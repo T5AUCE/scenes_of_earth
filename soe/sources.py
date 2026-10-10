@@ -5,10 +5,10 @@ Windows are integer (col, row, width, height) cell windows on that grid, so read
 """
 import math
 import time
-from dataclasses import dataclass
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import numpy as np
@@ -202,16 +202,15 @@ class RealSource:
 
         with ThreadPoolExecutor(8) as ex:
             dss = [d for d in ex.map(open_tile, names) if d is not None]
+        ny, nx = round((n - s) / res), round((e - w) / res)
         try:
             if not dss:
-                return (np.zeros((round((n - s) / res), round((e - w) / res)), "int16"),
-                        from_origin(w, n, res, res))
+                return np.zeros((ny, nx), "int16"), from_origin(w, n, res, res)
             with rasterio.Env(**GDAL_OPTS):
                 arr, _ = merge(dss, bounds=ext, res=res, nodata=0)
         finally:
             for d in dss:
                 d.close()
-        ny, nx = round((n - s) / res), round((e - w) / res)
         z = np.rint(arr[0][1:1 + ny, 1:1 + nx]).clip(-32768, 32767).astype("int16")
         return z, from_origin(w, n, res, res)
 
@@ -270,13 +269,8 @@ def window_of(bbox):
 
 @dataclass
 class Dataset:
-    """A layer the backend can build. Subclasses implement read().
-
-    read(bbox, months=None, factor=1) returns (data, transform):
-      static dataset: data is a 2D array;
-      time-varying dataset: data is a generator of 2D arrays, one per month in order (so callers
-      never hold every month); transform is the affine transform of the (aggregated) grid.
-    """
+    """A layer the backend can build. Static datasets implement read(bbox) -> (2D array, transform);
+    time-varying ones are read month by month with read_month()."""
     id: str
     units: str
     resolution_deg: float  # native cell size
@@ -301,17 +295,12 @@ class RainDataset(Dataset):
     def read_month(self, ym, bbox, factor=1):
         return block_mean(self.backend.read_rain(ym, window_of(bbox)), factor)
 
-    def read(self, bbox, months=None, factor=1):
-        c0, r0, _, _ = window_of(bbox)
-        transform = GRID @ Affine.translation(c0, r0) @ Affine.scale(factor)
-        return (self.read_month(m, bbox, factor) for m in months), transform
-
 
 class TerrainDataset(Dataset):
     def tile_count(self, bbox):
         return len(glo90_tiles(with_margin(bbox, terrain_res(bbox))))
 
-    def read(self, bbox, months=None, factor=1):
+    def read(self, bbox):
         return self.backend.terrain(tuple(bbox), terrain_res(bbox))
 
 

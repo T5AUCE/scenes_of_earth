@@ -73,10 +73,7 @@ def make(scene_id, title, area, plan, months, datasets, info):
 
 def validate(doc):
     """Return a list of problems (empty when the bundle is fine)."""
-    bad = []
-    for k in ("version", "id", "area", "layers", "data", "credits", "notices"):
-        if k not in doc:
-            bad.append(f"missing {k}")
+    bad = [f"missing {k}" for k in ("version", "id", "area", "layers", "data", "credits", "notices") if k not in doc]
     if bad:
         return bad
     if not doc["layers"]:

@@ -99,13 +99,10 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
 
     app = FastAPI(title="Scenes of Earth", version=__version__, lifespan=lifespan)
 
-    def bundle_url(sid):
-        return f"{public}/{sid}/scene.json"
-
     def scene_out(row):
         return {"id": row["id"], "status": row["status"], "progress": row["progress"], "error": row["error"],
                 "error_class": row["error_class"],
-                "bundle_url": bundle_url(row["id"]) if row["status"] == "done" else None}
+                "bundle_url": f"{public}/{row['id']}/scene.json" if row["status"] == "done" else None}
 
     def run_job(sid):
         try:
@@ -155,8 +152,10 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
         # The scene id is the content hash: canonical request + dataset versions + data vintage + generator.
         if area.named:
             geom_id = area.boundary["id"] + ":" + hashlib.sha1(area.boundary["geom_geojson"].encode()).hexdigest()
+            spec = {"type": "boundary", "id": area.boundary["id"]}
         else:
             geom_id = "poly:" + hashlib.sha1(area.geom.wkb).hexdigest()
+            spec = {"type": "polygon", "geometry": mapping(area.geom)}
         try:
             vintage = {ds.id: ds.vintage(end) for ds in datasets if ds.time_varying}
         except SourceUnavailable:
@@ -164,10 +163,6 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
         content = [geom_id, layers, start, end, {ds.id: ds.source.get("version") for ds in datasets},
                    vintage, __version__]
         sid = hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:ID_LEN]
-        if area.named:
-            spec = {"type": "boundary", "id": area.boundary["id"]}
-        else:
-            spec = {"type": "polygon", "geometry": mapping(area.geom)}
         request_json = json.dumps({"area": spec, "layers": layers, "start": start, "end": end,
                                    "title": title or (area.boundary["name"] if area.named else "Drawn area")})
         try:

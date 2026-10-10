@@ -38,9 +38,8 @@ def import_cgaz(db_path, folder):
     adm2.geometry = adm2.representative_point()
     joined = adm2.sjoin(frames[1][["geometry", "shapeName"]], predicate="within", rsuffix="p")
     parents = joined.groupby(level=0)["shapeName_p"].first()
-    all_rows = []
+    rows = []
     for lvl, gdf in frames.items():
-        rows = []
         for idx, r in gdf.iterrows():
             code = r["shapeGroup"]
             parent = {0: "", 1: countries.get(code, ""), 2: parents.get(idx, countries.get(code, ""))}[lvl]
@@ -49,10 +48,9 @@ def import_cgaz(db_path, folder):
                        r.geometry, "geoBoundaries CGAZ", "CC BY 4.0")
             if row:
                 rows.append(row)
-        all_rows += rows
-    replaced = db.add_boundaries(db_path, "geoBoundaries CGAZ", all_rows)
+    replaced = db.add_boundaries(db_path, "geoBoundaries CGAZ", rows)
     print(f"CGAZ: {replaced} duplicate ids replaced")
-    return len(all_rows)
+    return len(rows)
 
 
 def import_ucdb(db_path, path):

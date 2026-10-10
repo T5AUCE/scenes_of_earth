@@ -6,6 +6,7 @@
 	"features": {
 		"ghcr.io/devcontainers/features/node:1": { "version": "lts" },
 		"ghcr.io/devcontainers/features/github-cli:1": {},
+		"ghcr.io/devcontainers/features/powershell:1": { "version": "latest" },
 		"ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
 	},
 
@@ -14,5 +15,11 @@
 	"postCreateCommand": "pip install -e '.[import,dev]'",
 
 	"mounts": ["source=claude-code-config,target=/home/vscode/.claude,type=volume"],
-  	"containerEnv": { "CLAUDE_CONFIG_DIR": "/home/vscode/.claude" }
+	"containerEnv": { "CLAUDE_CONFIG_DIR": "/home/vscode/.claude" },
+
+	"customizations": {
+	"vscode": {
+		"settings": { "terminal.integrated.defaultProfile.linux": "pwsh" }
+	}
+}
 }

@@ -93,20 +93,18 @@ def submit(path, sid, request_json, done_ok, max_active=None):
     with connect(path) as c:
         c.execute("BEGIN IMMEDIATE")
         row = c.execute("SELECT * FROM scenes WHERE id = ?", (sid,)).fetchone()
-        if max_active is not None and (row is None or row["status"] == "failed" or (row["status"] == "done" and not done_ok)):
-            n = c.execute("SELECT COUNT(*) FROM scenes WHERE status IN ('queued','running')").fetchone()[0]
-            if n >= max_active:
-                raise Busy()
-        if row is None:
-            c.execute("INSERT INTO scenes (id, status, request_json, created) VALUES (?,?,?,?)",
-                      (sid, "queued", request_json, now()))
-            start = True
-        elif row["status"] == "failed" or (row["status"] == "done" and not done_ok):
-            c.execute("UPDATE scenes SET status='queued', progress=0, error=NULL, error_class=NULL, finished=NULL WHERE id = ?",
-                      (row["id"],))
-            start = True
-        else:
-            start = False
+        start = row is None or row["status"] == "failed" or (row["status"] == "done" and not done_ok)
+        if start:
+            if max_active is not None:
+                n = c.execute("SELECT COUNT(*) FROM scenes WHERE status IN ('queued','running')").fetchone()[0]
+                if n >= max_active:
+                    raise Busy()
+            if row is None:
+                c.execute("INSERT INTO scenes (id, status, request_json, created) VALUES (?,?,?,?)",
+                          (sid, "queued", request_json, now()))
+            else:
+                c.execute("UPDATE scenes SET status='queued', progress=0, error=NULL, error_class=NULL, finished=NULL "
+                          "WHERE id = ?", (sid,))
         row = c.execute("SELECT * FROM scenes WHERE id = ?", (sid,)).fetchone()
         c.execute("COMMIT")
     return dict(row), start

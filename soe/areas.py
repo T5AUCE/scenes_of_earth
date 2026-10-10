@@ -20,7 +20,6 @@ MIN_CELLS = 25  # drawn shapes smaller than this are rejected
 PAD_CELLS = 10  # bbox is padded to at least 0.5 degrees
 MAX_SOURCE = 100_000_000  # source cells x months, checked before any read
 MAX_OUTPUT = 25_000_000  # output cells x months after aggregation
-MAX_TILES = 100  # GLO-90 tiles
 FACTORS = (1, 2, 4, 8)
 
 
@@ -123,6 +122,11 @@ def _pad(lo, hi, size):
     return lo, hi
 
 
+def snap(lo, hi, f):
+    """Widen [lo, hi) outwards to multiples of f."""
+    return lo // f * f, -(-hi // f) * f
+
+
 def _cell_mask(geom, window_transform, shape_, all_touched=False):
     return geometry_mask([mapping(geom)], shape_, window_transform, invert=True, all_touched=all_touched)
 
@@ -144,11 +148,10 @@ def plan(area, n_months, datasets):
     c0, c1 = math.floor(round((x0 + 180) / 0.05, 6)), math.ceil(round((x1 + 180) / 0.05, 6))
     r0, r1 = math.floor(round((60 - y1) / 0.05, 6)), math.ceil(round((60 - y0) / 0.05, 6))
     c0, c1, r0, r1 = max(c0, 0), min(c1, NCOLS), max(r0, 0), min(r1, NROWS)
-    pc0, pc1 = _pad(c0, c1, NCOLS)
-    pr0, pr1 = _pad(r0, r1, NROWS)
-    if (pc0, pc1, pr0, pr1) != (c0, c1, r0, r1):
+    padded = _pad(c0, c1, NCOLS), _pad(r0, r1, NROWS)
+    if padded != ((c0, c1), (r0, r1)):
         notices.append("The map area was padded to at least 0.5 x 0.5 degrees for context.")
-    c0, c1, r0, r1 = pc0, pc1, pr0, pr1
+    (c0, c1), (r0, r1) = padded
 
     rain = any(ds.time_varying for ds in datasets)
     if rain and (c1 - c0) * (r1 - r0) * n_months > MAX_SOURCE:
@@ -165,9 +168,8 @@ def plan(area, n_months, datasets):
     factor = 1
     if rain:
         for f in FACTORS:
-            w = -(-c1 // f) * f - c0 // f * f
-            h = -(-r1 // f) * f - r0 // f * f
-            if (w // f) * (h // f) * n_months <= MAX_OUTPUT:
+            (sc0, sc1), (sr0, sr1) = snap(c0, c1, f), snap(r0, r1, f)
+            if ((sc1 - sc0) // f) * ((sr1 - sr0) // f) * n_months <= MAX_OUTPUT:
                 factor = f
                 break
         else:
@@ -175,7 +177,7 @@ def plan(area, n_months, datasets):
         if factor > 1:
             notices.append(f"Rain was averaged over {factor}x{factor} cells ({0.05 * factor:g} degrees) "
                            "to fit the size budget.")
-    c0, c1, r0, r1 = c0 // factor * factor, -(-c1 // factor) * factor, r0 // factor * factor, -(-r1 // factor) * factor
+    (c0, c1), (r0, r1) = snap(c0, c1, factor), snap(r0, r1, factor)
     if rain and (c1 - c0) * (r1 - r0) * n_months > MAX_SOURCE:
         raise AreaError("area and period are too large to read; choose a smaller area or fewer months")
 
