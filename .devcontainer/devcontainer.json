@@ -1,11 +1,17 @@
 {
-	"name": "Default Linux Universal",
+	"name": "Scenes of Earth",
 
-	"image": "mcr.microsoft.com/devcontainers/universal:6-linux",
+	"image": "mcr.microsoft.com/devcontainers/python:3.12",
 
 	"features": {
+		"ghcr.io/devcontainers/features/node:1": { "version": "lts" },
+		"ghcr.io/devcontainers/features/github-cli:1": {},
 		"ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
 	},
+
+	"forwardPorts": [5173, 8000],
+
+	"postCreateCommand": "pip install -e '.[import,dev]'",
 
 	"mounts": ["source=claude-code-config,target=/home/vscode/.claude,type=volume"],
   	"containerEnv": { "CLAUDE_CONFIG_DIR": "/home/vscode/.claude" }

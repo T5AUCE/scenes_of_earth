@@ -1,1 +1,1 @@
-# NOTHING YET
+from soe.api import app
