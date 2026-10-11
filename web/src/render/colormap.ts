@@ -11,13 +11,20 @@ const FLAT_GROUND_HILLSHADE = 180;
 
 // ColorBrewer Blues, 9 classes.
 const BLUES = [
-  [247, 251, 255], [222, 235, 247], [198, 219, 239], [158, 202, 225], [107, 174, 214],
-  [66, 146, 198], [33, 113, 181], [8, 81, 156], [8, 48, 107],
+  [247, 251, 255],
+  [222, 235, 247],
+  [198, 219, 239],
+  [158, 202, 225],
+  [107, 174, 214],
+  [66, 146, 198],
+  [33, 113, 181],
+  [8, 81, 156],
+  [8, 48, 107],
 ];
 
 const COLORMAPS: Record<string, number[][]> = { Blues: BLUES };
 
-// 256 opaque RGBA entries.
+// Returns 256 opaque RGBA entries.
 export function lut(name: string) {
   const stops = COLORMAPS[name];
   if (!stops) throw new Error(`Unknown colormap "${name}"`);
@@ -63,8 +70,7 @@ export function paintColormap(
   return rgba;
 }
 
-// Values below neutral darken (black, more opaque the darker), values above lighten (white), and
-// neutral is transparent so flat ground shows the basemap.
+// Neutral is transparent so flat ground shows the basemap; slopes darken or lighten from it.
 export function paintHillshade(
   shade: ArrayLike<number>,
   table: SampleTable,

@@ -21,9 +21,7 @@ export function formatTime(time: string, steps: string[]) {
   return time.slice(0, 4);
 }
 
-// Runs the task for the latest value only: values given while a run is in flight replace each
-// other, so scrubbing never starts a run for a value the user has already left. The task must
-// handle its own errors.
+// Only the latest queued value runs, so scrubbing skips stale steps; the task must catch errors.
 export function latestOnly<T>(task: (value: T) => Promise<void>) {
   let waiting: { value: T } | null = null;
   let isRunning = false;

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { imageCorners, mercY, sampleTable, shiftLongitudes, worldShift } from "./mercator.ts";
 
 const allInside = (cellCount: number) => new Uint8Array(cellCount).fill(1);
+
 const gridOf = (bbox: number[], nx: number, ny: number) => ({
   bbox: bbox as [number, number, number, number],
   nx,
@@ -15,6 +16,7 @@ test("rows map to source rows in order, never going back up", () => {
   const table = sampleTable(grid, allInside(40));
 
   let previousRow = 0;
+
   for (let pixelRow = 0; pixelRow < table.height; pixelRow++) {
     const row = Math.floor(table.src[pixelRow * width] / width);
     assert.ok(row >= previousRow);

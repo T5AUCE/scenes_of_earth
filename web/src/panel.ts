@@ -1,7 +1,7 @@
 import type { Map as MapLibreMap } from "maplibre-gl";
 import { ApiError, getLayers, getSceneStatus, loadScene, postScene, searchAreas } from "./api";
-import { fitToBbox } from "./map";
 import { makeElement } from "./dom";
+import { fitToBbox } from "./map";
 import { mountScene } from "./view";
 import type { AreaHit, Layer, Scene, SceneRequest, SceneStatus } from "./types";
 
@@ -26,7 +26,8 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap) {
   const { search, level, results, chosen, layerBox, start, end, build, status, result } = controls;
 
   let area: AreaHit | null = null;
-  let run = 0; // id of the current build; changing it cancels the running poll
+  // Changing the run id cancels the running poll.
+  let run = 0;
   let layers: Layer[] = [];
   let unmountScene = () => {};
 
@@ -53,6 +54,7 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap) {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(runSearch, SEARCH_DEBOUNCE_MS);
   };
+
   search.oninput = scheduleSearch;
   level.onchange = scheduleSearch;
 
@@ -72,7 +74,8 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap) {
 
     try {
       const hits = await searchAreas(query, level.value);
-      if (thisSearch !== searchCount) return; // a newer search is running
+      // A newer search has started, so these hits are stale.
+      if (thisSearch !== searchCount) return;
 
       if (!hits.length) makeElement("li", "No matches", results).className = "none";
 
@@ -86,6 +89,7 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap) {
 
   function showHit(hit: AreaHit) {
     const text = [hit.name, hit.parent_name, hit.level].filter(Boolean).join(" · ");
+
     makeElement("li", text, results).onclick = () => {
       area = hit;
       run++;
@@ -197,6 +201,7 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap) {
       area: { type: "boundary", id: area!.id },
       layers: selectedLayerIds(),
     };
+
     if (usesMonths()) Object.assign(body, { start: start.value, end: end.value });
 
     try {

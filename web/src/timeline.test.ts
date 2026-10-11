@@ -7,7 +7,12 @@ const sixteenDay = ["2020-01-01", "2020-01-17", "2020-02-02", "2020-02-18"];
 
 test("union of a monthly and a 16-day axis is sorted without duplicates", () => {
   assert.deepEqual(unionTimes([monthly, sixteenDay]), [
-    "2020-01-01", "2020-01-17", "2020-02-01", "2020-02-02", "2020-02-18", "2020-03-01",
+    "2020-01-01",
+    "2020-01-17",
+    "2020-02-01",
+    "2020-02-02",
+    "2020-02-18",
+    "2020-03-01",
   ]);
 });
 

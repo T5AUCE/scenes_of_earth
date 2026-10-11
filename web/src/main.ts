@@ -1,6 +1,6 @@
 import "./style.css";
 import { getHealth, isSceneId } from "./api";
-import { createMap } from "./map";
+import { createMap, reportMapErrors } from "./map";
 import { createPanel } from "./panel";
 
 const map = createMap("map");
@@ -8,6 +8,7 @@ const mapLoaded = new Promise<void>((resolve) => map.once("load", () => resolve(
 const panel = createPanel(document.getElementById("panel")!, map);
 const badge = document.getElementById("status")!;
 
+reportMapErrors(map, (message) => showBadge(`Map error: ${message}`, "down"));
 openSharedScene();
 showBackendStatus();
 

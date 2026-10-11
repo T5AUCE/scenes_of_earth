@@ -27,10 +27,7 @@ export function mercY(lat: number) {
   return Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
 }
 
-// MapLibre stretches an image linearly in Web Mercator, but grid rows are equally spaced in
-// latitude. Output rows are equally spaced in Mercator y so the two agree.
-// Width and height never exceed maxTextureSize, so the image fits the GPU; wider grids are
-// sampled with the nearest column.
+// Rows are even in Mercator y because MapLibre stretches images linearly in Web Mercator.
 export function sampleTable(
   grid: Grid,
   mask: ArrayLike<number>,
@@ -63,8 +60,7 @@ export function sampleTable(
   return { width, height, src };
 }
 
-// A centre above 180 would give MapLibre an out-of-range tile, so the image is drawn one
-// world to the west instead.
+// A centre above 180 gives MapLibre an out-of-range tile, so the image moves one world west.
 export function imageCorners(bbox: Bbox): Corners {
   const [west, south, east, north] = bbox;
   const shift = worldShift(bbox);
@@ -94,11 +90,7 @@ export function shiftLongitudes(coordinates: Coordinates, degrees: number): Coor
   return (coordinates as Coordinates[]).map((inner) => shiftLongitudes(inner, degrees));
 }
 
-function latFromMercY(y: number) {
-  return ((2 * Math.atan(Math.exp(y)) - Math.PI / 2) * 180) / Math.PI;
-}
-
-// In Mercator y, the height of the shortest grid row.
+// The shortest row in Mercator y sets the output resolution, so no grid row is skipped.
 function finestRowHeight({ bbox, ny }: Grid) {
   const [, south, , north] = bbox;
   const rowDegrees = (north - south) / ny;
@@ -112,4 +104,8 @@ function finestRowHeight({ bbox, ny }: Grid) {
   }
 
   return finest;
+}
+
+function latFromMercY(y: number) {
+  return ((2 * Math.atan(Math.exp(y)) - Math.PI / 2) * 180) / Math.PI;
 }

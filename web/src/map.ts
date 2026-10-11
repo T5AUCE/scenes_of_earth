@@ -34,6 +34,17 @@ export function fitToBbox(map: MapLibreMap, [west, south, east, north]: Bbox) {
   );
 }
 
+// Tile failures and aborts are routine while panning, so only other map errors are reported.
+export function reportMapErrors(map: MapLibreMap, report: (message: string) => void) {
+  map.on("error", (event) => {
+    const { error, tile } = event as typeof event & { tile?: unknown };
+    const isAborted = (error as Error).name === "AbortError";
+    if (tile || isAborted) return;
+
+    report(error.message);
+  });
+}
+
 // Images wider or taller than this cannot be uploaded to the GPU as textures.
 export function maxTextureSize(map: MapLibreMap) {
   const canvas = map.getCanvas();

@@ -1,7 +1,4 @@
-"""Command line: `python -m soe.cli import-boundaries --cgaz DIR --ucdb FILE`.
-
-Needs the [import] extra.
-"""
+"""Command line: `python -m soe.cli import-boundaries --cgaz DIR --ucdb FILE`."""
 import argparse
 import json
 import logging

@@ -1,6 +1,6 @@
-import { addImageLayer, maxTextureSize, removeLayerAndSource, setImage } from "../map";
 import { arrayDoc, cacheByIndex, decode, readArray, readMask } from "../data";
 import { gradientLegend } from "../legend";
+import { addImageLayer, maxTextureSize, removeLayerAndSource, setImage } from "../map";
 import { lut, paintColormap } from "../render/colormap";
 import { sampleTable } from "../render/mercator";
 import { latestOnly, stepAt } from "../timeline";
@@ -9,6 +9,12 @@ import { createTerrainView } from "./terrain";
 
 const CACHED_STEPS = 24;
 const SERIES_OPACITY = 0.8;
+
+// Later stack numbers draw on top of earlier ones.
+export const LAYER_KINDS = new Map([
+  ["series-colormap", { stack: 1, create: createSeriesView }],
+  ["terrain", { stack: 2, create: createTerrainView }],
+]);
 
 function createSeriesView({ map, store, layer, beforeId, report }: LayerContext): LayerView {
   const id = `${layer.id}-series`;
@@ -19,7 +25,8 @@ function createSeriesView({ map, store, layer, beforeId, report }: LayerContext)
   const valueDoc = arrayDoc(layer, "value");
   const colors = lut(colormap);
   let alive = true;
-  let shownStep = -1; // a slow read of an older step must not overwrite the one being displayed
+  // A slow read of an older step must not overwrite the one being displayed.
+  let shownStep = -1;
 
   addImageLayer(map, id, layer.grid.bbox, beforeId, {
     "raster-opacity": 0,
@@ -84,9 +91,3 @@ function createSeriesView({ map, store, layer, beforeId, report }: LayerContext)
     },
   };
 }
-
-// Later stack numbers draw on top of earlier ones.
-export const LAYER_KINDS = new Map([
-  ["series-colormap", { stack: 1, create: createSeriesView }],
-  ["terrain", { stack: 2, create: createTerrainView }],
-]);

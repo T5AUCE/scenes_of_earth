@@ -1,5 +1,5 @@
-import { addImageLayer, maxTextureSize, removeLayerAndSource, setImage } from "../map";
 import { arrayDoc, readArray, readMask } from "../data";
+import { addImageLayer, maxTextureSize, removeLayerAndSource, setImage } from "../map";
 import { paintHillshade } from "../render/colormap";
 import { sampleTable } from "../render/mercator";
 import type { LayerContext, LayerView } from "../types";

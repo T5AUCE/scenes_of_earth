@@ -48,8 +48,7 @@ export const postScene = (body: SceneRequest) =>
     body: JSON.stringify(body),
   });
 
-// Loads scene.json and makes its relative hrefs absolute against the bundle URL (works for
-// /scenes/... now, R2 later).
+// Hrefs resolve against the bundle URL so the same code works for /scenes/ now and R2 later.
 export async function loadScene(bundleUrl: string): Promise<Scene> {
   const base = new URL(bundleUrl, location.href);
   const scene = await request<Scene>(base.href);
@@ -81,7 +80,7 @@ async function apiErrorFrom(response: Response) {
 function errorMessage(detail: unknown, status: number) {
   if (typeof detail === "string") return detail;
 
-  // FastAPI validation errors.
+  // FastAPI validation errors arrive as a list of problems.
   if (Array.isArray(detail)) return detail.map((problem) => problem.msg).join("; ");
 
   return `HTTP ${status}`;

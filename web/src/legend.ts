@@ -18,6 +18,7 @@ function gradientBar(colors: Uint8ClampedArray) {
     const start = entry * RGBA_CHANNELS;
     const [red, green, blue] = colors.subarray(start, start + COLOR_CHANNELS);
     const percent = Math.round((entry / LAST_ENTRY) * 100);
+
     return `rgb(${red}, ${green}, ${blue}) ${percent}%`;
   });
 

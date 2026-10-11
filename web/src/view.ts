@@ -13,8 +13,7 @@ type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
 const OUTLINE_ID = "soe-area-outline";
 const EMPTY_FEATURES: GeoJsonData = { type: "FeatureCollection", features: [] };
 
-// Draws the scene's layers on the map and their controls into root. Returns the unmount function.
-// If drawing fails partway, whatever was already added is removed before the error is thrown.
+// Returns the unmount function; a failure partway removes whatever was already drawn.
 export function mountScene(map: MapLibreMap, scene: Scene, root: HTMLElement) {
   const box = makeElement("div", "", root);
   const views: LayerView[] = [];
@@ -59,8 +58,7 @@ export function mountScene(map: MapLibreMap, scene: Scene, root: HTMLElement) {
   return unmount;
 }
 
-// Rasters east of the antimeridian are drawn one world to the west, so the outline moves with
-// them; that needs the coordinates, so the source is filled once the file has loaded.
+// Rasters past the antimeridian are drawn one world west, so the outline is shifted to match.
 function addOutline(
   map: MapLibreMap,
   scene: Scene,
@@ -98,6 +96,7 @@ async function showShiftedOutline(
   if (!isMounted()) return;
 
   const { geometry } = feature;
+
   const shifted = {
     ...feature,
     geometry: { ...geometry, coordinates: shiftLongitudes(geometry.coordinates, shift) },
@@ -106,8 +105,7 @@ async function showShiftedOutline(
   (map.getSource(OUTLINE_ID) as GeoJSONSource).setData(shifted as GeoJsonData);
 }
 
-// Layers of unknown kinds are skipped with a note; a layer that fails to start does not stop
-// the others.
+// Unknown kinds get a note, and a layer that fails to start does not stop the others.
 function mountLayerViews(
   map: MapLibreMap,
   layers: LayerDoc[],

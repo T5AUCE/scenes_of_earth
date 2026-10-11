@@ -1,8 +1,4 @@
-"""Area handling: validate drawn GeoJSON, then plan the grid window, aggregation and mask.
-
-Everything here is offline. Every rule that can reject a request lives here, so
-rejections happen before any network read.
-"""
+"""Area handling: validate drawn GeoJSON, then plan the grid window, aggregation and mask."""
 import math
 from dataclasses import dataclass, field
 

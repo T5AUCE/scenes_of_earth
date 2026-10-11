@@ -10,9 +10,7 @@ type Encoding = Pick<ArrayDoc, "scale_factor" | "add_offset" | "fill">;
 // An opened array keeps the shard indexes it has read, so it is opened once per path.
 const openedArrays = new WeakMap<object, Map<string, Promise<OpenedArray>>>();
 
-// Bundles are Zarr v3 only, so the v2 probes are skipped. Without consolidated metadata each
-// array's own zarr.json is read instead. Suffix ranges read a shard's index in one request
-// instead of a HEAD first.
+// Bundles are Zarr v3 only (no v2 probes); suffix ranges read a shard index without a HEAD first.
 export function openStore(href: string) {
   const store = new zarr.FetchStore(href, { useSuffixRequest: true });
 
@@ -22,6 +20,7 @@ export function openStore(href: string) {
 export async function readArray(store: Store, path: string, selection: (number | null)[]) {
   const array = await openedArray(store, path);
   const chunk = await zarr.get(array, selection);
+
   return chunk.data as ArrayLike<number>;
 }
 
@@ -73,7 +72,8 @@ function openedArray(store: Store, path: string) {
 
   if (!arrays.has(path)) {
     const opening = openArray(store, path);
-    opening.catch(() => arrays.delete(path)); // so that a failed open can be retried
+    // A failed open is dropped so it can be retried.
+    opening.catch(() => arrays.delete(path));
     arrays.set(path, opening);
   }
 
