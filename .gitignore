@@ -12,3 +12,7 @@ CLAUDE.md
 
 # Local data (SQLite db, built scenes)
 data/
+
+# Frontend
+web/node_modules/
+web/dist/
