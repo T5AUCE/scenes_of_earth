@@ -1,7 +1,7 @@
 """FastAPI app: boundary search, scene build jobs, and static scene files.
 
 Config (environment): SOE_DB, SOE_SCENES_DIR, SOE_PUBLIC_BASE, SOE_MAX_BUILDS, SOE_MAX_QUEUE,
-SOE_SYNTHETIC, SOE_LATEST.
+SOE_SYNTHETIC, SOE_LATEST. With SOE_SYNTHETIC=1 an empty boundaries table is seeded from sample_areas.geojson.
 """
 import hashlib
 import json
@@ -20,15 +20,18 @@ from shapely.geometry import mapping, shape
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import __version__, db
-from .areas import MAX_BODY, Area, AreaError, check_months, clean_polygon, plan
+from .areas import MAX_BODY, Area, AreaError, check_months, clean_polygon, plan, unwrap
 from .build import build_scene
-from .sources import REGISTRY, RealSource, SourceUnavailable, SyntheticSource, make_registry, month_list
+from .sources import FIRST_MONTH, REGISTRY, RealSource, SourceUnavailable, SyntheticSource, make_registry, month_list
 
 log = logging.getLogger("soe")
 
 LEVELS = ("country", "state", "county", "city")
 ID_LEN = 20  # hex characters of the sha256 kept as the scene id (80 bits; short paths for Windows)
 ID_RE = re.compile(r"[0-9a-f]{%d}" % ID_LEN)
+DEFAULT_LAYERS = ["chirps_monthly", "glo90_terrain"]
+COVERAGE = [-180, -60, 180, 60]  # both layers: 60S to 60N
+SAMPLE_AREAS = Path(__file__).with_name("sample_areas.geojson")
 IMMUTABLE = "public, max-age=31536000, immutable"
 
 
@@ -74,6 +77,20 @@ async def read_body(request):
     return body
 
 
+def seed_sample_areas(db_path):
+    """Synthetic mode only: load the hand-drawn sample shapes when no boundaries exist yet."""
+    if db.search(db_path, "", None, 1):  # an empty query matches every row
+        return
+    rows = []
+    for f in json.loads(SAMPLE_AREAS.read_text())["features"]:
+        geom, p = shape(f["geometry"]), f["properties"]
+        w, s, e, n = unwrap(geom).bounds
+        rows.append((p["id"], p["level"], p["name"], p["parent_name"], p["iso3"], w, s, e, n,
+                     max(1, round(geom.area / 0.05**2)), json.dumps(f["geometry"]), "synthetic",
+                     "none (hand-drawn sample)"))
+    db.add_boundaries(db_path, "synthetic", rows)
+
+
 def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, max_queue=None):
     db_path = db_path or os.environ.get("SOE_DB", "./data/soe.db")
     scenes_dir = Path(scenes_dir or os.environ.get("SOE_SCENES_DIR", "./data/scenes"))
@@ -94,6 +111,8 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
     async def lifespan(app):
         scenes_dir.mkdir(parents=True, exist_ok=True)
         db.init(db_path)
+        if os.environ.get("SOE_SYNTHETIC") == "1":
+            seed_sample_areas(db_path)
         yield
         executor.shutdown(wait=False, cancel_futures=True)
 
@@ -146,8 +165,11 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
         if title is not None and not (isinstance(title, str) and len(title) <= 120):
             raise AreaError("title must be a string of at most 120 characters")
         area = resolve_area(db_path, data.get("area"))
-        start, end = data.get("start"), data.get("end")
-        check_months(start, end, series.backend.latest_month())
+        if any(ds.time_varying for ds in datasets):
+            start, end = data.get("start"), data.get("end")
+            check_months(start, end, series.backend.latest_month())
+        else:
+            start = end = FIRST_MONTH  # months are irrelevant here, so every terrain-only request is one scene
         plan(area, len(month_list(start, end)), datasets)  # raises AreaError before any data read
         # The scene id is the content hash: canonical request + dataset versions + data vintage + generator.
         if area.named:
@@ -175,6 +197,15 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
     @app.get("/api/health")
     def health():
         return {"ok": True, "version": __version__}
+
+    @app.get("/api/layers")
+    def layers():
+        latest = series.backend.latest_month()
+        return {"default": [k for k in DEFAULT_LAYERS if k in registry],
+                "layers": [{"id": ds.id, "title": ds.style["title"], "units": ds.units, "kind": ds.style["kind"],
+                            "time_varying": ds.time_varying, "coverage": COVERAGE,
+                            "first_month": FIRST_MONTH if ds.time_varying else None,
+                            "latest_month": latest if ds.time_varying else None} for ds in registry.values()]}
 
     @app.get("/api/areas/search")
     def search(q: str, level: str | None = None, limit: int = 20):

@@ -22,11 +22,15 @@ uvicorn main:app --reload --port 8000
 For the frontend (`npm run dev`, port 5173), set the Vite dev server to proxy `/api` and `/scenes` to
 `http://localhost:8000`, so the browser uses the same relative URLs as in production and needs no CORS setup.
 
-API: `GET /api/health`, `GET /api/areas/search?q=&level=&limit=`, `GET /api/areas/{id}`, `POST /api/scenes`,
+API: `GET /api/health`, `GET /api/layers` (layer ids, titles, kinds, month bounds and the default set),
+`GET /api/areas/search?q=&level=&limit=`, `GET /api/areas/{id}`, `POST /api/scenes`,
 `GET /api/scenes/{id}`, and the static files under `/scenes/{id}/`. `POST /api/scenes` takes
 `{"area": {"type": "boundary", "id": ...} | {"type": "polygon", "geometry": GeoJSON}, "start": "YYYY-MM",
 "end": "YYYY-MM", "layers": ["chirps_monthly", "glo90_terrain"], "title": ...}` and returns 202 (queued or running),
 200 (already built), 422 (refused, with a reason), 413, or 503 (queue full or data server unreachable; `Retry-After`).
+
+With `SOE_SYNTHETIC=1` and an empty boundaries table, five hand-drawn sample areas (names start with "Sample:", not real
+borders) are loaded from `soe/sample_areas.geojson`, so search works without the boundaries import.
 
 ## Import boundaries (once)
 

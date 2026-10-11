@@ -1,8 +1,10 @@
 import "./style.css";
 import { getHealth } from "./api";
 import { createMap } from "./map";
+import { createPanel } from "./panel";
 
-createMap("map");
+const map = createMap("map");
+createPanel(document.getElementById("panel")!, map);
 
 const badge = document.getElementById("status")!;
 getHealth().then(

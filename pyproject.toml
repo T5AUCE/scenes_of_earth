@@ -27,7 +27,7 @@ soe = "soe.cli:main"
 packages = ["soe"]
 
 [tool.setuptools.package-data]
-soe = ["glo90_tiles.bin"]
+soe = ["glo90_tiles.bin", "sample_areas.geojson"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

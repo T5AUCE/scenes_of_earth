@@ -193,3 +193,47 @@ def test_failed_job_has_generic_error_and_class(tmp_path):
         out = wait_for(client, sid)
         assert out["status"] == "failed" and out["error_class"] == "RuntimeError"
         assert "secret" not in out["error"]
+
+
+def test_layers(env):
+    client, _, _ = env
+    out = client.get("/api/layers").json()
+    by_id = {layer["id"]: layer for layer in out["layers"]}
+    assert out["default"] == ["chirps_monthly", "glo90_terrain"]
+    rain, terrain = by_id["chirps_monthly"], by_id["glo90_terrain"]
+    assert (rain["kind"], rain["time_varying"], rain["first_month"], rain["latest_month"]) == \
+        ("series-colormap", True, "1981-01", "2026-08")
+    assert (terrain["kind"], terrain["time_varying"], terrain["first_month"]) == ("terrain", False, None)
+    assert rain["title"] and rain["units"] == "mm/month" and rain["coverage"] == [-180, -60, 180, 60]
+
+
+def test_sample_areas_seed_only_in_synthetic_mode_and_when_empty(tmp_path, monkeypatch):
+    def app_in(name):
+        return create_app(tmp_path / name / "soe.db", tmp_path / name / "scenes", make_registry(SyntheticSource()))
+
+    def sample_hits(client):
+        return client.get("/api/areas/search", params={"q": "Sample"}).json()
+
+    with TestClient(app_in("real")) as client:
+        assert sample_hits(client) == []
+    monkeypatch.setenv("SOE_SYNTHETIC", "1")
+    with TestClient(app_in("synthetic")) as client:
+        assert len(sample_hits(client)) == 5
+        assert client.get("/api/areas/sample:fiji").json()["bbox"][2] > 180
+        sid = client.post("/api/scenes", json={"area": {"type": "boundary", "id": "sample:nairobi"},
+                                              "start": "2015-01", "end": "2015-02"}).json()["id"]
+        assert wait_for(client, sid)["status"] == "done"
+    db_path = str(tmp_path / "other" / "soe.db")  # a non-empty table is left alone
+    db.init(db_path)
+    db.add_boundaries(db_path, "geoBoundaries CGAZ", [("x", "state", "Other", None, None, 0, 0, 1, 1, 400, "{}",
+                                                      "geoBoundaries CGAZ", "CC BY 4.0")])
+    with TestClient(app_in("other")) as client:
+        assert sample_hits(client) == []
+
+
+def test_terrain_only_ignores_months(env):
+    client, _, _ = env
+    ids = {client.post("/api/scenes", json=body(layers=["glo90_terrain"], start=a, end=b)).json()["id"]
+           for a, b in (("2015-01", "2015-02"), ("2020-05", "2020-09"))}
+    assert len(ids) == 1
+    assert wait_for(client, ids.pop())["status"] == "done"

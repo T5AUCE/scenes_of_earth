@@ -7,3 +7,19 @@ html, body, #map { margin: 0; height: 100%; }
 }
 .badge.ok { color: #1a7f37; }
 .badge.down { color: #b42318; }
+
+#panel {
+  position: absolute; top: 40px; left: 8px; z-index: 1; width: 300px; max-height: calc(100% - 56px); overflow: auto;
+  box-sizing: border-box; padding: 8px; border-radius: 4px; font: 13px sans-serif;
+  background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.2);
+}
+#panel > * { display: block; margin-bottom: 8px; }
+#panel input[type="text"], #panel input:not([type]) { width: 100%; box-sizing: border-box; }
+#panel fieldset label { display: block; }
+#panel .results { list-style: none; margin: 0 0 8px; padding: 0; }
+#panel .results li { padding: 3px 4px; cursor: pointer; }
+#panel .results li:hover { background: #eef; }
+#panel .results li.none { cursor: default; color: #666; }
+#panel .chosen { font-weight: bold; }
+#panel .status, #panel .notice { color: #444; }
+#panel ul { padding-left: 18px; margin: 4px 0; }

@@ -72,6 +72,11 @@ SOURCES = {
                     "boundaries. PLoS ONE 15(4): e0231866. https://doi.org/10.1371/journal.pone.0231866",
         "modified": "simplified 0.01°, clipped to 60°S-60°N",
     },
+    "synthetic": {
+        "name": "Sample areas",
+        "licence": "none (hand-drawn sample)",
+        "attribution": "Boundaries: hand-drawn sample shapes, not real borders",
+    },
     "GHSL UCDB R2024A": {
         "name": "GHSL Urban Centre Database R2024A",
         "licence": "CC BY 4.0",
@@ -169,7 +174,7 @@ class RealSource:
     def latest_month(self):
         if self._latest:
             return self._latest
-        if self._probed and time.time() - self._probed[1] < 86400:
+        if self._probed and time.time() < self._probed[1]:
             return self._probed[0]
         now = datetime.now(timezone.utc)
         y, m = now.year, now.month
@@ -180,12 +185,14 @@ class RealSource:
                 found = ym
                 break
             y, m = (y - 1, 12) if m == 1 else (y, m - 1)
-        if found is None:  # offline: assume the usual two-month lag
+        ttl = 86400
+        if found is None:  # offline: assume the usual two-month lag, and probe again soon
+            ttl = 600
             y, m = now.year, now.month - 2
             if m < 1:
                 y, m = y - 1, m + 12
             found = f"{y:04d}-{m:02d}"
-        self._probed = (found, time.time())
+        self._probed = (found, time.time() + ttl)  # (month, expiry)
         return found
 
     def vintage(self, ym):
@@ -351,10 +358,10 @@ def make_registry(backend):
     return {
         "chirps_monthly": RainDataset(
             "chirps_monthly", "mm/month", 0.05, True, SOURCES["chirps"], ("precip",),
-            {"colormap": "Blues", "domain_min": 0}, backend),
+            {"kind": "series-colormap", "title": "Rainfall", "colormap": "Blues", "domain_min": 0}, backend),
         "glo90_terrain": TerrainDataset(
             "glo90_terrain", "m", NATIVE_TERRAIN_RES, False, SOURCES["glo90"], ("elevation", "hillshade"),
-            {"hillshade": {"azimuth": 315, "altitude": 45}}, backend, max_tiles=2500),
+            {"kind": "terrain", "title": "Terrain", "hillshade": {"azimuth": 315, "altitude": 45}}, backend, max_tiles=2500),
     }
 
 
