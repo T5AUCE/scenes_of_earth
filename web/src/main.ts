@@ -1,25 +1,39 @@
 import "./style.css";
-import { getHealth } from "./api";
+import { getHealth, isSceneId } from "./api";
 import { createMap } from "./map";
 import { createPanel } from "./panel";
 
 const map = createMap("map");
 const mapLoaded = new Promise<void>((resolve) => map.once("load", () => resolve()));
 const panel = createPanel(document.getElementById("panel")!, map);
+const badge = document.getElementById("status")!;
 
-const sharedScene = new URLSearchParams(location.search).get("scene");
-if (sharedScene) {
-  Promise.all([panel, mapLoaded]).then(([ready]) => ready.openScene(sharedScene));
+openSharedScene();
+showBackendStatus();
+
+// ?scene= comes from the address bar, so it is checked before it reaches a request.
+function openSharedScene() {
+  const sceneId = new URLSearchParams(location.search).get("scene");
+  if (!sceneId) return;
+
+  Promise.all([panel, mapLoaded])
+    .then(([ready]) => {
+      if (isSceneId(sceneId)) return ready.openScene(sceneId);
+
+      ready.showStatus("The scene id in the address is not valid.");
+    })
+    .catch((error) => showBadge(`Cannot open the scene: ${error.message}`, "down"));
 }
 
-const badge = document.getElementById("status")!;
-getHealth().then(
-  (h) => {
-    badge.textContent = `backend ok (v${h.version})`;
-    badge.classList.add("ok");
-  },
-  () => {
-    badge.textContent = "backend unreachable";
-    badge.classList.add("down");
-  },
-);
+function showBackendStatus() {
+  getHealth().then(
+    (health) => showBadge(`backend ok (v${health.version})`, "ok"),
+    () => showBadge("backend unreachable", "down"),
+  );
+}
+
+function showBadge(text: string, state: "ok" | "down") {
+  badge.textContent = text;
+  badge.classList.remove("ok", "down");
+  badge.classList.add(state);
+}

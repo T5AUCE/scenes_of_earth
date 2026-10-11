@@ -1,4 +1,7 @@
-"""Command line: `python -m soe.cli import-boundaries --cgaz DIR --ucdb FILE`. Needs the [import] extra."""
+"""Command line: `python -m soe.cli import-boundaries --cgaz DIR --ucdb FILE`.
+
+Needs the [import] extra.
+"""
 import argparse
 import json
 import logging
@@ -13,62 +16,119 @@ CELL_DEG2 = 0.05 * 0.05
 MIN_CITY_POP = 1_000_000
 GLO90_TILE_LIST = "https://copernicus-dem-90m.s3.amazonaws.com/tileList.txt"
 CGAZ_LEVELS = {0: "country", 1: "state", 2: "county"}
+SIMPLIFY_TOLERANCE_DEG = 0.01
+COVERAGE_BOUNDS = (-180, -60, 180, 60)  # the rain coverage
+DOWNLOAD_TIMEOUT_SECONDS = 60
+TILE_GRID_SHAPE = (180, 360)
+TILE_ROW_OFFSET = 90  # row = lat + 90
+TILE_COL_OFFSET = 180  # column = lon + 180
+GLO90_TILE_PATTERN = r"Copernicus_DSM_COG_30_([NS])(\d+)_00_([EW])(\d+)_00_DEM"
 
 
-def _row(rid, level, name, parent, iso3, geom, source, licence):
-    """One boundaries row: geometry simplified to 0.01 degrees, clipped to rain coverage (60S-60N)."""
-    from shapely.geometry import box, mapping
-    geom = geom.simplify(0.01, preserve_topology=True).intersection(box(-180, -60, 180, 60))
-    if geom.is_empty:
-        return None
-    w, s, e, n = unwrap(geom).bounds  # a shape across 180 gets E > 180 instead of spanning the world
-    return (rid, level, name, parent, iso3, w, s, e, n, max(1, round(geom.area / CELL_DEG2)),
-            json.dumps(mapping(geom)), source, licence)
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="soe")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    import_parser = subparsers.add_parser(
+        "import-boundaries",
+        help="load CGAZ ADM0/1/2 and GHSL UCDB cities into SQLite",
+    )
+    import_parser.add_argument("--cgaz", help="folder with the CGAZ ADM0/ADM1/ADM2 GeoPackages")
+    import_parser.add_argument("--ucdb", help="GHS UCDB R2024A GeoPackage or zip")
+    import_parser.add_argument("--db", default=os.environ.get("SOE_DB", "./data/soe.db"))
+    subparsers.add_parser(
+        "glo90-index",
+        help="rebuild soe/glo90_tiles.bin from the GLO-90 tile list (downloads 1 MB)",
+    )
+    args = parser.parse_args(argv)
+
+    if args.command == "glo90-index":
+        tile_count = build_glo90_index(Path(__file__).parent / "glo90_tiles.bin")
+        print("GLO-90 tiles:", tile_count)
+        return
+
+    if not (args.cgaz or args.ucdb):
+        parser.error("give --cgaz and/or --ucdb")
+
+    logging.basicConfig(level=logging.INFO)
+    db.init(args.db)
+    if args.cgaz:
+        print("CGAZ rows:", import_cgaz(args.db, args.cgaz))
+    if args.ucdb:
+        print("UCDB city rows:", import_ucdb(args.db, args.ucdb))
 
 
 def build_glo90_index(path):
-    """Write the bitmap of GLO-90 tiles that exist (soe/glo90_tiles.bin) from the bucket's tile list."""
+    """Write the bitmap of GLO-90 tiles that exist (soe/glo90_tiles.bin) from the bucket's list."""
     import re
     import urllib.request
+
     import numpy as np
-    bits = np.zeros((180, 360), bool)
-    with urllib.request.urlopen(GLO90_TILE_LIST, timeout=60) as r:
-        for line in r.read().decode().splitlines():
-            m = re.match(r"Copernicus_DSM_COG_30_([NS])(\d+)_00_([EW])(\d+)_00_DEM", line)
-            if m:
-                lat, lon = int(m[2]) * (1 if m[1] == "N" else -1), int(m[4]) * (1 if m[3] == "E" else -1)
-                bits[lat + 90, lon + 180] = True
-    Path(path).write_bytes(np.packbits(bits).tobytes())
-    return int(bits.sum())
+
+    exists = np.zeros(TILE_GRID_SHAPE, bool)
+    with urllib.request.urlopen(GLO90_TILE_LIST, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:
+        lines = response.read().decode().splitlines()
+    for line in lines:
+        match = re.match(GLO90_TILE_PATTERN, line)
+        if match:
+            north_or_south, lat_digits, east_or_west, lon_digits = match.groups()
+            lat = int(lat_digits) * (1 if north_or_south == "N" else -1)
+            lon = int(lon_digits) * (1 if east_or_west == "E" else -1)
+            exists[lat + TILE_ROW_OFFSET, lon + TILE_COL_OFFSET] = True
+
+    Path(path).write_bytes(np.packbits(exists).tobytes())
+    return int(exists.sum())
 
 
 def import_cgaz(db_path, folder):
-    """geoBoundaries CGAZ ADM0/1/2 GeoPackages (any file in `folder` containing 'ADM0', 'ADM1', 'ADM2')."""
+    """geoBoundaries CGAZ ADM0/1/2 GeoPackages, found in `folder` by 'ADM0', 'ADM1', 'ADM2'."""
     import geopandas as gpd
+
     frames = {}
-    for lvl in (0, 1, 2):
-        files = sorted(Path(folder).glob(f"*ADM{lvl}*.gpkg"))
+    for level in CGAZ_LEVELS:
+        files = sorted(Path(folder).glob(f"*ADM{level}*.gpkg"))
         if not files:
-            raise SystemExit(f"no *ADM{lvl}*.gpkg in {folder}")
-        frames[lvl] = gpd.read_file(files[0]).to_crs(4326)
-    countries = dict(zip(frames[0]["shapeGroup"], frames[0]["shapeName"]))
-    adm2 = frames[2].copy()  # parent of a county is the state that contains its representative point
-    adm2.geometry = adm2.representative_point()
-    joined = adm2.sjoin(frames[1][["geometry", "shapeName"]], predicate="within", rsuffix="p")
-    parents = joined.groupby(level=0)["shapeName_p"].first()
+            raise SystemExit(f"no *ADM{level}*.gpkg in {folder}")
+        frames[level] = gpd.read_file(files[0]).to_crs(4326)
+
+    country_names = dict(zip(frames[0]["shapeGroup"], frames[0]["shapeName"]))
+    county_parents = _county_parent_states(frames)
     rows = []
-    for lvl, gdf in frames.items():
-        for idx, r in gdf.iterrows():
-            code = r["shapeGroup"]
-            parent = {0: "", 1: countries.get(code, ""), 2: parents.get(idx, countries.get(code, ""))}[lvl]
-            sid = r["shapeID"] if "shapeID" in gdf.columns else r["id"]  # ADM0 has no shapeID
-            row = _row(f"cgaz:ADM{lvl}:{sid}", CGAZ_LEVELS[lvl], r["shapeName"], parent, code,
-                       r.geometry, "geoBoundaries CGAZ", "CC BY 4.0")
+    for level, frame in frames.items():
+        # ADM0 has no shapeID.
+        id_column = "shapeID" if "shapeID" in frame.columns else "id"
+        for index, record in frame.iterrows():
+            country_code = record["shapeGroup"]
+            country_name = country_names.get(country_code, "")
+            parent = {
+                0: "",
+                1: country_name,
+                2: county_parents.get(index, country_name),
+            }[level]
+            shape_id = record[id_column]
+            row = _row(
+                f"cgaz:ADM{level}:{shape_id}",
+                CGAZ_LEVELS[level],
+                record["shapeName"],
+                parent,
+                country_code,
+                record.geometry,
+                "geoBoundaries CGAZ",
+                "CC BY 4.0",
+            )
             if row:
                 rows.append(row)
+
     replaced = db.add_boundaries(db_path, "geoBoundaries CGAZ", rows)
     print(f"CGAZ: {replaced} duplicate ids replaced")
     return len(rows)
+
+
+def _county_parent_states(frames):
+    """State name per county index: the state that contains the county's representative point."""
+    counties = frames[2].copy()
+    counties.geometry = counties.representative_point()
+    joined = counties.sjoin(frames[1][["geometry", "shapeName"]], predicate="within", rsuffix="p")
+    return joined.groupby(level=0)["shapeName_p"].first()
 
 
 def import_ucdb(db_path, path):
@@ -78,53 +138,65 @@ def import_ucdb(db_path, path):
     exact R2024A names could not be checked offline.
     """
     import geopandas as gpd
+
     path = str(path)
     if path.endswith(".zip"):
-        inner = next(n for n in zipfile.ZipFile(path).namelist() if n.endswith(".gpkg"))
+        inner = next(name for name in zipfile.ZipFile(path).namelist() if name.endswith(".gpkg"))
         path = f"zip://{path}!{inner}"
-    gdf = gpd.read_file(path, layer=_ucdb_layer(path)).to_crs(4326)
+    frame = gpd.read_file(path, layer=_ucdb_layer(path)).to_crs(4326)
 
-    def col(part):
-        """Column containing `part`; if several epochs exist (..._1975 ... _2025) take the latest."""
-        return sorted(c for c in gdf.columns if part in c)[-1]
-
-    name, pop, country = col("UCN_MAI"), col("POP_TOT"), col("CNT_GAD")
+    name_column = _latest_column(frame, "UCN_MAI")
+    population_column = _latest_column(frame, "POP_TOT")
+    country_column = _latest_column(frame, "CNT_GAD")
     rows = []
-    for idx, r in gdf[gdf[pop] >= MIN_CITY_POP].iterrows():
-        row = _row(f"ucdb:{idx}", "city", r[name], r[country], None, r.geometry, "GHSL UCDB R2024A", "CC BY 4.0")
+    for index, record in frame[frame[population_column] >= MIN_CITY_POP].iterrows():
+        row = _row(
+            f"ucdb:{index}",
+            "city",
+            record[name_column],
+            record[country_column],
+            None,
+            record.geometry,
+            "GHSL UCDB R2024A",
+            "CC BY 4.0",
+        )
         if row:
             rows.append(row)
+
     replaced = db.add_boundaries(db_path, "GHSL UCDB R2024A", rows)
     print(f"UCDB: {replaced} duplicate ids replaced")
     return len(rows)
 
 
+def _latest_column(frame, part):
+    """Column containing `part`; if several epochs exist (..._1975 ... _2025) take the latest."""
+    return sorted(column for column in frame.columns if part in column)[-1]
+
+
 def _ucdb_layer(path):
     import pyogrio
-    layers = [l[0] for l in pyogrio.list_layers(path)]
-    return next((l for l in layers if "GENERAL_CHARACTERISTICS" in l.upper()), layers[0])
+
+    layers = [layer[0] for layer in pyogrio.list_layers(path)]
+    general = (layer for layer in layers if "GENERAL_CHARACTERISTICS" in layer.upper())
+    return next(general, layers[0])
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser(prog="soe")
-    sub = ap.add_subparsers(dest="cmd", required=True)
-    imp = sub.add_parser("import-boundaries", help="load CGAZ ADM0/1/2 and GHSL UCDB cities into SQLite")
-    imp.add_argument("--cgaz", help="folder with the CGAZ ADM0/ADM1/ADM2 GeoPackages")
-    imp.add_argument("--ucdb", help="GHS UCDB R2024A GeoPackage or zip")
-    imp.add_argument("--db", default=os.environ.get("SOE_DB", "./data/soe.db"))
-    sub.add_parser("glo90-index", help="rebuild soe/glo90_tiles.bin from the GLO-90 tile list (downloads 1 MB)")
-    args = ap.parse_args(argv)
-    if args.cmd == "glo90-index":
-        print("GLO-90 tiles:", build_glo90_index(Path(__file__).parent / "glo90_tiles.bin"))
-        return
-    logging.basicConfig(level=logging.INFO)
-    if not (args.cgaz or args.ucdb):
-        ap.error("give --cgaz and/or --ucdb")
-    db.init(args.db)
-    if args.cgaz:
-        print("CGAZ rows:", import_cgaz(args.db, args.cgaz))
-    if args.ucdb:
-        print("UCDB city rows:", import_ucdb(args.db, args.ucdb))
+def _row(row_id, level, name, parent, iso3, geometry, source, licence):
+    """One boundaries row: geometry simplified, clipped to rain coverage (60S-60N)."""
+    from shapely.geometry import box, mapping
+
+    simplified = geometry.simplify(SIMPLIFY_TOLERANCE_DEG, preserve_topology=True)
+    clipped = simplified.intersection(box(*COVERAGE_BOUNDS))
+    if clipped.is_empty:
+        return None
+
+    # A shape across 180 gets E > 180 instead of spanning the world.
+    west, south, east, north = unwrap(clipped).bounds
+    cells = max(1, round(clipped.area / CELL_DEG2))
+    return (
+        row_id, level, name, parent, iso3, west, south, east, north, cells,
+        json.dumps(mapping(clipped)), source, licence,
+    )
 
 
 if __name__ == "__main__":

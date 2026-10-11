@@ -1,26 +1,33 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { imageCorners, mercY, sampleTable } from "./mercator.ts";
+import { imageCorners, mercY, sampleTable, shiftLongitudes, worldShift } from "./mercator.ts";
 
-const allInside = (n: number) => new Uint8Array(n).fill(1);
+const allInside = (cellCount: number) => new Uint8Array(cellCount).fill(1);
+const gridOf = (bbox: number[], nx: number, ny: number) => ({
+  bbox: bbox as [number, number, number, number],
+  nx,
+  ny,
+});
 
 test("rows map to source rows in order, never going back up", () => {
-  const grid = { bbox: [10, 40, 12, 50] as [number, number, number, number], nx: 4, ny: 10 };
+  const width = 4;
+  const grid = gridOf([10, 40, 12, 50], width, 10);
   const table = sampleTable(grid, allInside(40));
 
   let previousRow = 0;
-  for (let j = 0; j < table.height; j++) {
-    const row = Math.floor(table.src[j * 4] / 4);
+  for (let pixelRow = 0; pixelRow < table.height; pixelRow++) {
+    const row = Math.floor(table.src[pixelRow * width] / width);
     assert.ok(row >= previousRow);
     previousRow = row;
   }
+
   assert.equal(table.src[0], 0);
   assert.equal(table.src[table.src.length - 1], 39);
   assert.ok(table.height >= 10);
 });
 
 test("near the equator the table is the grid itself", () => {
-  const grid = { bbox: [0, -0.05, 0.1, 0.05] as [number, number, number, number], nx: 2, ny: 2 };
+  const grid = gridOf([0, -0.05, 0.1, 0.05], 2, 2);
   const table = sampleTable(grid, allInside(4));
 
   assert.equal(table.height, 2);
@@ -28,16 +35,17 @@ test("near the equator the table is the grid itself", () => {
 });
 
 test("cells outside the mask become -1", () => {
-  const grid = { bbox: [0, 0, 2, 1] as [number, number, number, number], nx: 2, ny: 1 };
+  const grid = gridOf([0, 0, 2, 1], 2, 1);
   const table = sampleTable(grid, Uint8Array.of(1, 0));
 
   assert.deepEqual([...table.src.slice(0, 2)], [0, -1]);
 });
 
 test("the height is capped", () => {
-  const grid = { bbox: [0, 0, 1, 1] as [number, number, number, number], nx: 1, ny: 100 };
+  const grid = gridOf([0, 0, 1, 1], 1, 100);
+  const cappedHeight = 30;
 
-  assert.equal(sampleTable(grid, allInside(100), 30).height, 30);
+  assert.equal(sampleTable(grid, allInside(100), cappedHeight).height, cappedHeight);
 });
 
 test("Mercator y grows faster than latitude away from the equator", () => {
@@ -49,4 +57,28 @@ test("corners shift one world west only when the centre is above 180", () => {
   assert.deepEqual(imageCorners([177, -20, 180, -15])[0], [177, -15]);
   assert.deepEqual(imageCorners([170, -20, 190, -15])[1], [190, -15]);
   assert.deepEqual(imageCorners([175, -20, 195, -15])[0], [-185, -15]);
+});
+
+test("the table is narrower than the grid when the texture limit is smaller", () => {
+  const grid = gridOf([0, 0, 10, 1], 100, 1);
+  const table = sampleTable(grid, allInside(100), 40);
+
+  assert.equal(table.width, 40);
+  assert.equal(table.src.length, table.width * table.height);
+  assert.equal(table.src[0], 1);
+  assert.equal(table.src[39], 98);
+});
+
+test("the outline shifts by the same amount as the image corners", () => {
+  const eastern: [number, number, number, number] = [175, -20, 195, -15];
+
+  assert.equal(worldShift(eastern), -360);
+  assert.equal(worldShift([170, -20, 190, -15]), 0);
+  assert.equal(imageCorners(eastern)[0][0], eastern[0] + worldShift(eastern));
+});
+
+test("shifting longitudes keeps latitudes and nesting", () => {
+  const polygon = [[[179, 1], [181, 1], [181, 2], [179, 1]]];
+
+  assert.deepEqual(shiftLongitudes(polygon, -360), [[[-181, 1], [-179, 1], [-179, 2], [-181, 1]]]);
 });

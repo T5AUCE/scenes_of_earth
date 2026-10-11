@@ -14,8 +14,8 @@ from soe.sources import (REGISTRY, SyntheticSource, _tile_index, block_mean, glo
                          make_registry, month_list, terrain_by_blocks, terrain_res)
 
 NAIROBI = box(36.5, -1.5, 37.5, -0.5)
-SYN = make_registry(SyntheticSource())
-RAIN, TERRAIN = SYN['chirps_monthly'], SYN['glo90_terrain']
+SYNTHETIC_REGISTRY = make_registry(SyntheticSource())
+RAIN, TERRAIN = SYNTHETIC_REGISTRY["chirps_monthly"], SYNTHETIC_REGISTRY["glo90_terrain"]
 
 
 def poly(x0, y0, x1, y1):
@@ -41,10 +41,10 @@ def test_months():
 
 
 def test_block_mean_is_nan_aware():
-    a = np.array([[1, 3, np.nan, np.nan], [5, np.nan, np.nan, np.nan]], "float32")
-    out = block_mean(a, 2)
+    values = np.array([[1, 3, np.nan, np.nan], [5, np.nan, np.nan, np.nan]], "float32")
+    means = block_mean(values, 2)
 
-    assert out[0, 0] == 3 and np.isnan(out[0, 1])
+    assert means[0, 0] == 3 and np.isnan(means[0, 1])
 
 
 def test_hillshade_flat_and_slope():
@@ -73,16 +73,16 @@ def test_clean_polygon_rules():
         "nope",
     ]
 
-    for b in bad:
+    for geometry in bad:
         with pytest.raises(AreaError):
-            clean_polygon(b)
+            clean_polygon(geometry)
 
 
 def test_dedupe_shape_is_canonical():
-    a = clean_polygon(poly(36.50001, -1.5, 37.5, -0.49999))
-    b = clean_polygon(poly(36.5, -1.5, 37.5, -0.5))
+    jittered = clean_polygon(poly(36.50001, -1.5, 37.5, -0.49999))
+    exact = clean_polygon(poly(36.5, -1.5, 37.5, -0.5))
 
-    assert a.wkb == b.wkb
+    assert jittered.wkb == exact.wkb
 
 
 def test_plan_rejections():
@@ -110,38 +110,37 @@ def test_plan_rejections():
 
 def test_plan_aggregates_and_snaps():
     # 360k cells x 120 months x 2 B is more than 50 MB.
-    p = plan_months(Area(box(30, -20, 60, 10)), [RAIN], 120)
-    lp = p.layers["chirps_monthly"]
-    f = lp.factor
+    scene_plan = plan_months(Area(box(30, -20, 60, 10)), [RAIN], 120)
+    layer_plan = scene_plan.layers["chirps_monthly"]
+    factor = layer_plan.factor
 
-    assert f == 2
+    assert factor == 2
 
-    w, s, e, n = lp.bbox
+    west, south, east, north = layer_plan.bbox
+    cell = 0.05 * factor
+    edges = (west + 180, 60 - north, east + 180, 60 - south)
 
-    cell = 0.05 * f
-
-    edges = (w + 180, 60 - n, e + 180, 60 - s)
-
-    assert all(v / cell == pytest.approx(round(v / cell)) for v in edges)
-    assert lp.shape == (round((n - s) / 0.1), round((e - w) / 0.1))
-    assert lp.transform.a == pytest.approx(cell)
-    assert any("averaged" in note for note in lp.notices)
-    assert lp.shape[0] * lp.shape[1] * 120 * 2 <= 50_000_000
-    assert len(lp.steps) == 120
+    assert all(edge / cell == pytest.approx(round(edge / cell)) for edge in edges)
+    assert layer_plan.shape == (round((north - south) / 0.1), round((east - west) / 0.1))
+    assert layer_plan.transform.a == pytest.approx(cell)
+    assert any("averaged" in note for note in layer_plan.notices)
+    assert layer_plan.shape[0] * layer_plan.shape[1] * 120 * 2 <= 50_000_000
+    assert len(layer_plan.steps) == 120
 
 
 def test_plan_tiny_named_area_falls_back_to_all_touched():
     tiny = box(36.99, -1.01, 37.0, -1.0)  # sits between cell centres
-    p = plan_months(Area(tiny, {"name": "Tinyville"}), [RAIN])
+    scene_plan = plan_months(Area(tiny, {"name": "Tinyville"}), [RAIN])
 
-    lp = p.layers["chirps_monthly"]
+    layer_plan = scene_plan.layers["chirps_monthly"]
 
-    assert lp.cells_inside >= 1
-    assert any("touches" in n for n in lp.notices)
-    assert any("padded" in n for n in p.notices)
+    assert layer_plan.cells_inside >= 1
+    assert any("touches" in note for note in layer_plan.notices)
+    assert any("padded" in note for note in scene_plan.notices)
 
-    w, s, e, n = p.bbox
-    assert e - w >= 0.5 - 1e-9 and n - s >= 0.5 - 1e-9
+    west, south, east, north = scene_plan.bbox
+
+    assert east - west >= 0.5 - 1e-9 and north - south >= 0.5 - 1e-9
 
 
 def test_terrain_res_budget():
@@ -152,11 +151,12 @@ def test_terrain_res_budget():
 
     boxes = ((33, -4, 42, 6), (-70, -30, -30, 10), (19, 41, 191, 60), (0, 0, 2, 2), (0, 0, 0.5, 40))
 
-    for b in boxes:
-        res = terrain_res(b)
-        nx, ny = (b[2] - b[0]) / res, (b[3] - b[1]) / res
-        assert nx == pytest.approx(round(nx)) and ny == pytest.approx(round(ny))
-        assert nx * ny <= 2048 * 2048 and max(nx, ny) <= 4096
+    for bounds in boxes:
+        res = terrain_res(bounds)
+        width, height = (bounds[2] - bounds[0]) / res, (bounds[3] - bounds[1]) / res
+
+        assert width == pytest.approx(round(width)) and height == pytest.approx(round(height))
+        assert width * height <= 2048 * 2048 and max(width, height) <= 4096
 
 
 def test_tile_index():
@@ -169,14 +169,16 @@ def test_tile_index():
 
 
 def test_terrain_blocks_equal_one_read():
-    syn = SyntheticSource()
+    synthetic = SyntheticSource()
     for bounds in ((177.35, -19.1, 181.65, -15.85), (36.5, -1.5, 37.5, -0.5)):
         res = terrain_res(bounds)
-        whole, _ = syn.terrain(bounds, res)
-        blocks, t = terrain_by_blocks(bounds, res, lambda b, r: syn.terrain(b, r)[0])
+        whole, _ = synthetic.terrain(bounds, res)
+        blocks, transform = terrain_by_blocks(
+            bounds, res, lambda block, block_res: synthetic.terrain(block, block_res)[0]
+        )
 
         assert np.abs(whole.astype(int) - blocks).max() <= 1  # float rounding at block edges only
-        assert t.c == bounds[0] and t.f == bounds[3]
+        assert transform.c == bounds[0] and transform.f == bounds[3]
 
 
 FIJI = MultiPolygon([box(178, -19, 180, -17), box(-180, -19, -178, -17)])
@@ -185,27 +187,27 @@ FIJI = MultiPolygon([box(178, -19, 180, -17), box(-180, -19, -178, -17)])
 def test_unwrap_and_plan_across_180():
     assert unwrap(FIJI).bounds == (178, -19, 182, -17)
 
-    p = plan_months(Area(FIJI), [RAIN], 2)
-    lp = p.layers["chirps_monthly"]
+    scene_plan = plan_months(Area(FIJI), [RAIN], 2)
+    layer_plan = scene_plan.layers["chirps_monthly"]
 
-    assert p.bbox[2] > 180 and lp.bbox[2] > 180 and lp.mask.sum() > 0
+    assert scene_plan.bbox[2] > 180 and layer_plan.bbox[2] > 180 and layer_plan.mask.sum() > 0
 
 
 def test_read_month_wraps_at_180():
-    src = SyntheticSource()
-    rain = make_registry(src)["chirps_monthly"]
+    source = SyntheticSource()
+    rain = make_registry(source)["chirps_monthly"]
     bbox = [179, -1, 181, 1]
-    a = rain.read_month("2015-01", bbox, 2)
-    left = src.read_rain("2015-01", (7180, 1180, 20, 40))
-    right = src.read_rain("2015-01", (0, 1180, 20, 40))
+    rain_month = rain.read_month("2015-01", bbox, 2)
+    left = source.read_rain("2015-01", (7180, 1180, 20, 40))
+    right = source.read_rain("2015-01", (0, 1180, 20, 40))
 
-    assert src.reads == 4 and a.shape == (20, 20)
-    assert np.array_equal(a, block_mean(np.hstack([left, right]), 2), equal_nan=True)
+    assert source.reads == 4 and rain_month.shape == (20, 20)
+    assert np.array_equal(rain_month, block_mean(np.hstack([left, right]), 2), equal_nan=True)
 
 
 def test_synthetic_build_across_180(tmp_path):
-    reg = make_registry(SyntheticSource())
-    layers = [reg["glo90_terrain"], reg["chirps_monthly"]]
+    registry = make_registry(SyntheticSource())
+    layers = [registry["glo90_terrain"], registry["chirps_monthly"]]
     build_scene(HASH_B, Area(FIJI, BOUNDARY), "2015-01", "2015-03", layers, "Test", tmp_path,
                 lambda fraction: None)
 
@@ -214,19 +216,23 @@ def test_synthetic_build_across_180(tmp_path):
 
     assert validate(doc) == [] and doc["area"]["bbox"][2] > 180
 
-    g = zarr.open_group(out / "data.zarr", mode="r")
+    root = zarr.open_group(out / "data.zarr", mode="r")
 
     for name in ("chirps_monthly", "glo90_terrain"):
-        lon = g[name]["lon"][:]
+        lon = root[name]["lon"][:]
+
         assert np.all(np.diff(lon) > 0) and lon[-1] > 180
 
-    t = g["glo90_terrain"]
-    w, e = doc["area"]["bbox"][0], doc["area"]["bbox"][2]
+    terrain = root["glo90_terrain"]
+    bbox = doc["area"]["bbox"]
+    west, east = bbox[0], bbox[2]
 
-    assert t["elevation"].shape[1] == round((e - w) / terrain_res(doc["area"]["bbox"]))
+    assert terrain["elevation"].shape[1] == round((east - west) / terrain_res(bbox))
 
-    hs = t["hillshade"][:]
-    assert not np.all(hs[:, hs.shape[1] // 2] == hs[0, hs.shape[1] // 2])  # no flat seam column
+    shade = terrain["hillshade"][:]
+    middle = shade.shape[1] // 2
+
+    assert not np.all(shade[:, middle] == shade[0, middle])  # no flat seam column
 
 
 HASH_A, HASH_B, HASH_C = "a" * 20, "b" * 20, "c" * 20
@@ -235,11 +241,11 @@ BOUNDARY = {"id": "cgaz:ADM1:TEST", "name": "Testland", "level": "state", "iso3"
 
 
 def test_synthetic_build_validates_and_opens(tmp_path):
-    src = SyntheticSource()
-    reg = make_registry(src)
+    source = SyntheticSource()
+    registry = make_registry(source)
     area = Area(NAIROBI, BOUNDARY)
     seen = []
-    layers = [reg["glo90_terrain"], reg["chirps_monthly"]]
+    layers = [registry["glo90_terrain"], registry["chirps_monthly"]]
     size = build_scene(HASH_A, area, "2015-01", "2016-12", layers, "Test", tmp_path, seen.append)
 
     assert size > 0 and seen[-1] == 1.0
@@ -281,8 +287,8 @@ def test_synthetic_build_validates_and_opens(tmp_path):
 
 
 def test_build_with_aggregation_factor_2(tmp_path):
-    reg = make_registry(SyntheticSource())
-    rain = reg["chirps_monthly"]
+    registry = make_registry(SyntheticSource())
+    rain = registry["chirps_monthly"]
     area = Area(box(30, -20, 60, 10), BOUNDARY)
 
     # 360k cells x 72 months x 2 B is more than 50 MB.
@@ -294,7 +300,7 @@ def test_build_with_aggregation_factor_2(tmp_path):
     assert validate(doc) == []
     assert doc["layers"][0]["grid"] == {"crs": "EPSG:4326", "bbox": [30, -20, 60, 10], "res": 0.1,
                                         "nx": 300, "ny": 300, "aggregation": 2}
-    assert any("averaged" in n for n in doc["notices"]["limits"])
+    assert any("averaged" in note for note in doc["notices"]["limits"])
 
     store = zarr.open_group(str(tmp_path / HASH_A / "data.zarr"), mode="r")
     precip = store["chirps_monthly/precip"]
@@ -327,15 +333,15 @@ def test_validate_catches_missing_attribution(tmp_path):
     doc = json.loads((tmp_path / HASH_B / "scene.json").read_text(encoding="utf-8"))
     del doc["layers"][0]["source"]["disclaimer"]
 
-    assert any("disclaimer" in p for p in validate(doc))
+    assert any("disclaimer" in problem for problem in validate(doc))
 
     doc["layers"][1]["source"]["attribution"] = ""
-    assert any("attribution" in p for p in validate(doc))
+    assert any("attribution" in problem for problem in validate(doc))
 
 
 def test_failed_build_leaves_no_partial_bundle(tmp_path):
     class Boom(SyntheticSource):
-        def read_rain(self, ym, win):
+        def read_rain(self, month, window):
             raise RuntimeError("boom")
 
     boom = make_registry(Boom())["chirps_monthly"]
@@ -354,10 +360,12 @@ def test_import_boundaries_tiny_geopackage(tmp_path):
 
     country, state, county = box(36, -2, 38, 0), box(36, -2, 37, 0), box(36, -1, 36.5, 0)
     levels = ((0, country, "Testland"), (1, state, "West State"), (2, county, "Small County"))
-    for lvl, g, nm in levels:
-        gpd.GeoDataFrame({"shapeName": [nm], "shapeGroup": ["TST"], "shapeID": [f"id{lvl}"]},
-                         geometry=[g], crs=4326).to_file(
-            tmp_path / f"geoBoundariesCGAZ_ADM{lvl}.gpkg")
+    for level, geometry, name in levels:
+        gpd.GeoDataFrame(
+            {"shapeName": [name], "shapeGroup": ["TST"], "shapeID": [f"id{level}"]},
+            geometry=[geometry],
+            crs=4326,
+        ).to_file(tmp_path / f"geoBoundariesCGAZ_ADM{level}.gpkg")
 
     gpd.GeoDataFrame({"GC_UCN_MAI_2025": ["Big City", "Small Town"], "GC_POP_TOT_2025": [2e6, 5e4],
                       "GC_CNT_GAD_2025": ["Testland", "Testland"]},
@@ -389,8 +397,8 @@ def build_nairobi(tmp_path, months=("2015-01", "2016-02")):
 
 
 def test_plan_gives_each_layer_its_own_grid_and_mask():
-    p = plan_months(Area(NAIROBI), [TERRAIN, RAIN])
-    terrain, rain = p.layers["glo90_terrain"], p.layers["chirps_monthly"]
+    scene_plan = plan_months(Area(NAIROBI), [TERRAIN, RAIN])
+    terrain, rain = scene_plan.layers["glo90_terrain"], scene_plan.layers["chirps_monthly"]
 
     assert terrain.res == pytest.approx(1 / 1200) and rain.res == pytest.approx(0.05)
     assert terrain.shape == (1200, 1200) and rain.shape == (20, 20)
@@ -410,33 +418,40 @@ def test_output_budget_is_summed_across_layers():
 
 
 def test_layer_outside_its_coverage_is_refused_before_read(tmp_path):
-    src = SyntheticSource()
-    reg = make_registry(src)
+    source = SyntheticSource()
+    registry = make_registry(source)
     north = box(36, 40, 38, 45)
-    narrow = replace(reg["glo90_terrain"], coverage=(-180, -30, 180, 30))
+    narrow = replace(registry["glo90_terrain"], coverage=(-180, -30, 180, 30))
 
     with pytest.raises(AreaError, match="outside Terrain coverage"):
-        build_scene(HASH_A, Area(north), "2015-01", "2015-03", [narrow, reg["chirps_monthly"]], "T",
-                    tmp_path)
+        build_scene(
+            HASH_A,
+            Area(north),
+            "2015-01",
+            "2015-03",
+            [narrow, registry["chirps_monthly"]],
+            "T",
+            tmp_path,
+        )
 
-    assert src.reads == 0 and not (tmp_path / HASH_A).exists()
+    assert source.reads == 0 and not (tmp_path / HASH_A).exists()
 
     # Half of this area is inside the terrain coverage.
-    p = plan_months(Area(box(36, 28, 38, 33)), [narrow, reg["chirps_monthly"]])
+    scene_plan = plan_months(Area(box(36, 28, 38, 33)), [narrow, registry["chirps_monthly"]])
 
-    assert any("clipped" in n for n in p.layers["glo90_terrain"].notices)
-    assert p.layers["chirps_monthly"].notices == []
-    assert p.clipped and p.layers["glo90_terrain"].bbox[3] <= 30
+    assert any("clipped" in note for note in scene_plan.layers["glo90_terrain"].notices)
+    assert scene_plan.layers["chirps_monthly"].notices == []
+    assert scene_plan.clipped and scene_plan.layers["glo90_terrain"].bbox[3] <= 30
 
 
 def test_series_steps_come_from_the_dataset_axis():
     sixteen_day = replace(RAIN, id="ndvi", title="Vegetation", step="P16D")
     sixteen_day.steps = lambda start, end: ["2020-01-01", "2020-01-17", "2020-02-02"]
 
-    p = plan_months(Area(NAIROBI), [RAIN, sixteen_day], 2)
+    scene_plan = plan_months(Area(NAIROBI), [RAIN, sixteen_day], 2)
 
-    assert p.layers["chirps_monthly"].steps == ["1990-01-01", "1990-02-01"]
-    assert p.layers["ndvi"].steps == ["2020-01-01", "2020-01-17", "2020-02-02"]
+    assert scene_plan.layers["chirps_monthly"].steps == ["1990-01-01", "1990-02-01"]
+    assert scene_plan.layers["ndvi"].steps == ["2020-01-01", "2020-01-17", "2020-02-02"]
 
 
 def test_rain_is_uint16_sharded_and_round_trips(tmp_path):
@@ -454,7 +469,7 @@ def test_rain_is_uint16_sharded_and_round_trips(tmp_path):
     raw = precip[...]
     decoded = np.where(raw == 65535, np.nan, raw * precip.attrs["scale_factor"])
     bbox = rain["grid"]["bbox"]
-    expected = np.stack([RAIN.read_step(d, bbox) for d in rain["time"]["values"]])
+    expected = np.stack([RAIN.read_step(step, bbox) for step in rain["time"]["values"]])
 
     assert np.isnan(expected).any() and np.array_equal(np.isnan(decoded), np.isnan(expected))
     assert np.nanmax(np.abs(decoded - expected)) <= 0.051
@@ -494,9 +509,10 @@ def test_validate_checks_the_layer_contract(tmp_path):
 
     problems = validate(doc)
 
-    assert any("time axis" in p for p in problems) and any("static layer" in p for p in problems)
-    assert any("mask has no cells" in p for p in problems)
-    assert any("missing grid" in p for p in problems)
+    assert any("time axis" in problem for problem in problems)
+    assert any("static layer" in problem for problem in problems)
+    assert any("mask has no cells" in problem for problem in problems)
+    assert any("missing grid" in problem for problem in problems)
 
 
 def test_static_layers_over_budget_get_their_own_message(monkeypatch):

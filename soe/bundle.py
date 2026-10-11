@@ -5,60 +5,39 @@ from . import __version__
 from .sources import SOURCES
 
 VERSION = "0.2"
+BOUNDARY_SOURCE_FIELDS = ("licence_url", "attribution", "citation", "modified")
+TERRAIN_LAYER_ID = "glo90_terrain"
 
 
-def credits(doc_layers, boundary_source):
+def credits(layer_blocks, boundary_source):
     """Attribution block, generated from the sources actually used."""
-    srcs = [layer["source"] for layer in doc_layers]
+    sources = [layer["source"] for layer in layer_blocks]
     if boundary_source:
-        srcs.append(boundary_source)
+        sources.append(boundary_source)
     return {
-        "lines": [s["attribution"] for s in srcs],
-        "disclaimers": [s["disclaimer"] for s in srcs if s.get("disclaimer")],
+        "lines": [source["attribution"] for source in sources],
+        "disclaimers": [source["disclaimer"] for source in sources if source.get("disclaimer")],
         "endorsement": "Scenes of Earth is not endorsed by the data providers.",
-        "terms_passthrough": "Reuse of this bundle's data is subject to each source's licence "
-                             "listed in layers[].source and area.boundary.",
+        "terms_passthrough": (
+            "Reuse of this bundle's data is subject to each source's licence "
+            "listed in layers[].source and area.boundary."
+        ),
     }
 
 
-def _layer_block(ds, lp, r):
-    """One layer of scene.json, from the dataset metadata, its plan and its build result `r`."""
-    grid = {"crs": "EPSG:4326", "bbox": lp.bbox, "res": round(lp.res, 8),
-            "nx": lp.shape[1], "ny": lp.shape[0]}
-    arrays = {}
-    for role, name in ds.arrays.items():
-        dtype, scale_factor, add_offset, fill = ds.encoding[role]
-        arrays[role] = {"path": f"{ds.id}/{name}", "dtype": dtype, "scale_factor": scale_factor,
-                        "add_offset": add_offset, "fill": fill}
-    layer = {"id": ds.id, "title": ds.title, "units": ds.units, "time_varying": ds.time_varying,
-             "source": dict(ds.source), "style": dict(ds.style), "coverage": list(ds.coverage),
-             "grid": grid,
-             "mask": {"path": f"{ds.id}/mask", "rule": "cell centre inside",
-                      "cells_inside": lp.cells_inside},
-             "time": None, "arrays": arrays}
-    if ds.time_varying:
-        grid["aggregation"] = lp.factor
-        layer["style"]["domain"] = r["domain"]
-        layer["time"] = {"step": ds.step, "count": len(lp.steps), "path": f"{ds.id}/time",
-                         "values": lp.steps}
-        layer["stats"] = r["stats"]
-    return layer
-
-
 def make(scene_id, title, area, plan, datasets, info):
-    """Assemble scene.json. Layer blocks come from the dataset registry metadata.
+    """Assemble scene.json. Layer blocks come from the dataset registry metadata."""
+    boundary = _boundary_block(area) if area.named else None
+    static_layers_first = sorted(datasets, key=lambda dataset: dataset.time_varying)
+    
+    layer_blocks = [
+        _layer_block(dataset, plan.layers[dataset.id], info[dataset.id])
+        for dataset in static_layers_first
+    ]
 
-    `info[ds.id]` holds build results: {"domain", "stats"} for time-varying layers.
-    """
-    boundary = None
-    if area.named:
-        b = area.boundary
-        boundary = {"id": b["id"], "name": b["name"], "level": b["level"], "iso3": b["iso3"],
-                    "source": b["source"], "licence": b["licence"]}
-        boundary.update({k: v for k, v in SOURCES[b["source"]].items() if k in
-                         ("licence_url", "attribution", "citation", "modified")})
-    doc_layers = [_layer_block(ds, plan.layers[ds.id], info[ds.id])
-                  for ds in sorted(datasets, key=lambda d: d.time_varying)]
+    boundary_source = SOURCES[area.boundary["source"]] if area.named else None
+    layer_notices = [note for layer in plan.layers.values() for note in layer.notices]
+
     return {
         "version": VERSION,
         "id": scene_id,
@@ -73,54 +52,162 @@ def make(scene_id, title, area, plan, datasets, info):
             "geometry_href": "area.geojson",
             "clipped_to_coverage": plan.clipped,
         },
-        "layers": doc_layers,
-        "data": {"href": "data.zarr",
-                 "format": "zarr v3, gzip, sharded series, consolidated metadata"},
-        "notices": {"limits": plan.notices
-                    + [n for lp in plan.layers.values() for n in lp.notices]},
-        "credits": credits(doc_layers, boundary and SOURCES[area.boundary["source"]]),
+        "layers": layer_blocks,
+        "data": {
+            "href": "data.zarr",
+            "format": "zarr v3, gzip, sharded series, consolidated metadata",
+        },
+        "notices": {"limits": plan.notices + layer_notices},
+        "credits": credits(layer_blocks, boundary_source),
     }
+
+
+def _boundary_block(area):
+    row = area.boundary
+
+    block = {
+        "id": row["id"],
+        "name": row["name"],
+        "level": row["level"],
+        "iso3": row["iso3"],
+        "source": row["source"],
+        "licence": row["licence"],
+    }
+
+    source = SOURCES[row["source"]]
+    block.update({key: source[key] for key in BOUNDARY_SOURCE_FIELDS if key in source})
+
+    return block
+
+
+def _layer_block(dataset, layer_plan, result):
+    """One layer of scene.json, from the dataset metadata, its plan and its build result."""
+    grid = {
+        "crs": "EPSG:4326",
+        "bbox": layer_plan.bbox,
+        "res": round(layer_plan.res, 8),
+        "nx": layer_plan.shape[1],
+        "ny": layer_plan.shape[0],
+    }
+
+    layer = {
+        "id": dataset.id,
+        "title": dataset.title,
+        "units": dataset.units,
+        "time_varying": dataset.time_varying,
+        "source": dict(dataset.source),
+        "style": dict(dataset.style),
+        "coverage": list(dataset.coverage),
+        "grid": grid,
+        "mask": {
+            "path": f"{dataset.id}/mask",
+            "rule": "cell centre inside",
+            "cells_inside": layer_plan.cells_inside,
+        },
+        "time": None,
+        "arrays": _array_blocks(dataset),
+    }
+
+    if dataset.time_varying:
+        grid["aggregation"] = layer_plan.factor
+        layer["style"]["domain"] = result["domain"]
+        layer["time"] = {
+            "step": dataset.step,
+            "count": len(layer_plan.steps),
+            "path": f"{dataset.id}/time",
+            "values": layer_plan.steps,
+        }
+        layer["stats"] = result["stats"]
+
+    return layer
+
+
+def _array_blocks(dataset):
+    blocks = {}
+
+    for role, name in dataset.arrays.items():
+        dtype, scale_factor, add_offset, fill = dataset.encoding[role]
+        blocks[role] = {
+            "path": f"{dataset.id}/{name}",
+            "dtype": dtype,
+            "scale_factor": scale_factor,
+            "add_offset": add_offset,
+            "fill": fill,
+        }
+
+    return blocks
 
 
 def validate(doc):
     """Return a list of problems (empty when the bundle is fine)."""
     required = ("version", "id", "area", "layers", "data", "credits", "notices")
-    bad = [f"missing {k}" for k in required if k not in doc]
-    if bad:
-        return bad
+    missing = [f"missing {key}" for key in required if key not in doc]
+
+    if missing:
+        return missing
+
+    problems = []
     if not doc["layers"]:
-        bad.append("no layers")
+        problems.append("no layers")
+
     area = doc["area"]
-    w, s, e, n = area["bbox"]
-    if not (w < e and s < n):
-        bad.append("bbox is not W < E and S < N")
-    lines = doc["credits"].get("lines", [])
-    sources = [layer["source"] for layer in doc["layers"]]
-    if area["type"] == "boundary":
-        if not area.get("boundary"):
-            bad.append("boundary area without boundary block")
-        else:
-            sources.append(area["boundary"])
-    for src in sources:
-        name = src.get("name") or src.get("source", "?")
-        for k in ("licence", "attribution"):
-            if not src.get(k):
-                bad.append(f"{name}: missing {k}")
-        if src.get("attribution") and src["attribution"] not in lines:
-            bad.append(f"{name}: attribution not in credits.lines")
-        if src.get("disclaimer") and src["disclaimer"] not in doc["credits"].get("disclaimers", []):
-            bad.append(f"{name}: disclaimer not in credits.disclaimers")
+    west, south, east, north = area["bbox"]
+
+    if not (west < east and south < north):
+        problems.append("bbox is not W < E and S < N")
+
+    problems += _attribution_problems(doc)
     for layer in doc["layers"]:
-        for k in ("grid", "mask", "arrays"):
-            if not layer.get(k):
-                bad.append(f"{layer['id']}: missing {k}")
-        if layer.get("mask") and layer["mask"]["cells_inside"] < 1:
-            bad.append(f"{layer['id']}: mask has no cells")
-        time = layer.get("time")
-        if layer["time_varying"] and not (time and time["count"] == len(time["values"])):
-            bad.append(f"{layer['id']}: time axis missing or count does not match values")
-        if not layer["time_varying"] and time is not None:
-            bad.append(f"{layer['id']}: static layer has a time axis")
-        if layer["id"] == "glo90_terrain" and not layer["source"].get("disclaimer"):
-            bad.append("glo90_terrain: missing disclaimer")
-    return bad
+        problems += _layer_problems(layer)
+
+    return problems
+
+
+def _attribution_problems(doc):
+    problems = []
+    area = doc["area"]
+    sources = [layer["source"] for layer in doc["layers"]]
+
+    if area["type"] == "boundary":
+        if area.get("boundary"):
+            sources.append(area["boundary"])
+        else:
+            problems.append("boundary area without boundary block")
+
+    lines = doc["credits"].get("lines", [])
+    disclaimers = doc["credits"].get("disclaimers", [])
+
+    for source in sources:
+        name = source.get("name") or source.get("source", "?")
+        for key in ("licence", "attribution"):
+            if not source.get(key):
+                problems.append(f"{name}: missing {key}")
+        if source.get("attribution") and source["attribution"] not in lines:
+            problems.append(f"{name}: attribution not in credits.lines")
+        if source.get("disclaimer") and source["disclaimer"] not in disclaimers:
+            problems.append(f"{name}: disclaimer not in credits.disclaimers")
+
+    return problems
+
+
+def _layer_problems(layer):
+    layer_id = layer["id"]
+    problems = [f"{layer_id}: missing {key}" for key in ("grid", "mask", "arrays")
+                if not layer.get(key)]
+    
+    if layer.get("mask") and layer["mask"]["cells_inside"] < 1:
+        problems.append(f"{layer_id}: mask has no cells")
+
+    time_axis = layer.get("time")
+    time_axis_is_consistent = bool(time_axis) and time_axis["count"] == len(time_axis["values"])
+
+    if layer["time_varying"] and not time_axis_is_consistent:
+        problems.append(f"{layer_id}: time axis missing or count does not match values")
+
+    if not layer["time_varying"] and time_axis is not None:
+        problems.append(f"{layer_id}: static layer has a time axis")
+
+    if layer_id == TERRAIN_LAYER_ID and not layer["source"].get("disclaimer"):
+        problems.append(f"{TERRAIN_LAYER_ID}: missing disclaimer")
+        
+    return problems

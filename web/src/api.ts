@@ -1,37 +1,46 @@
-import type { AreaHit, Health, LayersResponse, Scene, SceneRequest, SceneStatus } from "./types";
+import type {
+  AreaFeature,
+  AreaHit,
+  Health,
+  LayersResponse,
+  Scene,
+  SceneRequest,
+  SceneStatus,
+} from "./types";
 
 const SCENE_VERSION = "0.2";
+const REQUEST_TIMEOUT_MS = 10_000;
+const SCENE_ID_PATTERN = /^[0-9a-f]{20}$/;
 
 // Relative URLs only. Bundle files must be read via the scene's bundle_url, not a hard-coded path.
 export class ApiError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-    public retryAfter?: number, // seconds, from the Retry-After header
-  ) {
-    super(message);
-  }
-}
+  status: number;
+  retryAfter?: number; // seconds, from the Retry-After header
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, { ...init, signal: AbortSignal.timeout(10_000) });
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    const retry = Number(res.headers.get("Retry-After"));
-    const detail = body?.detail;
-    const message = typeof detail === "string" ? detail
-      : Array.isArray(detail) ? detail.map((d) => d.msg).join("; ") // FastAPI validation errors
-      : `HTTP ${res.status}`;
-    throw new ApiError(res.status, message, retry || undefined);
+  constructor(status: number, message: string, retryAfter?: number) {
+    super(message);
+    this.status = status;
+    this.retryAfter = retryAfter;
   }
-  return res.json();
 }
 
 export const getHealth = () => request<Health>("/api/health");
+
 export const getLayers = () => request<LayersResponse>("/api/layers");
-export const searchAreas = (q: string, level: string) =>
-  request<AreaHit[]>(`/api/areas/search?q=${encodeURIComponent(q)}${level ? `&level=${level}` : ""}`);
-export const getSceneStatus = (id: string) => request<SceneStatus>(`/api/scenes/${id}`);
+
+export function searchAreas(query: string, level: string) {
+  const levelParameter = level ? `&level=${level}` : "";
+  return request<AreaHit[]>(`/api/areas/search?q=${encodeURIComponent(query)}${levelParameter}`);
+}
+
+// The backend makes scene ids from the first 20 hex characters of a hash.
+export const isSceneId = (text: string) => SCENE_ID_PATTERN.test(text);
+
+export const getSceneStatus = (id: string) =>
+  request<SceneStatus>(`/api/scenes/${encodeURIComponent(id)}`);
+
+export const loadAreaFeature = (href: string) => request<AreaFeature>(href);
+
 export const postScene = (body: SceneRequest) =>
   request<SceneStatus>("/api/scenes", {
     method: "POST",
@@ -39,14 +48,41 @@ export const postScene = (body: SceneRequest) =>
     body: JSON.stringify(body),
   });
 
-// Loads scene.json and makes its relative hrefs absolute against the bundle URL (works for /scenes/... now, R2 later).
+// Loads scene.json and makes its relative hrefs absolute against the bundle URL (works for
+// /scenes/... now, R2 later).
 export async function loadScene(bundleUrl: string): Promise<Scene> {
   const base = new URL(bundleUrl, location.href);
   const scene = await request<Scene>(base.href);
   if (scene.version !== SCENE_VERSION) {
     throw new Error(`Scene format ${scene.version} is not supported; rebuild this scene.`);
   }
+
   scene.area.geometry_href = new URL(scene.area.geometry_href, base).href;
   scene.data.href = new URL(scene.data.href, base).href;
+
   return scene;
+}
+
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  if (!response.ok) throw await apiErrorFrom(response);
+
+  return response.json();
+}
+
+async function apiErrorFrom(response: Response) {
+  const body = await response.json().catch(() => null);
+  const retryAfter = Number(response.headers.get("Retry-After"));
+  const message = errorMessage(body?.detail, response.status);
+
+  return new ApiError(response.status, message, retryAfter || undefined);
+}
+
+function errorMessage(detail: unknown, status: number) {
+  if (typeof detail === "string") return detail;
+
+  // FastAPI validation errors.
+  if (Array.isArray(detail)) return detail.map((problem) => problem.msg).join("; ");
+
+  return `HTTP ${status}`;
 }

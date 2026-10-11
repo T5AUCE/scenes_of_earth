@@ -34,14 +34,17 @@ ID_RE = re.compile(r"[0-9a-f]{%d}" % ID_LEN)
 DEFAULT_LAYERS = ["chirps_monthly", "glo90_terrain"]
 SAMPLE_AREAS = Path(__file__).with_name("sample_areas.geojson")
 IMMUTABLE = "public, max-age=31536000, immutable"
+MAX_TITLE_LENGTH = 120
+MAX_SEARCH_LIMIT = 50
+DRAWN_AREA_TITLE = "Drawn area"
+PROGRESS_STEP = 0.02
+SAMPLE_CELL_AREA_DEG2 = 0.05**2
+SOURCE_RETRY_AFTER_SECONDS = 30
+QUEUE_RETRY_AFTER_SECONDS = 60
 
 
 class SceneFiles(StaticFiles):
-    """Serve SCENES_DIR, never the half-built .tmp directory.
-
-    Bundles are content-addressed, so responses are cached as immutable.
-    """
-
+    """Bundles are content-addressed, so responses are cached as immutable."""
     async def get_response(self, path, scope):
         if path.startswith("."):
             raise StarletteHTTPException(404)
@@ -55,13 +58,17 @@ def resolve_area(db_path, spec):
     """Turn {"type": "boundary", "id"} or {"type": "polygon", "geometry"} into an Area."""
     if not isinstance(spec, dict):
         raise AreaError("area must be an object")
+
     if spec.get("type") == "boundary":
-        row = db.get_boundary(db_path, spec.get("id")) if isinstance(spec.get("id"), str) else None
+        boundary_id = spec.get("id")
+        row = db.get_boundary(db_path, boundary_id) if isinstance(boundary_id, str) else None
         if row is None:
             raise AreaError("unknown boundary id")
         return Area(shape(json.loads(row["geom_geojson"])), row)
+
     if spec.get("type") == "polygon":
         return Area(clean_polygon(spec.get("geometry")))
+
     raise AreaError("area.type must be 'boundary' or 'polygon'")
 
 
@@ -73,6 +80,7 @@ async def read_body(request):
         raise HTTPException(400, "invalid Content-Length header")
     if declared > MAX_BODY:
         raise HTTPException(413, "request body too large")
+
     body = b""
     async for chunk in request.stream():
         body += chunk
@@ -85,14 +93,38 @@ def seed_sample_areas(db_path):
     """Synthetic mode only: load the hand-drawn sample shapes when no boundaries exist yet."""
     if db.search(db_path, "", None, 1):  # an empty query matches every row
         return
-    rows = []
-    for f in json.loads(SAMPLE_AREAS.read_text())["features"]:
-        geom, p = shape(f["geometry"]), f["properties"]
-        w, s, e, n = unwrap(geom).bounds
-        rows.append((p["id"], p["level"], p["name"], p["parent_name"], p["iso3"], w, s, e, n,
-                     max(1, round(geom.area / 0.05**2)), json.dumps(f["geometry"]), "synthetic",
-                     "none (hand-drawn sample)"))
-    db.add_boundaries(db_path, "synthetic", rows)
+
+    features = json.loads(SAMPLE_AREAS.read_text())["features"]
+    db.add_boundaries(db_path, "synthetic", [_sample_row(feature) for feature in features])
+
+
+def _sample_row(feature):
+    geometry, properties = shape(feature["geometry"]), feature["properties"]
+    west, south, east, north = unwrap(geometry).bounds
+    cells = max(1, round(geometry.area / SAMPLE_CELL_AREA_DEG2))
+    return (
+        properties["id"],
+        properties["level"],
+        properties["name"],
+        properties["parent_name"],
+        properties["iso3"],
+        west,
+        south,
+        east,
+        north,
+        cells,
+        json.dumps(feature["geometry"]),
+        "synthetic",
+        "none (hand-drawn sample)",
+    )
+
+
+def _default_registry():
+    if os.environ.get("SOE_SYNTHETIC") == "1":
+        return make_registry(SyntheticSource())
+    if os.environ.get("SOE_LATEST"):
+        return make_registry(RealSource(os.environ["SOE_LATEST"]))
+    return REGISTRY
 
 
 def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, max_queue=None):
@@ -101,16 +133,13 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
     scenes_dir = Path(scenes_dir or os.environ.get("SOE_SCENES_DIR", "./data/scenes"))
     public = os.environ.get("SOE_PUBLIC_BASE", "/scenes").rstrip("/")
     max_queue = max_queue or int(os.environ.get("SOE_MAX_QUEUE", "20"))
+    if registry is None:
+        registry = _default_registry()
     # Builds run on their own small pool, so waiting jobs never occupy Starlette's request threads.
     executor = ThreadPoolExecutor(
-        max_builds or int(os.environ.get("SOE_MAX_BUILDS", "1")), "soe-build")
-    if registry is None:
-        if os.environ.get("SOE_SYNTHETIC") == "1":
-            registry = make_registry(SyntheticSource())
-        elif os.environ.get("SOE_LATEST"):
-            registry = make_registry(RealSource(os.environ["SOE_LATEST"]))
-        else:
-            registry = REGISTRY
+        max_builds or int(os.environ.get("SOE_MAX_BUILDS", "1")),
+        "soe-build",
+    )
 
     @asynccontextmanager
     async def lifespan(app):
@@ -125,92 +154,68 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
 
     def scene_out(row):
         done = row["status"] == "done"
-        return {"id": row["id"], "status": row["status"], "progress": row["progress"],
-                "error": row["error"], "error_class": row["error_class"],
-                "bundle_url": f"{public}/{row['id']}/scene.json" if done else None}
+        return {
+            "id": row["id"],
+            "status": row["status"],
+            "progress": row["progress"],
+            "error": row["error"],
+            "error_class": row["error_class"],
+            "bundle_url": f"{public}/{row['id']}/scene.json" if done else None,
+        }
 
-    def run_job(sid):
+    def run_job(scene_id):
         try:
-            row = db.get_scene(db_path, sid)
-            req, last = json.loads(row["request_json"]), [0.0]
+            request = json.loads(db.get_scene(db_path, scene_id)["request_json"])
+            db.update_scene(db_path, scene_id, status="running")
 
-            def progress(p):
-                if p - last[0] >= 0.02 or p >= 1:
-                    last[0] = p
-                    db.update_scene(db_path, sid, progress=round(p, 3))
-
-            db.update_scene(db_path, sid, status="running")
-            area = resolve_area(db_path, req["area"])
-            size = build_scene(sid, area, req["start"], req["end"],
-                               [registry[k] for k in req["layers"]], req["title"], scenes_dir,
-                               progress)
-            db.update_scene(db_path, sid, status="done", progress=1.0, bytes=size,
-                            finished=db.now())
-        except Exception as e:
-            log.exception("scene %s failed", sid)
-            # Our own AreaError texts are safe to show. Anything else may contain paths, so it stays
-            # in the log.
-            message = str(e) if isinstance(e, AreaError) else "build failed; see the server log"
-            try:
-                db.update_scene(db_path, sid, status="failed", error=message,
-                                error_class=type(e).__name__, finished=db.now())
-            except Exception:
-                log.exception("scene %s: could not record the failure", sid)
+            area = resolve_area(db_path, request["area"])
+            size = build_scene(
+                scene_id,
+                area,
+                request["start"],
+                request["end"],
+                [registry[layer_id] for layer_id in request["layers"]],
+                request["title"],
+                scenes_dir,
+                _ProgressRecorder(db_path, scene_id),
+            )
+            db.update_scene(
+                db_path, scene_id, status="done", progress=1.0, bytes=size, finished=db.now()
+            )
+        except Exception as error:
+            log.exception("scene %s failed", scene_id)
+            _record_failure(db_path, scene_id, error)
 
     def prepare(body):
         """Validate and register a scene request. Returns (status code, payload, start the job?)."""
-        try:
-            data = json.loads(body)
-        except (ValueError, RecursionError):
-            raise AreaError("body must be JSON")
-        if not isinstance(data, dict):
-            raise AreaError("body must be a JSON object")
-        layers = data.get("layers", list(registry))
-        if not (isinstance(layers, list) and layers
-                and all(isinstance(v, str) and v in registry for v in layers)):
-            raise AreaError("layers must be a non-empty list of: " + ", ".join(registry))
-        layers = sorted(set(layers))
-        datasets = [registry[k] for k in layers]
-        title = data.get("title")
-        if title is not None and not (isinstance(title, str) and len(title) <= 120):
-            raise AreaError("title must be a string of at most 120 characters")
+        data = _parse_body(body)
+        layers = _requested_layers(data, registry)
+        datasets = [registry[layer_id] for layer_id in layers]
+        title = _requested_title(data)
         area = resolve_area(db_path, data.get("area"))
-        if any(ds.time_varying for ds in datasets):
-            start, end = data.get("start"), data.get("end")
-            for ds in datasets:
-                if ds.time_varying:
-                    check_months(start, end, ds.first(), ds.latest(), f"{ds.title}: ")
-        else:
-            # Months are irrelevant here, so every terrain-only request is one scene.
-            start = end = FIRST_MONTH
+        start, end = _requested_period(data, datasets)
         plan(area, datasets, start, end)  # Refuses a bad request before any data is read.
-        # The scene id is the content hash of the canonical request, dataset versions, data vintage
-        # and generator.
-        if area.named:
-            geom_hash = hashlib.sha1(area.boundary["geom_geojson"].encode()).hexdigest()
-            geom_id = area.boundary["id"] + ":" + geom_hash
-            spec = {"type": "boundary", "id": area.boundary["id"]}
-        else:
-            geom_id = "poly:" + hashlib.sha1(area.geom.wkb).hexdigest()
-            spec = {"type": "polygon", "geometry": mapping(area.geom)}
+
+        geometry_id, area_spec = _area_identity(area)
+        scene_id = _scene_id(geometry_id, layers, start, end, datasets)
+        request_json = json.dumps({
+            "area": area_spec,
+            "layers": layers,
+            "start": start,
+            "end": end,
+            "title": title or (area.boundary["name"] if area.named else DRAWN_AREA_TITLE),
+        })
         try:
-            vintage = {ds.id: ds.vintage(end) for ds in datasets if ds.time_varying}
-        except SourceUnavailable:
-            raise HTTPException(503, "data source unavailable, retry shortly",
-                                headers={"Retry-After": "30"})
-        content = [geom_id, layers, start, end,
-                   {ds.id: ds.source.get("version") for ds in datasets}, vintage, __version__]
-        sid = hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:ID_LEN]
-        request_json = json.dumps({"area": spec, "layers": layers, "start": start, "end": end,
-                                   "title": title or (area.boundary["name"] if area.named
-                                                      else "Drawn area")})
-        try:
-            built = (scenes_dir / sid / "scene.json").exists()
-            row, start_job = db.submit(db_path, sid, request_json, built, max_queue)
+            built = (scenes_dir / scene_id / "scene.json").exists()
+            row, start_job = db.submit(db_path, scene_id, request_json, built, max_queue)
         except db.Busy:
-            raise HTTPException(503, "too many scenes are being built, retry later",
-                                headers={"Retry-After": "60"})
-        return (202 if row["status"] in ("queued", "running") else 200), scene_out(row), start_job
+            raise HTTPException(
+                503,
+                "too many scenes are being built, retry later",
+                headers={"Retry-After": str(QUEUE_RETRY_AFTER_SECONDS)},
+            )
+        status_code = 202 if row["status"] in ("queued", "running") else 200
+        return status_code, scene_out(row), start_job
 
     @app.get("/api/health")
     def health():
@@ -218,19 +223,21 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
 
     @app.get("/api/layers")
     def layers():
-        return {"default": [k for k in DEFAULT_LAYERS if k in registry],
-                "layers": [{"id": ds.id, "title": ds.title, "units": ds.units,
-                            "kind": ds.style["kind"],
-                            "time_varying": ds.time_varying, "coverage": list(ds.coverage),
-                            "time": {"step": ds.step, "first": ds.first(), "latest": ds.latest()}
-                            if ds.time_varying else None} for ds in registry.values()]}
+        return {
+            "default": [layer_id for layer_id in DEFAULT_LAYERS if layer_id in registry],
+            "layers": [_layer_out(dataset) for dataset in registry.values()],
+        }
 
     @app.get("/api/areas/search")
     def search(q: str, level: str | None = None, limit: int = 20):
         if level is not None and level not in LEVELS:
             raise HTTPException(422, "level must be one of " + ", ".join(LEVELS))
-        rows = db.search(db_path, q.strip(), level, max(1, min(limit, 50))) if q.strip() else []
-        return [_area_out(r) for r in rows]
+
+        query = q.strip()
+        if not query:
+            return []
+        rows = db.search(db_path, query, level, max(1, min(limit, MAX_SEARCH_LIMIT)))
+        return [_area_out(row) for row in rows]
 
     @app.get("/api/areas/{area_id:path}")
     def get_area(area_id: str):
@@ -243,12 +250,13 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
     async def post_scene(request: Request):
         body = await read_body(request)
         try:
-            code, out, start = await run_in_threadpool(prepare, body)
-        except AreaError as e:
-            raise HTTPException(422, str(e))
-        if start:
+            status_code, out, start_job = await run_in_threadpool(prepare, body)
+        except AreaError as error:
+            raise HTTPException(422, str(error))
+
+        if start_job:
             executor.submit(run_job, out["id"])
-        return JSONResponse(out, code)
+        return JSONResponse(out, status_code)
 
     @app.get("/api/scenes/{scene_id}")
     def get_scene(scene_id: str):
@@ -257,16 +265,144 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
             raise HTTPException(404, "unknown scene")
         return scene_out(row)
 
-    app.mount(public if public.startswith("/") else "/scenes",
-              SceneFiles(directory=scenes_dir, check_dir=False), name="scenes")
+    app.mount(
+        public if public.startswith("/") else "/scenes",
+        SceneFiles(directory=scenes_dir, check_dir=False),
+        name="scenes",
+    )
     return app
 
 
-def _area_out(r):
-    return {"id": r["id"], "name": r["name"], "level": r["level"], "iso3": r["iso3"],
-            "parent_name": r["parent_name"],
-            "bbox": [r["bbox_w"], r["bbox_s"], r["bbox_e"], r["bbox_n"]],
-            "cells": r["cells"]}
+class _ProgressRecorder:
+    """Writes build progress to the database, but only when it moved by PROGRESS_STEP."""
+
+    def __init__(self, db_path, scene_id):
+        self._db_path = db_path
+        self._scene_id = scene_id
+        self._last_written = 0.0
+
+    def __call__(self, progress):
+        if progress - self._last_written >= PROGRESS_STEP or progress >= 1:
+            self._last_written = progress
+            db.update_scene(self._db_path, self._scene_id, progress=round(progress, 3))
+
+
+def _record_failure(db_path, scene_id, error):
+    # Our own AreaError texts are safe to show. Anything else may contain paths, so it stays in
+    # the log.
+    message = str(error) if isinstance(error, AreaError) else "build failed; see the server log"
+    try:
+        db.update_scene(
+            db_path,
+            scene_id,
+            status="failed",
+            error=message,
+            error_class=type(error).__name__,
+            finished=db.now(),
+        )
+    except Exception:
+        log.exception("scene %s: could not record the failure", scene_id)
+
+
+def _parse_body(body):
+    try:
+        data = json.loads(body)
+    except (ValueError, RecursionError):
+        raise AreaError("body must be JSON")
+    if not isinstance(data, dict):
+        raise AreaError("body must be a JSON object")
+    return data
+
+
+def _requested_layers(data, registry):
+    layers = data.get("layers", list(registry))
+    valid = (
+        isinstance(layers, list)
+        and layers
+        and all(isinstance(layer_id, str) and layer_id in registry for layer_id in layers)
+    )
+    if not valid:
+        raise AreaError("layers must be a non-empty list of: " + ", ".join(registry))
+    return sorted(set(layers))
+
+
+def _requested_title(data):
+    title = data.get("title")
+    if title is not None and not (isinstance(title, str) and len(title) <= MAX_TITLE_LENGTH):
+        raise AreaError(f"title must be a string of at most {MAX_TITLE_LENGTH} characters")
+    return title
+
+
+def _requested_period(data, datasets):
+    series = [dataset for dataset in datasets if dataset.time_varying]
+    if not series:
+        # Months are irrelevant here, so every terrain-only request is one scene.
+        return FIRST_MONTH, FIRST_MONTH
+
+    start, end = data.get("start"), data.get("end")
+    for dataset in series:
+        check_months(start, end, dataset.first(), dataset.latest(), f"{dataset.title}: ")
+    return start, end
+
+
+def _area_identity(area):
+    """(id that changes when the geometry does, area spec stored in the job's request)."""
+    if area.named:
+        boundary = area.boundary
+        geometry_hash = hashlib.sha1(boundary["geom_geojson"].encode()).hexdigest()
+        return boundary["id"] + ":" + geometry_hash, {"type": "boundary", "id": boundary["id"]}
+
+    geometry_hash = hashlib.sha1(area.geom.wkb).hexdigest()
+    return "poly:" + geometry_hash, {"type": "polygon", "geometry": mapping(area.geom)}
+
+
+def _scene_id(geometry_id, layers, start, end, datasets):
+    """Content hash of the canonical request, dataset versions, data vintage and generator."""
+    try:
+        vintage = {
+            dataset.id: dataset.vintage(end) for dataset in datasets if dataset.time_varying
+        }
+    except SourceUnavailable:
+        raise HTTPException(
+            503,
+            "data source unavailable, retry shortly",
+            headers={"Retry-After": str(SOURCE_RETRY_AFTER_SECONDS)},
+        )
+
+    versions = {dataset.id: dataset.source.get("version") for dataset in datasets}
+    content = [geometry_id, layers, start, end, versions, vintage, __version__]
+    return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:ID_LEN]
+
+
+def _layer_out(dataset):
+    time_axis = None
+    if dataset.time_varying:
+        time_axis = {
+            "step": dataset.step,
+            "first": dataset.first(),
+            "latest": dataset.latest(),
+        }
+    return {
+        "id": dataset.id,
+        "title": dataset.title,
+        "units": dataset.units,
+        "kind": dataset.style["kind"],
+        "time_varying": dataset.time_varying,
+        "coverage": list(dataset.coverage),
+        "time": time_axis,
+    }
+
+
+def _area_out(row):
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "level": row["level"],
+        "iso3": row["iso3"],
+        "parent_name": row["parent_name"],
+        "bbox": [row["bbox_w"], row["bbox_s"], row["bbox_e"], row["bbox_n"]],
+        "cells": row["cells"],
+    }
 
 
 app = create_app()

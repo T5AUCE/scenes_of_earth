@@ -6,13 +6,14 @@ resampled.
 """
 import math
 import time
-from functools import lru_cache
-from pathlib import Path
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 import rasterio
@@ -27,7 +28,21 @@ FIRST_MONTH = "1981-01"
 NATIVE_TERRAIN_RES = 1 / 1200
 TERRAIN_PIXELS = 2048 * 2048
 TERRAIN_THREADS = 32
+TILE_ROW_OFFSET = 90  # tile index row = lat + 90
+TILE_COL_OFFSET = 180  # tile index column = lon + 180
+TILE_EDGE_TOLERANCE = 1e-9  # degrees; a bound exactly on a tile edge must not pull in the next tile
+CELLS_PER_DEG2_AT_CHIRPS_RES = 400  # (1 / 0.05) ** 2
+MAX_TERRAIN_SIDE_PIXELS = 4096
+MAX_TERRAIN_DIVISIONS = 60  # 0.05 / 60 is the native 90 m cell
 BLOCK_DEG = 2  # terrain is read in blocks of this many whole degrees
+CELL_DEG = 0.05  # CHIRPS cell size
+HEAD_TIMEOUT_SECONDS = 15
+LATEST_MONTH_PROBES = 7
+LATEST_TTL_SECONDS = 86400
+OFFLINE_LATEST_TTL_SECONDS = 600
+OFFLINE_ASSUMED_LAG_MONTHS = 2
+TILE_OPEN_ATTEMPTS = 3
+TILE_RETRY_DELAY_SECONDS = 1
 
 CHIRPS_URL = ("https://data.chc.ucsb.edu/products/CHIRPS/v3.0/monthly/global/cogs/"
               "chirps-v3.0.{ym}.cog")
@@ -95,12 +110,20 @@ SOURCES = {
 
 def month_list(start, end):
     """'YYYY-MM' strings from start to end inclusive."""
-    y, m = int(start[:4]), int(start[5:7])
-    out = []
-    while f"{y:04d}-{m:02d}" <= end:
-        out.append(f"{y:04d}-{m:02d}")
-        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
-    return out
+    year, month = int(start[:4]), int(start[5:7])
+    months = []
+    while f"{year:04d}-{month:02d}" <= end:
+        months.append(f"{year:04d}-{month:02d}")
+        year, month = _next_month(year, month)
+    return months
+
+
+def _next_month(year, month):
+    return (year + 1, 1) if month == 12 else (year, month + 1)
+
+
+def _previous_month(year, month):
+    return (year - 1, 12) if month == 1 else (year, month - 1)
 
 
 @lru_cache
@@ -119,15 +142,23 @@ def glo90_tiles(bounds):
     Tiles are 1 degree and named by their south-west corner. Longitudes above 180 wrap, so bounds
     may cross the antimeridian.
     """
-    w, s, e, n = bounds
+    west, south, east, north = bounds
+    tile_exists = _tile_index()
     names = []
-    for lat in range(max(math.floor(s + 1e-9), -90), min(math.ceil(n - 1e-9), 90)):
-        for lon in range(math.floor(w + 1e-9), math.ceil(e - 1e-9)):
-            lon = (lon + 180) % 360 - 180
-            if _tile_index()[lat + 90, lon + 180]:
-                ns, ew = ("N" if lat >= 0 else "S"), ("E" if lon >= 0 else "W")
+    first_lat = max(math.floor(south + TILE_EDGE_TOLERANCE), -TILE_ROW_OFFSET)
+    last_lat = min(math.ceil(north - TILE_EDGE_TOLERANCE), TILE_ROW_OFFSET)
+    for lat in range(first_lat, last_lat):
+        for lon in range(
+            math.floor(west + TILE_EDGE_TOLERANCE), math.ceil(east - TILE_EDGE_TOLERANCE)
+        ):
+            lon = (lon + TILE_COL_OFFSET) % 360 - TILE_COL_OFFSET
+            if tile_exists[lat + TILE_ROW_OFFSET, lon + TILE_COL_OFFSET]:
+                north_south = "N" if lat >= 0 else "S"
+                east_west = "E" if lon >= 0 else "W"
                 names.append(
-                    f"Copernicus_DSM_COG_30_{ns}{abs(lat):02d}_00_{ew}{abs(lon):03d}_00_DEM")
+                    f"Copernicus_DSM_COG_30_{north_south}{abs(lat):02d}"
+                    f"_00_{east_west}{abs(lon):03d}_00_DEM"
+                )
     return names
 
 
@@ -136,10 +167,13 @@ def terrain_res(bounds):
 
     It gives about 4.2 Mpx and at most 4096 px on the long side, never finer than native.
     """
-    w, s, e, n = bounds
-    k = min(math.isqrt(int(TERRAIN_PIXELS / (400 * (e - w) * (n - s)))),
-            int(204.8 / max(e - w, n - s)))
-    return 0.05 / min(max(k, 1), 60)
+    west, south, east, north = bounds
+    width, height = east - west, north - south
+    divisions = min(
+        math.isqrt(int(TERRAIN_PIXELS / (CELLS_PER_DEG2_AT_CHIRPS_RES * width * height))),
+        int(MAX_TERRAIN_SIDE_PIXELS * CELL_DEG / max(width, height)),
+    )
+    return CELL_DEG / min(max(divisions, 1), MAX_TERRAIN_DIVISIONS)
 
 
 def with_margin(bounds, res):
@@ -147,8 +181,8 @@ def with_margin(bounds, res):
 
     GLO-90 tiles are half a pixel off-grid, so the margin is cropped after merging.
     """
-    w, s, e, n = bounds
-    return (w - res, s - res, e + res, n + res)
+    west, south, east, north = bounds
+    return (west - res, south - res, east + res, north + res)
 
 
 def terrain_by_blocks(bounds, res, read_block):
@@ -156,31 +190,44 @@ def terrain_by_blocks(bounds, res, read_block):
 
     read_block(block_bounds, res) returns an array, or None for a block without terrain (left at 0).
     """
-    w, s, e, n = bounds
-    ny, nx = round((n - s) / res), round((e - w) / res)
-    xs = [w] + list(range(math.floor(w / BLOCK_DEG) * BLOCK_DEG + BLOCK_DEG, math.ceil(e),
-                          BLOCK_DEG)) + [e]
-    ys = [s] + list(range(math.floor(s / BLOCK_DEG) * BLOCK_DEG + BLOCK_DEG, math.ceil(n),
-                          BLOCK_DEG)) + [n]
-    blocks = [(x0, y0, x1, y1) for x0, x1 in zip(xs, xs[1:]) for y0, y1 in zip(ys, ys[1:])]
-    with ThreadPoolExecutor(TERRAIN_THREADS) as ex:
-        parts = list(ex.map(lambda b: read_block(b, res), blocks))
-    z = np.zeros((ny, nx), "int16")
-    for (x0, y0, x1, y1), part in zip(blocks, parts):
+    west, south, east, north = bounds
+    height, width = round((north - south) / res), round((east - west) / res)
+    x_edges = _block_edges(west, east)
+    y_edges = _block_edges(south, north)
+    blocks = [
+        (x0, y0, x1, y1)
+        for x0, x1 in zip(x_edges, x_edges[1:])
+        for y0, y1 in zip(y_edges, y_edges[1:])
+    ]
+    with ThreadPoolExecutor(TERRAIN_THREADS) as executor:
+        parts = list(executor.map(lambda block: read_block(block, res), blocks))
+
+    elevation = np.zeros((height, width), "int16")
+    for (x0, y0, _, y1), part in zip(blocks, parts):
         if part is not None:
-            r, c = round((n - y1) / res), round((x0 - w) / res)
-            z[r:r + part.shape[0], c:c + part.shape[1]] = part
-    return z, from_origin(w, n, res, res)
+            row, col = round((north - y1) / res), round((x0 - west) / res)
+            elevation[row:row + part.shape[0], col:col + part.shape[1]] = part
+    return elevation, from_origin(west, north, res, res)
+
+
+def _block_edges(low, high):
+    """low, every multiple of BLOCK_DEG strictly between, then high."""
+    first_multiple = math.floor(low / BLOCK_DEG) * BLOCK_DEG + BLOCK_DEG
+    return [low] + list(range(first_multiple, math.ceil(high), BLOCK_DEG)) + [high]
 
 
 def _head(url):
     """(exists, Last-Modified) for a URL; (False, None) on 404 or any network error."""
     try:
-        req = urllib.request.Request(url, method="HEAD")
-        with urllib.request.urlopen(req, timeout=15) as r:
-            return True, r.headers.get("Last-Modified")
+        request = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(request, timeout=HEAD_TIMEOUT_SECONDS) as response:
+            return True, response.headers.get("Last-Modified")
     except (urllib.error.URLError, OSError):
         return False, None
+
+
+def _chirps_url(month):
+    return CHIRPS_URL.format(ym=month.replace("-", "."))
 
 
 class SourceUnavailable(RuntimeError):
@@ -200,43 +247,49 @@ class RealSource:
             return self._latest
         if self._probed and time.time() < self._probed[1]:
             return self._probed[0]
+
         now = datetime.now(timezone.utc)
-        y, m = now.year, now.month
-        found = None
-        for _ in range(7):
-            ym = f"{y:04d}-{m:02d}"
-            if _head(CHIRPS_URL.format(ym=ym.replace("-", ".")))[0]:
-                found = ym
-                break
-            y, m = (y - 1, 12) if m == 1 else (y, m - 1)
-        ttl = 86400
+        found = self._probe_latest_month(now)
+        ttl = LATEST_TTL_SECONDS
         if found is None:
             # Offline: assume the usual two-month lag, and probe again soon.
-            ttl = 600
-            y, m = now.year, now.month - 2
-            if m < 1:
-                y, m = y - 1, m + 12
-            found = f"{y:04d}-{m:02d}"
+            found = self._assumed_latest_month(now)
+            ttl = OFFLINE_LATEST_TTL_SECONDS
         self._probed = (found, time.time() + ttl)
         return found
 
-    def vintage(self, ym):
+    def _probe_latest_month(self, now):
+        year, month = now.year, now.month
+        for _ in range(LATEST_MONTH_PROBES):
+            candidate = f"{year:04d}-{month:02d}"
+            if _head(_chirps_url(candidate))[0]:
+                return candidate
+            year, month = _previous_month(year, month)
+        return None
+
+    def _assumed_latest_month(self, now):
+        year, month = now.year, now.month
+        for _ in range(OFFLINE_ASSUMED_LAG_MONTHS):
+            year, month = _previous_month(year, month)
+        return f"{year:04d}-{month:02d}"
+
+    def vintage(self, month):
         """Last-Modified of a month's file; changes when CHC revises a recent month."""
-        last_modified = _head(CHIRPS_URL.format(ym=ym.replace("-", ".")))[1]
+        last_modified = _head(_chirps_url(month))[1]
         if not last_modified:
             raise SourceUnavailable("CHIRPS server did not answer")
         return last_modified
 
-    def read_rain(self, ym, win):
+    def read_rain(self, month, window):
         """One month at native resolution as float32; fill values (< 0) become NaN."""
-        col, row, w, h = win
+        col, row, width, height = window
         with rasterio.Env(**GDAL_OPTS):
-            with rasterio.open(CHIRPS_URL.format(ym=ym.replace("-", "."))) as ds:
-                if (ds.width, ds.height) != (NCOLS, NROWS):
-                    raise RuntimeError(f"unexpected CHIRPS grid {ds.width}x{ds.height}")
-                a = ds.read(1, window=Window(col, row, w, h)).astype("float32")
-        a[a < 0] = np.nan
-        return a
+            with rasterio.open(_chirps_url(month)) as dataset:
+                if (dataset.width, dataset.height) != (NCOLS, NROWS):
+                    raise RuntimeError(f"unexpected CHIRPS grid {dataset.width}x{dataset.height}")
+                rain = dataset.read(1, window=Window(col, row, width, height)).astype("float32")
+        rain[rain < 0] = np.nan
+        return rain
 
     def terrain(self, bounds, res):
         """Elevation (int16) on bounds at res; ocean (no tile) is 0. Returns (array, transform)."""
@@ -247,37 +300,46 @@ class RealSource:
 
         Bounds above 180 read the tiles west of it.
         """
-        w, s, e, n = bounds
-        if w >= 180:
-            w, e = w - 360, e - 360
-        ext = with_margin((w, s, e, n), res)
-        names = glo90_tiles(ext)
+        west, south, east, north = bounds
+        if west >= 180:
+            west, east = west - 360, east - 360
+
+        padded_bounds = with_margin((west, south, east, north), res)
+        names = glo90_tiles(padded_bounds)
         if not names:
             return None
-        dss = []
-        try:
-            for name in names:
-                url = GLO90_URL.format(n=name)
-                for attempt in range(3):
-                    try:
-                        with rasterio.Env(**GDAL_OPTS):
-                            dss.append(rasterio.open(url))
-                        break
-                    except RasterioIOError:
-                        if attempt == 2:
-                            raise
-                        time.sleep(1)
+
+        with ExitStack() as open_tiles:
+            tiles = [open_tiles.enter_context(_open_tile(GLO90_URL.format(n=name)))
+                     for name in names]
             with rasterio.Env(**GDAL_OPTS):
-                arr, _ = merge(dss, bounds=ext, res=res, nodata=0)
-        finally:
-            for d in dss:
-                d.close()
-        ny, nx = round((n - s) / res), round((e - w) / res)
-        z = np.rint(arr[0][1:1 + ny, 1:1 + nx]).clip(-32768, 32767).astype("int16")
-        if e == 180:
+                merged, _ = merge(tiles, bounds=padded_bounds, res=res, nodata=0)
+
+        elevation = _crop_margin(merged[0], bounds, res)
+        if east == 180:
             # Tiles are half a pixel off-grid and the next tile is across the seam.
-            z[:, -1] = z[:, -2]
-        return z
+            elevation[:, -1] = elevation[:, -2]
+        return elevation
+
+
+def _crop_margin(merged, bounds, res):
+    """Elevation of `bounds` as int16, cropped from the merge that had a one-pixel margin."""
+    west, south, east, north = bounds
+    height, width = round((north - south) / res), round((east - west) / res)
+    elevation = np.rint(merged[1:1 + height, 1:1 + width]).clip(-32768, 32767)
+    return elevation.astype("int16")
+
+
+def _open_tile(url):
+    """Open one GLO-90 tile, retrying a few times because the bucket drops connections."""
+    for attempt in range(1, TILE_OPEN_ATTEMPTS + 1):
+        try:
+            with rasterio.Env(**GDAL_OPTS):
+                return rasterio.open(url)
+        except RasterioIOError:
+            if attempt == TILE_OPEN_ATTEMPTS:
+                raise
+            time.sleep(TILE_RETRY_DELAY_SECONDS)
 
 
 class SyntheticSource:
@@ -290,46 +352,47 @@ class SyntheticSource:
     def latest_month(self):
         return self._latest
 
-    def vintage(self, ym):
+    def vintage(self, month):
         return "synthetic"
 
-    def read_rain(self, ym, win):
+    def read_rain(self, month, window):
         self.reads += 1
-        col, row, w, h = win
-        mi = int(ym[:4]) * 12 + int(ym[5:7])
-        cc, rr = np.meshgrid(np.arange(col, col + w), np.arange(row, row + h))
-        a = 100 + 80 * np.sin(cc / 15 + mi * 0.5) * np.cos(rr / 11)
-        a = a.astype("float32")
-        a[(cc * 7 + rr * 13) % 11 == 0] = np.nan  # Holes, to exercise NaN-aware means.
-        return a
+        col, row, width, height = window
+        month_number = int(month[:4]) * 12 + int(month[5:7])
+        cols, rows = np.meshgrid(np.arange(col, col + width), np.arange(row, row + height))
+        rain = 100 + 80 * np.sin(cols / 15 + month_number * 0.5) * np.cos(rows / 11)
+        rain = rain.astype("float32")
+        rain[(cols * 7 + rows * 13) % 11 == 0] = np.nan  # Holes, to exercise NaN-aware means.
+        return rain
 
     def terrain(self, bounds, res):
-        w, s, e, n = bounds
-        nx, ny = round((e - w) / res), round((n - s) / res)
-        tr = from_origin(w, n, res, res)
-        cc, rr = np.meshgrid(np.arange(nx) + 0.5, np.arange(ny) + 0.5)
-        lon, lat = tr @ (cc, rr)
-        z = 1000 + 800 * np.sin(lon * 20) * np.cos(lat * 20)
-        return z.astype("int16"), tr
+        west, south, east, north = bounds
+        width, height = round((east - west) / res), round((north - south) / res)
+        transform = from_origin(west, north, res, res)
+        cols, rows = np.meshgrid(np.arange(width) + 0.5, np.arange(height) + 0.5)
+        lon, lat = transform @ (cols, rows)
+        elevation = 1000 + 800 * np.sin(lon * 20) * np.cos(lat * 20)
+        return elevation.astype("int16"), transform
 
 
-def block_mean(a, f):
-    """NaN-aware f x f block mean (shape must be divisible by f)."""
-    if f == 1:
-        return a
-    h, w = a.shape
-    b = a.reshape(h // f, f, w // f, f)
-    ok = ~np.isnan(b)
-    n = ok.sum(axis=(1, 3))
-    s = np.where(ok, b, 0).sum(axis=(1, 3), dtype="float64")
-    return np.where(n > 0, s / np.maximum(n, 1), np.nan).astype("float32")
+def block_mean(values, factor):
+    """NaN-aware factor x factor block mean (shape must be divisible by factor)."""
+    if factor == 1:
+        return values
+
+    height, width = values.shape
+    blocks = values.reshape(height // factor, factor, width // factor, factor)
+    valid = ~np.isnan(blocks)
+    counts = valid.sum(axis=(1, 3))
+    sums = np.where(valid, blocks, 0).sum(axis=(1, 3), dtype="float64")
+    return np.where(counts > 0, sums / np.maximum(counts, 1), np.nan).astype("float32")
 
 
 def window_of(bbox):
     """Integer (col, row, width, height) window on the global rain grid for a grid-aligned bbox."""
-    w, s, e, n = bbox
-    c0, r0 = round((w + 180) / 0.05), round((60 - n) / 0.05)
-    return c0, r0, round((e - w) / 0.05), round((n - s) / 0.05)
+    west, south, east, north = bbox
+    col, row = round((west + 180) / CELL_DEG), round((60 - north) / CELL_DEG)
+    return col, row, round((east - west) / CELL_DEG), round((north - south) / CELL_DEG)
 
 
 @dataclass
@@ -401,15 +464,16 @@ class RainDataset(Dataset):
         """The month that starts on the ISO date `step`."""
         return self.read_month(step[:7], bbox, factor)
 
-    def read_month(self, ym, bbox, factor=1):
+    def read_month(self, month, bbox, factor=1):
         """Rain of month 'YYYY-MM' over a grid-aligned bbox, block-averaged by `factor`."""
-        c, r, w, h = window_of(bbox)
-        c %= NCOLS
-        a = self.backend.read_rain(ym, (c, r, min(w, NCOLS - c), h))
-        if c + w > NCOLS:
+        col, row, width, height = window_of(bbox)
+        col %= NCOLS
+        rain = self.backend.read_rain(month, (col, row, min(width, NCOLS - col), height))
+        if col + width > NCOLS:
             # The window continues past 180 degrees, so the rest is at the west edge of the grid.
-            a = np.hstack([a, self.backend.read_rain(ym, (0, r, c + w - NCOLS, h))])
-        return block_mean(a, factor)
+            west_edge = self.backend.read_rain(month, (0, row, col + width - NCOLS, height))
+            rain = np.hstack([rain, west_edge])
+        return block_mean(rain, factor)
 
 
 class TerrainDataset(Dataset):
@@ -435,7 +499,7 @@ def make_registry(backend):
     """The two datasets, reading through `backend` (RealSource or SyntheticSource)."""
     return {
         "chirps_monthly": RainDataset(
-            "chirps_monthly", "Rainfall", "mm/month", 0.05, True, SOURCES["chirps"],
+            "chirps_monthly", "Rainfall", "mm/month", CELL_DEG, True, SOURCES["chirps"],
             {"value": "precip"}, {"value": ("uint16", 0.1, 0, 65535)},
             {"kind": "series-colormap", "colormap": "Blues"}, backend,
             long_name="Monthly precipitation", step="P1M"),

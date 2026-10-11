@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatTime, stepAt, unionTimes } from "./timeline.ts";
+import { formatTime, latestOnly, stepAt, unionTimes } from "./timeline.ts";
 
 const monthly = ["2020-01-01", "2020-02-01", "2020-03-01"];
 const sixteenDay = ["2020-01-01", "2020-01-17", "2020-02-02", "2020-02-18"];
@@ -27,4 +27,34 @@ test("labels show only as much date as the finest step needs", () => {
   assert.equal(formatTime("2020-02-01", ["P1M"]), "2020-02");
   assert.equal(formatTime("2020-02-01", ["P1M", "P16D"]), "2020-02-01");
   assert.equal(formatTime("2020-01-01", ["P5Y"]), "2020");
+});
+
+test("while a step is loading, only the latest later step is loaded", async () => {
+  const loaded: number[] = [];
+  let finishFirst: () => void = () => {};
+  const draw = latestOnly(async (step: number) => {
+    loaded.push(step);
+    if (step === 0) await new Promise<void>((resolve) => (finishFirst = resolve));
+  });
+
+  const firstRun = draw(0);
+  draw(1);
+  draw(2);
+  draw(3);
+  finishFirst();
+  await firstRun;
+
+  assert.deepEqual(loaded, [0, 3]);
+});
+
+test("steps given one after another are each loaded", async () => {
+  const loaded: number[] = [];
+  const draw = latestOnly(async (step: number) => {
+    loaded.push(step);
+  });
+
+  await draw(1);
+  await draw(2);
+
+  assert.deepEqual(loaded, [1, 2]);
 });

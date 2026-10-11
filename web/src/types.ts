@@ -1,5 +1,6 @@
 import type { Map as MapLibreMap } from "maplibre-gl";
 import type { Store } from "./data";
+import type { Coordinates } from "./render/mercator";
 
 // Shapes of backend responses (only the fields the frontend uses).
 
@@ -8,7 +9,8 @@ export interface Health {
   version: string;
 }
 
-export type Bbox = [number, number, number, number]; // [W, S, E, N]; E may exceed 180 across the antimeridian
+// [W, S, E, N]; E may exceed 180 across the antimeridian.
+export type Bbox = [number, number, number, number];
 
 export interface Layer {
   id: string;
@@ -86,6 +88,13 @@ export interface LayerDoc {
   arrays: Record<string, ArrayDoc>; // by role, e.g. value, elevation, hillshade
 }
 
+// area.geojson: one Feature holding the area's outline.
+export interface AreaFeature {
+  type: "Feature";
+  properties: Record<string, unknown>;
+  geometry: { type: string; coordinates: Coordinates };
+}
+
 export interface Scene {
   version: string;
   id: string;
@@ -107,7 +116,8 @@ export interface LayerContext {
   store: Promise<Store>;
   layer: LayerDoc;
   beforeId: string | undefined;
-  report(error: unknown): void; // for failures after the layer is mounted, e.g. a month that cannot be read
+  // For failures after the layer is mounted, e.g. a month that cannot be read.
+  report(error: unknown): void;
 }
 
 export interface LayerView {
@@ -115,7 +125,7 @@ export interface LayerView {
   options: { label: string; set(on: boolean): void }[];
   time: TimeDoc | null;
   ready: Promise<void>; // rejects when the layer's data cannot be read
-  setTime(t: string): void;
+  setTime(time: string): void;
   legend(): HTMLElement | null;
   destroy(): void;
 }

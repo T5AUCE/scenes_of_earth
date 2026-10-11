@@ -1,9 +1,9 @@
-import { addImageLayer, removeLayerAndSource, setImage } from "../map";
+import { addImageLayer, maxTextureSize, removeLayerAndSource, setImage } from "../map";
 import { arrayDoc, cacheByIndex, decode, readArray, readMask } from "../data";
 import { gradientLegend } from "../legend";
 import { lut, paintColormap } from "../render/colormap";
 import { sampleTable } from "../render/mercator";
-import { stepAt } from "../timeline";
+import { latestOnly, stepAt } from "../timeline";
 import type { LayerContext, LayerView } from "../types";
 import { createTerrainView } from "./terrain";
 
@@ -13,32 +13,54 @@ const SERIES_OPACITY = 0.8;
 function createSeriesView({ map, store, layer, beforeId, report }: LayerContext): LayerView {
   const id = `${layer.id}-series`;
   const { colormap = "Blues", domain } = layer.style;
-  const { time } = layer;
-  if (!domain || !time) throw new Error(`Layer "${layer.id}" needs a domain and a time axis`);
+  const { time: timeAxis } = layer;
+  if (!domain || !timeAxis) throw new Error(`Layer "${layer.id}" needs a domain and a time axis`);
 
   const valueDoc = arrayDoc(layer, "value");
-  const times = time.values;
   const colors = lut(colormap);
   let alive = true;
-  let shown = -1; // index being displayed; a slow read of an older step must not overwrite it
+  let shownStep = -1; // a slow read of an older step must not overwrite the one being displayed
+
   addImageLayer(map, id, layer.grid.bbox, beforeId, {
     "raster-opacity": 0,
     "raster-resampling": "nearest",
   });
 
-  const table = (async () => sampleTable(layer.grid, await readMask(await store, layer)))();
-  const readStep = cacheByIndex(CACHED_STEPS, async (index) =>
-    decode(await readArray(await store, valueDoc.path, [index, null, null]), valueDoc),
-  );
+  const sampledGrid = (async () => {
+    const mask = await readMask(await store, layer);
 
-  const show = async (index: number) => {
-    const [values, sampled] = await Promise.all([readStep(index), table]);
-    if (!alive || index !== shown) return;
+    return sampleTable(layer.grid, mask, maxTextureSize(map));
+  })();
 
-    const rgba = paintColormap(values, sampled, colors, domain);
-    setImage(map, id, new ImageData(rgba, sampled.width, sampled.height));
-    if (index + 1 < times.length) readStep(index + 1).catch(() => {});
+  const readStep = cacheByIndex(CACHED_STEPS, async (step) => {
+    const raw = await readArray(await store, valueDoc.path, [step, null, null]);
+    return decode(raw, valueDoc);
+  });
+
+  const hideImage = () => map.setPaintProperty(id, "raster-opacity", 0);
+
+  const drawStep = async (step: number) => {
+    try {
+      const [values, table] = await Promise.all([readStep(step), sampledGrid]);
+      if (!alive || step !== shownStep) return;
+
+      const rgba = paintColormap(values, table, colors, domain);
+      setImage(map, id, new ImageData(rgba, table.width, table.height));
+      map.setPaintProperty(id, "raster-opacity", SERIES_OPACITY);
+
+      const nextStep = step + 1;
+      if (nextStep < timeAxis.values.length) readStep(nextStep).catch(() => {});
+    } catch (error) {
+      // An error for a step the user has already left is no longer relevant.
+      if (!alive || step !== shownStep) return;
+
+      // The image on the map still belongs to an earlier step and must not pass for this one.
+      hideImage();
+      report(error);
+    }
   };
+
+  const drawLatestStep = latestOnly(drawStep);
 
   return {
     parts: [{ id, label: layer.title, layerIds: [id] }],
@@ -48,12 +70,12 @@ function createSeriesView({ map, store, layer, beforeId, report }: LayerContext)
         set: (on) => map.setPaintProperty(id, "raster-resampling", on ? "linear" : "nearest"),
       },
     ],
-    time,
-    ready: table.then(() => {}),
-    setTime(t) {
-      shown = stepAt(times, t);
-      map.setPaintProperty(id, "raster-opacity", shown < 0 ? 0 : SERIES_OPACITY);
-      if (shown >= 0) show(shown).catch(report);
+    time: timeAxis,
+    ready: sampledGrid.then(() => {}),
+    setTime(time) {
+      shownStep = stepAt(timeAxis.values, time);
+      if (shownStep < 0) hideImage();
+      else drawLatestStep(shownStep);
     },
     legend: () => gradientLegend(colors, domain, layer.units),
     destroy() {

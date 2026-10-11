@@ -14,11 +14,21 @@ CREATE TABLE IF NOT EXISTS boundaries (
 CREATE INDEX IF NOT EXISTS ix_boundaries_name ON boundaries(name COLLATE NOCASE);
 CREATE TABLE IF NOT EXISTS scenes (
     id TEXT PRIMARY KEY, status TEXT NOT NULL, progress REAL DEFAULT 0,
-    error TEXT, error_class TEXT, request_json TEXT NOT NULL, bytes INTEGER, created TEXT NOT NULL, finished TEXT
+    error TEXT, error_class TEXT, request_json TEXT NOT NULL, bytes INTEGER,
+    created TEXT NOT NULL, finished TEXT
 );
 """
 log = logging.getLogger("soe.db")
-LEVEL_RANK = "CASE level WHEN 'country' THEN 0 WHEN 'state' THEN 1 WHEN 'county' THEN 2 ELSE 3 END"
+LEVEL_RANK = (
+    "CASE level WHEN 'country' THEN 0 WHEN 'state' THEN 1 WHEN 'county' THEN 2 ELSE 3 END"
+)
+SQLITE_TIMEOUT_SECONDS = 5
+BUSY_TIMEOUT_MILLISECONDS = SQLITE_TIMEOUT_SECONDS * 1000
+ACTIVE_STATUSES = "('queued','running')"
+INSERT_BOUNDARY = (
+    "INSERT OR REPLACE INTO boundaries (id, level, name, parent_name, iso3, bbox_w, bbox_s, "
+    "bbox_e, bbox_n, cells, geom_geojson, source, licence) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
+)
 
 
 def now():
@@ -27,40 +37,56 @@ def now():
 
 @contextmanager
 def connect(path):
-    conn = sqlite3.connect(path, timeout=5, isolation_level=None)  # autocommit; submit() uses BEGIN
-    conn.row_factory = sqlite3.Row
+    # isolation_level=None is autocommit; submit() and add_boundaries() use explicit BEGIN.
+    connection = sqlite3.connect(
+        path, timeout=SQLITE_TIMEOUT_SECONDS, isolation_level=None
+    )
+    connection.row_factory = sqlite3.Row
     try:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        yield conn
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MILLISECONDS}")
+        yield connection
     finally:
-        conn.close()
+        connection.close()
 
 
 def init(path):
     """Create tables; jobs that were queued or running when the process died are marked failed."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with connect(path) as c:
-        c.executescript(SCHEMA)
-        c.execute("UPDATE scenes SET status='failed', error='interrupted', error_class='Interrupted', finished=? "
-                  "WHERE status IN ('queued','running')", (now(),))
+    with connect(path) as connection:
+        connection.executescript(SCHEMA)
+        connection.execute(
+            "UPDATE scenes SET status='failed', error='interrupted', "
+            "error_class='Interrupted', finished=? "
+            f"WHERE status IN {ACTIVE_STATUSES}",
+            (now(),),
+        )
 
 
-def search(path, q, level=None, limit=20):
-    q = q.replace("!", "!!").replace("%", "!%").replace("_", "!_")  # LIKE escape character is '!'
-    start, word = f"{q}%", f"% {q}%"
-    sql = ("SELECT id, name, level, iso3, parent_name, bbox_w, bbox_s, bbox_e, bbox_n, cells FROM boundaries "
-           "WHERE (name LIKE ? ESCAPE '!' OR name LIKE ? ESCAPE '!')" + (" AND level = ?" if level else "") +
-           f" ORDER BY (name LIKE ? ESCAPE '!') DESC, {LEVEL_RANK}, cells DESC, name LIMIT ?")
-    args = [start, word] + ([level] if level else []) + [start, limit]
-    with connect(path) as c:
-        return [dict(r) for r in c.execute(sql, args)]
+def search(path, query, level=None, limit=20):
+    # LIKE escape character is '!'.
+    query = query.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+    prefix_pattern, word_pattern = f"{query}%", f"% {query}%"
+    where = "(name LIKE ? ESCAPE '!' OR name LIKE ? ESCAPE '!')"
+    if level:
+        where += " AND level = ?"
+    order_by = f"(name LIKE ? ESCAPE '!') DESC, {LEVEL_RANK}, cells DESC, name"
+    sql = (
+        "SELECT id, name, level, iso3, parent_name, bbox_w, bbox_s, bbox_e, bbox_n, cells "
+        f"FROM boundaries WHERE {where} ORDER BY {order_by} LIMIT ?"
+    )
+    arguments = [prefix_pattern, word_pattern] + ([level] if level else [])
+    arguments += [prefix_pattern, limit]
+    with connect(path) as connection:
+        return [dict(row) for row in connection.execute(sql, arguments)]
 
 
-def get_boundary(path, bid):
-    with connect(path) as c:
-        r = c.execute("SELECT * FROM boundaries WHERE id = ?", (bid,)).fetchone()
-    return dict(r) if r else None
+def get_boundary(path, boundary_id):
+    with connect(path) as connection:
+        row = connection.execute(
+            "SELECT * FROM boundaries WHERE id = ?", (boundary_id,)
+        ).fetchone()
+    return dict(row) if row else None
 
 
 class Busy(Exception):
@@ -68,55 +94,73 @@ class Busy(Exception):
 
 
 def add_boundaries(path, source, rows):
-    """Replace all boundaries of one source. rows: tuples in column order of the INSERT below.
-
-    Duplicate ids inside `rows` overwrite each other (INSERT OR REPLACE); returns how many were replaced.
-    """
-    replaced = len(rows) - len({r[0] for r in rows})
+    """Replace all boundaries of one source. rows: tuples in column order of INSERT_BOUNDARY."""
+    replaced = len(rows) - len({row[0] for row in rows})
     if replaced:
         log.warning("%s: %d duplicate boundary ids replaced", source, replaced)
-    with connect(path) as c:
-        c.execute("BEGIN")
-        c.execute("DELETE FROM boundaries WHERE source = ?", (source,))
-        c.executemany("INSERT OR REPLACE INTO boundaries (id, level, name, parent_name, iso3, bbox_w, bbox_s, bbox_e, "
-                      "bbox_n, cells, geom_geojson, source, licence) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
-        c.execute("COMMIT")
+
+    with connect(path) as connection:
+        connection.execute("BEGIN")
+        connection.execute("DELETE FROM boundaries WHERE source = ?", (source,))
+        connection.executemany(INSERT_BOUNDARY, rows)
+        connection.execute("COMMIT")
     return replaced
 
 
-def submit(path, sid, request_json, done_ok, max_active=None):
-    """Register a scene job; `sid` is the content hash. Returns (row, start): start is True when the caller must run the build.
-
-    An existing done row is reused only if done_ok (its files exist); failed rows are re-queued.
-    Raises Busy when a new job would exceed `max_active` queued + running jobs.
-    """
-    with connect(path) as c:
-        c.execute("BEGIN IMMEDIATE")
-        row = c.execute("SELECT * FROM scenes WHERE id = ?", (sid,)).fetchone()
-        start = row is None or row["status"] == "failed" or (row["status"] == "done" and not done_ok)
+def submit(path, scene_id, request_json, bundle_exists, max_active=None):
+    """Register a scene job; `scene_id` is the content hash."""
+    with connect(path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = _select_scene(connection, scene_id)
+        start = _needs_build(row, bundle_exists)
         if start:
-            if max_active is not None:
-                n = c.execute("SELECT COUNT(*) FROM scenes WHERE status IN ('queued','running')").fetchone()[0]
-                if n >= max_active:
-                    raise Busy()
+            _check_capacity(connection, max_active)
             if row is None:
-                c.execute("INSERT INTO scenes (id, status, request_json, created) VALUES (?,?,?,?)",
-                          (sid, "queued", request_json, now()))
+                connection.execute(
+                    "INSERT INTO scenes (id, status, request_json, created) VALUES (?,?,?,?)",
+                    (scene_id, "queued", request_json, now()),
+                )
             else:
-                c.execute("UPDATE scenes SET status='queued', progress=0, error=NULL, error_class=NULL, finished=NULL "
-                          "WHERE id = ?", (sid,))
-        row = c.execute("SELECT * FROM scenes WHERE id = ?", (sid,)).fetchone()
-        c.execute("COMMIT")
+                connection.execute(
+                    "UPDATE scenes SET status='queued', progress=0, error=NULL, error_class=NULL, "
+                    "finished=NULL WHERE id = ?",
+                    (scene_id,),
+                )
+        row = _select_scene(connection, scene_id)
+        connection.execute("COMMIT")
     return dict(row), start
 
 
-def get_scene(path, sid):
-    with connect(path) as c:
-        r = c.execute("SELECT * FROM scenes WHERE id = ?", (sid,)).fetchone()
-    return dict(r) if r else None
+def _select_scene(connection, scene_id):
+    return connection.execute("SELECT * FROM scenes WHERE id = ?", (scene_id,)).fetchone()
 
 
-def update_scene(path, sid, **fields):
-    cols = ", ".join(f"{k} = ?" for k in fields)
-    with connect(path) as c:
-        c.execute(f"UPDATE scenes SET {cols} WHERE id = ?", (*fields.values(), sid))
+def _needs_build(row, bundle_exists):
+    if row is None or row["status"] == "failed":
+        return True
+    return row["status"] == "done" and not bundle_exists
+
+
+def _check_capacity(connection, max_active):
+    if max_active is None:
+        return
+
+    active = connection.execute(
+        f"SELECT COUNT(*) FROM scenes WHERE status IN {ACTIVE_STATUSES}"
+    ).fetchone()[0]
+    if active >= max_active:
+        raise Busy()
+
+
+def get_scene(path, scene_id):
+    with connect(path) as connection:
+        row = _select_scene(connection, scene_id)
+    return dict(row) if row else None
+
+
+def update_scene(path, scene_id, **fields):
+    assignments = ", ".join(f"{column} = ?" for column in fields)
+    with connect(path) as connection:
+        connection.execute(
+            f"UPDATE scenes SET {assignments} WHERE id = ?", (*fields.values(), scene_id)
+        )

@@ -1,41 +1,77 @@
-import type { Map as MapLibreMap } from "maplibre-gl";
-import { openStore } from "./data";
+import type { GeoJSONSource, Map as MapLibreMap } from "maplibre-gl";
+import { loadAreaFeature } from "./api";
+import { openStore, type Store } from "./data";
+import { makeElement } from "./dom";
 import { LAYER_KINDS } from "./layers/registry";
 import { firstSymbolId, removeLayerAndSource } from "./map";
+import { shiftLongitudes, worldShift } from "./render/mercator";
 import { createTimeline, unionTimes } from "./timeline";
-import type { LayerView, Part, Scene } from "./types";
+import type { LayerDoc, LayerView, Part, Scene } from "./types";
+
+type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
 
 const OUTLINE_ID = "soe-area-outline";
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = "", parent?: HTMLElement) {
-  const e = document.createElement(tag);
-  e.textContent = text;
-  parent?.append(e);
-  return e;
-}
-
-function checkbox(label: string, checked: boolean, onChange: (on: boolean) => void) {
-  const row = el("label");
-  const box = document.createElement("input");
-  box.type = "checkbox";
-  box.checked = checked;
-  box.onchange = () => onChange(box.checked);
-  row.append(box, ` ${label}`);
-  return row;
-}
+const EMPTY_FEATURES: GeoJsonData = { type: "FeatureCollection", features: [] };
 
 // Draws the scene's layers on the map and their controls into root. Returns the unmount function.
+// If drawing fails partway, whatever was already added is removed before the error is thrown.
 export function mountScene(map: MapLibreMap, scene: Scene, root: HTMLElement) {
-  const box = el("div", "", root);
-  const notes = el("div", "", box);
-  const note = (text: string) => {
-    el("div", text, notes).className = "notice";
+  const box = makeElement("div", "", root);
+  const views: LayerView[] = [];
+  let timeline: ReturnType<typeof createSceneTimeline> = null;
+  let isMounted = true;
+
+  const unmount = () => {
+    isMounted = false;
+    timeline?.destroy();
+    views.forEach((view) => view.destroy());
+    removeLayerAndSource(map, OUTLINE_ID);
+    box.remove();
   };
 
-  const store = openStore(scene.data.href);
-  store.catch((e) => note(`Cannot open the data: ${e.message}`));
+  try {
+    const notes = makeElement("div", "", box);
+    const addNote = (text: string) => {
+      makeElement("div", text, notes).className = "notice";
+    };
 
-  map.addSource(OUTLINE_ID, { type: "geojson", data: scene.area.geometry_href });
+    const store = openStore(scene.data.href);
+    store.catch((error) => addNote(`Cannot open the data: ${error.message}`));
+
+    addOutline(map, scene, addNote, () => isMounted);
+    views.push(...mountLayerViews(map, scene.layers, store, addNote));
+    box.append(togglesFor(map, views));
+
+    timeline = createSceneTimeline(views);
+    if (timeline) box.append(timeline.element);
+
+    for (const view of views) {
+      const legend = view.legend();
+      if (legend) box.append(legend);
+    }
+
+    for (const limit of scene.notices.limits) addNote(limit);
+  } catch (error) {
+    unmount();
+    throw error;
+  }
+
+  return unmount;
+}
+
+// Rasters east of the antimeridian are drawn one world to the west, so the outline moves with
+// them; that needs the coordinates, so the source is filled once the file has loaded.
+function addOutline(
+  map: MapLibreMap,
+  scene: Scene,
+  addNote: (text: string) => void,
+  isMounted: () => boolean,
+) {
+  const shift = worldShift(scene.area.bbox);
+  const data = shift === 0 ? scene.area.geometry_href : EMPTY_FEATURES;
+
+  map.addSource(OUTLINE_ID, { type: "geojson", data });
+
   map.addLayer(
     {
       id: OUTLINE_ID,
@@ -46,62 +82,108 @@ export function mountScene(map: MapLibreMap, scene: Scene, root: HTMLElement) {
     firstSymbolId(map),
   );
 
-  const views: LayerView[] = [];
-  const kinds = scene.layers.map((layer) => ({ layer, kind: LAYER_KINDS.get(layer.style.kind) }));
-  const known = kinds.filter((k) => k.kind).sort((a, b) => a.kind!.stack - b.kind!.stack);
-  for (const { layer, kind } of kinds.filter((k) => !k.kind)) {
-    note(`${layer.title}: display not supported yet`);
+  if (shift === 0) return;
+
+  showShiftedOutline(map, scene.area.geometry_href, shift, isMounted)
+    .catch((error) => addNote(`Area outline: ${error.message}`));
+}
+
+async function showShiftedOutline(
+  map: MapLibreMap,
+  geometryHref: string,
+  shift: number,
+  isMounted: () => boolean,
+) {
+  const feature = await loadAreaFeature(geometryHref);
+  if (!isMounted()) return;
+
+  const { geometry } = feature;
+  const shifted = {
+    ...feature,
+    geometry: { ...geometry, coordinates: shiftLongitudes(geometry.coordinates, shift) },
+  };
+
+  (map.getSource(OUTLINE_ID) as GeoJSONSource).setData(shifted as GeoJsonData);
+}
+
+// Layers of unknown kinds are skipped with a note; a layer that fails to start does not stop
+// the others.
+function mountLayerViews(
+  map: MapLibreMap,
+  layers: LayerDoc[],
+  store: Promise<Store>,
+  addNote: (text: string) => void,
+) {
+  const layersWithKind = layers.map((layer) => ({
+    layer,
+    kind: LAYER_KINDS.get(layer.style.kind),
+  }));
+
+  for (const { layer } of layersWithKind.filter(({ kind }) => !kind)) {
+    addNote(`${layer.title}: display not supported yet`);
   }
-  for (const { layer, kind } of known) {
-    const report = (e: unknown) => note(`${layer.title}: ${(e as Error).message}`);
+
+  const supported = layersWithKind
+    .filter(({ kind }) => kind)
+    .sort((first, second) => first.kind!.stack - second.kind!.stack);
+
+  const views: LayerView[] = [];
+
+  for (const { layer, kind } of supported) {
+    const report = (error: unknown) => addNote(`${layer.title}: ${(error as Error).message}`);
     try {
       const view = kind!.create({ map, store, layer, beforeId: OUTLINE_ID, report });
       view.ready.catch(report);
       views.push(view);
-    } catch (e) {
-      report(e);
+    } catch (error) {
+      report(error);
     }
   }
 
-  const toggles = el("fieldset", "", box);
-  el("legend", "Show", toggles);
-  const parts: Part[] = [
-    ...views.flatMap((v) => v.parts),
-    { id: OUTLINE_ID, label: "Area outline", layerIds: [OUTLINE_ID] },
-  ];
-  for (const part of parts) {
-    toggles.append(
-      checkbox(part.label, true, (on) => {
-        for (const id of part.layerIds) {
-          map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
-        }
-      }),
-    );
+  return views;
+}
+
+function togglesFor(map: MapLibreMap, views: LayerView[]) {
+  const toggles = makeElement("fieldset");
+  makeElement("legend", "Show", toggles);
+
+  const outline: Part = { id: OUTLINE_ID, label: "Area outline", layerIds: [OUTLINE_ID] };
+
+  for (const part of [...views.flatMap((view) => view.parts), outline]) {
+    toggles.append(checkbox(part.label, true, (on) => setVisible(map, part.layerIds, on)));
   }
-  for (const option of views.flatMap((v) => v.options)) {
+
+  for (const option of views.flatMap((view) => view.options)) {
     toggles.append(checkbox(option.label, false, option.set));
   }
 
-  const axes = views.flatMap((v) => (v.time ? [v.time] : []));
-  const timeline = axes.length
-    ? createTimeline(
-        unionTimes(axes.map((a) => a.values)),
-        axes.map((a) => a.step),
-        (t) => views.forEach((v) => v.setTime(t)),
-      )
-    : null;
-  if (timeline) box.append(timeline.element);
+  return toggles;
+}
 
-  for (const view of views) {
-    const legend = view.legend();
-    if (legend) box.append(legend);
+function setVisible(map: MapLibreMap, layerIds: string[], visible: boolean) {
+  for (const id of layerIds) {
+    map.setLayoutProperty(id, "visibility", visible ? "visible" : "none");
   }
-  for (const text of scene.notices.limits) note(text);
+}
 
-  return () => {
-    timeline?.destroy();
-    views.forEach((v) => v.destroy());
-    removeLayerAndSource(map, OUTLINE_ID);
-    box.remove();
-  };
+function createSceneTimeline(views: LayerView[]) {
+  const axes = views.flatMap((view) => (view.time ? [view.time] : []));
+  if (!axes.length) return null;
+
+  return createTimeline(
+    unionTimes(axes.map((axis) => axis.values)),
+    axes.map((axis) => axis.step),
+    (time) => views.forEach((view) => view.setTime(time)),
+  );
+}
+
+function checkbox(label: string, checked: boolean, onChange: (on: boolean) => void) {
+  const row = makeElement("label");
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = checked;
+  box.onchange = () => onChange(box.checked);
+  row.append(box, ` ${label}`);
+
+  return row;
 }

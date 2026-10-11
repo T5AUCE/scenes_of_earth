@@ -1,5 +1,4 @@
 """Build immutable scene bundles containing raster data and metadata."""
-
 import json
 import os
 import shutil
@@ -36,6 +35,7 @@ def build_scene(
     scenes_dir,
     progress=lambda _: None,
 ):
+    """Build or reuse the scene's bundle and return its size in bytes."""
 
     scenes_dir = Path(scenes_dir)
     final_dir = scenes_dir / scene_id
@@ -87,6 +87,7 @@ def build_scene(
         )
 
     progress(1.0)
+
     return bundle_size
 
 
@@ -176,7 +177,6 @@ def _directory_size(directory):
 def _write_layers(root, scene_plan, datasets, progress):
     layer_metadata = {}
 
-    # Static layers are written before time-varying layers.
     ordered_datasets = sorted(
         datasets,
         key=lambda dataset: dataset.time_varying,
@@ -287,6 +287,7 @@ def hillshade(
     azimuth=315,
     altitude=45,
 ):
+    """Return uint8 hillshade (0-255) for a north-up grid with cells in degrees."""
     elevation = np.pad(
         elevation.astype("float64"),
         1,
@@ -299,7 +300,7 @@ def hillshade(
         - (np.arange(height) + 0.5) * resolution_degrees
     )
 
-    # Convert geographic cell dimensions to approximate metres.
+    # Gradients need cell sizes in metres to match elevation units.
     cell_width = (
         resolution_degrees
         * 111320
@@ -535,8 +536,7 @@ class _StatisticsAccumulator:
         self._value_sum += values.sum(dtype="float64")
         self._value_count += values.size
 
-        # Sampling each batch bounds memory use. Unequal batch sizes can
-        # slightly overweight a short final batch in the percentile estimate.
+        # Per-batch sampling bounds memory but slightly overweights a short last batch.
         self._samples.append(
             self._random.choice(
                 values,
@@ -598,6 +598,7 @@ def _write_array(
     )
 
     array[...] = data
+
     return array
 
 
