@@ -105,7 +105,7 @@ def test_rejections_happen_before_any_read(env):
         {"layers": ["rain"]},
         {"area": {"type": "polygon", "geometry": {"type": "Point", "coordinates": [0, 0]}}},
         {"area": {"type": "polygon", "geometry": mapping(box(-60, -20, 40, 10))}, "start": "1981-01", "end": "2026-08"},
-        {"area": {"type": "polygon", "geometry": mapping(box(0, 0, 11, 11))}, "layers": ["glo90_terrain"]},
+        {"area": {"type": "polygon", "geometry": mapping(box(-100, -50, 70, 60))}, "layers": ["glo90_terrain"]},
     ]
     for extra in cases:
         r = client.post("/api/scenes", json={**body(), **extra})

@@ -26,6 +26,9 @@ soe = "soe.cli:main"
 [tool.setuptools]
 packages = ["soe"]
 
+[tool.setuptools.package-data]
+soe = ["glo90_tiles.bin"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

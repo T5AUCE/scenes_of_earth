@@ -7,9 +7,11 @@ import zipfile
 from pathlib import Path
 
 from . import db
+from .areas import unwrap
 
 CELL_DEG2 = 0.05 * 0.05
 MIN_CITY_POP = 1_000_000
+GLO90_TILE_LIST = "https://copernicus-dem-90m.s3.amazonaws.com/tileList.txt"
 CGAZ_LEVELS = {0: "country", 1: "state", 2: "county"}
 
 
@@ -19,9 +21,25 @@ def _row(rid, level, name, parent, iso3, geom, source, licence):
     geom = geom.simplify(0.01, preserve_topology=True).intersection(box(-180, -60, 180, 60))
     if geom.is_empty:
         return None
-    w, s, e, n = geom.bounds
+    w, s, e, n = unwrap(geom).bounds  # a shape across 180 gets E > 180 instead of spanning the world
     return (rid, level, name, parent, iso3, w, s, e, n, max(1, round(geom.area / CELL_DEG2)),
             json.dumps(mapping(geom)), source, licence)
+
+
+def build_glo90_index(path):
+    """Write the bitmap of GLO-90 tiles that exist (soe/glo90_tiles.bin) from the bucket's tile list."""
+    import re
+    import urllib.request
+    import numpy as np
+    bits = np.zeros((180, 360), bool)
+    with urllib.request.urlopen(GLO90_TILE_LIST, timeout=60) as r:
+        for line in r.read().decode().splitlines():
+            m = re.match(r"Copernicus_DSM_COG_30_([NS])(\d+)_00_([EW])(\d+)_00_DEM", line)
+            if m:
+                lat, lon = int(m[2]) * (1 if m[1] == "N" else -1), int(m[4]) * (1 if m[3] == "E" else -1)
+                bits[lat + 90, lon + 180] = True
+    Path(path).write_bytes(np.packbits(bits).tobytes())
+    return int(bits.sum())
 
 
 def import_cgaz(db_path, folder):
@@ -94,7 +112,11 @@ def main(argv=None):
     imp.add_argument("--cgaz", help="folder with the CGAZ ADM0/ADM1/ADM2 GeoPackages")
     imp.add_argument("--ucdb", help="GHS UCDB R2024A GeoPackage or zip")
     imp.add_argument("--db", default=os.environ.get("SOE_DB", "./data/soe.db"))
+    sub.add_parser("glo90-index", help="rebuild soe/glo90_tiles.bin from the GLO-90 tile list (downloads 1 MB)")
     args = ap.parse_args(argv)
+    if args.cmd == "glo90-index":
+        print("GLO-90 tiles:", build_glo90_index(Path(__file__).parent / "glo90_tiles.bin"))
+        return
     logging.basicConfig(level=logging.INFO)
     if not (args.cgaz or args.ucdb):
         ap.error("give --cgaz and/or --ucdb")

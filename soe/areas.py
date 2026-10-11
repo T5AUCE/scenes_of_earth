@@ -10,6 +10,7 @@ import numpy as np
 import shapely
 from rasterio.features import geometry_mask
 from rasterio.transform import Affine
+from shapely.affinity import translate
 from shapely.geometry import MultiPolygon, Polygon, box, mapping, shape
 
 from .sources import FIRST_MONTH, GRID, NCOLS, NROWS
@@ -131,13 +132,22 @@ def _cell_mask(geom, window_transform, shape_, all_touched=False):
     return geometry_mask([mapping(geom)], shape_, window_transform, invert=True, all_touched=all_touched)
 
 
+def unwrap(geom):
+    """Put a shape that crosses 180 into one longitude frame: parts west of 0 move east by 360 (longitudes up to 360)."""
+    x0, _, x1, _ = geom.bounds
+    if x1 - x0 <= 180:
+        return geom
+    parts = [translate(p, xoff=360) if sum(p.bounds[::2]) < 0 else p for p in shapely.get_parts(geom)]
+    return MultiPolygon(parts)
+
+
 def plan(area, n_months, datasets):
     """Work out window, aggregation factor, mask and notices; raise AreaError if the request is refused."""
-    geom, notices = area.geom, []
+    geom, notices = unwrap(area.geom), []
     x0, y0, x1, y1 = geom.bounds
     if x1 - x0 > 180:
-        raise AreaError("shapes crossing the antimeridian are not supported")
-    clipped_geom = geom.intersection(box(-180, -60, 180, 60))
+        raise AreaError("area spans more than 180 degrees of longitude")
+    clipped_geom = geom.intersection(box(-180, -60, 360, 60))
     if clipped_geom.is_empty or clipped_geom.area == 0:
         raise AreaError("area is outside rain coverage (60S to 60N)")
     clipped = clipped_geom.area < geom.area * (1 - 1e-9)
@@ -147,8 +157,8 @@ def plan(area, n_months, datasets):
     x0, y0, x1, y1 = clipped_geom.bounds
     c0, c1 = math.floor(round((x0 + 180) / 0.05, 6)), math.ceil(round((x1 + 180) / 0.05, 6))
     r0, r1 = math.floor(round((60 - y1) / 0.05, 6)), math.ceil(round((60 - y0) / 0.05, 6))
-    c0, c1, r0, r1 = max(c0, 0), min(c1, NCOLS), max(r0, 0), min(r1, NROWS)
-    padded = _pad(c0, c1, NCOLS), _pad(r0, r1, NROWS)
+    c0, c1, r0, r1 = max(c0, 0), min(c1, NCOLS * 3 // 2), max(r0, 0), min(r1, NROWS)
+    padded = _pad(c0, c1, NCOLS * 3 // 2), _pad(r0, r1, NROWS)
     if padded != ((c0, c1), (r0, r1)):
         notices.append("The map area was padded to at least 0.5 x 0.5 degrees for context.")
     (c0, c1), (r0, r1) = padded
@@ -194,5 +204,7 @@ def plan(area, n_months, datasets):
     for ds in datasets:
         if ds.max_tiles and ds.tile_count(bbox) > ds.max_tiles:
             raise AreaError(f"{ds.id} needs more than {ds.max_tiles} source tiles; choose a smaller area")
+        if note := ds.notice(bbox):
+            notices.append(note)
     return Plan(clipped_geom, (c0, r0, c1 - c0, r1 - r0), factor, transform, (ny, nx),
                 mask.astype("uint8"), int(mask.sum()), bbox, clipped, notices)

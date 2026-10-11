@@ -4,12 +4,13 @@ import json
 import numpy as np
 import pytest
 import zarr
-from shapely.geometry import box, mapping
+from shapely.geometry import MultiPolygon, box, mapping
 
-from soe.areas import Area, AreaError, check_months, clean_polygon, plan
+from soe.areas import Area, AreaError, check_months, clean_polygon, plan, unwrap
 from soe.build import build_scene, hillshade
 from soe.bundle import validate
-from soe.sources import REGISTRY, SyntheticSource, block_mean, glo90_tiles, make_registry, month_list, terrain_res
+from soe.sources import (REGISTRY, SyntheticSource, _tile_index, block_mean, glo90_tiles, make_registry, month_list,
+                         terrain_by_blocks, terrain_res)
 
 NAIROBI = box(36.5, -1.5, 37.5, -0.5)
 SYN = make_registry(SyntheticSource())
@@ -69,16 +70,17 @@ def test_dedupe_shape_is_canonical():
 def test_plan_rejections():
     with pytest.raises(AreaError, match="too small"):
         plan(Area(box(36.8, -1.1, 36.9, -1.0)), 12, [RAIN])
-    with pytest.raises(AreaError, match="antimeridian"):
-        plan(Area(box(-170, 0, 170, 10)), 12, [RAIN])
+    with pytest.raises(AreaError, match="more than 180 degrees"):
+        plan(Area(box(0, 0, 90, 10).union(box(180, 0, 270, 10)).union(box(90, 0, 91, 1))), 12, [RAIN])
     with pytest.raises(AreaError, match="outside"):
         plan(Area(box(0, 62, 5, 70)), 12, [RAIN])
     with pytest.raises(AreaError, match="too large to read"):  # 2M source cells x 240 months > 100M
         plan(Area(box(-60, -20, 40, 10)), 240, [RAIN])
     assert REGISTRY.keys() == {'chirps_monthly', 'glo90_terrain'}
     assert len(glo90_tiles((36, -2, 38, 0))) == 4
-    with pytest.raises(AreaError, match="source tiles"):  # 11 x 11 degrees = 121 tiles
-        plan(Area(box(0, 0, 11, 11)), 1, [TERRAIN])
+    with pytest.raises(AreaError, match="source tiles"):  # 8190 existing tiles > 2500
+        plan(Area(box(-100, -50, 70, 60)), 1, [TERRAIN])
+    assert plan(Area(box(0, 0, 11, 11)), 1, [TERRAIN]).bbox == [0, 0, 11, 11]
 
 
 def test_plan_aggregates_and_snaps():
@@ -102,9 +104,72 @@ def test_plan_tiny_named_area_falls_back_to_all_touched():
     assert e - w >= 0.5 - 1e-9 and n - s >= 0.5 - 1e-9
 
 
-def test_terrain_res_not_finer_than_native():
+def test_terrain_res_budget():
     assert terrain_res((36.5, -1.5, 37.5, -0.5)) == pytest.approx(1 / 1200)
-    assert terrain_res((0, 0, 20, 20)) == pytest.approx(20 / 2048)
+    assert terrain_res((33, -4, 42, 6)) == pytest.approx(0.005)
+    assert terrain_res((-70, -30, -30, 10)) == pytest.approx(0.025)
+    assert terrain_res((19, 41, 191, 60)) == pytest.approx(0.05)
+    for b in ((33, -4, 42, 6), (-70, -30, -30, 10), (19, 41, 191, 60), (0, 0, 2, 2), (0, 0, 0.5, 40)):
+        res = terrain_res(b)
+        nx, ny = (b[2] - b[0]) / res, (b[3] - b[1]) / res
+        assert nx == pytest.approx(round(nx)) and ny == pytest.approx(round(ny))
+        assert nx * ny <= 2048 * 2048 and max(nx, ny) <= 4096
+
+
+def test_tile_index():
+    assert _tile_index().sum() == 26475
+    assert glo90_tiles((6, 0, 7, 1)) == ["Copernicus_DSM_COG_30_N00_00_E006_00_DEM"]
+    assert glo90_tiles((-130, -10, -120, 0)) == []  # mid-Pacific
+    assert TERRAIN.tile_count([-130, -10, -120, 0]) == 0
+    assert glo90_tiles((179, -18, 181, -17)) == ["Copernicus_DSM_COG_30_S18_00_E179_00_DEM",
+                                                 "Copernicus_DSM_COG_30_S18_00_W180_00_DEM"]
+
+
+def test_terrain_blocks_equal_one_read():
+    syn = SyntheticSource()
+    for bounds in ((177.35, -19.1, 181.65, -15.85), (36.5, -1.5, 37.5, -0.5)):
+        res = terrain_res(bounds)
+        whole, _ = syn.terrain(bounds, res)
+        blocks, t = terrain_by_blocks(bounds, res, lambda b, r: syn.terrain(b, r)[0])
+        assert np.abs(whole.astype(int) - blocks).max() <= 1  # float rounding at block edges only
+        assert t.c == bounds[0] and t.f == bounds[3]
+
+
+FIJI = MultiPolygon([box(178, -19, 180, -17), box(-180, -19, -178, -17)])
+
+
+def test_unwrap_and_plan_across_180():
+    assert unwrap(FIJI).bounds == (178, -19, 182, -17)
+    p = plan(Area(FIJI), 2, [RAIN])
+    assert p.bbox[2] > 180 and p.window[0] + p.window[2] > 7200 and p.mask.sum() > 0
+
+
+def test_read_month_wraps_at_180():
+    src = SyntheticSource()
+    rain = make_registry(src)["chirps_monthly"]
+    bbox = [179, -1, 181, 1]
+    a = rain.read_month("2015-01", bbox, 2)
+    left, right = src.read_rain("2015-01", (7180, 1180, 20, 40)), src.read_rain("2015-01", (0, 1180, 20, 40))
+    assert src.reads == 4 and a.shape == (20, 20)
+    assert np.array_equal(a, block_mean(np.hstack([left, right]), 2), equal_nan=True)
+
+
+def test_synthetic_build_across_180(tmp_path):
+    reg = make_registry(SyntheticSource())
+    build_scene(HASH_B, Area(FIJI, BOUNDARY), "2015-01", "2015-03", [reg["glo90_terrain"], reg["chirps_monthly"]],
+                "Test", tmp_path, lambda f: None)
+    out = tmp_path / HASH_B
+    doc = json.loads((out / "scene.json").read_text(encoding="utf-8"))
+    assert validate(doc) == [] and doc["area"]["bbox"][2] > 180
+    g = zarr.open_group(out / "data.zarr", mode="r")
+    for name in ("chirps_monthly", "glo90_terrain"):
+        lon = g[name]["lon"][:]
+        assert np.all(np.diff(lon) > 0) and lon[-1] > 180
+    t = g["glo90_terrain"]
+    w, e = doc["area"]["bbox"][0], doc["area"]["bbox"][2]
+    assert t["elevation"].shape[1] == round((e - w) / terrain_res(doc["area"]["bbox"]))
+    hs = t["hillshade"][:]
+    assert not np.all(hs[:, hs.shape[1] // 2] == hs[0, hs.shape[1] // 2])  # no flat seam column
 
 
 HASH_A, HASH_B, HASH_C = "a" * 20, "b" * 20, "c" * 20

@@ -5,6 +5,8 @@ Windows are integer (col, row, width, height) cell windows on that grid, so read
 """
 import math
 import time
+from functools import lru_cache
+from pathlib import Path
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -22,6 +24,9 @@ GRID = Affine(0.05, 0, -180, 0, -0.05, 60)
 NCOLS, NROWS = 7200, 2400
 FIRST_MONTH = "1981-01"
 NATIVE_TERRAIN_RES = 1 / 1200
+TERRAIN_PIXELS = 2048 * 2048
+TERRAIN_THREADS = 32
+BLOCK_DEG = 2  # terrain is read in blocks of this many whole degrees
 
 CHIRPS_URL = "https://data.chc.ucsb.edu/products/CHIRPS/v3.0/monthly/global/cogs/chirps-v3.0.{ym}.cog"
 GLO90_URL = "https://copernicus-dem-90m.s3.amazonaws.com/{n}/{n}.tif"
@@ -87,27 +92,57 @@ def month_list(start, end):
     return out
 
 
+@lru_cache
+def _tile_index():
+    """180 x 360 bool grid (row = lat + 90, column = lon + 180) of the tiles that exist in the GLO-90 bucket."""
+    packed = np.frombuffer((Path(__file__).parent / "glo90_tiles.bin").read_bytes(), "uint8")
+    return np.unpackbits(packed).reshape(180, 360).astype(bool)
+
+
 def glo90_tiles(bounds):
-    """GLO-90 tile names (1 degree, named by the south-west corner) covering bounds (W, S, E, N)."""
+    """Names of the existing GLO-90 tiles (1 degree, named by the south-west corner) covering bounds (W, S, E, N).
+    Longitudes above 180 wrap, so bounds may cross the antimeridian."""
     w, s, e, n = bounds
     names = []
-    for lat in range(math.floor(s + 1e-9), math.ceil(n - 1e-9)):
+    for lat in range(max(math.floor(s + 1e-9), -90), min(math.ceil(n - 1e-9), 90)):
         for lon in range(math.floor(w + 1e-9), math.ceil(e - 1e-9)):
-            ns, ew = ("N" if lat >= 0 else "S"), ("E" if lon >= 0 else "W")
-            names.append(f"Copernicus_DSM_COG_30_{ns}{abs(lat):02d}_00_{ew}{abs(lon):03d}_00_DEM")
+            lon = (lon + 180) % 360 - 180
+            if _tile_index()[lat + 90, lon + 180]:
+                ns, ew = ("N" if lat >= 0 else "S"), ("E" if lon >= 0 else "W")
+                names.append(f"Copernicus_DSM_COG_30_{ns}{abs(lat):02d}_00_{ew}{abs(lon):03d}_00_DEM")
     return names
 
 
 def terrain_res(bounds):
-    """Terrain cell size: 2048 px on the long side, but no finer than native."""
+    """Terrain cell size 0.05 / k degrees: about 4.2 Mpx and at most 4096 px on the long side, never finer than native.
+    Whole degrees are then a whole number of cells."""
     w, s, e, n = bounds
-    return max(NATIVE_TERRAIN_RES, max(e - w, n - s) / 2048)
+    k = min(math.isqrt(int(TERRAIN_PIXELS / (400 * (e - w) * (n - s)))), int(204.8 / max(e - w, n - s)))
+    return 0.05 / min(max(k, 1), 60)
 
 
 def with_margin(bounds, res):
     """Bounds grown by one pixel: GLO-90 tiles are half a pixel off-grid, so the margin is cropped after merging."""
     w, s, e, n = bounds
     return (w - res, s - res, e + res, n + res)
+
+
+def terrain_by_blocks(bounds, res, read_block):
+    """Terrain on bounds, read in parallel in blocks of whole degrees (so no block crosses 180).
+    read_block(block_bounds, res) returns an array, or None for a block without terrain (left at 0)."""
+    w, s, e, n = bounds
+    ny, nx = round((n - s) / res), round((e - w) / res)
+    xs = [w] + list(range(math.floor(w / BLOCK_DEG) * BLOCK_DEG + BLOCK_DEG, math.ceil(e), BLOCK_DEG)) + [e]
+    ys = [s] + list(range(math.floor(s / BLOCK_DEG) * BLOCK_DEG + BLOCK_DEG, math.ceil(n), BLOCK_DEG)) + [n]
+    blocks = [(x0, y0, x1, y1) for x0, x1 in zip(xs, xs[1:]) for y0, y1 in zip(ys, ys[1:])]
+    with ThreadPoolExecutor(TERRAIN_THREADS) as ex:
+        parts = list(ex.map(lambda b: read_block(b, res), blocks))
+    z = np.zeros((ny, nx), "int16")
+    for (x0, y0, x1, y1), part in zip(blocks, parts):
+        if part is not None:
+            r, c = round((n - y1) / res), round((x0 - w) / res)
+            z[r:r + part.shape[0], c:c + part.shape[1]] = part
+    return z, from_origin(w, n, res, res)
 
 
 def _head(url):
@@ -118,16 +153,6 @@ def _head(url):
             return True, r.headers.get("Last-Modified")
     except (urllib.error.URLError, OSError):
         return False, None
-
-
-def _is_404(url):
-    try:
-        urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=15).close()
-    except urllib.error.HTTPError as e:
-        return e.code == 404
-    except OSError:
-        pass
-    return False
 
 
 class SourceUnavailable(RuntimeError):
@@ -182,37 +207,41 @@ class RealSource:
         return a
 
     def terrain(self, bounds, res):
-        """Merged elevation (int16) on bounds at res; missing (ocean) tiles are 0. Returns (array, transform)."""
-        w, s, e, n = bounds
-        ext = with_margin(bounds, res)
-        names = glo90_tiles(ext)
+        """Elevation (int16) on bounds at res; ocean (no tile) is 0. Returns (array, transform)."""
+        return terrain_by_blocks(bounds, res, self._merge)
 
-        def open_tile(n):
-            url = GLO90_URL.format(n=n)
-            for attempt in range(3):
-                with rasterio.Env(**GDAL_OPTS):
+    def _merge(self, bounds, res):
+        """One block: merged elevation, or None if no tile exists there. Bounds above 180 read the tiles west of it."""
+        w, s, e, n = bounds
+        if w >= 180:
+            w, e = w - 360, e - 360
+        ext = with_margin((w, s, e, n), res)
+        names = glo90_tiles(ext)
+        if not names:
+            return None
+        dss = []
+        try:
+            for name in names:
+                url = GLO90_URL.format(n=name)
+                for attempt in range(3):
                     try:
-                        return rasterio.open(url)
+                        with rasterio.Env(**GDAL_OPTS):
+                            dss.append(rasterio.open(url))
+                        break
                     except RasterioIOError:
-                        if _is_404(url):  # ocean tiles do not exist: treated as elevation 0
-                            return None
                         if attempt == 2:
                             raise
                         time.sleep(1)
-
-        with ThreadPoolExecutor(8) as ex:
-            dss = [d for d in ex.map(open_tile, names) if d is not None]
-        ny, nx = round((n - s) / res), round((e - w) / res)
-        try:
-            if not dss:
-                return np.zeros((ny, nx), "int16"), from_origin(w, n, res, res)
             with rasterio.Env(**GDAL_OPTS):
                 arr, _ = merge(dss, bounds=ext, res=res, nodata=0)
         finally:
             for d in dss:
                 d.close()
+        ny, nx = round((n - s) / res), round((e - w) / res)
         z = np.rint(arr[0][1:1 + ny, 1:1 + nx]).clip(-32768, 32767).astype("int16")
-        return z, from_origin(w, n, res, res)
+        if e == 180:  # tiles are half a pixel off-grid and the next tile is across the seam: copy the last column
+            z[:, -1] = z[:, -2]
+        return z
 
 
 class SyntheticSource:
@@ -287,18 +316,31 @@ class Dataset:
     def vintage(self, last_month):
         return None
 
+    def notice(self, bbox):
+        return None
+
 
 class RainDataset(Dataset):
     def vintage(self, last_month):
         return self.backend.vintage(last_month)
 
     def read_month(self, ym, bbox, factor=1):
-        return block_mean(self.backend.read_rain(ym, window_of(bbox)), factor)
+        c, r, w, h = window_of(bbox)
+        c %= NCOLS
+        a = self.backend.read_rain(ym, (c, r, min(w, NCOLS - c), h))
+        if c + w > NCOLS:  # the window continues past 180 degrees: the rest is at the west edge of the grid
+            a = np.hstack([a, self.backend.read_rain(ym, (0, r, c + w - NCOLS, h))])
+        return block_mean(a, factor)
 
 
 class TerrainDataset(Dataset):
     def tile_count(self, bbox):
         return len(glo90_tiles(with_margin(bbox, terrain_res(bbox))))
+
+    def notice(self, bbox):
+        res = terrain_res(bbox)
+        if res > NATIVE_TERRAIN_RES * (1 + 1e-9):
+            return f"Terrain resampled to {round(res * 111320)} m cells (source 90 m)."
 
     def read(self, bbox):
         return self.backend.terrain(tuple(bbox), terrain_res(bbox))
@@ -312,7 +354,7 @@ def make_registry(backend):
             {"colormap": "Blues", "domain_min": 0}, backend),
         "glo90_terrain": TerrainDataset(
             "glo90_terrain", "m", NATIVE_TERRAIN_RES, False, SOURCES["glo90"], ("elevation", "hillshade"),
-            {"hillshade": {"azimuth": 315, "altitude": 45}}, backend, max_tiles=100),
+            {"hillshade": {"azimuth": 315, "altitude": 45}}, backend, max_tiles=2500),
     }
 
 

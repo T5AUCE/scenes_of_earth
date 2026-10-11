@@ -44,6 +44,22 @@ python -m soe.cli import-boundaries --cgaz <folder> --ucdb <GHS_UCDB file or zip
 
 The import is large (several hundred MB of input). CGAZ draws disputed borders to US State Department definitions.
 
+## Terrain tile index
+
+`soe/glo90_tiles.bin` lists which GLO-90 tiles exist (ocean tiles do not), so planning stays offline. Rebuild it only if the
+bucket's tile list changes:
+
+```
+python -m soe.cli glo90-index
+```
+
+## Area contract notes
+
+- `area.bbox` is `[W, S, E, N]` with W < E always. A shape across the antimeridian is unwrapped into one frame, so E may be
+  above 180 (up to 360) and `lon` arrays rise past 180, as MapLibre's `LngLatBounds` does. `area.geojson` is in the same frame.
+- Large areas get coarser terrain (cell size 0.05/k degrees, about 4.2 Mpx at most) and a notice
+  "Terrain resampled to N m cells (source 90 m)." Terrain is refused above 2500 existing source tiles.
+
 ## Environment variables
 
 | Name | Default | Meaning |
