@@ -4,7 +4,13 @@ import { createMap } from "./map";
 import { createPanel } from "./panel";
 
 const map = createMap("map");
-createPanel(document.getElementById("panel")!, map);
+const mapLoaded = new Promise<void>((resolve) => map.once("load", () => resolve()));
+const panel = createPanel(document.getElementById("panel")!, map);
+
+const sharedScene = new URLSearchParams(location.search).get("scene");
+if (sharedScene) {
+  Promise.all([panel, mapLoaded]).then(([ready]) => ready.openScene(sharedScene));
+}
 
 const badge = document.getElementById("status")!;
 getHealth().then(

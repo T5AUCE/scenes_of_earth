@@ -22,7 +22,13 @@ uvicorn main:app --reload --port 8000
 For the frontend (`npm run dev`, port 5173), set the Vite dev server to proxy `/api` and `/scenes` to
 `http://localhost:8000`, so the browser uses the same relative URLs as in production and needs no CORS setup.
 
-API: `GET /api/health`, `GET /api/layers` (layer ids, titles, kinds, month bounds and the default set),
+Frontend (`web/`): `npm install`, then `npm run dev` (port 5173), `npm run build` (typecheck plus bundle) and `npm test`
+(Node's built-in runner, no framework). A built scene opens by id with `http://localhost:5173/?scene=<id>`, which is also
+how to share it. The page draws terrain hillshade and the rain series from the bundle's Zarr store, each toggleable,
+with a time slider and a blocky or smooth rain look.
+
+API: `GET /api/health`, `GET /api/layers` (per layer: id, title, kind, units, coverage, time step with first and latest month,
+and the default set),
 `GET /api/areas/search?q=&level=&limit=`, `GET /api/areas/{id}`, `POST /api/scenes`,
 `GET /api/scenes/{id}`, and the static files under `/scenes/{id}/`. `POST /api/scenes` takes
 `{"area": {"type": "boundary", "id": ...} | {"type": "polygon", "geometry": GeoJSON}, "start": "YYYY-MM",
@@ -61,6 +67,16 @@ python -m soe.cli glo90-index
 
 - `area.bbox` is `[W, S, E, N]` with W < E always. A shape across the antimeridian is unwrapped into one frame, so E may be
   above 180 (up to 360) and `lon` arrays rise past 180, as MapLibre's `LngLatBounds` does. `area.geojson` is in the same frame.
+- `scene.json` is version 0.2. Each layer has its own `grid` (crs, bbox, res, nx, ny; `aggregation` for series), `mask`,
+  `coverage`, `time` (`step` as an ISO 8601 duration, `count`, explicit `values`, or `null` for static layers) and
+  `arrays` keyed by role (`value`, `elevation`, `hillshade`) with `dtype`, `scale_factor`, `add_offset` and `fill`.
+  The viewer's colour domain is `style.domain`. Stored value = (real value - add_offset) / scale_factor.
+- Rain is stored as uint16 at 0.1 mm (fill 65535, values above 6553.4 mm are clipped). Series are chunked one step per
+  chunk and sharded 12 steps per shard; static arrays are one chunk each. The root `zarr.json` has consolidated metadata.
+- Budgets: the raw size of all layers' arrays together is capped at 50 MB, and the source cells x steps read for all
+  time-varying layers together at 100M. Terrain is planned first; all time-varying layers then share one aggregation factor.
+- In v1 every layer is anchored to the 60S-60N grid of 0.05 degree cells that starts at 180W. `area.geojson` is the area
+  clipped to the coverage of all selected layers, so one layer's mask can reach slightly beyond the outline.
 - Large areas get coarser terrain (cell size 0.05/k degrees, about 4.2 Mpx at most) and a notice
   "Terrain resampled to N m cells (source 90 m)." Terrain is refused above 2500 existing source tiles.
 
@@ -83,6 +99,23 @@ pytest
 ```
 
 All tests run offline with synthetic data.
+
+## Code style
+
+Adapted from the MIT CommLab guide on coding and comment style
+(https://mitcommlab.mit.edu/broad/commkit/coding-and-comment-style/). Clear code first, comments second.
+
+- **Names:** descriptive and pronounceable; nouns for variables and classes, verbs for functions. No unexplained
+  abbreviations (domain terms like `bbox`, `res` are fine). Length scales with scope. Use context to avoid redundancy.
+- **Layout:** structure vertically. One statement per line, 4-space indents. Aim for 80 columns, hard limit 100. When
+  breaking at an operator, start the new line with it. Consistent spacing around operators and after commas.
+- **Comments:** only explain **why** something confusing exists (a workaround, a data quirk, a non-obvious constraint),
+  never **what** the code does. If a comment restates the code, delete it or rename until the code says it. Comments are
+  complete sentences. A TODO names the problem and the work needed. Update or delete comments when the code changes.
+  Exception: short trailing notes on constants and fields (units, shapes, what a key means) may be fragments.
+- **Docstrings:** public modules and functions get a short PEP 257 docstring (purpose, plus inputs and outputs when not
+  obvious from the signature).
+- **Consistency:** follow the existing style of the file you edit.
 
 ## Data sources, licences and attribution
 

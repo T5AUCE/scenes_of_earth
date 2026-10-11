@@ -6,10 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "maplibre-gl": "^6.13.0"
+    "maplibre-gl": "^6.13.0",
+    "zarrita": "^0.7.5"
   },
   "devDependencies": {
     "typescript": "^7.0.2",

@@ -1,3 +1,6 @@
+import type { Map as MapLibreMap } from "maplibre-gl";
+import type { Store } from "./data";
+
 // Shapes of backend responses (only the fields the frontend uses).
 
 export interface Health {
@@ -14,8 +17,7 @@ export interface Layer {
   kind: string; // style.kind: how to render it
   time_varying: boolean;
   coverage: Bbox;
-  first_month: string | null; // "YYYY-MM", time-varying layers only
-  latest_month: string | null;
+  time: { step: string; first: string; latest: string } | null; // first/latest are "YYYY-MM"
 }
 
 export interface LayersResponse {
@@ -50,12 +52,70 @@ export interface SceneStatus {
   bundle_url: string | null;
 }
 
-export interface Scene {
+export interface GridDoc {
+  bbox: Bbox;
+  nx: number;
+  ny: number;
+}
+
+export interface ArrayDoc {
+  path: string;
+  dtype: string;
+  scale_factor: number;
+  add_offset: number;
+  fill: number | null;
+}
+
+export interface TimeDoc {
+  step: string; // ISO 8601 duration, e.g. P1M
+  values: string[]; // "YYYY-MM-DD" period starts
+}
+
+export interface LayerDoc {
   id: string;
   title: string;
-  time: { start: string; end: string; count: number } | null;
+  units: string;
+  style: {
+    kind: string;
+    colormap?: string;
+    domain?: [number, number];
+  };
+  grid: GridDoc;
+  mask: { path: string };
+  time: TimeDoc | null;
+  arrays: Record<string, ArrayDoc>; // by role, e.g. value, elevation, hillshade
+}
+
+export interface Scene {
+  version: string;
+  id: string;
+  title: string;
   area: { bbox: Bbox; geometry_href: string };
-  layers: { id: string; units: string; time_varying: boolean; arrays: Record<string, string>; style: { kind: string; title: string } }[];
+  layers: LayerDoc[];
   data: { href: string };
   notices: { limits: string[] };
+}
+
+export interface Part {
+  id: string;
+  label: string;
+  layerIds: string[]; // map layers shown or hidden together
+}
+
+export interface LayerContext {
+  map: MapLibreMap;
+  store: Promise<Store>;
+  layer: LayerDoc;
+  beforeId: string | undefined;
+  report(error: unknown): void; // for failures after the layer is mounted, e.g. a month that cannot be read
+}
+
+export interface LayerView {
+  parts: Part[];
+  options: { label: string; set(on: boolean): void }[];
+  time: TimeDoc | null;
+  ready: Promise<void>; // rejects when the layer's data cannot be read
+  setTime(t: string): void;
+  legend(): HTMLElement | null;
+  destroy(): void;
 }

@@ -1,7 +1,8 @@
 """Data sources: CHIRPS rain, Copernicus GLO-90 terrain, a synthetic stand-in, and licence text.
 
 Rain grid: global CHIRPS 0.05 degree grid, row 0 is the north edge (60N).
-Windows are integer (col, row, width, height) cell windows on that grid, so reads are never resampled.
+Windows are integer (col, row, width, height) cell windows on that grid, so reads are never
+resampled.
 """
 import math
 import time
@@ -28,7 +29,8 @@ TERRAIN_PIXELS = 2048 * 2048
 TERRAIN_THREADS = 32
 BLOCK_DEG = 2  # terrain is read in blocks of this many whole degrees
 
-CHIRPS_URL = "https://data.chc.ucsb.edu/products/CHIRPS/v3.0/monthly/global/cogs/chirps-v3.0.{ym}.cog"
+CHIRPS_URL = ("https://data.chc.ucsb.edu/products/CHIRPS/v3.0/monthly/global/cogs/"
+              "chirps-v3.0.{ym}.cog")
 GLO90_URL = "https://copernicus-dem-90m.s3.amazonaws.com/{n}/{n}.tif"
 GDAL_OPTS = {
     "GDAL_HTTP_MAX_RETRY": "5",
@@ -45,9 +47,11 @@ SOURCES = {
         "licence": "CC BY 4.0",
         "licence_url": "http://creativecommons.org/licenses/by/4.0/",
         "attribution": "Rainfall: CHIRPS v3 (Climate Hazards Center, UC Santa Barbara)",
-        "citation": "Funk, C. et al. (2026) The Climate Hazards Center Infrared Precipitation with Stations, "
-                    "Version 3. Scientific Data 13, 718. doi:10.1038/s41597-026-07096-4; dataset doi:10.15780/G2JQ0P",
-        "modified": "negative fill values masked; block-mean aggregation when stated in the layer resolution",
+        "citation": "Funk, C. et al. (2026) The Climate Hazards Center Infrared Precipitation with "
+                    "Stations, Version 3. Scientific Data 13, 718. doi:10.1038/s41597-026-07096-4; "
+                    "dataset doi:10.15780/G2JQ0P",
+        "modified": "negative fill values masked; block-mean aggregation when stated in the layer "
+                    "resolution",
     },
     "glo90": {
         "name": "Copernicus DEM GLO-90",
@@ -58,8 +62,9 @@ SOURCES = {
         "attribution": "produced using Copernicus WorldDEM™-90 © DLR e.V. 2010-2014 and "
                        "© Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS "
                        "by the European Union and ESA; all rights reserved",
-        "disclaimer": "The organisations in charge of the Copernicus programme by law or by delegation "
-                      "do not incur any liability for any use of the Copernicus WorldDEM™-90",
+        "disclaimer": "The organisations in charge of the Copernicus programme by law or by "
+                      "delegation do not incur any liability for any use of the Copernicus "
+                      "WorldDEM™-90",
         "citation": "doi:10.5270/ESA-c5d3d65",
         "modified": "hillshade (Horn, az 315°, alt 45°) and resampled elevation",
     },
@@ -68,8 +73,9 @@ SOURCES = {
         "licence": "CC BY 4.0",
         "licence_url": "https://www.geoboundaries.org/",
         "attribution": "Boundaries: geoBoundaries (https://www.geoboundaries.org)",
-        "citation": "Runfola, D. et al. (2020) geoBoundaries: A global database of political administrative "
-                    "boundaries. PLoS ONE 15(4): e0231866. https://doi.org/10.1371/journal.pone.0231866",
+        "citation": "Runfola, D. et al. (2020) geoBoundaries: A global database of political "
+                    "administrative boundaries. PLoS ONE 15(4): e0231866. "
+                    "https://doi.org/10.1371/journal.pone.0231866",
         "modified": "simplified 0.01°, clipped to 60°S-60°N",
     },
     "synthetic": {
@@ -99,14 +105,20 @@ def month_list(start, end):
 
 @lru_cache
 def _tile_index():
-    """180 x 360 bool grid (row = lat + 90, column = lon + 180) of the tiles that exist in the GLO-90 bucket."""
+    """180 x 360 bool grid of the tiles that exist in the GLO-90 bucket.
+
+    The row is lat + 90 and the column is lon + 180.
+    """
     packed = np.frombuffer((Path(__file__).parent / "glo90_tiles.bin").read_bytes(), "uint8")
     return np.unpackbits(packed).reshape(180, 360).astype(bool)
 
 
 def glo90_tiles(bounds):
-    """Names of the existing GLO-90 tiles (1 degree, named by the south-west corner) covering bounds (W, S, E, N).
-    Longitudes above 180 wrap, so bounds may cross the antimeridian."""
+    """Names of the existing GLO-90 tiles covering bounds (W, S, E, N).
+
+    Tiles are 1 degree and named by their south-west corner. Longitudes above 180 wrap, so bounds
+    may cross the antimeridian.
+    """
     w, s, e, n = bounds
     names = []
     for lat in range(max(math.floor(s + 1e-9), -90), min(math.ceil(n - 1e-9), 90)):
@@ -114,31 +126,42 @@ def glo90_tiles(bounds):
             lon = (lon + 180) % 360 - 180
             if _tile_index()[lat + 90, lon + 180]:
                 ns, ew = ("N" if lat >= 0 else "S"), ("E" if lon >= 0 else "W")
-                names.append(f"Copernicus_DSM_COG_30_{ns}{abs(lat):02d}_00_{ew}{abs(lon):03d}_00_DEM")
+                names.append(
+                    f"Copernicus_DSM_COG_30_{ns}{abs(lat):02d}_00_{ew}{abs(lon):03d}_00_DEM")
     return names
 
 
 def terrain_res(bounds):
-    """Terrain cell size 0.05 / k degrees: about 4.2 Mpx and at most 4096 px on the long side, never finer than native.
-    Whole degrees are then a whole number of cells."""
+    """Terrain cell size 0.05 / k degrees, so whole degrees are a whole number of cells.
+
+    It gives about 4.2 Mpx and at most 4096 px on the long side, never finer than native.
+    """
     w, s, e, n = bounds
-    k = min(math.isqrt(int(TERRAIN_PIXELS / (400 * (e - w) * (n - s)))), int(204.8 / max(e - w, n - s)))
+    k = min(math.isqrt(int(TERRAIN_PIXELS / (400 * (e - w) * (n - s)))),
+            int(204.8 / max(e - w, n - s)))
     return 0.05 / min(max(k, 1), 60)
 
 
 def with_margin(bounds, res):
-    """Bounds grown by one pixel: GLO-90 tiles are half a pixel off-grid, so the margin is cropped after merging."""
+    """Bounds grown by one pixel.
+
+    GLO-90 tiles are half a pixel off-grid, so the margin is cropped after merging.
+    """
     w, s, e, n = bounds
     return (w - res, s - res, e + res, n + res)
 
 
 def terrain_by_blocks(bounds, res, read_block):
-    """Terrain on bounds, read in parallel in blocks of whole degrees (so no block crosses 180).
-    read_block(block_bounds, res) returns an array, or None for a block without terrain (left at 0)."""
+    """Terrain on bounds, read in parallel in blocks of whole degrees, so no block crosses 180.
+
+    read_block(block_bounds, res) returns an array, or None for a block without terrain (left at 0).
+    """
     w, s, e, n = bounds
     ny, nx = round((n - s) / res), round((e - w) / res)
-    xs = [w] + list(range(math.floor(w / BLOCK_DEG) * BLOCK_DEG + BLOCK_DEG, math.ceil(e), BLOCK_DEG)) + [e]
-    ys = [s] + list(range(math.floor(s / BLOCK_DEG) * BLOCK_DEG + BLOCK_DEG, math.ceil(n), BLOCK_DEG)) + [n]
+    xs = [w] + list(range(math.floor(w / BLOCK_DEG) * BLOCK_DEG + BLOCK_DEG, math.ceil(e),
+                          BLOCK_DEG)) + [e]
+    ys = [s] + list(range(math.floor(s / BLOCK_DEG) * BLOCK_DEG + BLOCK_DEG, math.ceil(n),
+                          BLOCK_DEG)) + [n]
     blocks = [(x0, y0, x1, y1) for x0, x1 in zip(xs, xs[1:]) for y0, y1 in zip(ys, ys[1:])]
     with ThreadPoolExecutor(TERRAIN_THREADS) as ex:
         parts = list(ex.map(lambda b: read_block(b, res), blocks))
@@ -168,7 +191,8 @@ class RealSource:
     """CHIRPS COGs and GLO-90 tiles over HTTP."""
 
     def __init__(self, latest=None):
-        self._latest = latest  # optional fixed 'YYYY-MM' (SOE_LATEST); else probed and cached for a day
+        # An optional fixed 'YYYY-MM' (SOE_LATEST); otherwise the latest month is probed and cached.
+        self._latest = latest
         self._probed = None
 
     def latest_month(self):
@@ -186,13 +210,14 @@ class RealSource:
                 break
             y, m = (y - 1, 12) if m == 1 else (y, m - 1)
         ttl = 86400
-        if found is None:  # offline: assume the usual two-month lag, and probe again soon
+        if found is None:
+            # Offline: assume the usual two-month lag, and probe again soon.
             ttl = 600
             y, m = now.year, now.month - 2
             if m < 1:
                 y, m = y - 1, m + 12
             found = f"{y:04d}-{m:02d}"
-        self._probed = (found, time.time() + ttl)  # (month, expiry)
+        self._probed = (found, time.time() + ttl)
         return found
 
     def vintage(self, ym):
@@ -203,7 +228,7 @@ class RealSource:
         return last_modified
 
     def read_rain(self, ym, win):
-        """One month, native resolution, float32; fill values (< 0) become NaN. Opens its own dataset."""
+        """One month at native resolution as float32; fill values (< 0) become NaN."""
         col, row, w, h = win
         with rasterio.Env(**GDAL_OPTS):
             with rasterio.open(CHIRPS_URL.format(ym=ym.replace("-", "."))) as ds:
@@ -218,7 +243,10 @@ class RealSource:
         return terrain_by_blocks(bounds, res, self._merge)
 
     def _merge(self, bounds, res):
-        """One block: merged elevation, or None if no tile exists there. Bounds above 180 read the tiles west of it."""
+        """One block: merged elevation, or None if no tile exists there.
+
+        Bounds above 180 read the tiles west of it.
+        """
         w, s, e, n = bounds
         if w >= 180:
             w, e = w - 360, e - 360
@@ -246,7 +274,8 @@ class RealSource:
                 d.close()
         ny, nx = round((n - s) / res), round((e - w) / res)
         z = np.rint(arr[0][1:1 + ny, 1:1 + nx]).clip(-32768, 32767).astype("int16")
-        if e == 180:  # tiles are half a pixel off-grid and the next tile is across the seam: copy the last column
+        if e == 180:
+            # Tiles are half a pixel off-grid and the next tile is across the seam.
             z[:, -1] = z[:, -2]
         return z
 
@@ -271,7 +300,7 @@ class SyntheticSource:
         cc, rr = np.meshgrid(np.arange(col, col + w), np.arange(row, row + h))
         a = 100 + 80 * np.sin(cc / 15 + mi * 0.5) * np.cos(rr / 11)
         a = a.astype("float32")
-        a[(cc * 7 + rr * 13) % 11 == 0] = np.nan  # holes, to exercise NaN-aware means
+        a[(cc * 7 + rr * 13) % 11 == 0] = np.nan  # Holes, to exercise NaN-aware means.
         return a
 
     def terrain(self, bounds, res):
@@ -305,64 +334,118 @@ def window_of(bbox):
 
 @dataclass
 class Dataset:
-    """A layer the backend can build. Static datasets implement read(bbox) -> (2D array, transform);
-    time-varying ones are read month by month with read_month()."""
+    """A layer the backend can build.
+
+    Static datasets implement read(bbox, res) -> (2D array, transform). Time-varying ones implement
+    first(), latest(), steps(start, end) and read_step(step, bbox, factor).
+    """
     id: str
+    title: str
     units: str
     resolution_deg: float  # native cell size
     time_varying: bool
     source: dict  # licence, licence_url, attribution, citation, modified, version, ...
-    arrays: tuple  # data array names inside the Zarr group `id`
+    arrays: dict  # role -> data array name inside the Zarr group `id`
+    encoding: dict  # role -> (stored dtype, scale_factor, add_offset, fill value or None)
     style: dict  # viewer defaults
     backend: object
+    long_name: str = ""  # CF long_name of the main array
+    coverage: tuple = (-180, -60, 180, 60)  # W, S, E, N
+    anchor_res: float = 0.05  # the layer's window is cut on a grid of this cell size
+    step: str | None = None  # ISO 8601 duration between time steps; None for static layers
     max_tiles: int | None = None  # request cap for tiled datasets
 
     def tile_count(self, bbox):
+        """Number of source tiles a read of bbox needs (0 for untiled data)."""
         return 0
 
+    def res_for(self, bbox):
+        """Cell size of a static layer over bbox."""
+        return self.resolution_deg
+
     def vintage(self, last_month):
+        """A string that changes when the source revises `last_month`, or None."""
         return None
 
+    def domain(self, stats):
+        """Colour-scale range of a series layer, from the stats of its values."""
+        return [stats["min"], stats["p98"]]
+
     def notice(self, bbox):
+        """A limits notice for a read of bbox, or None."""
         return None
 
 
 class RainDataset(Dataset):
+    """CHIRPS monthly rain."""
+
+    def first(self):
+        """First available month, 'YYYY-MM'."""
+        return FIRST_MONTH
+
+    def latest(self):
+        """Latest available month, 'YYYY-MM'."""
+        return self.backend.latest_month()
+
+    def steps(self, start, end):
+        """Period starts ('YYYY-MM-DD') of the months start..end ('YYYY-MM')."""
+        return [f"{ym}-01" for ym in month_list(start, end)]
+
     def vintage(self, last_month):
         return self.backend.vintage(last_month)
 
+    def domain(self, stats):
+        return [0, stats["p98"]]
+
+    def read_step(self, step, bbox, factor=1):
+        """The month that starts on the ISO date `step`."""
+        return self.read_month(step[:7], bbox, factor)
+
     def read_month(self, ym, bbox, factor=1):
+        """Rain of month 'YYYY-MM' over a grid-aligned bbox, block-averaged by `factor`."""
         c, r, w, h = window_of(bbox)
         c %= NCOLS
         a = self.backend.read_rain(ym, (c, r, min(w, NCOLS - c), h))
-        if c + w > NCOLS:  # the window continues past 180 degrees: the rest is at the west edge of the grid
+        if c + w > NCOLS:
+            # The window continues past 180 degrees, so the rest is at the west edge of the grid.
             a = np.hstack([a, self.backend.read_rain(ym, (0, r, c + w - NCOLS, h))])
         return block_mean(a, factor)
 
 
 class TerrainDataset(Dataset):
+    """Copernicus GLO-90 elevation, read at a resolution that depends on the area size."""
+
     def tile_count(self, bbox):
         return len(glo90_tiles(with_margin(bbox, terrain_res(bbox))))
+
+    def res_for(self, bbox):
+        return terrain_res(bbox)
 
     def notice(self, bbox):
         res = terrain_res(bbox)
         if res > NATIVE_TERRAIN_RES * (1 + 1e-9):
             return f"Terrain resampled to {round(res * 111320)} m cells (source 90 m)."
 
-    def read(self, bbox):
-        return self.backend.terrain(tuple(bbox), terrain_res(bbox))
+    def read(self, bbox, res):
+        """Elevation over bbox at cell size `res`: (int16 array, transform)."""
+        return self.backend.terrain(tuple(bbox), res)
 
 
 def make_registry(backend):
     """The two datasets, reading through `backend` (RealSource or SyntheticSource)."""
     return {
         "chirps_monthly": RainDataset(
-            "chirps_monthly", "mm/month", 0.05, True, SOURCES["chirps"], ("precip",),
-            {"kind": "series-colormap", "title": "Rainfall", "colormap": "Blues", "domain_min": 0}, backend),
+            "chirps_monthly", "Rainfall", "mm/month", 0.05, True, SOURCES["chirps"],
+            {"value": "precip"}, {"value": ("uint16", 0.1, 0, 65535)},
+            {"kind": "series-colormap", "colormap": "Blues"}, backend,
+            long_name="Monthly precipitation", step="P1M"),
         "glo90_terrain": TerrainDataset(
-            "glo90_terrain", "m", NATIVE_TERRAIN_RES, False, SOURCES["glo90"], ("elevation", "hillshade"),
-            {"kind": "terrain", "title": "Terrain", "hillshade": {"azimuth": 315, "altitude": 45}}, backend, max_tiles=2500),
+            "glo90_terrain", "Terrain", "m", NATIVE_TERRAIN_RES, False, SOURCES["glo90"],
+            {"elevation": "elevation", "hillshade": "hillshade"},
+            {"elevation": ("int16", 1, 0, None), "hillshade": ("uint8", 1, 0, None)},
+            {"kind": "terrain", "hillshade": {"azimuth": 315, "altitude": 45}}, backend,
+            max_tiles=2500),
     }
 
 
-REGISTRY = make_registry(RealSource())  # tests use make_registry(SyntheticSource())
+REGISTRY = make_registry(RealSource())

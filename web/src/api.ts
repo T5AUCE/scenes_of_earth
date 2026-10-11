@@ -1,5 +1,7 @@
 import type { AreaHit, Health, LayersResponse, Scene, SceneRequest, SceneStatus } from "./types";
 
+const SCENE_VERSION = "0.2";
+
 // Relative URLs only. Bundle files must be read via the scene's bundle_url, not a hard-coded path.
 export class ApiError extends Error {
   constructor(
@@ -41,6 +43,9 @@ export const postScene = (body: SceneRequest) =>
 export async function loadScene(bundleUrl: string): Promise<Scene> {
   const base = new URL(bundleUrl, location.href);
   const scene = await request<Scene>(base.href);
+  if (scene.version !== SCENE_VERSION) {
+    throw new Error(`Scene format ${scene.version} is not supported; rebuild this scene.`);
+  }
   scene.area.geometry_href = new URL(scene.area.geometry_href, base).href;
   scene.data.href = new URL(scene.data.href, base).href;
   return scene;

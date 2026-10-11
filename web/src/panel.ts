@@ -1,6 +1,7 @@
 import type { Map as MapLibreMap } from "maplibre-gl";
 import { ApiError, getLayers, getSceneStatus, loadScene, postScene, searchAreas } from "./api";
 import { fitToBbox } from "./map";
+import { mountScene } from "./view";
 import type { AreaHit, Layer, Scene, SceneRequest, SceneStatus } from "./types";
 
 const POLL_MS = 1500;
@@ -61,10 +62,10 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap) {
       box.checked = info.default.includes(layer.id);
       label.append(box, ` ${layer.title} (${layer.units})`);
     }
-    const series = layers.filter((l) => l.time_varying && l.first_month && l.latest_month);
-    if (series.length) {
-      const first = series.map((l) => l.first_month!).sort().at(-1)!;
-      const latest = series.map((l) => l.latest_month!).sort()[0];
+    const axes = layers.flatMap((l) => (l.time ? [l.time] : []));
+    if (axes.length) {
+      const first = axes.map((a) => a.first).sort().at(-1)!;
+      const latest = axes.map((a) => a.latest).sort()[0];
       start.min = end.min = first;
       start.max = end.max = latest;
       end.value = latest;
@@ -133,17 +134,34 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap) {
     }
   }
 
+  let unmountScene = () => {};
+
   function showScene(scene: Scene) {
+    unmountScene();
     result.replaceChildren();
     el("h3", scene.title, result);
-    if (scene.time) el("div", `${scene.time.start} to ${scene.time.end} (${scene.time.count} months)`, result);
-    const list = el("ul", "", result);
-    for (const l of scene.layers) el("li", `${l.style.title} (${l.units})`, list);
-    for (const n of scene.notices.limits) el("div", n, result).className = "notice";
+    unmountScene = mountScene(map, scene, result);
     fitToBbox(map, scene.area.bbox);
   }
 
+  async function openScene(id: string) {
+    const mine = ++run;
+    try {
+      const s = await getSceneStatus(id);
+      if (s.status !== "done") {
+        status.textContent = `Scene ${id} is ${s.status}.`;
+        return;
+      }
+      const scene = await loadScene(s.bundle_url!);
+      if (mine === run) showScene(scene);
+    } catch (e) {
+      if (mine === run) status.textContent = `Could not open scene ${id}: ${(e as Error).message}`;
+    }
+  }
+
   build.onclick = async () => {
+    unmountScene();
+    unmountScene = () => {};
     result.replaceChildren();
     if (!area) return void (status.textContent = "Select an area first.");
     if (!selectedLayers().length) return void (status.textContent = "Select at least one layer.");
@@ -181,4 +199,6 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap) {
       if (mine === run) build.disabled = false;
     }
   };
+
+  return { openScene };
 }

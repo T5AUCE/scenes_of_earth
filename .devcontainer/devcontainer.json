@@ -10,7 +10,11 @@
 		"ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
 	},
 
-	"forwardPorts": [5173, 8000],
+	"portsAttributes": {
+		"8000": { "label": "api", "onAutoForward": "silent" },
+		"5173": { "label": "web", "onAutoForward": "notify" }
+	},
+	"otherPortsAttributes": { "onAutoForward": "ignore" },
 
 	"postCreateCommand": "pip install -e '.[import,dev]'",
 
