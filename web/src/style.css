@@ -1,4 +1,4 @@
-:root { --page-background: #fff; }
+:root { --page-background: #fff; --pick-outline: #d92d20; }
 html, body, #map { margin: 0; height: 100%; }
 body { background: var(--page-background); }
 
@@ -19,9 +19,14 @@ body { background: var(--page-background); }
 #panel > * { display: block; margin-bottom: 8px; }
 #panel input[type="text"], #panel input:not([type]) { width: 100%; box-sizing: border-box; }
 #panel fieldset label { display: block; }
-#panel .results { list-style: none; margin: 0 0 8px; padding: 0; }
-#panel .results li { padding: 3px 4px; cursor: pointer; }
-#panel .results li:hover { background: #eef; }
+#panel .search-box { position: relative; }
+#panel .results {
+  position: absolute; left: 0; right: 0; z-index: 2; list-style: none; margin: 2px 0 0; padding: 0;
+  max-height: 240px; overflow: auto; background: #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+#panel .results[hidden] { display: none; }
+#panel .results li { padding: 5px 8px; cursor: pointer; }
+#panel .results li:hover, #panel .results li[aria-selected="true"] { background: #eef; }
 #panel .results li.none { cursor: default; color: #666; }
 #panel .chosen { font-weight: bold; }
 #panel .status, #panel .notice { color: #444; }
@@ -50,6 +55,7 @@ body.scene-mode #panel { display: none; }
   background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.2);
 }
 #scene-column .card label { display: block; }
+#scene-column .card .option-note { margin: 0 0 4px 20px; font-size: 11px; color: #666; }
 #scene-column .notice {
   padding: 6px 8px; margin-bottom: 8px; border-radius: 4px; background: #fff;
 }

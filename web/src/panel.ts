@@ -1,9 +1,25 @@
 import type { Map as MapLibreMap } from "maplibre-gl";
-import { ApiError, getLayers, getSceneStatus, loadScene, postScene, searchAreas } from "./api";
+import {
+  ApiError,
+  getArea,
+  getLayers,
+  getSceneStatus,
+  loadScene,
+  postScene,
+  searchAreas,
+} from "./api";
+import { nextOptionIndex } from "./combobox";
 import { makeHtmlElement } from "./html";
-import { fitToBbox } from "./map";
+import {
+  BROWSE_MAX_ZOOM,
+  BROWSE_PADDING_PX,
+  clearPickedOutline,
+  fitToBbox,
+  showPickedOutline,
+} from "./map";
+import { shiftLongitudes, worldShift } from "./render/mercator";
 import type { EnterOptions } from "./scene-mode";
-import type { AreaHit, Layer, Scene, SceneRequest, SceneStatus } from "./types";
+import type { AreaFeature, AreaHit, Bbox, Layer, Scene, SceneRequest, SceneStatus } from "./types";
 
 const POLL_INTERVAL_MS = 1500;
 const SEARCH_DEBOUNCE_MS = 300;
@@ -14,6 +30,8 @@ const SERVER_BUSY = 503;
 const NOT_FOUND = 404;
 const MS_PER_SECOND = 1000;
 const MONTHS_PER_YEAR = 12;
+
+const NO_AREA_TEXT = "No area selected";
 
 const AREA_LEVELS = [
   { value: "", label: "any level" },
@@ -54,13 +72,22 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
 
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let searchCount = 0;
+  let pickCount = 0;
+  let shownHits: AreaHit[] = [];
+  let hitItems: HTMLElement[] = [];
+  let activeIndex = -1;
 
   const scheduleSearch = () => {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(runSearch, SEARCH_DEBOUNCE_MS);
   };
 
-  search.oninput = scheduleSearch;
+  search.oninput = () => {
+    if (!search.value.trim()) deselectArea();
+    scheduleSearch();
+  };
+  search.onkeydown = handleSearchKey;
+  search.onblur = closeResults;
   level.onchange = scheduleSearch;
 
   build.onclick = buildScene;
@@ -74,7 +101,7 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
   async function runSearch() {
     const thisSearch = ++searchCount;
     const query = search.value.trim();
-    results.replaceChildren();
+    closeResults();
     if (!query) return;
 
     try {
@@ -82,28 +109,117 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
       // A newer search has started, so these hits are stale.
       if (thisSearch !== searchCount) return;
 
-      if (!hits.length) makeHtmlElement("li", "No matches", results).className = "none";
+      if (!hits.length) showMessage("No matches");
 
-      for (const hit of hits) showHit(hit);
+      shownHits = hits;
+      hitItems = hits.map(showHit);
+      openResults();
     } catch (error) {
       if (thisSearch !== searchCount) return;
 
-      const message = `Search failed: ${(error as Error).message}`;
-      makeHtmlElement("li", message, results).className = "none";
+      showMessage(`Search failed: ${(error as Error).message}`);
     }
   }
 
-  function showHit(hit: AreaHit) {
-    const text = [hit.name, hit.parent_name, hit.level].filter(Boolean).join(" · ");
+  function showMessage(text: string) {
+    const item = makeHtmlElement("li", text, results);
+    item.className = "none";
+    item.setAttribute("role", "presentation");
+    openResults();
+  }
 
-    makeHtmlElement("li", text, results).onclick = () => {
-      area = hit;
-      run++;
-      build.disabled = false;
-      results.replaceChildren();
-      chosen.textContent = hit.name;
-      fitToBbox(map, hit.bbox);
+  function showHit(hit: AreaHit, index: number) {
+    const text = [hit.name, hit.parent_name, hit.level].filter(Boolean).join(" · ");
+    const item = makeHtmlElement("li", text, results);
+    item.id = `${results.id}-${index}`;
+    item.setAttribute("role", "option");
+
+    // Mouse down, not click, so the pick happens before the input loses focus.
+    item.onmousedown = (event) => {
+      event.preventDefault();
+      pick(hit);
     };
+
+    return item;
+  }
+
+  function pick(hit: AreaHit) {
+    area = hit;
+    run++;
+    build.disabled = false;
+    closeResults();
+    chosen.textContent = hit.name;
+    search.value = hit.name;
+    fitToBbox(map, hit.bbox, { padding: BROWSE_PADDING_PX, maxZoom: BROWSE_MAX_ZOOM });
+    drawPickedOutline(hit);
+  }
+
+  // The outline is the stored geometry; the bbox rectangle stands in when it cannot be fetched.
+  async function drawPickedOutline(hit: AreaHit) {
+    const thisPick = ++pickCount;
+    const geometry = await getArea(hit.id).then(
+      (detail) => detail.geometry,
+      () => bboxGeometry(hit.bbox),
+    );
+    if (thisPick !== pickCount) return;
+
+    const shifted = shiftLongitudes(geometry.coordinates, worldShift(hit.bbox));
+    showPickedOutline(map, { ...geometry, coordinates: shifted } as GeoJSON.Geometry);
+  }
+
+  // Clearing the search forgets the area, so Build asks for a new pick.
+  function deselectArea() {
+    area = null;
+    pickCount++;
+    chosen.textContent = NO_AREA_TEXT;
+    clearPickedOutline(map);
+  }
+
+  function handleSearchKey(event: KeyboardEvent) {
+    if (event.key === "Escape") closeResults();
+    else if (event.key === "Enter") pickActive(event);
+    else moveActive(event);
+  }
+
+  function pickActive(event: KeyboardEvent) {
+    if (activeIndex < 0) return;
+
+    event.preventDefault();
+    pick(shownHits[activeIndex]);
+  }
+
+  function moveActive(event: KeyboardEvent) {
+    const next = nextOptionIndex(event.key, activeIndex, hitItems.length);
+    if (next === activeIndex) return;
+
+    event.preventDefault();
+    openResults();
+    setActive(next);
+  }
+
+  function setActive(index: number) {
+    hitItems[activeIndex]?.setAttribute("aria-selected", "false");
+    activeIndex = index;
+
+    const item = hitItems[index];
+    item.setAttribute("aria-selected", "true");
+    item.scrollIntoView({ block: "nearest" });
+    search.setAttribute("aria-activedescendant", item.id);
+  }
+
+  function openResults() {
+    results.hidden = false;
+    search.setAttribute("aria-expanded", "true");
+  }
+
+  function closeResults() {
+    results.replaceChildren();
+    results.hidden = true;
+    shownHits = [];
+    hitItems = [];
+    activeIndex = -1;
+    search.setAttribute("aria-expanded", "false");
+    search.removeAttribute("aria-activedescendant");
   }
 
   async function openScene(id: string, options: EnterOptions) {
@@ -118,7 +234,7 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
       }
 
       const scene = await loadScene(sceneStatus.bundle_url!);
-      if (thisRun === run) sceneMode.enter(scene, options);
+      if (thisRun === run) enterScene(scene, options);
     } catch (error) {
       if (thisRun === run) {
         status.textContent = `Could not open scene ${id}: ${(error as Error).message}`;
@@ -154,7 +270,7 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
 
       status.textContent = "Bundle ready.";
       const scene = await loadScene(finished.bundle_url!);
-      if (thisRun === run) sceneMode.enter(scene, { month: null, entry: "push" });
+      if (thisRun === run) enterScene(scene, { month: null, entry: "push" });
     } catch (error) {
       if (thisRun !== run) return;
 
@@ -218,20 +334,45 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
       ? `Building… ${Math.round(sceneStatus.progress * 100)}%`
       : `Scene ${sceneStatus.status}…`;
   }
+
+  // The scene draws its own outline.
+  function enterScene(scene: Scene, options: EnterOptions) {
+    pickCount++;
+    clearPickedOutline(map);
+    sceneMode.enter(scene, options);
+  }
+}
+
+function bboxGeometry([west, south, east, north]: Bbox): AreaFeature["geometry"] {
+  const ring = [[west, south], [east, south], [east, north], [west, north], [west, south]];
+
+  return { type: "Polygon", coordinates: [ring] };
 }
 
 function createControls(root: HTMLElement) {
-  const search = makeHtmlElement("input", "", root);
+  const searchBox = makeHtmlElement("div", "", root);
+  searchBox.className = "search-box";
+
+  const search = makeHtmlElement("input", "", searchBox);
   search.placeholder = "Search an area";
+  search.setAttribute("role", "combobox");
+  search.setAttribute("aria-label", "Search an area");
+  search.setAttribute("aria-autocomplete", "list");
+  search.setAttribute("aria-controls", "area-results");
+  search.setAttribute("aria-expanded", "false");
+  search.autocomplete = "off";
 
   const level = makeHtmlElement("select", "", root);
 
   for (const { value, label } of AREA_LEVELS) level.append(new Option(label, value));
 
-  const results = makeHtmlElement("ul", "", root);
+  const results = makeHtmlElement("ul", "", searchBox);
+  results.id = "area-results";
   results.className = "results";
+  results.setAttribute("role", "listbox");
+  results.hidden = true;
 
-  const chosen = makeHtmlElement("div", "No area selected", root);
+  const chosen = makeHtmlElement("div", NO_AREA_TEXT, root);
   chosen.className = "chosen";
 
   const layerBox = makeHtmlElement("fieldset", "", root);

@@ -11,6 +11,8 @@ import type { LayerDoc, LayerView, Scene } from "./types";
 type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
 
 export const OUTLINE_ID = "soe-area-outline";
+// The only options so far are display smoothing; the data itself is never changed by them.
+const OPTION_NOTE = "Smoothed for display; values are per cell.";
 const EMPTY_FEATURES: GeoJsonData = { type: "FeatureCollection", features: [] };
 const OUTLINE_COLOR = "#333";
 const OUTLINE_WIDTH_PX = 1.5;
@@ -166,7 +168,10 @@ function layerCard(map: MapLibreMap, view: LayerView) {
     );
   }
 
-  for (const option of view.options) card.append(checkbox(option.label, false, option.set));
+  for (const option of view.options) {
+    card.append(checkbox(option.label, false, option.set));
+    makeHtmlElement("div", OPTION_NOTE, card).className = "option-note";
+  }
 
   const legend = view.legend();
   if (legend) card.append(legend);

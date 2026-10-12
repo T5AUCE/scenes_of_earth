@@ -41,6 +41,10 @@ export const isSceneId = (text: string) => SCENE_ID_PATTERN.test(text);
 export const getSceneStatus = (id: string) =>
   request<SceneStatus>(`/api/scenes/${encodeURIComponent(id)}`);
 
+// Search hits carry only a bbox, so drawing the real outline needs this extra request.
+export const getArea = (id: string) =>
+  request<AreaHit & { geometry: AreaFeature["geometry"] }>(`/api/areas/${encodeURIComponent(id)}`);
+
 export const loadAreaFeature = (href: string) => request<AreaFeature>(href);
 
 export const postScene = (body: SceneRequest) =>

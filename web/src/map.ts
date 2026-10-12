@@ -13,6 +13,12 @@ import type { Bbox } from "./types";
 const BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 export const WORLD_VIEW = { center: [0, 20] as [number, number], zoom: 1.5 };
 const MAX_FIT_ZOOM = 10;
+// A picked area is shown with its surroundings, before a scene is built for it.
+export const BROWSE_PADDING_PX = { top: 120, bottom: 120, left: 460, right: 120 };
+export const BROWSE_MAX_ZOOM = 8;
+const PICKED_ID = "soe-picked-area";
+const PICKED_COLOR_PROPERTY = "--pick-outline";
+const PICKED_LINE_WIDTH_PX = 3;
 export const MAX_ZOOM = 24;
 const AREA_LABEL_SUFFIX = "-in-area";
 // WebGL guarantees at least this much; used when the context cannot be queried.
@@ -41,11 +47,11 @@ export function createMap(container: string): MapLibreMap {
 export function fitToBbox(
   map: MapLibreMap,
   [west, south, east, north]: Bbox,
-  options: { padding?: PaddingOptions; duration?: number } = {},
+  options: { padding?: PaddingOptions; duration?: number; maxZoom?: number } = {},
 ) {
   map.fitBounds(
     [[west, south], [east, north]],
-    { padding: FIT_PADDING_PX, ...options, maxZoom: MAX_FIT_ZOOM },
+    { padding: FIT_PADDING_PX, maxZoom: MAX_FIT_ZOOM, ...options },
   );
 }
 
@@ -62,6 +68,23 @@ export function fitZoom(
 
   return camera?.zoom;
 }
+
+// Replaces any earlier outline; the geometry must already sit in the visible world copy.
+export function showPickedOutline(map: MapLibreMap, geometry: GeoJSON.Geometry) {
+  clearPickedOutline(map);
+
+  const color = getComputedStyle(document.documentElement).getPropertyValue(PICKED_COLOR_PROPERTY);
+  map.addSource(PICKED_ID, { type: "geojson", data: geometry });
+
+  map.addLayer({
+    id: PICKED_ID,
+    type: "line",
+    source: PICKED_ID,
+    paint: { "line-color": color.trim(), "line-width": PICKED_LINE_WIDTH_PX },
+  });
+}
+
+export const clearPickedOutline = (map: MapLibreMap) => removeLayerAndSource(map, PICKED_ID);
 
 // Tile failures and aborts are routine while panning, so only other map errors are reported.
 export function reportMapErrors(map: MapLibreMap, report: (message: string) => void) {

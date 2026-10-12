@@ -18,6 +18,22 @@ const NO_FALLBACK_NOTE =
 const ISO_MINUTE_LENGTH = 16;
 const CLIPPED_NOTICE = "The area reaches beyond the data coverage and was clipped to it.";
 
+const SMOOTHING_LINES = [
+  "Each data cell is one colour block by default. The Smooth option lets your graphics card blend "
+    + "the colours of neighbouring cells (linear interpolation), so edges look softer. It blends "
+    + "colours, not values, and it never adds data.",
+  "Cells without data are see-through, so smoothing fades the colour out at the edge of such a "
+    + "cell and at the border of the area instead of inventing values there. The terrain shading "
+    + "is always smoothed this way.",
+  "Contour lines are drawn from elevation averaged into blocks of at most 1024 cells per side "
+    + "and then smoothly interpolated, so they are close to the real relief but not exact at "
+    + "very fine scale; zooming in recomputes them in finer blocks.",
+  "The values in the files are the cell values of the stored grid, never the smoothed picture; "
+    + "terrain may be stored in coarser cells than its 90 m source. Area averages use the raw "
+    + "cells whose centre lies inside the outline. For a very small area with no cell centre "
+    + "inside, every cell it touches is used and a notice says so.",
+];
+
 export function summaryText(scene: Scene) {
   const layerCount = scene.layers.length;
 
@@ -52,6 +68,7 @@ export function renderAbout(scene: Scene) {
   }
 
   appendNotices(root, scene);
+  appendSmoothing(root);
 
   makeHtmlElement("h4", "Versions", root);
   root.append(definitionList(versionRows(scene)));
@@ -102,6 +119,12 @@ function appendNotices(root: HTMLElement, scene: Scene) {
   if (scene.area.clipped_to_coverage) makeHtmlElement("li", CLIPPED_NOTICE, list);
 
   for (const limit of scene.notices.limits) makeHtmlElement("li", limit, list);
+}
+
+function appendSmoothing(root: HTMLElement) {
+  makeHtmlElement("h4", "How the map is smoothed", root);
+
+  for (const line of SMOOTHING_LINES) makeHtmlElement("p", line, root);
 }
 
 function versionRows(scene: Scene): [string, string][] {
