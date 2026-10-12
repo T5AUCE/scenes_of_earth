@@ -27,8 +27,11 @@ type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
 
 const FLY_DURATION_MS = 1800;
 const SNAP_BACK_MS = 250;
+const USER_INPUT_EVENTS = ["wheel", "mousedown", "touchstart"];
+// Capture phase, so the snap-back is cancelled before the map handles the gesture.
+const LISTEN_FIRST = { capture: true, passive: false };
 // Zooming out may pass the fitted zoom by this much before it eases back.
-const MIN_ZOOM_OVERSHOOT = 0.3;
+const MIN_ZOOM_OVERSHOOT = 0.15;
 const ZOOM_EPSILON = 0.001;
 const MASK_ID = "soe-scene-mask";
 const MASK_OPACITY = 1;
@@ -175,17 +178,26 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     panel: ReturnType<typeof createScenePanel>,
     clock: SceneClock,
   ): ActiveScene {
-    const flight = flyIn(scene);
-    hideDataBelow(mounted.layerIds, flight.zoom);
+    // Once the fly-in has landed, nothing depends on zoom any more, so the elastic dip stays clean.
+    let isLanded = false;
+    const fadeZoom = () => (isLanded ? undefined : flight.zoom);
+
+    const flight = flyIn(scene, () => {
+      isLanded = true;
+      hideDataBelow(mounted.layerIds, undefined);
+      refreshMaskAndLabels(undefined);
+    });
+
+    hideDataBelow(mounted.layerIds, fadeZoom());
 
     let isOpen = true;
-    showAreaMask(scene, flight, () => isOpen)
+    showAreaMask(scene, fadeZoom, () => isOpen)
       .catch((error) => mounted.addNote(error.message));
 
     const stopWatchingResize = watchResize(() => {
       flight.refit();
-      hideDataBelow(mounted.layerIds, flight.zoom);
-      refreshMaskAndLabels(flight.zoom);
+      hideDataBelow(mounted.layerIds, fadeZoom());
+      refreshMaskAndLabels(fadeZoom());
     });
 
     return {
@@ -227,13 +239,13 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   }
 
   // The area is centred in the part of the map that the column and the time bar leave open.
-  function flyIn(scene: Scene) {
+  function flyIn(scene: Scene, onLanded: () => void) {
     const padding = scenePadding();
     const camera = fitCamera(map, scene.area.bbox, padding);
 
     fitToBbox(map, scene.area.bbox, { padding, duration: flightDuration() });
 
-    const hold = camera ? holdView(camera) : null;
+    const hold = camera ? holdView(camera, onLanded) : null;
     let fitted = camera;
 
     return {
@@ -291,15 +303,46 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   }
 
   // The limits start after the flight, because they would cut it short.
-  function holdView(first: FittedCamera) {
+  function holdView(first: FittedCamera, onLanded: () => void) {
     let fitted = first;
     let isHolding = false;
+    let isSnapping = false;
+    // Set when the user took over from the snap-back, until that gesture has ended.
+    let isSnapBackPaused = false;
     let stopPanLock = () => {};
+    const canvasContainer = map.getCanvasContainer();
 
     const snapBack = () => {
-      if (map.getZoom() >= fitted.zoom - ZOOM_EPSILON) return;
+      if (isSnapping || isSnapBackPaused || map.getZoom() >= fitted.zoom - ZOOM_EPSILON) return;
 
-      map.easeTo({ zoom: fitted.zoom, duration: SNAP_BACK_MS });
+      isSnapping = true;
+      map.easeTo({
+        center: fitted.center,
+        zoom: fitted.zoom,
+        duration: SNAP_BACK_MS,
+        easing: easeOut,
+      });
+    };
+
+    const endMove = () => {
+      isSnapping = false;
+      isSnapBackPaused = false;
+    };
+
+    const takeOverFromSnapBack = (event: Event) => {
+      // A trackpad's zoom-out stream would hold the dip open, so it is dropped at the fitted zoom.
+      if (isZoomOut(event) && map.getZoom() <= fitted.zoom + ZOOM_EPSILON) {
+        event.stopPropagation();
+        event.preventDefault();
+
+        return;
+      }
+
+      if (!isSnapping) return;
+
+      isSnapBackPaused = true;
+      isSnapping = false;
+      map.stop();
     };
 
     const apply = () => {
@@ -307,7 +350,14 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       isHolding = true;
       map.setMinZoom(fitted.zoom - MIN_ZOOM_OVERSHOOT);
       map.on("zoomend", snapBack);
+      map.on("moveend", endMove);
       stopPanLock = lockPan(map, fitted);
+
+      for (const type of USER_INPUT_EVENTS) {
+        canvasContainer.addEventListener(type, takeOverFromSnapBack, LISTEN_FIRST);
+      }
+
+      onLanded();
     };
 
     if (map.isMoving()) map.on("moveend", apply);
@@ -328,7 +378,13 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
       stop() {
         map.off("moveend", apply);
+        map.off("moveend", endMove);
         map.off("zoomend", snapBack);
+
+        for (const type of USER_INPUT_EVENTS) {
+          canvasContainer.removeEventListener(type, takeOverFromSnapBack, LISTEN_FIRST);
+        }
+
         stopPanLock();
         map.setMinZoom(null);
       },
@@ -337,7 +393,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
   async function showAreaMask(
     scene: Scene,
-    flight: { zoom: number | undefined },
+    fadeZoom: () => number | undefined,
     isOpen: () => boolean,
   ) {
     const feature = await loadAreaFeature(scene.area.geometry_href).catch((error) => {
@@ -345,10 +401,11 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     });
     if (!isOpen()) return;
 
-    addMask(map, feature, scene.area.bbox, flight.zoom);
+    const zoom = fadeZoom();
+    addMask(map, feature, scene.area.bbox, zoom);
 
     labelArea = tileAreaGeometry(feature.geometry);
-    restoreLabels = moveLabelsIntoArea(map, labelArea, dataMinZoom(flight.zoom));
+    restoreLabels = moveLabelsIntoArea(map, labelArea, dataMinZoom(zoom));
   }
 }
 
@@ -456,6 +513,11 @@ function worldRing(holes: number[][][]) {
     [west, -MAX_LATITUDE],
   ];
 }
+
+const isZoomOut = (event: Event) => event.type === "wheel" && (event as WheelEvent).deltaY > 0;
+
+// Fast start, soft landing.
+const easeOut = (progress: number) => 1 - (1 - progress) ** 3;
 
 // Calls back once the window has stopped changing size; returns the undo.
 function watchResize(onSettled: () => void) {
