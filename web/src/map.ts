@@ -1,11 +1,14 @@
 import {
   AttributionControl,
+  LngLat,
   Map as MapLibreMap,
   type LayerSpecification,
+  MercatorCoordinate,
   type PaddingOptions,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { areaFilter, type TileArea } from "./label-filter";
+import { areaFilter, type TileArea, WORLD_WIDTH_DEGREES } from "./label-filter";
+import { clampAround, nearestEquivalent, panLimit } from "./pan-lock";
 import { imageCorners } from "./render/mercator";
 import type { Bbox } from "./types";
 
@@ -13,6 +16,8 @@ import type { Bbox } from "./types";
 const BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 export const WORLD_VIEW = { center: [0, 20] as [number, number], zoom: 1.5 };
 const MAX_FIT_ZOOM = 10;
+// MapLibre draws the world 512 px wide at zoom 0.
+const TILE_SIZE_PX = 512;
 // A picked area is shown with its surroundings, before a scene is built for it.
 export const BROWSE_PADDING_PX = { top: 120, bottom: 120, left: 460, right: 120 };
 export const BROWSE_MAX_ZOOM = 8;
@@ -55,8 +60,8 @@ export function fitToBbox(
   );
 }
 
-// The zoom fitToBbox ends at, or undefined when the box cannot be fitted.
-export function fitZoom(
+// The camera fitToBbox ends at, or undefined when the box cannot be fitted.
+export function fitCamera(
   map: MapLibreMap,
   [west, south, east, north]: Bbox,
   padding: PaddingOptions,
@@ -65,8 +70,38 @@ export function fitZoom(
     [[west, south], [east, north]],
     { padding, maxZoom: MAX_FIT_ZOOM },
   );
+  if (!camera?.center || camera.zoom === undefined) return undefined;
 
-  return camera?.zoom;
+  return { center: LngLat.convert(camera.center), zoom: camera.zoom };
+}
+
+// Holds the centre inside the fitted view (not setMaxBounds, which cuts the elastic zoom short).
+export function lockPan(map: MapLibreMap, fitted: { center: LngLat; zoom: number }) {
+  const fittedCentre = MercatorCoordinate.fromLngLat(fitted.center);
+  const fittedWorldPx = TILE_SIZE_PX * 2 ** fitted.zoom;
+
+  const clampCentre = () => {
+    const { clientWidth, clientHeight } = map.getCanvas();
+    const { lng, lat } = map.getCenter();
+    const centre = MercatorCoordinate.fromLngLat({
+      lng: nearestEquivalent(lng, fitted.center.lng, WORLD_WIDTH_DEGREES),
+      lat,
+    });
+
+    const zoom = map.getZoom();
+    const limitX = panLimit(clientWidth / fittedWorldPx, fitted.zoom, zoom);
+    const limitY = panLimit(clientHeight / fittedWorldPx, fitted.zoom, zoom);
+    const x = clampAround(centre.x, fittedCentre.x, limitX);
+    const y = clampAround(centre.y, fittedCentre.y, limitY);
+    if (x === centre.x && y === centre.y) return;
+
+    map.setCenter(new MercatorCoordinate(x, y, 0).toLngLat());
+  };
+
+  map.on("move", clampCentre);
+  clampCentre();
+
+  return () => map.off("move", clampCentre);
 }
 
 // Replaces any earlier outline; the geometry must already sit in the visible world copy.

@@ -1,4 +1,4 @@
-import { creditsLine, renderAbout, renderCredits, summaryText } from "./about";
+import { creditsLine, NOTICES_HEADING_ID, renderAbout, renderCredits, summaryText } from "./about";
 import { makeHtmlElement } from "./html";
 import { noticeCount } from "./scene-info";
 import type { Scene } from "./types";
@@ -23,7 +23,7 @@ export interface PanelHooks {
 
 // The docked panel is always usable; the dialog is its whole-window view.
 export function createScenePanel(scene: Scene, dialog: HTMLDialogElement, hooks: PanelHooks) {
-  const collapsed = makeCollapsed(scene, hooks);
+  const collapsed = makeCollapsed(scene, dialog, hooks);
   const full = makeFull(scene, dialog, hooks);
 
   return {
@@ -55,7 +55,7 @@ export function createScenePanel(scene: Scene, dialog: HTMLDialogElement, hooks:
   };
 }
 
-function makeCollapsed(scene: Scene, hooks: PanelHooks) {
+function makeCollapsed(scene: Scene, dialog: HTMLDialogElement, hooks: PanelHooks) {
   const element = makeHtmlElement("section");
   element.className = "scene-panel";
   element.setAttribute("role", "region");
@@ -92,9 +92,17 @@ function makeCollapsed(scene: Scene, hooks: PanelHooks) {
 
   const count = noticeCount(scene);
   if (count) {
-    const badge = makeHtmlElement("button", `⚠ ${count}`, header);
-    badge.title = "Notices and limits";
-    badge.onclick = () => hooks.requestOpen("about");
+    const noun = count === 1 ? "note" : "notes";
+    const badge = makeHtmlElement("button", `⚠ ${count} ${noun}`, header);
+
+    const description = `${count} ${noun} about this data's limits; opens About`;
+    badge.title = description;
+    badge.setAttribute("aria-label", description);
+
+    badge.onclick = () => {
+      hooks.requestOpen("about");
+      dialog.querySelector(`#${NOTICES_HEADING_ID}`)?.scrollIntoView();
+    };
   }
 
   const expand = makeHtmlElement("button", "Expand ⤢", header);

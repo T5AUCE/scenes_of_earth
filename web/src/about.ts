@@ -16,6 +16,8 @@ const NO_FALLBACK_NOTE =
   "If the basemap cannot load, no other basemap is substituted; the data layers still draw.";
 // "YYYY-MM-DDTHH:MM" is the part of an ISO timestamp that is shown.
 const ISO_MINUTE_LENGTH = 16;
+// The docked panel scrolls the About tab to this heading.
+export const NOTICES_HEADING_ID = "notices-heading";
 const CLIPPED_NOTICE = "The area reaches beyond the data coverage and was clipped to it.";
 
 const SMOOTHING_LINES = [
@@ -113,7 +115,8 @@ function periodText(scene: Scene) {
 function appendNotices(root: HTMLElement, scene: Scene) {
   if (!noticeCount(scene)) return;
 
-  makeHtmlElement("h4", "Notices and limits", root);
+  const heading = makeHtmlElement("h4", "Notices and limits", root);
+  heading.id = NOTICES_HEADING_ID;
   const list = makeHtmlElement("ul", "", root);
 
   if (scene.area.clipped_to_coverage) makeHtmlElement("li", CLIPPED_NOTICE, list);

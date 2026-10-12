@@ -49,9 +49,11 @@ class SceneFiles(StaticFiles):
     async def get_response(self, path, scope):
         if path.startswith("."):
             raise StarletteHTTPException(404)
+
         response = await super().get_response(path, scope)
         if response.status_code in (200, 304):
             response.headers["Cache-Control"] = IMMUTABLE
+
         return response
 
 
@@ -87,6 +89,7 @@ async def read_body(request):
         body += chunk
         if len(body) > MAX_BODY:
             raise HTTPException(413, "request body too large")
+        
     return body
 
 
@@ -135,6 +138,7 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
     scenes_dir = Path(scenes_dir or os.environ.get("SOE_SCENES_DIR", "./data/scenes"))
     public = os.environ.get("SOE_PUBLIC_BASE", "/scenes").rstrip("/")
     max_queue = max_queue or int(os.environ.get("SOE_MAX_QUEUE", "20"))
+    
     if registry is None:
         registry = _default_registry()
     # Builds run on their own small pool, so waiting jobs never occupy Starlette's request threads.
@@ -208,6 +212,7 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
             "end": end,
             "title": title or (area.boundary["name"] if area.named else DRAWN_AREA_TITLE),
         })
+
         try:
             built = (scenes_dir / scene_id / "scene.json").exists()
             row, start_job = db.submit(db_path, scene_id, request_json, built, max_queue)
@@ -217,6 +222,7 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
                 "too many scenes are being built, retry later",
                 headers={"Retry-After": str(QUEUE_RETRY_AFTER_SECONDS)},
             )
+
         status_code = 202 if row["status"] in ("queued", "running") else 200
         return status_code, scene_out(row), start_job
 
@@ -239,6 +245,7 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
         query = q.strip()
         if not query:
             return []
+        
         rows = db.search(db_path, query, level, max(1, min(limit, MAX_SEARCH_LIMIT)))
         return [_area_out(row) for row in rows]
 
@@ -247,6 +254,7 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
         row = db.get_boundary(db_path, area_id)
         if row is None:
             raise HTTPException(404, "unknown area")
+        
         return {**_area_out(row), "geometry": json.loads(row["geom_geojson"])}
 
     @app.post("/api/scenes")
@@ -259,6 +267,7 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
 
         if start_job:
             executor.submit(run_job, out["id"])
+
         return JSONResponse(out, status_code)
 
     @app.get("/api/scenes/{scene_id}")
@@ -266,6 +275,7 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
         row = db.get_scene(db_path, scene_id) if ID_RE.fullmatch(scene_id) else None
         if row is None:
             raise HTTPException(404, "unknown scene")
+        
         return scene_out(row)
 
     app.mount(
@@ -273,6 +283,7 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
         SceneFiles(directory=scenes_dir, check_dir=False),
         name="scenes",
     )
+
     return app
 
 
@@ -289,8 +300,7 @@ def _warm_latest_months(registry):
 
 
 class _ProgressRecorder:
-    """Writes build progress to the database, but only when it moved by PROGRESS_STEP."""
-
+    """Writes build progress to the database, but only when moved by PROGRESS_STEP."""
     def __init__(self, db_path, scene_id):
         self._db_path = db_path
         self._scene_id = scene_id
@@ -399,6 +409,7 @@ def _layer_out(dataset):
             "first": dataset.first(),
             "latest": dataset.latest(),
         }
+
     return {
         "id": dataset.id,
         "title": dataset.title,

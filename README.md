@@ -1,4 +1,4 @@
-# Scenes of Earth backend
+# Scenes of Earth
 
 A small FastAPI + SQLite service that turns an area (a country, state, county or large city, or a drawn polygon) and a
 month range into a static scene bundle: `scene.json`, `area.geojson` and a Zarr v3 store (`data.zarr`, gzip) with monthly
@@ -107,8 +107,7 @@ All tests run offline with synthetic data.
 
 ## Code style
 
-Adapted from the MIT CommLab guide on coding and comment style
-(https://mitcommlab.mit.edu/broad/commkit/coding-and-comment-style/). Clear code first, comments second.
+Adapted from general clean and elegant code methodology. Clear code first with comments second.
 
 - **Names:** descriptive and pronounceable; nouns for variables and classes, verbs for functions. No unexplained
   abbreviations (domain terms like `bbox`, `res` are fine). Length scales with scope. Use context to avoid redundancy.

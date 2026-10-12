@@ -57,15 +57,11 @@ function contourWindow(
   job: number,
   fixedInterval?: number,
 ): ContourResult {
-  const started = performance.now();
-
   const sampled = downsample(elevation, mask, grid, MAX_SIDE_CELLS, sourceWindow);
   const inside = maskedValues(sampled);
   const interval = fixedInterval ?? pickInterval(inside);
   const maxElevation = inside.reduce((top, value) => Math.max(top, value), 0);
   const levelRuns = contourRuns(sampled, thresholds(maxElevation, interval));
-
-  console.info(`contours: ${Math.round(performance.now() - started)} ms (job ${job})`);
 
   return { job, interval, collection: toLonLat(levelRuns, grid, sampled, interval) };
 }

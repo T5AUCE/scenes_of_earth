@@ -4,7 +4,7 @@ type Polygon = number[][][];
 
 export type TileArea = ReturnType<typeof tileAreaGeometry>;
 
-const WORLD_WIDTH_DEGREES = 360;
+export const WORLD_WIDTH_DEGREES = 360;
 const ANTIMERIDIAN_DEGREES = 180;
 
 // An area east of 180 is repeated one world west, where tile features sit.

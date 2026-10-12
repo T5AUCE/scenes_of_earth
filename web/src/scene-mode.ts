@@ -1,15 +1,17 @@
 import type {
   ExpressionSpecification,
   GeoJSONSource,
+  LngLat,
   Map as MapLibreMap,
   PaddingOptions,
 } from "maplibre-gl";
 import { loadAreaFeature } from "./api";
 import { makeHtmlElement } from "./html";
-import { polygonParts, tileAreaGeometry } from "./label-filter";
+import { polygonParts, tileAreaGeometry, type TileArea } from "./label-filter";
 import {
   fitToBbox,
-  fitZoom,
+  fitCamera,
+  lockPan,
   MAX_ZOOM,
   moveLabelsIntoArea,
   removeLayerAndSource,
@@ -39,10 +41,10 @@ const PAGE_BACKGROUND_PROPERTY = "--page-background";
 const HALF_WORLD_DEGREES = 180;
 // Mercator has no poles.
 const MAX_LATITUDE = 85;
-// Room for the right column and the time bar.
-const DESKTOP_PADDING_PX = { top: 40, bottom: 96, left: 40, right: 340 };
-const PHONE_PADDING_PX = { top: 40, left: 20, right: 20 };
-const PHONE_SHEET_FRACTION = 0.5;
+// Space kept between the fitted area and whatever covers or borders the map.
+const EDGE_MARGIN_PX = 24;
+const RESIZE_DEBOUNCE_MS = 200;
+const STATUS_BADGE_ID = "status";
 const PHONE_QUERY = "(max-width: 600px)";
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 
@@ -60,6 +62,8 @@ export interface SceneRoots {
   dialog: HTMLDialogElement;
 }
 
+type FittedCamera = { center: LngLat; zoom: number };
+
 type Camera = { center: { lng: number; lat: number } | [number, number]; zoom: number };
 
 // What the caller must know about the scene that is showing.
@@ -75,6 +79,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   let current: ActiveScene | null = null;
   let worldCamera: Camera | null = null;
   let restoreLabels = () => {};
+  let labelArea: TileArea | null = null;
 
   return { enter, exit, sceneId: () => current?.id ?? null, showFullscreen };
 
@@ -171,11 +176,17 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     clock: SceneClock,
   ): ActiveScene {
     const flight = flyIn(scene);
-    hideDataUntilMasked(mounted.layerIds, flight.zoom);
+    hideDataBelow(mounted.layerIds, flight.zoom);
 
     let isOpen = true;
-    showAreaMask(scene, flight.zoom, () => isOpen)
+    showAreaMask(scene, flight, () => isOpen)
       .catch((error) => mounted.addNote(error.message));
+
+    const stopWatchingResize = watchResize(() => {
+      flight.refit();
+      hideDataBelow(mounted.layerIds, flight.zoom);
+      refreshMaskAndLabels(flight.zoom);
+    });
 
     return {
       id: scene.id,
@@ -183,7 +194,9 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       clock,
       close() {
         isOpen = false;
+        stopWatchingResize();
         flight.stopClamp();
+        labelArea = null;
         restoreLabels();
         restoreLabels = () => {};
         removeLayerAndSource(map, MASK_ID);
@@ -213,50 +226,118 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     if (entry === "keep" && history.state?.panel) history.replaceState(null, "", url);
   }
 
-  // Zoom can leave the fitted view by a little; it eases back when the gesture ends.
+  // The area is centred in the part of the map that the column and the time bar leave open.
   function flyIn(scene: Scene) {
     const padding = scenePadding();
-    const zoom = fitZoom(map, scene.area.bbox, padding);
+    const camera = fitCamera(map, scene.area.bbox, padding);
 
     fitToBbox(map, scene.area.bbox, { padding, duration: flightDuration() });
 
-    return { zoom, stopClamp: zoom === undefined ? () => {} : clampZoom(zoom) };
+    const hold = camera ? holdView(camera) : null;
+    let fitted = camera;
+
+    return {
+      get zoom() {
+        return fitted?.zoom;
+      },
+
+      stopClamp: () => hold?.stop(),
+
+      // The window changed size, so the area is centred again in the space that is left.
+      refit() {
+        const next = fitCamera(map, scene.area.bbox, scenePadding());
+        if (!next || !hold) return;
+
+        hold.refit(next);
+        fitted = next;
+      },
+    };
   }
 
-  function hideDataUntilMasked(layerIds: string[], fittedZoom: number | undefined) {
-    if (fittedZoom === undefined) return;
+  function scenePadding(): PaddingOptions {
+    const column = roots.column.getBoundingClientRect();
+    const timeBar = roots.timeBar.getBoundingClientRect();
+    const edges = { top: EDGE_MARGIN_PX, bottom: EDGE_MARGIN_PX, left: EDGE_MARGIN_PX };
 
-    const minZoom = fittedZoom - DATA_APPEARS_ZOOMS;
-    for (const id of layerIds) map.setLayerZoomRange(id, minZoom, MAX_ZOOM);
+    if (matchMedia(PHONE_QUERY).matches) {
+      const badge = document.getElementById(STATUS_BADGE_ID)!.getBoundingClientRect();
+      const top = badge.bottom + EDGE_MARGIN_PX;
+      const bottom = window.innerHeight - column.top + EDGE_MARGIN_PX;
+
+      return { ...edges, top, right: EDGE_MARGIN_PX, bottom };
+    }
+
+    const right = window.innerWidth - column.left + EDGE_MARGIN_PX;
+    const timeBarTop = timeBar.height ? timeBar.top : window.innerHeight;
+    const bottom = window.innerHeight - timeBarTop + EDGE_MARGIN_PX;
+
+    return { ...edges, right, bottom };
   }
 
-  // The limits start after the flight, because a minimum zoom would cut it short.
-  function clampZoom(fittedZoom: number) {
+  // Data and labels wait for the complete mask, so unmasked data never shows.
+  function hideDataBelow(layerIds: string[], fittedZoom: number | undefined) {
+    for (const id of layerIds) map.setLayerZoomRange(id, dataMinZoom(fittedZoom), MAX_ZOOM);
+  }
+
+  function refreshMaskAndLabels(fittedZoom: number | undefined) {
+    if (map.getLayer(MASK_ID)) {
+      map.setPaintProperty(MASK_ID, "fill-opacity", maskOpacity(fittedZoom));
+    }
+
+    if (!labelArea) return;
+
+    restoreLabels();
+    restoreLabels = moveLabelsIntoArea(map, labelArea, dataMinZoom(fittedZoom));
+  }
+
+  // The limits start after the flight, because they would cut it short.
+  function holdView(first: FittedCamera) {
+    let fitted = first;
+    let isHolding = false;
+    let stopPanLock = () => {};
+
     const snapBack = () => {
-      if (map.getZoom() >= fittedZoom - ZOOM_EPSILON) return;
+      if (map.getZoom() >= fitted.zoom - ZOOM_EPSILON) return;
 
-      map.easeTo({ zoom: fittedZoom, duration: SNAP_BACK_MS });
+      map.easeTo({ zoom: fitted.zoom, duration: SNAP_BACK_MS });
     };
 
     const apply = () => {
       map.off("moveend", apply);
-      map.setMinZoom(fittedZoom - MIN_ZOOM_OVERSHOOT);
+      isHolding = true;
+      map.setMinZoom(fitted.zoom - MIN_ZOOM_OVERSHOOT);
       map.on("zoomend", snapBack);
+      stopPanLock = lockPan(map, fitted);
     };
 
     if (map.isMoving()) map.on("moveend", apply);
     else apply();
 
-    return () => {
-      map.off("moveend", apply);
-      map.off("zoomend", snapBack);
-      map.setMinZoom(null);
+    return {
+      refit(next: FittedCamera) {
+        const wasAtFit = map.getZoom() <= fitted.zoom + ZOOM_EPSILON;
+        fitted = next;
+        if (!isHolding) return;
+
+        stopPanLock();
+        map.setMinZoom(next.zoom - MIN_ZOOM_OVERSHOOT);
+        stopPanLock = lockPan(map, next);
+
+        if (wasAtFit) map.jumpTo({ center: next.center, zoom: next.zoom });
+      },
+
+      stop() {
+        map.off("moveend", apply);
+        map.off("zoomend", snapBack);
+        stopPanLock();
+        map.setMinZoom(null);
+      },
     };
   }
 
   async function showAreaMask(
     scene: Scene,
-    fittedZoom: number | undefined,
+    flight: { zoom: number | undefined },
     isOpen: () => boolean,
   ) {
     const feature = await loadAreaFeature(scene.area.geometry_href).catch((error) => {
@@ -264,11 +345,10 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     });
     if (!isOpen()) return;
 
-    addMask(map, feature, scene.area.bbox, fittedZoom);
+    addMask(map, feature, scene.area.bbox, flight.zoom);
 
-    // Labels are shown from the zoom at which the mask is complete, like the data layers.
-    const labelsFromZoom = fittedZoom === undefined ? 0 : fittedZoom - DATA_APPEARS_ZOOMS;
-    restoreLabels = moveLabelsIntoArea(map, tileAreaGeometry(feature.geometry), labelsFromZoom);
+    labelArea = tileAreaGeometry(feature.geometry);
+    restoreLabels = moveLabelsIntoArea(map, labelArea, dataMinZoom(flight.zoom));
   }
 }
 
@@ -377,6 +457,26 @@ function worldRing(holes: number[][][]) {
   ];
 }
 
+// Calls back once the window has stopped changing size; returns the undo.
+function watchResize(onSettled: () => void) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const onResize = () => {
+    clearTimeout(timer);
+    timer = setTimeout(onSettled, RESIZE_DEBOUNCE_MS);
+  };
+
+  window.addEventListener("resize", onResize);
+
+  return () => {
+    window.removeEventListener("resize", onResize);
+    clearTimeout(timer);
+  };
+}
+
+const dataMinZoom = (fittedZoom: number | undefined) =>
+  fittedZoom === undefined ? 0 : fittedZoom - DATA_APPEARS_ZOOMS;
+
 function pageBackground() {
   const style = getComputedStyle(document.documentElement);
 
@@ -396,12 +496,6 @@ function maskOpacity(fittedZoom?: number): number | ExpressionSpecification {
     fittedZoom - MASK_FADE_END_ZOOMS,
     MASK_OPACITY,
   ];
-}
-
-function scenePadding(): PaddingOptions {
-  if (!matchMedia(PHONE_QUERY).matches) return DESKTOP_PADDING_PX;
-
-  return { ...PHONE_PADDING_PX, bottom: window.innerHeight * PHONE_SHEET_FRACTION };
 }
 
 const flightDuration = () => (matchMedia(REDUCED_MOTION_QUERY).matches ? 0 : FLY_DURATION_MS);
