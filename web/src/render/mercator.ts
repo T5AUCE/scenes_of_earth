@@ -3,7 +3,7 @@ import type { Bbox } from "../types";
 export interface SampleTable {
   width: number;
   height: number;
-  src: Int32Array; // per output pixel: source cell index, or -1 when the cell is outside the mask
+  src: Int32Array; // per output pixel: source cell index
 }
 
 interface Grid {
@@ -30,7 +30,6 @@ export function mercY(lat: number) {
 // Rows are even in Mercator y because MapLibre stretches images linearly in Web Mercator.
 export function sampleTable(
   grid: Grid,
-  mask: ArrayLike<number>,
   maxTextureSize = MAX_TEXTURE_SIZE_PX,
 ): SampleTable {
   const { nx, ny } = grid;
@@ -52,8 +51,7 @@ export function sampleTable(
 
     for (let pixelColumn = 0; pixelColumn < width; pixelColumn++) {
       const gridColumn = Math.floor(((pixelColumn + 0.5) * nx) / width);
-      const cell = gridRow * nx + gridColumn;
-      src[pixelRow * width + pixelColumn] = mask[cell] ? cell : -1;
+      src[pixelRow * width + pixelColumn] = gridRow * nx + gridColumn;
     }
   }
 

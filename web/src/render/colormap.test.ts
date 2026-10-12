@@ -6,10 +6,10 @@ import { lut, paintColormap, paintHillshade } from "./colormap.ts";
 const table = (src: number[]) => ({ width: src.length, height: 1, src: Int32Array.from(src) });
 const alphaOf = (rgba: Uint8ClampedArray) => [...rgba].filter((_, i) => i % 4 === 3);
 
-test("NaN and cells outside the mask are transparent", () => {
-  const rgba = paintColormap(Float32Array.of(5, NaN), table([0, 1, -1]), lut("Blues"), [0, 10]);
+test("NaN cells are transparent", () => {
+  const rgba = paintColormap(Float32Array.of(5, NaN), table([0, 1]), lut("Blues"), [0, 10]);
 
-  assert.deepEqual(alphaOf(rgba), [255, 0, 0]);
+  assert.deepEqual(alphaOf(rgba), [255, 0]);
 });
 
 test("values outside the domain take the end colours", () => {
@@ -32,11 +32,10 @@ test("uint16 rain decodes with the scale factor and the fill becomes NaN", () =>
 });
 
 test("flat hillshade is transparent, shadows black and highlights white", () => {
-  const rgba = paintHillshade(Uint8Array.of(180, 0, 255, 90), table([0, 1, 2, 3, -1]));
+  const rgba = paintHillshade(Uint8Array.of(180, 0, 255, 90), table([0, 1, 2, 3]));
 
   assert.equal(rgba[3], 0);
   assert.deepEqual([...rgba.slice(4, 8)], [0, 0, 0, 255]);
   assert.deepEqual([...rgba.slice(8, 12)], [255, 255, 255, 255]);
   assert.deepEqual([...rgba.slice(12, 16)], [0, 0, 0, 128]);
-  assert.equal(rgba[19], 0);
 });

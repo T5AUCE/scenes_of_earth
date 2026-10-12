@@ -70,8 +70,8 @@ function contourWindow(
   return { job, interval, collection: toLonLat(levelRuns, grid, sampled, interval) };
 }
 
-// The unmasked grid is contoured: d3 treats NaN as -Infinity, which would ring the mask edge.
-function contourRuns({ values, mask, nx, ny }: Downsampled, levels: number[]) {
+// Cells without data hold 0, since d3 treats NaN as -Infinity, which would ring their edge.
+function contourRuns({ values, hasData, nx, ny }: Downsampled, levels: number[]) {
   const multiPolygons = contours()
     .size([nx, ny])
     .smooth(true)
@@ -79,6 +79,6 @@ function contourRuns({ values, mask, nx, ny }: Downsampled, levels: number[]) {
 
   return multiPolygons.map(({ value, coordinates }) => ({
     elevation: value,
-    runs: coordinates.flatMap((polygon) => clipRings(polygon, mask, nx, ny)),
+    runs: coordinates.flatMap((polygon) => clipRings(polygon, hasData, nx, ny)),
   }));
 }

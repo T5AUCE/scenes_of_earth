@@ -59,7 +59,7 @@ export function paintColormap(
 
   for (let pixel = 0; pixel < table.src.length; pixel++) {
     const cell = table.src[pixel];
-    const value = cell < 0 ? NaN : values[cell];
+    const value = values[cell];
     if (Number.isNaN(value)) continue;
 
     const position = span > 0 ? Math.min(1, Math.max(0, (value - low) / span)) : 0;
@@ -80,8 +80,6 @@ export function paintHillshade(
 
   for (let pixel = 0; pixel < table.src.length; pixel++) {
     const cell = table.src[pixel];
-    if (cell < 0) continue;
-
     const value = shade[cell];
     const isLighter = value > neutral;
     const strength = isLighter

@@ -1,12 +1,11 @@
-import { Map as MapLibreMap } from "maplibre-gl";
+import { AttributionControl, Map as MapLibreMap, type PaddingOptions } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { imageCorners } from "./render/mercator";
 import type { Bbox } from "./types";
 
 // OpenFreeMap: free, no API key.
 const BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
-const INITIAL_CENTER: [number, number] = [0, 20];
-const INITIAL_ZOOM = 1.5;
+export const WORLD_VIEW = { center: [0, 20] as [number, number], zoom: 1.5 };
 const MAX_FIT_ZOOM = 10;
 // WebGL guarantees at least this much; used when the context cannot be queried.
 const GUARANTEED_TEXTURE_SIZE_PX = 4096;
@@ -18,20 +17,42 @@ interface DrawableImage {
 }
 
 export function createMap(container: string): MapLibreMap {
-  return new MapLibreMap({
+  const map = new MapLibreMap({
     container,
     style: BASEMAP_STYLE,
-    center: INITIAL_CENTER,
-    zoom: INITIAL_ZOOM,
-    attributionControl: { compact: false },
+    ...WORLD_VIEW,
+    attributionControl: false,
   });
+
+  // Bottom right belongs to the scene column.
+  map.addControl(new AttributionControl({ compact: false }), "bottom-left");
+
+  return map;
 }
 
-export function fitToBbox(map: MapLibreMap, [west, south, east, north]: Bbox) {
+export function fitToBbox(
+  map: MapLibreMap,
+  [west, south, east, north]: Bbox,
+  options: { padding?: PaddingOptions; duration?: number } = {},
+) {
   map.fitBounds(
     [[west, south], [east, north]],
-    { padding: FIT_PADDING_PX, maxZoom: MAX_FIT_ZOOM },
+    { padding: FIT_PADDING_PX, ...options, maxZoom: MAX_FIT_ZOOM },
   );
+}
+
+// The zoom fitToBbox ends at, or undefined when the box cannot be fitted.
+export function fitZoom(
+  map: MapLibreMap,
+  [west, south, east, north]: Bbox,
+  padding: PaddingOptions,
+) {
+  const camera = map.cameraForBounds(
+    [[west, south], [east, north]],
+    { padding, maxZoom: MAX_FIT_ZOOM },
+  );
+
+  return camera?.zoom;
 }
 
 // Tile failures and aborts are routine while panning, so only other map errors are reported.

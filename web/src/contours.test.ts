@@ -48,8 +48,18 @@ test("downsampling averages blocks and keeps a block inside if any cell is", () 
   assert.equal(small.factor, 2);
   assert.deepEqual([small.nx, small.ny], [2, 1]);
   assert.deepEqual(Array.from(small.values), [25, 45]);
-  assert.deepEqual(Array.from(small.mask), [0, 1]);
+  assert.deepEqual(Array.from(small.inside), [0, 1]);
   assert.deepEqual(Array.from(maskedValues(small)), [45]);
+});
+
+test("downsampling flags blocks with data apart from blocks inside the area", () => {
+  const elevation = [NaN, NaN, 5, NaN];
+  const mask = [1, 0, 0, 0];
+
+  const small = downsample(elevation, mask, { bbox: [0, 0, 2, 2], nx: 2, ny: 2 }, 2);
+
+  assert.deepEqual(Array.from(small.hasData), [0, 0, 1, 0]);
+  assert.deepEqual(Array.from(small.inside), [1, 0, 0, 0]);
 });
 
 test("a ring that leaves the mask is cut into runs at the mask edge", () => {
@@ -225,17 +235,16 @@ test("a view is covered when the window holds the part of it over the grid", () 
   assert.equal(covers(outer, [2, 2, 6 + 1e-12, 12], grid), true);
 });
 
-test("contours of a hill inside a mask stay clear of the mask edge and the frame", () => {
+test("contours of a hill stay clear of cells without data and the frame", () => {
   const nx = 40;
   const ny = 40;
   const elevation = new Float32Array(nx * ny);
-  const mask = new Uint8Array(nx * ny);
+  const mask = new Uint8Array(nx * ny).fill(1);
 
   for (let y = 0; y < ny; y++) {
     for (let x = 0; x < nx; x++) {
       const distance = Math.hypot(x - 20, y - 20);
-      elevation[y * nx + x] = 1000 - 50 * distance;
-      mask[y * nx + x] = distance < 12 ? 1 : 0;
+      elevation[y * nx + x] = distance < 12 ? 1000 - 50 * distance : NaN;
     }
   }
 
@@ -245,7 +254,7 @@ test("contours of a hill inside a mask stay clear of the mask edge and the frame
     .smooth(true)
     .thresholds([400, 800])(sampled.values as unknown as number[]);
   const runs = multiPolygons.flatMap(({ coordinates }) => {
-    return coordinates.flatMap((polygon) => clipRings(polygon, sampled.mask, nx, ny));
+    return coordinates.flatMap((polygon) => clipRings(polygon, sampled.hasData, nx, ny));
   });
 
   const points = runs.flat();

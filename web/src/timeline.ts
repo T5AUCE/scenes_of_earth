@@ -94,7 +94,27 @@ export function createTimeline(
     timer = setInterval(advance, PLAY_INTERVAL_MS);
   };
 
+  const select = (index: number) => {
+    stop();
+    slider.value = String(index);
+    show();
+  };
+
   show();
 
-  return { element, destroy: stop };
+  return {
+    element,
+    times,
+    destroy: stop,
+
+    goTo(time: string) {
+      const index = times.indexOf(time);
+      if (index >= 0) select(index);
+    },
+
+    // Stops at both ends; only play wraps around.
+    move(delta: number) {
+      select(Math.min(Math.max(Number(slider.value) + delta, 0), times.length - 1));
+    },
+  };
 }

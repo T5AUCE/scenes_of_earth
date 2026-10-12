@@ -1,0 +1,27 @@
+const MONTH_LENGTH = 7; // "YYYY-MM"
+
+export type Route =
+  | { kind: "world" }
+  | { kind: "scene"; id: string; month: string | null; panel: string | null };
+
+// `time` is a full "YYYY-MM-DD" step start; the link keeps only the month.
+export function sceneUrl(id: string, time: string | null) {
+  return time ? `?scene=${id}&t=${time.slice(0, MONTH_LENGTH)}` : `?scene=${id}`;
+}
+
+// The id is returned as typed; the caller checks it before it reaches a request.
+export function routeFor(search: string, state: { panel?: string } | null): Route {
+  const parameters = new URLSearchParams(search);
+  const id = parameters.get("scene");
+  if (!id) return { kind: "world" };
+
+  const month = parameters.get("t");
+  const isMonth = month !== null && /^\d{4}-(0[1-9]|1[0-2])$/.test(month);
+
+  return { kind: "scene", id, month: isMonth ? month : null, panel: state?.panel ?? null };
+}
+
+// A month in the link selects the first step that starts in it.
+export function timeForMonth(times: string[], month: string) {
+  return times.find((time) => time.startsWith(month));
+}

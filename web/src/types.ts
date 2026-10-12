@@ -56,6 +56,7 @@ export interface SceneStatus {
 
 export interface GridDoc {
   bbox: Bbox;
+  res: number; // degrees
   nx: number;
   ny: number;
 }
@@ -73,17 +74,43 @@ export interface TimeDoc {
   values: string[]; // "YYYY-MM-DD" period starts
 }
 
+// Licence and attribution of one data source, as the bundle states them.
+export interface CreditDoc {
+  name: string;
+  version?: string;
+  licence: string;
+  licence_url?: string;
+  attribution?: string;
+  citation?: string;
+  modified?: string;
+  disclaimer?: string;
+}
+
+export interface BoundaryDoc {
+  id: string;
+  name: string;
+  level: string;
+  iso3: string | null;
+  source: string;
+  licence: string;
+  licence_url?: string;
+  attribution?: string;
+  citation?: string;
+  modified?: string;
+}
+
 export interface LayerDoc {
   id: string;
   title: string;
   units: string;
+  source: CreditDoc;
   style: {
     kind: string;
     colormap?: string;
     domain?: [number, number];
   };
   grid: GridDoc;
-  mask: { path: string };
+  mask: { path: string; cells_inside: number };
   time: TimeDoc | null;
   arrays: Record<string, ArrayDoc>; // by role, e.g. value, elevation, hillshade
 }
@@ -99,10 +126,22 @@ export interface Scene {
   version: string;
   id: string;
   title: string;
-  area: { bbox: Bbox; geometry_href: string };
+  generator: { name: string; version: string };
+  created: string; // ISO 8601 with UTC offset
+  area: {
+    boundary: BoundaryDoc | null; // null for a drawn polygon
+    bbox: Bbox;
+    geometry_href: string;
+    clipped_to_coverage: boolean;
+  };
   layers: LayerDoc[];
   data: { href: string };
   notices: { limits: string[] };
+  credits: {
+    lines: string[];
+    disclaimers: string[];
+    endorsement: string;
+  };
 }
 
 export interface Part {
@@ -125,7 +164,7 @@ export interface LayerView {
   parts: Part[];
   options: { label: string; set(on: boolean): void }[];
   time: TimeDoc | null;
-  ready: Promise<void>; // rejects when the layer's data cannot be read
+  ready?: Promise<void>; // rejects when the layer's data cannot be read
   setTime(time: string): void;
   legend(): HTMLElement | null;
   destroy(): void;

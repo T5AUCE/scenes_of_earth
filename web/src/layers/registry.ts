@@ -1,4 +1,4 @@
-import { arrayDoc, cacheByIndex, decode, readArray, readMask } from "../data";
+import { arrayDoc, cacheByIndex, decode, readArray } from "../data";
 import { gradientLegend } from "../legend";
 import { addImageLayer, maxTextureSize, removeLayerAndSource, setImage } from "../map";
 import { lut, paintColormap } from "../render/colormap";
@@ -33,11 +33,7 @@ function createSeriesView({ map, store, layer, beforeId, report }: LayerContext)
     "raster-resampling": "nearest",
   });
 
-  const sampledGrid = (async () => {
-    const mask = await readMask(await store, layer);
-
-    return sampleTable(layer.grid, mask, maxTextureSize(map));
-  })();
+  const table = sampleTable(layer.grid, maxTextureSize(map));
 
   const readStep = cacheByIndex(CACHED_STEPS, async (step) => {
     const raw = await readArray(await store, valueDoc.path, [step, null, null]);
@@ -48,7 +44,7 @@ function createSeriesView({ map, store, layer, beforeId, report }: LayerContext)
 
   const drawStep = async (step: number) => {
     try {
-      const [values, table] = await Promise.all([readStep(step), sampledGrid]);
+      const values = await readStep(step);
       if (!alive || step !== shownStep) return;
 
       const rgba = paintColormap(values, table, colors, domain);
@@ -78,7 +74,6 @@ function createSeriesView({ map, store, layer, beforeId, report }: LayerContext)
       },
     ],
     time: timeAxis,
-    ready: sampledGrid.then(() => {}),
     setTime(time) {
       shownStep = stepAt(timeAxis.values, time);
       if (shownStep < 0) hideImage();

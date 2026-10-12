@@ -2,7 +2,7 @@ import type { Map as MapLibreMap } from "maplibre-gl";
 import { ApiError, getLayers, getSceneStatus, loadScene, postScene, searchAreas } from "./api";
 import { makeHtmlElement } from "./html";
 import { fitToBbox } from "./map";
-import { mountScene } from "./view";
+import type { EnterOptions } from "./scene-mode";
 import type { AreaHit, Layer, Scene, SceneRequest, SceneStatus } from "./types";
 
 const POLL_INTERVAL_MS = 1500;
@@ -23,15 +23,18 @@ const AREA_LEVELS = [
   { value: "city", label: "city" },
 ];
 
-export async function createPanel(root: HTMLElement, map: MapLibreMap) {
+interface SceneMode {
+  enter(scene: Scene, options: EnterOptions): void;
+}
+
+export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode: SceneMode) {
   const controls = createControls(root);
-  const { search, level, results, chosen, layerBox, start, end, build, status, result } = controls;
+  const { search, level, results, chosen, layerBox, start, end, build, status } = controls;
 
   let area: AreaHit | null = null;
   // Changing the run id cancels the running poll.
   let run = 0;
   let layers: Layer[] = [];
-  let unmountScene = () => {};
 
   try {
     layers = await loadLayerChoices(controls);
@@ -103,15 +106,7 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap) {
     };
   }
 
-  function showScene(scene: Scene) {
-    unmountScene();
-    result.replaceChildren();
-    makeHtmlElement("h3", scene.title, result);
-    unmountScene = mountScene(map, scene, result);
-    fitToBbox(map, scene.area.bbox);
-  }
-
-  async function openScene(id: string) {
+  async function openScene(id: string, options: EnterOptions) {
     const thisRun = ++run;
     try {
       const sceneStatus = await getSceneStatus(id);
@@ -122,7 +117,7 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap) {
       }
 
       const scene = await loadScene(sceneStatus.bundle_url!);
-      if (thisRun === run) showScene(scene);
+      if (thisRun === run) sceneMode.enter(scene, options);
     } catch (error) {
       if (thisRun === run) {
         status.textContent = `Could not open scene ${id}: ${(error as Error).message}`;
@@ -131,10 +126,6 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap) {
   }
 
   async function buildScene() {
-    unmountScene();
-    unmountScene = () => {};
-    result.replaceChildren();
-
     if (!area) {
       status.textContent = "Select an area first.";
 
@@ -161,7 +152,7 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap) {
 
       status.textContent = "Bundle ready.";
       const scene = await loadScene(finished.bundle_url!);
-      if (thisRun === run) showScene(scene);
+      if (thisRun === run) sceneMode.enter(scene, { month: null, entry: "push" });
     } catch (error) {
       if (thisRun !== run) return;
 
@@ -255,9 +246,7 @@ function createControls(root: HTMLElement) {
   const status = makeHtmlElement("div", "", root);
   status.className = "status";
 
-  const result = makeHtmlElement("div", "", root);
-
-  return { search, level, results, chosen, layerBox, start, end, build, status, result };
+  return { search, level, results, chosen, layerBox, start, end, build, status };
 }
 
 // Layers come from the backend; none are hard-coded here.

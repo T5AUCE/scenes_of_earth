@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { imageCorners, mercY, sampleTable, shiftLongitudes, worldShift } from "./mercator.ts";
 
-const allInside = (cellCount: number) => new Uint8Array(cellCount).fill(1);
-
 const gridOf = (bbox: number[], nx: number, ny: number) => ({
   bbox: bbox as [number, number, number, number],
   nx,
@@ -13,7 +11,7 @@ const gridOf = (bbox: number[], nx: number, ny: number) => ({
 test("rows map to source rows in order, never going back up", () => {
   const width = 4;
   const grid = gridOf([10, 40, 12, 50], width, 10);
-  const table = sampleTable(grid, allInside(40));
+  const table = sampleTable(grid);
 
   let previousRow = 0;
 
@@ -30,24 +28,24 @@ test("rows map to source rows in order, never going back up", () => {
 
 test("near the equator the table is the grid itself", () => {
   const grid = gridOf([0, -0.05, 0.1, 0.05], 2, 2);
-  const table = sampleTable(grid, allInside(4));
+  const table = sampleTable(grid);
 
   assert.equal(table.height, 2);
   assert.deepEqual([...table.src], [0, 1, 2, 3]);
 });
 
-test("cells outside the mask become -1", () => {
-  const grid = gridOf([0, 0, 2, 1], 2, 1);
-  const table = sampleTable(grid, Uint8Array.of(1, 0));
+test("every cell of the grid is drawn", () => {
+  const grid = gridOf([0, 0, 3, 1], 3, 1);
+  const table = sampleTable(grid);
 
-  assert.deepEqual([...table.src.slice(0, 2)], [0, -1]);
+  assert.deepEqual([...table.src.slice(0, 3)], [0, 1, 2]);
 });
 
 test("the height is capped", () => {
   const grid = gridOf([0, 0, 1, 1], 1, 100);
   const cappedHeight = 30;
 
-  assert.equal(sampleTable(grid, allInside(100), cappedHeight).height, cappedHeight);
+  assert.equal(sampleTable(grid, cappedHeight).height, cappedHeight);
 });
 
 test("Mercator y grows faster than latitude away from the equator", () => {
@@ -63,7 +61,7 @@ test("corners shift one world west only when the centre is above 180", () => {
 
 test("the table is narrower than the grid when the texture limit is smaller", () => {
   const grid = gridOf([0, 0, 10, 1], 100, 1);
-  const table = sampleTable(grid, allInside(100), 40);
+  const table = sampleTable(grid, 40);
 
   assert.equal(table.width, 40);
   assert.equal(table.src.length, table.width * table.height);

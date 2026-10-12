@@ -16,7 +16,8 @@ export interface GridWindow {
 
 export interface Downsampled {
   values: Float32Array;
-  mask: Uint8Array;
+  hasData: Uint8Array; // 1 where any source cell of the block has an elevation
+  inside: Uint8Array; // 1 where any source cell of the block is inside the area
   nx: number;
   ny: number;
   factor: number; // source cells per side of one downsampled cell
@@ -62,7 +63,7 @@ export const wholeGrid = ({ nx, ny }: { nx: number; ny: number }): GridWindow =>
 export const factorFor = (width: number, height: number, maxSide = MAX_SIDE_CELLS) =>
   Math.ceil(Math.max(width, height) / maxSide);
 
-// Block means keep the shape of the relief; a block counts as inside if any cell in it is.
+// Block means keep the shape of the relief; a block counts if any cell in it does.
 export function downsample(
   elevation: ArrayLike<number>,
   mask: ArrayLike<number>,
@@ -74,7 +75,8 @@ export function downsample(
   const width = Math.ceil(sourceWindow.width / factor);
   const height = Math.ceil(sourceWindow.height / factor);
   const values = new Float32Array(width * height);
-  const insideMask = new Uint8Array(width * height);
+  const hasData = new Uint8Array(width * height);
+  const inside = new Uint8Array(width * height);
 
   for (let row = 0; row < height; row++) {
     const yStart = sourceWindow.y + row * factor;
@@ -100,11 +102,12 @@ export function downsample(
 
       const target = row * width + column;
       values[target] = count ? sum / count : 0;
-      insideMask[target] = isInside ? 1 : 0;
+      hasData[target] = count ? 1 : 0;
+      inside[target] = isInside ? 1 : 0;
     }
   }
 
-  return { values, mask: insideMask, nx: width, ny: height, factor, sourceWindow };
+  return { values, hasData, inside, nx: width, ny: height, factor, sourceWindow };
 }
 
 // The source cells showing a view, padded by a fraction of its size so small pans stay inside.
@@ -173,8 +176,8 @@ export function covers(outer: Bbox, view: Bbox, within: Bbox) {
   );
 }
 
-export function maskedValues({ values, mask }: Downsampled) {
-  return values.filter((_, index) => mask[index]);
+export function maskedValues({ values, inside }: Downsampled) {
+  return values.filter((_, index) => inside[index]);
 }
 
 // The smallest interval that gives about TARGET_LINE_COUNT lines across the typical relief.
@@ -205,7 +208,7 @@ export function thresholds(maxElevation: number, interval: number) {
   return levels;
 }
 
-// d3 gives closed rings along the grid frame and across masked-out cells; those parts are dropped.
+// d3 gives closed rings along the grid frame and across cells without data; those parts are dropped.
 export function clipRings(rings: number[][][], mask: ArrayLike<number>, nx: number, ny: number) {
   const runs: Run[] = [];
 

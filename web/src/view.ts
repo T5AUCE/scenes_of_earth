@@ -5,57 +5,62 @@ import { makeHtmlElement } from "./html";
 import { LAYER_KINDS } from "./layers/registry";
 import { firstSymbolId, removeLayerAndSource } from "./map";
 import { shiftLongitudes, worldShift } from "./render/mercator";
-import { createTimeline, unionTimes } from "./timeline";
-import type { LayerDoc, LayerView, Part, Scene } from "./types";
+import { createTimeline, formatTime, unionTimes } from "./timeline";
+import type { LayerDoc, LayerView, Scene } from "./types";
 
 type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
 
-const OUTLINE_ID = "soe-area-outline";
+export const OUTLINE_ID = "soe-area-outline";
 const EMPTY_FEATURES: GeoJsonData = { type: "FeatureCollection", features: [] };
 
-// Returns the unmount function; a failure partway removes whatever was already drawn.
-export function mountScene(map: MapLibreMap, scene: Scene, root: HTMLElement) {
-  const box = makeHtmlElement("div", "", root);
+// Where a scene puts its pieces; the caller owns the containers.
+export interface SceneSlots {
+  cards: HTMLElement;
+  timeBar: HTMLElement;
+  onTime(time: string, label: string): void;
+}
+
+// A failure partway removes whatever was already drawn.
+export function mountScene(map: MapLibreMap, scene: Scene, { cards, timeBar, onTime }: SceneSlots) {
+  const box = makeHtmlElement("div", "", cards);
   const views: LayerView[] = [];
   let timeline: ReturnType<typeof createSceneTimeline> = null;
   let isMounted = true;
+
+  const notes = makeHtmlElement("div", "", box);
+  const addNote = (text: string) => {
+    makeHtmlElement("div", text, notes).className = "notice";
+  };
 
   const unmount = () => {
     isMounted = false;
     timeline?.destroy();
     views.forEach((view) => view.destroy());
     removeLayerAndSource(map, OUTLINE_ID);
+    timeline?.element.remove();
     box.remove();
   };
 
   try {
-    const notes = makeHtmlElement("div", "", box);
-    const addNote = (text: string) => {
-      makeHtmlElement("div", text, notes).className = "notice";
-    };
-
     const store = openStore(scene.data.href);
     store.catch((error) => addNote(`Cannot open the data: ${error.message}`));
 
     addOutline(map, scene, addNote, () => isMounted);
     views.push(...mountLayerViews(map, scene.layers, store, addNote));
-    box.append(togglesFor(map, views));
 
-    timeline = createSceneTimeline(views);
-    if (timeline) box.append(timeline.element);
+    for (const view of views) box.append(layerCard(map, view));
+    box.append(outlineCard(map));
 
-    for (const view of views) {
-      const legend = view.legend();
-      if (legend) box.append(legend);
-    }
-
-    for (const limit of scene.notices.limits) addNote(limit);
+    timeline = createSceneTimeline(views, onTime);
+    if (timeline) timeBar.append(timeline.element);
   } catch (error) {
     unmount();
     throw error;
   }
 
-  return unmount;
+  const layerIds = views.flatMap((view) => view.parts.flatMap((part) => part.layerIds));
+
+  return { unmount, addNote, timeline, layerIds };
 }
 
 // Rasters past the antimeridian are drawn one world west, so the outline is shifted to match.
@@ -131,7 +136,7 @@ function mountLayerViews(
     const report = (error: unknown) => addNote(`${layer.title}: ${(error as Error).message}`);
     try {
       const view = kind!.create({ map, store, layer, beforeId: OUTLINE_ID, report });
-      view.ready.catch(report);
+      view.ready?.catch(report);
       views.push(view);
     } catch (error) {
       report(error);
@@ -141,14 +146,12 @@ function mountLayerViews(
   return views;
 }
 
-function togglesFor(map: MapLibreMap, views: LayerView[]) {
-  const toggles = makeHtmlElement("fieldset");
-  makeHtmlElement("legend", "Show", toggles);
+function layerCard(map: MapLibreMap, view: LayerView) {
+  const card = makeHtmlElement("section");
+  card.className = "card";
 
-  const outline: Part = { id: OUTLINE_ID, label: "Area outline", layerIds: [OUTLINE_ID] };
-
-  for (const part of [...views.flatMap((view) => view.parts), outline]) {
-    toggles.append(
+  for (const part of view.parts) {
+    card.append(
       checkbox(part.label, true, (on) => {
         setVisible(map, part.layerIds, on);
         part.onToggle?.(on);
@@ -156,11 +159,20 @@ function togglesFor(map: MapLibreMap, views: LayerView[]) {
     );
   }
 
-  for (const option of views.flatMap((view) => view.options)) {
-    toggles.append(checkbox(option.label, false, option.set));
-  }
+  for (const option of view.options) card.append(checkbox(option.label, false, option.set));
 
-  return toggles;
+  const legend = view.legend();
+  if (legend) card.append(legend);
+
+  return card;
+}
+
+function outlineCard(map: MapLibreMap) {
+  const card = makeHtmlElement("section");
+  card.className = "card";
+  card.append(checkbox("Area outline", true, (on) => setVisible(map, [OUTLINE_ID], on)));
+
+  return card;
 }
 
 function setVisible(map: MapLibreMap, layerIds: string[], visible: boolean) {
@@ -169,15 +181,16 @@ function setVisible(map: MapLibreMap, layerIds: string[], visible: boolean) {
   }
 }
 
-function createSceneTimeline(views: LayerView[]) {
+function createSceneTimeline(views: LayerView[], onTime: SceneSlots["onTime"]) {
   const axes = views.flatMap((view) => (view.time ? [view.time] : []));
   if (!axes.length) return null;
 
-  return createTimeline(
-    unionTimes(axes.map((axis) => axis.values)),
-    axes.map((axis) => axis.step),
-    (time) => views.forEach((view) => view.setTime(time)),
-  );
+  const steps = axes.map((axis) => axis.step);
+
+  return createTimeline(unionTimes(axes.map((axis) => axis.values)), steps, (time) => {
+    views.forEach((view) => view.setTime(time));
+    onTime(time, formatTime(time, steps));
+  });
 }
 
 function checkbox(label: string, checked: boolean, onChange: (on: boolean) => void) {
