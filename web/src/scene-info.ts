@@ -3,6 +3,7 @@ import type { CreditDoc, Scene } from "./types";
 const METERS_PER_DEGREE = 111_320;
 const METERS_PER_KILOMETER = 1000;
 const DEGREES_PER_RADIAN = 180 / Math.PI;
+const CELL_SIZE_ROUNDING_M = 10;
 
 export interface CreditEntry extends CreditDoc {
   isBoundary: boolean;
@@ -28,7 +29,7 @@ export function formatCellSize(resolutionDegrees: number) {
     return `${Number((meters / METERS_PER_KILOMETER).toPrecision(2))} km`;
   }
 
-  return `${Math.round(meters / 10) * 10} m`;
+  return `${Math.round(meters / CELL_SIZE_ROUNDING_M) * CELL_SIZE_ROUNDING_M} m`;
 }
 
 // One entry per source that the bundle credits: each layer, then the area boundary.

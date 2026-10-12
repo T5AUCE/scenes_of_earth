@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { decode } from "../data.ts";
-import { lut, paintColormap, paintHillshade } from "./colormap.ts";
+import {
+  COLOR_CHANNELS,
+  lut,
+  paintColormap,
+  paintHillshade,
+  RGBA_CHANNELS,
+} from "./colormap.ts";
 
 const table = (src: number[]) => ({ width: src.length, height: 1, src: Int32Array.from(src) });
-const alphaOf = (rgba: Uint8ClampedArray) => [...rgba].filter((_, i) => i % 4 === 3);
+const alphaOf = (rgba: Uint8ClampedArray) =>
+  [...rgba].filter((_, index) => index % RGBA_CHANNELS === COLOR_CHANNELS);
 
 test("NaN cells are transparent", () => {
   const rgba = paintColormap(Float32Array.of(5, NaN), table([0, 1]), lut("Blues"), [0, 10]);

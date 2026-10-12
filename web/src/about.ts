@@ -22,7 +22,7 @@ export function summaryText(scene: Scene) {
   const layerCount = scene.layers.length;
 
   return [
-    `≈ ${Math.round(areaKm2(scene)).toLocaleString("en")} km²`,
+    areaText(scene),
     periodText(scene),
     `${layerCount} ${layerCount === 1 ? "layer" : "layers"}`,
   ].join(" · ");
@@ -39,7 +39,7 @@ export function renderAbout(scene: Scene) {
     definitionList([
       ["Area", scene.area.boundary?.name ?? "Drawn polygon"],
       ["Level", scene.area.boundary?.level ?? "custom"],
-      ["Size", `≈ ${Math.round(areaKm2(scene)).toLocaleString("en")} km²`],
+      ["Size", areaText(scene)],
       ["Period", periodText(scene)],
     ]),
   );
@@ -75,6 +75,10 @@ export function renderCredits(scene: Scene) {
   makeHtmlElement("p", scene.credits.endorsement, terms);
 
   return root;
+}
+
+function areaText(scene: Scene) {
+  return `≈ ${Math.round(areaKm2(scene)).toLocaleString("en")} km²`;
 }
 
 function periodText(scene: Scene) {

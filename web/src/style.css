@@ -11,7 +11,8 @@ body { background: var(--page-background); }
 .badge.down { color: #b42318; }
 
 #panel {
-  position: absolute; top: 40px; left: 8px; z-index: 1; width: 300px; max-height: calc(100% - 56px); overflow: auto;
+  position: absolute; top: 40px; left: 8px; z-index: 1;
+  width: 300px; max-height: calc(100% - 56px); overflow: auto;
   box-sizing: border-box; padding: 8px; border-radius: 4px; font: 13px sans-serif;
   background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.2);
 }
@@ -49,7 +50,9 @@ body.scene-mode #panel { display: none; }
   background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.2);
 }
 #scene-column .card label { display: block; }
-#scene-column .notice { padding: 6px 8px; margin-bottom: 8px; border-radius: 4px; background: #fff; }
+#scene-column .notice {
+  padding: 6px 8px; margin-bottom: 8px; border-radius: 4px; background: #fff;
+}
 
 #time-bar {
   position: absolute; left: 8px; right: 324px; bottom: 28px; z-index: 1;

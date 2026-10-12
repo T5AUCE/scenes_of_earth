@@ -108,6 +108,7 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
 
   async function openScene(id: string, options: EnterOptions) {
     const thisRun = ++run;
+
     try {
       const sceneStatus = await getSceneStatus(id);
       if (sceneStatus.status !== "done") {
@@ -140,6 +141,7 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
 
     build.disabled = true;
     const thisRun = ++run;
+
     try {
       const finished = await submitAndPoll(thisRun);
       if (!finished) return;

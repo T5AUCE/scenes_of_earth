@@ -82,6 +82,7 @@ function makeCollapsed(scene: Scene, hooks: PanelHooks) {
   const select = (tab: PanelTab) => {
     selected = tab;
     body.textContent = tab === "charts" ? CHARTS_PLACEHOLDER : summaryText(scene);
+
     for (const { tab: chipTab, chip } of chips) {
       chip.setAttribute("aria-pressed", String(chipTab === tab));
     }
@@ -167,24 +168,6 @@ function makeFull(scene: Scene, dialog: HTMLDialogElement, hooks: PanelHooks) {
   return { selectTab, setTimeLabel: timeControl.setLabel };
 }
 
-// Arrow keys wrap; Home and End jump, as in the WAI-ARIA tabs pattern.
-function tabIndexForKey(key: string, current: number, count: number) {
-  if (current < 0) return null;
-  if (key === "ArrowRight") return (current + 1) % count;
-  if (key === "ArrowLeft") return (current + count - 1) % count;
-  if (key === "Home") return 0;
-  if (key === "End") return count - 1;
-
-  return null;
-}
-
-function renderTab(scene: Scene, tab: PanelTab) {
-  if (tab === "about") return renderAbout(scene);
-  if (tab === "credits") return renderCredits(scene);
-
-  return makeHtmlElement("p", CHARTS_PLACEHOLDER);
-}
-
 // Shown only for scenes with a time axis; it drives the same timeline as the time bar.
 function makeTimeControl(hooks: PanelHooks) {
   const element = makeHtmlElement("div");
@@ -208,4 +191,22 @@ function makeTimeControl(hooks: PanelHooks) {
       label.textContent = text ?? "";
     },
   };
+}
+
+function renderTab(scene: Scene, tab: PanelTab) {
+  if (tab === "about") return renderAbout(scene);
+  if (tab === "credits") return renderCredits(scene);
+
+  return makeHtmlElement("p", CHARTS_PLACEHOLDER);
+}
+
+// Arrow keys wrap; Home and End jump, as in the WAI-ARIA tabs pattern.
+function tabIndexForKey(key: string, current: number, count: number) {
+  if (current < 0) return null;
+  if (key === "ArrowRight") return (current + 1) % count;
+  if (key === "ArrowLeft") return (current + count - 1) % count;
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+
+  return null;
 }

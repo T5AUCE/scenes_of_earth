@@ -1,4 +1,6 @@
 const PLAY_INTERVAL_MS = 700;
+const YEAR_LENGTH = 4; // "YYYY"
+const MONTH_LENGTH = 7; // "YYYY-MM"
 
 export const unionTimes = (axes: string[][]) => [...new Set(axes.flat())].sort();
 
@@ -16,9 +18,9 @@ export function stepAt(values: string[], time: string) {
 // Shows only as much of the date as the finest step needs.
 export function formatTime(time: string, steps: string[]) {
   if (steps.some((step) => step.endsWith("D") || step.endsWith("W"))) return time;
-  if (steps.some((step) => step.endsWith("M"))) return time.slice(0, 7);
+  if (steps.some((step) => step.endsWith("M"))) return time.slice(0, MONTH_LENGTH);
 
-  return time.slice(0, 4);
+  return time.slice(0, YEAR_LENGTH);
 }
 
 // Only the latest queued value runs, so scrubbing skips stale steps; the task must catch errors.
@@ -114,7 +116,8 @@ export function createTimeline(
 
     // Stops at both ends; only play wraps around.
     move(delta: number) {
-      select(Math.min(Math.max(Number(slider.value) + delta, 0), times.length - 1));
+      const target = Number(slider.value) + delta;
+      select(Math.min(Math.max(target, 0), times.length - 1));
     },
   };
 }

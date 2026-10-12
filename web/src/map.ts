@@ -1,5 +1,11 @@
-import { AttributionControl, Map as MapLibreMap, type PaddingOptions } from "maplibre-gl";
+import {
+  AttributionControl,
+  Map as MapLibreMap,
+  type LayerSpecification,
+  type PaddingOptions,
+} from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { areaFilter, type TileArea } from "./label-filter";
 import { imageCorners } from "./render/mercator";
 import type { Bbox } from "./types";
 
@@ -7,6 +13,8 @@ import type { Bbox } from "./types";
 const BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 export const WORLD_VIEW = { center: [0, 20] as [number, number], zoom: 1.5 };
 const MAX_FIT_ZOOM = 10;
+export const MAX_ZOOM = 24;
+const AREA_LABEL_SUFFIX = "-in-area";
 // WebGL guarantees at least this much; used when the context cannot be queried.
 const GUARANTEED_TEXTURE_SIZE_PX = 4096;
 // The left side is wider because the side panel covers it.
@@ -102,4 +110,34 @@ export function setImage(map: MapLibreMap, id: string, image: ImageData) {
 export function removeLayerAndSource(map: MapLibreMap, id: string) {
   if (map.getLayer(id)) map.removeLayer(id);
   if (map.getSource(id)) map.removeSource(id);
+}
+
+// Labels are copied above the mask, limited to the area, and the originals give way; returns undo.
+export function moveLabelsIntoArea(map: MapLibreMap, area: TileArea, fromZoom: number) {
+  const labelLayers = map.getStyle().layers.filter((layer) => layer.type === "symbol");
+
+  const originals = labelLayers.map((layer) => {
+    const minzoom = layer.minzoom ?? 0;
+    const maxzoom = layer.maxzoom ?? MAX_ZOOM;
+    const switchZoom = Math.max(minzoom, fromZoom);
+
+    map.setLayerZoomRange(layer.id, minzoom, switchZoom);
+
+    map.addLayer({
+      ...layer,
+      id: `${layer.id}${AREA_LABEL_SUFFIX}`,
+      filter: areaFilter(layer.filter, area, Boolean(layer.layout?.["icon-image"])),
+      minzoom: switchZoom,
+      maxzoom,
+    } as LayerSpecification);
+
+    return { id: layer.id, minzoom, maxzoom };
+  });
+
+  return () => {
+    for (const { id, minzoom, maxzoom } of originals) {
+      map.removeLayer(`${id}${AREA_LABEL_SUFFIX}`);
+      map.setLayerZoomRange(id, minzoom, maxzoom);
+    }
+  };
 }

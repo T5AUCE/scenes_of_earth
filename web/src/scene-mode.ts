@@ -6,7 +6,15 @@ import type {
 } from "maplibre-gl";
 import { loadAreaFeature } from "./api";
 import { makeHtmlElement } from "./html";
-import { fitToBbox, fitZoom, removeLayerAndSource, WORLD_VIEW } from "./map";
+import { polygonParts, tileAreaGeometry } from "./label-filter";
+import {
+  fitToBbox,
+  fitZoom,
+  MAX_ZOOM,
+  moveLabelsIntoArea,
+  removeLayerAndSource,
+  WORLD_VIEW,
+} from "./map";
 import { shiftLongitudes, worldShift } from "./render/mercator";
 import { createScenePanel, PANEL_TABS, type PanelTab } from "./scene-panel";
 import { sceneUrl, timeForMonth } from "./scene-url";
@@ -25,9 +33,8 @@ const MASK_OPACITY = 1;
 // The mask fades in between these distances (in zoom levels) below the fitted zoom.
 const MASK_FADE_START_ZOOMS = 1.5;
 const MASK_FADE_END_ZOOMS = 0.25;
-// Data layers appear when the mask is half opaque, so their uncropped bbox never shows.
-const DATA_APPEARS_ZOOMS = (MASK_FADE_START_ZOOMS + MASK_FADE_END_ZOOMS) / 2;
-const MAX_ZOOM = 24;
+// Data layers appear once the mask is opaque, so their uncropped bbox never shows through it.
+const DATA_APPEARS_ZOOMS = MASK_FADE_END_ZOOMS;
 const PAGE_BACKGROUND_PROPERTY = "--page-background";
 const HALF_WORLD_DEGREES = 180;
 // Mercator has no poles.
@@ -63,44 +70,11 @@ interface ActiveScene {
   close(): void;
 }
 
-// The current step of the scene, and the link that says so.
-function createSceneClock(sceneId: string) {
-  let time: string | null = null;
-  let label: string | null = null;
-  let isEntered = false;
-
-  return {
-    get time() {
-      return time;
-    },
-
-    get label() {
-      return label;
-    },
-
-    update(newTime: string, newLabel: string) {
-      time = newTime;
-      label = newLabel;
-      if (isEntered) this.syncUrl();
-    },
-
-    // Scrubbing replaces the entry, so Back is never flooded with months.
-    syncUrl() {
-      history.replaceState(history.state, "", sceneUrl(sceneId, time));
-    },
-
-    markEntered() {
-      isEntered = true;
-    },
-  };
-}
-
-type SceneClock = ReturnType<typeof createSceneClock>;
-
 // One map with two modes: the world, and one scene at a time that the camera is held to.
 export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   let current: ActiveScene | null = null;
   let worldCamera: Camera | null = null;
+  let restoreLabels = () => {};
 
   return { enter, exit, sceneId: () => current?.id ?? null, showFullscreen };
 
@@ -198,8 +172,10 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   ): ActiveScene {
     const flight = flyIn(scene);
     hideDataUntilMasked(mounted.layerIds, flight.zoom);
+
     let isOpen = true;
-    showAreaMask(scene, flight.zoom, () => isOpen).catch((error) => mounted.addNote(error.message));
+    showAreaMask(scene, flight.zoom, () => isOpen)
+      .catch((error) => mounted.addNote(error.message));
 
     return {
       id: scene.id,
@@ -208,6 +184,8 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       close() {
         isOpen = false;
         flight.stopClamp();
+        restoreLabels();
+        restoreLabels = () => {};
         removeLayerAndSource(map, MASK_ID);
         panel.destroy();
         mounted.unmount();
@@ -248,7 +226,8 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   function hideDataUntilMasked(layerIds: string[], fittedZoom: number | undefined) {
     if (fittedZoom === undefined) return;
 
-    for (const id of layerIds) map.setLayerZoomRange(id, fittedZoom - DATA_APPEARS_ZOOMS, MAX_ZOOM);
+    const minZoom = fittedZoom - DATA_APPEARS_ZOOMS;
+    for (const id of layerIds) map.setLayerZoomRange(id, minZoom, MAX_ZOOM);
   }
 
   // The limits start after the flight, because a minimum zoom would cut it short.
@@ -275,15 +254,57 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     };
   }
 
-  async function showAreaMask(scene: Scene, fittedZoom: number | undefined, isOpen: () => boolean) {
+  async function showAreaMask(
+    scene: Scene,
+    fittedZoom: number | undefined,
+    isOpen: () => boolean,
+  ) {
     const feature = await loadAreaFeature(scene.area.geometry_href).catch((error) => {
       throw new Error(`Area outline: ${error.message}`);
     });
     if (!isOpen()) return;
 
     addMask(map, feature, scene.area.bbox, fittedZoom);
+
+    // Labels are shown from the zoom at which the mask is complete, like the data layers.
+    const labelsFromZoom = fittedZoom === undefined ? 0 : fittedZoom - DATA_APPEARS_ZOOMS;
+    restoreLabels = moveLabelsIntoArea(map, tileAreaGeometry(feature.geometry), labelsFromZoom);
   }
 }
+
+// The current step of the scene, and the link that says so.
+function createSceneClock(sceneId: string) {
+  let time: string | null = null;
+  let label: string | null = null;
+  let isEntered = false;
+
+  return {
+    get time() {
+      return time;
+    },
+
+    get label() {
+      return label;
+    },
+
+    update(newTime: string, newLabel: string) {
+      time = newTime;
+      label = newLabel;
+      if (isEntered) this.syncUrl();
+    },
+
+    // Scrubbing replaces the entry, so Back is never flooded with months.
+    syncUrl() {
+      history.replaceState(history.state, "", sceneUrl(sceneId, time));
+    },
+
+    markEntered() {
+      isEntered = true;
+    },
+  };
+}
+
+type SceneClock = ReturnType<typeof createSceneClock>;
 
 type SceneTimeline = ReturnType<typeof mountScene>["timeline"];
 
@@ -331,6 +352,16 @@ function addMask(map: MapLibreMap, feature: AreaFeature, bbox: Bbox, fittedZoom?
   if (map.getLayer(OUTLINE_ID)) map.moveLayer(OUTLINE_ID);
 }
 
+function outlines(geometry: AreaFeature["geometry"]) {
+  const coordinates = geometry.coordinates as number[][][] | number[][][][];
+  const parts = polygonParts(geometry.type, coordinates);
+
+  return {
+    exteriors: parts.map((part) => part[0]),
+    interiors: parts.flatMap((part) => part.slice(1)),
+  };
+}
+
 // One world wide, centred on the area: MapLibre does not cut holes from a ring that is wider.
 function worldRing(holes: number[][][]) {
   const longitudes = holes.flat().map(([longitude]) => longitude);
@@ -365,23 +396,6 @@ function maskOpacity(fittedZoom?: number): number | ExpressionSpecification {
     fittedZoom - MASK_FADE_END_ZOOMS,
     MASK_OPACITY,
   ];
-}
-
-function polygonParts(type: string, coordinates: number[][][] | number[][][][]) {
-  if (type === "Polygon") return [coordinates as number[][][]];
-  if (type === "MultiPolygon") return coordinates as number[][][][];
-
-  return [];
-}
-
-function outlines(geometry: AreaFeature["geometry"]) {
-  const coordinates = geometry.coordinates as number[][][] | number[][][][];
-  const parts = polygonParts(geometry.type, coordinates);
-
-  return {
-    exteriors: parts.map((part) => part[0]),
-    interiors: parts.flatMap((part) => part.slice(1)),
-  };
 }
 
 function scenePadding(): PaddingOptions {

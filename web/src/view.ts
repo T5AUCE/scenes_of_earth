@@ -12,6 +12,8 @@ type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
 
 export const OUTLINE_ID = "soe-area-outline";
 const EMPTY_FEATURES: GeoJsonData = { type: "FeatureCollection", features: [] };
+const OUTLINE_COLOR = "#333";
+const OUTLINE_WIDTH_PX = 1.5;
 
 // Where a scene puts its pieces; the caller owns the containers.
 export interface SceneSlots {
@@ -21,7 +23,11 @@ export interface SceneSlots {
 }
 
 // A failure partway removes whatever was already drawn.
-export function mountScene(map: MapLibreMap, scene: Scene, { cards, timeBar, onTime }: SceneSlots) {
+export function mountScene(
+  map: MapLibreMap,
+  scene: Scene,
+  { cards, timeBar, onTime }: SceneSlots,
+) {
   const box = makeHtmlElement("div", "", cards);
   const views: LayerView[] = [];
   let timeline: ReturnType<typeof createSceneTimeline> = null;
@@ -80,7 +86,7 @@ function addOutline(
       id: OUTLINE_ID,
       type: "line",
       source: OUTLINE_ID,
-      paint: { "line-color": "#333", "line-width": 1.5 },
+      paint: { "line-color": OUTLINE_COLOR, "line-width": OUTLINE_WIDTH_PX },
     },
     firstSymbolId(map),
   );
@@ -134,6 +140,7 @@ function mountLayerViews(
 
   for (const { layer, kind } of supported) {
     const report = (error: unknown) => addNote(`${layer.title}: ${(error as Error).message}`);
+
     try {
       const view = kind!.create({ map, store, layer, beforeId: OUTLINE_ID, report });
       view.ready?.catch(report);

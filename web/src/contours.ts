@@ -208,7 +208,7 @@ export function thresholds(maxElevation: number, interval: number) {
   return levels;
 }
 
-// d3 gives closed rings along the grid frame and across cells without data; those parts are dropped.
+// d3 closes rings along the grid frame and across cells without data; those parts are dropped.
 export function clipRings(rings: number[][][], mask: ArrayLike<number>, nx: number, ny: number) {
   const runs: Run[] = [];
 

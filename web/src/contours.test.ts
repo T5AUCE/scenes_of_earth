@@ -203,14 +203,10 @@ test("a view in another world copy is moved next to the grid", () => {
 
 test("a window maps back to the bbox it came from", () => {
   const grid = { bbox: [177.2, -19, 182.8, -16] as Bbox, nx: 56, ny: 30 };
+  const sourceWindow = { x: 10, y: 5, width: 20, height: 10 };
 
   assert.deepEqual(windowBounds(grid, wholeGrid(grid)), grid.bbox);
-  assert.deepEqual(windowBounds(grid, { x: 10, y: 5, width: 20, height: 10 }), [
-    178.2,
-    -17.5,
-    180.2,
-    -16.5,
-  ]);
+  assert.deepEqual(windowBounds(grid, sourceWindow), [178.2, -17.5, 180.2, -16.5]);
 });
 
 test("detail lines east of 180 with a narrow last block stay unwrapped", () => {
