@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -90,8 +91,8 @@ async def read_body(request):
 
 
 def seed_sample_areas(db_path):
-    """Synthetic mode only: load the real sample outlines when no boundaries exist yet."""
-    if db.search(db_path, "", None, 1):  # an empty query matches every row
+    """Synthetic mode only: reload the sample outlines unless real boundaries are loaded."""
+    if db.has_boundaries_besides(db_path, "synthetic"):
         return
 
     features = json.loads(SAMPLE_AREAS.read_text())["features"]
@@ -148,6 +149,7 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
         db.init(db_path)
         if os.environ.get("SOE_SYNTHETIC") == "1":
             seed_sample_areas(db_path)
+        threading.Thread(target=_warm_latest_months, args=(registry,), daemon=True).start()
         yield
         executor.shutdown(wait=False, cancel_futures=True)
 
@@ -272,6 +274,18 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
         name="scenes",
     )
     return app
+
+
+def _warm_latest_months(registry):
+    """Probe each series' latest month now so the first page load does not wait for it."""
+    for dataset in registry.values():
+        if not dataset.time_varying:
+            continue
+
+        try:
+            dataset.latest()
+        except Exception:
+            log.warning("could not warm latest month of %s", dataset.id, exc_info=True)
 
 
 class _ProgressRecorder:

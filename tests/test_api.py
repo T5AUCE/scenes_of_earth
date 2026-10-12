@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from shapely.geometry import box, mapping, shape
 
 from soe import db
-from soe.api import SAMPLE_AREAS, _scene_id, create_app
+from soe.api import SAMPLE_AREAS, _scene_id, create_app, seed_sample_areas
 from soe.areas import unwrap
 from soe.sources import RealSource, SourceUnavailable, SyntheticSource, make_registry
 
@@ -332,6 +332,66 @@ def test_sample_area_geometries_are_valid_raw_and_unwrapped():
 
         assert geometry.is_valid, feature["properties"]["id"]
         assert unwrap(geometry).is_valid, feature["properties"]["id"]
+
+
+def test_sample_areas_reload_on_startup_and_real_boundaries_suppress_them(tmp_path):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    stale_sample = (
+        "sample:old",
+        "state",
+        "Sample: Old strip",
+        None,
+        None,
+        0,
+        0,
+        1,
+        1,
+        1,
+        "{}",
+        "synthetic",
+        "none (hand-drawn sample)",
+    )
+    db.add_boundaries(db_path, "synthetic", [stale_sample])
+
+    seed_sample_areas(db_path)
+
+    assert db.get_boundary(db_path, "sample:old") is None
+    assert db.get_boundary(db_path, "sample:kenya")["licence"].startswith("Public Domain")
+
+    real_boundary = (
+        "x",
+        "state",
+        "Other",
+        None,
+        None,
+        0,
+        0,
+        1,
+        1,
+        400,
+        "{}",
+        "geoBoundaries CGAZ",
+        "CC BY 4.0",
+    )
+    db.add_boundaries(db_path, "geoBoundaries CGAZ", [real_boundary])
+    db.add_boundaries(db_path, "synthetic", [stale_sample])
+
+    seed_sample_areas(db_path)
+
+    assert db.get_boundary(db_path, "sample:old") is not None
+
+
+def test_startup_survives_a_failing_latest_month_warmup(tmp_path):
+    class BrokenSource(SyntheticSource):
+        def latest_month(self):
+            raise RuntimeError("network down")
+
+    registry = make_registry(SyntheticSource())
+    registry["chirps_monthly"] = replace(registry["chirps_monthly"], backend=BrokenSource())
+
+    with TestClient(create_app(tmp_path / "soe.db", tmp_path / "scenes", registry)) as client:
+        assert client.get("/api/health").json()["ok"] is True
 
 
 def test_terrain_only_ignores_months(env):

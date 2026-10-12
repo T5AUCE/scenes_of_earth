@@ -141,12 +141,7 @@ def clean_polygon(obj):
     except Exception as error:
         raise AreaError(f"invalid geometry: {error}") from error
 
-    geometry = shapely.make_valid(geometry)
-    polygons = [
-        part
-        for part in shapely.get_parts(shapely.get_parts(geometry))
-        if isinstance(part, Polygon) and not part.is_empty
-    ]
+    polygons = _polygonal_parts(geometry)
     if not polygons:
         raise AreaError("geometry is empty")
 
@@ -209,12 +204,25 @@ def unwrap(geom):
     if east - west <= MAX_LONGITUDE:
         return geom
 
+    polygons = _polygonal_parts(geom)
+    if not polygons:
+        raise AreaError("geometry is empty")
+
     parts = [
         translate(part, xoff=360) if sum(part.bounds[::2]) < 0 else part
-        for part in shapely.get_parts(geom)
+        for part in polygons
     ]
 
     return shapely.unary_union(parts)
+
+
+def _polygonal_parts(geometry):
+    """Non-empty polygons of a repaired shape; stray lines and points are dropped."""
+    collection = shapely.make_valid(geometry)
+    # make_valid can nest a MultiPolygon in a GeometryCollection, so flatten twice.
+    parts = shapely.get_parts(shapely.get_parts(collection))
+
+    return [part for part in parts if isinstance(part, Polygon) and not part.is_empty]
 
 
 def _extent(coverage):
@@ -433,7 +441,7 @@ def _layer_plan(dataset, geometry, window, factor, steps, clip_notices):
     mask, used_touched = _layer_mask(dataset, geometry, transform, grid_shape)
     if used_touched:
         notices.append(
-            "No cell centre fell inside this small area, so every cell it touches is used."
+            "No cell center fell inside this small area, so every cell it touches is used."
         )
     if note := dataset.notice(bbox):
         notices.append(note)
@@ -452,7 +460,7 @@ def _layer_plan(dataset, geometry, window, factor, steps, clip_notices):
 
 
 def _layer_mask(dataset, geometry, transform, grid_shape):
-    """(mask, whether it fell back to every touched cell because no cell centre was inside)."""
+    """(mask, whether it fell back to every touched cell because no cell center was inside)."""
     mask = _cell_mask(geometry, transform, grid_shape)
     if mask.any():
         return mask, False

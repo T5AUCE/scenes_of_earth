@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path
 
 from . import db
-from .areas import unwrap
+from .areas import AreaError, unwrap
 from .sources import GLO90_TILE_INDEX
 
 CELL_DEG2 = 0.05 * 0.05
@@ -189,7 +189,12 @@ def _row(row_id, level, name, parent, iso3, geometry, source, licence):
         return None
 
     # A shape across 180 gets E > 180 instead of spanning the world.
-    west, south, east, north = unwrap(clipped).bounds
+    try:
+        west, south, east, north = unwrap(clipped).bounds
+    except AreaError as error:
+        print(f"skipping {row_id}: {error}")
+        return None
+
     cells = max(1, round(clipped.area / CELL_DEG2))
     return (
         row_id, level, name, parent, iso3, west, south, east, north, cells,

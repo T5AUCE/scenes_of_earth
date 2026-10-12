@@ -19,13 +19,16 @@ Open the folder in the devcontainer (Python 3.12, Node LTS, GitHub CLI, Claude C
 uvicorn main:app --reload --port 8000
 ```
 
+Without `SOE_SYNTHETIC=1`, the first start probes CHIRPS online (a few HEAD requests, in the background) for the latest
+month, so it needs network access.
+
 For the frontend (`npm run dev`, port 5173), set the Vite dev server to proxy `/api` and `/scenes` to
 `http://localhost:8000`, so the browser uses the same relative URLs as in production and needs no CORS setup.
 
 Frontend (`web/`): `npm install`, then `npm run dev` (port 5173), `npm run build` (typecheck plus bundle) and `npm test`
 (Node's built-in runner, no framework). A built scene opens by id with `http://localhost:5173/?scene=<id>`, which is also
-how to share it. The page draws terrain hillshade and the rain series from the bundle's Zarr store, each toggleable,
-with a time slider and a blocky or smooth rain look.
+how to share it. The page draws terrain hillshade, contour lines (computed in a browser worker, interval chosen
+automatically) and the rain series from the bundle's Zarr store, each toggleable, with a time slider and a blocky or smooth rain look.
 
 API: `GET /api/health`, `GET /api/layers` (per layer: id, title, kind, units, coverage, time step with first and latest month,
 and the default set),
@@ -35,9 +38,10 @@ and the default set),
 "end": "YYYY-MM", "layers": ["chirps_monthly", "glo90_terrain"], "title": ...}` and returns 202 (queued or running),
 200 (already built), 422 (refused, with a reason), 413, or 503 (queue full or data server unreachable; `Retry-After`).
 
-With `SOE_SYNTHETIC=1` and an empty boundaries table, five sample areas (Kenya, Fiji, Nairobi, Cusco, Burkina Faso) are
+With `SOE_SYNTHETIC=1`, five sample areas (Kenya, Fiji, Nairobi, Cusco, Burkina Faso) are
 loaded from `soe/data/sample_areas.geojson`, so search works without the boundaries import. They are real
-geoBoundaries gbOpen outlines simplified to about 0.01 degrees; each feature carries its own licence and source.
+geoBoundaries gbOpen outlines simplified to about 0.01 degrees; each feature carries its own licence and source. They
+reload on every synthetic start, unless real boundaries are imported.
 
 ## Import boundaries (once)
 

@@ -1,6 +1,11 @@
+import { MAJOR_EVERY } from "./contours";
 import { COLOR_CHANNELS, LAST_ENTRY, RGBA_CHANNELS } from "./render/colormap";
 
 const GRADIENT_STOP_ENTRIES = [0, 64, 128, 192, 255];
+
+export function contourLegendText(interval: number, units: string) {
+  return `Contours every ${interval} ${units} (bold every ${interval * MAJOR_EVERY})`;
+}
 
 export function gradientLegend(
   colors: Uint8ClampedArray,

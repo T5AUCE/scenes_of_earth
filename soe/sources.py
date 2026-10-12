@@ -5,6 +5,7 @@ Windows are integer (col, row, width, height) cell windows on that grid, so read
 resampled.
 """
 import math
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -37,7 +38,8 @@ MAX_TERRAIN_SIDE_PIXELS = 4096
 MAX_TERRAIN_DIVISIONS = 60  # 0.05 / 60 is the native 90 m cell
 BLOCK_DEG = 2  # terrain is read in blocks of this many whole degrees
 CELL_DEG = 0.05  # CHIRPS cell size
-HEAD_TIMEOUT_SECONDS = 15
+HEAD_TIMEOUT_SECONDS = 5  # latest-month probes run on the first page load
+VINTAGE_TIMEOUT_SECONDS = 15
 LATEST_MONTH_PROBES = 7
 LATEST_TTL_SECONDS = 86400
 OFFLINE_LATEST_TTL_SECONDS = 600
@@ -63,24 +65,34 @@ SOURCES = {
         "licence": "CC BY 4.0",
         "licence_url": "http://creativecommons.org/licenses/by/4.0/",
         "attribution": "Rainfall: CHIRPS v3 (Climate Hazards Center, UC Santa Barbara)",
-        "citation": "Funk, C. et al. (2026) The Climate Hazards Center Infrared Precipitation with "
-                    "Stations, Version 3. Scientific Data 13, 718. doi:10.1038/s41597-026-07096-4; "
-                    "dataset doi:10.15780/G2JQ0P",
-        "modified": "negative fill values masked; block-mean aggregation when stated in the layer "
-                    "resolution",
+        "citation": (
+            "Funk, C. et al. (2026) The Climate Hazards Center Infrared Precipitation with "
+            "Stations, Version 3. Scientific Data 13, 718. doi:10.1038/s41597-026-07096-4; "
+            "dataset doi:10.15780/G2JQ0P"
+        ),
+        "modified": (
+            "negative fill values masked; block-mean aggregation when stated in the layer "
+            "resolution"
+        ),
     },
     "glo90": {
         "name": "Copernicus DEM GLO-90",
         "version": "2021",
         "licence": "Copernicus WorldDEM™-90 licence (COP-DEM-GLO-90-F, Full, Free & Open)",
-        "licence_url": "https://dataspace.copernicus.eu/explore-data/data-collections/"
-                       "copernicus-contributing-missions/collections-description/COP-DEM",
-        "attribution": "produced using Copernicus WorldDEM™-90 © DLR e.V. 2010-2014 and "
-                       "© Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS "
-                       "by the European Union and ESA; all rights reserved",
-        "disclaimer": "The organisations in charge of the Copernicus programme by law or by "
-                      "delegation do not incur any liability for any use of the Copernicus "
-                      "WorldDEM™-90",
+        "licence_url": (
+            "https://dataspace.copernicus.eu/explore-data/data-collections/"
+            "copernicus-contributing-missions/collections-description/COP-DEM"
+        ),
+        "attribution": (
+            "produced using Copernicus WorldDEM™-90 © DLR e.V. 2010-2014 and "
+            "© Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS "
+            "by the European Union and ESA; all rights reserved"
+        ),
+        "disclaimer": (
+            "The organisations in charge of the Copernicus programme by law or by "
+            "delegation do not incur any liability for any use of the Copernicus "
+            "WorldDEM™-90"
+        ),
         "citation": "doi:10.5270/ESA-c5d3d65",
         "modified": "hillshade (Horn, az 315°, alt 45°) and resampled elevation",
     },
@@ -222,14 +234,16 @@ def _block_edges(low, high):
     return [low] + list(range(first_multiple, math.ceil(high), BLOCK_DEG)) + [high]
 
 
-def _head(url):
-    """(exists, Last-Modified) for a URL; (False, None) on 404 or any network error."""
+def _head(url, timeout=HEAD_TIMEOUT_SECONDS):
+    """(exists, Last-Modified) for a URL: (False, None) on 404, (None, None) if unreachable."""
     try:
         request = urllib.request.Request(url, method="HEAD")
-        with urllib.request.urlopen(request, timeout=HEAD_TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return True, response.headers.get("Last-Modified")
+    except urllib.error.HTTPError as error:
+        return (False if error.code == 404 else None), None
     except (urllib.error.URLError, OSError):
-        return False, None
+        return None, None
 
 
 def _chirps_url(month):
@@ -247,31 +261,45 @@ class RealSource:
         # An optional fixed 'YYYY-MM' (SOE_LATEST); otherwise the latest month is probed and cached.
         self._latest = latest
         self._probed = None
+        self._probe_lock = threading.Lock()
 
     def latest_month(self):
         if self._latest:
             return self._latest
-        if self._probed and time.time() < self._probed[1]:
-            return self._probed[0]
 
-        now = datetime.now(timezone.utc)
-        found = self._probe_latest_month(now)
-        ttl = LATEST_TTL_SECONDS
-        if found is None:
-            # Offline: assume the usual two-month lag, and probe again soon.
-            found = self._assumed_latest_month(now)
-            ttl = OFFLINE_LATEST_TTL_SECONDS
-        self._probed = (found, time.time() + ttl)
-        return found
+        with self._probe_lock:  # concurrent first requests share one probe
+            if self._probed and time.time() < self._probed[1]:
+                return self._probed[0]
+
+            now = datetime.now(timezone.utc)
+            found, complete = self._probe_latest_month(now)
+            if found is None:
+                # Offline: assume the usual two-month lag, and probe again soon.
+                found = self._assumed_latest_month(now)
+                complete = False
+
+            ttl = LATEST_TTL_SECONDS if complete else OFFLINE_LATEST_TTL_SECONDS
+            self._probed = (found, time.time() + ttl)
+
+            return found
 
     def _probe_latest_month(self, now):
+        candidates = []
         year, month = now.year, now.month
         for _ in range(LATEST_MONTH_PROBES):
-            candidate = f"{year:04d}-{month:02d}"
-            if _head(_chirps_url(candidate))[0]:
-                return candidate
+            candidates.append(f"{year:04d}-{month:02d}")
             year, month = _previous_month(year, month)
-        return None
+
+        with ThreadPoolExecutor(LATEST_MONTH_PROBES) as pool:
+            answers = pool.map(_head, [_chirps_url(candidate) for candidate in candidates])
+            exists = [answer[0] for answer in answers]
+
+        if True not in exists:
+            return None, False
+
+        newest_index = exists.index(True)
+
+        return candidates[newest_index], None not in exists[:newest_index]
 
     def _assumed_latest_month(self, now):
         year, month = now.year, now.month
@@ -281,7 +309,7 @@ class RealSource:
 
     def vintage(self, month):
         """Last-Modified of a month's file; changes when CHC revises a recent month."""
-        last_modified = _head(_chirps_url(month))[1]
+        last_modified = _head(_chirps_url(month), VINTAGE_TIMEOUT_SECONDS)[1]
         if not last_modified:
             raise SourceUnavailable("CHIRPS server did not answer")
         return last_modified

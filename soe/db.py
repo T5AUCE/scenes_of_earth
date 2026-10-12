@@ -107,6 +107,16 @@ def add_boundaries(path, source, rows):
     return replaced
 
 
+def has_boundaries_besides(path, source):
+    with connect(path) as connection:
+        row = connection.execute(
+            "SELECT 1 FROM boundaries WHERE source != ? LIMIT 1",
+            (source,),
+        ).fetchone()
+
+    return row is not None
+
+
 def submit(path, scene_id, request_json, bundle_exists, max_active=None):
     """Register a scene job; `scene_id` is the content hash."""
     with connect(path) as connection:

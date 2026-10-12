@@ -109,6 +109,7 @@ export interface Part {
   id: string;
   label: string;
   layerIds: string[]; // map layers shown or hidden together
+  onToggle?(visible: boolean): void;
 }
 
 export interface LayerContext {

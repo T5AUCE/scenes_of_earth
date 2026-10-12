@@ -148,7 +148,12 @@ function togglesFor(map: MapLibreMap, views: LayerView[]) {
   const outline: Part = { id: OUTLINE_ID, label: "Area outline", layerIds: [OUTLINE_ID] };
 
   for (const part of [...views.flatMap((view) => view.parts), outline]) {
-    toggles.append(checkbox(part.label, true, (on) => setVisible(map, part.layerIds, on)));
+    toggles.append(
+      checkbox(part.label, true, (on) => {
+        setVisible(map, part.layerIds, on);
+        part.onToggle?.(on);
+      }),
+    );
   }
 
   for (const option of views.flatMap((view) => view.options)) {

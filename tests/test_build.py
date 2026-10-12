@@ -1,17 +1,20 @@
 """Offline tests: planning, block mean, hillshade, synthetic end-to-end builds, boundary import."""
 import json
+import time
 from dataclasses import replace
+from datetime import datetime, timezone
 
 import numpy as np
 import pytest
 import zarr
-from shapely.geometry import MultiPolygon, box, mapping
+from shapely.geometry import LineString, MultiPolygon, Polygon, box, mapping
 
+from soe import sources
 from soe.areas import Area, AreaError, check_months, clean_polygon, plan, unwrap
 from soe.build import build_scene, hillshade
 from soe.bundle import validate
-from soe.sources import (REGISTRY, SyntheticSource, _tile_index, block_mean, glo90_tiles,
-                         make_registry, month_list, terrain_by_blocks, terrain_res)
+from soe.sources import (REGISTRY, RealSource, SyntheticSource, _tile_index, block_mean,
+                         glo90_tiles, make_registry, month_list, terrain_by_blocks, terrain_res)
 
 NAIROBI = box(36.5, -1.5, 37.5, -0.5)
 SYNTHETIC_REGISTRY = make_registry(SyntheticSource())
@@ -181,6 +184,36 @@ def test_terrain_blocks_equal_one_read():
         assert transform.c == bounds[0] and transform.f == bounds[3]
 
 
+def test_latest_month_probe_picks_the_newest_existing_month(monkeypatch):
+    now = datetime.now(timezone.utc)
+    newest_existing = sources._previous_month(*sources._previous_month(now.year, now.month))
+    existing_urls = set()
+    year, month = newest_existing
+    for _ in range(3):
+        existing_urls.add(sources._chirps_url(f"{year:04d}-{month:02d}"))
+        year, month = sources._previous_month(year, month)
+
+    monkeypatch.setattr(sources, "_head", lambda url: (url in existing_urls, None))
+
+    latest = RealSource().latest_month()
+
+    assert latest == f"{newest_existing[0]:04d}-{newest_existing[1]:02d}"
+
+
+def test_latest_month_is_rechecked_soon_when_a_newer_month_was_unreachable(monkeypatch):
+    now = datetime.now(timezone.utc)
+    this_month = sources._chirps_url(f"{now.year:04d}-{now.month:02d}")
+    monkeypatch.setattr(
+        sources, "_head", lambda url: (None, None) if url == this_month else (True, None)
+    )
+    source = RealSource()
+
+    source.latest_month()
+
+    ttl = source._probed[1] - time.time()
+    assert ttl <= sources.OFFLINE_LATEST_TTL_SECONDS
+
+
 FIJI = MultiPolygon([box(178, -19, 180, -17), box(-180, -19, -178, -17)])
 
 
@@ -192,6 +225,24 @@ def test_unwrap_merges_parts_split_at_180_into_valid_shape():
     assert split.is_valid and merged.is_valid
     assert merged.geom_type == "Polygon"
     assert merged.bounds == (179, -1, 181, 1)
+
+
+def test_unwrap_repairs_a_self_intersecting_part_crossing_180():
+    bow_tie = Polygon([(179, -1), (181, 1), (181, -1), (179, 1)])
+    west_part = box(-180, 2, -179, 3)
+
+    merged = unwrap(MultiPolygon([bow_tie, west_part]))
+
+    assert merged.is_valid
+    assert merged.geom_type in ("Polygon", "MultiPolygon")
+    assert merged.bounds == (179, -1, 181, 3)
+
+
+def test_unwrap_rejects_a_shape_with_no_polygon_area():
+    line_across_180 = LineString([(179, 0), (-179, 0)])
+
+    with pytest.raises(AreaError, match="empty"):
+        unwrap(line_across_180)
 
 
 def test_unwrap_and_plan_across_180():
