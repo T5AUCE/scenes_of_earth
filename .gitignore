@@ -14,5 +14,5 @@ CLAUDE.md
 data/
 
 # Frontend
-web/node_modules/
+node_modules/
 web/dist/

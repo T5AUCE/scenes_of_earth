@@ -6,11 +6,12 @@ from dataclasses import replace
 
 import pytest
 from fastapi.testclient import TestClient
-from shapely.geometry import box, mapping
+from shapely.geometry import box, mapping, shape
 
 from soe import db
-from soe.api import create_app
-from soe.sources import SourceUnavailable, SyntheticSource, make_registry
+from soe.api import SAMPLE_AREAS, _scene_id, create_app
+from soe.areas import unwrap
+from soe.sources import RealSource, SourceUnavailable, SyntheticSource, make_registry
 
 POLL_ATTEMPTS = 100
 POLL_INTERVAL_SECONDS = 0.1
@@ -273,15 +274,24 @@ def test_sample_areas_seed_only_in_synthetic_mode_and_when_empty(tmp_path, monke
         return create_app(tmp_path / name / "soe.db", tmp_path / name / "scenes",
                           make_registry(SyntheticSource()))
 
-    def sample_hits(client):
-        return client.get("/api/areas/search", params={"q": "Sample"}).json()
+    def sample_ids(client):
+        names = ["Kenya", "Fiji", "Nairobi", "Cusco", "Burkina"]
+        hits = [client.get("/api/areas/search", params={"q": name}).json() for name in names]
+
+        return {hit["id"] for found in hits for hit in found if hit["id"].startswith("sample:")}
 
     with TestClient(app_in("real")) as client:
-        assert sample_hits(client) == []
+        assert sample_ids(client) == set()
 
     monkeypatch.setenv("SOE_SYNTHETIC", "1")
     with TestClient(app_in("synthetic")) as client:
-        assert len(sample_hits(client)) == 5
+        assert sample_ids(client) == {
+            "sample:kenya",
+            "sample:fiji",
+            "sample:nairobi",
+            "sample:cusco",
+            "sample:burkina-faso",
+        }
 
         assert client.get("/api/areas/sample:fiji").json()["bbox"][2] > 180
 
@@ -300,7 +310,28 @@ def test_sample_areas_seed_only_in_synthetic_mode_and_when_empty(tmp_path, monke
     db.add_boundaries(db_path, "geoBoundaries CGAZ", [other])
 
     with TestClient(app_in("other")) as client:
-        assert sample_hits(client) == []
+        assert sample_ids(client) == set()
+
+
+def test_synthetic_and_real_terrain_scenes_get_different_ids():
+    terrain = ["glo90_terrain"]
+    synthetic = make_registry(SyntheticSource())
+    real = make_registry(RealSource())
+
+    def scene_id(registry):
+        return _scene_id("g", terrain, "2015-01", "2015-02", [registry["glo90_terrain"]])
+
+    assert scene_id(synthetic) != scene_id(real)
+
+
+def test_sample_area_geometries_are_valid_raw_and_unwrapped():
+    features = json.loads(SAMPLE_AREAS.read_text())["features"]
+
+    for feature in features:
+        geometry = shape(feature["geometry"])
+
+        assert geometry.is_valid, feature["properties"]["id"]
+        assert unwrap(geometry).is_valid, feature["properties"]["id"]
 
 
 def test_terrain_only_ignores_months(env):

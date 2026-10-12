@@ -8,6 +8,7 @@ from pathlib import Path
 
 from . import db
 from .areas import unwrap
+from .sources import GLO90_TILE_INDEX
 
 CELL_DEG2 = 0.05 * 0.05
 MIN_CITY_POP = 1_000_000
@@ -34,12 +35,12 @@ def main(argv=None):
     import_parser.add_argument("--db", default=os.environ.get("SOE_DB", "./data/soe.db"))
     subparsers.add_parser(
         "glo90-index",
-        help="rebuild soe/glo90_tiles.bin from the GLO-90 tile list (downloads 1 MB)",
+        help="rebuild soe/data/glo90_tiles.bin from the GLO-90 tile list (downloads 1 MB)",
     )
     args = parser.parse_args(argv)
 
     if args.command == "glo90-index":
-        tile_count = build_glo90_index(Path(__file__).parent / "glo90_tiles.bin")
+        tile_count = build_glo90_index(GLO90_TILE_INDEX)
         print("GLO-90 tiles:", tile_count)
         return
 
@@ -55,7 +56,7 @@ def main(argv=None):
 
 
 def build_glo90_index(path):
-    """Write the bitmap of GLO-90 tiles that exist (soe/glo90_tiles.bin) from the bucket's list."""
+    """Write the bitmap of GLO-90 tiles that exist (GLO90_TILE_INDEX) from the bucket list."""
     import re
     import urllib.request
 

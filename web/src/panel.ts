@@ -1,6 +1,6 @@
 import type { Map as MapLibreMap } from "maplibre-gl";
 import { ApiError, getLayers, getSceneStatus, loadScene, postScene, searchAreas } from "./api";
-import { makeElement } from "./dom";
+import { makeHtmlElement } from "./html";
 import { fitToBbox } from "./map";
 import { mountScene } from "./view";
 import type { AreaHit, Layer, Scene, SceneRequest, SceneStatus } from "./types";
@@ -12,6 +12,8 @@ const DEFAULT_RETRY_SECONDS = 30;
 const MAX_POLL_FAILURES = 3;
 const SERVER_BUSY = 503;
 const NOT_FOUND = 404;
+const MS_PER_SECOND = 1000;
+const MONTHS_PER_YEAR = 12;
 
 const AREA_LEVELS = [
   { value: "", label: "any level" },
@@ -47,7 +49,7 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap) {
   layerBox.onchange = updateMonths;
   updateMonths();
 
-  let searchTimer: number | undefined;
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let searchCount = 0;
 
   const scheduleSearch = () => {
@@ -77,20 +79,21 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap) {
       // A newer search has started, so these hits are stale.
       if (thisSearch !== searchCount) return;
 
-      if (!hits.length) makeElement("li", "No matches", results).className = "none";
+      if (!hits.length) makeHtmlElement("li", "No matches", results).className = "none";
 
       for (const hit of hits) showHit(hit);
     } catch (error) {
       if (thisSearch !== searchCount) return;
 
-      makeElement("li", `Search failed: ${(error as Error).message}`, results).className = "none";
+      const message = `Search failed: ${(error as Error).message}`;
+      makeHtmlElement("li", message, results).className = "none";
     }
   }
 
   function showHit(hit: AreaHit) {
     const text = [hit.name, hit.parent_name, hit.level].filter(Boolean).join(" · ");
 
-    makeElement("li", text, results).onclick = () => {
+    makeHtmlElement("li", text, results).onclick = () => {
       area = hit;
       run++;
       build.disabled = false;
@@ -103,7 +106,7 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap) {
   function showScene(scene: Scene) {
     unmountScene();
     result.replaceChildren();
-    makeElement("h3", scene.title, result);
+    makeHtmlElement("h3", scene.title, result);
     unmountScene = mountScene(map, scene, result);
     fitToBbox(map, scene.area.bbox);
   }
@@ -211,7 +214,7 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap) {
 
       const retrySeconds = error.retryAfter ?? DEFAULT_RETRY_SECONDS;
       status.textContent = `${error.message} Retrying in ${retrySeconds} s…`;
-      await wait(retrySeconds * 1000);
+      await wait(retrySeconds * MS_PER_SECOND);
 
       return thisRun === run ? postScene(body) : null;
     }
@@ -225,34 +228,34 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap) {
 }
 
 function createControls(root: HTMLElement) {
-  const search = makeElement("input", "", root);
+  const search = makeHtmlElement("input", "", root);
   search.placeholder = "Search an area";
 
-  const level = makeElement("select", "", root);
+  const level = makeHtmlElement("select", "", root);
 
   for (const { value, label } of AREA_LEVELS) level.append(new Option(label, value));
 
-  const results = makeElement("ul", "", root);
+  const results = makeHtmlElement("ul", "", root);
   results.className = "results";
 
-  const chosen = makeElement("div", "No area selected", root);
+  const chosen = makeHtmlElement("div", "No area selected", root);
   chosen.className = "chosen";
 
-  const layerBox = makeElement("fieldset", "", root);
-  makeElement("legend", "Layers", layerBox);
+  const layerBox = makeHtmlElement("fieldset", "", root);
+  makeHtmlElement("legend", "Layers", layerBox);
 
-  const months = makeElement("div", "", root);
+  const months = makeHtmlElement("div", "", root);
   const start = document.createElement("input");
   const end = document.createElement("input");
   start.type = end.type = "month";
   months.append("From ", start, " to ", end);
 
-  const build = makeElement("button", "Build scene", root);
+  const build = makeHtmlElement("button", "Build scene", root);
 
-  const status = makeElement("div", "", root);
+  const status = makeHtmlElement("div", "", root);
   status.className = "status";
 
-  const result = makeElement("div", "", root);
+  const result = makeHtmlElement("div", "", root);
 
   return { search, level, results, chosen, layerBox, start, end, build, status, result };
 }
@@ -262,7 +265,7 @@ async function loadLayerChoices({ layerBox, start, end }: ReturnType<typeof crea
   const { layers, default: defaultIds } = await getLayers();
 
   for (const layer of layers) {
-    const label = makeElement("label", "", layerBox);
+    const label = makeHtmlElement("label", "", layerBox);
     const box = document.createElement("input");
     box.type = "checkbox";
     box.value = layer.id;
@@ -287,9 +290,12 @@ async function loadLayerChoices({ layerBox, start, end }: ReturnType<typeof crea
 
 function addMonths(yearMonth: string, delta: number) {
   const [year, month] = yearMonth.split("-").map(Number);
-  const totalMonths = year * 12 + (month - 1) + delta;
+  const totalMonths = year * MONTHS_PER_YEAR + (month - 1) + delta;
+  const shiftedYear = Math.floor(totalMonths / MONTHS_PER_YEAR);
+  const shiftedMonth = String((totalMonths % MONTHS_PER_YEAR) + 1).padStart(2, "0");
 
-  return `${Math.floor(totalMonths / 12)}-${String((totalMonths % 12) + 1).padStart(2, "0")}`;
+  return `${shiftedYear}-${shiftedMonth}`;
 }
 
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const wait = (milliseconds: number) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));

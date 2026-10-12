@@ -28,6 +28,7 @@ FIRST_MONTH = "1981-01"
 NATIVE_TERRAIN_RES = 1 / 1200
 TERRAIN_PIXELS = 2048 * 2048
 TERRAIN_THREADS = 32
+GLO90_TILE_INDEX = Path(__file__).parent / "data" / "glo90_tiles.bin"
 TILE_ROW_OFFSET = 90  # tile index row = lat + 90
 TILE_COL_OFFSET = 180  # tile index column = lon + 180
 TILE_EDGE_TOLERANCE = 1e-9  # degrees; a bound exactly on a tile edge must not pull in the next tile
@@ -88,15 +89,20 @@ SOURCES = {
         "licence": "CC BY 4.0",
         "licence_url": "https://www.geoboundaries.org/",
         "attribution": "Boundaries: geoBoundaries (https://www.geoboundaries.org)",
-        "citation": "Runfola, D. et al. (2020) geoBoundaries: A global database of political "
-                    "administrative boundaries. PLoS ONE 15(4): e0231866. "
-                    "https://doi.org/10.1371/journal.pone.0231866",
+        "citation": (
+            "Runfola, D. et al. (2020) geoBoundaries: A global database of political "
+            "administrative boundaries. PLoS ONE 15(4): e0231866. "
+            "https://doi.org/10.1371/journal.pone.0231866"
+        ),
         "modified": "simplified 0.01°, clipped to 60°S-60°N",
     },
     "synthetic": {
         "name": "Sample areas",
-        "licence": "none (hand-drawn sample)",
-        "attribution": "Boundaries: hand-drawn sample shapes, not real borders",
+        "licence": "per feature: Public Domain, ODbL 1.0 or CC BY 4.0 (geoBoundaries gbOpen)",
+        "attribution": (
+            "Boundaries: geoBoundaries (https://www.geoboundaries.org), simplified; "
+            "data are synthetic"
+        ),
     },
     "GHSL UCDB R2024A": {
         "name": "GHSL Urban Centre Database R2024A",
@@ -132,7 +138,7 @@ def _tile_index():
 
     The row is lat + 90 and the column is lon + 180.
     """
-    packed = np.frombuffer((Path(__file__).parent / "glo90_tiles.bin").read_bytes(), "uint8")
+    packed = np.frombuffer(GLO90_TILE_INDEX.read_bytes(), "uint8")
     return np.unpackbits(packed).reshape(180, 360).astype(bool)
 
 

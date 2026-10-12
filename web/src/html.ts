@@ -1,4 +1,4 @@
-export function makeElement<K extends keyof HTMLElementTagNameMap>(
+export function makeHtmlElement<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   text = "",
   parent?: HTMLElement,

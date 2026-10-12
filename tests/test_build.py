@@ -184,6 +184,16 @@ def test_terrain_blocks_equal_one_read():
 FIJI = MultiPolygon([box(178, -19, 180, -17), box(-180, -19, -178, -17)])
 
 
+def test_unwrap_merges_parts_split_at_180_into_valid_shape():
+    split = MultiPolygon([box(179, -1, 180, 1), box(-180, -1, -179, 1)])
+
+    merged = unwrap(split)
+
+    assert split.is_valid and merged.is_valid
+    assert merged.geom_type == "Polygon"
+    assert merged.bounds == (179, -1, 181, 1)
+
+
 def test_unwrap_and_plan_across_180():
     assert unwrap(FIJI).bounds == (178, -19, 182, -17)
 

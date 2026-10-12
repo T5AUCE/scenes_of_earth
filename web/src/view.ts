@@ -1,7 +1,7 @@
 import type { GeoJSONSource, Map as MapLibreMap } from "maplibre-gl";
 import { loadAreaFeature } from "./api";
 import { openStore, type Store } from "./data";
-import { makeElement } from "./dom";
+import { makeHtmlElement } from "./html";
 import { LAYER_KINDS } from "./layers/registry";
 import { firstSymbolId, removeLayerAndSource } from "./map";
 import { shiftLongitudes, worldShift } from "./render/mercator";
@@ -15,7 +15,7 @@ const EMPTY_FEATURES: GeoJsonData = { type: "FeatureCollection", features: [] };
 
 // Returns the unmount function; a failure partway removes whatever was already drawn.
 export function mountScene(map: MapLibreMap, scene: Scene, root: HTMLElement) {
-  const box = makeElement("div", "", root);
+  const box = makeHtmlElement("div", "", root);
   const views: LayerView[] = [];
   let timeline: ReturnType<typeof createSceneTimeline> = null;
   let isMounted = true;
@@ -29,9 +29,9 @@ export function mountScene(map: MapLibreMap, scene: Scene, root: HTMLElement) {
   };
 
   try {
-    const notes = makeElement("div", "", box);
+    const notes = makeHtmlElement("div", "", box);
     const addNote = (text: string) => {
-      makeElement("div", text, notes).className = "notice";
+      makeHtmlElement("div", text, notes).className = "notice";
     };
 
     const store = openStore(scene.data.href);
@@ -142,8 +142,8 @@ function mountLayerViews(
 }
 
 function togglesFor(map: MapLibreMap, views: LayerView[]) {
-  const toggles = makeElement("fieldset");
-  makeElement("legend", "Show", toggles);
+  const toggles = makeHtmlElement("fieldset");
+  makeHtmlElement("legend", "Show", toggles);
 
   const outline: Part = { id: OUTLINE_ID, label: "Area outline", layerIds: [OUTLINE_ID] };
 
@@ -176,7 +176,7 @@ function createSceneTimeline(views: LayerView[]) {
 }
 
 function checkbox(label: string, checked: boolean, onChange: (on: boolean) => void) {
-  const row = makeElement("label");
+  const row = makeHtmlElement("label");
   const box = document.createElement("input");
   box.type = "checkbox";
   box.checked = checked;

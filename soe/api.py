@@ -2,7 +2,7 @@
 
 Config (environment): SOE_DB, SOE_SCENES_DIR, SOE_PUBLIC_BASE, SOE_MAX_BUILDS, SOE_MAX_QUEUE,
 SOE_SYNTHETIC, SOE_LATEST. With SOE_SYNTHETIC=1 an empty boundaries table is seeded from
-sample_areas.geojson.
+soe/data/sample_areas.geojson.
 """
 import hashlib
 import json
@@ -32,7 +32,7 @@ LEVELS = ("country", "state", "county", "city")
 ID_LEN = 20  # hex characters of the sha256 kept as the scene id (80 bits; short paths for Windows)
 ID_RE = re.compile(r"[0-9a-f]{%d}" % ID_LEN)
 DEFAULT_LAYERS = ["chirps_monthly", "glo90_terrain"]
-SAMPLE_AREAS = Path(__file__).with_name("sample_areas.geojson")
+SAMPLE_AREAS = Path(__file__).parent / "data" / "sample_areas.geojson"
 IMMUTABLE = "public, max-age=31536000, immutable"
 MAX_TITLE_LENGTH = 120
 MAX_SEARCH_LIMIT = 50
@@ -90,7 +90,7 @@ async def read_body(request):
 
 
 def seed_sample_areas(db_path):
-    """Synthetic mode only: load the hand-drawn sample shapes when no boundaries exist yet."""
+    """Synthetic mode only: load the real sample outlines when no boundaries exist yet."""
     if db.search(db_path, "", None, 1):  # an empty query matches every row
         return
 
@@ -102,6 +102,7 @@ def _sample_row(feature):
     geometry, properties = shape(feature["geometry"]), feature["properties"]
     west, south, east, north = unwrap(geometry).bounds
     cells = max(1, round(geometry.area / SAMPLE_CELL_AREA_DEG2))
+
     return (
         properties["id"],
         properties["level"],
@@ -115,7 +116,7 @@ def _sample_row(feature):
         cells,
         json.dumps(feature["geometry"]),
         "synthetic",
-        "none (hand-drawn sample)",
+        f"{properties['license']} ({properties['source']})",
     )
 
 
@@ -370,7 +371,9 @@ def _scene_id(geometry_id, layers, start, end, datasets):
         )
 
     versions = {dataset.id: dataset.source.get("version") for dataset in datasets}
-    content = [geometry_id, layers, start, end, versions, vintage, __version__]
+    synthetic = {dataset.id: isinstance(dataset.backend, SyntheticSource) for dataset in datasets}
+    content = [geometry_id, layers, start, end, versions, vintage, synthetic, __version__]
+
     return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:ID_LEN]
 
 

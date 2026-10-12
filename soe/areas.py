@@ -202,17 +202,19 @@ def _cell_mask(geometry, window_transform, grid_shape, all_touched=False):
 def unwrap(geom):
     """Put a shape that crosses 180 into one longitude frame.
 
-    Parts west of 0 move east by 360, so longitudes go up to 360.
+    Parts west of 0 move east by 360, so longitudes go up to 360;
+    parts that meet at 180 merge.
     """
-    x0, _, x1, _ = geom.bounds
-    if x1 - x0 <= MAX_LONGITUDE:
+    west, _, east, _ = geom.bounds
+    if east - west <= MAX_LONGITUDE:
         return geom
 
     parts = [
         translate(part, xoff=360) if sum(part.bounds[::2]) < 0 else part
         for part in shapely.get_parts(geom)
     ]
-    return MultiPolygon(parts)
+
+    return shapely.unary_union(parts)
 
 
 def _extent(coverage):

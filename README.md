@@ -35,8 +35,9 @@ and the default set),
 "end": "YYYY-MM", "layers": ["chirps_monthly", "glo90_terrain"], "title": ...}` and returns 202 (queued or running),
 200 (already built), 422 (refused, with a reason), 413, or 503 (queue full or data server unreachable; `Retry-After`).
 
-With `SOE_SYNTHETIC=1` and an empty boundaries table, five hand-drawn sample areas (names start with "Sample:", not real
-borders) are loaded from `soe/sample_areas.geojson`, so search works without the boundaries import.
+With `SOE_SYNTHETIC=1` and an empty boundaries table, five sample areas (Kenya, Fiji, Nairobi, Cusco, Burkina Faso) are
+loaded from `soe/data/sample_areas.geojson`, so search works without the boundaries import. They are real
+geoBoundaries gbOpen outlines simplified to about 0.01 degrees; each feature carries its own licence and source.
 
 ## Import boundaries (once)
 
@@ -56,8 +57,8 @@ The import is large (several hundred MB of input). CGAZ draws disputed borders t
 
 ## Terrain tile index
 
-`soe/glo90_tiles.bin` lists which GLO-90 tiles exist (ocean tiles do not), so planning stays offline. Rebuild it only if the
-bucket's tile list changes:
+`soe/data/glo90_tiles.bin` lists which GLO-90 tiles exist (ocean tiles do not), so planning stays offline.
+Rebuild it only if the bucket's tile list changes:
 
 ```
 python -m soe.cli glo90-index
@@ -107,8 +108,9 @@ Adapted from the MIT CommLab guide on coding and comment style
 
 - **Names:** descriptive and pronounceable; nouns for variables and classes, verbs for functions. No unexplained
   abbreviations (domain terms like `bbox`, `res` are fine). Length scales with scope. Use context to avoid redundancy.
-- **Layout:** structure vertically. One statement per line, 4-space indents. Aim for 80 columns, hard limit 100. When
-  breaking at an operator, start the new line with it. Consistent spacing around operators and after commas.
+- **Layout:** structure vertically. One statement per line, 4-space indents in Python, 2 in TypeScript.
+  Aim for 80 columns, hard limit 100. When breaking at an operator, start the new line with it. Consistent spacing
+  around operators and after commas.
 - **Comments:** only explain **why** something confusing exists (a workaround, a data quirk, a non-obvious constraint),
   never **what** the code does. If a comment restates the code, delete it or rename until the code says it. Comments are
   complete sentences. A TODO names the problem and the work needed. Update or delete comments when the code changes.
@@ -135,5 +137,8 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
   administrative boundaries. PLoS ONE 15(4): e0231866. https://www.geoboundaries.org. Simplified to 0.01 degrees and
   clipped to 60S-60N. CC BY 4.0 for CGAZ itself is the repository-wide licence for geoBoundaries derivatives, not a
   statement naming CGAZ.
+- **Sample areas: geoBoundaries gbOpen** (offline mode only), per-feature licence: Kenya, Nairobi and Cusco Public Domain;
+  Fiji ODbL 1.0 (OpenStreetMap, share-alike and attribution: "© OpenStreetMap contributors"); Burkina Faso CC BY 4.0
+  (World Bank). Same citation as above; simplified.
 - **Cities: GHSL Urban Centre Database R2024A**, CC BY 4.0, © European Union, 1995-2026. Reprojected from Mollweide
   and simplified.

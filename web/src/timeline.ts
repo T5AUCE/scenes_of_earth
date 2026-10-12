@@ -63,7 +63,7 @@ export function createTimeline(
   const label = document.createElement("span");
   element.append(play, slider, label);
 
-  let timer: number | undefined;
+  let timer: ReturnType<typeof setInterval> | undefined;
 
   const stop = () => {
     clearInterval(timer);
