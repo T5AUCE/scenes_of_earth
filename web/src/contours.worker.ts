@@ -1,44 +1,74 @@
 import { contours } from "d3-contour";
 import {
   clipRings,
+  COARSE_JOB,
   downsample,
+  MAX_SIDE_CELLS,
   maskedValues,
   pickInterval,
   thresholds,
   toLonLat,
+  wholeGrid,
   type ContourGrid,
   type Downsampled,
+  type GridWindow,
 } from "./contours";
 
-export interface ContourRequest {
+export interface ContourSource {
   elevation: Float32Array;
   mask: ArrayLike<number>;
   grid: ContourGrid;
 }
 
+export type ContourRequest =
+  | ({ kind: "start" } & ContourSource)
+  | { kind: "detail"; job: number; sourceWindow: GridWindow };
+
 export interface ContourResult {
+  job: number;
   interval: number;
   collection: ReturnType<typeof toLonLat>;
 }
 
-self.onmessage = (event: MessageEvent<ContourRequest>) => {
-  const started = performance.now();
-  const { elevation, mask, grid } = event.data;
+let source: ContourSource | null = null;
+let wholeAreaInterval = 0;
 
-  const sampled = downsample(elevation, mask, grid);
+self.onmessage = (event: MessageEvent<ContourRequest>) => {
+  const request = event.data;
+
+  if (request.kind === "start") {
+    source = request;
+    const result = contourWindow(source, wholeGrid(source.grid), COARSE_JOB);
+    wholeAreaInterval = result.interval;
+    self.postMessage(result);
+
+    return;
+  }
+
+  if (!source) throw new Error("Contours were asked for detail before the elevation arrived");
+
+  self.postMessage(contourWindow(source, request.sourceWindow, request.job, wholeAreaInterval));
+};
+
+// A detail window reuses the whole-area interval so the legend and the bold lines stay the same.
+function contourWindow(
+  { elevation, mask, grid }: ContourSource,
+  sourceWindow: GridWindow,
+  job: number,
+  fixedInterval?: number,
+): ContourResult {
+  const started = performance.now();
+
+  const sampled = downsample(elevation, mask, grid, MAX_SIDE_CELLS, sourceWindow);
   const inside = maskedValues(sampled);
-  const interval = pickInterval(inside);
+  const interval = fixedInterval ?? pickInterval(inside);
   const maxElevation = inside.reduce((top, value) => Math.max(top, value), 0);
   const levelRuns = contourRuns(sampled, thresholds(maxElevation, interval));
 
-  const result: ContourResult = {
-    interval,
-    collection: toLonLat(levelRuns, grid, sampled, interval),
-  };
+  console.info(`contours: ${Math.round(performance.now() - started)} ms (job ${job})`);
 
-  console.info(`contours: ${Math.round(performance.now() - started)} ms`);
-  self.postMessage(result);
-};
+  return { job, interval, collection: toLonLat(levelRuns, grid, sampled, interval) };
+}
 
 // The unmasked grid is contoured: d3 treats NaN as -Infinity, which would ring the mask edge.
 function contourRuns({ values, mask, nx, ny }: Downsampled, levels: number[]) {

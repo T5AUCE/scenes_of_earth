@@ -2,20 +2,26 @@
 from datetime import datetime, timezone
 
 from . import __version__
-from .sources import SOURCES
+from .sources import SOURCES, SyntheticSource
 
 VERSION = "0.2"
 BOUNDARY_SOURCE_FIELDS = ("licence_url", "attribution", "citation", "modified")
 TERRAIN_LAYER_ID = "glo90_terrain"
+SYNTHETIC_DATA_CREDIT = "Data: synthetically generated, not real measurements"
 
 
-def credits(layer_blocks, boundary_source):
+def credits(layer_blocks, boundary_source, synthetic=False):
     """Attribution block, generated from the sources actually used."""
     sources = [layer["source"] for layer in layer_blocks]
     if boundary_source:
         sources.append(boundary_source)
+
+    lines = [source["attribution"] for source in sources]
+    if synthetic:
+        lines.append(SYNTHETIC_DATA_CREDIT)
+
     return {
-        "lines": [source["attribution"] for source in sources],
+        "lines": lines,
         "disclaimers": [source["disclaimer"] for source in sources if source.get("disclaimer")],
         "endorsement": "Scenes of Earth is not endorsed by the data providers.",
         "terms_passthrough": (
@@ -36,6 +42,7 @@ def make(scene_id, title, area, plan, datasets, info):
     ]
 
     boundary_source = SOURCES[area.boundary["source"]] if area.named else None
+    synthetic = any(isinstance(dataset.backend, SyntheticSource) for dataset in datasets)
     layer_notices = [note for layer in plan.layers.values() for note in layer.notices]
 
     return {
@@ -58,7 +65,7 @@ def make(scene_id, title, area, plan, datasets, info):
             "format": "zarr v3, gzip, sharded series, consolidated metadata",
         },
         "notices": {"limits": plan.notices + layer_notices},
-        "credits": credits(layer_blocks, boundary_source),
+        "credits": credits(layer_blocks, boundary_source, synthetic),
     }
 
 

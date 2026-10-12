@@ -12,9 +12,20 @@ from shapely.geometry import LineString, MultiPolygon, Polygon, box, mapping
 from soe import sources
 from soe.areas import Area, AreaError, check_months, clean_polygon, plan, unwrap
 from soe.build import build_scene, hillshade
-from soe.bundle import validate
-from soe.sources import (REGISTRY, RealSource, SyntheticSource, _tile_index, block_mean,
-                         glo90_tiles, make_registry, month_list, terrain_by_blocks, terrain_res)
+from soe.bundle import SYNTHETIC_DATA_CREDIT, credits, validate
+from soe.sources import (
+    REGISTRY,
+    SOURCES,
+    RealSource,
+    SyntheticSource,
+    _tile_index,
+    block_mean,
+    glo90_tiles,
+    make_registry,
+    month_list,
+    terrain_by_blocks,
+    terrain_res,
+)
 
 NAIROBI = box(36.5, -1.5, 37.5, -0.5)
 SYNTHETIC_REGISTRY = make_registry(SyntheticSource())
@@ -212,6 +223,23 @@ def test_latest_month_is_rechecked_soon_when_a_newer_month_was_unreachable(monke
 
     ttl = source._probed[1] - time.time()
     assert ttl <= sources.OFFLINE_LATEST_TTL_SECONDS
+
+
+def test_credits_of_a_real_mode_sample_boundary_do_not_claim_synthetic_data():
+    layer_blocks = [{"source": SOURCES["chirps"]}, {"source": SOURCES["glo90"]}]
+
+    lines = credits(layer_blocks, SOURCES["synthetic"])["lines"]
+
+    assert not any("synthetic" in line.lower() for line in lines)
+    assert any("geoBoundaries" in line for line in lines)
+
+
+def test_credits_announce_synthetic_data_only_for_the_synthetic_source():
+    layer_blocks = [{"source": SOURCES["chirps"]}]
+    line = SYNTHETIC_DATA_CREDIT
+
+    assert line in credits(layer_blocks, None, synthetic=True)["lines"]
+    assert line not in credits(layer_blocks, None)["lines"]
 
 
 FIJI = MultiPolygon([box(178, -19, 180, -17), box(-180, -19, -178, -17)])

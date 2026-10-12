@@ -6,12 +6,21 @@ export interface ContourGrid {
   ny: number;
 }
 
+// A rectangle of source cells; y counts down from the north edge.
+export interface GridWindow {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface Downsampled {
   values: Float32Array;
   mask: Uint8Array;
   nx: number;
   ny: number;
   factor: number; // source cells per side of one downsampled cell
+  sourceWindow: GridWindow;
 }
 
 // Grid coordinates: sample i sits at i + 0.5, so x spans [0, nx] and y spans [0, ny].
@@ -33,38 +42,54 @@ export interface ContourFeatureCollection {
 
 export const MAX_SIDE_CELLS = 1024;
 export const MAJOR_EVERY = 5;
+export const COARSE_JOB = 0;
 
+const WORLD_WIDTH_DEGREES = 360;
+const BOUNDS_TOLERANCE_DEGREES = 1e-9;
 const INTERVALS_M = [10, 20, 50, 100, 200, 250, 500, 1000];
 const TARGET_LINE_COUNT = 12;
 const LOW_PERCENTILE = 0.02;
 const HIGH_PERCENTILE = 0.98;
 const MAX_PERCENTILE_SAMPLES = 65536;
 
+export const wholeGrid = ({ nx, ny }: { nx: number; ny: number }): GridWindow => ({
+  x: 0,
+  y: 0,
+  width: nx,
+  height: ny,
+});
+
+export const factorFor = (width: number, height: number, maxSide = MAX_SIDE_CELLS) =>
+  Math.ceil(Math.max(width, height) / maxSide);
+
 // Block means keep the shape of the relief; a block counts as inside if any cell in it is.
 export function downsample(
   elevation: ArrayLike<number>,
   mask: ArrayLike<number>,
-  { nx, ny }: ContourGrid,
+  grid: ContourGrid,
   maxSide = MAX_SIDE_CELLS,
+  sourceWindow = wholeGrid(grid),
 ): Downsampled {
-  const factor = Math.ceil(Math.max(nx, ny) / maxSide);
-  const width = Math.ceil(nx / factor);
-  const height = Math.ceil(ny / factor);
+  const factor = factorFor(sourceWindow.width, sourceWindow.height, maxSide);
+  const width = Math.ceil(sourceWindow.width / factor);
+  const height = Math.ceil(sourceWindow.height / factor);
   const values = new Float32Array(width * height);
   const insideMask = new Uint8Array(width * height);
 
   for (let row = 0; row < height; row++) {
-    const yEnd = Math.min(ny, (row + 1) * factor);
+    const yStart = sourceWindow.y + row * factor;
+    const yEnd = Math.min(sourceWindow.y + sourceWindow.height, yStart + factor);
 
     for (let column = 0; column < width; column++) {
-      const xEnd = Math.min(nx, (column + 1) * factor);
+      const xStart = sourceWindow.x + column * factor;
+      const xEnd = Math.min(sourceWindow.x + sourceWindow.width, xStart + factor);
       let sum = 0;
       let count = 0;
       let isInside = false;
 
-      for (let y = row * factor; y < yEnd; y++) {
-        for (let x = column * factor; x < xEnd; x++) {
-          const cell = y * nx + x;
+      for (let y = yStart; y < yEnd; y++) {
+        for (let x = xStart; x < xEnd; x++) {
+          const cell = y * grid.nx + x;
           if (mask[cell]) isInside = true;
           if (Number.isFinite(elevation[cell])) {
             sum += elevation[cell];
@@ -79,7 +104,73 @@ export function downsample(
     }
   }
 
-  return { values, mask: insideMask, nx: width, ny: height, factor };
+  return { values, mask: insideMask, nx: width, ny: height, factor, sourceWindow };
+}
+
+// The source cells showing a view, padded by a fraction of its size so small pans stay inside.
+export function viewWindow(
+  grid: ContourGrid,
+  view: Bbox,
+  margin: number,
+  maxSide = MAX_SIDE_CELLS,
+) {
+  const [west, south, east, north] = grid.bbox;
+  const degreesPerColumn = (east - west) / grid.nx;
+  const degreesPerRow = (north - south) / grid.ny;
+
+  const left = (view[0] - west) / degreesPerColumn;
+  const right = (view[2] - west) / degreesPerColumn;
+  const top = (north - view[3]) / degreesPerRow;
+  const bottom = (north - view[1]) / degreesPerRow;
+  const paddingX = (right - left) * margin;
+  const paddingY = (bottom - top) * margin;
+
+  const x = Math.max(0, Math.floor(left - paddingX));
+  const y = Math.max(0, Math.floor(top - paddingY));
+  const width = Math.min(grid.nx, Math.ceil(right + paddingX)) - x;
+  const height = Math.min(grid.ny, Math.ceil(bottom + paddingY)) - y;
+  if (width <= 0 || height <= 0) return null;
+
+  return { sourceWindow: { x, y, width, height }, factor: factorFor(width, height, maxSide) };
+}
+
+export function windowBounds(grid: ContourGrid, { x, y, width, height }: GridWindow): Bbox {
+  const [west, south, east, north] = grid.bbox;
+  const degreesPerColumn = (east - west) / grid.nx;
+  const degreesPerRow = (north - south) / grid.ny;
+
+  return [
+    west + x * degreesPerColumn,
+    north - (y + height) * degreesPerRow,
+    west + (x + width) * degreesPerColumn,
+    north - y * degreesPerRow,
+  ];
+}
+
+// MapLibre wraps the map centre across 180, but the grid may sit in another world copy.
+export function viewInGridWorld(view: Bbox, gridBbox: Bbox): Bbox {
+  const gridCenter = (gridBbox[0] + gridBbox[2]) / 2;
+  const viewCenter = (view[0] + view[2]) / 2;
+  const shift = WORLD_WIDTH_DEGREES * Math.round((gridCenter - viewCenter) / WORLD_WIDTH_DEGREES);
+
+  return [view[0] + shift, view[1], view[2] + shift, view[3]];
+}
+
+// Only the part of the view over the grid needs covering.
+export function covers(outer: Bbox, view: Bbox, within: Bbox) {
+  const needed = [
+    Math.max(view[0], within[0]),
+    Math.max(view[1], within[1]),
+    Math.min(view[2], within[2]),
+    Math.min(view[3], within[3]),
+  ];
+
+  return (
+    outer[0] <= needed[0] + BOUNDS_TOLERANCE_DEGREES &&
+    outer[1] <= needed[1] + BOUNDS_TOLERANCE_DEGREES &&
+    outer[2] >= needed[2] - BOUNDS_TOLERANCE_DEGREES &&
+    outer[3] >= needed[3] - BOUNDS_TOLERANCE_DEGREES
+  );
 }
 
 export function maskedValues({ values, mask }: Downsampled) {
@@ -154,7 +245,7 @@ export function clipRings(rings: number[][][], mask: ArrayLike<number>, nx: numb
 export function toLonLat(
   levels: ContourLevel[],
   grid: ContourGrid,
-  blocks: Pick<Downsampled, "nx" | "ny" | "factor">,
+  blocks: Pick<Downsampled, "nx" | "ny" | "factor" | "sourceWindow">,
   interval: number,
 ): ContourFeatureCollection {
   const [west, south, east, north] = grid.bbox;
@@ -162,9 +253,16 @@ export function toLonLat(
   const degreesPerRow = (north - south) / grid.ny;
   const majorInterval = MAJOR_EVERY * interval;
 
+  const { sourceWindow, factor } = blocks;
+
+  const sourceColumn = (x: number) =>
+    sourceWindow.x + sourceCells(x, blocks.nx, sourceWindow.width, factor);
+  const sourceRow = (y: number) =>
+    sourceWindow.y + sourceCells(y, blocks.ny, sourceWindow.height, factor);
+
   const toPosition = ([x, y]: number[]) => [
-    west + sourceCells(x, blocks.nx, grid.nx, blocks.factor) * degreesPerColumn,
-    north - sourceCells(y, blocks.ny, grid.ny, blocks.factor) * degreesPerRow,
+    west + sourceColumn(x) * degreesPerColumn,
+    north - sourceRow(y) * degreesPerRow,
   ];
 
   const features = levels

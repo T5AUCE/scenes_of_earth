@@ -112,8 +112,7 @@ SOURCES = {
         "name": "Sample areas",
         "licence": "per feature: Public Domain, ODbL 1.0 or CC BY 4.0 (geoBoundaries gbOpen)",
         "attribution": (
-            "Boundaries: geoBoundaries (https://www.geoboundaries.org), simplified; "
-            "data are synthetic"
+            "Sample outlines: geoBoundaries (https://www.geoboundaries.org), simplified"
         ),
     },
     "GHSL UCDB R2024A": {

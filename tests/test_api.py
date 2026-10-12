@@ -11,6 +11,7 @@ from shapely.geometry import box, mapping, shape
 from soe import db
 from soe.api import SAMPLE_AREAS, _scene_id, create_app, seed_sample_areas
 from soe.areas import unwrap
+from soe.bundle import SYNTHETIC_DATA_CREDIT
 from soe.sources import RealSource, SourceUnavailable, SyntheticSource, make_registry
 
 POLL_ATTEMPTS = 100
@@ -120,6 +121,7 @@ def test_boundary_scene(env):
     scene = client.get(done["bundle_url"]).json()
     assert done["status"] == "done"
     assert scene["area"]["boundary"]["attribution"].startswith("Boundaries:")
+    assert SYNTHETIC_DATA_CREDIT in scene["credits"]["lines"]
 
     unknown = {"type": "boundary", "id": "zzz"}
     assert client.post("/api/scenes", json={**body(), "area": unknown}).status_code == 422

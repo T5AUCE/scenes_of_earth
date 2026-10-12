@@ -10,6 +10,8 @@ import type {
 
 const SCENE_VERSION = "0.2";
 const REQUEST_TIMEOUT_MS = 10_000;
+// The backend may wait up to 15 s on the CHIRPS vintage lookup before accepting a build.
+export const BUILD_REQUEST_TIMEOUT_MS = 30_000;
 const SCENE_ID_PATTERN = /^[0-9a-f]{20}$/;
 
 // Relative URLs only. Bundle files must be read via the scene's bundle_url, not a hard-coded path.
@@ -42,11 +44,15 @@ export const getSceneStatus = (id: string) =>
 export const loadAreaFeature = (href: string) => request<AreaFeature>(href);
 
 export const postScene = (body: SceneRequest) =>
-  request<SceneStatus>("/api/scenes", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  request<SceneStatus>(
+    "/api/scenes",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+    BUILD_REQUEST_TIMEOUT_MS,
+  );
 
 // Hrefs resolve against the bundle URL so the same code works for /scenes/ now and R2 later.
 export async function loadScene(bundleUrl: string): Promise<Scene> {
@@ -62,8 +68,12 @@ export async function loadScene(bundleUrl: string): Promise<Scene> {
   return scene;
 }
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+async function request<T>(
+  url: string,
+  init?: RequestInit,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<T> {
+  const response = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
   if (!response.ok) throw await apiErrorFrom(response);
 
   return response.json();
