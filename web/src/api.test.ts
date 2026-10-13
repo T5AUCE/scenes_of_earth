@@ -3,6 +3,8 @@ import { test } from "node:test";
 
 import { BUILD_REQUEST_TIMEOUT_MS, isSceneId } from "./api.ts";
 
+const REVISION_LOOKUP_TIMEOUT_MS = 15 * 1000; // REVISION_TIMEOUT_SECS in soe/sources.py.
+
 test("a scene id is exactly 20 lowercase hex characters", () => {
   assert.ok(isSceneId("0123456789abcdef0123"));
 
@@ -18,6 +20,6 @@ test("path tricks and empty values are not scene ids", () => {
   assert.ok(!isSceneId("0123456789abcdef0123\n"));
 });
 
-test("the build request waits longer than the backend vintage lookup of 15 s", () => {
-  assert.ok(BUILD_REQUEST_TIMEOUT_MS > 15_000);
+test("the build request waits longer than the backend revision lookup of 15 s", () => {
+  assert.ok(BUILD_REQUEST_TIMEOUT_MS > REVISION_LOOKUP_TIMEOUT_MS);
 });

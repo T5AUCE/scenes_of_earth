@@ -48,10 +48,10 @@ TILE_OPEN_ATTEMPTS = 3
 TILE_RETRY_DELAY_SECS = 1
 
 HEAD_TIMEOUT_SECS = 5  # latest-month probes run on the first page load
-VINTAGE_TIMEOUT_SECS = 15
+REVISION_TIMEOUT_SECS = 15
 LATEST_MONTH_PROBES = 7
-LATEST_TTL_SECS = 86400
-OFFLINE_LATEST_TTL_SECS = 600
+LATEST_TTL_SECS = 24 * 60 * 60
+OFFLINE_LATEST_TTL_SECS = 10 * 60
 OFFLINE_ASSUMED_LAG_MONTHS = 2
 
 CHIRPS_URL = (
@@ -298,9 +298,12 @@ class RealSource:
             year, month = _previous_month(year, month)
         return f"{year:04d}-{month:02d}"
 
-    def vintage(self, month):
-        """Last-Modified of a month's file; changes when CHC revises a recent month."""
-        last_modified = _head(_chirps_url(month), VINTAGE_TIMEOUT_SECS)[1]
+    def current_revision(self, month):
+        """Last-Modified date of the month's CHIRPS file.
+
+        It changes whenever CHC republishes (revises) that month's data.
+        """
+        last_modified = _head(_chirps_url(month), REVISION_TIMEOUT_SECS)[1]
         if not last_modified:
             raise SourceUnavailable("CHIRPS server did not answer")
 
@@ -398,7 +401,7 @@ class SyntheticSource:
     def latest_month(self):
         return self._latest
 
-    def vintage(self, month):
+    def current_revision(self, month):
         return "synthetic"
 
     def read_rain(self, month, window):
@@ -476,8 +479,12 @@ class Dataset:
         """Cell size of a static layer over bbox."""
         return self.resolution_deg
 
-    def vintage(self, last_month):
-        """A string that changes when the source revises `last_month`, or None."""
+    def current_revision(self, last_month):
+        """The provider's current revision marker of `last_month`, or None for static data.
+
+        A revision is a string that changes whenever the provider republishes that month's
+        data. It is part of the scene id, so revised data gets a new scene.
+        """
         return None
 
     def domain(self, stats):
@@ -504,8 +511,8 @@ class RainDataset(Dataset):
         """Period starts ('YYYY-MM-DD') of the months start..end ('YYYY-MM')."""
         return [f"{month}-01" for month in month_list(start, end)]
 
-    def vintage(self, last_month):
-        return self.backend.vintage(last_month)
+    def current_revision(self, last_month):
+        return self.backend.current_revision(last_month)
 
     def domain(self, stats):
         return [0, stats["p98"]]

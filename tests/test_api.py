@@ -9,10 +9,17 @@ from fastapi.testclient import TestClient
 from shapely.geometry import box, mapping, shape
 
 from soe import db
-from soe.api import SAMPLE_AREAS, _scene_id, create_app, seed_sample_areas
+from soe.api import (
+    QUEUE_RETRY_AFTER_SECS,
+    SAMPLE_AREAS,
+    SOURCE_RETRY_AFTER_SECS,
+    create_app,
+    seed_sample_areas,
+)
 from soe.areas import unwrap
 from soe.bundle import SYNTHETIC_DATA_CREDIT
-from soe.sources import RealSource, SourceUnavailable, SyntheticSource, make_registry
+from soe.sources import SourceUnavailable, SyntheticSource, make_registry
+from test_scene_request import RevisionSource
 
 POLL_ATTEMPTS = 100
 POLL_INTERVAL_SECS = 0.1
@@ -261,7 +268,8 @@ def test_queue_full_gives_503_and_unreachable_source_gives_503(tmp_path):
         assert first.status_code == 202
 
         second = client.post("/api/scenes", json=body(end="2015-07"))
-        assert second.status_code == 503 and "retry-after" in second.headers
+        assert second.status_code == 503
+        assert second.headers["retry-after"] == str(QUEUE_RETRY_AFTER_SECS)
 
         assert client.post("/api/scenes", json=body()).status_code == 202  # same job: not a new one
 
@@ -269,12 +277,29 @@ def test_queue_full_gives_503_and_unreachable_source_gives_503(tmp_path):
         assert wait_for(client, first.json()["id"])["status"] == "done"
 
     class Down(SyntheticSource):
-        def vintage(self, month):
+        def current_revision(self, month):
             raise SourceUnavailable("down")
 
     app = create_app(tmp_path / "b.db", tmp_path / "scenes2", make_registry(Down()))
     with TestClient(app) as client:
-        assert client.post("/api/scenes", json=body()).status_code == 503
+        response = client.post("/api/scenes", json=body())
+        assert response.status_code == 503
+        assert response.headers["retry-after"] == str(SOURCE_RETRY_AFTER_SECS)
+
+
+def test_built_scene_is_served_again_when_the_source_goes_down(tmp_path, monkeypatch):
+    source = RevisionSource()
+    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(source))
+    with TestClient(app) as client:
+        first = client.post("/api/scenes", json=body())
+        assert wait_for(client, first.json()["id"])["status"] == "done"
+
+        monkeypatch.setattr("soe.scene_request.REVISION_FRESH_SECS", 0)
+        source.down = True
+        again = client.post("/api/scenes", json=body())
+
+        assert again.status_code == 200
+        assert again.json()["id"] == first.json()["id"]
 
 
 def test_failed_job_has_generic_error_and_class(tmp_path):
@@ -364,17 +389,6 @@ def test_sample_areas_seed_only_in_synthetic_mode_and_when_empty(tmp_path, monke
 
     with TestClient(app_in("other")) as client:
         assert sample_ids(client) == set()
-
-
-def test_synthetic_and_real_terrain_scenes_get_different_ids():
-    terrain = ["glo90_terrain"]
-    synthetic = make_registry(SyntheticSource())
-    real = make_registry(RealSource())
-
-    def scene_id(registry):
-        return _scene_id("g", terrain, "2015-01", "2015-02", [registry["glo90_terrain"]])
-
-    assert scene_id(synthetic) != scene_id(real)
 
 
 def test_sample_area_geometries_are_valid_raw_and_unwrapped():

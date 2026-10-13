@@ -1,4 +1,4 @@
-"""SQLite: boundaries (search) and scene jobs. One connection per call, WAL, busy_timeout 5000."""
+"""SQLite: boundaries (search), scene jobs and source revisions; one WAL connection per call."""
 import logging
 import sqlite3
 from contextlib import contextmanager
@@ -21,7 +21,9 @@ CREATE TABLE IF NOT EXISTS boundaries (
     source TEXT NOT NULL,
     licence TEXT NOT NULL
 );
+
 CREATE INDEX IF NOT EXISTS ix_boundaries_name ON boundaries(name COLLATE NOCASE);
+
 CREATE TABLE IF NOT EXISTS scenes (
     id TEXT PRIMARY KEY,
     status TEXT NOT NULL,
@@ -32,6 +34,14 @@ CREATE TABLE IF NOT EXISTS scenes (
     bytes INTEGER,
     created TEXT NOT NULL,
     finished TEXT
+);
+
+CREATE TABLE IF NOT EXISTS source_revisions (
+    dataset_id TEXT NOT NULL,
+    month TEXT NOT NULL,
+    revision TEXT NOT NULL,
+    checked TEXT NOT NULL,
+    PRIMARY KEY (dataset_id, month)
 );
 """
 
@@ -188,6 +198,30 @@ def _check_capacity(connection, max_active):
     ).fetchone()[0]
     if active >= max_active:
         raise Busy()
+
+
+def get_revision(path, dataset_id, month):
+    """(stored revision, seconds since the source was asked) or None."""
+    with connect(path) as connection:
+        row = connection.execute(
+            "SELECT revision, checked FROM source_revisions WHERE dataset_id = ? AND month = ?",
+            (dataset_id, month),
+        ).fetchone()
+    if row is None:
+        return None
+
+    age = datetime.now(timezone.utc) - datetime.fromisoformat(row["checked"])
+    return row["revision"], age.total_seconds()
+
+
+def set_revision(path, dataset_id, month, revision):
+    """Store the source's revision of a month and the time it was asked."""
+    with connect(path) as connection:
+        connection.execute(
+            "INSERT OR REPLACE INTO source_revisions (dataset_id, month, revision, checked) "
+            "VALUES (?,?,?,?)",
+            (dataset_id, month, revision, now()),
+        )
 
 
 @contextmanager

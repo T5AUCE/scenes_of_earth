@@ -9,11 +9,12 @@ import type {
 } from "./types";
 
 const SCENE_VERSION = "0.2";
-const SCENE_ID_PATTERN = /^[0-9a-f]{20}$/;
+const SCENE_ID_CHARS = 20; // Must match ID_CHARS in soe/scene_request.py.
+const SCENE_ID_PATTERN = new RegExp(`^[0-9a-f]{${SCENE_ID_CHARS}}$`);
 
-const REQUEST_TIMEOUT_MS = 10_000;
-/** Build request timeout; the backend may first wait up to 15 s on the CHIRPS vintage lookup. */
-export const BUILD_REQUEST_TIMEOUT_MS = 30_000;
+const REQUEST_TIMEOUT_MS = 10 * 1000;
+/** Build request timeout; the backend may first wait up to 15 s on the CHIRPS revision lookup. */
+export const BUILD_REQUEST_TIMEOUT_MS = 30 * 1000;
 
 /** A failed API response, with its HTTP status and any Retry-After delay. */
 export class ApiError extends Error {
@@ -39,7 +40,7 @@ export function searchAreas(query: string, level: string) {
   return request<AreaHit[]>(`/api/areas/search?q=${encodeURIComponent(query)}${levelParameter}`);
 }
 
-/** Whether text is a scene id: the first 20 hex characters of the backend's hash. */
+/** Whether text is a scene id: the first SCENE_ID_CHARS hex characters of the backend's hash. */
 export const isSceneId = (text: string) => SCENE_ID_PATTERN.test(text);
 
 /** The build status of one scene. */
@@ -100,7 +101,6 @@ async function apiErrorFrom(response: Response) {
 
 function errorMessage(detail: unknown, status: number) {
   if (typeof detail === "string") return detail;
-
   // FastAPI validation errors arrive as a list of problems.
   if (Array.isArray(detail)) return detail.map((problem) => problem.msg).join("; ");
   return `HTTP ${status}`;
