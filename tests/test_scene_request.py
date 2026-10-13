@@ -20,29 +20,6 @@ PINNED_REVISION = "Tue, 01 Sep 2015 00:00:00 GMT"
 PINNED_SCENE_ID = "dbb1ffc5d99da2225a23"  # Computed before the revision refactor.
 
 
-class RevisionSource(RealSource):
-    """A real-mode backend (so revisions are stored) that reads synthetic data and no network."""
-
-    def __init__(self):
-        super().__init__(latest="2026-08")
-        self.data = SyntheticSource()
-        self.revision = "first"
-        self.down = False
-        self.revision_calls = 0
-
-    def current_revision(self, month):
-        self.revision_calls += 1
-        if self.down:
-            raise SourceUnavailable("down")
-        return self.revision
-
-    def read_rain(self, month, window):
-        return self.data.read_rain(month, window)
-
-    def terrain(self, bounds, res):
-        return self.data.terrain(bounds, res)
-
-
 def request_body(**overrides):
     return json.dumps({
         "area": {"type": "polygon", "geometry": SQUARE},
@@ -78,36 +55,34 @@ def test_unknown_layer_is_an_area_error(db_path):
 def test_stored_revision_serves_a_built_scene_when_the_source_goes_down(
     db_path,
     monkeypatch,
+    revision_source,
 ):
-    source = RevisionSource()
-    registry = make_registry(source)
+    registry = make_registry(revision_source)
     first = prepare_scene(db_path, registry, request_body())
 
     monkeypatch.setattr("soe.scene_request.REVISION_FRESH_SECS", 0)
-    source.down = True
+    revision_source.down = True
     again = prepare_scene(db_path, registry, request_body())
 
     assert again.scene_id == first.scene_id
 
 
-def test_unavailable_source_without_stored_revision_fails_before_any_read(db_path):
-    source = RevisionSource()
-    source.down = True
+def test_unavailable_source_without_stored_revision_fails_before_any_read(db_path, revision_source):
+    revision_source.down = True
 
     with pytest.raises(SourceUnavailable):
-        prepare_scene(db_path, make_registry(source), request_body())
+        prepare_scene(db_path, make_registry(revision_source), request_body())
 
-    assert source.data.reads == 0
+    assert revision_source.data.reads == 0
 
 
-def test_fresh_stored_revision_is_not_asked_again(db_path):
-    source = RevisionSource()
-    registry = make_registry(source)
+def test_fresh_stored_revision_is_not_asked_again(db_path, revision_source):
+    registry = make_registry(revision_source)
 
     prepare_scene(db_path, registry, request_body())
     prepare_scene(db_path, registry, request_body())
 
-    assert source.revision_calls == 1
+    assert revision_source.revision_calls == 1
 
 
 def test_synthetic_backend_does_not_touch_the_revision_table(db_path):
@@ -116,13 +91,16 @@ def test_synthetic_backend_does_not_touch_the_revision_table(db_path):
     assert db.get_revision(db_path, "chirps_monthly", "2015-06") is None
 
 
-def test_changed_revision_after_recovery_gives_a_new_scene_id(db_path, monkeypatch):
-    source = RevisionSource()
-    registry = make_registry(source)
+def test_changed_revision_after_recovery_gives_a_new_scene_id(
+    db_path,
+    monkeypatch,
+    revision_source,
+):
+    registry = make_registry(revision_source)
     first = prepare_scene(db_path, registry, request_body())
 
     monkeypatch.setattr("soe.scene_request.REVISION_FRESH_SECS", 0)
-    source.revision = "revised"
+    revision_source.revision = "revised"
     second = prepare_scene(db_path, registry, request_body())
 
     assert second.scene_id != first.scene_id

@@ -342,7 +342,8 @@ async def read_body(request):
 
 
 class SceneFiles(StaticFiles):
-    """Bundles are content-addressed, so responses are cached as immutable."""
+    """Serves scene bundles: hides in-progress builds (.tmp) and marks files as
+    cacheable forever, since a scene id changes whenever its data would."""
 
     async def get_response(self, path, scope):
         if path.startswith("."):

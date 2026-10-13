@@ -35,9 +35,14 @@ export const getHealth = () => request<Health>("/api/health");
 export const getLayers = () => request<LayersResponse>("/api/layers");
 
 /** Named areas matching the query, optionally at one level only. */
-export function searchAreas(query: string, level: string) {
-  const levelParameter = level ? `&level=${level}` : "";
-  return request<AreaHit[]>(`/api/areas/search?q=${encodeURIComponent(query)}${levelParameter}`);
+export const searchAreas = (query: string, level: string) =>
+  request<AreaHit[]>(searchUrl(query, level));
+
+/** The area search URL; the level is left out when empty. */
+export function searchUrl(query: string, level: string) {
+  const parameters = new URLSearchParams({ q: query });
+  if (level) parameters.set("level", level);
+  return `/api/areas/search?${parameters}`;
 }
 
 /** Whether text is a scene id: the first SCENE_ID_CHARS hex characters of the backend's hash. */

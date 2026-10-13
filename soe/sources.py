@@ -148,10 +148,6 @@ def _next_month(year, month):
     return (year + 1, 1) if month == 12 else (year, month + 1)
 
 
-def _previous_month(year, month):
-    return (year - 1, 12) if month == 1 else (year, month - 1)
-
-
 def glo90_tiles(bounds):
     """Names of the existing GLO-90 tiles covering bounds (W, S, E, N).
 
@@ -355,6 +351,14 @@ class RealSource:
         return elevation
 
 
+def _previous_month(year, month):
+    return (year - 1, 12) if month == 1 else (year, month - 1)
+
+
+def _chirps_url(month):
+    return CHIRPS_URL.format(ym=month.replace("-", "."))
+
+
 def _head(url, timeout=HEAD_TIMEOUT_SECS):
     """(exists, Last-Modified) for a URL: (False, None) on 404, (None, None) if unreachable."""
     try:
@@ -365,10 +369,6 @@ def _head(url, timeout=HEAD_TIMEOUT_SECS):
         return (False if error.code == 404 else None), None
     except (urllib.error.URLError, OSError):
         return None, None
-
-
-def _chirps_url(month):
-    return CHIRPS_URL.format(ym=month.replace("-", "."))
 
 
 def _crop_margin(merged, bounds, res):

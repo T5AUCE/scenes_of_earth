@@ -19,7 +19,6 @@ from soe.api import (
 from soe.areas import unwrap
 from soe.bundle import SYNTHETIC_DATA_CREDIT
 from soe.sources import SourceUnavailable, SyntheticSource, make_registry
-from test_scene_request import RevisionSource
 
 POLL_ATTEMPTS = 100
 POLL_INTERVAL_SECS = 0.1
@@ -287,15 +286,18 @@ def test_queue_full_gives_503_and_unreachable_source_gives_503(tmp_path):
         assert response.headers["retry-after"] == str(SOURCE_RETRY_AFTER_SECS)
 
 
-def test_built_scene_is_served_again_when_the_source_goes_down(tmp_path, monkeypatch):
-    source = RevisionSource()
-    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(source))
+def test_built_scene_is_served_again_when_the_source_goes_down(
+    tmp_path,
+    monkeypatch,
+    revision_source,
+):
+    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(revision_source))
     with TestClient(app) as client:
         first = client.post("/api/scenes", json=body())
         assert wait_for(client, first.json()["id"])["status"] == "done"
 
         monkeypatch.setattr("soe.scene_request.REVISION_FRESH_SECS", 0)
-        source.down = True
+        revision_source.down = True
         again = client.post("/api/scenes", json=body())
 
         assert again.status_code == 200
