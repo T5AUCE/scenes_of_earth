@@ -7,28 +7,58 @@ from pathlib import Path
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS boundaries (
-    id TEXT PRIMARY KEY, level TEXT NOT NULL, name TEXT NOT NULL, parent_name TEXT, iso3 TEXT,
-    bbox_w REAL, bbox_s REAL, bbox_e REAL, bbox_n REAL, cells INTEGER,
-    geom_geojson TEXT NOT NULL, source TEXT NOT NULL, licence TEXT NOT NULL
+    id TEXT PRIMARY KEY, 
+    level TEXT NOT NULL, 
+    name TEXT NOT NULL, 
+    parent_name TEXT, 
+    iso3 TEXT,
+    bbox_w REAL, 
+    bbox_s REAL, 
+    bbox_e REAL, 
+    bbox_n REAL, 
+    cells INTEGER,
+    geom_geojson TEXT NOT NULL, 
+    source TEXT NOT NULL, 
+    licence TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_boundaries_name ON boundaries(name COLLATE NOCASE);
 CREATE TABLE IF NOT EXISTS scenes (
-    id TEXT PRIMARY KEY, status TEXT NOT NULL, progress REAL DEFAULT 0,
-    error TEXT, error_class TEXT, request_json TEXT NOT NULL, bytes INTEGER,
-    created TEXT NOT NULL, finished TEXT
+    id TEXT PRIMARY KEY, 
+    status TEXT NOT NULL, 
+    progress REAL DEFAULT 0,
+    error TEXT, 
+    error_class TEXT, 
+    request_json TEXT NOT NULL, 
+    bytes INTEGER,
+    created TEXT NOT NULL, 
+    finished TEXT
 );
 """
-log = logging.getLogger("soe.db")
+
 LEVEL_RANK = (
     "CASE level WHEN 'country' THEN 0 WHEN 'state' THEN 1 WHEN 'county' THEN 2 ELSE 3 END"
 )
+
 SQLITE_TIMEOUT_SECONDS = 5
 BUSY_TIMEOUT_MILLISECONDS = SQLITE_TIMEOUT_SECONDS * 1000
 ACTIVE_STATUSES = "('queued','running')"
-INSERT_BOUNDARY = (
-    "INSERT OR REPLACE INTO boundaries (id, level, name, parent_name, iso3, bbox_w, bbox_s, "
-    "bbox_e, bbox_n, cells, geom_geojson, source, licence) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
-)
+
+INSERT_BOUNDARY = """
+    INSERT OR REPLACE INTO boundaries (
+        id, level, name, parent_name, iso3,
+        bbox_w, bbox_s, bbox_e, bbox_n, cells,
+        geom_geojson, source, licence
+    )
+    VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    )
+"""
+
+log = logging.getLogger("soe.db")
+
+
+class Busy(Exception):
+    """Too many queued or running scene jobs."""
 
 
 def now():
@@ -39,9 +69,12 @@ def now():
 def connect(path):
     # isolation_level=None is autocommit; submit() and add_boundaries() use explicit BEGIN.
     connection = sqlite3.connect(
-        path, timeout=SQLITE_TIMEOUT_SECONDS, isolation_level=None
+        path,
+        timeout=SQLITE_TIMEOUT_SECONDS,
+        isolation_level=None,
     )
     connection.row_factory = sqlite3.Row
+    
     try:
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MILLISECONDS}")
@@ -64,19 +97,23 @@ def init(path):
 
 
 def search(path, query, level=None, limit=20):
-    # LIKE escape character is '!'.
+    # User text must match literally, so LIKE wildcards are escaped with '!'.
     query = query.replace("!", "!!").replace("%", "!%").replace("_", "!_")
     prefix_pattern, word_pattern = f"{query}%", f"% {query}%"
+
     where = "(name LIKE ? ESCAPE '!' OR name LIKE ? ESCAPE '!')"
     if level:
         where += " AND level = ?"
+
     order_by = f"(name LIKE ? ESCAPE '!') DESC, {LEVEL_RANK}, cells DESC, name"
     sql = (
         "SELECT id, name, level, iso3, parent_name, bbox_w, bbox_s, bbox_e, bbox_n, cells "
         f"FROM boundaries WHERE {where} ORDER BY {order_by} LIMIT ?"
     )
+
     arguments = [prefix_pattern, word_pattern] + ([level] if level else [])
     arguments += [prefix_pattern, limit]
+
     with connect(path) as connection:
         return [dict(row) for row in connection.execute(sql, arguments)]
 
@@ -84,13 +121,10 @@ def search(path, query, level=None, limit=20):
 def get_boundary(path, boundary_id):
     with connect(path) as connection:
         row = connection.execute(
-            "SELECT * FROM boundaries WHERE id = ?", (boundary_id,)
+            "SELECT * FROM boundaries WHERE id = ?",
+            (boundary_id,),
         ).fetchone()
     return dict(row) if row else None
-
-
-class Busy(Exception):
-    """Too many queued or running scene jobs."""
 
 
 def add_boundaries(path, source, rows):
@@ -108,13 +142,28 @@ def add_boundaries(path, source, rows):
 
 
 def has_boundaries_besides(path, source):
+    """Used to skip seeding if real boundaries exist from another source."""
     with connect(path) as connection:
         row = connection.execute(
             "SELECT 1 FROM boundaries WHERE source != ? LIMIT 1",
             (source,),
         ).fetchone()
-
     return row is not None
+
+
+def get_scene(path, scene_id):
+    with connect(path) as connection:
+        row = _select_scene(connection, scene_id)
+    return dict(row) if row else None
+
+
+def update_scene(path, scene_id, **fields):
+    assignments = ", ".join(f"{column} = ?" for column in fields)
+    with connect(path) as connection:
+        connection.execute(
+            f"UPDATE scenes SET {assignments} WHERE id = ?",
+            (*fields.values(), scene_id),
+        )
 
 
 def submit(path, scene_id, request_json, bundle_exists, max_active=None):
@@ -160,17 +209,3 @@ def _check_capacity(connection, max_active):
     ).fetchone()[0]
     if active >= max_active:
         raise Busy()
-
-
-def get_scene(path, scene_id):
-    with connect(path) as connection:
-        row = _select_scene(connection, scene_id)
-    return dict(row) if row else None
-
-
-def update_scene(path, scene_id, **fields):
-    assignments = ", ".join(f"{column} = ?" for column in fields)
-    with connect(path) as connection:
-        connection.execute(
-            f"UPDATE scenes SET {assignments} WHERE id = ?", (*fields.values(), scene_id)
-        )

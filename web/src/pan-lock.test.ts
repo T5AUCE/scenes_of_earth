@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+
 import { clampAround, nearestEquivalent, panLimit } from "./pan-lock.ts";
 
 const FLOAT_TOLERANCE = 1e-12;

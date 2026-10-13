@@ -7,6 +7,7 @@ import {
   type PaddingOptions,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+
 import { areaFilter, type TileArea, WORLD_WIDTH_DEGREES } from "./label-filter";
 import { clampAround, nearestEquivalent, panLimit } from "./pan-lock";
 import { imageCorners } from "./render/mercator";
@@ -14,22 +15,25 @@ import type { Bbox } from "./types";
 
 // OpenFreeMap: free, no API key.
 const BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
-export const WORLD_VIEW = { center: [0, 20] as [number, number], zoom: 1.5 };
-const MAX_FIT_ZOOM = 10;
+export const MAX_ZOOM = 24;
 // MapLibre draws the world 512 px wide at zoom 0.
 const TILE_SIZE_PX = 512;
+// WebGL guarantees at least this much; used when the context cannot be queried.
+const GUARANTEED_TEXTURE_SIZE_PX = 4096;
+
+export const WORLD_VIEW = { center: [0, 20] as [number, number], zoom: 1.5 };
+const MAX_FIT_ZOOM = 10;
+// The left side is wider because the side panel covers it.
+const FIT_PADDING_PX = { top: 40, bottom: 40, left: 340, right: 40 };
 // A picked area is shown with its surroundings, before a scene is built for it.
 export const BROWSE_PADDING_PX = { top: 120, bottom: 120, left: 460, right: 120 };
 export const BROWSE_MAX_ZOOM = 8;
+
 const PICKED_ID = "soe-picked-area";
 const PICKED_COLOR_PROPERTY = "--pick-outline";
 const PICKED_LINE_WIDTH_PX = 3;
-export const MAX_ZOOM = 24;
+
 const AREA_LABEL_SUFFIX = "-in-area";
-// WebGL guarantees at least this much; used when the context cannot be queried.
-const GUARANTEED_TEXTURE_SIZE_PX = 4096;
-// The left side is wider because the side panel covers it.
-const FIT_PADDING_PX = { top: 40, bottom: 40, left: 340, right: 40 };
 
 interface DrawableImage {
   updateImage(options: { image: ImageData }): void;

@@ -1,4 +1,5 @@
 const PLAY_INTERVAL_MS = 700;
+
 const YEAR_LENGTH = 4; // "YYYY"
 const MONTH_LENGTH = 7; // "YYYY-MM"
 

@@ -20,6 +20,7 @@ type Corners = [[number, number], [number, number], [number, number], [number, n
 const MAX_TEXTURE_SIZE_PX = 4096;
 // Keeps rounding noise from adding a row to an already exact fit.
 const ROW_COUNT_TOLERANCE = 1e-9;
+
 const WORLD_WIDTH_DEGREES = 360;
 const ANTIMERIDIAN_DEGREES = 180;
 

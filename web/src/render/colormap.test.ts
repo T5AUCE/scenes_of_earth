@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+
 import { decode } from "../data.ts";
 import {
   COLOR_CHANNELS,
@@ -34,7 +35,6 @@ test("uint16 rain decodes with the scale factor and the fill becomes NaN", () =>
   const values = decode(Uint16Array.of(0, 1234, 65535), doc);
 
   assert.ok(Math.abs(values[1] - 123.4) < 0.01);
-
   assert.ok(Number.isNaN(values[2]));
 });
 

@@ -5,30 +5,10 @@ from . import __version__
 from .sources import SOURCES, SyntheticSource
 
 VERSION = "0.2"
-BOUNDARY_SOURCE_FIELDS = ("licence_url", "attribution", "citation", "modified")
 TERRAIN_LAYER_ID = "glo90_terrain"
+
+BOUNDARY_SOURCE_FIELDS = ("licence_url", "attribution", "citation", "modified")
 SYNTHETIC_DATA_CREDIT = "Data: synthetically generated, not real measurements"
-
-
-def credits(layer_blocks, boundary_source, synthetic=False):
-    """Attribution block, generated from the sources actually used."""
-    sources = [layer["source"] for layer in layer_blocks]
-    if boundary_source:
-        sources.append(boundary_source)
-
-    lines = [source["attribution"] for source in sources]
-    if synthetic:
-        lines.append(SYNTHETIC_DATA_CREDIT)
-
-    return {
-        "lines": lines,
-        "disclaimers": [source["disclaimer"] for source in sources if source.get("disclaimer")],
-        "endorsement": "Scenes of Earth is not endorsed by the data providers.",
-        "terms_passthrough": (
-            "Reuse of this bundle's data is subject to each source's licence "
-            "listed in layers[].source and area.boundary."
-        ),
-    }
 
 
 def make(scene_id, title, area, plan, datasets, info):
@@ -71,7 +51,6 @@ def make(scene_id, title, area, plan, datasets, info):
 
 def _boundary_block(area):
     row = area.boundary
-
     block = {
         "id": row["id"],
         "name": row["name"],
@@ -80,10 +59,8 @@ def _boundary_block(area):
         "source": row["source"],
         "licence": row["licence"],
     }
-
     source = SOURCES[row["source"]]
     block.update({key: source[key] for key in BOUNDARY_SOURCE_FIELDS if key in source})
-
     return block
 
 
@@ -96,7 +73,6 @@ def _layer_block(dataset, layer_plan, result):
         "nx": layer_plan.shape[1],
         "ny": layer_plan.shape[0],
     }
-
     layer = {
         "id": dataset.id,
         "title": dataset.title,
@@ -125,13 +101,11 @@ def _layer_block(dataset, layer_plan, result):
             "values": layer_plan.steps,
         }
         layer["stats"] = result["stats"]
-
     return layer
 
 
 def _array_blocks(dataset):
     blocks = {}
-
     for role, name in dataset.arrays.items():
         dtype, scale_factor, add_offset, fill = dataset.encoding[role]
         blocks[role] = {
@@ -141,15 +115,34 @@ def _array_blocks(dataset):
             "add_offset": add_offset,
             "fill": fill,
         }
-
     return blocks
+
+
+def credits(layer_blocks, boundary_source, synthetic=False):
+    """Attribution block, generated from the sources actually used."""
+    sources = [layer["source"] for layer in layer_blocks]
+    if boundary_source:
+        sources.append(boundary_source)
+
+    lines = [source["attribution"] for source in sources]
+    if synthetic:
+        lines.append(SYNTHETIC_DATA_CREDIT)
+
+    return {
+        "lines": lines,
+        "disclaimers": [source["disclaimer"] for source in sources if source.get("disclaimer")],
+        "endorsement": "Scenes of Earth is not endorsed by the data providers.",
+        "terms_passthrough": (
+            "Reuse of this bundle's data is subject to each source's licence "
+            "listed in layers[].source and area.boundary."
+        ),
+    }
 
 
 def validate(doc):
     """Return a list of problems (empty when the bundle is fine)."""
     required = ("version", "id", "area", "layers", "data", "credits", "notices")
     missing = [f"missing {key}" for key in required if key not in doc]
-
     if missing:
         return missing
 
@@ -159,14 +152,12 @@ def validate(doc):
 
     area = doc["area"]
     west, south, east, north = area["bbox"]
-
     if not (west < east and south < north):
         problems.append("bbox is not W < E and S < N")
 
     problems += _attribution_problems(doc)
     for layer in doc["layers"]:
         problems += _layer_problems(layer)
-
     return problems
 
 
@@ -193,14 +184,16 @@ def _attribution_problems(doc):
             problems.append(f"{name}: attribution not in credits.lines")
         if source.get("disclaimer") and source["disclaimer"] not in disclaimers:
             problems.append(f"{name}: disclaimer not in credits.disclaimers")
-
     return problems
 
 
 def _layer_problems(layer):
     layer_id = layer["id"]
-    problems = [f"{layer_id}: missing {key}" for key in ("grid", "mask", "arrays")
-                if not layer.get(key)]
+    problems = [
+        f"{layer_id}: missing {key}"
+        for key in ("grid", "mask", "arrays")
+        if not layer.get(key)
+    ]
     
     if layer.get("mask") and layer["mask"]["cells_inside"] < 1:
         problems.append(f"{layer_id}: mask has no cells")

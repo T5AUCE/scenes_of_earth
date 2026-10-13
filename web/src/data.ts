@@ -1,4 +1,5 @@
 import * as zarr from "zarrita";
+
 import type { ArrayDoc, LayerDoc } from "./types";
 
 export type Store = Awaited<ReturnType<typeof openStore>>;

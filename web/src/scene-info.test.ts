@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+
 import {
   areaKm2,
   creditEntries,
@@ -8,6 +9,9 @@ import {
   noticeCount,
 } from "./scene-info.ts";
 import type { Scene } from "./types.ts";
+
+const KILOMETERS_PER_DEGREE = 111.32;
+const AREA_TOLERANCE_KM2 = 1e-6;
 
 function makeScene(overrides: Partial<Scene["area"]> = {}) {
   const source = { name: "Rain", licence: "CC BY 4.0", attribution: "Rain credit" };
@@ -34,9 +38,9 @@ function makeScene(overrides: Partial<Scene["area"]> = {}) {
 }
 
 test("the area comes from the finest layer's cells at the bbox centre latitude", () => {
-  const cellKm = 0.01 * 111.32;
+  const cellKm = 0.01 * KILOMETERS_PER_DEGREE;
 
-  assert.ok(Math.abs(areaKm2(makeScene()) - 10_000 * cellKm ** 2) < 1e-6);
+  assert.ok(Math.abs(areaKm2(makeScene()) - 10_000 * cellKm ** 2) < AREA_TOLERANCE_KM2);
 });
 
 test("cell sizes show metres below a kilometre and kilometres above", () => {

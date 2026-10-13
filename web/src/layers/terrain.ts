@@ -1,4 +1,5 @@
 import type { GeoJSONSource, Map as MapLibreMap } from "maplibre-gl";
+
 import {
   COARSE_JOB,
   covers,
@@ -20,10 +21,12 @@ import type { Bbox, LayerContext, LayerDoc, LayerView, Part } from "../types";
 type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
 
 const HILLSHADE_OPACITY = 0.7;
+
 const CONTOUR_COLOR = "#5b4636";
 const CONTOUR_OPACITY = 0.55;
 const MINOR_LINE_WIDTH_PX = 0.5;
 const MAJOR_LINE_WIDTH_PX = 1.1;
+
 const DETAIL_DEBOUNCE_MS = 200;
 const DETAIL_MARGIN = 0.5;
 
@@ -202,7 +205,6 @@ class ContourOverlay {
 
     if (this.inFlight) {
       this.isRequestPending = true;
-
       return;
     }
 

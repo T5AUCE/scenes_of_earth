@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+
 import { imageCorners, mercY, sampleTable, shiftLongitudes, worldShift } from "./mercator.ts";
+
+const FLOAT_TOLERANCE = 1e-12;
 
 const gridOf = (bbox: number[], nx: number, ny: number) => ({
   bbox: bbox as [number, number, number, number],
@@ -49,7 +52,7 @@ test("the height is capped", () => {
 });
 
 test("Mercator y grows faster than latitude away from the equator", () => {
-  assert.ok(Math.abs(mercY(0)) < 1e-12);
+  assert.ok(Math.abs(mercY(0)) < FLOAT_TOLERANCE);
   assert.ok(mercY(60) - mercY(50) > mercY(10) - mercY(0));
 });
 

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+
 import { routeFor, sceneUrl, timeForMonth } from "./scene-url.ts";
 
 const id = "0123456789abcdef0123";

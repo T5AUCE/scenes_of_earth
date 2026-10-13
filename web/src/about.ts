@@ -10,14 +10,16 @@ import {
 import { formatTime, unionTimes } from "./timeline";
 import type { Scene } from "./types";
 
+// The docked panel scrolls the About tab to this heading.
+export const NOTICES_HEADING_ID = "notices-heading";
+// "YYYY-MM-DDTHH:MM" is the part of an ISO timestamp that is shown.
+const ISO_MINUTE_LENGTH = 16;
+const WEB_LINK_PATTERN = /^https?:\/\//;
+
 const BASEMAP_CREDIT = "Basemap: OpenFreeMap, © OpenMapTiles, data from OpenStreetMap.";
 // The basemap is the only layer that is not part of the bundle, so its failure is stated here.
 const NO_FALLBACK_NOTE =
   "If the basemap cannot load, no other basemap is substituted; the data layers still draw.";
-// "YYYY-MM-DDTHH:MM" is the part of an ISO timestamp that is shown.
-const ISO_MINUTE_LENGTH = 16;
-// The docked panel scrolls the About tab to this heading.
-export const NOTICES_HEADING_ID = "notices-heading";
 const CLIPPED_NOTICE = "The area reaches beyond the data coverage and was clipped to it.";
 
 const SMOOTHING_LINES = [
@@ -177,7 +179,7 @@ function definitionList(rows: [string, string][]) {
 
 // The address comes from the bundle, so only web links become clickable.
 function link(text: string, href: string) {
-  if (!/^https?:\/\//.test(href)) return document.createTextNode(text);
+  if (!WEB_LINK_PATTERN.test(href)) return document.createTextNode(text);
 
   const anchor = makeHtmlElement("a", text);
   anchor.href = href;

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+
 import { BUILD_REQUEST_TIMEOUT_MS, isSceneId } from "./api.ts";
 
 test("a scene id is exactly 20 lowercase hex characters", () => {

@@ -9,7 +9,7 @@ import pytest
 import zarr
 from shapely.geometry import LineString, MultiPolygon, Polygon, box, mapping
 
-from soe import sources
+from soe import db, sources
 from soe.areas import Area, AreaError, check_months, clean_polygon, plan, unwrap
 from soe.build import build_scene, hillshade
 from soe.bundle import SYNTHETIC_DATA_CREDIT, credits, validate
@@ -28,6 +28,17 @@ from soe.sources import (
 )
 
 NAIROBI = box(36.5, -1.5, 37.5, -0.5)
+FIJI = MultiPolygon([box(178, -19, 180, -17), box(-180, -19, -178, -17)])
+BOUNDARY = {
+    "id": "cgaz:ADM1:TEST",
+    "name": "Testland",
+    "level": "state",
+    "iso3": "KEN",
+    "source": "geoBoundaries CGAZ",
+    "licence": "CC BY 4.0",
+}
+
+HASH_A, HASH_B, HASH_C = "a" * 20, "b" * 20, "c" * 20
 SYNTHETIC_REGISTRY = make_registry(SyntheticSource())
 RAIN, TERRAIN = SYNTHETIC_REGISTRY["chirps_monthly"], SYNTHETIC_REGISTRY["glo90_terrain"]
 
@@ -42,12 +53,31 @@ def plan_months(area, datasets, months=12):
     return plan(area, datasets, "1990-01", end)
 
 
+def build_nairobi(tmp_path, months=("2015-01", "2016-02")):
+    build_scene(
+        HASH_A,
+        Area(NAIROBI, BOUNDARY),
+        months[0],
+        months[1],
+        [TERRAIN, RAIN],
+        "Test",
+        tmp_path,
+    )
+    out = tmp_path / HASH_A
+    doc = json.loads((out / "scene.json").read_text(encoding="utf-8"))
+    return doc, zarr.open_group(out / "data.zarr", mode="r")
+
+
 def test_months():
     assert month_list("2015-11", "2016-02") == ["2015-11", "2015-12", "2016-01", "2016-02"]
     check_months("1981-01", "2026-08", "1981-01", "2026-08")
 
-    bad_ranges = (("1980-12", "1990-01"), ("2020-05", "2020-04"), ("2020-01", "2026-09"),
-                  ("2020-13", "2020-14"))
+    bad_ranges = (
+        ("1980-12", "1990-01"),
+        ("2020-05", "2020-04"),
+        ("2020-01", "2026-09"),
+        ("2020-13", "2020-14"),
+    )
 
     for start, end in bad_ranges:
         with pytest.raises(AreaError):
@@ -65,7 +95,8 @@ def test_hillshade_flat_and_slope():
     flat = hillshade(np.zeros((8, 8)), 0.01, 10.0)
     assert (flat == round(255 * np.sin(np.radians(45)))).all()
 
-    west_facing = np.tile(np.arange(8) * 50.0, (8, 1))  # rises eastwards, so faces the NW sun
+    # It rises eastwards, so it faces the north-west sun.
+    west_facing = np.tile(np.arange(8) * 50.0, (8, 1))
     east_facing = west_facing[:, ::-1]
 
     assert hillshade(west_facing, 0.01, 10.0)[4, 4] > hillshade(east_facing, 0.01, 10.0)[4, 4]
@@ -178,8 +209,10 @@ def test_tile_index():
     assert glo90_tiles((6, 0, 7, 1)) == ["Copernicus_DSM_COG_30_N00_00_E006_00_DEM"]
     assert glo90_tiles((-130, -10, -120, 0)) == []  # mid-Pacific
     assert TERRAIN.tile_count([-130, -10, -120, 0]) == 0
-    assert glo90_tiles((179, -18, 181, -17)) == ["Copernicus_DSM_COG_30_S18_00_E179_00_DEM",
-                                                 "Copernicus_DSM_COG_30_S18_00_W180_00_DEM"]
+    assert glo90_tiles((179, -18, 181, -17)) == [
+        "Copernicus_DSM_COG_30_S18_00_E179_00_DEM",
+        "Copernicus_DSM_COG_30_S18_00_W180_00_DEM",
+    ]
 
 
 def test_terrain_blocks_equal_one_read():
@@ -242,9 +275,6 @@ def test_credits_announce_synthetic_data_only_for_the_synthetic_source():
     assert line not in credits(layer_blocks, None)["lines"]
 
 
-FIJI = MultiPolygon([box(178, -19, 180, -17), box(-180, -19, -178, -17)])
-
-
 def test_unwrap_merges_parts_split_at_180_into_valid_shape():
     split = MultiPolygon([box(179, -1, 180, 1), box(-180, -1, -179, 1)])
 
@@ -297,8 +327,16 @@ def test_read_month_wraps_at_180():
 def test_synthetic_build_across_180(tmp_path):
     registry = make_registry(SyntheticSource())
     layers = [registry["glo90_terrain"], registry["chirps_monthly"]]
-    build_scene(HASH_B, Area(FIJI, BOUNDARY), "2015-01", "2015-03", layers, "Test", tmp_path,
-                lambda fraction: None)
+    build_scene(
+        HASH_B,
+        Area(FIJI, BOUNDARY),
+        "2015-01",
+        "2015-03",
+        layers,
+        "Test",
+        tmp_path,
+        lambda fraction: None,
+    )
 
     out = tmp_path / HASH_B
     doc = json.loads((out / "scene.json").read_text(encoding="utf-8"))
@@ -322,11 +360,6 @@ def test_synthetic_build_across_180(tmp_path):
     middle = shade.shape[1] // 2
 
     assert not np.all(shade[:, middle] == shade[0, middle])  # no flat seam column
-
-
-HASH_A, HASH_B, HASH_C = "a" * 20, "b" * 20, "c" * 20
-BOUNDARY = {"id": "cgaz:ADM1:TEST", "name": "Testland", "level": "state", "iso3": "KEN",
-            "source": "geoBoundaries CGAZ", "licence": "CC BY 4.0"}
 
 
 def test_synthetic_build_validates_and_opens(tmp_path):
@@ -387,8 +420,14 @@ def test_build_with_aggregation_factor_2(tmp_path):
     doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
 
     assert validate(doc) == []
-    assert doc["layers"][0]["grid"] == {"crs": "EPSG:4326", "bbox": [30, -20, 60, 10], "res": 0.1,
-                                        "nx": 300, "ny": 300, "aggregation": 2}
+    assert doc["layers"][0]["grid"] == {
+        "crs": "EPSG:4326",
+        "bbox": [30, -20, 60, 10],
+        "res": 0.1,
+        "nx": 300,
+        "ny": 300,
+        "aggregation": 2,
+    }
     assert any("averaged" in note for note in doc["notices"]["limits"])
 
     store = zarr.open_group(str(tmp_path / HASH_A / "data.zarr"), mode="r")
@@ -398,19 +437,34 @@ def test_build_with_aggregation_factor_2(tmp_path):
 
 
 def test_clean_polygon_malformed_inputs():
-    for coords in ([[[0, 0], [10 ** 400, 0], [1, 1], [0, 0]]], [[["a", 0], [1, 0], [1, 1], [0, 0]]],
-                   [[[[[[[0, 0]]]]]]]):  # too deeply nested
+    malformed_coordinates = (
+        [[[0, 0], [10 ** 400, 0], [1, 1], [0, 0]]],
+        [[["a", 0], [1, 0], [1, 1], [0, 0]]],
+        [[[[[[[0, 0]]]]]]],  # too deeply nested
+    )
+    for coordinates in malformed_coordinates:
         with pytest.raises(AreaError):
-            clean_polygon({"type": "Polygon", "coordinates": coords})
+            clean_polygon({"type": "Polygon", "coordinates": coordinates})
 
 
 def test_add_boundaries_replaces_duplicate_ids(tmp_path):
-    from soe import db
     path = str(tmp_path / "soe.db")
     db.init(path)
-
-    row = ("x:1", "state", "Dup", "", "TST", 0, 0, 1, 1, 400, "{}", "geoBoundaries CGAZ",
-           "CC BY 4.0")
+    row = (
+        "x:1",
+        "state",
+        "Dup",
+        "",
+        "TST",
+        0,
+        0,
+        1,
+        1,
+        400,
+        "{}",
+        "geoBoundaries CGAZ",
+        "CC BY 4.0",
+    )
 
     assert db.add_boundaries(path, "geoBoundaries CGAZ", [row, row, ("x:2",) + row[1:]]) == 1
     assert len(db.search(path, "Dup")) == 2
@@ -444,7 +498,6 @@ def test_failed_build_leaves_no_partial_bundle(tmp_path):
 
 def test_import_boundaries_tiny_geopackage(tmp_path):
     gpd = pytest.importorskip("geopandas")
-    from soe import db
     from soe.cli import import_cgaz, import_ucdb
 
     country, state, county = box(36, -2, 38, 0), box(36, -2, 37, 0), box(36, -1, 36.5, 0)
@@ -456,11 +509,16 @@ def test_import_boundaries_tiny_geopackage(tmp_path):
             crs=4326,
         ).to_file(tmp_path / f"geoBoundariesCGAZ_ADM{level}.gpkg")
 
-    gpd.GeoDataFrame({"GC_UCN_MAI_2025": ["Big City", "Small Town"], "GC_POP_TOT_2025": [2e6, 5e4],
-                      "GC_CNT_GAD_2025": ["Testland", "Testland"]},
-                     geometry=[box(36.5, -1.5, 36.9, -1.1), box(37, -1, 37.1, -0.9)],
-                     crs=4326).to_file(tmp_path / "ucdb.gpkg",
-                                       layer="GHS_UCDB_THEME_GENERAL_CHARACTERISTICS")
+    cities = gpd.GeoDataFrame(
+        {
+            "GC_UCN_MAI_2025": ["Big City", "Small Town"],
+            "GC_POP_TOT_2025": [2e6, 5e4],
+            "GC_CNT_GAD_2025": ["Testland", "Testland"],
+        },
+        geometry=[box(36.5, -1.5, 36.9, -1.1), box(37, -1, 37.1, -0.9)],
+        crs=4326,
+    )
+    cities.to_file(tmp_path / "ucdb.gpkg", layer="GHS_UCDB_THEME_GENERAL_CHARACTERISTICS")
 
     path = str(tmp_path / "soe.db")
     db.init(path)
@@ -474,15 +532,6 @@ def test_import_boundaries_tiny_geopackage(tmp_path):
     assert db.search(path, "t")[0]["level"] == "country"
     assert db.search(path, "big")[0]["level"] == "city"
     assert db.get_boundary(path, "ucdb:0")["licence"] == "CC BY 4.0"
-
-
-def build_nairobi(tmp_path, months=("2015-01", "2016-02")):
-    build_scene(HASH_A, Area(NAIROBI, BOUNDARY), months[0], months[1], [TERRAIN, RAIN], "Test",
-                tmp_path)
-    out = tmp_path / HASH_A
-    doc = json.loads((out / "scene.json").read_text(encoding="utf-8"))
-
-    return doc, zarr.open_group(out / "data.zarr", mode="r")
 
 
 def test_plan_gives_each_layer_its_own_grid_and_mask():
@@ -550,8 +599,13 @@ def test_rain_is_uint16_sharded_and_round_trips(tmp_path):
 
     assert precip.dtype == "uint16" and precip.chunks == (1, 20, 20)
     assert precip.shards == (12, 20, 20)
-    assert rain["arrays"]["value"] == {"path": "chirps_monthly/precip", "dtype": "uint16",
-                                       "scale_factor": 0.1, "add_offset": 0, "fill": 65535}
+    assert rain["arrays"]["value"] == {
+        "path": "chirps_monthly/precip",
+        "dtype": "uint16",
+        "scale_factor": 0.1,
+        "add_offset": 0,
+        "fill": 65535,
+    }
     assert rain["time"]["count"] == 14
     assert rain["time"]["values"][:2] == ["2015-01-01", "2015-02-01"]
 
@@ -581,7 +635,6 @@ def test_store_has_consolidated_metadata(tmp_path):
 
     root_json = json.loads((tmp_path / HASH_A / "data.zarr" / "zarr.json").read_text())
     meta = root_json["consolidated_metadata"]["metadata"]
-
     expected = {"chirps_monthly/precip", "chirps_monthly/mask", "glo90_terrain/elevation"}
 
     assert expected <= meta.keys()

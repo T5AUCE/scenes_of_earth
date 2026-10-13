@@ -1,4 +1,5 @@
 import { contours } from "d3-contour";
+
 import {
   clipRings,
   COARSE_JOB,
@@ -41,7 +42,6 @@ self.onmessage = (event: MessageEvent<ContourRequest>) => {
     const result = contourWindow(source, wholeGrid(source.grid), COARSE_JOB);
     wholeAreaInterval = result.interval;
     self.postMessage(result);
-
     return;
   }
 

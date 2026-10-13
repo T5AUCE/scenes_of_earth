@@ -42,16 +42,17 @@ export interface ContourFeatureCollection {
 }
 
 export const MAX_SIDE_CELLS = 1024;
-export const MAJOR_EVERY = 5;
 export const COARSE_JOB = 0;
 
-const WORLD_WIDTH_DEGREES = 360;
-const BOUNDS_TOLERANCE_DEGREES = 1e-9;
+export const MAJOR_EVERY = 5;
 const INTERVALS_M = [10, 20, 50, 100, 200, 250, 500, 1000];
 const TARGET_LINE_COUNT = 12;
 const LOW_PERCENTILE = 0.02;
 const HIGH_PERCENTILE = 0.98;
 const MAX_PERCENTILE_SAMPLES = 65536;
+
+const WORLD_WIDTH_DEGREES = 360;
+const BOUNDS_TOLERANCE_DEGREES = 1e-9;
 
 export const wholeGrid = ({ nx, ny }: { nx: number; ny: number }): GridWindow => ({
   x: 0,
@@ -169,10 +170,10 @@ export function covers(outer: Bbox, view: Bbox, within: Bbox) {
   ];
 
   return (
-    outer[0] <= needed[0] + BOUNDS_TOLERANCE_DEGREES &&
-    outer[1] <= needed[1] + BOUNDS_TOLERANCE_DEGREES &&
-    outer[2] >= needed[2] - BOUNDS_TOLERANCE_DEGREES &&
-    outer[3] >= needed[3] - BOUNDS_TOLERANCE_DEGREES
+    outer[0] <= needed[0] + BOUNDS_TOLERANCE_DEGREES
+    && outer[1] <= needed[1] + BOUNDS_TOLERANCE_DEGREES
+    && outer[2] >= needed[2] - BOUNDS_TOLERANCE_DEGREES
+    && outer[3] >= needed[3] - BOUNDS_TOLERANCE_DEGREES
   );
 }
 

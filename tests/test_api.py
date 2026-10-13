@@ -44,12 +44,41 @@ def env(tmp_path):
     app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(source))
     with TestClient(app) as client:
         geometry = box(36.5, -1.5, 37.5, -0.5)
-        db.add_boundaries(str(tmp_path / "soe.db"), "geoBoundaries CGAZ", [
-            ("cgaz:ADM1:NBO", "state", "Nairobi", "Kenya", "KEN", 36.5, -1.5, 37.5, -0.5, 400,
-             json.dumps(mapping(geometry)), "geoBoundaries CGAZ", "CC BY 4.0"),
-            ("cgaz:ADM2:WA", "county", "Washington County", "Maine", "USA", 0, 0, 1, 1, 400, "{}",
-             "geoBoundaries CGAZ", "CC BY 4.0"),
-        ])
+        nairobi = (
+            "cgaz:ADM1:NBO",
+            "state",
+            "Nairobi",
+            "Kenya",
+            "KEN",
+            36.5,
+            -1.5,
+            37.5,
+            -0.5,
+            400,
+            json.dumps(mapping(geometry)),
+            "geoBoundaries CGAZ",
+            "CC BY 4.0",
+        )
+        washington = (
+            "cgaz:ADM2:WA",
+            "county",
+            "Washington County",
+            "Maine",
+            "USA",
+            0,
+            0,
+            1,
+            1,
+            400,
+            "{}",
+            "geoBoundaries CGAZ",
+            "CC BY 4.0",
+        )
+        db.add_boundaries(
+            str(tmp_path / "soe.db"),
+            "geoBoundaries CGAZ",
+            [nairobi, washington],
+        )
         yield client, source, tmp_path
 
 
@@ -87,26 +116,30 @@ def test_post_poll_and_serve(env):
     assert client.get(f"/scenes/{scene_id}/data.zarr/zarr.json").status_code == 200
     assert client.get(f"/scenes/.tmp/{scene_id}/scene.json").status_code == 404
 
-    # same request again: done, instant, no new rain reads
+    # The same request again is done at once, without new rain reads.
     reads = source.reads
     repeat = client.post("/api/scenes", json=body())
 
     assert repeat.status_code == 200 and repeat.json()["id"] == scene_id and len(scene_id) == 20
     assert source.reads == reads
 
-    # a rounded-off shape, and the same ring rotated and reversed, dedupe too
+    # A rounded-off shape, and the same ring rotated and reversed, dedupe too.
     jittered = body()
     jittered["area"]["geometry"] = mapping(box(36.50001, -1.5, 37.5, -0.50001))
 
     assert client.post("/api/scenes", json=jittered).json()["id"] == scene_id
 
     reordered = body()
-    reordered["area"]["geometry"] = {"type": "Polygon", "coordinates": [
-        [[37.5, -0.5], [37.5, -1.5], [36.5, -1.5], [36.5, -0.5], [37.5, -0.5]]]}
+    reordered["area"]["geometry"] = {
+        "type": "Polygon",
+        "coordinates": [
+            [[37.5, -0.5], [37.5, -1.5], [36.5, -1.5], [36.5, -0.5], [37.5, -0.5]],
+        ],
+    }
 
     assert client.post("/api/scenes", json=reordered).json()["id"] == scene_id
 
-    # bundles are content-addressed, so they are served as immutable
+    # Bundles are content-addressed, so they are served as immutable.
     assert "immutable" in client.get(f"/scenes/{scene_id}/scene.json").headers["cache-control"]
 
 
@@ -139,10 +172,15 @@ def test_rejections_happen_before_any_read(env):
         {"layers": ["lava"]},
         {"layers": ["rain"]},
         {"area": {"type": "polygon", "geometry": {"type": "Point", "coordinates": [0, 0]}}},
-        {"area": {"type": "polygon", "geometry": mapping(box(-60, -20, 40, 10))},
-         "start": "1981-01", "end": "2026-08"},
-        {"area": {"type": "polygon", "geometry": mapping(box(-100, -50, 70, 60))},
-         "layers": ["glo90_terrain"]},
+        {
+            "area": {"type": "polygon", "geometry": mapping(box(-60, -20, 40, 10))},
+            "start": "1981-01",
+            "end": "2026-08",
+        },
+        {
+            "area": {"type": "polygon", "geometry": mapping(box(-100, -50, 70, 60))},
+            "layers": ["glo90_terrain"],
+        },
     ]
 
     for extra in cases:
@@ -155,42 +193,41 @@ def test_rejections_happen_before_any_read(env):
 def test_body_cap_and_bad_json(env):
     client, _, _ = env
     assert client.post("/api/scenes", content=b"x" * 1_100_000).status_code == 413
-
     assert client.post("/api/scenes", content=b"{nope").status_code == 422
-
     assert client.post("/api/scenes", json=[1]).status_code == 422
 
 
 def test_scene_id_must_be_hex(env):
     client, _, _ = env
     assert client.get("/api/scenes/../etc").status_code == 404
-
     assert client.get("/api/scenes/" + "Z" * 20).status_code == 404
-
     assert client.get("/api/scenes/" + "0" * 20).status_code == 404
 
 
 def test_startup_marks_interrupted_and_repost_requeues(tmp_path):
     path = str(tmp_path / "soe.db")
+    scene_id = "a" * 20
     db.init(path)
-    db.submit(path, "a" * 20, "{}", True)
-    db.update_scene(path, "a" * 20, status="running")
+    db.submit(path, scene_id, "{}", True)
+    db.update_scene(path, scene_id, status="running")
     db.init(path)  # simulated restart
 
-    row = db.get_scene(path, "a" * 20)
+    row = db.get_scene(path, scene_id)
     assert row["status"] == "failed" and row["error"] == "interrupted"
 
-    row, start = db.submit(path, "a" * 20, "{}", True)
+    row, start = db.submit(path, scene_id, "{}", True)
     assert start and row["status"] == "queued" and row["error"] is None
 
-    assert db.submit(path, "a" * 20, "{}", True)[1] is False
+    assert db.submit(path, scene_id, "{}", True)[1] is False
 
 
 def test_malformed_requests_are_4xx_not_500(env):
     client, _, _ = env
     huge_int = body()
-    huge_int["area"]["geometry"] = {"type": "Polygon",
-                                    "coordinates": [[[0, 0], [10 ** 400, 0], [1, 1], [0, 0]]]}
+    huge_int["area"]["geometry"] = {
+        "type": "Polygon",
+        "coordinates": [[[0, 0], [10 ** 400, 0], [1, 1], [0, 0]]],
+    }
 
     response = client.post("/api/scenes", content=json.dumps(huge_int))
     assert response.status_code == 422
@@ -199,7 +236,10 @@ def test_malformed_requests_are_4xx_not_500(env):
         assert client.post("/api/scenes", content=deep).status_code == 422
 
     nested = body()
-    nested["area"]["geometry"] = {"type": "Polygon", "coordinates": json.loads("[" * 50 + "]" * 50)}
+    nested["area"]["geometry"] = {
+        "type": "Polygon",
+        "coordinates": json.loads("[" * 50 + "]" * 50),
+    }
 
     assert client.post("/api/scenes", json=nested).status_code == 422
 
@@ -244,7 +284,6 @@ def test_failed_job_has_generic_error_and_class(tmp_path):
 
     app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(Boom()))
     with TestClient(app) as client:
-
         scene_id = client.post("/api/scenes", json=body()).json()["id"]
         out = wait_for(client, scene_id)
 
@@ -255,17 +294,13 @@ def test_failed_job_has_generic_error_and_class(tmp_path):
 def test_layers(env):
     client, _, _ = env
     out = client.get("/api/layers").json()
-
     by_id = {layer["id"]: layer for layer in out["layers"]}
-
-    assert out["default"] == ["chirps_monthly", "glo90_terrain"]
-
     rain, terrain = by_id["chirps_monthly"], by_id["glo90_terrain"]
 
+    assert out["default"] == ["chirps_monthly", "glo90_terrain"]
     assert (rain["kind"], rain["time_varying"]) == ("series-colormap", True)
     assert rain["time"] == {"step": "P1M", "first": "1981-01", "latest": "2026-08"}
     assert (terrain["kind"], terrain["time_varying"], terrain["time"]) == ("terrain", False, None)
-
     assert rain["title"] == "Rainfall" and rain["units"] == "mm/month"
     assert rain["coverage"] == [-180, -60, 180, 60]
     assert terrain["coverage"] == [-180, -60, 180, 60]
@@ -273,13 +308,15 @@ def test_layers(env):
 
 def test_sample_areas_seed_only_in_synthetic_mode_and_when_empty(tmp_path, monkeypatch):
     def app_in(name):
-        return create_app(tmp_path / name / "soe.db", tmp_path / name / "scenes",
-                          make_registry(SyntheticSource()))
+        return create_app(
+            tmp_path / name / "soe.db",
+            tmp_path / name / "scenes",
+            make_registry(SyntheticSource()),
+        )
 
     def sample_ids(client):
         names = ["Kenya", "Fiji", "Nairobi", "Cusco", "Burkina"]
         hits = [client.get("/api/areas/search", params={"q": name}).json() for name in names]
-
         return {hit["id"] for found in hits for hit in found if hit["id"].startswith("sample:")}
 
     with TestClient(app_in("real")) as client:
@@ -299,7 +336,8 @@ def test_sample_areas_seed_only_in_synthetic_mode_and_when_empty(tmp_path, monke
 
         nairobi = {"type": "boundary", "id": "sample:nairobi"}
         posted = client.post(
-            "/api/scenes", json={"area": nairobi, "start": "2015-01", "end": "2015-02"}
+            "/api/scenes",
+            json={"area": nairobi, "start": "2015-01", "end": "2015-02"},
         )
         scene_id = posted.json()["id"]
 
@@ -307,8 +345,21 @@ def test_sample_areas_seed_only_in_synthetic_mode_and_when_empty(tmp_path, monke
 
     db_path = str(tmp_path / "other" / "soe.db")  # a non-empty table is left alone
     db.init(db_path)
-    other = ("x", "state", "Other", None, None, 0, 0, 1, 1, 400, "{}", "geoBoundaries CGAZ",
-             "CC BY 4.0")
+    other = (
+        "x",
+        "state",
+        "Other",
+        None,
+        None,
+        0,
+        0,
+        1,
+        1,
+        400,
+        "{}",
+        "geoBoundaries CGAZ",
+        "CC BY 4.0",
+    )
     db.add_boundaries(db_path, "geoBoundaries CGAZ", [other])
 
     with TestClient(app_in("other")) as client:
@@ -401,13 +452,13 @@ def test_terrain_only_ignores_months(env):
     periods = (("2015-01", "2015-02"), ("2020-05", "2020-09"))
     ids = {
         client.post(
-            "/api/scenes", json=body(layers=["glo90_terrain"], start=start, end=end)
+            "/api/scenes",
+            json=body(layers=["glo90_terrain"], start=start, end=end),
         ).json()["id"]
         for start, end in periods
     }
 
     assert len(ids) == 1
-
     assert wait_for(client, ids.pop())["status"] == "done"
 
 

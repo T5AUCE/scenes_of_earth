@@ -10,17 +10,22 @@ from . import db
 from .areas import AreaError, unwrap
 from .sources import GLO90_TILE_INDEX
 
-CELL_DEG2 = 0.05 * 0.05
-MIN_CITY_POP = 1_000_000
 GLO90_TILE_LIST = "https://copernicus-dem-90m.s3.amazonaws.com/tileList.txt"
-CGAZ_LEVELS = {0: "country", 1: "state", 2: "county"}
-SIMPLIFY_TOLERANCE_DEG = 0.01
-COVERAGE_BOUNDS = (-180, -60, 180, 60)  # the rain coverage
+GLO90_TILE_PATTERN = r"Copernicus_DSM_COG_30_([NS])(\d+)_00_([EW])(\d+)_00_DEM"
 DOWNLOAD_TIMEOUT_SECONDS = 60
 TILE_GRID_SHAPE = (180, 360)
 TILE_ROW_OFFSET = 90  # row = lat + 90
 TILE_COL_OFFSET = 180  # column = lon + 180
-GLO90_TILE_PATTERN = r"Copernicus_DSM_COG_30_([NS])(\d+)_00_([EW])(\d+)_00_DEM"
+
+CGAZ_SOURCE = "geoBoundaries CGAZ"
+CGAZ_LEVELS = {0: "country", 1: "state", 2: "county"}
+UCDB_SOURCE = "GHSL UCDB R2024A"
+MIN_CITY_POP = 1_000_000
+BOUNDARY_LICENCE = "CC BY 4.0"
+
+SIMPLIFY_TOLERANCE_DEG = 0.01
+COVERAGE_BOUNDS = (-180, -60, 180, 60)  # the rain coverage
+CELL_DEG2 = 0.05 * 0.05
 
 
 def main(argv=None):
@@ -59,7 +64,6 @@ def build_glo90_index(path):
     """Write the bitmap of GLO-90 tiles that exist (GLO90_TILE_INDEX) from the bucket list."""
     import re
     import urllib.request
-
     import numpy as np
 
     exists = np.zeros(TILE_GRID_SHAPE, bool)
@@ -110,13 +114,13 @@ def import_cgaz(db_path, folder):
                 parent,
                 country_code,
                 record.geometry,
-                "geoBoundaries CGAZ",
-                "CC BY 4.0",
+                CGAZ_SOURCE,
+                BOUNDARY_LICENCE,
             )
             if row:
                 rows.append(row)
 
-    replaced = db.add_boundaries(db_path, "geoBoundaries CGAZ", rows)
+    replaced = db.add_boundaries(db_path, CGAZ_SOURCE, rows)
     print(f"CGAZ: {replaced} duplicate ids replaced")
     return len(rows)
 
@@ -155,20 +159,15 @@ def import_ucdb(db_path, path):
             record[country_column],
             None,
             record.geometry,
-            "GHSL UCDB R2024A",
-            "CC BY 4.0",
+            UCDB_SOURCE,
+            BOUNDARY_LICENCE,
         )
         if row:
             rows.append(row)
 
-    replaced = db.add_boundaries(db_path, "GHSL UCDB R2024A", rows)
+    replaced = db.add_boundaries(db_path, UCDB_SOURCE, rows)
     print(f"UCDB: {replaced} duplicate ids replaced")
     return len(rows)
-
-
-def _latest_column(frame, part):
-    """Column containing `part`; if several epochs exist (..._1975 ... _2025) take the latest."""
-    return sorted(column for column in frame.columns if part in column)[-1]
 
 
 def _ucdb_layer(path):
@@ -177,6 +176,11 @@ def _ucdb_layer(path):
     layers = [layer[0] for layer in pyogrio.list_layers(path)]
     general = (layer for layer in layers if "GENERAL_CHARACTERISTICS" in layer.upper())
     return next(general, layers[0])
+
+
+def _latest_column(frame, part):
+    """Column containing `part`; if several epochs exist (..._1975 ... _2025) take the latest."""
+    return sorted(column for column in frame.columns if part in column)[-1]
 
 
 def _row(row_id, level, name, parent, iso3, geometry, source, licence):
@@ -197,8 +201,19 @@ def _row(row_id, level, name, parent, iso3, geometry, source, licence):
 
     cells = max(1, round(clipped.area / CELL_DEG2))
     return (
-        row_id, level, name, parent, iso3, west, south, east, north, cells,
-        json.dumps(mapping(clipped)), source, licence,
+        row_id,
+        level,
+        name,
+        parent,
+        iso3,
+        west,
+        south,
+        east,
+        north,
+        cells,
+        json.dumps(mapping(clipped)),
+        source,
+        licence,
     )
 
 

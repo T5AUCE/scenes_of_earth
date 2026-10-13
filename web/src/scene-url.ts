@@ -1,4 +1,5 @@
 const MONTH_LENGTH = 7; // "YYYY-MM"
+const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 export type Route =
   | { kind: "world" }
@@ -16,7 +17,7 @@ export function routeFor(search: string, state: { panel?: string } | null): Rout
   if (!id) return { kind: "world" };
 
   const month = parameters.get("t");
-  const isMonth = month !== null && /^\d{4}-(0[1-9]|1[0-2])$/.test(month);
+  const isMonth = month !== null && MONTH_PATTERN.test(month);
 
   return { kind: "scene", id, month: isMonth ? month : null, panel: state?.panel ?? null };
 }

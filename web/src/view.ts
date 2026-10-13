@@ -1,4 +1,5 @@
 import type { GeoJSONSource, Map as MapLibreMap } from "maplibre-gl";
+
 import { loadAreaFeature } from "./api";
 import { openStore, type Store } from "./data";
 import { makeHtmlElement } from "./html";
@@ -11,11 +12,12 @@ import type { LayerDoc, LayerView, Scene } from "./types";
 type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
 
 export const OUTLINE_ID = "soe-area-outline";
-// The only options so far are display smoothing; the data itself is never changed by them.
-const OPTION_NOTE = "Smoothed for display; values are per cell.";
-const EMPTY_FEATURES: GeoJsonData = { type: "FeatureCollection", features: [] };
 const OUTLINE_COLOR = "#333";
 const OUTLINE_WIDTH_PX = 1.5;
+const EMPTY_FEATURES: GeoJsonData = { type: "FeatureCollection", features: [] };
+
+// The only options so far are display smoothing; the data itself is never changed by them.
+const OPTION_NOTE = "Smoothed for display; values are per cell.";
 
 // Where a scene puts its pieces; the caller owns the containers.
 export interface SceneSlots {
@@ -109,7 +111,6 @@ async function showShiftedOutline(
   if (!isMounted()) return;
 
   const { geometry } = feature;
-
   const shifted = {
     ...feature,
     geometry: { ...geometry, coordinates: shiftLongitudes(geometry.coordinates, shift) },

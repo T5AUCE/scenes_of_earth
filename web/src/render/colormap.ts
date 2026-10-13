@@ -2,8 +2,10 @@ import type { SampleTable } from "./mercator";
 
 const LUT_ENTRIES = 256;
 export const LAST_ENTRY = LUT_ENTRIES - 1;
+
 export const COLOR_CHANNELS = 3;
 export const RGBA_CHANNELS = 4;
+
 const OPAQUE = 255;
 const WHITE = 255;
 const BLACK = 0;

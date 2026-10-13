@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+
 import { nextOptionIndex } from "./combobox.ts";
 
 test("arrow down starts at the first option and wraps after the last", () => {

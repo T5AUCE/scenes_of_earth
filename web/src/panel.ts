@@ -1,4 +1,5 @@
 import type { Map as MapLibreMap } from "maplibre-gl";
+
 import {
   ApiError,
   getArea,
@@ -19,20 +20,29 @@ import {
 } from "./map";
 import { shiftLongitudes, worldShift } from "./render/mercator";
 import type { EnterOptions } from "./scene-mode";
-import type { AreaFeature, AreaHit, Bbox, Layer, Scene, SceneRequest, SceneStatus } from "./types";
+import type {
+  AreaFeature,
+  AreaHit,
+  Bbox,
+  Layer,
+  Scene,
+  SceneRequest,
+  SceneStatus,
+} from "./types";
 
 const POLL_INTERVAL_MS = 1500;
-const SEARCH_DEBOUNCE_MS = 300;
-const DEFAULT_MONTHS = 6;
-const DEFAULT_RETRY_SECONDS = 30;
 const MAX_POLL_FAILURES = 3;
+const DEFAULT_RETRY_SECONDS = 30;
+const MS_PER_SECOND = 1000;
+
 const SERVER_BUSY = 503;
 const NOT_FOUND = 404;
-const MS_PER_SECOND = 1000;
+
+const DEFAULT_MONTHS = 6;
 const MONTHS_PER_YEAR = 12;
 
+const SEARCH_DEBOUNCE_MS = 300;
 const NO_AREA_TEXT = "No area selected";
-
 const AREA_LEVELS = [
   { value: "", label: "any level" },
   { value: "country", label: "country" },
@@ -229,7 +239,6 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
       const sceneStatus = await getSceneStatus(id);
       if (sceneStatus.status !== "done") {
         status.textContent = `Scene ${id} is ${sceneStatus.status}.`;
-
         return;
       }
 
@@ -245,13 +254,11 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
   async function buildScene() {
     if (!area) {
       status.textContent = "Select an area first.";
-
       return;
     }
 
     if (!selectedLayerIds().length) {
       status.textContent = "Select at least one layer.";
-
       return;
     }
 
@@ -264,7 +271,6 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
 
       if (finished.status === "failed") {
         status.textContent = `Build failed: ${finished.error ?? "unknown error"}`;
-
         return;
       }
 
@@ -363,7 +369,6 @@ function createControls(root: HTMLElement) {
   search.autocomplete = "off";
 
   const level = makeHtmlElement("select", "", root);
-
   for (const { value, label } of AREA_LEVELS) level.append(new Option(label, value));
 
   const results = makeHtmlElement("ul", "", searchBox);

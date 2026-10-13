@@ -11,8 +11,9 @@ const TAB_LABELS: Record<PanelTab, string> = {
   about: "About",
   credits: "Credits",
 };
-const CHARTS_PLACEHOLDER = "Charts for this scene are not available yet.";
 const DOCKED_TABS = ["charts", "about"] as const;
+
+const CHARTS_PLACEHOLDER = "Charts for this scene are not available yet.";
 
 export interface PanelHooks {
   // The owner records the history entry, then calls openFull or closeFull.

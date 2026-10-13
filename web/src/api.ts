@@ -9,12 +9,12 @@ import type {
 } from "./types";
 
 const SCENE_VERSION = "0.2";
+const SCENE_ID_PATTERN = /^[0-9a-f]{20}$/;
+
 const REQUEST_TIMEOUT_MS = 10_000;
 // The backend may wait up to 15 s on the CHIRPS vintage lookup before accepting a build.
 export const BUILD_REQUEST_TIMEOUT_MS = 30_000;
-const SCENE_ID_PATTERN = /^[0-9a-f]{20}$/;
 
-// Relative URLs only. Bundle files must be read via the scene's bundle_url, not a hard-coded path.
 export class ApiError extends Error {
   status: number;
   retryAfter?: number; // seconds, from the Retry-After header
@@ -26,6 +26,7 @@ export class ApiError extends Error {
   }
 }
 
+// Relative URLs only. Bundle files must be read via the scene's bundle_url, not a hard-coded path.
 export const getHealth = () => request<Health>("/api/health");
 
 export const getLayers = () => request<LayersResponse>("/api/layers");

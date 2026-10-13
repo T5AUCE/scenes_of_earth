@@ -1,4 +1,5 @@
 import type { Map as MapLibreMap } from "maplibre-gl";
+
 import type { Store } from "./data";
 import type { Coordinates } from "./render/mercator";
 

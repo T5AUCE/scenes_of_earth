@@ -9,6 +9,7 @@ import { createTerrainView } from "./terrain";
 
 const CACHED_STEPS = 24;
 const SERIES_OPACITY = 0.8;
+const DEFAULT_COLORMAP = "Blues";
 
 // Later stack numbers draw on top of earlier ones.
 export const LAYER_KINDS = new Map([
@@ -18,7 +19,7 @@ export const LAYER_KINDS = new Map([
 
 function createSeriesView({ map, store, layer, beforeId, report }: LayerContext): LayerView {
   const id = `${layer.id}-series`;
-  const { colormap = "Blues", domain } = layer.style;
+  const { colormap = DEFAULT_COLORMAP, domain } = layer.style;
   const { time: timeAxis } = layer;
   if (!domain || !timeAxis) throw new Error(`Layer "${layer.id}" needs a domain and a time axis`);
 

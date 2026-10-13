@@ -5,12 +5,13 @@ import type {
   Map as MapLibreMap,
   PaddingOptions,
 } from "maplibre-gl";
+
 import { loadAreaFeature } from "./api";
 import { makeHtmlElement } from "./html";
 import { polygonParts, tileAreaGeometry, type TileArea } from "./label-filter";
 import {
-  fitToBbox,
   fitCamera,
+  fitToBbox,
   lockPan,
   MAX_ZOOM,
   moveLabelsIntoArea,
@@ -20,19 +21,23 @@ import {
 import { shiftLongitudes, worldShift } from "./render/mercator";
 import { createScenePanel, PANEL_TABS, type PanelTab } from "./scene-panel";
 import { sceneUrl, timeForMonth } from "./scene-url";
-import { mountScene, OUTLINE_ID } from "./view";
 import type { AreaFeature, Bbox, Scene } from "./types";
+import { mountScene, OUTLINE_ID } from "./view";
 
 type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
 
 const FLY_DURATION_MS = 1800;
 const SNAP_BACK_MS = 250;
+const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+
 const USER_INPUT_EVENTS = ["wheel", "mousedown", "touchstart"];
-// Capture phase, so the snap-back is cancelled before the map handles the gesture.
+// Capture and non-passive, so a gesture can be stopped before the map handles it.
 const LISTEN_FIRST = { capture: true, passive: false };
+
 // Zooming out may pass the fitted zoom by this much before it eases back.
 const MIN_ZOOM_OVERSHOOT = 0.15;
 const ZOOM_EPSILON = 0.001;
+
 const MASK_ID = "soe-scene-mask";
 const MASK_OPACITY = 1;
 // The mask fades in between these distances (in zoom levels) below the fitted zoom.
@@ -44,12 +49,12 @@ const PAGE_BACKGROUND_PROPERTY = "--page-background";
 const HALF_WORLD_DEGREES = 180;
 // Mercator has no poles.
 const MAX_LATITUDE = 85;
+
 // Space kept between the fitted area and whatever covers or borders the map.
 const EDGE_MARGIN_PX = 24;
-const RESIZE_DEBOUNCE_MS = 200;
 const STATUS_BADGE_ID = "status";
 const PHONE_QUERY = "(max-width: 600px)";
-const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+const RESIZE_DEBOUNCE_MS = 200;
 
 // push: a new history entry; replace: the entry the page was opened with; keep: Back/Forward.
 export type SceneEntry = "push" | "replace" | "keep";
@@ -126,7 +131,6 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     if (tab === null) {
       current.panel.closeFull();
       current.clock.syncUrl();
-
       return;
     }
 
@@ -178,7 +182,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     panel: ReturnType<typeof createScenePanel>,
     clock: SceneClock,
   ): ActiveScene {
-    // Once the fly-in has landed, nothing depends on zoom any more, so the elastic dip stays clean.
+    // Once landed, nothing depends on zoom, so the elastic zoom-out dip stays clean.
     let isLanded = false;
     const fadeZoom = () => (isLanded ? undefined : flight.zoom);
 
@@ -313,7 +317,8 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     const canvasContainer = map.getCanvasContainer();
 
     const snapBack = () => {
-      if (isSnapping || isSnapBackPaused || map.getZoom() >= fitted.zoom - ZOOM_EPSILON) return;
+      const isAtFit = map.getZoom() >= fitted.zoom - ZOOM_EPSILON;
+      if (isSnapping || isSnapBackPaused || isAtFit) return;
 
       isSnapping = true;
       map.easeTo({
@@ -334,7 +339,6 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       if (isZoomOut(event) && map.getZoom() <= fitted.zoom + ZOOM_EPSILON) {
         event.stopPropagation();
         event.preventDefault();
-
         return;
       }
 
@@ -516,7 +520,7 @@ function worldRing(holes: number[][][]) {
 
 const isZoomOut = (event: Event) => event.type === "wheel" && (event as WheelEvent).deltaY > 0;
 
-// Fast start, soft landing.
+// A soft landing makes the snap-back feel elastic rather than abrupt.
 const easeOut = (progress: number) => 1 - (1 - progress) ** 3;
 
 // Calls back once the window has stopped changing size; returns the undo.

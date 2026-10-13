@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+
 import { areaFilter, tileAreaGeometry } from "./label-filter.ts";
 
 const square = (west: number, east: number) => [

@@ -22,33 +22,43 @@ from rasterio.errors import RasterioIOError
 from rasterio.merge import merge
 from rasterio.transform import Affine, from_origin
 from rasterio.windows import Window
+from soe.db import now
 
 GRID = Affine(0.05, 0, -180, 0, -0.05, 60)
 NCOLS, NROWS = 7200, 2400
-FIRST_MONTH = "1981-01"
-NATIVE_TERRAIN_RES = 1 / 1200
-TERRAIN_PIXELS = 2048 * 2048
-TERRAIN_THREADS = 32
-GLO90_TILE_INDEX = Path(__file__).parent / "data" / "glo90_tiles.bin"
-TILE_ROW_OFFSET = 90  # tile index row = lat + 90
-TILE_COL_OFFSET = 180  # tile index column = lon + 180
-TILE_EDGE_TOLERANCE = 1e-9  # degrees; a bound exactly on a tile edge must not pull in the next tile
+CELL_DEG = 0.05  # CHIRPS cell size
 CELLS_PER_DEG2_AT_CHIRPS_RES = 400  # (1 / 0.05) ** 2
+FIRST_MONTH = "1981-01"
+WORLD_WIDTH_DEGREES = 360
+
+NATIVE_TERRAIN_RES = 1 / 1200
+NATIVE_RES_TOLERANCE = 1e-9  # relative; coarser than this counts as resampled
+METRES_PER_DEGREE = 111_320  # at the equator, for the notice's approximate cell size
+TERRAIN_PIXELS = 2048 * 2048
 MAX_TERRAIN_SIDE_PIXELS = 4096
 MAX_TERRAIN_DIVISIONS = 60  # 0.05 / 60 is the native 90 m cell
 BLOCK_DEG = 2  # terrain is read in blocks of this many whole degrees
-CELL_DEG = 0.05  # CHIRPS cell size
+TERRAIN_THREADS = 32
+
+GLO90_TILE_INDEX = Path(__file__).parent / "data" / "glo90_tiles.bin"
+TILE_GRID_SHAPE = (180, 360)
+TILE_ROW_OFFSET = 90  # tile index row = lat + 90
+TILE_COL_OFFSET = 180  # tile index column = lon + 180
+TILE_EDGE_TOLERANCE = 1e-9  # degrees; a bound exactly on a tile edge must not pull in the next tile
+TILE_OPEN_ATTEMPTS = 3
+TILE_RETRY_DELAY_SECONDS = 1
+
 HEAD_TIMEOUT_SECONDS = 5  # latest-month probes run on the first page load
 VINTAGE_TIMEOUT_SECONDS = 15
 LATEST_MONTH_PROBES = 7
 LATEST_TTL_SECONDS = 86400
 OFFLINE_LATEST_TTL_SECONDS = 600
 OFFLINE_ASSUMED_LAG_MONTHS = 2
-TILE_OPEN_ATTEMPTS = 3
-TILE_RETRY_DELAY_SECONDS = 1
 
-CHIRPS_URL = ("https://data.chc.ucsb.edu/products/CHIRPS/v3.0/monthly/global/cogs/"
-              "chirps-v3.0.{ym}.cog")
+CHIRPS_URL = (
+    "https://data.chc.ucsb.edu/products/CHIRPS/v3.0/monthly/global/cogs/"
+    "chirps-v3.0.{ym}.cog"
+)
 GLO90_URL = "https://copernicus-dem-90m.s3.amazonaws.com/{n}/{n}.tif"
 GDAL_OPTS = {
     "GDAL_HTTP_MAX_RETRY": "5",
@@ -143,16 +153,6 @@ def _previous_month(year, month):
     return (year - 1, 12) if month == 1 else (year, month - 1)
 
 
-@lru_cache
-def _tile_index():
-    """180 x 360 bool grid of the tiles that exist in the GLO-90 bucket.
-
-    The row is lat + 90 and the column is lon + 180.
-    """
-    packed = np.frombuffer(GLO90_TILE_INDEX.read_bytes(), "uint8")
-    return np.unpackbits(packed).reshape(180, 360).astype(bool)
-
-
 def glo90_tiles(bounds):
     """Names of the existing GLO-90 tiles covering bounds (W, S, E, N).
 
@@ -168,7 +168,7 @@ def glo90_tiles(bounds):
         for lon in range(
             math.floor(west + TILE_EDGE_TOLERANCE), math.ceil(east - TILE_EDGE_TOLERANCE)
         ):
-            lon = (lon + TILE_COL_OFFSET) % 360 - TILE_COL_OFFSET
+            lon = (lon + TILE_COL_OFFSET) % WORLD_WIDTH_DEGREES - TILE_COL_OFFSET
             if tile_exists[lat + TILE_ROW_OFFSET, lon + TILE_COL_OFFSET]:
                 north_south = "N" if lat >= 0 else "S"
                 east_west = "E" if lon >= 0 else "W"
@@ -177,6 +177,16 @@ def glo90_tiles(bounds):
                     f"_00_{east_west}{abs(lon):03d}_00_DEM"
                 )
     return names
+
+
+@lru_cache
+def _tile_index():
+    """180 x 360 bool grid of the tiles that exist in the GLO-90 bucket.
+
+    The row is lat + 90 and the column is lon + 180.
+    """
+    packed = np.frombuffer(GLO90_TILE_INDEX.read_bytes(), "uint8")
+    return np.unpackbits(packed).reshape(TILE_GRID_SHAPE).astype(bool)
 
 
 def terrain_res(bounds):
@@ -233,29 +243,12 @@ def _block_edges(low, high):
     return [low] + list(range(first_multiple, math.ceil(high), BLOCK_DEG)) + [high]
 
 
-def _head(url, timeout=HEAD_TIMEOUT_SECONDS):
-    """(exists, Last-Modified) for a URL: (False, None) on 404, (None, None) if unreachable."""
-    try:
-        request = urllib.request.Request(url, method="HEAD")
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return True, response.headers.get("Last-Modified")
-    except urllib.error.HTTPError as error:
-        return (False if error.code == 404 else None), None
-    except (urllib.error.URLError, OSError):
-        return None, None
-
-
-def _chirps_url(month):
-    return CHIRPS_URL.format(ym=month.replace("-", "."))
-
-
 class SourceUnavailable(RuntimeError):
     """The remote data server could not be reached; the API turns this into a 503."""
 
 
 class RealSource:
     """CHIRPS COGs and GLO-90 tiles over HTTP."""
-
     def __init__(self, latest=None):
         # An optional fixed 'YYYY-MM' (SOE_LATEST); otherwise the latest month is probed and cached.
         self._latest = latest
@@ -266,7 +259,8 @@ class RealSource:
         if self._latest:
             return self._latest
 
-        with self._probe_lock:  # concurrent first requests share one probe
+        # Concurrent first requests share one probe.
+        with self._probe_lock:
             if self._probed and time.time() < self._probed[1]:
                 return self._probed[0]
 
@@ -279,7 +273,6 @@ class RealSource:
 
             ttl = LATEST_TTL_SECONDS if complete else OFFLINE_LATEST_TTL_SECONDS
             self._probed = (found, time.time() + ttl)
-
             return found
 
     def _probe_latest_month(self, now):
@@ -289,15 +282,14 @@ class RealSource:
             candidates.append(f"{year:04d}-{month:02d}")
             year, month = _previous_month(year, month)
 
+        urls = [_chirps_url(candidate) for candidate in candidates]
         with ThreadPoolExecutor(LATEST_MONTH_PROBES) as pool:
-            answers = pool.map(_head, [_chirps_url(candidate) for candidate in candidates])
-            exists = [answer[0] for answer in answers]
+            exists = [answer[0] for answer in pool.map(_head, urls)]
 
         if True not in exists:
             return None, False
 
         newest_index = exists.index(True)
-
         return candidates[newest_index], None not in exists[:newest_index]
 
     def _assumed_latest_month(self, now):
@@ -316,11 +308,13 @@ class RealSource:
     def read_rain(self, month, window):
         """One month at native resolution as float32; fill values (< 0) become NaN."""
         col, row, width, height = window
+
         with rasterio.Env(**GDAL_OPTS):
             with rasterio.open(_chirps_url(month)) as dataset:
                 if (dataset.width, dataset.height) != (NCOLS, NROWS):
                     raise RuntimeError(f"unexpected CHIRPS grid {dataset.width}x{dataset.height}")
                 rain = dataset.read(1, window=Window(col, row, width, height)).astype("float32")
+
         rain[rain < 0] = np.nan
         return rain
 
@@ -335,7 +329,7 @@ class RealSource:
         """
         west, south, east, north = bounds
         if west >= 180:
-            west, east = west - 360, east - 360
+            west, east = west - WORLD_WIDTH_DEGREES, east - WORLD_WIDTH_DEGREES
 
         padded_bounds = with_margin((west, south, east, north), res)
         names = glo90_tiles(padded_bounds)
@@ -343,8 +337,10 @@ class RealSource:
             return None
 
         with ExitStack() as open_tiles:
-            tiles = [open_tiles.enter_context(_open_tile(GLO90_URL.format(n=name)))
-                     for name in names]
+            tiles = [
+                open_tiles.enter_context(_open_tile(GLO90_URL.format(n=name)))
+                for name in names
+            ]
             with rasterio.Env(**GDAL_OPTS):
                 merged, _ = merge(tiles, bounds=padded_bounds, res=res, nodata=0)
 
@@ -355,11 +351,28 @@ class RealSource:
         return elevation
 
 
+def _head(url, timeout=HEAD_TIMEOUT_SECONDS):
+    """(exists, Last-Modified) for a URL: (False, None) on 404, (None, None) if unreachable."""
+    try:
+        request = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return True, response.headers.get("Last-Modified")
+    except urllib.error.HTTPError as error:
+        return (False if error.code == 404 else None), None
+    except (urllib.error.URLError, OSError):
+        return None, None
+
+
+def _chirps_url(month):
+    return CHIRPS_URL.format(ym=month.replace("-", "."))
+
+
 def _crop_margin(merged, bounds, res):
     """Elevation of `bounds` as int16, cropped from the merge that had a one-pixel margin."""
     west, south, east, north = bounds
     height, width = round((north - south) / res), round((east - west) / res)
     elevation = np.rint(merged[1:1 + height, 1:1 + width]).clip(-32768, 32767)
+
     return elevation.astype("int16")
 
 
@@ -377,7 +390,6 @@ def _open_tile(url):
 
 class SyntheticSource:
     """Deterministic fake data, no network. `reads` counts rain reads (tests use it)."""
-
     def __init__(self, latest="2026-08"):
         self._latest = latest
         self.reads = 0
@@ -393,18 +405,22 @@ class SyntheticSource:
         col, row, width, height = window
         month_number = int(month[:4]) * 12 + int(month[5:7])
         cols, rows = np.meshgrid(np.arange(col, col + width), np.arange(row, row + height))
+
         rain = 100 + 80 * np.sin(cols / 15 + month_number * 0.5) * np.cos(rows / 11)
         rain = rain.astype("float32")
         rain[(cols * 7 + rows * 13) % 11 == 0] = np.nan  # Holes, to exercise NaN-aware means.
+
         return rain
 
     def terrain(self, bounds, res):
         west, south, east, north = bounds
         width, height = round((east - west) / res), round((north - south) / res)
         transform = from_origin(west, north, res, res)
+
         cols, rows = np.meshgrid(np.arange(width) + 0.5, np.arange(height) + 0.5)
         lon, lat = transform @ (cols, rows)
         elevation = 1000 + 800 * np.sin(lon * 20) * np.cos(lat * 20)
+
         return elevation.astype("int16"), transform
 
 
@@ -418,6 +434,7 @@ def block_mean(values, factor):
     valid = ~np.isnan(blocks)
     counts = valid.sum(axis=(1, 3))
     sums = np.where(valid, blocks, 0).sum(axis=(1, 3), dtype="float64")
+
     return np.where(counts > 0, sums / np.maximum(counts, 1), np.nan).astype("float32")
 
 
@@ -474,7 +491,6 @@ class Dataset:
 
 class RainDataset(Dataset):
     """CHIRPS monthly rain."""
-
     def first(self):
         """First available month, 'YYYY-MM'."""
         return FIRST_MONTH
@@ -485,7 +501,7 @@ class RainDataset(Dataset):
 
     def steps(self, start, end):
         """Period starts ('YYYY-MM-DD') of the months start..end ('YYYY-MM')."""
-        return [f"{ym}-01" for ym in month_list(start, end)]
+        return [f"{month}-01" for month in month_list(start, end)]
 
     def vintage(self, last_month):
         return self.backend.vintage(last_month)
@@ -502,16 +518,17 @@ class RainDataset(Dataset):
         col, row, width, height = window_of(bbox)
         col %= NCOLS
         rain = self.backend.read_rain(month, (col, row, min(width, NCOLS - col), height))
+        
         if col + width > NCOLS:
             # The window continues past 180 degrees, so the rest is at the west edge of the grid.
             west_edge = self.backend.read_rain(month, (0, row, col + width - NCOLS, height))
             rain = np.hstack([rain, west_edge])
+
         return block_mean(rain, factor)
 
 
 class TerrainDataset(Dataset):
     """Copernicus GLO-90 elevation, read at a resolution that depends on the area size."""
-
     def tile_count(self, bbox):
         return len(glo90_tiles(with_margin(bbox, terrain_res(bbox))))
 
@@ -520,8 +537,8 @@ class TerrainDataset(Dataset):
 
     def notice(self, bbox):
         res = terrain_res(bbox)
-        if res > NATIVE_TERRAIN_RES * (1 + 1e-9):
-            return f"Terrain resampled to {round(res * 111320)} m cells (source 90 m)."
+        if res > NATIVE_TERRAIN_RES * (1 + NATIVE_RES_TOLERANCE):
+            return f"Terrain resampled to {round(res * METRES_PER_DEGREE)} m cells (source 90 m)."
 
     def read(self, bbox, res):
         """Elevation over bbox at cell size `res`: (int16 array, transform)."""
@@ -532,16 +549,32 @@ def make_registry(backend):
     """The two datasets, reading through `backend` (RealSource or SyntheticSource)."""
     return {
         "chirps_monthly": RainDataset(
-            "chirps_monthly", "Rainfall", "mm/month", CELL_DEG, True, SOURCES["chirps"],
-            {"value": "precip"}, {"value": ("uint16", 0.1, 0, 65535)},
-            {"kind": "series-colormap", "colormap": "Blues"}, backend,
-            long_name="Monthly precipitation", step="P1M"),
+            id="chirps_monthly",
+            title="Rainfall",
+            units="mm/month",
+            resolution_deg=CELL_DEG,
+            time_varying=True,
+            source=SOURCES["chirps"],
+            arrays={"value": "precip"},
+            encoding={"value": ("uint16", 0.1, 0, 65535)},
+            style={"kind": "series-colormap", "colormap": "Blues"},
+            backend=backend,
+            long_name="Monthly precipitation",
+            step="P1M",
+        ),
         "glo90_terrain": TerrainDataset(
-            "glo90_terrain", "Terrain", "m", NATIVE_TERRAIN_RES, False, SOURCES["glo90"],
-            {"elevation": "elevation", "hillshade": "hillshade"},
-            {"elevation": ("int16", 1, 0, None), "hillshade": ("uint8", 1, 0, None)},
-            {"kind": "terrain", "hillshade": {"azimuth": 315, "altitude": 45}}, backend,
-            max_tiles=2500),
+            id="glo90_terrain",
+            title="Terrain",
+            units="m",
+            resolution_deg=NATIVE_TERRAIN_RES,
+            time_varying=False,
+            source=SOURCES["glo90"],
+            arrays={"elevation": "elevation", "hillshade": "hillshade"},
+            encoding={"elevation": ("int16", 1, 0, None), "hillshade": ("uint8", 1, 0, None)},
+            style={"kind": "terrain", "hillshade": {"azimuth": 315, "altitude": 45}},
+            backend=backend,
+            max_tiles=2500,
+        ),
     }
 
 

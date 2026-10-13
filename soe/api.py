@@ -22,117 +22,52 @@ from shapely.geometry import mapping, shape
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import __version__, db
-from .areas import MAX_BODY, Area, AreaError, check_months, clean_polygon, plan, unwrap
+from .areas import (
+    MAX_BODY,
+    Area,
+    AreaError,
+    check_months,
+    clean_polygon,
+    plan,
+    unwrap,
+)
 from .build import build_scene
-from .sources import (FIRST_MONTH, REGISTRY, RealSource, SourceUnavailable, SyntheticSource,
-                      make_registry)
+from .sources import (
+    FIRST_MONTH,
+    REGISTRY,
+    RealSource,
+    SourceUnavailable,
+    SyntheticSource,
+    make_registry,
+)
 
-log = logging.getLogger("soe")
-
-LEVELS = ("country", "state", "county", "city")
 ID_LEN = 20  # hex characters of the sha256 kept as the scene id (80 bits; short paths for Windows)
 ID_RE = re.compile(r"[0-9a-f]{%d}" % ID_LEN)
-DEFAULT_LAYERS = ["chirps_monthly", "glo90_terrain"]
-SAMPLE_AREAS = Path(__file__).parent / "data" / "sample_areas.geojson"
 IMMUTABLE = "public, max-age=31536000, immutable"
+PROGRESS_STEP = 0.02
+
+LEVELS = ("country", "state", "county", "city")
+DEFAULT_LAYERS = ["chirps_monthly", "glo90_terrain"]
+DRAWN_AREA_TITLE = "Drawn area"
 MAX_TITLE_LENGTH = 120
 MAX_SEARCH_LIMIT = 50
-DRAWN_AREA_TITLE = "Drawn area"
-PROGRESS_STEP = 0.02
+
+SAMPLE_AREAS = Path(__file__).parent / "data" / "sample_areas.geojson"
 SAMPLE_CELL_AREA_DEG2 = 0.05**2
+
 SOURCE_RETRY_AFTER_SECONDS = 30
 QUEUE_RETRY_AFTER_SECONDS = 60
 
-
-class SceneFiles(StaticFiles):
-    """Bundles are content-addressed, so responses are cached as immutable."""
-    async def get_response(self, path, scope):
-        if path.startswith("."):
-            raise StarletteHTTPException(404)
-
-        response = await super().get_response(path, scope)
-        if response.status_code in (200, 304):
-            response.headers["Cache-Control"] = IMMUTABLE
-
-        return response
+log = logging.getLogger("soe")
 
 
-def resolve_area(db_path, spec):
-    """Turn {"type": "boundary", "id"} or {"type": "polygon", "geometry"} into an Area."""
-    if not isinstance(spec, dict):
-        raise AreaError("area must be an object")
-
-    if spec.get("type") == "boundary":
-        boundary_id = spec.get("id")
-        row = db.get_boundary(db_path, boundary_id) if isinstance(boundary_id, str) else None
-        if row is None:
-            raise AreaError("unknown boundary id")
-        return Area(shape(json.loads(row["geom_geojson"])), row)
-
-    if spec.get("type") == "polygon":
-        return Area(clean_polygon(spec.get("geometry")))
-
-    raise AreaError("area.type must be 'boundary' or 'polygon'")
-
-
-async def read_body(request):
-    """Request body, capped at MAX_BODY bytes (413 beyond; 400 for a malformed Content-Length)."""
-    try:
-        declared = int(request.headers.get("content-length") or 0)
-    except ValueError:
-        raise HTTPException(400, "invalid Content-Length header")
-    if declared > MAX_BODY:
-        raise HTTPException(413, "request body too large")
-
-    body = b""
-    async for chunk in request.stream():
-        body += chunk
-        if len(body) > MAX_BODY:
-            raise HTTPException(413, "request body too large")
-        
-    return body
-
-
-def seed_sample_areas(db_path):
-    """Synthetic mode only: reload the sample outlines unless real boundaries are loaded."""
-    if db.has_boundaries_besides(db_path, "synthetic"):
-        return
-
-    features = json.loads(SAMPLE_AREAS.read_text())["features"]
-    db.add_boundaries(db_path, "synthetic", [_sample_row(feature) for feature in features])
-
-
-def _sample_row(feature):
-    geometry, properties = shape(feature["geometry"]), feature["properties"]
-    west, south, east, north = unwrap(geometry).bounds
-    cells = max(1, round(geometry.area / SAMPLE_CELL_AREA_DEG2))
-
-    return (
-        properties["id"],
-        properties["level"],
-        properties["name"],
-        properties["parent_name"],
-        properties["iso3"],
-        west,
-        south,
-        east,
-        north,
-        cells,
-        json.dumps(feature["geometry"]),
-        "synthetic",
-        f"{properties['license']} ({properties['source']})",
-    )
-
-
-def _default_registry():
-    if os.environ.get("SOE_SYNTHETIC") == "1":
-        return make_registry(SyntheticSource())
-    if os.environ.get("SOE_LATEST"):
-        return make_registry(RealSource(os.environ["SOE_LATEST"]))
-    return REGISTRY
-
-
-def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, max_queue=None):
+def create_app(
+    db_path=None,
+    scenes_dir=None,
+    registry=None,
+    max_builds=None,
+    max_queue=None,
+):
     """Build the FastAPI app; arguments override the environment settings (tests pass them)."""
     db_path = db_path or os.environ.get("SOE_DB", "./data/soe.db")
     scenes_dir = Path(scenes_dir or os.environ.get("SOE_SCENES_DIR", "./data/scenes"))
@@ -187,7 +122,12 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
                 _ProgressRecorder(db_path, scene_id),
             )
             db.update_scene(
-                db_path, scene_id, status="done", progress=1.0, bytes=size, finished=db.now()
+                db_path,
+                scene_id,
+                status="done",
+                progress=1.0,
+                bytes=size,
+                finished=db.now(),
             )
         except Exception as error:
             log.exception("scene %s failed", scene_id)
@@ -283,8 +223,45 @@ def create_app(db_path=None, scenes_dir=None, registry=None, max_builds=None, ma
         SceneFiles(directory=scenes_dir, check_dir=False),
         name="scenes",
     )
-
     return app
+
+
+def _default_registry():
+    if os.environ.get("SOE_SYNTHETIC") == "1":
+        return make_registry(SyntheticSource())
+    if os.environ.get("SOE_LATEST"):
+        return make_registry(RealSource(os.environ["SOE_LATEST"]))
+    return REGISTRY
+
+
+def seed_sample_areas(db_path):
+    """Synthetic mode only: reload the sample outlines unless real boundaries are loaded."""
+    if db.has_boundaries_besides(db_path, "synthetic"):
+        return
+
+    features = json.loads(SAMPLE_AREAS.read_text())["features"]
+    db.add_boundaries(db_path, "synthetic", [_sample_row(feature) for feature in features])
+
+
+def _sample_row(feature):
+    geometry, properties = shape(feature["geometry"]), feature["properties"]
+    west, south, east, north = unwrap(geometry).bounds
+    cells = max(1, round(geometry.area / SAMPLE_CELL_AREA_DEG2))
+    return (
+        properties["id"],
+        properties["level"],
+        properties["name"],
+        properties["parent_name"],
+        properties["iso3"],
+        west,
+        south,
+        east,
+        north,
+        cells,
+        json.dumps(feature["geometry"]),
+        "synthetic",
+        f"{properties['license']} ({properties['source']})",
+    )
 
 
 def _warm_latest_months(registry):
@@ -297,6 +274,24 @@ def _warm_latest_months(registry):
             dataset.latest()
         except Exception:
             log.warning("could not warm latest month of %s", dataset.id, exc_info=True)
+
+
+def resolve_area(db_path, spec):
+    """Turn {"type": "boundary", "id"} or {"type": "polygon", "geometry"} into an Area."""
+    if not isinstance(spec, dict):
+        raise AreaError("area must be an object")
+
+    if spec.get("type") == "boundary":
+        boundary_id = spec.get("id")
+        row = db.get_boundary(db_path, boundary_id) if isinstance(boundary_id, str) else None
+        if row is None:
+            raise AreaError("unknown boundary id")
+        return Area(shape(json.loads(row["geom_geojson"])), row)
+
+    if spec.get("type") == "polygon":
+        return Area(clean_polygon(spec.get("geometry")))
+
+    raise AreaError("area.type must be 'boundary' or 'polygon'")
 
 
 class _ProgressRecorder:
@@ -313,8 +308,7 @@ class _ProgressRecorder:
 
 
 def _record_failure(db_path, scene_id, error):
-    # Our own AreaError texts are safe to show. Anything else may contain paths, so it stays in
-    # the log.
+    # Only our own AreaError texts are safe to show; other errors may contain server paths.
     message = str(error) if isinstance(error, AreaError) else "build failed; see the server log"
     try:
         db.update_scene(
@@ -374,10 +368,10 @@ def _area_identity(area):
     """(id that changes when the geometry does, area spec stored in the job's request)."""
     if area.named:
         boundary = area.boundary
-        geometry_hash = hashlib.sha1(boundary["geom_geojson"].encode()).hexdigest()
+        geometry_hash = hashlib.sha256(boundary["geom_geojson"].encode()).hexdigest()
         return boundary["id"] + ":" + geometry_hash, {"type": "boundary", "id": boundary["id"]}
 
-    geometry_hash = hashlib.sha1(area.geom.wkb).hexdigest()
+    geometry_hash = hashlib.sha256(area.geom.wkb).hexdigest()
     return "poly:" + geometry_hash, {"type": "polygon", "geometry": mapping(area.geom)}
 
 
@@ -397,7 +391,6 @@ def _scene_id(geometry_id, layers, start, end, datasets):
     versions = {dataset.id: dataset.source.get("version") for dataset in datasets}
     synthetic = {dataset.id: isinstance(dataset.backend, SyntheticSource) for dataset in datasets}
     content = [geometry_id, layers, start, end, versions, vintage, synthetic, __version__]
-
     return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:ID_LEN]
 
 
@@ -409,7 +402,6 @@ def _layer_out(dataset):
             "first": dataset.first(),
             "latest": dataset.latest(),
         }
-
     return {
         "id": dataset.id,
         "title": dataset.title,
@@ -431,6 +423,36 @@ def _area_out(row):
         "bbox": [row["bbox_w"], row["bbox_s"], row["bbox_e"], row["bbox_n"]],
         "cells": row["cells"],
     }
+
+
+async def read_body(request):
+    """Request body, capped at MAX_BODY bytes (413 beyond; 400 for a malformed Content-Length)."""
+    try:
+        declared = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        raise HTTPException(400, "invalid Content-Length header")
+    if declared > MAX_BODY:
+        raise HTTPException(413, "request body too large")
+
+    body = b""
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > MAX_BODY:
+            raise HTTPException(413, "request body too large")
+        
+    return body
+
+
+class SceneFiles(StaticFiles):
+    """Bundles are content-addressed, so responses are cached as immutable."""
+    async def get_response(self, path, scope):
+        if path.startswith("."):
+            raise StarletteHTTPException(404)
+
+        response = await super().get_response(path, scope)
+        if response.status_code in (200, 304):
+            response.headers["Cache-Control"] = IMMUTABLE
+        return response
 
 
 app = create_app()

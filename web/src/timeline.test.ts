@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+
 import { formatTime, latestOnly, stepAt, unionTimes } from "./timeline.ts";
 
 const monthly = ["2020-01-01", "2020-02-01", "2020-03-01"];

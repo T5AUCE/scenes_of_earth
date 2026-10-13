@@ -20,9 +20,18 @@ from .bundle import make, validate
 MAX_WORKERS = 8
 MEMORY_BUDGET_BYTES = 500_000_000
 ESTIMATED_BYTES_PER_CELL = 13
+
 BATCH_SIZE = 12
 TILE_SIZE = 512
 COMPRESSION = GzipCodec(level=5)
+UNIX_EPOCH = date(1970, 1, 1)
+
+WRITE_PROGRESS_START = 0.05
+WRITE_PROGRESS_SPAN = 0.9
+PERCENTILE_SAMPLES_PER_BATCH = 100_000
+
+METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR = 111_320
+METRES_PER_DEGREE_LATITUDE = 110_574
 
 
 def build_scene(
@@ -36,7 +45,6 @@ def build_scene(
     progress=lambda _: None,
 ):
     """Build or reuse the scene's bundle and return its size in bytes."""
-
     scenes_dir = Path(scenes_dir)
     final_dir = scenes_dir / scene_id
 
@@ -55,11 +63,8 @@ def build_scene(
             zarr_format=3,
         )
 
-        progress(0.05)
-
-        layer_metadata = _write_layers(
-            root, scene_plan, datasets, progress
-        )
+        progress(WRITE_PROGRESS_START)
+        layer_metadata = _write_layers(root, scene_plan, datasets, progress)
 
         scene_document = make(
             scene_id,
@@ -80,14 +85,10 @@ def build_scene(
         )
 
         bundle_size = _directory_size(temp_dir)
-
         # If another build published this scene first, keep the existing bundle.
-        bundle_size = _publish_scene(
-            temp_dir, final_dir, bundle_size
-        )
+        bundle_size = _publish_scene(temp_dir, final_dir, bundle_size)
 
     progress(1.0)
-
     return bundle_size
 
 
@@ -175,13 +176,11 @@ def _directory_size(directory):
 
 
 def _write_layers(root, scene_plan, datasets, progress):
-    layer_metadata = {}
-
     ordered_datasets = sorted(
         datasets,
         key=lambda dataset: dataset.time_varying,
     )
-
+    layer_metadata = {}
     for dataset in ordered_datasets:
         layer_plan = scene_plan.layers[dataset.id]
         layer_group = root.create_group(dataset.id)
@@ -203,16 +202,13 @@ def _write_layers(root, scene_plan, datasets, progress):
             )
 
         layer_metadata[dataset.id] = metadata
-
     return layer_metadata
 
 
 def _write_coordinates_and_mask(layer_group, layer_plan):
     """Write cell-centre coordinates and the area mask."""
     height, width = layer_plan.shape
-    longitude, latitude = _coordinates(
-        layer_plan.transform, height, width
-    )
+    longitude, latitude = _coordinates(layer_plan.transform, height, width)
 
     _write_array(
         layer_group,
@@ -263,7 +259,6 @@ def _write_static_layer(layer_group, dataset, layer_plan):
         shade_settings["azimuth"],
         shade_settings["altitude"],
     )
-
     shade_description = (
         f"Hillshade, azimuth {shade_settings['azimuth']}, "
         f"altitude {shade_settings['altitude']} (0-255)"
@@ -276,7 +271,6 @@ def _write_static_layer(layer_group, dataset, layer_plan):
         ["lat", "lon"],
         {"long_name": shade_description},
     )
-
     return {}
 
 
@@ -303,11 +297,10 @@ def hillshade(
     # Gradients need cell sizes in metres to match elevation units.
     cell_width = (
         resolution_degrees
-        * 111320
+        * METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR
         * np.cos(np.radians(latitude))
     )[:, None].clip(min=1)
-
-    cell_height = resolution_degrees * 110574
+    cell_height = resolution_degrees * METRES_PER_DEGREE_LATITUDE
 
     northwest = elevation[:-2, :-2]
     north = elevation[:-2, 1:-1]
@@ -341,8 +334,8 @@ def hillshade(
 
     illumination = (
         -gradient_east * light_east
-        -gradient_north * light_north
-        +light_up
+        - gradient_north * light_north
+        + light_up
     ) / np.sqrt(
         gradient_east**2 + gradient_north**2 + 1
     )
@@ -355,13 +348,10 @@ def hillshade(
 def _write_time_series(layer_group, dataset, layer_plan, progress):
     """Write a time series in batches and return its display statistics."""
     steps = layer_plan.steps
-    height, width = layer_plan.shape
     step_count = len(steps)
-
     dtype, scale, offset, fill_value = dataset.encoding["value"]
 
     _write_time_coordinate(layer_group, steps)
-
     series = _create_time_array(
         layer_group,
         dataset,
@@ -371,26 +361,19 @@ def _write_time_series(layer_group, dataset, layer_plan, progress):
         offset,
         fill_value,
     )
-
     statistics = _StatisticsAccumulator()
-
     worker_count = _choose_worker_count(layer_plan)
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         for batch_start in range(0, step_count, BATCH_SIZE):
-            batch_steps = steps[
-                batch_start:batch_start + BATCH_SIZE
-            ]
-
+            batch_steps = steps[batch_start:batch_start + BATCH_SIZE]
             raster_batch = _read_batch(
                 executor,
                 dataset,
                 layer_plan,
                 batch_steps,
             )
-
             statistics.add(raster_batch, layer_plan.mask)
-
             encoded_batch = encode_values(
                 raster_batch,
                 dtype,
@@ -398,16 +381,14 @@ def _write_time_series(layer_group, dataset, layer_plan, progress):
                 offset,
                 fill_value,
             )
-
             batch_end = batch_start + len(batch_steps)
             series[batch_start:batch_end] = encoded_batch
-
             progress(
-                0.05 + 0.9 * batch_end / step_count
+                WRITE_PROGRESS_START
+                + WRITE_PROGRESS_SPAN * batch_end / step_count
             )
 
     value_stats = statistics.finish()
-
     return {
         "domain": dataset.domain(value_stats),
         "stats": value_stats,
@@ -416,16 +397,13 @@ def _write_time_series(layer_group, dataset, layer_plan, progress):
 
 def _write_time_coordinate(layer_group, steps):
     """Write dates as integer days since the Unix epoch."""
-    epoch = date(1970, 1, 1)
-
     days_since_epoch = np.array(
         [
-            (date.fromisoformat(step) - epoch).days
+            (date.fromisoformat(step) - UNIX_EPOCH).days
             for step in steps
         ],
         dtype="int32",
     )
-
     _write_array(
         layer_group,
         "time",
@@ -450,7 +428,6 @@ def _create_time_array(
     """Create the chunked and sharded Zarr array for a time series."""
     step_count = len(layer_plan.steps)
     height, width = layer_plan.shape
-
     spatial_chunks = (
         min(height, TILE_SIZE),
         min(width, TILE_SIZE),
@@ -486,26 +463,22 @@ def _read_batch(executor, dataset, layer_plan, steps):
         ),
         steps,
     )
-
     return np.stack(list(rasters))
 
 
 def _choose_worker_count(layer_plan):
     """Limit concurrent raster reads using the estimated memory budget."""
     height, width = layer_plan.shape
-
     estimated_bytes_per_step = (
         height
         * width
         * layer_plan.factor**2
         * ESTIMATED_BYTES_PER_CELL
     )
-
     workers_allowed_by_memory = (
         MEMORY_BUDGET_BYTES
         // max(1, estimated_bytes_per_step)
     )
-
     return max(
         1,
         min(MAX_WORKERS, workers_allowed_by_memory),
@@ -514,7 +487,6 @@ def _choose_worker_count(layer_plan):
 
 class _StatisticsAccumulator:
     """Accumulate exact basic statistics and an approximate 98th percentile."""
-
     def __init__(self):
         self._random = np.random.default_rng(0)
         self._samples = []
@@ -540,7 +512,7 @@ class _StatisticsAccumulator:
         self._samples.append(
             self._random.choice(
                 values,
-                min(values.size, 100_000),
+                min(values.size, PERCENTILE_SAMPLES_PER_BATCH),
                 replace=False,
             )
         )
@@ -554,7 +526,6 @@ class _StatisticsAccumulator:
             np.concatenate(self._samples),
             98,
         )
-
         return {
             "min": round(float(self._minimum), 2),
             "max": round(float(self._maximum), 2),
@@ -576,7 +547,6 @@ def _coordinates(transform, height, width):
         transform.f
         + (np.arange(height) + 0.5) * transform.e
     )
-
     return longitude, latitude
 
 
@@ -596,9 +566,7 @@ def _write_array(
         dimension_names=dimensions,
         attributes=attributes or {},
     )
-
     array[...] = data
-
     return array
 
 
@@ -607,11 +575,9 @@ def encode_values(values, dtype, scale, offset, fill_value):
     quantized = np.rint(
         (values - offset) / scale
     ).clip(0, fill_value - 1)
-
     encoded = np.where(
         np.isnan(values),
         fill_value,
         quantized,
     )
-
     return encoded.astype(dtype)

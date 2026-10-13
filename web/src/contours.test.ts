@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+
 import { contours } from "d3-contour";
+
 import {
   clipRings,
   covers,
@@ -95,7 +97,6 @@ test("a ring wholly inside the mask stays closed", () => {
 test("grid corners map to the bbox corners and rows run north to south", () => {
   const grid = { bbox: [10, -4, 20, 6] as Bbox, nx: 100, ny: 50 };
   const run: [number, number][] = [[0, 0], [100, 50]];
-
   const levels = [{ elevation: 500, runs: [run] }];
   const blocks = { nx: grid.nx, ny: grid.ny, factor: 1, sourceWindow: wholeGrid(grid) };
 
@@ -107,7 +108,6 @@ test("grid corners map to the bbox corners and rows run north to south", () => {
 test("a downsampled grid keeps the same extent", () => {
   const grid = { bbox: [0, 0, 8, 4] as Bbox, nx: 8, ny: 4 };
   const run: [number, number][] = [[4, 2]];
-
   const levels = [{ elevation: 100, runs: [run] }];
   const blocks = { nx: 4, ny: 2, factor: 2, sourceWindow: wholeGrid(grid) };
 
@@ -130,11 +130,9 @@ test("every fifth line is major", () => {
   const grid = { bbox: [0, 0, 1, 1] as Bbox, nx: 1, ny: 1 };
   const run: [number, number][] = [[0, 0], [1, 1]];
   const levels = [100, 200, 500, 600].map((elevation) => ({ elevation, runs: [run] }));
-
   const blocks = { nx: grid.nx, ny: grid.ny, factor: 1, sourceWindow: wholeGrid(grid) };
 
   const { features } = toLonLat(levels, grid, blocks, 100);
-
   const majors = features.map((feature) => feature.properties.major);
 
   assert.deepEqual(majors, [false, false, true, false]);
@@ -144,7 +142,6 @@ test("a grid east of 180 keeps its longitudes unwrapped", () => {
   const bbox: Bbox = [177.2, -19, 182.8, -16];
   const grid = { bbox, nx: 56, ny: 30 };
   const run: [number, number][] = [[56, 0], [56, 30]];
-
   const levels = [{ elevation: 100, runs: [run] }];
   const blocks = { nx: grid.nx, ny: grid.ny, factor: 1, sourceWindow: wholeGrid(grid) };
 
@@ -249,10 +246,9 @@ test("contours of a hill stay clear of cells without data and the frame", () => 
     .size([nx, ny])
     .smooth(true)
     .thresholds([400, 800])(sampled.values as unknown as number[]);
-  const runs = multiPolygons.flatMap(({ coordinates }) => {
-    return coordinates.flatMap((polygon) => clipRings(polygon, sampled.hasData, nx, ny));
-  });
-
+  const runs = multiPolygons.flatMap(({ coordinates }) =>
+    coordinates.flatMap((polygon) => clipRings(polygon, sampled.hasData, nx, ny)),
+  );
   const points = runs.flat();
 
   assert.ok(points.length > 0);
