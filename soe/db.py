@@ -7,30 +7,30 @@ from pathlib import Path
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS boundaries (
-    id TEXT PRIMARY KEY, 
-    level TEXT NOT NULL, 
-    name TEXT NOT NULL, 
-    parent_name TEXT, 
+    id TEXT PRIMARY KEY,
+    level TEXT NOT NULL,
+    name TEXT NOT NULL,
+    parent_name TEXT,
     iso3 TEXT,
-    bbox_w REAL, 
-    bbox_s REAL, 
-    bbox_e REAL, 
-    bbox_n REAL, 
+    bbox_w REAL,
+    bbox_s REAL,
+    bbox_e REAL,
+    bbox_n REAL,
     cells INTEGER,
-    geom_geojson TEXT NOT NULL, 
-    source TEXT NOT NULL, 
+    geom_geojson TEXT NOT NULL,
+    source TEXT NOT NULL,
     licence TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_boundaries_name ON boundaries(name COLLATE NOCASE);
 CREATE TABLE IF NOT EXISTS scenes (
-    id TEXT PRIMARY KEY, 
-    status TEXT NOT NULL, 
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
     progress REAL DEFAULT 0,
-    error TEXT, 
-    error_class TEXT, 
-    request_json TEXT NOT NULL, 
+    error TEXT,
+    error_class TEXT,
+    request_json TEXT NOT NULL,
     bytes INTEGER,
-    created TEXT NOT NULL, 
+    created TEXT NOT NULL,
     finished TEXT
 );
 """
@@ -39,8 +39,8 @@ LEVEL_RANK = (
     "CASE level WHEN 'country' THEN 0 WHEN 'state' THEN 1 WHEN 'county' THEN 2 ELSE 3 END"
 )
 
-SQLITE_TIMEOUT_SECONDS = 5
-BUSY_TIMEOUT_MILLISECONDS = SQLITE_TIMEOUT_SECONDS * 1000
+SQLITE_TIMEOUT_SECS = 5
+BUSY_TIMEOUT_MS = SQLITE_TIMEOUT_SECS * 1000
 ACTIVE_STATUSES = "('queued','running')"
 
 INSERT_BOUNDARY = """
@@ -59,28 +59,6 @@ log = logging.getLogger("soe.db")
 
 class Busy(Exception):
     """Too many queued or running scene jobs."""
-
-
-def now():
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-@contextmanager
-def connect(path):
-    # isolation_level=None is autocommit; submit() and add_boundaries() use explicit BEGIN.
-    connection = sqlite3.connect(
-        path,
-        timeout=SQLITE_TIMEOUT_SECONDS,
-        isolation_level=None,
-    )
-    connection.row_factory = sqlite3.Row
-    
-    try:
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MILLISECONDS}")
-        yield connection
-    finally:
-        connection.close()
 
 
 def init(path):
@@ -138,6 +116,7 @@ def add_boundaries(path, source, rows):
         connection.execute("DELETE FROM boundaries WHERE source = ?", (source,))
         connection.executemany(INSERT_BOUNDARY, rows)
         connection.execute("COMMIT")
+
     return replaced
 
 
@@ -209,3 +188,25 @@ def _check_capacity(connection, max_active):
     ).fetchone()[0]
     if active >= max_active:
         raise Busy()
+
+
+@contextmanager
+def connect(path):
+    # isolation_level=None is autocommit; submit() and add_boundaries() use explicit BEGIN.
+    connection = sqlite3.connect(
+        path,
+        timeout=SQLITE_TIMEOUT_SECS,
+        isolation_level=None,
+    )
+    connection.row_factory = sqlite3.Row
+    
+    try:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+        yield connection
+    finally:
+        connection.close()
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")

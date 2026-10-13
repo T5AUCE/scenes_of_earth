@@ -10,10 +10,10 @@ import {
 import { formatTime, unionTimes } from "./timeline";
 import type { Scene } from "./types";
 
-// The docked panel scrolls the About tab to this heading.
+/** Id of the notices heading; the docked panel scrolls the About tab to it. */
 export const NOTICES_HEADING_ID = "notices-heading";
 // "YYYY-MM-DDTHH:MM" is the part of an ISO timestamp that is shown.
-const ISO_MINUTE_LENGTH = 16;
+const ISO_MINUTE_CHARS = 16;
 const WEB_LINK_PATTERN = /^https?:\/\//;
 
 const BASEMAP_CREDIT = "Basemap: OpenFreeMap, © OpenMapTiles, data from OpenStreetMap.";
@@ -38,9 +38,9 @@ const SMOOTHING_LINES = [
     + "inside, every cell it touches is used and a notice says so.",
 ];
 
+/** One line on the scene: area, period and layer count. */
 export function summaryText(scene: Scene) {
   const layerCount = scene.layers.length;
-
   return [
     areaText(scene),
     periodText(scene),
@@ -48,9 +48,11 @@ export function summaryText(scene: Scene) {
   ].join(" · ");
 }
 
+/** The credited source names on one line. */
 export const creditsLine = (scene: Scene) =>
   creditEntries(scene).map((entry) => entry.name).join(" · ");
 
+/** The About tab: area, layers, notices, smoothing and versions. */
 export function renderAbout(scene: Scene) {
   const root = makeHtmlElement("div");
   makeHtmlElement("h3", scene.title, root);
@@ -80,6 +82,7 @@ export function renderAbout(scene: Scene) {
   return root;
 }
 
+/** The Credits tab: each source, the basemap and the terms. */
 export function renderCredits(scene: Scene) {
   const root = makeHtmlElement("div");
 
@@ -133,19 +136,17 @@ function appendSmoothing(root: HTMLElement) {
 }
 
 function versionRows(scene: Scene): [string, string][] {
-  const built = new Date(scene.created).toISOString().slice(0, ISO_MINUTE_LENGTH).replace("T", " ");
+  const built = new Date(scene.created).toISOString().slice(0, ISO_MINUTE_CHARS).replace("T", " ");
 
   const rows: [string, string][] = [
     ["Scenes of Earth", scene.generator.version],
     ["Bundle format", scene.version],
     ["Built", `${built} UTC`],
   ];
-
   for (const layer of scene.layers) {
     const { name, version } = layer.source;
     if (version) rows.push([name, version]);
   }
-
   return rows;
 }
 
@@ -168,12 +169,10 @@ function creditCard(entry: CreditEntry) {
 
 function definitionList(rows: [string, string][]) {
   const list = makeHtmlElement("dl");
-
   for (const [term, description] of rows) {
     makeHtmlElement("dt", term, list);
     makeHtmlElement("dd", description, list);
   }
-
   return list;
 }
 

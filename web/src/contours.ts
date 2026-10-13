@@ -6,7 +6,7 @@ export interface ContourGrid {
   ny: number;
 }
 
-// A rectangle of source cells; y counts down from the north edge.
+/** A rectangle of source cells; y counts down from the north edge. */
 export interface GridWindow {
   x: number;
   y: number;
@@ -14,6 +14,7 @@ export interface GridWindow {
   height: number;
 }
 
+/** Block means of a grid window, flagging blocks that have data or lie inside the area. */
 export interface Downsampled {
   values: Float32Array;
   hasData: Uint8Array; // 1 where any source cell of the block has an elevation
@@ -24,9 +25,10 @@ export interface Downsampled {
   sourceWindow: GridWindow;
 }
 
-// Grid coordinates: sample i sits at i + 0.5, so x spans [0, nx] and y spans [0, ny].
+/** One contour polyline in grid coordinates: sample i sits at i + 0.5, so x spans [0, nx]. */
 export type Run = [number, number][];
 
+/** The contour runs at one elevation. */
 export interface ContourLevel {
   elevation: number;
   runs: Run[];
@@ -41,9 +43,12 @@ export interface ContourFeatureCollection {
   }[];
 }
 
+/** Most blocks per side that contours are traced on; larger windows are averaged into blocks. */
 export const MAX_SIDE_CELLS = 1024;
+/** Job number of the whole-area contours; detail windows count up from it. */
 export const COARSE_JOB = 0;
 
+/** Every this-many-th contour interval is drawn bold. */
 export const MAJOR_EVERY = 5;
 const INTERVALS_M = [10, 20, 50, 100, 200, 250, 500, 1000];
 const TARGET_LINE_COUNT = 12;
@@ -51,9 +56,10 @@ const LOW_PERCENTILE = 0.02;
 const HIGH_PERCENTILE = 0.98;
 const MAX_PERCENTILE_SAMPLES = 65536;
 
-const WORLD_WIDTH_DEGREES = 360;
-const BOUNDS_TOLERANCE_DEGREES = 1e-9;
+const WORLD_WIDTH_DEG = 360;
+const BOUNDS_TOLERANCE_DEG = 1e-9;
 
+/** A window covering the whole grid. */
 export const wholeGrid = ({ nx, ny }: { nx: number; ny: number }): GridWindow => ({
   x: 0,
   y: 0,
@@ -61,10 +67,14 @@ export const wholeGrid = ({ nx, ny }: { nx: number; ny: number }): GridWindow =>
   height: ny,
 });
 
+/** Source cells per block side, so neither side exceeds maxSide blocks. */
 export const factorFor = (width: number, height: number, maxSide = MAX_SIDE_CELLS) =>
   Math.ceil(Math.max(width, height) / maxSide);
 
-// Block means keep the shape of the relief; a block counts if any cell in it does.
+/**
+ * Averages a window into blocks; block means keep the relief's shape, and a block counts if any
+ * cell does.
+ */
 export function downsample(
   elevation: ArrayLike<number>,
   mask: ArrayLike<number>,
@@ -107,11 +117,10 @@ export function downsample(
       inside[target] = isInside ? 1 : 0;
     }
   }
-
   return { values, hasData, inside, nx: width, ny: height, factor, sourceWindow };
 }
 
-// The source cells showing a view, padded by a fraction of its size so small pans stay inside.
+/** The source cells showing a view, padded by a fraction of its size so small pans stay inside. */
 export function viewWindow(
   grid: ContourGrid,
   view: Bbox,
@@ -138,6 +147,7 @@ export function viewWindow(
   return { sourceWindow: { x, y, width, height }, factor: factorFor(width, height, maxSide) };
 }
 
+/** The bbox of a window of source cells. */
 export function windowBounds(grid: ContourGrid, { x, y, width, height }: GridWindow): Bbox {
   const [west, south, east, north] = grid.bbox;
   const degreesPerColumn = (east - west) / grid.nx;
@@ -151,16 +161,18 @@ export function windowBounds(grid: ContourGrid, { x, y, width, height }: GridWin
   ];
 }
 
-// MapLibre wraps the map centre across 180, but the grid may sit in another world copy.
+/**
+ * The view moved into the grid's world copy; MapLibre wraps the centre across 180, the grid may
+ * not.
+ */
 export function viewInGridWorld(view: Bbox, gridBbox: Bbox): Bbox {
   const gridCenter = (gridBbox[0] + gridBbox[2]) / 2;
   const viewCenter = (view[0] + view[2]) / 2;
-  const shift = WORLD_WIDTH_DEGREES * Math.round((gridCenter - viewCenter) / WORLD_WIDTH_DEGREES);
-
+  const shift = WORLD_WIDTH_DEG * Math.round((gridCenter - viewCenter) / WORLD_WIDTH_DEG);
   return [view[0] + shift, view[1], view[2] + shift, view[3]];
 }
 
-// Only the part of the view over the grid needs covering.
+/** Whether outer covers the view; only the part of the view over the grid needs covering. */
 export function covers(outer: Bbox, view: Bbox, within: Bbox) {
   const needed = [
     Math.max(view[0], within[0]),
@@ -168,20 +180,20 @@ export function covers(outer: Bbox, view: Bbox, within: Bbox) {
     Math.min(view[2], within[2]),
     Math.min(view[3], within[3]),
   ];
-
   return (
-    outer[0] <= needed[0] + BOUNDS_TOLERANCE_DEGREES
-    && outer[1] <= needed[1] + BOUNDS_TOLERANCE_DEGREES
-    && outer[2] >= needed[2] - BOUNDS_TOLERANCE_DEGREES
-    && outer[3] >= needed[3] - BOUNDS_TOLERANCE_DEGREES
+    outer[0] <= needed[0] + BOUNDS_TOLERANCE_DEG
+    && outer[1] <= needed[1] + BOUNDS_TOLERANCE_DEG
+    && outer[2] >= needed[2] - BOUNDS_TOLERANCE_DEG
+    && outer[3] >= needed[3] - BOUNDS_TOLERANCE_DEG
   );
 }
 
+/** The downsampled values inside the area. */
 export function maskedValues({ values, inside }: Downsampled) {
   return values.filter((_, index) => inside[index]);
 }
 
-// The smallest interval that gives about TARGET_LINE_COUNT lines across the typical relief.
+/** The smallest interval that gives about TARGET_LINE_COUNT lines across the typical relief. */
 export function pickInterval(values: ArrayLike<number>) {
   if (!values.length) return INTERVALS_M[0];
 
@@ -200,22 +212,22 @@ export function pickInterval(values: ArrayLike<number>) {
   return INTERVALS_M.find((interval) => interval >= wanted) ?? largestInterval;
 }
 
-// Multiples of the interval above zero, so the coastline is not drawn as a contour.
+/** Multiples of the interval above zero, so the coastline is not drawn as a contour. */
 export function thresholds(maxElevation: number, interval: number) {
   const levels: number[] = [];
-
   for (let level = interval; level <= maxElevation; level += interval) levels.push(level);
-
   return levels;
 }
 
-// d3 closes rings along the grid frame and across cells without data; those parts are dropped.
+/**
+ * Contour runs over cells with data; d3 closes rings along the grid frame and across empty cells,
+ * so those parts are dropped.
+ */
 export function clipRings(rings: number[][][], mask: ArrayLike<number>, nx: number, ny: number) {
   const runs: Run[] = [];
 
   const isKept = ([x, y]: number[]) => {
     const isOnFrame = x <= 0 || x >= nx || y <= 0 || y >= ny;
-
     return !isOnFrame && mask[Math.floor(y) * nx + Math.floor(x)] > 0;
   };
 
@@ -242,10 +254,10 @@ export function clipRings(rings: number[][][], mask: ArrayLike<number>, nx: numb
       run = [];
     }
   }
-
   return runs;
 }
 
+/** Contour runs in block coordinates as GeoJSON lines in longitude and latitude. */
 export function toLonLat(
   levels: ContourLevel[],
   grid: ContourGrid,
@@ -279,7 +291,6 @@ export function toLonLat(
         coordinates: runs.map((run) => run.map(toPosition)),
       },
     }));
-
   return { type: "FeatureCollection", features };
 }
 

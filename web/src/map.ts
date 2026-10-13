@@ -8,25 +8,28 @@ import {
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
-import { areaFilter, type TileArea, WORLD_WIDTH_DEGREES } from "./label-filter";
+import { areaFilter, type TileArea, WORLD_WIDTH_DEG } from "./label-filter";
 import { clampAround, nearestEquivalent, panLimit } from "./pan-lock";
 import { imageCorners } from "./render/mercator";
 import type { Bbox } from "./types";
 
 // OpenFreeMap: free, no API key.
 const BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
+/** The map's highest zoom, used as the open upper end of layer zoom ranges. */
 export const MAX_ZOOM = 24;
 // MapLibre draws the world 512 px wide at zoom 0.
 const TILE_SIZE_PX = 512;
 // WebGL guarantees at least this much; used when the context cannot be queried.
 const GUARANTEED_TEXTURE_SIZE_PX = 4096;
 
+/** The camera of the world view. */
 export const WORLD_VIEW = { center: [0, 20] as [number, number], zoom: 1.5 };
 const MAX_FIT_ZOOM = 10;
 // The left side is wider because the side panel covers it.
 const FIT_PADDING_PX = { top: 40, bottom: 40, left: 340, right: 40 };
-// A picked area is shown with its surroundings, before a scene is built for it.
+/** Padding that shows a picked area with its surroundings, before a scene is built for it. */
 export const BROWSE_PADDING_PX = { top: 120, bottom: 120, left: 460, right: 120 };
+/** Highest zoom when showing a picked area. */
 export const BROWSE_MAX_ZOOM = 8;
 
 const PICKED_ID = "soe-picked-area";
@@ -39,6 +42,7 @@ interface DrawableImage {
   updateImage(options: { image: ImageData }): void;
 }
 
+/** Creates the basemap, with its attribution at the bottom left. */
 export function createMap(container: string): MapLibreMap {
   const map = new MapLibreMap({
     container,
@@ -49,10 +53,10 @@ export function createMap(container: string): MapLibreMap {
 
   // Bottom right belongs to the scene column.
   map.addControl(new AttributionControl({ compact: false }), "bottom-left");
-
   return map;
 }
 
+/** Moves the camera to fit the bbox, leaving room for the side panel. */
 export function fitToBbox(
   map: MapLibreMap,
   [west, south, east, north]: Bbox,
@@ -64,7 +68,7 @@ export function fitToBbox(
   );
 }
 
-// The camera fitToBbox ends at, or undefined when the box cannot be fitted.
+/** The camera fitToBbox ends at, or undefined when the box cannot be fitted. */
 export function fitCamera(
   map: MapLibreMap,
   [west, south, east, north]: Bbox,
@@ -79,7 +83,7 @@ export function fitCamera(
   return { center: LngLat.convert(camera.center), zoom: camera.zoom };
 }
 
-// Holds the centre inside the fitted view (not setMaxBounds, which cuts the elastic zoom short).
+/** Holds the centre inside the fitted view; setMaxBounds would cut the elastic zoom short. */
 export function lockPan(map: MapLibreMap, fitted: { center: LngLat; zoom: number }) {
   const fittedCentre = MercatorCoordinate.fromLngLat(fitted.center);
   const fittedWorldPx = TILE_SIZE_PX * 2 ** fitted.zoom;
@@ -88,7 +92,7 @@ export function lockPan(map: MapLibreMap, fitted: { center: LngLat; zoom: number
     const { clientWidth, clientHeight } = map.getCanvas();
     const { lng, lat } = map.getCenter();
     const centre = MercatorCoordinate.fromLngLat({
-      lng: nearestEquivalent(lng, fitted.center.lng, WORLD_WIDTH_DEGREES),
+      lng: nearestEquivalent(lng, fitted.center.lng, WORLD_WIDTH_DEG),
       lat,
     });
 
@@ -108,7 +112,7 @@ export function lockPan(map: MapLibreMap, fitted: { center: LngLat; zoom: number
   return () => map.off("move", clampCentre);
 }
 
-// Replaces any earlier outline; the geometry must already sit in the visible world copy.
+/** Replaces any earlier outline; the geometry must already sit in the visible world copy. */
 export function showPickedOutline(map: MapLibreMap, geometry: GeoJSON.Geometry) {
   clearPickedOutline(map);
 
@@ -123,9 +127,10 @@ export function showPickedOutline(map: MapLibreMap, geometry: GeoJSON.Geometry) 
   });
 }
 
+/** Removes the picked area's outline, if any. */
 export const clearPickedOutline = (map: MapLibreMap) => removeLayerAndSource(map, PICKED_ID);
 
-// Tile failures and aborts are routine while panning, so only other map errors are reported.
+/** Tile failures and aborts are routine while panning, so only other map errors are reported. */
 export function reportMapErrors(map: MapLibreMap, report: (message: string) => void) {
   map.on("error", (event) => {
     const { error, tile } = event as typeof event & { tile?: unknown };
@@ -136,7 +141,7 @@ export function reportMapErrors(map: MapLibreMap, report: (message: string) => v
   });
 }
 
-// Images wider or taller than this cannot be uploaded to the GPU as textures.
+/** Images wider or taller than this cannot be uploaded to the GPU as textures. */
 export function maxTextureSize(map: MapLibreMap) {
   const canvas = map.getCanvas();
   const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
@@ -145,12 +150,12 @@ export function maxTextureSize(map: MapLibreMap) {
   return (gl.getParameter(gl.MAX_TEXTURE_SIZE) as number | null) ?? GUARANTEED_TEXTURE_SIZE_PX;
 }
 
-// The first label layer; data layers go below it so the basemap's place names stay on top.
+/** The first label layer; data layers go below it so the basemap's place names stay on top. */
 export function firstSymbolId(map: MapLibreMap) {
   return map.getStyle().layers.find((layer) => layer.type === "symbol")?.id;
 }
 
-// The source starts empty; the image arrives later through setImage.
+/** Adds an image layer over the bbox; its source starts empty until setImage. */
 export function addImageLayer(
   map: MapLibreMap,
   id: string,
@@ -165,16 +170,18 @@ export function addImageLayer(
   );
 }
 
+/** Replaces the picture of a layer added with addImageLayer. */
 export function setImage(map: MapLibreMap, id: string, image: ImageData) {
   (map.getSource(id) as unknown as DrawableImage | undefined)?.updateImage({ image });
 }
 
+/** Removes a layer and its source, whichever of them exist. */
 export function removeLayerAndSource(map: MapLibreMap, id: string) {
   if (map.getLayer(id)) map.removeLayer(id);
   if (map.getSource(id)) map.removeSource(id);
 }
 
-// Labels are copied above the mask, limited to the area, and the originals give way; returns undo.
+/** Copies labels above the mask, limited to the area; the originals give way. Returns undo. */
 export function moveLabelsIntoArea(map: MapLibreMap, area: TileArea, fromZoom: number) {
   const labelLayers = map.getStyle().layers.filter((layer) => layer.type === "symbol");
 

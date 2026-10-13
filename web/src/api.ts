@@ -12,42 +12,48 @@ const SCENE_VERSION = "0.2";
 const SCENE_ID_PATTERN = /^[0-9a-f]{20}$/;
 
 const REQUEST_TIMEOUT_MS = 10_000;
-// The backend may wait up to 15 s on the CHIRPS vintage lookup before accepting a build.
+/** Build request timeout; the backend may first wait up to 15 s on the CHIRPS vintage lookup. */
 export const BUILD_REQUEST_TIMEOUT_MS = 30_000;
 
+/** A failed API response, with its HTTP status and any Retry-After delay. */
 export class ApiError extends Error {
   status: number;
-  retryAfter?: number; // seconds, from the Retry-After header
+  retryAfterSecs?: number; // From the Retry-After header.
 
-  constructor(status: number, message: string, retryAfter?: number) {
+  constructor(status: number, message: string, retryAfterSecs?: number) {
     super(message);
     this.status = status;
-    this.retryAfter = retryAfter;
+    this.retryAfterSecs = retryAfterSecs;
   }
 }
 
-// Relative URLs only. Bundle files must be read via the scene's bundle_url, not a hard-coded path.
+/** Backend health and version. */
 export const getHealth = () => request<Health>("/api/health");
 
+/** The layers the backend can build, with the default selection. */
 export const getLayers = () => request<LayersResponse>("/api/layers");
 
+/** Named areas matching the query, optionally at one level only. */
 export function searchAreas(query: string, level: string) {
   const levelParameter = level ? `&level=${level}` : "";
   return request<AreaHit[]>(`/api/areas/search?q=${encodeURIComponent(query)}${levelParameter}`);
 }
 
-// The backend makes scene ids from the first 20 hex characters of a hash.
+/** Whether text is a scene id: the first 20 hex characters of the backend's hash. */
 export const isSceneId = (text: string) => SCENE_ID_PATTERN.test(text);
 
+/** The build status of one scene. */
 export const getSceneStatus = (id: string) =>
   request<SceneStatus>(`/api/scenes/${encodeURIComponent(id)}`);
 
-// Search hits carry only a bbox, so drawing the real outline needs this extra request.
+/** One area with its geometry; search hits carry only a bbox, so the outline needs this request. */
 export const getArea = (id: string) =>
   request<AreaHit & { geometry: AreaFeature["geometry"] }>(`/api/areas/${encodeURIComponent(id)}`);
 
+/** The area outline (area.geojson) at href. */
 export const loadAreaFeature = (href: string) => request<AreaFeature>(href);
 
+/** Submits a scene build request. */
 export const postScene = (body: SceneRequest) =>
   request<SceneStatus>(
     "/api/scenes",
@@ -59,7 +65,7 @@ export const postScene = (body: SceneRequest) =>
     BUILD_REQUEST_TIMEOUT_MS,
   );
 
-// Hrefs resolve against the bundle URL so the same code works for /scenes/ now and R2 later.
+/** Hrefs resolve against the bundle URL so the same code works for /scenes/ now and R2 later. */
 export async function loadScene(bundleUrl: string): Promise<Scene> {
   const base = new URL(bundleUrl, location.href);
   const scene = await request<Scene>(base.href);
@@ -69,10 +75,10 @@ export async function loadScene(bundleUrl: string): Promise<Scene> {
 
   scene.area.geometry_href = new URL(scene.area.geometry_href, base).href;
   scene.data.href = new URL(scene.data.href, base).href;
-
   return scene;
 }
 
+// Relative URLs only. Bundle files must be read via the scene's bundle_url, not a hard-coded path.
 async function request<T>(
   url: string,
   init?: RequestInit,
@@ -86,10 +92,10 @@ async function request<T>(
 
 async function apiErrorFrom(response: Response) {
   const body = await response.json().catch(() => null);
-  const retryAfter = Number(response.headers.get("Retry-After"));
+  const retryAfterSecs = Number(response.headers.get("Retry-After"));
   const message = errorMessage(body?.detail, response.status);
 
-  return new ApiError(response.status, message, retryAfter || undefined);
+  return new ApiError(response.status, message, retryAfterSecs || undefined);
 }
 
 function errorMessage(detail: unknown, status: number) {
@@ -97,6 +103,5 @@ function errorMessage(detail: unknown, status: number) {
 
   // FastAPI validation errors arrive as a list of problems.
   if (Array.isArray(detail)) return detail.map((problem) => problem.msg).join("; ");
-
   return `HTTP ${status}`;
 }

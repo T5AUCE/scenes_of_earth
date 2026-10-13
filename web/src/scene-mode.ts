@@ -35,20 +35,20 @@ const USER_INPUT_EVENTS = ["wheel", "mousedown", "touchstart"];
 const LISTEN_FIRST = { capture: true, passive: false };
 
 // Zooming out may pass the fitted zoom by this much before it eases back.
-const MIN_ZOOM_OVERSHOOT = 0.15;
-const ZOOM_EPSILON = 0.001;
+const FIT_OVERSHOOT_ZOOM = 0.15;
+const FIT_TOLERANCE_ZOOM = 0.001;
 
 const MASK_ID = "soe-scene-mask";
 const MASK_OPACITY = 1;
 // The mask fades in between these distances (in zoom levels) below the fitted zoom.
-const MASK_FADE_START_ZOOMS = 1.5;
-const MASK_FADE_END_ZOOMS = 0.25;
+const MASK_FADE_START_ZOOM = 1.5;
+const MASK_FADE_END_ZOOM = 0.25;
 // Data layers appear once the mask is opaque, so their uncropped bbox never shows through it.
-const DATA_APPEARS_ZOOMS = MASK_FADE_END_ZOOMS;
+const DATA_APPEARS_ZOOM = MASK_FADE_END_ZOOM;
 const PAGE_BACKGROUND_PROPERTY = "--page-background";
-const HALF_WORLD_DEGREES = 180;
+const HALF_WORLD_DEG = 180;
 // Mercator has no poles.
-const MAX_LATITUDE = 85;
+const MAX_LATITUDE_DEG = 85;
 
 // Space kept between the fitted area and whatever covers or borders the map.
 const EDGE_MARGIN_PX = 24;
@@ -56,14 +56,19 @@ const STATUS_BADGE_ID = "status";
 const PHONE_QUERY = "(max-width: 600px)";
 const RESIZE_DEBOUNCE_MS = 200;
 
-// push: a new history entry; replace: the entry the page was opened with; keep: Back/Forward.
+/**
+ * How entering a scene treats history. push: a new entry; replace: the entry the page was opened
+ * with; keep: Back/Forward.
+ */
 export type SceneEntry = "push" | "replace" | "keep";
 
+/** How a scene is entered: the month to show and its history entry. */
 export interface EnterOptions {
   month: string | null;
   entry: SceneEntry;
 }
 
+/** The page elements a scene uses: the column, the time bar and the full-view dialog. */
 export interface SceneRoots {
   column: HTMLElement;
   timeBar: HTMLElement;
@@ -82,7 +87,7 @@ interface ActiveScene {
   close(): void;
 }
 
-// One map with two modes: the world, and one scene at a time that the camera is held to.
+/** One map with two modes: the world, and one scene at a time that the camera is held to. */
 export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   let current: ActiveScene | null = null;
   let worldCamera: Camera | null = null;
@@ -172,7 +177,6 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     });
 
     roots.column.append(panel.element);
-
     return panel;
   }
 
@@ -317,7 +321,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     const canvasContainer = map.getCanvasContainer();
 
     const snapBack = () => {
-      const isAtFit = map.getZoom() >= fitted.zoom - ZOOM_EPSILON;
+      const isAtFit = map.getZoom() >= fitted.zoom - FIT_TOLERANCE_ZOOM;
       if (isSnapping || isSnapBackPaused || isAtFit) return;
 
       isSnapping = true;
@@ -336,7 +340,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
     const takeOverFromSnapBack = (event: Event) => {
       // A trackpad's zoom-out stream would hold the dip open, so it is dropped at the fitted zoom.
-      if (isZoomOut(event) && map.getZoom() <= fitted.zoom + ZOOM_EPSILON) {
+      if (isZoomOut(event) && map.getZoom() <= fitted.zoom + FIT_TOLERANCE_ZOOM) {
         event.stopPropagation();
         event.preventDefault();
         return;
@@ -352,7 +356,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     const apply = () => {
       map.off("moveend", apply);
       isHolding = true;
-      map.setMinZoom(fitted.zoom - MIN_ZOOM_OVERSHOOT);
+      map.setMinZoom(fitted.zoom - FIT_OVERSHOOT_ZOOM);
       map.on("zoomend", snapBack);
       map.on("moveend", endMove);
       stopPanLock = lockPan(map, fitted);
@@ -369,12 +373,12 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
     return {
       refit(next: FittedCamera) {
-        const wasAtFit = map.getZoom() <= fitted.zoom + ZOOM_EPSILON;
+        const wasAtFit = map.getZoom() <= fitted.zoom + FIT_TOLERANCE_ZOOM;
         fitted = next;
         if (!isHolding) return;
 
         stopPanLock();
-        map.setMinZoom(next.zoom - MIN_ZOOM_OVERSHOOT);
+        map.setMinZoom(next.zoom - FIT_OVERSHOOT_ZOOM);
         stopPanLock = lockPan(map, next);
 
         if (wasAtFit) map.jumpTo({ center: next.center, zoom: next.zoom });
@@ -463,7 +467,6 @@ function makeColumn(scene: Scene, column: HTMLElement, leave: () => void) {
 
   const cards = makeHtmlElement("div", "", column);
   cards.className = "cards";
-
   return cards;
 }
 
@@ -496,7 +499,6 @@ function addMask(map: MapLibreMap, feature: AreaFeature, bbox: Bbox, fittedZoom?
 function outlines(geometry: AreaFeature["geometry"]) {
   const coordinates = geometry.coordinates as number[][][] | number[][][][];
   const parts = polygonParts(geometry.type, coordinates);
-
   return {
     exteriors: parts.map((part) => part[0]),
     interiors: parts.flatMap((part) => part.slice(1)),
@@ -507,14 +509,13 @@ function outlines(geometry: AreaFeature["geometry"]) {
 function worldRing(holes: number[][][]) {
   const longitudes = holes.flat().map(([longitude]) => longitude);
   const centre = (Math.min(...longitudes) + Math.max(...longitudes)) / 2;
-  const [west, east] = [centre - HALF_WORLD_DEGREES, centre + HALF_WORLD_DEGREES];
-
+  const [west, east] = [centre - HALF_WORLD_DEG, centre + HALF_WORLD_DEG];
   return [
-    [west, -MAX_LATITUDE],
-    [east, -MAX_LATITUDE],
-    [east, MAX_LATITUDE],
-    [west, MAX_LATITUDE],
-    [west, -MAX_LATITUDE],
+    [west, -MAX_LATITUDE_DEG],
+    [east, -MAX_LATITUDE_DEG],
+    [east, MAX_LATITUDE_DEG],
+    [west, MAX_LATITUDE_DEG],
+    [west, -MAX_LATITUDE_DEG],
   ];
 }
 
@@ -541,11 +542,10 @@ function watchResize(onSettled: () => void) {
 }
 
 const dataMinZoom = (fittedZoom: number | undefined) =>
-  fittedZoom === undefined ? 0 : fittedZoom - DATA_APPEARS_ZOOMS;
+  fittedZoom === undefined ? 0 : fittedZoom - DATA_APPEARS_ZOOM;
 
 function pageBackground() {
   const style = getComputedStyle(document.documentElement);
-
   return style.getPropertyValue(PAGE_BACKGROUND_PROPERTY).trim();
 }
 
@@ -557,9 +557,9 @@ function maskOpacity(fittedZoom?: number): number | ExpressionSpecification {
     "interpolate",
     ["linear"],
     ["zoom"],
-    fittedZoom - MASK_FADE_START_ZOOMS,
+    fittedZoom - MASK_FADE_START_ZOOM,
     0,
-    fittedZoom - MASK_FADE_END_ZOOMS,
+    fittedZoom - MASK_FADE_END_ZOOM,
     MASK_OPACITY,
   ];
 }

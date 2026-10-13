@@ -15,16 +15,19 @@ import {
   type GridWindow,
 } from "./contours";
 
+/** What the worker keeps from the start message, so later windows need no new read. */
 export interface ContourSource {
   elevation: Float32Array;
   mask: ArrayLike<number>;
   grid: ContourGrid;
 }
 
+/** Start with the whole elevation grid, or ask for one finer window. */
 export type ContourRequest =
   | ({ kind: "start" } & ContourSource)
   | { kind: "detail"; job: number; sourceWindow: GridWindow };
 
+/** Contour lines for one job, with the interval they use. */
 export interface ContourResult {
   job: number;
   interval: number;
@@ -72,7 +75,6 @@ function contourRuns({ values, hasData, nx, ny }: Downsampled, levels: number[])
     .size([nx, ny])
     .smooth(true)
     .thresholds(levels)(values as unknown as number[]);
-
   return multiPolygons.map(({ value, coordinates }) => ({
     elevation: value,
     runs: coordinates.flatMap((polygon) => clipRings(polygon, hasData, nx, ny)),

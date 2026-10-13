@@ -17,7 +17,6 @@ test("rows map to source rows in order, never going back up", () => {
   const table = sampleTable(grid);
 
   let previousRow = 0;
-
   for (let pixelRow = 0; pixelRow < table.height; pixelRow++) {
     const row = Math.floor(table.src[pixelRow * width] / width);
     assert.ok(row >= previousRow);

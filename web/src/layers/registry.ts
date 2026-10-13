@@ -11,7 +11,7 @@ const CACHED_STEPS = 24;
 const SERIES_OPACITY = 0.8;
 const DEFAULT_COLORMAP = "Blues";
 
-// Later stack numbers draw on top of earlier ones.
+/** Renderers by style.kind; later stack numbers draw on top of earlier ones. */
 export const LAYER_KINDS = new Map([
   ["series-colormap", { stack: 1, create: createSeriesView }],
   ["terrain", { stack: 2, create: createTerrainView }],

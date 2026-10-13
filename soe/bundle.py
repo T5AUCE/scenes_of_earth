@@ -209,5 +209,4 @@ def _layer_problems(layer):
 
     if layer_id == TERRAIN_LAYER_ID and not layer["source"].get("disclaimer"):
         problems.append(f"{TERRAIN_LAYER_ID}: missing disclaimer")
-        
     return problems

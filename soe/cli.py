@@ -12,10 +12,10 @@ from .sources import GLO90_TILE_INDEX
 
 GLO90_TILE_LIST = "https://copernicus-dem-90m.s3.amazonaws.com/tileList.txt"
 GLO90_TILE_PATTERN = r"Copernicus_DSM_COG_30_([NS])(\d+)_00_([EW])(\d+)_00_DEM"
-DOWNLOAD_TIMEOUT_SECONDS = 60
+DOWNLOAD_TIMEOUT_SECS = 60
 TILE_GRID_SHAPE = (180, 360)
-TILE_ROW_OFFSET = 90  # row = lat + 90
-TILE_COL_OFFSET = 180  # column = lon + 180
+TILE_ROW_OFFSET_DEG = 90  # row = lat + 90
+TILE_COL_OFFSET_DEG = 180  # column = lon + 180
 
 CGAZ_SOURCE = "geoBoundaries CGAZ"
 CGAZ_LEVELS = {0: "country", 1: "state", 2: "county"}
@@ -24,7 +24,7 @@ MIN_CITY_POP = 1_000_000
 BOUNDARY_LICENCE = "CC BY 4.0"
 
 SIMPLIFY_TOLERANCE_DEG = 0.01
-COVERAGE_BOUNDS = (-180, -60, 180, 60)  # the rain coverage
+COVERAGE_BOUNDS_DEG = (-180, -60, 180, 60)  # the rain coverage
 CELL_DEG2 = 0.05 * 0.05
 
 
@@ -64,10 +64,11 @@ def build_glo90_index(path):
     """Write the bitmap of GLO-90 tiles that exist (GLO90_TILE_INDEX) from the bucket list."""
     import re
     import urllib.request
+
     import numpy as np
 
     exists = np.zeros(TILE_GRID_SHAPE, bool)
-    with urllib.request.urlopen(GLO90_TILE_LIST, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:
+    with urllib.request.urlopen(GLO90_TILE_LIST, timeout=DOWNLOAD_TIMEOUT_SECS) as response:
         lines = response.read().decode().splitlines()
     for line in lines:
         match = re.match(GLO90_TILE_PATTERN, line)
@@ -75,7 +76,7 @@ def build_glo90_index(path):
             north_or_south, lat_digits, east_or_west, lon_digits = match.groups()
             lat = int(lat_digits) * (1 if north_or_south == "N" else -1)
             lon = int(lon_digits) * (1 if east_or_west == "E" else -1)
-            exists[lat + TILE_ROW_OFFSET, lon + TILE_COL_OFFSET] = True
+            exists[lat + TILE_ROW_OFFSET_DEG, lon + TILE_COL_OFFSET_DEG] = True
 
     Path(path).write_bytes(np.packbits(exists).tobytes())
     return int(exists.sum())
@@ -188,7 +189,7 @@ def _row(row_id, level, name, parent, iso3, geometry, source, licence):
     from shapely.geometry import box, mapping
 
     simplified = geometry.simplify(SIMPLIFY_TOLERANCE_DEG, preserve_topology=True)
-    clipped = simplified.intersection(box(*COVERAGE_BOUNDS))
+    clipped = simplified.intersection(box(*COVERAGE_BOUNDS_DEG))
     if clipped.is_empty:
         return None
 
@@ -200,6 +201,7 @@ def _row(row_id, level, name, parent, iso3, geometry, source, licence):
         return None
 
     cells = max(1, round(clipped.area / CELL_DEG2))
+
     return (
         row_id,
         level,

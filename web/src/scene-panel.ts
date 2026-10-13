@@ -3,6 +3,7 @@ import { makeHtmlElement } from "./html";
 import { noticeCount } from "./scene-info";
 import type { Scene } from "./types";
 
+/** The tabs of the full view, in order. */
 export const PANEL_TABS = ["charts", "about", "credits"] as const;
 export type PanelTab = (typeof PANEL_TABS)[number];
 
@@ -15,6 +16,7 @@ const DOCKED_TABS = ["charts", "about"] as const;
 
 const CHARTS_PLACEHOLDER = "Charts for this scene are not available yet.";
 
+/** What the panel asks its owner to do. */
 export interface PanelHooks {
   // The owner records the history entry, then calls openFull or closeFull.
   requestOpen(tab: PanelTab): void;
@@ -22,7 +24,7 @@ export interface PanelHooks {
   stepTime(delta: number): void;
 }
 
-// The docked panel is always usable; the dialog is its whole-window view.
+/** The docked scene panel and its full-window dialog; the docked panel stays usable throughout. */
 export function createScenePanel(scene: Scene, dialog: HTMLDialogElement, hooks: PanelHooks) {
   const collapsed = makeCollapsed(scene, dialog, hooks);
   const full = makeFull(scene, dialog, hooks);
@@ -76,7 +78,6 @@ function makeCollapsed(scene: Scene, dialog: HTMLDialogElement, hooks: PanelHook
   const chips = DOCKED_TABS.map((tab) => {
     const chip = makeHtmlElement("button", TAB_LABELS[tab], header);
     chip.onclick = () => select(tab);
-
     return { tab, chip };
   });
 
@@ -132,7 +133,6 @@ function makeFull(scene: Scene, dialog: HTMLDialogElement, hooks: PanelHooks) {
   const tabButtons = PANEL_TABS.map((tab) => {
     const button = makeHtmlElement("button", TAB_LABELS[tab], tabs);
     button.setAttribute("role", "tab");
-
     return { tab, button };
   });
 
@@ -205,7 +205,6 @@ function makeTimeControl(hooks: PanelHooks) {
 function renderTab(scene: Scene, tab: PanelTab) {
   if (tab === "about") return renderAbout(scene);
   if (tab === "credits") return renderCredits(scene);
-
   return makeHtmlElement("p", CHARTS_PLACEHOLDER);
 }
 
@@ -216,6 +215,5 @@ function tabIndexForKey(key: string, current: number, count: number) {
   if (key === "ArrowLeft") return (current + count - 1) % count;
   if (key === "Home") return 0;
   if (key === "End") return count - 1;
-
   return null;
 }

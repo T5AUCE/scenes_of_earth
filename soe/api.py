@@ -23,7 +23,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import __version__, db
 from .areas import (
-    MAX_BODY,
+    MAX_BODY_BYTES,
     Area,
     AreaError,
     check_months,
@@ -49,14 +49,14 @@ PROGRESS_STEP = 0.02
 LEVELS = ("country", "state", "county", "city")
 DEFAULT_LAYERS = ["chirps_monthly", "glo90_terrain"]
 DRAWN_AREA_TITLE = "Drawn area"
-MAX_TITLE_LENGTH = 120
+MAX_TITLE_CHARS = 120
 MAX_SEARCH_LIMIT = 50
 
 SAMPLE_AREAS = Path(__file__).parent / "data" / "sample_areas.geojson"
 SAMPLE_CELL_AREA_DEG2 = 0.05**2
 
-SOURCE_RETRY_AFTER_SECONDS = 30
-QUEUE_RETRY_AFTER_SECONDS = 60
+SOURCE_RETRY_AFTER_SECS = 30
+QUEUE_RETRY_AFTER_SECS = 60
 
 log = logging.getLogger("soe")
 
@@ -160,7 +160,7 @@ def create_app(
             raise HTTPException(
                 503,
                 "too many scenes are being built, retry later",
-                headers={"Retry-After": str(QUEUE_RETRY_AFTER_SECONDS)},
+                headers={"Retry-After": str(QUEUE_RETRY_AFTER_SECS)},
             )
 
         status_code = 202 if row["status"] in ("queued", "running") else 200
@@ -223,6 +223,7 @@ def create_app(
         SceneFiles(directory=scenes_dir, check_dir=False),
         name="scenes",
     )
+
     return app
 
 
@@ -247,6 +248,7 @@ def _sample_row(feature):
     geometry, properties = shape(feature["geometry"]), feature["properties"]
     west, south, east, north = unwrap(geometry).bounds
     cells = max(1, round(geometry.area / SAMPLE_CELL_AREA_DEG2))
+
     return (
         properties["id"],
         properties["level"],
@@ -286,6 +288,7 @@ def resolve_area(db_path, spec):
         row = db.get_boundary(db_path, boundary_id) if isinstance(boundary_id, str) else None
         if row is None:
             raise AreaError("unknown boundary id")
+
         return Area(shape(json.loads(row["geom_geojson"])), row)
 
     if spec.get("type") == "polygon":
@@ -296,6 +299,7 @@ def resolve_area(db_path, spec):
 
 class _ProgressRecorder:
     """Writes build progress to the database, but only when moved by PROGRESS_STEP."""
+
     def __init__(self, db_path, scene_id):
         self._db_path = db_path
         self._scene_id = scene_id
@@ -330,6 +334,7 @@ def _parse_body(body):
         raise AreaError("body must be JSON")
     if not isinstance(data, dict):
         raise AreaError("body must be a JSON object")
+
     return data
 
 
@@ -342,13 +347,15 @@ def _requested_layers(data, registry):
     )
     if not valid:
         raise AreaError("layers must be a non-empty list of: " + ", ".join(registry))
+
     return sorted(set(layers))
 
 
 def _requested_title(data):
     title = data.get("title")
-    if title is not None and not (isinstance(title, str) and len(title) <= MAX_TITLE_LENGTH):
-        raise AreaError(f"title must be a string of at most {MAX_TITLE_LENGTH} characters")
+    if title is not None and not (isinstance(title, str) and len(title) <= MAX_TITLE_CHARS):
+        raise AreaError(f"title must be a string of at most {MAX_TITLE_CHARS} characters")
+
     return title
 
 
@@ -385,7 +392,7 @@ def _scene_id(geometry_id, layers, start, end, datasets):
         raise HTTPException(
             503,
             "data source unavailable, retry shortly",
-            headers={"Retry-After": str(SOURCE_RETRY_AFTER_SECONDS)},
+            headers={"Retry-After": str(SOURCE_RETRY_AFTER_SECS)},
         )
 
     versions = {dataset.id: dataset.source.get("version") for dataset in datasets}
@@ -402,6 +409,7 @@ def _layer_out(dataset):
             "first": dataset.first(),
             "latest": dataset.latest(),
         }
+
     return {
         "id": dataset.id,
         "title": dataset.title,
@@ -426,25 +434,25 @@ def _area_out(row):
 
 
 async def read_body(request):
-    """Request body, capped at MAX_BODY bytes (413 beyond; 400 for a malformed Content-Length)."""
+    """Request body, capped at MAX_BODY_BYTES (413 beyond; 400 for a malformed Content-Length)."""
     try:
         declared = int(request.headers.get("content-length") or 0)
     except ValueError:
         raise HTTPException(400, "invalid Content-Length header")
-    if declared > MAX_BODY:
+    if declared > MAX_BODY_BYTES:
         raise HTTPException(413, "request body too large")
 
     body = b""
     async for chunk in request.stream():
         body += chunk
-        if len(body) > MAX_BODY:
+        if len(body) > MAX_BODY_BYTES:
             raise HTTPException(413, "request body too large")
-        
     return body
 
 
 class SceneFiles(StaticFiles):
     """Bundles are content-addressed, so responses are cached as immutable."""
+
     async def get_response(self, path, scope):
         if path.startswith("."):
             raise StarletteHTTPException(404)

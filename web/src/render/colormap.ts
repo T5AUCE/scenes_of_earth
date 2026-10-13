@@ -1,6 +1,7 @@
 import type { SampleTable } from "./mercator";
 
 const LUT_ENTRIES = 256;
+/** Index of the last colormap entry. */
 export const LAST_ENTRY = LUT_ENTRIES - 1;
 
 export const COLOR_CHANNELS = 3;
@@ -26,13 +27,12 @@ const BLUES = [
 
 const COLORMAPS: Record<string, number[][]> = { Blues: BLUES };
 
-// Returns 256 opaque RGBA entries.
+/** A lookup table of 256 opaque RGBA entries for a named colormap. */
 export function lut(name: string) {
   const stops = COLORMAPS[name];
   if (!stops) throw new Error(`Unknown colormap "${name}"`);
 
   const table = new Uint8ClampedArray(LUT_ENTRIES * RGBA_CHANNELS);
-
   for (let entry = 0; entry < LUT_ENTRIES; entry++) {
     const position = (entry / LAST_ENTRY) * (stops.length - 1);
     const lowStop = Math.min(Math.floor(position), stops.length - 2);
@@ -46,10 +46,10 @@ export function lut(name: string) {
 
     table[entry * RGBA_CHANNELS + COLOR_CHANNELS] = OPAQUE;
   }
-
   return table;
 }
 
+/** RGBA pixels coloured by value across the domain; NaN cells stay transparent. */
 export function paintColormap(
   values: Float32Array,
   table: SampleTable,
@@ -58,7 +58,6 @@ export function paintColormap(
 ) {
   const rgba = new Uint8ClampedArray(table.src.length * RGBA_CHANNELS);
   const span = high - low;
-
   for (let pixel = 0; pixel < table.src.length; pixel++) {
     const cell = table.src[pixel];
     const value = values[cell];
@@ -68,18 +67,16 @@ export function paintColormap(
     const colorStart = Math.round(position * LAST_ENTRY) * RGBA_CHANNELS;
     rgba.set(colors.subarray(colorStart, colorStart + RGBA_CHANNELS), pixel * RGBA_CHANNELS);
   }
-
   return rgba;
 }
 
-// Neutral is transparent so flat ground shows the basemap; slopes darken or lighten from it.
+/** Neutral is transparent so flat ground shows the basemap; slopes darken or lighten from it. */
 export function paintHillshade(
   shade: ArrayLike<number>,
   table: SampleTable,
   neutral = FLAT_GROUND_HILLSHADE,
 ) {
   const rgba = new Uint8ClampedArray(table.src.length * RGBA_CHANNELS);
-
   for (let pixel = 0; pixel < table.src.length; pixel++) {
     const cell = table.src[pixel];
     const value = shade[cell];
@@ -92,6 +89,5 @@ export function paintHillshade(
     rgba[start] = rgba[start + 1] = rgba[start + 2] = isLighter ? WHITE : BLACK;
     rgba[start + COLOR_CHANNELS] = Math.round(strength * OPAQUE);
   }
-
   return rgba;
 }

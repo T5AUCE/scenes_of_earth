@@ -3,10 +3,12 @@ import { COLOR_CHANNELS, LAST_ENTRY, RGBA_CHANNELS } from "./render/colormap";
 
 const GRADIENT_STOP_ENTRIES = [0, 64, 128, 192, 255];
 
+/** The legend line for contours. */
 export function contourLegendText(interval: number, units: string) {
   return `Contours every ${interval} ${units} (bold every ${interval * MAJOR_EVERY})`;
 }
 
+/** A colour bar with labels for the low and high end of the domain. */
 export function gradientLegend(
   colors: Uint8ClampedArray,
   domain: [number, number],
@@ -14,7 +16,6 @@ export function gradientLegend(
 ) {
   const element = document.createElement("div");
   element.append(gradientBar(colors), domainLabels(domain, units));
-
   return element;
 }
 
@@ -30,7 +31,6 @@ function gradientBar(colors: Uint8ClampedArray) {
   const bar = document.createElement("div");
   bar.className = "legend-bar";
   bar.style.background = `linear-gradient(to right, ${stops.join(", ")})`;
-
   return bar;
 }
 
@@ -45,6 +45,5 @@ function domainLabels([low, high]: [number, number], units: string) {
   const labels = document.createElement("div");
   labels.className = "legend-labels";
   labels.append(lowLabel, highLabel);
-
   return labels;
 }

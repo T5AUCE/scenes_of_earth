@@ -32,7 +32,7 @@ import type {
 
 const POLL_INTERVAL_MS = 1500;
 const MAX_POLL_FAILURES = 3;
-const DEFAULT_RETRY_SECONDS = 30;
+const DEFAULT_RETRY_SECS = 30;
 const MS_PER_SECOND = 1000;
 
 const SERVER_BUSY = 503;
@@ -55,6 +55,7 @@ interface SceneMode {
   enter(scene: Scene, options: EnterOptions): void;
 }
 
+/** The area search and build panel; ready once the layer choices have loaded. */
 export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode: SceneMode) {
   const controls = createControls(root);
   const { search, level, results, chosen, layerBox, start, end, build, status } = controls;
@@ -149,7 +150,6 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
       event.preventDefault();
       pick(hit);
     };
-
     return item;
   }
 
@@ -327,7 +327,7 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== SERVER_BUSY) throw error;
 
-      const retrySeconds = error.retryAfter ?? DEFAULT_RETRY_SECONDS;
+      const retrySeconds = error.retryAfterSecs ?? DEFAULT_RETRY_SECS;
       status.textContent = `${error.message} Retrying in ${retrySeconds} s…`;
       await wait(retrySeconds * MS_PER_SECOND);
 
@@ -351,7 +351,6 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
 
 function bboxGeometry([west, south, east, north]: Bbox): AreaFeature["geometry"] {
   const ring = [[west, south], [east, south], [east, north], [west, north], [west, south]];
-
   return { type: "Polygon", coordinates: [ring] };
 }
 

@@ -22,7 +22,7 @@ MEMORY_BUDGET_BYTES = 500_000_000
 ESTIMATED_BYTES_PER_CELL = 13
 
 BATCH_SIZE = 12
-TILE_SIZE = 512
+TILE_SIZE_CELLS = 512
 COMPRESSION = GzipCodec(level=5)
 UNIX_EPOCH = date(1970, 1, 1)
 
@@ -30,8 +30,8 @@ WRITE_PROGRESS_START = 0.05
 WRITE_PROGRESS_SPAN = 0.9
 PERCENTILE_SAMPLES_PER_BATCH = 100_000
 
-METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR = 111_320
-METRES_PER_DEGREE_LATITUDE = 110_574
+LONGITUDE_DEGREE_AT_EQUATOR_M = 111_320
+LATITUDE_DEGREE_M = 110_574
 
 
 def build_scene(
@@ -271,6 +271,7 @@ def _write_static_layer(layer_group, dataset, layer_plan):
         ["lat", "lon"],
         {"long_name": shade_description},
     )
+
     return {}
 
 
@@ -297,10 +298,10 @@ def hillshade(
     # Gradients need cell sizes in metres to match elevation units.
     cell_width = (
         resolution_degrees
-        * METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR
+        * LONGITUDE_DEGREE_AT_EQUATOR_M
         * np.cos(np.radians(latitude))
     )[:, None].clip(min=1)
-    cell_height = resolution_degrees * METRES_PER_DEGREE_LATITUDE
+    cell_height = resolution_degrees * LATITUDE_DEGREE_M
 
     northwest = elevation[:-2, :-2]
     north = elevation[:-2, 1:-1]
@@ -429,8 +430,8 @@ def _create_time_array(
     step_count = len(layer_plan.steps)
     height, width = layer_plan.shape
     spatial_chunks = (
-        min(height, TILE_SIZE),
-        min(width, TILE_SIZE),
+        min(height, TILE_SIZE_CELLS),
+        min(width, TILE_SIZE_CELLS),
     )
 
     return layer_group.create_array(
@@ -487,6 +488,7 @@ def _choose_worker_count(layer_plan):
 
 class _StatisticsAccumulator:
     """Accumulate exact basic statistics and an approximate 98th percentile."""
+
     def __init__(self):
         self._random = np.random.default_rng(0)
         self._samples = []

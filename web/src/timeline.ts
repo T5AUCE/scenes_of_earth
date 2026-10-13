@@ -1,30 +1,29 @@
 const PLAY_INTERVAL_MS = 700;
 
-const YEAR_LENGTH = 4; // "YYYY"
-const MONTH_LENGTH = 7; // "YYYY-MM"
+const YEAR_CHARS = 4; // "YYYY"
+const MONTH_CHARS = 7; // "YYYY-MM"
 
+/** The steps of several time axes, sorted and without duplicates. */
 export const unionTimes = (axes: string[][]) => [...new Set(axes.flat())].sort();
 
-// Index of the last value at or before time, or -1 when time lies outside the axis.
+/** Index of the last value at or before time, or -1 when time lies outside the axis. */
 export function stepAt(values: string[], time: string) {
   const isOutsideAxis = !values.length || time < values[0] || time > values[values.length - 1];
   if (isOutsideAxis) return -1;
 
   let index = 0;
   while (index + 1 < values.length && values[index + 1] <= time) index++;
-
   return index;
 }
 
-// Shows only as much of the date as the finest step needs.
+/** Shows only as much of the date as the finest step needs. */
 export function formatTime(time: string, steps: string[]) {
   if (steps.some((step) => step.endsWith("D") || step.endsWith("W"))) return time;
-  if (steps.some((step) => step.endsWith("M"))) return time.slice(0, MONTH_LENGTH);
-
-  return time.slice(0, YEAR_LENGTH);
+  if (steps.some((step) => step.endsWith("M"))) return time.slice(0, MONTH_CHARS);
+  return time.slice(0, YEAR_CHARS);
 }
 
-// Only the latest queued value runs, so scrubbing skips stale steps; the task must catch errors.
+/** Only the latest queued value runs, so scrubbing skips stale steps; task must catch errors. */
 export function latestOnly<T>(task: (value: T) => Promise<void>) {
   let waiting: { value: T } | null = null;
   let isRunning = false;
@@ -46,6 +45,7 @@ export function latestOnly<T>(task: (value: T) => Promise<void>) {
   };
 }
 
+/** A play button, slider and label that step through the times. */
 export function createTimeline(
   times: string[],
   steps: string[],

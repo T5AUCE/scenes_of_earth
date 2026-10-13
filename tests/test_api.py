@@ -15,7 +15,7 @@ from soe.bundle import SYNTHETIC_DATA_CREDIT
 from soe.sources import RealSource, SourceUnavailable, SyntheticSource, make_registry
 
 POLL_ATTEMPTS = 100
-POLL_INTERVAL_SECONDS = 0.1
+POLL_INTERVAL_SECS = 0.1
 SQUARE = mapping(box(36.5, -1.5, 37.5, -0.5))
 
 
@@ -34,7 +34,7 @@ def wait_for(client, scene_id, wanted_status="done"):
         scene = client.get(f"/api/scenes/{scene_id}").json()
         if scene["status"] in (wanted_status, "failed"):
             return scene
-        time.sleep(POLL_INTERVAL_SECONDS)
+        time.sleep(POLL_INTERVAL_SECS)
     raise AssertionError("timeout")
 
 

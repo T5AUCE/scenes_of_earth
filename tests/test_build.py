@@ -255,7 +255,7 @@ def test_latest_month_is_rechecked_soon_when_a_newer_month_was_unreachable(monke
     source.latest_month()
 
     ttl = source._probed[1] - time.time()
-    assert ttl <= sources.OFFLINE_LATEST_TTL_SECONDS
+    assert ttl <= sources.OFFLINE_LATEST_TTL_SECS
 
 
 def test_credits_of_a_real_mode_sample_boundary_do_not_claim_synthetic_data():

@@ -30,6 +30,7 @@ const MAJOR_LINE_WIDTH_PX = 1.1;
 const DETAIL_DEBOUNCE_MS = 200;
 const DETAIL_MARGIN = 0.5;
 
+/** Hillshade image and contour lines for one terrain layer. */
 export function createTerrainView(context: LayerContext): LayerView {
   const { map, store, layer, beforeId } = context;
   const id = `${layer.id}-hillshade`;
@@ -235,7 +236,6 @@ class ContourOverlay {
   private viewport(): Bbox {
     const bounds = this.map.getBounds();
     const view: Bbox = [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()];
-
     return viewInGridWorld(view, this.grid.bbox);
   }
 }
@@ -279,6 +279,5 @@ function shiftedGrid({ grid }: LayerDoc) {
   const shift = worldShift(grid.bbox);
   const [west, south, east, north] = grid.bbox;
   const bbox: Bbox = [west + shift, south, east + shift, north];
-
   return { ...grid, bbox };
 }

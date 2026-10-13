@@ -10,7 +10,7 @@ export interface Health {
   version: string;
 }
 
-// [W, S, E, N]; E may exceed 180 across the antimeridian.
+/** [W, S, E, N] in degrees; E may exceed 180 across the antimeridian. */
 export type Bbox = [number, number, number, number];
 
 export interface Layer {
@@ -75,7 +75,7 @@ export interface TimeDoc {
   values: string[]; // "YYYY-MM-DD" period starts
 }
 
-// Licence and attribution of one data source, as the bundle states them.
+/** Licence and attribution of one data source, as the bundle states them. */
 export interface CreditDoc {
   name: string;
   version?: string;
@@ -116,7 +116,7 @@ export interface LayerDoc {
   arrays: Record<string, ArrayDoc>; // by role, e.g. value, elevation, hillshade
 }
 
-// area.geojson: one Feature holding the area's outline.
+/** area.geojson: one Feature holding the area's outline. */
 export interface AreaFeature {
   type: "Feature";
   properties: Record<string, unknown>;
@@ -145,6 +145,7 @@ export interface Scene {
   };
 }
 
+/** A toggleable piece of a layer: map layers shown or hidden together. */
 export interface Part {
   id: string;
   label: string;
@@ -152,6 +153,7 @@ export interface Part {
   onToggle?(visible: boolean): void;
 }
 
+/** What a layer renderer gets to draw one layer. */
 export interface LayerContext {
   map: MapLibreMap;
   store: Promise<Store>;
@@ -161,6 +163,7 @@ export interface LayerContext {
   report(error: unknown): void;
 }
 
+/** A drawn layer: its toggles, options, time axis, legend and teardown. */
 export interface LayerView {
   parts: Part[];
   options: { label: string; set(on: boolean): void }[];

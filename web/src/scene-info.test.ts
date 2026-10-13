@@ -15,7 +15,6 @@ const AREA_TOLERANCE_KM2 = 1e-6;
 
 function makeScene(overrides: Partial<Scene["area"]> = {}) {
   const source = { name: "Rain", licence: "CC BY 4.0", attribution: "Rain credit" };
-
   return {
     area: {
       boundary: null,

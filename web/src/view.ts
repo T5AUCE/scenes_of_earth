@@ -11,6 +11,7 @@ import type { LayerDoc, LayerView, Scene } from "./types";
 
 type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
 
+/** Map layer and source id of the scene's area outline. */
 export const OUTLINE_ID = "soe-area-outline";
 const OUTLINE_COLOR = "#333";
 const OUTLINE_WIDTH_PX = 1.5;
@@ -19,14 +20,14 @@ const EMPTY_FEATURES: GeoJsonData = { type: "FeatureCollection", features: [] };
 // The only options so far are display smoothing; the data itself is never changed by them.
 const OPTION_NOTE = "Smoothed for display; values are per cell.";
 
-// Where a scene puts its pieces; the caller owns the containers.
+/** Where a scene puts its pieces; the caller owns the containers. */
 export interface SceneSlots {
   cards: HTMLElement;
   timeBar: HTMLElement;
   onTime(time: string, label: string): void;
 }
 
-// A failure partway removes whatever was already drawn.
+/** Draws a scene's layers, outline, cards and timeline; a failure partway removes all of it. */
 export function mountScene(
   map: MapLibreMap,
   scene: Scene,
@@ -140,7 +141,6 @@ function mountLayerViews(
     .sort((first, second) => first.kind!.stack - second.kind!.stack);
 
   const views: LayerView[] = [];
-
   for (const { layer, kind } of supported) {
     const report = (error: unknown) => addNote(`${layer.title}: ${(error as Error).message}`);
 
@@ -152,7 +152,6 @@ function mountLayerViews(
       report(error);
     }
   }
-
   return views;
 }
 
@@ -184,7 +183,6 @@ function outlineCard(map: MapLibreMap) {
   const card = makeHtmlElement("section");
   card.className = "card";
   card.append(checkbox("Area outline", true, (on) => setVisible(map, [OUTLINE_ID], on)));
-
   return card;
 }
 
@@ -213,6 +211,5 @@ function checkbox(label: string, checked: boolean, onChange: (on: boolean) => vo
   box.checked = checked;
   box.onchange = () => onChange(box.checked);
   row.append(box, ` ${label}`);
-
   return row;
 }
