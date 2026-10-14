@@ -3,6 +3,7 @@ import json
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -10,13 +11,17 @@ import zarr
 from shapely.geometry import LineString, MultiPolygon, Polygon, box, mapping
 
 from soe import db, sources
-from soe.areas import Area, AreaError, check_months, clean_polygon, plan, unwrap
+from soe.areas import Area, AreaError, Plan, check_months, clean_polygon, plan, unwrap
 from soe.build import build_scene, hillshade
-from soe.bundle import SYNTHETIC_DATA_CREDIT, credits, validate
+from soe.bundle import SYNTHETIC_DATA_CREDIT, JsonObject, credits, validate
 from soe.sources import (
     REGISTRY,
     SOURCES,
+    CellWindow,
+    Dataset,
     RealSource,
+    SeriesDataset,
+    StaticDataset,
     SyntheticSource,
     _tile_index,
     block_mean,
@@ -43,17 +48,20 @@ SYNTHETIC_REGISTRY = make_registry(SyntheticSource())
 RAIN, TERRAIN = SYNTHETIC_REGISTRY["chirps_monthly"], SYNTHETIC_REGISTRY["glo90_terrain"]
 
 
-def poly(x0, y0, x1, y1):
+def poly(x0: float, y0: float, x1: float, y1: float) -> JsonObject:
     return mapping(box(x0, y0, x1, y1))
 
 
-def plan_months(area, datasets, months=12):
+def plan_months(area: Area, datasets: list[Dataset], months: int = 12) -> Plan:
     """plan() for a period of `months` months starting 1990-01."""
     end = f"{1990 + (months - 1) // 12}-{(months - 1) % 12 + 1:02d}"
     return plan(area, datasets, "1990-01", end)
 
 
-def build_nairobi(tmp_path, months=("2015-01", "2016-02")):
+def build_nairobi(
+    tmp_path: Path,
+    months: tuple[str, str] = ("2015-01", "2016-02"),
+) -> tuple[JsonObject, zarr.Group]:
     build_scene(
         HASH_A,
         Area(NAIROBI, BOUNDARY),
@@ -484,7 +492,7 @@ def test_validate_catches_missing_attribution(tmp_path):
 
 def test_failed_build_leaves_no_partial_bundle(tmp_path):
     class Boom(SyntheticSource):
-        def read_rain(self, month, window):
+        def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
             raise RuntimeError("boom")
 
     boom = make_registry(Boom())["chirps_monthly"]
@@ -662,3 +670,34 @@ def test_static_layers_over_budget_get_their_own_message(monkeypatch):
 
     with pytest.raises(AreaError, match="static layers alone"):
         plan_months(Area(NAIROBI), [TERRAIN], 1)
+
+
+def test_series_dataset_without_read_step_cannot_be_created():
+    class HalfSeries(SeriesDataset):
+        def first(self) -> str:
+            return "1990-01"
+
+        def latest(self) -> str:
+            return "1990-12"
+
+        def steps(self, start: str, end: str) -> list[str]:
+            return []
+
+    with pytest.raises(TypeError, match="read_step"):
+        HalfSeries(**vars_of(RAIN))
+
+
+def test_static_dataset_without_read_cannot_be_created():
+    class NoRead(StaticDataset):
+        pass
+
+    with pytest.raises(TypeError, match="read"):
+        NoRead(**vars_of(TERRAIN))
+
+
+def test_time_varying_follows_the_dataset_kind():
+    assert (RAIN.time_varying, TERRAIN.time_varying) == (True, False)
+
+
+def vars_of(dataset: Dataset) -> dict:
+    return {name: getattr(dataset, name) for name in dataset.__dataclass_fields__}

@@ -1,8 +1,12 @@
 """scene.json: build it from a plan and validate it (including attribution rules)."""
 from datetime import datetime, timezone
+from typing import Any
 
 from . import __version__
-from .sources import SOURCES, SyntheticSource
+from .areas import Area, LayerPlan, Plan
+from .sources import SOURCES, Dataset, SyntheticSource
+
+JsonObject = dict[str, Any]  # a decoded JSON object, such as scene.json or one of its blocks
 
 VERSION = "0.2"
 TERRAIN_LAYER_ID = "glo90_terrain"
@@ -11,7 +15,14 @@ BOUNDARY_SOURCE_FIELDS = ("licence_url", "attribution", "citation", "modified")
 SYNTHETIC_DATA_CREDIT = "Data: synthetically generated, not real measurements"
 
 
-def make(scene_id, title, area, plan, datasets, info):
+def make(
+    scene_id: str,
+    title: str,
+    area: Area,
+    plan: Plan,
+    datasets: list[Dataset],
+    info: dict[str, JsonObject],
+) -> JsonObject:
     """Assemble scene.json. Layer blocks come from the dataset registry metadata."""
     boundary = _boundary_block(area) if area.named else None
     static_layers_first = sorted(datasets, key=lambda dataset: dataset.time_varying)
@@ -49,7 +60,7 @@ def make(scene_id, title, area, plan, datasets, info):
     }
 
 
-def _boundary_block(area):
+def _boundary_block(area: Area) -> JsonObject:
     row = area.boundary
     block = {
         "id": row["id"],
@@ -64,7 +75,7 @@ def _boundary_block(area):
     return block
 
 
-def _layer_block(dataset, layer_plan, result):
+def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) -> JsonObject:
     """One layer of scene.json, from the dataset metadata, its plan and its build result."""
     grid = {
         "crs": "EPSG:4326",
@@ -104,7 +115,7 @@ def _layer_block(dataset, layer_plan, result):
     return layer
 
 
-def _array_blocks(dataset):
+def _array_blocks(dataset: Dataset) -> dict[str, JsonObject]:
     blocks = {}
     for role, name in dataset.arrays.items():
         dtype, scale_factor, add_offset, fill = dataset.encoding[role]
@@ -118,7 +129,11 @@ def _array_blocks(dataset):
     return blocks
 
 
-def credits(layer_blocks, boundary_source, synthetic=False):
+def credits(
+    layer_blocks: list[JsonObject],
+    boundary_source: dict[str, str] | None,
+    synthetic: bool = False,
+) -> JsonObject:
     """Attribution block, generated from the sources actually used."""
     sources = [layer["source"] for layer in layer_blocks]
     if boundary_source:
@@ -139,7 +154,7 @@ def credits(layer_blocks, boundary_source, synthetic=False):
     }
 
 
-def validate(doc):
+def validate(doc: JsonObject) -> list[str]:
     """Return a list of problems (empty when the bundle is fine)."""
     required = ("version", "id", "area", "layers", "data", "credits", "notices")
     missing = [f"missing {key}" for key in required if key not in doc]
@@ -161,7 +176,7 @@ def validate(doc):
     return problems
 
 
-def _attribution_problems(doc):
+def _attribution_problems(doc: JsonObject) -> list[str]:
     problems = []
     area = doc["area"]
     sources = [layer["source"] for layer in doc["layers"]]
@@ -187,7 +202,7 @@ def _attribution_problems(doc):
     return problems
 
 
-def _layer_problems(layer):
+def _layer_problems(layer: JsonObject) -> list[str]:
     layer_id = layer["id"]
     problems = [
         f"{layer_id}: missing {key}"

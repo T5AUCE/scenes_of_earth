@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import threading
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,14 +20,20 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from shapely.geometry import shape
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import Response
+from starlette.types import Scope
 
 from . import __version__, db
 from .areas import MAX_BODY_BYTES, AreaError, unwrap
 from .build import build_scene
+from .bundle import JsonObject
 from .scene_request import ID_CHARS, prepare_scene, resolve_area
 from .sources import (
     REGISTRY,
+    Dataset,
     RealSource,
+    Registry,
+    SeriesDataset,
     SourceUnavailable,
     SyntheticSource,
     make_registry,
@@ -51,12 +58,12 @@ log = logging.getLogger("soe")
 
 
 def create_app(
-    db_path=None,
-    scenes_dir=None,
-    registry=None,
-    max_builds=None,
-    max_queue=None,
-):
+    db_path: Path | str | None = None,
+    scenes_dir: Path | str | None = None,
+    registry: Registry | None = None,
+    max_builds: int | None = None,
+    max_queue: int | None = None,
+) -> FastAPI:
     """Build the FastAPI app; arguments override the environment settings (tests pass them)."""
     db_path = db_path or os.environ.get("SOE_DB", "./data/soe.db")
     scenes_dir = Path(scenes_dir or os.environ.get("SOE_SCENES_DIR", "./data/scenes"))
@@ -72,7 +79,7 @@ def create_app(
     )
 
     @asynccontextmanager
-    async def lifespan(app):
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         scenes_dir.mkdir(parents=True, exist_ok=True)
         db.init(db_path)
         if os.environ.get("SOE_SYNTHETIC") == "1":
@@ -83,7 +90,7 @@ def create_app(
 
     app = FastAPI(title="Scenes of Earth", version=__version__, lifespan=lifespan)
 
-    def scene_out(row):
+    def scene_out(row: db.Record) -> JsonObject:
         done = row["status"] == "done"
         return {
             "id": row["id"],
@@ -94,7 +101,7 @@ def create_app(
             "bundle_url": f"{public}/{row['id']}/scene.json" if done else None,
         }
 
-    def run_job(scene_id):
+    def run_job(scene_id: str) -> None:
         try:
             request = json.loads(db.get_scene(db_path, scene_id)["request_json"])
             db.update_scene(db_path, scene_id, status="running")
@@ -122,7 +129,7 @@ def create_app(
             log.exception("scene %s failed", scene_id)
             _record_failure(db_path, scene_id, error)
 
-    def prepare(body):
+    def prepare(body: bytes) -> tuple[int, JsonObject, bool]:
         """Register a scene request. Returns (status code, payload, start the job?)."""
         prepared = prepare_scene(db_path, registry, body)
         bundle_exists = (scenes_dir / prepared.scene_id / "scene.json").exists()
@@ -144,19 +151,19 @@ def create_app(
         status_code = 202 if row["status"] in ("queued", "running") else 200
         return status_code, scene_out(row), start_job
 
-    @app.get("/api/health")
-    def health():
+    @app.get("/api/health", response_model=None)
+    def health() -> JsonObject:
         return {"ok": True, "version": __version__}
 
-    @app.get("/api/layers")
-    def layers():
+    @app.get("/api/layers", response_model=None)
+    def layers() -> JsonObject:
         return {
             "default": [layer_id for layer_id in DEFAULT_LAYERS if layer_id in registry],
             "layers": [_layer_out(dataset) for dataset in registry.values()],
         }
 
-    @app.get("/api/areas/search")
-    def search(q: str, level: str | None = None, limit: int = 20):
+    @app.get("/api/areas/search", response_model=None)
+    def search(q: str, level: str | None = None, limit: int = 20) -> list[JsonObject]:
         if level is not None and level not in LEVELS:
             raise HTTPException(422, "level must be one of " + ", ".join(LEVELS))
 
@@ -167,8 +174,8 @@ def create_app(
         rows = db.search(db_path, query, level, max(1, min(limit, MAX_SEARCH_LIMIT)))
         return [_area_out(row) for row in rows]
 
-    @app.get("/api/areas/{area_id:path}")
-    def get_area(area_id: str):
+    @app.get("/api/areas/{area_id:path}", response_model=None)
+    def get_area(area_id: str) -> JsonObject:
         row = db.get_boundary(db_path, area_id)
         if row is None:
             raise HTTPException(404, "unknown area")
@@ -176,7 +183,7 @@ def create_app(
         return {**_area_out(row), "geometry": json.loads(row["geom_geojson"])}
 
     @app.post("/api/scenes")
-    async def post_scene(request: Request):
+    async def post_scene(request: Request) -> JSONResponse:
         body = await read_body(request)
         try:
             status_code, out, start_job = await run_in_threadpool(prepare, body)
@@ -194,8 +201,8 @@ def create_app(
 
         return JSONResponse(out, status_code)
 
-    @app.get("/api/scenes/{scene_id}")
-    def get_scene(scene_id: str):
+    @app.get("/api/scenes/{scene_id}", response_model=None)
+    def get_scene(scene_id: str) -> JsonObject:
         row = db.get_scene(db_path, scene_id) if ID_RE.fullmatch(scene_id) else None
         if row is None:
             raise HTTPException(404, "unknown scene")
@@ -211,7 +218,7 @@ def create_app(
     return app
 
 
-def _default_registry():
+def _default_registry() -> Registry:
     if os.environ.get("SOE_SYNTHETIC") == "1":
         return make_registry(SyntheticSource())
     if os.environ.get("SOE_LATEST"):
@@ -219,7 +226,7 @@ def _default_registry():
     return REGISTRY
 
 
-def seed_sample_areas(db_path):
+def seed_sample_areas(db_path: Path | str) -> None:
     """Synthetic mode only: reload the sample outlines unless real boundaries are loaded."""
     if db.has_boundaries_besides(db_path, "synthetic"):
         return
@@ -228,7 +235,7 @@ def seed_sample_areas(db_path):
     db.add_boundaries(db_path, "synthetic", [_sample_row(feature) for feature in features])
 
 
-def _sample_row(feature):
+def _sample_row(feature: JsonObject) -> db.BoundaryValues:
     geometry, properties = shape(feature["geometry"]), feature["properties"]
     west, south, east, north = unwrap(geometry).bounds
     cells = max(1, round(geometry.area / SAMPLE_CELL_AREA_DEG2))
@@ -250,10 +257,10 @@ def _sample_row(feature):
     )
 
 
-def _warm_latest_months(registry):
+def _warm_latest_months(registry: Registry) -> None:
     """Probe each series' latest month now so the first page load does not wait for it."""
     for dataset in registry.values():
-        if not dataset.time_varying:
+        if not isinstance(dataset, SeriesDataset):
             continue
 
         try:
@@ -265,18 +272,18 @@ def _warm_latest_months(registry):
 class _ProgressRecorder:
     """Writes build progress to the database, but only when moved by PROGRESS_STEP."""
 
-    def __init__(self, db_path, scene_id):
+    def __init__(self, db_path: Path | str, scene_id: str) -> None:
         self._db_path = db_path
         self._scene_id = scene_id
         self._last_written = 0.0
 
-    def __call__(self, progress):
+    def __call__(self, progress: float) -> None:
         if progress - self._last_written >= PROGRESS_STEP or progress >= 1:
             self._last_written = progress
             db.update_scene(self._db_path, self._scene_id, progress=round(progress, 3))
 
 
-def _record_failure(db_path, scene_id, error):
+def _record_failure(db_path: Path | str, scene_id: str, error: Exception) -> None:
     # Only our own AreaError texts are safe to show; other errors may contain server paths.
     message = str(error) if isinstance(error, AreaError) else "build failed; see the server log"
     try:
@@ -292,9 +299,9 @@ def _record_failure(db_path, scene_id, error):
         log.exception("scene %s: could not record the failure", scene_id)
 
 
-def _layer_out(dataset):
+def _layer_out(dataset: Dataset) -> JsonObject:
     time_axis = None
-    if dataset.time_varying:
+    if isinstance(dataset, SeriesDataset):
         time_axis = {
             "step": dataset.step,
             "first": dataset.first(),
@@ -312,7 +319,7 @@ def _layer_out(dataset):
     }
 
 
-def _area_out(row):
+def _area_out(row: db.Record) -> JsonObject:
     return {
         "id": row["id"],
         "name": row["name"],
@@ -324,7 +331,7 @@ def _area_out(row):
     }
 
 
-async def read_body(request):
+async def read_body(request: Request) -> bytes:
     """Request body, capped at MAX_BODY_BYTES (413 beyond; 400 for a malformed Content-Length)."""
     try:
         declared = int(request.headers.get("content-length") or 0)
@@ -345,7 +352,7 @@ class SceneFiles(StaticFiles):
     """Serves scene bundles: hides in-progress builds (.tmp) and marks files as
     cacheable forever, since a scene id changes whenever its data would."""
 
-    async def get_response(self, path, scope):
+    async def get_response(self, path: str, scope: Scope) -> Response:
         if path.startswith("."):
             raise StarletteHTTPException(404)
 

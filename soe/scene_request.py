@@ -7,12 +7,14 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 
 from shapely.geometry import mapping, shape
 
 from . import __version__, db
 from .areas import Area, AreaError, check_months, clean_polygon, plan
-from .sources import FIRST_MONTH, SourceUnavailable, SyntheticSource
+from .bundle import JsonObject
+from .sources import FIRST_MONTH, Dataset, Registry, SeriesDataset, SourceUnavailable, SyntheticSource
 
 ID_CHARS = 20  # hex characters of the sha256 kept as the id (80 bits; short Windows paths)
 
@@ -33,7 +35,7 @@ class PreparedScene:
     request_json: str
 
 
-def prepare_scene(db_path, registry, body):
+def prepare_scene(db_path: Path | str, registry: Registry, body: bytes | str) -> PreparedScene:
     """Validate a request body and name its scene. Raises AreaError or SourceUnavailable."""
     data = _parse_body(body)
     layers = _requested_layers(data, registry)
@@ -57,7 +59,7 @@ def prepare_scene(db_path, registry, body):
     return PreparedScene(scene_id, json.dumps(request))
 
 
-def _parse_body(body):
+def _parse_body(body: bytes | str) -> JsonObject:
     try:
         data = json.loads(body)
     except (ValueError, RecursionError):
@@ -68,7 +70,7 @@ def _parse_body(body):
     return data
 
 
-def _requested_layers(data, registry):
+def _requested_layers(data: JsonObject, registry: Registry) -> list[str]:
     layers = data.get("layers", list(registry))
     valid = (
         isinstance(layers, list)
@@ -81,7 +83,7 @@ def _requested_layers(data, registry):
     return sorted(set(layers))
 
 
-def _requested_title(data):
+def _requested_title(data: JsonObject) -> str | None:
     title = data.get("title")
     if title is not None and not (isinstance(title, str) and len(title) <= MAX_TITLE_CHARS):
         raise AreaError(f"title must be a string of at most {MAX_TITLE_CHARS} characters")
@@ -89,7 +91,7 @@ def _requested_title(data):
     return title
 
 
-def resolve_area(db_path, spec):
+def resolve_area(db_path: Path | str, spec: object) -> Area:
     """Turn {"type": "boundary", "id"} or {"type": "polygon", "geometry"} into an Area."""
     if not isinstance(spec, dict):
         raise AreaError("area must be an object")
@@ -108,8 +110,8 @@ def resolve_area(db_path, spec):
     raise AreaError("area.type must be 'boundary' or 'polygon'")
 
 
-def _requested_period(data, datasets):
-    series = [dataset for dataset in datasets if dataset.time_varying]
+def _requested_period(data: JsonObject, datasets: list[Dataset]) -> tuple[str, str]:
+    series = [dataset for dataset in datasets if isinstance(dataset, SeriesDataset)]
     if not series:
         # Months are irrelevant here, so every terrain-only request is one scene.
         return FIRST_MONTH, FIRST_MONTH
@@ -120,7 +122,7 @@ def _requested_period(data, datasets):
     return start, end
 
 
-def _area_identity(area):
+def _area_identity(area: Area) -> tuple[str, JsonObject]:
     """(id that changes when the geometry does, area spec stored in the job's request)."""
     if area.named:
         boundary = area.boundary
@@ -131,7 +133,11 @@ def _area_identity(area):
     return "poly:" + geometry_hash, {"type": "polygon", "geometry": mapping(area.geom)}
 
 
-def _current_revisions(db_path, datasets, month):
+def _current_revisions(
+    db_path: Path | str,
+    datasets: list[Dataset],
+    month: str,
+) -> dict[str, str | None]:
     """Revision of `month` for each time-varying dataset."""
     return {
         dataset.id: _current_revision(db_path, dataset, month)
@@ -140,7 +146,7 @@ def _current_revisions(db_path, datasets, month):
     }
 
 
-def _current_revision(db_path, dataset, month):
+def _current_revision(db_path: Path | str, dataset: Dataset, month: str) -> str | None:
     """Stored revision while fresh; if the source is down, a stale stored one."""
     # Offline answers must not reach the stored real ones.
     if isinstance(dataset.backend, SyntheticSource):
@@ -164,7 +170,14 @@ def _current_revision(db_path, dataset, month):
     return revision
 
 
-def compute_scene_id(geometry_id, layers, start, end, datasets, revisions):
+def compute_scene_id(
+    geometry_id: str,
+    layers: list[str],
+    start: str,
+    end: str,
+    datasets: list[Dataset],
+    revisions: dict[str, str | None],
+) -> str:
     """Content hash of the canonical request, dataset versions, revisions and generator."""
     versions = {dataset.id: dataset.source.get("version") for dataset in datasets}
     synthetic = {dataset.id: isinstance(dataset.backend, SyntheticSource) for dataset in datasets}

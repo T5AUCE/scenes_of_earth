@@ -1,5 +1,6 @@
 """Area handling: validate drawn GeoJSON, then plan the grid window, aggregation and mask."""
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -8,8 +9,11 @@ from rasterio.features import geometry_mask
 from rasterio.transform import Affine
 from shapely.affinity import translate
 from shapely.geometry import MultiPolygon, Polygon, box, mapping, shape
+from shapely.geometry.base import BaseGeometry
 
-from .sources import GRID
+from .sources import GRID, Bbox, Dataset, SeriesDataset
+
+CellSpan = tuple[int, int, int, int]  # c0, c1, r0, r1 on an anchor grid
 
 MAX_BODY_BYTES = 1_000_000
 MAX_VERTICES = 5000
@@ -47,7 +51,7 @@ class Area:
     boundary: dict | None = None  # boundary row for named areas, None for drawn ones
 
     @property
-    def named(self):
+    def named(self) -> bool:
         return self.boundary is not None
 
 
@@ -78,7 +82,7 @@ class Plan:
     notices: list = field(default_factory=list)
 
 
-def check_months(start, end, first, latest, who=""):
+def check_months(start: object, end: object, first: str, latest: str, who: str = "") -> None:
     """Validate 'YYYY-MM' start/end: first <= start <= end <= latest.
 
     `who` prefixes the range messages.
@@ -95,7 +99,7 @@ def check_months(start, end, first, latest, who=""):
         raise AreaError(f"{who}end must be {latest} or earlier")
 
 
-def _is_month(value):
+def _is_month(value: object) -> bool:
     return (
         isinstance(value, str)
         and len(value) == 7
@@ -106,7 +110,7 @@ def _is_month(value):
     )
 
 
-def clean_polygon(obj):
+def clean_polygon(obj: object) -> Polygon | MultiPolygon:
     """Validate drawn GeoJSON; return a repaired, rounded (1e-4 degrees), normalised polygon."""
     if isinstance(obj, dict) and obj.get("type") == "Feature":
         obj = obj.get("geometry")
@@ -138,7 +142,7 @@ def clean_polygon(obj):
     return shapely.normalize(geometry)
 
 
-def _positions(coordinates):
+def _positions(coordinates: object) -> list[Sequence[float]]:
     """Every [x, y, ...] position of a GeoJSON coordinates array, with the nesting depth capped."""
     positions, stack = [], [(coordinates, 0)]
     while stack:
@@ -153,11 +157,11 @@ def _positions(coordinates):
     return positions
 
 
-def _is_number(value):
+def _is_number(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def _within_world(positions):
+def _within_world(positions: list[Sequence[float]]) -> bool:
     try:
         # Written so NaN, infinity and huge integers all fail the comparison (no float conversion).
         return all(
@@ -170,7 +174,7 @@ def _within_world(positions):
         return False
 
 
-def _polygonal_parts(geometry):
+def _polygonal_parts(geometry: BaseGeometry) -> list[Polygon]:
     """Non-empty polygons of a repaired shape; stray lines and points are dropped."""
     collection = shapely.make_valid(geometry)
     # make_valid can nest a MultiPolygon in a GeometryCollection, so flatten twice.
@@ -178,7 +182,7 @@ def _polygonal_parts(geometry):
     return [part for part in parts if isinstance(part, Polygon) and not part.is_empty]
 
 
-def plan(area, datasets, start, end):
+def plan(area: Area, datasets: list[Dataset], start: str, end: str) -> Plan:
     """Work out each layer's grid, mask and time steps, with one aggregation factor for all series.
 
     Raises AreaError if the request is refused. `start` and `end` ('YYYY-MM') matter only to
@@ -191,13 +195,13 @@ def plan(area, datasets, start, end):
     windows, padded = _layer_windows(datasets, parts)
     notices = [PADDED_NOTICE] if padded else []
 
-    steps = {dataset.id: dataset.steps(start, end) for dataset in datasets if dataset.time_varying}
+    series = [dataset for dataset in datasets if isinstance(dataset, SeriesDataset)]
+    steps = {dataset.id: dataset.steps(start, end) for dataset in series}
     _check_source_size(windows, steps)
 
     notices += _small_area_notices(area, shared_geometry)
 
     budget_for_series = _budget_after_static_layers(datasets, windows)
-    series = [dataset for dataset in datasets if dataset.time_varying]
     factor = 1
     if series:
         factor, series_windows = _aggregation_factor(series, windows, steps, budget_for_series)
@@ -226,7 +230,7 @@ def plan(area, datasets, start, end):
     return Plan(shared_geometry, layers, bbox, clipped, notices)
 
 
-def unwrap(geom):
+def unwrap(geom: BaseGeometry) -> BaseGeometry:
     """Put a shape that crosses 180 into one longitude frame.
 
     Parts west of 0 move east by 360, so longitudes go up to 360;
@@ -247,13 +251,16 @@ def unwrap(geom):
     return shapely.unary_union(parts)
 
 
-def _check_longitude_span(geometry):
+def _check_longitude_span(geometry: BaseGeometry) -> None:
     west, _, east, _ = geometry.bounds
     if east - west > MAX_LONGITUDE_DEG:
         raise AreaError("area spans more than 180 degrees of longitude")
 
 
-def _clip_to_coverage(geometry, datasets):
+def _clip_to_coverage(
+    geometry: BaseGeometry,
+    datasets: list[Dataset],
+) -> tuple[dict[str, BaseGeometry], dict[str, list[str]], BaseGeometry, bool]:
     """Per-layer clipped geometry, per-layer notices, the geometry all layers share, was clipped."""
     parts, layer_notices = {}, {}
     shared_geometry, clipped = geometry, False
@@ -277,14 +284,17 @@ def _clip_to_coverage(geometry, datasets):
     return parts, layer_notices, shared_geometry, clipped
 
 
-def _extent(coverage):
+def _extent(coverage: Bbox) -> Bbox:
     """Coverage as (W, S, E, N) in the unwrapped frame: a global coverage reaches 360 east."""
     west, south, east, north = coverage
     is_global = (west, east) == (-MAX_LONGITUDE_DEG, MAX_LONGITUDE_DEG)
     return west, south, WORLD_WIDTH_DEG if is_global else east, north
 
 
-def _layer_windows(datasets, parts):
+def _layer_windows(
+    datasets: list[Dataset],
+    parts: dict[str, BaseGeometry],
+) -> tuple[dict[str, CellSpan], bool]:
     """Anchor-grid cell window (c0, c1, r0, r1) of each layer, padded; and whether any was."""
     windows, padded = {}, False
     for dataset in datasets:
@@ -303,7 +313,7 @@ def _layer_windows(datasets, parts):
     return windows, padded
 
 
-def _span(bounds, cell):
+def _span(bounds: Bbox, cell: float) -> CellSpan:
     """Outward cell range (c0, c1, r0, r1) of bounds on the grid that starts at 180W, 60N."""
     west, south, east, north = bounds
     return (
@@ -314,7 +324,13 @@ def _span(bounds, cell):
     )
 
 
-def _pad(low, high, limit_low, limit_high, needed_cells):
+def _pad(
+    low: int,
+    high: int,
+    limit_low: int,
+    limit_high: int,
+    needed_cells: int,
+) -> tuple[int, int]:
     """Grow [low, high) to at least `needed_cells` cells, centred, within the limits."""
     extra = needed_cells - (high - low)
     if extra <= 0:
@@ -328,14 +344,14 @@ def _pad(low, high, limit_low, limit_high, needed_cells):
     return low, high
 
 
-def _check_source_size(windows, steps):
+def _check_source_size(windows: dict[str, CellSpan], steps: dict[str, list[str]]) -> None:
     if _source_cells(windows, steps) > MAX_SOURCE:
         raise AreaError(
             "area and period are too large to read; choose a smaller area or fewer months"
         )
 
 
-def _source_cells(windows, steps):
+def _source_cells(windows: dict[str, CellSpan], steps: dict[str, list[str]]) -> int:
     return sum(
         (c1 - c0) * (r1 - r0) * len(steps[dataset_id])
         for dataset_id, (c0, c1, r0, r1) in windows.items()
@@ -343,7 +359,7 @@ def _source_cells(windows, steps):
     )
 
 
-def _small_area_notices(area, shared_geometry):
+def _small_area_notices(area: Area, shared_geometry: BaseGeometry) -> list[str]:
     c0, c1, r0, r1 = _span(shared_geometry.bounds, GRID.a)
     window_transform = GRID @ Affine.translation(c0, r0)
     native_mask = _cell_mask(shared_geometry, window_transform, (r1 - r0, c1 - c0))
@@ -360,7 +376,10 @@ def _small_area_notices(area, shared_geometry):
     ]
 
 
-def _budget_after_static_layers(datasets, windows):
+def _budget_after_static_layers(
+    datasets: list[Dataset],
+    windows: dict[str, CellSpan],
+) -> int:
     """Output bytes left for series; static layers have a fixed cost, so they are budgeted first."""
     budget = MAX_OUTPUT_BYTES
     for dataset in datasets:
@@ -381,7 +400,11 @@ def _budget_after_static_layers(datasets, windows):
     return budget
 
 
-def _layer_grid(dataset, window, factor):
+def _layer_grid(
+    dataset: Dataset,
+    window: CellSpan,
+    factor: int,
+) -> tuple[Affine, tuple[int, int], list[float], float]:
     """(transform, (height, width), bbox, res) of a layer over anchor-grid cells c0:c1, r0:r1."""
     c0, c1, r0, r1 = window
     cell = dataset.anchor_res
@@ -399,13 +422,18 @@ def _layer_grid(dataset, window, factor):
     return Affine(res, 0, bbox[0], 0, -res, bbox[3]), shape, bbox, res
 
 
-def _layer_bytes(dataset, shape, steps=1):
+def _layer_bytes(dataset: Dataset, shape: tuple[int, int], steps: int = 1) -> int:
     """Raw bytes of a layer's arrays: every array per step, plus one mask byte per cell."""
     bytes_per_step = sum(np.dtype(encoding[0]).itemsize for encoding in dataset.encoding.values())
     return shape[0] * shape[1] * (steps * bytes_per_step + 1)
 
 
-def _aggregation_factor(series, windows, steps, budget):
+def _aggregation_factor(
+    series: list[SeriesDataset],
+    windows: dict[str, CellSpan],
+    steps: dict[str, list[str]],
+    budget: int,
+) -> tuple[int, dict[str, CellSpan]]:
     """Smallest block-mean factor whose series fit the budget, with the windows snapped to it."""
     for factor in FACTORS:
         snapped = {}
@@ -421,12 +449,19 @@ def _aggregation_factor(series, windows, steps, budget):
     raise AreaError(f"area and period are too large even at {FACTORS[-1]}x aggregation")
 
 
-def snap(low, high, factor):
+def snap(low: int, high: int, factor: int) -> tuple[int, int]:
     """Widen [low, high) outwards to multiples of `factor`."""
     return low // factor * factor, -(-high // factor) * factor
 
 
-def _layer_plan(dataset, geometry, window, factor, steps, clip_notices):
+def _layer_plan(
+    dataset: Dataset,
+    geometry: BaseGeometry,
+    window: CellSpan,
+    factor: int,
+    steps: list[str],
+    clip_notices: list[str],
+) -> LayerPlan:
     transform, grid_shape, bbox, res = _layer_grid(dataset, window, factor)
     notices = list(clip_notices)
     if factor > 1:
@@ -457,7 +492,12 @@ def _layer_plan(dataset, geometry, window, factor, steps, clip_notices):
     )
 
 
-def _layer_mask(dataset, geometry, transform, grid_shape):
+def _layer_mask(
+    dataset: Dataset,
+    geometry: BaseGeometry,
+    transform: Affine,
+    grid_shape: tuple[int, int],
+) -> tuple[np.ndarray, bool]:
     """(mask, whether it fell back to every touched cell because no cell center was inside)."""
     mask = _cell_mask(geometry, transform, grid_shape)
     if mask.any():
@@ -470,7 +510,12 @@ def _layer_mask(dataset, geometry, transform, grid_shape):
     return mask, True
 
 
-def _cell_mask(geometry, window_transform, grid_shape, all_touched=False):
+def _cell_mask(
+    geometry: BaseGeometry,
+    window_transform: Affine,
+    grid_shape: tuple[int, int],
+    all_touched: bool = False,
+) -> np.ndarray:
     return geometry_mask(
         [mapping(geometry)],
         grid_shape,

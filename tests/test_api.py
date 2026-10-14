@@ -4,7 +4,9 @@ import threading
 import time
 from dataclasses import replace
 
+import numpy as np
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from shapely.geometry import box, mapping, shape
 
@@ -17,15 +19,15 @@ from soe.api import (
     seed_sample_areas,
 )
 from soe.areas import unwrap
-from soe.bundle import SYNTHETIC_DATA_CREDIT
-from soe.sources import SourceUnavailable, SyntheticSource, make_registry
+from soe.bundle import SYNTHETIC_DATA_CREDIT, JsonObject
+from soe.sources import CellWindow, SourceUnavailable, SyntheticSource, make_registry
 
 POLL_ATTEMPTS = 100
 POLL_INTERVAL_SECS = 0.1
 SQUARE = mapping(box(36.5, -1.5, 37.5, -0.5))
 
 
-def body(**overrides):
+def body(**overrides: object) -> JsonObject:
     return {
         "area": {"type": "polygon", "geometry": SQUARE},
         "start": "2015-01",
@@ -35,7 +37,7 @@ def body(**overrides):
     }
 
 
-def wait_for(client, scene_id, wanted_status="done"):
+def wait_for(client: TestClient, scene_id: str, wanted_status: str = "done") -> JsonObject:
     for _ in range(POLL_ATTEMPTS):
         scene = client.get(f"/api/scenes/{scene_id}").json()
         if scene["status"] in (wanted_status, "failed"):
@@ -257,7 +259,7 @@ def test_queue_full_gives_503_and_unreachable_source_gives_503(tmp_path):
     gate = threading.Event()
 
     class Slow(SyntheticSource):
-        def read_rain(self, month, window):
+        def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
             gate.wait(10)
             return super().read_rain(month, window)
 
@@ -276,7 +278,7 @@ def test_queue_full_gives_503_and_unreachable_source_gives_503(tmp_path):
         assert wait_for(client, first.json()["id"])["status"] == "done"
 
     class Down(SyntheticSource):
-        def current_revision(self, month):
+        def current_revision(self, month: str) -> str:
             raise SourceUnavailable("down")
 
     app = create_app(tmp_path / "b.db", tmp_path / "scenes2", make_registry(Down()))
@@ -306,7 +308,7 @@ def test_built_scene_is_served_again_when_the_source_goes_down(
 
 def test_failed_job_has_generic_error_and_class(tmp_path):
     class Boom(SyntheticSource):
-        def read_rain(self, month, window):
+        def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
             raise RuntimeError("secret path C:/x/y")
 
     app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(Boom()))
@@ -334,14 +336,14 @@ def test_layers(env):
 
 
 def test_sample_areas_seed_only_in_synthetic_mode_and_when_empty(tmp_path, monkeypatch):
-    def app_in(name):
+    def app_in(name: str) -> FastAPI:
         return create_app(
             tmp_path / name / "soe.db",
             tmp_path / name / "scenes",
             make_registry(SyntheticSource()),
         )
 
-    def sample_ids(client):
+    def sample_ids(client: TestClient) -> set[str]:
         names = ["Kenya", "Fiji", "Nairobi", "Cusco", "Burkina"]
         hits = [client.get("/api/areas/search", params={"q": name}).json() for name in names]
         return {hit["id"] for found in hits for hit in found if hit["id"].startswith("sample:")}
@@ -453,7 +455,7 @@ def test_sample_areas_reload_on_startup_and_real_boundaries_suppress_them(tmp_pa
 
 def test_startup_survives_a_failing_latest_month_warmup(tmp_path):
     class BrokenSource(SyntheticSource):
-        def latest_month(self):
+        def latest_month(self) -> str:
             raise RuntimeError("network down")
 
     registry = make_registry(SyntheticSource())

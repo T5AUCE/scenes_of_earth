@@ -1,11 +1,19 @@
 """Load geoBoundaries CGAZ shapes and GHSL UCDB cities into the boundaries table."""
 import json
 import zipfile
+from collections.abc import Iterable, Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+from shapely.geometry.base import BaseGeometry
 
 from . import db
 from .areas import AreaError, unwrap
 from .sources import CELL_DEG, SOURCES, SUPPORTED_BOUNDS_DEG
+
+if TYPE_CHECKING:
+    import geopandas as gpd
+    import pandas as pd
 
 CGAZ_SOURCE = "geoBoundaries CGAZ"
 CGAZ_LEVELS = {0: "country", 1: "state", 2: "county"}
@@ -16,7 +24,7 @@ SIMPLIFY_TOLERANCE_DEG = 0.01
 CELL_AREA_DEG2 = CELL_DEG * CELL_DEG
 
 
-def import_cgaz(db_path, folder):
+def import_cgaz(db_path: Path | str, folder: Path | str) -> int:
     """geoBoundaries CGAZ ADM0/1/2 GeoPackages, found in `folder` by 'ADM0', 'ADM1', 'ADM2'.
 
     Returns the number of rows stored.
@@ -25,7 +33,7 @@ def import_cgaz(db_path, folder):
     return _store(db_path, CGAZ_SOURCE, "CGAZ", _cgaz_rows(frames))
 
 
-def _read_cgaz_level(folder, level):
+def _read_cgaz_level(folder: Path | str, level: int) -> "gpd.GeoDataFrame":
     import geopandas as gpd
 
     files = sorted(Path(folder).glob(f"*ADM{level}*.gpkg"))
@@ -34,7 +42,9 @@ def _read_cgaz_level(folder, level):
     return gpd.read_file(files[0]).to_crs(4326)
 
 
-def _cgaz_rows(frames):
+def _cgaz_rows(
+    frames: dict[int, "gpd.GeoDataFrame"],
+) -> Iterator[db.BoundaryValues | None]:
     """Boundary row per CGAZ shape, countries first; None for a shape outside the coverage."""
     country_names = dict(zip(frames[0]["shapeGroup"], frames[0]["shapeName"]))
     county_states = _county_states(counties=frames[2], states=frames[1])
@@ -54,7 +64,12 @@ def _cgaz_rows(frames):
             )
 
 
-def _parent_name(level, index, country_name, county_states):
+def _parent_name(
+    level: int,
+    index: int,
+    country_name: str,
+    county_states: "pd.Series",
+) -> str:
     """No parent for a country, its country for a state, the containing state for a county."""
     if level == 0:
         return ""
@@ -63,7 +78,7 @@ def _parent_name(level, index, country_name, county_states):
     return county_states.get(index, country_name)
 
 
-def _county_states(counties, states):
+def _county_states(counties: "gpd.GeoDataFrame", states: "gpd.GeoDataFrame") -> "pd.Series":
     """State name per county index: the state that contains the county's representative point."""
     county_points = counties.copy()
     county_points.geometry = counties.representative_point()
@@ -76,7 +91,7 @@ def _county_states(counties, states):
     return joined.groupby(level=0)["shapeName_state"].first()
 
 
-def import_ucdb(db_path, path):
+def import_ucdb(db_path: Path | str, path: Path | str) -> int:
     """GHSL UCDB R2024A (GeoPackage or zip of one): urban centres with population >= 1,000,000.
 
     Column names are matched by substring (UCN_MAI name, POP_TOT, CNT_GAD country) because the
@@ -102,7 +117,7 @@ def import_ucdb(db_path, path):
     return _store(db_path, UCDB_SOURCE, "UCDB", rows)
 
 
-def _read_ucdb(path):
+def _read_ucdb(path: Path | str) -> "gpd.GeoDataFrame":
     """The UCDB general-characteristics layer in WGS 84."""
     import geopandas as gpd
 
@@ -112,14 +127,14 @@ def _read_ucdb(path):
     return gpd.read_file(path, layer=_ucdb_layer(path)).to_crs(4326)
 
 
-def _zipped_geopackage(zip_path):
+def _zipped_geopackage(zip_path: str) -> str:
     """GDAL path of the first GeoPackage inside a zip."""
     with zipfile.ZipFile(zip_path) as archive:
         inner = next(name for name in archive.namelist() if name.endswith(".gpkg"))
     return f"zip://{zip_path}!{inner}"
 
 
-def _ucdb_layer(path):
+def _ucdb_layer(path: str) -> str:
     import pyogrio
 
     layers = [layer[0] for layer in pyogrio.list_layers(path)]
@@ -127,12 +142,17 @@ def _ucdb_layer(path):
     return next(general, layers[0])
 
 
-def _latest_column(frame, part):
+def _latest_column(frame: "gpd.GeoDataFrame", part: str) -> str:
     """Column containing `part`; if several epochs exist (..._1975 ... _2025) take the latest."""
     return sorted(column for column in frame.columns if part in column)[-1]
 
 
-def _store(db_path, source, label, rows):
+def _store(
+    db_path: Path | str,
+    source: str,
+    label: str,
+    rows: Iterable[db.BoundaryValues | None],
+) -> int:
     """Replace the boundaries of `source` with `rows`, skipping None; returns the count stored."""
     kept = [row for row in rows if row]
     replaced = db.add_boundaries(db_path, source, kept)
@@ -140,7 +160,15 @@ def _store(db_path, source, label, rows):
     return len(kept)
 
 
-def _row(row_id, level, name, parent, iso3, geometry, source):
+def _row(
+    row_id: str,
+    level: str,
+    name: str,
+    parent: str,
+    iso3: str | None,
+    geometry: BaseGeometry,
+    source: str,
+) -> db.BoundaryValues | None:
     """One boundaries row: geometry simplified, clipped to the supported extent (60S-60N)."""
     from shapely.geometry import box, mapping
 

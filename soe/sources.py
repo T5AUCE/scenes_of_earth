@@ -9,19 +9,28 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from abc import ABC, abstractmethod
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 import rasterio
 from rasterio.errors import RasterioIOError
+from rasterio.io import DatasetReader
 from rasterio.merge import merge
 from rasterio.transform import Affine, from_origin
 from rasterio.windows import Window
+
+Bbox = Sequence[float]  # W, S, E, N in degrees; a list or a tuple
+CellWindow = tuple[int, int, int, int]  # col, row, width, height on the rain grid
+Encoding = tuple[str, float, float, int | None]  # dtype, scale_factor, add_offset, fill
+Registry = dict[str, "Dataset"]  # dataset id -> dataset
 
 # The app supports 60S-60N in v1; widen the extent here.
 SUPPORTED_BOUNDS_DEG = (-180, -60, 180, 60)  # W, S, E, N
@@ -137,7 +146,7 @@ SOURCES = {
 }
 
 
-def month_list(start, end):
+def month_list(start: str, end: str) -> list[str]:
     """'YYYY-MM' strings from start to end inclusive."""
     year, month = int(start[:4]), int(start[5:7])
     months = []
@@ -147,11 +156,11 @@ def month_list(start, end):
     return months
 
 
-def _next_month(year, month):
+def _next_month(year: int, month: int) -> tuple[int, int]:
     return (year + 1, 1) if month == 12 else (year, month + 1)
 
 
-def glo90_tiles(bounds):
+def glo90_tiles(bounds: Bbox) -> list[str]:
     """Names of the existing GLO-90 tiles covering bounds (W, S, E, N).
 
     Tiles are 1 degree and named by their south-west corner. Longitudes above 180 wrap, so bounds
@@ -178,7 +187,7 @@ def glo90_tiles(bounds):
 
 
 @lru_cache
-def _tile_index():
+def _tile_index() -> np.ndarray:
     """180 x 360 bool grid of the tiles that exist in the GLO-90 bucket.
 
     The row is lat + 90 and the column is lon + 180.
@@ -187,7 +196,7 @@ def _tile_index():
     return np.unpackbits(packed).reshape(TILE_GRID_SHAPE).astype(bool)
 
 
-def terrain_res(bounds):
+def terrain_res(bounds: Bbox) -> float:
     """Terrain cell size 0.05 / k degrees, so whole degrees are a whole number of cells.
 
     It gives about 4.2 Mpx and at most 4096 px on the long side, never finer than native.
@@ -201,7 +210,7 @@ def terrain_res(bounds):
     return CELL_DEG / min(max(divisions, 1), MAX_TERRAIN_DIVISIONS)
 
 
-def with_margin(bounds, res):
+def with_margin(bounds: Bbox, res: float) -> Bbox:
     """Bounds grown by one pixel.
 
     GLO-90 tiles are half a pixel off-grid, so the margin is cropped after merging.
@@ -210,7 +219,11 @@ def with_margin(bounds, res):
     return (west - res, south - res, east + res, north + res)
 
 
-def terrain_by_blocks(bounds, res, read_block):
+def terrain_by_blocks(
+    bounds: Bbox,
+    res: float,
+    read_block: Callable[[Bbox, float], np.ndarray | None],
+) -> tuple[np.ndarray, Affine]:
     """Terrain on bounds, read in parallel in blocks of whole degrees, so no block crosses 180.
 
     read_block(block_bounds, res) returns an array, or None for a block without terrain (left at 0).
@@ -235,7 +248,7 @@ def terrain_by_blocks(bounds, res, read_block):
     return elevation, from_origin(west, north, res, res)
 
 
-def _block_edges(low, high):
+def _block_edges(low: float, high: float) -> list[float]:
     """low, every multiple of BLOCK_DEG strictly between, then high."""
     first_multiple = math.floor(low / BLOCK_DEG) * BLOCK_DEG + BLOCK_DEG
     return [low] + list(range(first_multiple, math.ceil(high), BLOCK_DEG)) + [high]
@@ -248,13 +261,13 @@ class SourceUnavailable(RuntimeError):
 class RealSource:
     """CHIRPS COGs and GLO-90 tiles over HTTP."""
 
-    def __init__(self, latest=None):
+    def __init__(self, latest: str | None = None) -> None:
         # An optional fixed 'YYYY-MM' (SOE_LATEST); otherwise the latest month is probed and cached.
         self._latest = latest
         self._probed = None
         self._probe_lock = threading.Lock()
 
-    def latest_month(self):
+    def latest_month(self) -> str:
         if self._latest:
             return self._latest
 
@@ -274,7 +287,7 @@ class RealSource:
             self._probed = (found, time.time() + ttl)
             return found
 
-    def _probe_latest_month(self, now):
+    def _probe_latest_month(self, now: datetime) -> tuple[str | None, bool]:
         candidates = []
         year, month = now.year, now.month
         for _ in range(LATEST_MONTH_PROBES):
@@ -291,13 +304,13 @@ class RealSource:
         newest_index = exists.index(True)
         return candidates[newest_index], None not in exists[:newest_index]
 
-    def _assumed_latest_month(self, now):
+    def _assumed_latest_month(self, now: datetime) -> str:
         year, month = now.year, now.month
         for _ in range(OFFLINE_ASSUMED_LAG_MONTHS):
             year, month = _previous_month(year, month)
         return f"{year:04d}-{month:02d}"
 
-    def current_revision(self, month):
+    def current_revision(self, month: str) -> str:
         """Last-Modified date of the month's CHIRPS file.
 
         It changes whenever CHC republishes (revises) that month's data.
@@ -308,7 +321,7 @@ class RealSource:
 
         return last_modified
 
-    def read_rain(self, month, window):
+    def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
         """One month at native resolution as float32; fill values (< 0) become NaN."""
         col, row, width, height = window
 
@@ -321,11 +334,11 @@ class RealSource:
         rain[rain < 0] = np.nan
         return rain
 
-    def terrain(self, bounds, res):
+    def terrain(self, bounds: Bbox, res: float) -> tuple[np.ndarray, Affine]:
         """Elevation (int16) on bounds at res; ocean (no tile) is 0. Returns (array, transform)."""
         return terrain_by_blocks(bounds, res, self._merge)
 
-    def _merge(self, bounds, res):
+    def _merge(self, bounds: Bbox, res: float) -> np.ndarray | None:
         """One block: merged elevation, or None if no tile exists there.
 
         Bounds above 180 read the tiles west of it.
@@ -354,15 +367,15 @@ class RealSource:
         return elevation
 
 
-def _previous_month(year, month):
+def _previous_month(year: int, month: int) -> tuple[int, int]:
     return (year - 1, 12) if month == 1 else (year, month - 1)
 
 
-def _chirps_url(month):
+def _chirps_url(month: str) -> str:
     return CHIRPS_URL.format(ym=month.replace("-", "."))
 
 
-def _head(url, timeout=HEAD_TIMEOUT_SECS):
+def _head(url: str, timeout: float = HEAD_TIMEOUT_SECS) -> tuple[bool | None, str | None]:
     """(exists, Last-Modified) for a URL: (False, None) on 404, (None, None) if unreachable."""
     try:
         request = urllib.request.Request(url, method="HEAD")
@@ -374,7 +387,7 @@ def _head(url, timeout=HEAD_TIMEOUT_SECS):
         return None, None
 
 
-def _crop_margin(merged, bounds, res):
+def _crop_margin(merged: np.ndarray, bounds: Bbox, res: float) -> np.ndarray:
     """Elevation of `bounds` as int16, cropped from the merge that had a one-pixel margin."""
     west, south, east, north = bounds
     height, width = round((north - south) / res), round((east - west) / res)
@@ -382,7 +395,7 @@ def _crop_margin(merged, bounds, res):
     return elevation.astype("int16")
 
 
-def _open_tile(url):
+def _open_tile(url: str) -> DatasetReader:
     """Open one GLO-90 tile, retrying a few times because the bucket drops connections."""
     for attempt in range(1, TILE_OPEN_ATTEMPTS + 1):
         try:
@@ -397,17 +410,17 @@ def _open_tile(url):
 class SyntheticSource:
     """Deterministic fake data, no network. `reads` counts rain reads (tests use it)."""
 
-    def __init__(self, latest="2026-08"):
+    def __init__(self, latest: str = "2026-08") -> None:
         self._latest = latest
         self.reads = 0
 
-    def latest_month(self):
+    def latest_month(self) -> str:
         return self._latest
 
-    def current_revision(self, month):
+    def current_revision(self, month: str) -> str:
         return "synthetic"
 
-    def read_rain(self, month, window):
+    def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
         self.reads += 1
         col, row, width, height = window
         month_number = int(month[:4]) * 12 + int(month[5:7])
@@ -418,7 +431,7 @@ class SyntheticSource:
         rain[(cols * 7 + rows * 13) % 11 == 0] = np.nan  # Holes, to exercise NaN-aware means.
         return rain
 
-    def terrain(self, bounds, res):
+    def terrain(self, bounds: Bbox, res: float) -> tuple[np.ndarray, Affine]:
         west, south, east, north = bounds
         width, height = round((east - west) / res), round((north - south) / res)
         transform = from_origin(west, north, res, res)
@@ -429,7 +442,7 @@ class SyntheticSource:
         return elevation.astype("int16"), transform
 
 
-def block_mean(values, factor):
+def block_mean(values: np.ndarray, factor: int) -> np.ndarray:
     """NaN-aware factor x factor block mean (shape must be divisible by factor)."""
     if factor == 1:
         return values
@@ -443,7 +456,7 @@ def block_mean(values, factor):
     return np.where(counts > 0, sums / np.maximum(counts, 1), np.nan).astype("float32")
 
 
-def window_of(bbox):
+def window_of(bbox: Bbox) -> CellWindow:
     """Integer (col, row, width, height) window on the global rain grid for a grid-aligned bbox."""
     west, south, east, north = bbox
     col, row = round((west + 180) / CELL_DEG), round((60 - north) / CELL_DEG)
@@ -451,18 +464,16 @@ def window_of(bbox):
 
 
 @dataclass
-class Dataset:
-    """A layer the backend can build.
+class Dataset(ABC):
+    """A layer the backend can build; subclass StaticDataset or SeriesDataset, not this."""
 
-    Static datasets implement read(bbox, res) -> (2D array, transform). Time-varying ones implement
-    first(), latest(), steps(start, end) and read_step(step, bbox, factor).
-    """
+    # Set only by StaticDataset/SeriesDataset; some code branches on it, some on isinstance.
+    time_varying: ClassVar[bool]  # published in scene.json and /api/layers
 
     id: str
     title: str
     units: str
     resolution_deg: float  # native cell size
-    time_varying: bool
     source: dict  # licence, licence_url, attribution, citation, modified, version, ...
     arrays: dict  # role -> data array name inside the Zarr group `id`
     encoding: dict  # role -> (stored dtype, scale_factor, add_offset, fill value or None)
@@ -474,15 +485,15 @@ class Dataset:
     step: str | None = None  # ISO 8601 duration between time steps; None for static layers
     max_tiles: int | None = None  # request cap for tiled datasets
 
-    def tile_count(self, bbox):
+    def tile_count(self, bbox: Bbox) -> int:
         """Number of source tiles a read of bbox needs (0 for untiled data)."""
         return 0
 
-    def res_for(self, bbox):
+    def res_for(self, bbox: Bbox) -> float:
         """Cell size of a static layer over bbox."""
         return self.resolution_deg
 
-    def current_revision(self, last_month):
+    def current_revision(self, last_month: str) -> str | None:
         """The provider's current revision marker of `last_month`, or None for static data.
 
         A revision is a string that changes whenever the provider republishes that month's
@@ -490,41 +501,73 @@ class Dataset:
         """
         return None
 
-    def domain(self, stats):
+    def domain(self, stats: dict[str, float]) -> list[float]:
         """Colour-scale range of a series layer, from the stats of its values."""
         return [stats["min"], stats["p98"]]
 
-    def notice(self, bbox):
+    def notice(self, bbox: Bbox) -> str | None:
         """A limits notice for a read of bbox, or None."""
         return None
 
 
-class RainDataset(Dataset):
+class StaticDataset(Dataset):
+    """A layer without a time axis, read as one 2D grid."""
+
+    time_varying = False
+
+    @abstractmethod
+    def read(self, bbox: Bbox, res: float) -> tuple[np.ndarray, Affine]:
+        """Values over bbox at cell size `res`: (2D array, transform)."""
+
+
+class SeriesDataset(Dataset):
+    """A layer with a time axis, read one step at a time on the anchor grid."""
+
+    time_varying = True
+
+    @abstractmethod
+    def first(self) -> str:
+        """First available month, 'YYYY-MM'."""
+
+    @abstractmethod
+    def latest(self) -> str:
+        """Latest available month, 'YYYY-MM'."""
+
+    @abstractmethod
+    def steps(self, start: str, end: str) -> list[str]:
+        """Period starts (ISO dates) of the months start..end ('YYYY-MM')."""
+
+    @abstractmethod
+    def read_step(self, step: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
+        """The step that starts on the ISO date `step`, block-averaged by `factor`."""
+
+
+class RainDataset(SeriesDataset):
     """CHIRPS monthly rain."""
 
-    def first(self):
+    def first(self) -> str:
         """First available month, 'YYYY-MM'."""
         return FIRST_MONTH
 
-    def latest(self):
+    def latest(self) -> str:
         """Latest available month, 'YYYY-MM'."""
         return self.backend.latest_month()
 
-    def steps(self, start, end):
+    def steps(self, start: str, end: str) -> list[str]:
         """Period starts ('YYYY-MM-DD') of the months start..end ('YYYY-MM')."""
         return [f"{month}-01" for month in month_list(start, end)]
 
-    def current_revision(self, last_month):
+    def current_revision(self, last_month: str) -> str | None:
         return self.backend.current_revision(last_month)
 
-    def domain(self, stats):
+    def domain(self, stats: dict[str, float]) -> list[float]:
         return [0, stats["p98"]]
 
-    def read_step(self, step, bbox, factor=1):
+    def read_step(self, step: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
         """The month that starts on the ISO date `step`."""
         return self.read_month(step[:7], bbox, factor)
 
-    def read_month(self, month, bbox, factor=1):
+    def read_month(self, month: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
         """Rain of month 'YYYY-MM' over a grid-aligned bbox, block-averaged by `factor`."""
         col, row, width, height = window_of(bbox)
         col %= NCOLS
@@ -538,27 +581,28 @@ class RainDataset(Dataset):
         return block_mean(rain, factor)
 
 
-class TerrainDataset(Dataset):
+class TerrainDataset(StaticDataset):
     """Copernicus GLO-90 elevation, read at a resolution that depends on the area size."""
 
-    def tile_count(self, bbox):
+    def tile_count(self, bbox: Bbox) -> int:
         return len(glo90_tiles(with_margin(bbox, terrain_res(bbox))))
 
-    def res_for(self, bbox):
+    def res_for(self, bbox: Bbox) -> float:
         return terrain_res(bbox)
 
-    def notice(self, bbox):
+    def notice(self, bbox: Bbox) -> str | None:
         res = terrain_res(bbox)
         if res > NATIVE_TERRAIN_RES_DEG * (1 + NATIVE_RES_TOLERANCE):
             cell_size_m = round(res * LONGITUDE_DEGREE_AT_EQUATOR_M)
             return f"Terrain resampled to {cell_size_m} m cells (source 90 m)."
+        return None
 
-    def read(self, bbox, res):
+    def read(self, bbox: Bbox, res: float) -> tuple[np.ndarray, Affine]:
         """Elevation over bbox at cell size `res`: (int16 array, transform)."""
         return self.backend.terrain(tuple(bbox), res)
 
 
-def make_registry(backend):
+def make_registry(backend: RealSource | SyntheticSource) -> Registry:
     """The two datasets, reading through `backend` (RealSource or SyntheticSource)."""
     return {
         "chirps_monthly": RainDataset(
@@ -566,7 +610,6 @@ def make_registry(backend):
             title="Rainfall",
             units="mm/month",
             resolution_deg=CELL_DEG,
-            time_varying=True,
             source=SOURCES["chirps"],
             arrays={"value": "precip"},
             encoding={"value": ("uint16", 0.1, 0, 65535)},
@@ -580,7 +623,6 @@ def make_registry(backend):
             title="Terrain",
             units="m",
             resolution_deg=NATIVE_TERRAIN_RES_DEG,
-            time_varying=False,
             source=SOURCES["glo90"],
             arrays={"elevation": "elevation", "hillshade": "hillshade"},
             encoding={"elevation": ("int16", 1, 0, None), "hillshade": ("uint8", 1, 0, None)},

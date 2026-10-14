@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import urllib.request
+from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +23,7 @@ GLO90_TILE_PATTERN = r"Copernicus_DSM_COG_30_([NS])(\d+)_00_([EW])(\d+)_00_DEM"
 DOWNLOAD_TIMEOUT_SECS = 60
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> None:
     """Run the `glo90-index` or `import-boundaries` command given in `argv`."""
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -42,7 +43,7 @@ def main(argv=None):
         print("UCDB city rows:", import_ucdb(args.db, args.ucdb))
 
 
-def _build_parser():
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="soe")
     subparsers = parser.add_subparsers(dest="command", required=True)
     import_parser = subparsers.add_parser(
@@ -59,7 +60,7 @@ def _build_parser():
     return parser
 
 
-def build_glo90_index(path):
+def build_glo90_index(path: Path | str) -> int:
     """Write the bitmap of GLO-90 tiles that exist (GLO90_TILE_INDEX) from the bucket list."""
     exists = np.zeros(TILE_GRID_SHAPE, bool)
     for lat, lon in _listed_tiles():
@@ -68,7 +69,7 @@ def build_glo90_index(path):
     return int(exists.sum())
 
 
-def _listed_tiles():
+def _listed_tiles() -> Iterator[tuple[int, int]]:
     """(lat, lon) of the south-west corner of each tile named in the GLO-90 bucket list."""
     with urllib.request.urlopen(GLO90_TILE_LIST, timeout=DOWNLOAD_TIMEOUT_SECS) as response:
         lines = response.read().decode().splitlines()

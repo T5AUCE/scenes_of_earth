@@ -1,9 +1,15 @@
 """SQLite: boundaries (search), scene jobs and source revisions; one WAL connection per call."""
 import logging
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+
+SqlValue = str | int | float | None
+Record = dict[str, Any]  # one table row as column -> value
+BoundaryValues = tuple[SqlValue, ...]  # one boundaries row in INSERT_BOUNDARY column order
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS boundaries (
@@ -71,7 +77,7 @@ class Busy(Exception):
     """Too many queued or running scene jobs."""
 
 
-def init(path):
+def init(path: Path | str) -> None:
     """Create tables; jobs that were queued or running when the process died are marked failed."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with connect(path) as connection:
@@ -84,7 +90,12 @@ def init(path):
         )
 
 
-def search(path, query, level=None, limit=20):
+def search(
+    path: Path | str,
+    query: str,
+    level: str | None = None,
+    limit: int = 20,
+) -> list[Record]:
     # User text must match literally, so LIKE wildcards are escaped with '!'.
     query = query.replace("!", "!!").replace("%", "!%").replace("_", "!_")
     prefix_pattern, word_pattern = f"{query}%", f"% {query}%"
@@ -106,7 +117,7 @@ def search(path, query, level=None, limit=20):
         return [dict(row) for row in connection.execute(sql, arguments)]
 
 
-def get_boundary(path, boundary_id):
+def get_boundary(path: Path | str, boundary_id: str) -> Record | None:
     with connect(path) as connection:
         row = connection.execute(
             "SELECT * FROM boundaries WHERE id = ?",
@@ -115,7 +126,7 @@ def get_boundary(path, boundary_id):
     return dict(row) if row else None
 
 
-def add_boundaries(path, source, rows):
+def add_boundaries(path: Path | str, source: str, rows: list[BoundaryValues]) -> int:
     """Replace all boundaries of one source. rows: tuples in column order of INSERT_BOUNDARY."""
     replaced = len(rows) - len({row[0] for row in rows})
     if replaced:
@@ -130,7 +141,7 @@ def add_boundaries(path, source, rows):
     return replaced
 
 
-def has_boundaries_besides(path, source):
+def has_boundaries_besides(path: Path | str, source: str) -> bool:
     """Used to skip seeding if real boundaries exist from another source."""
     with connect(path) as connection:
         row = connection.execute(
@@ -140,13 +151,13 @@ def has_boundaries_besides(path, source):
     return row is not None
 
 
-def get_scene(path, scene_id):
+def get_scene(path: Path | str, scene_id: str) -> Record | None:
     with connect(path) as connection:
         row = _select_scene(connection, scene_id)
     return dict(row) if row else None
 
 
-def update_scene(path, scene_id, **fields):
+def update_scene(path: Path | str, scene_id: str, **fields: SqlValue) -> None:
     assignments = ", ".join(f"{column} = ?" for column in fields)
     with connect(path) as connection:
         connection.execute(
@@ -155,7 +166,13 @@ def update_scene(path, scene_id, **fields):
         )
 
 
-def submit(path, scene_id, request_json, bundle_exists, max_active=None):
+def submit(
+    path: Path | str,
+    scene_id: str,
+    request_json: str,
+    bundle_exists: bool,
+    max_active: int | None = None,
+) -> tuple[Record, bool]:
     """Register a scene job; `scene_id` is the content hash."""
     with connect(path) as connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -179,17 +196,17 @@ def submit(path, scene_id, request_json, bundle_exists, max_active=None):
     return dict(row), start
 
 
-def _select_scene(connection, scene_id):
+def _select_scene(connection: sqlite3.Connection, scene_id: str) -> sqlite3.Row | None:
     return connection.execute("SELECT * FROM scenes WHERE id = ?", (scene_id,)).fetchone()
 
 
-def _needs_build(row, bundle_exists):
+def _needs_build(row: sqlite3.Row | None, bundle_exists: bool) -> bool:
     if row is None or row["status"] == "failed":
         return True
     return row["status"] == "done" and not bundle_exists
 
 
-def _check_capacity(connection, max_active):
+def _check_capacity(connection: sqlite3.Connection, max_active: int | None) -> None:
     if max_active is None:
         return
 
@@ -200,7 +217,7 @@ def _check_capacity(connection, max_active):
         raise Busy()
 
 
-def get_revision(path, dataset_id, month):
+def get_revision(path: Path | str, dataset_id: str, month: str) -> tuple[str, float] | None:
     """(stored revision, seconds since the source was asked) or None."""
     with connect(path) as connection:
         row = connection.execute(
@@ -214,7 +231,7 @@ def get_revision(path, dataset_id, month):
     return row["revision"], age.total_seconds()
 
 
-def set_revision(path, dataset_id, month, revision):
+def set_revision(path: Path | str, dataset_id: str, month: str, revision: str) -> None:
     """Store the source's revision of a month and the time it was asked."""
     with connect(path) as connection:
         connection.execute(
@@ -225,7 +242,7 @@ def set_revision(path, dataset_id, month, revision):
 
 
 @contextmanager
-def connect(path):
+def connect(path: Path | str) -> Iterator[sqlite3.Connection]:
     # isolation_level=None is autocommit; submit() and add_boundaries() use explicit BEGIN.
     connection = sqlite3.connect(
         path,
@@ -242,5 +259,5 @@ def connect(path):
         connection.close()
 
 
-def now():
+def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")

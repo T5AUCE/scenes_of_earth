@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import warnings
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import date
@@ -10,12 +11,16 @@ from pathlib import Path
 
 import numpy as np
 import zarr
+from rasterio.transform import Affine
 from shapely.geometry import mapping
 from zarr.codecs import GzipCodec
 
 from . import __version__
-from .areas import AreaError, plan as make_plan
-from .bundle import make, validate
+from .areas import Area, AreaError, LayerPlan, Plan, plan as make_plan
+from .bundle import JsonObject, make, validate
+from .sources import Dataset, SeriesDataset, StaticDataset
+
+ProgressCallback = Callable[[float], None]  # receives the build fraction done, 0 to 1
 
 MAX_WORKERS = 8
 MEMORY_BUDGET_BYTES = 500_000_000
@@ -35,15 +40,15 @@ LATITUDE_DEGREE_M = 110_574
 
 
 def build_scene(
-    scene_id,
-    area,
-    start,
-    end,
-    datasets,
-    title,
-    scenes_dir,
-    progress=lambda _: None,
-):
+    scene_id: str,
+    area: Area,
+    start: str,
+    end: str,
+    datasets: list[Dataset],
+    title: str,
+    scenes_dir: Path | str,
+    progress: ProgressCallback = lambda _: None,
+) -> int:
     """Build or reuse the scene's bundle and return its size in bytes."""
     scenes_dir = Path(scenes_dir)
     final_dir = scenes_dir / scene_id
@@ -93,7 +98,7 @@ def build_scene(
 
 
 @contextmanager
-def _temporary_scene_directory(scenes_dir, scene_id):
+def _temporary_scene_directory(scenes_dir: Path | str, scene_id: str) -> Iterator[Path]:
     temp_dir = Path(scenes_dir) / ".tmp" / scene_id
 
     shutil.rmtree(temp_dir, ignore_errors=True)
@@ -105,7 +110,7 @@ def _temporary_scene_directory(scenes_dir, scene_id):
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def _publish_scene(temp_dir, final_dir, built_size):
+def _publish_scene(temp_dir: Path, final_dir: Path, built_size: int) -> int:
     if final_dir.is_dir():
         return _directory_size(final_dir)
 
@@ -121,13 +126,13 @@ def _publish_scene(temp_dir, final_dir, built_size):
 
 
 def _finalize_scene(
-    root,
-    temp_dir,
-    scene_document,
-    title,
-    area,
-    scene_plan,
-):
+    root: zarr.Group,
+    temp_dir: Path,
+    scene_document: JsonObject,
+    title: str,
+    area: Area,
+    scene_plan: Plan,
+) -> None:
     problems = validate(scene_document)
     if problems:
         raise RuntimeError(
@@ -167,7 +172,7 @@ def _finalize_scene(
     )
 
 
-def _directory_size(directory):
+def _directory_size(directory: Path | str) -> int:
     return sum(
         file_path.stat().st_size
         for file_path in Path(directory).rglob("*")
@@ -175,7 +180,12 @@ def _directory_size(directory):
     )
 
 
-def _write_layers(root, scene_plan, datasets, progress):
+def _write_layers(
+    root: zarr.Group,
+    scene_plan: Plan,
+    datasets: list[Dataset],
+    progress: ProgressCallback,
+) -> dict[str, JsonObject]:
     ordered_datasets = sorted(
         datasets,
         key=lambda dataset: dataset.time_varying,
@@ -187,25 +197,27 @@ def _write_layers(root, scene_plan, datasets, progress):
 
         _write_coordinates_and_mask(layer_group, layer_plan)
 
-        if dataset.time_varying:
+        if isinstance(dataset, SeriesDataset):
             metadata = _write_time_series(
                 layer_group,
                 dataset,
                 layer_plan,
                 progress,
             )
-        else:
+        elif isinstance(dataset, StaticDataset):
             metadata = _write_static_layer(
                 layer_group,
                 dataset,
                 layer_plan,
             )
+        else:
+            raise TypeError(f"{dataset.id}: unknown dataset kind {type(dataset).__name__}")
 
         layer_metadata[dataset.id] = metadata
     return layer_metadata
 
 
-def _write_coordinates_and_mask(layer_group, layer_plan):
+def _write_coordinates_and_mask(layer_group: zarr.Group, layer_plan: LayerPlan) -> None:
     """Write cell-centre coordinates and the area mask."""
     height, width = layer_plan.shape
     longitude, latitude = _coordinates(layer_plan.transform, height, width)
@@ -233,7 +245,11 @@ def _write_coordinates_and_mask(layer_group, layer_plan):
     )
 
 
-def _write_static_layer(layer_group, dataset, layer_plan):
+def _write_static_layer(
+    layer_group: zarr.Group,
+    dataset: StaticDataset,
+    layer_plan: LayerPlan,
+) -> JsonObject:
     """Write an elevation raster and its derived hillshade."""
     elevation, transform = dataset.read(
         layer_plan.bbox,
@@ -276,12 +292,12 @@ def _write_static_layer(layer_group, dataset, layer_plan):
 
 
 def hillshade(
-    elevation,
-    resolution_degrees,
-    latitude_top,
-    azimuth=315,
-    altitude=45,
-):
+    elevation: np.ndarray,
+    resolution_degrees: float,
+    latitude_top: float,
+    azimuth: float = 315,
+    altitude: float = 45,
+) -> np.ndarray:
     """Return uint8 hillshade (0-255) for a north-up grid with cells in degrees."""
     elevation = np.pad(
         elevation.astype("float64"),
@@ -346,7 +362,12 @@ def hillshade(
     ).astype("uint8")
 
 
-def _write_time_series(layer_group, dataset, layer_plan, progress):
+def _write_time_series(
+    layer_group: zarr.Group,
+    dataset: SeriesDataset,
+    layer_plan: LayerPlan,
+    progress: ProgressCallback,
+) -> JsonObject:
     """Write a time series in batches and return its display statistics."""
     steps = layer_plan.steps
     step_count = len(steps)
@@ -396,7 +417,7 @@ def _write_time_series(layer_group, dataset, layer_plan, progress):
     }
 
 
-def _write_time_coordinate(layer_group, steps):
+def _write_time_coordinate(layer_group: zarr.Group, steps: list[str]) -> None:
     """Write dates as integer days since the Unix epoch."""
     days_since_epoch = np.array(
         [
@@ -418,12 +439,12 @@ def _write_time_coordinate(layer_group, steps):
 
 
 def _write_array(
-    group,
-    name,
-    data,
-    dimensions,
-    attributes=None,
-):
+    group: zarr.Group,
+    name: str,
+    data: np.ndarray,
+    dimensions: list[str],
+    attributes: JsonObject | None = None,
+) -> zarr.Array:
     array = group.create_array(
         name,
         shape=data.shape,
@@ -438,14 +459,14 @@ def _write_array(
 
 
 def _create_time_array(
-    layer_group,
-    dataset,
-    layer_plan,
-    dtype,
-    scale,
-    offset,
-    fill_value,
-):
+    layer_group: zarr.Group,
+    dataset: Dataset,
+    layer_plan: LayerPlan,
+    dtype: str,
+    scale: float,
+    offset: float,
+    fill_value: int,
+) -> zarr.Array:
     """Create the chunked and sharded Zarr array for a time series."""
     step_count = len(layer_plan.steps)
     height, width = layer_plan.shape
@@ -475,7 +496,12 @@ def _create_time_array(
     )
 
 
-def _read_batch(executor, dataset, layer_plan, steps):
+def _read_batch(
+    executor: ThreadPoolExecutor,
+    dataset: SeriesDataset,
+    layer_plan: LayerPlan,
+    steps: list[str],
+) -> np.ndarray:
     rasters = executor.map(
         lambda step: dataset.read_step(
             step,
@@ -487,7 +513,7 @@ def _read_batch(executor, dataset, layer_plan, steps):
     return np.stack(list(rasters))
 
 
-def _choose_worker_count(layer_plan):
+def _choose_worker_count(layer_plan: LayerPlan) -> int:
     """Limit concurrent raster reads using the estimated memory budget."""
     height, width = layer_plan.shape
     estimated_bytes_per_step = (
@@ -509,7 +535,7 @@ def _choose_worker_count(layer_plan):
 class _StatisticsAccumulator:
     """Accumulate exact basic statistics and an approximate 98th percentile."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._random = np.random.default_rng(0)
         self._samples = []
         self._minimum = np.inf
@@ -517,7 +543,7 @@ class _StatisticsAccumulator:
         self._value_sum = 0.0
         self._value_count = 0
 
-    def add(self, raster_batch, area_mask):
+    def add(self, raster_batch: np.ndarray, area_mask: np.ndarray) -> None:
         """Accumulate valid values from one batch."""
         values = raster_batch[:, area_mask.astype(bool)]
         values = values[np.isfinite(values)]
@@ -539,7 +565,7 @@ class _StatisticsAccumulator:
             )
         )
 
-    def finish(self):
+    def finish(self) -> dict[str, float]:
         """Return rounded statistics or raise when no valid data exists."""
         if self._value_count == 0:
             raise AreaError("No valid data inside the area")
@@ -559,7 +585,7 @@ class _StatisticsAccumulator:
         }
 
 
-def _coordinates(transform, height, width):
+def _coordinates(transform: Affine, height: int, width: int) -> tuple[np.ndarray, np.ndarray]:
     """Return cell-centre longitude and latitude coordinates."""
     longitude = (
         transform.c
@@ -572,7 +598,13 @@ def _coordinates(transform, height, width):
     return longitude, latitude
 
 
-def encode_values(values, dtype, scale, offset, fill_value):
+def encode_values(
+    values: np.ndarray,
+    dtype: str,
+    scale: float,
+    offset: float,
+    fill_value: int,
+) -> np.ndarray:
     """Quantize floats to integers, using fill_value for NaN values."""
     quantized = np.rint(
         (values - offset) / scale

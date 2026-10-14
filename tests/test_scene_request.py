@@ -13,14 +13,20 @@ from soe.scene_request import (
     compute_scene_id,
     prepare_scene,
 )
-from soe.sources import RealSource, SourceUnavailable, SyntheticSource, make_registry
+from soe.sources import (
+    RealSource,
+    Registry,
+    SourceUnavailable,
+    SyntheticSource,
+    make_registry,
+)
 
 SQUARE = mapping(box(36.5, -1.5, 37.5, -0.5))
 PINNED_REVISION = "Tue, 01 Sep 2015 00:00:00 GMT"
 PINNED_SCENE_ID = "dbb1ffc5d99da2225a23"  # Computed before the revision refactor.
 
 
-def request_body(**overrides):
+def request_body(**overrides: object) -> str:
     return json.dumps({
         "area": {"type": "polygon", "geometry": SQUARE},
         "start": "2015-01",
@@ -124,7 +130,7 @@ def test_scene_id_is_unchanged_for_known_inputs():
 def test_synthetic_and_real_terrain_scenes_get_different_ids():
     terrain = ["glo90_terrain"]
 
-    def scene_id(registry):
+    def scene_id(registry: Registry) -> str:
         return compute_scene_id(
             "g",
             terrain,
