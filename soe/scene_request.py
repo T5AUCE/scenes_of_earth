@@ -216,7 +216,10 @@ def compute_scene_id(
     datasets: list[Dataset],
     revisions: dict[str, str | None],
 ) -> str:
-    """Content hash of the canonical request, dataset versions, revisions and generator."""
+    """Content hash of the canonical request, dataset versions, revisions and generator.
+
+    The terrain product (GLO-30 or GLO-90) follows from the area's size, so the geometry covers it.
+    """
     versions = {dataset.id: dataset.source.get("version") for dataset in datasets}
     synthetic = {dataset.id: isinstance(dataset.backend, SyntheticSource) for dataset in datasets}
     content = [geometry_id, layers, start, end, versions, revisions, synthetic, __version__]

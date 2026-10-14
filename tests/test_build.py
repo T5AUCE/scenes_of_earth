@@ -61,9 +61,30 @@ def test_hillshade_flat_and_slope():
     assert hillshade(west_facing, 0.01, 10.0)[4, 4] > hillshade(east_facing, 0.01, 10.0)[4, 4]
 
 
+def test_scene_over_a_glo30_gap_credits_the_glo90_fallback(tmp_path):
+    area = Area(box(42.8, 40.0, 43.2, 40.3), BOUNDARY)
+    registry = make_registry(SyntheticSource())
+    build_scene(HASH_A, area, "2015-01", "2015-02", [registry["copdem_terrain"]], "Test", tmp_path)
+
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    terrain = doc["layers"][0]
+
+    assert validate(doc) == []
+    assert terrain["source"]["name"] == SOURCES["glo30"]["name"]
+    assert terrain["fallback_sources"] == [SOURCES["glo90"]]
+    assert SOURCES["glo30"]["attribution"] in doc["credits"]["lines"]
+    assert SOURCES["glo90"]["attribution"] in doc["credits"]["lines"]
+    assert SOURCES["glo90"]["disclaimer"] in doc["credits"]["disclaimers"]
+    assert any("GLO-90" in note for note in doc["notices"]["limits"])
+
+    doc["credits"]["lines"].remove(SOURCES["glo90"]["attribution"])
+
+    assert any("attribution not in credits.lines" in problem for problem in validate(doc))
+
+
 def test_synthetic_build_across_180(tmp_path):
     registry = make_registry(SyntheticSource())
-    layers = [registry["glo90_terrain"], registry["chirps_monthly"]]
+    layers = [registry["copdem_terrain"], registry["chirps_monthly"]]
     build_scene(
         HASH_B,
         Area(FIJI, BOUNDARY),
@@ -82,12 +103,12 @@ def test_synthetic_build_across_180(tmp_path):
 
     root = zarr.open_group(out / "data.zarr", mode="r")
 
-    for name in ("chirps_monthly", "glo90_terrain"):
+    for name in ("chirps_monthly", "copdem_terrain"):
         lon = root[name]["lon"][:]
 
         assert np.all(np.diff(lon) > 0) and lon[-1] > 180
 
-    terrain = root["glo90_terrain"]
+    terrain = root["copdem_terrain"]
     bbox = doc["area"]["bbox"]
     west, east = bbox[0], bbox[2]
 
@@ -104,7 +125,7 @@ def test_synthetic_build_validates_and_opens(tmp_path):
     registry = make_registry(source)
     area = Area(NAIROBI, BOUNDARY)
     seen = []
-    layers = [registry["glo90_terrain"], registry["chirps_monthly"]]
+    layers = [registry["copdem_terrain"], registry["chirps_monthly"]]
     size = build_scene(HASH_A, area, "2015-01", "2016-12", layers, "Test", tmp_path, seen.append)
 
     assert size > 0 and seen[-1] == 1.0
@@ -114,7 +135,7 @@ def test_synthetic_build_validates_and_opens(tmp_path):
     doc = json.loads((out / "scene.json").read_text(encoding="utf-8"))
 
     assert validate(doc) == []
-    assert "Copernicus WorldDEM™-90" in doc["credits"]["lines"][0]
+    assert "Copernicus WorldDEM™-30" in doc["credits"]["lines"][0]
     assert doc["credits"]["disclaimers"]
 
     root = zarr.open_group(str(out / "data.zarr"), mode="r")
@@ -133,8 +154,8 @@ def test_synthetic_build_validates_and_opens(tmp_path):
     mask = root["chirps_monthly/mask"][...]
 
     assert (precip[0][mask == 1] != 65535).any()
-    assert root["glo90_terrain/hillshade"].dtype == "uint8"
-    assert root["glo90_terrain/elevation"].dtype == "int16"
+    assert root["copdem_terrain/hillshade"].dtype == "uint8"
+    assert root["copdem_terrain/elevation"].dtype == "int16"
 
     lat = root["chirps_monthly/lat"][...]
 
@@ -177,7 +198,7 @@ def test_layer_outside_its_coverage_is_refused_before_read(tmp_path):
     source = SyntheticSource()
     registry = make_registry(source)
     north = box(36, 40, 38, 45)
-    narrow = replace(registry["glo90_terrain"], coverage=(-180, -30, 180, 30))
+    narrow = replace(registry["copdem_terrain"], coverage=(-180, -30, 180, 30))
 
     with pytest.raises(AreaError, match="outside Terrain coverage"):
         build_scene(
@@ -195,9 +216,9 @@ def test_layer_outside_its_coverage_is_refused_before_read(tmp_path):
     # Half of this area is inside the terrain coverage.
     scene_plan = plan_months(Area(box(36, 28, 38, 33)), [narrow, registry["chirps_monthly"]])
 
-    assert any("clipped" in note for note in scene_plan.layers["glo90_terrain"].notices)
+    assert any("clipped" in note for note in scene_plan.layers["copdem_terrain"].notices)
     assert scene_plan.layers["chirps_monthly"].notices == []
-    assert scene_plan.clipped and scene_plan.layers["glo90_terrain"].bbox[3] <= 30
+    assert scene_plan.clipped and scene_plan.layers["copdem_terrain"].bbox[3] <= 30
 
 
 def test_failed_build_leaves_no_partial_bundle(tmp_path):
@@ -242,14 +263,14 @@ def test_rain_is_uint16_sharded_and_round_trips(tmp_path):
 
 def test_static_layer_has_no_time_and_one_chunk(tmp_path):
     doc, root = build_nairobi(tmp_path)
-    terrain = next(layer for layer in doc["layers"] if layer["id"] == "glo90_terrain")
+    terrain = next(layer for layer in doc["layers"] if layer["id"] == "copdem_terrain")
 
-    assert terrain["time"] is None and terrain["grid"]["res"] == pytest.approx(1 / 1200, abs=1e-8)
+    assert terrain["time"] is None and terrain["grid"]["res"] == pytest.approx(0.05 / 102, abs=1e-8)
     assert "aggregation" not in terrain["grid"]
     assert set(terrain["arrays"]) == {"elevation", "hillshade"}
-    assert "time" not in dict(root["glo90_terrain"].members())
-    assert root["glo90_terrain/elevation"].chunks == (1200, 1200)
-    assert root["glo90_terrain/hillshade"].shards is None
+    assert "time" not in dict(root["copdem_terrain"].members())
+    assert root["copdem_terrain/elevation"].chunks == (2040, 2040)
+    assert root["copdem_terrain/hillshade"].shards is None
 
 
 def test_store_has_consolidated_metadata(tmp_path):
@@ -257,7 +278,7 @@ def test_store_has_consolidated_metadata(tmp_path):
 
     root_json = json.loads((tmp_path / HASH_A / "data.zarr" / "zarr.json").read_text())
     meta = root_json["consolidated_metadata"]["metadata"]
-    expected = {"chirps_monthly/precip", "chirps_monthly/mask", "glo90_terrain/elevation"}
+    expected = {"chirps_monthly/precip", "chirps_monthly/mask", "copdem_terrain/elevation"}
 
     assert expected <= meta.keys()
 

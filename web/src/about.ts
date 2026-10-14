@@ -33,9 +33,9 @@ const SMOOTHING_LINES = [
     + "and then smoothly interpolated, so they are close to the real relief but not exact at "
     + "very fine scale; zooming in recomputes them in finer blocks.",
   "The values in the files are the cell values of the stored grid, never the smoothed picture; "
-    + "terrain may be stored in coarser cells than its 90 m source. Area averages use the raw "
-    + "cells whose centre lies inside the outline. For a very small area with no cell centre "
-    + "inside, every cell it touches is used and a notice says so.",
+    + "terrain may be stored in coarser cells than its 30 m or 90 m source. Area averages use "
+    + "the raw cells whose centre lies inside the outline. For a very small area with no cell "
+    + "centre inside, every cell it touches is used and a notice says so.",
 ];
 
 /** One line on the scene: area, period and layer count. */

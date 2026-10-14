@@ -12,24 +12,27 @@ import numpy as np
 from . import db
 from .boundary_import import import_cgaz, import_ucdb
 from .sources import (
-    GLO90_TILE_INDEX,
+    TERRAIN_PRODUCTS,
     TILE_COL_OFFSET_DEG,
     TILE_GRID_SHAPE,
     TILE_ROW_OFFSET_DEG,
 )
 
-GLO90_TILE_LIST = "https://copernicus-dem-90m.s3.amazonaws.com/tileList.txt"
-GLO90_TILE_PATTERN = r"Copernicus_DSM_COG_30_([NS])(\d+)_00_([EW])(\d+)_00_DEM"
+TILE_LIST_URLS = {
+    "glo30": "https://copernicus-dem-30m.s3.amazonaws.com/tileList.txt",
+    "glo90": "https://copernicus-dem-90m.s3.amazonaws.com/tileList.txt",
+}
 DOWNLOAD_TIMEOUT_SECS = 60
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Run the `glo90-index` or `import-boundaries` command given in `argv`."""
+    """Run the `terrain-index` or `import-boundaries` command given in `argv`."""
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    if args.command == "glo90-index":
-        print("GLO-90 tiles:", build_glo90_index(GLO90_TILE_INDEX))
+    if args.command == "terrain-index":
+        for product, terrain_product in TERRAIN_PRODUCTS.items():
+            print(f"{product} tiles:", build_tile_index(product, terrain_product.index))
         return
 
     if not (args.cgaz or args.ucdb):
@@ -54,26 +57,28 @@ def _build_parser() -> argparse.ArgumentParser:
     import_parser.add_argument("--ucdb", help="GHS UCDB R2024A GeoPackage or zip")
     import_parser.add_argument("--db", default=os.environ.get("SOE_DB", "./data/soe.db"))
     subparsers.add_parser(
-        "glo90-index",
-        help="rebuild soe/data/glo90_tiles.bin from the GLO-90 tile list (downloads 1 MB)",
+        "terrain-index",
+        help="rebuild the GLO-30 and GLO-90 tile bitmaps in soe/data (downloads 2 MB)",
     )
     return parser
 
 
-def build_glo90_index(path: Path | str) -> int:
-    """Write the bitmap of GLO-90 tiles that exist (GLO90_TILE_INDEX) from the bucket list."""
+def build_tile_index(product: str, path: Path | str) -> int:
+    """Write the bitmap of the product's existing tiles (TERRAIN_PRODUCTS index) from its list."""
     exists = np.zeros(TILE_GRID_SHAPE, bool)
-    for lat, lon in _listed_tiles():
+    for lat, lon in _listed_tiles(product):
         exists[lat + TILE_ROW_OFFSET_DEG, lon + TILE_COL_OFFSET_DEG] = True
     Path(path).write_bytes(np.packbits(exists).tobytes())
     return int(exists.sum())
 
 
-def _listed_tiles() -> Iterator[tuple[int, int]]:
-    """(lat, lon) of the south-west corner of each tile named in the GLO-90 bucket list."""
-    with urllib.request.urlopen(GLO90_TILE_LIST, timeout=DOWNLOAD_TIMEOUT_SECS) as response:
+def _listed_tiles(product: str) -> Iterator[tuple[int, int]]:
+    """(lat, lon) of the south-west corner of each tile named in the product's bucket list."""
+    with urllib.request.urlopen(TILE_LIST_URLS[product], timeout=DOWNLOAD_TIMEOUT_SECS) as response:
         lines = response.read().decode().splitlines()
-    matches = (re.match(GLO90_TILE_PATTERN, line) for line in lines)
+    tile_code = TERRAIN_PRODUCTS[product].tile_code
+    pattern = rf"Copernicus_DSM_COG_{tile_code}_([NS])(\d+)_00_([EW])(\d+)_00_DEM"
+    matches = (re.match(pattern, line) for line in lines)
     for match in filter(None, matches):
         north_or_south, lat_digits, east_or_west, lon_digits = match.groups()
         lat = int(lat_digits) if north_or_south == "N" else -int(lat_digits)

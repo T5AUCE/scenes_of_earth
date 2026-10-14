@@ -37,7 +37,7 @@ and the default set),
 `GET /api/areas/search?q=&level=&limit=`, `GET /api/areas/{id}`, `POST /api/scenes`,
 `GET /api/scenes/{id}`, and the static files under `/scenes/{id}/`. `POST /api/scenes` takes
 `{"area": {"type": "boundary", "id": ...} | {"type": "polygon", "geometry": GeoJSON}, "start": "YYYY-MM",
-"end": "YYYY-MM", "layers": ["chirps_monthly", "glo90_terrain"], "title": ...}` and returns 202 (queued or running),
+"end": "YYYY-MM", "layers": ["chirps_monthly", "copdem_terrain"], "title": ...}` and returns 202 (queued or running),
 200 (already built), 422 (refused, with a reason), 413, or 503 (queue full or data server unreachable; `Retry-After`).
 
 With `SOE_SYNTHETIC=1`, five sample areas (Kenya, Fiji, Nairobi, Cusco, Burkina Faso) are
@@ -63,11 +63,12 @@ The import is large (several hundred MB of input). CGAZ draws disputed borders t
 
 ## Terrain tile index
 
-`soe/data/glo90_tiles.bin` lists which GLO-90 tiles exist (ocean tiles do not), so planning stays offline.
-Rebuild it only if the bucket's tile list changes:
+`soe/data/glo30_tiles.bin` and `soe/data/glo90_tiles.bin` list which GLO-30 and GLO-90 tiles exist (ocean tiles do
+not), so planning stays offline. GLO-30 lacks 25 tiles in the Caucasus (N38-41, E043-050); GLO-90 fills them.
+Rebuild them only if a bucket's tile list changes:
 
 ```
-python -m soe.cli glo90-index
+python -m soe.cli terrain-index
 ```
 
 ## Area contract notes
@@ -84,8 +85,10 @@ python -m soe.cli glo90-index
   time-varying layers together at 100M. Terrain is planned first; all time-varying layers then share one aggregation factor.
 - In v1 every layer is anchored to the 60S-60N grid of 0.05 degree cells that starts at 180W. `area.geojson` is the area
   clipped to the coverage of all selected layers, so one layer's mask can reach slightly beyond the outline.
-- Large areas get coarser terrain (cell size 0.05/k degrees, about 4.2 Mpx at most) and a notice
-  "Terrain resampled to N m cells (source 90 m)." Terrain is refused above 2500 existing source tiles.
+- Terrain cells are 0.05/k degrees (k up to 180, about 4.2 Mpx at most). Cells finer than 90 m are read from GLO-30 (with
+  average resampling), others from GLO-90; tiles GLO-30 lacks come from GLO-90 as `layers[].fallback_sources`. Coarser
+  cells than the source give the notice "Terrain resampled to N m cells (source 30 m)." Terrain is refused above 2500
+  existing source tiles.
 
 ## Environment variables
 
@@ -107,10 +110,6 @@ pytest
 
 All tests run offline with synthetic data.
 
-## Code style
-
-See [STYLE.md](STYLE.md).
-
 ## Data sources, licences and attribution
 
 Every bundle carries these in `scene.json` (`layers[].source`, `area.boundary`, `credits`) and in the Zarr root attributes.
@@ -119,11 +118,13 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
 - **Rain: CHIRPS v3** (Climate Hazards Center, UC Santa Barbara), CC BY 4.0. Funk, C. et al. (2026) The Climate Hazards
   Center Infrared Precipitation with Stations, Version 3. Scientific Data 13, 718, doi:10.1038/s41597-026-07096-4;
   dataset doi:10.15780/G2JQ0P. https://www.chc.ucsb.edu/data/chirps3
-- **Terrain: Copernicus DEM GLO-90** (Copernicus WorldDEM-90 licence, "Full, Free & Open"). Hillshade and resampled
-  elevation are adapted data, so the notice is required: "produced using Copernicus WorldDEM™-90 © DLR e.V.
+- **Terrain: Copernicus DEM GLO-30 Public and GLO-90** (Copernicus WorldDEM-30 / -90 licences, free and open; GLO-90 is
+  the fallback where GLO-30 has no tile). Hillshade and resampled elevation are adapted data, so the notice is
+  required: "produced using Copernicus WorldDEM™-90 © DLR e.V.
   2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all
-  rights reserved". Art. 6(c) disclaimer: "The organisations in charge of the Copernicus programme by law or by
-  delegation do not incur any liability for any use of the Copernicus WorldDEM™-90". Citation: doi:10.5270/ESA-c5d3d65.
+  rights reserved" (with "-30" for GLO-30). Art. 6(c) disclaimer: "The organisations in charge of the Copernicus
+  programme by law or by delegation do not incur any liability for any use of the Copernicus WorldDEM™-90" (likewise
+  "-30"). Citation: doi:10.5270/ESA-c5d3d65.
   Subsequent users of a bundle receive the same obligations. The same text is in `soe/sources.py`.
 - **Boundaries: geoBoundaries CGAZ**, CC BY 4.0. Runfola, D. et al. (2020) geoBoundaries: A global database of political
   administrative boundaries. PLoS ONE 15(4): e0231866. https://www.geoboundaries.org. Simplified to 0.01 degrees and

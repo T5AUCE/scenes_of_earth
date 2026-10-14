@@ -36,7 +36,12 @@ export function formatCellSize(resolutionDegrees: number) {
 
 /** One entry per source that the bundle credits: each layer, then the area boundary. */
 export function creditEntries(scene: Scene): CreditEntry[] {
-  const layerEntries = scene.layers.map((layer) => ({ ...layer.source, isBoundary: false }));
+  const layerEntries = scene.layers.flatMap((layer) =>
+    [layer.source, ...(layer.fallback_sources ?? [])].map((source) => ({
+      ...source,
+      isBoundary: false,
+    })),
+  );
 
   const { boundary } = scene.area;
   if (!boundary) return layerEntries;

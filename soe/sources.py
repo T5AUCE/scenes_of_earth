@@ -1,4 +1,4 @@
-"""Data sources: CHIRPS rain, Copernicus GLO-90 terrain, a synthetic stand-in, and licence text.
+"""Data sources: CHIRPS rain, Copernicus GLO-30/90 terrain, a synthetic stand-in, licence text.
 
 Rain grid: global CHIRPS 0.05 degree grid, row 0 is the north edge (60N).
 Windows are integer (col, row, width, height) cell windows on that grid, so reads are never
@@ -21,6 +21,7 @@ from typing import ClassVar
 
 import numpy as np
 import rasterio
+from rasterio.enums import Resampling
 from rasterio.errors import RasterioIOError
 from rasterio.io import DatasetReader
 from rasterio.merge import merge
@@ -42,15 +43,17 @@ CELLS_PER_DEG2_AT_CHIRPS_RES = 400  # (1 / 0.05) ** 2
 FIRST_MONTH = "1981-01"
 WORLD_WIDTH_DEG = 360
 
-NATIVE_TERRAIN_RES_DEG = 1 / 1200
+GLO30_RES_DEG = 1 / 3600
+GLO90_RES_DEG = 1 / 1200
 NATIVE_RES_TOLERANCE = 1e-9  # relative; coarser than this counts as resampled
 LONGITUDE_DEGREE_AT_EQUATOR_M = 111_320  # for the notice's approximate cell size
 TERRAIN_BUDGET_PX = 2048 * 2048
 MAX_TERRAIN_SIDE_PX = 4096
-MAX_TERRAIN_DIVISIONS = 60  # 0.05 / 60 is the native 90 m cell
+MAX_TERRAIN_DIVISIONS = 180  # 0.05 / 180 is the native 30 m cell
 BLOCK_DEG = 2  # terrain is read in blocks of this many whole degrees
 TERRAIN_THREADS = 32
 
+GLO30_TILE_INDEX = Path(__file__).parent / "data" / "glo30_tiles.bin"
 GLO90_TILE_INDEX = Path(__file__).parent / "data" / "glo90_tiles.bin"
 TILE_GRID_SHAPE = (180, 360)
 TILE_ROW_OFFSET_DEG = 90  # tile index row = lat + 90
@@ -70,12 +73,31 @@ CHIRPS_URL = (
     "https://data.chc.ucsb.edu/products/CHIRPS/v3.0/monthly/global/cogs/"
     "chirps-v3.0.{ym}.cog"
 )
+GLO30_URL = "https://copernicus-dem-30m.s3.amazonaws.com/{n}/{n}.tif"
 GLO90_URL = "https://copernicus-dem-90m.s3.amazonaws.com/{n}/{n}.tif"
 GDAL_OPTS = {
     "GDAL_HTTP_MAX_RETRY": "5",
     "GDAL_HTTP_RETRY_DELAY": "1",
     "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
     "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".cog,.tif",
+}
+
+
+@dataclass(frozen=True)
+class TerrainProduct:
+    """One Copernicus DEM product: where its tiles are and how they are named."""
+
+    url: str  # tile URL template with {n} for the tile name
+    index: Path  # bitmap of the tiles that exist
+    tile_code: str  # the number in the tile name that tells the products apart
+    res_deg: float  # native cell size
+    cell_m: int  # native cell size in metres, for notices
+
+
+# Finest first: this is also the order of a mixed scene's sources.
+TERRAIN_PRODUCTS = {
+    "glo30": TerrainProduct(GLO30_URL, GLO30_TILE_INDEX, "10", GLO30_RES_DEG, 30),
+    "glo90": TerrainProduct(GLO90_URL, GLO90_TILE_INDEX, "30", GLO90_RES_DEG, 90),
 }
 
 # Licence and attribution text, copied into every bundle (see bundle.py).
@@ -95,6 +117,27 @@ SOURCES = {
             "negative fill values masked; block-mean aggregation when stated in the layer "
             "resolution"
         ),
+    },
+    "glo30": {
+        "name": "Copernicus DEM GLO-30 Public",
+        "version": "2021",
+        "licence": "Copernicus WorldDEM™-30 licence (COP-DEM-GLO-30, Free & Open, Public)",
+        "licence_url": (
+            "https://dataspace.copernicus.eu/explore-data/data-collections/"
+            "copernicus-contributing-missions/collections-description/COP-DEM"
+        ),
+        "attribution": (
+            "produced using Copernicus WorldDEM™-30 © DLR e.V. 2010-2014 and "
+            "© Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS "
+            "by the European Union and ESA; all rights reserved"
+        ),
+        "disclaimer": (
+            "The organisations in charge of the Copernicus programme by law or by "
+            "delegation do not incur any liability for any use of the Copernicus "
+            "WorldDEM™-30"
+        ),
+        "citation": "doi:10.5270/ESA-c5d3d65",
+        "modified": "hillshade (Horn, az 315°, alt 45°) and resampled elevation",
     },
     "glo90": {
         "name": "Copernicus DEM GLO-90",
@@ -160,15 +203,20 @@ def _next_month(year: int, month: int) -> tuple[int, int]:
     return (year + 1, 1) if month == 12 else (year, month + 1)
 
 
-def glo90_tiles(bounds: Bbox) -> list[str]:
-    """Names of the existing GLO-90 tiles covering bounds (W, S, E, N).
+def terrain_product(res: float) -> str:
+    """'glo30' for cells finer than the 90 m of GLO-90, else 'glo90'."""
+    return "glo30" if res < GLO90_RES_DEG * (1 - NATIVE_RES_TOLERANCE) else "glo90"
 
-    Tiles are 1 degree and named by their south-west corner. Longitudes above 180 wrap, so bounds
-    may cross the antimeridian.
+
+def terrain_tiles(bounds: Bbox, product: str) -> list[tuple[str, str]]:
+    """(product, name) of the existing tiles covering bounds (W, S, E, N).
+
+    Tiles are 1 degree and named by their south-west corner. A cell that GLO-30 does not publish
+    is taken from GLO-90. Longitudes above 180 wrap, so bounds may cross the antimeridian.
     """
     west, south, east, north = bounds
-    tile_exists = _tile_index()
-    names = []
+    candidates = list(dict.fromkeys([product, "glo90"]))
+    tiles = []
     first_lat = max(math.floor(south + TILE_EDGE_TOLERANCE_DEG), -TILE_ROW_OFFSET_DEG)
     last_lat = min(math.ceil(north - TILE_EDGE_TOLERANCE_DEG), TILE_ROW_OFFSET_DEG)
     for lat in range(first_lat, last_lat):
@@ -176,23 +224,29 @@ def glo90_tiles(bounds: Bbox) -> list[str]:
             math.floor(west + TILE_EDGE_TOLERANCE_DEG), math.ceil(east - TILE_EDGE_TOLERANCE_DEG)
         ):
             lon = (lon + TILE_COL_OFFSET_DEG) % WORLD_WIDTH_DEG - TILE_COL_OFFSET_DEG
-            if tile_exists[lat + TILE_ROW_OFFSET_DEG, lon + TILE_COL_OFFSET_DEG]:
-                north_south = "N" if lat >= 0 else "S"
-                east_west = "E" if lon >= 0 else "W"
-                names.append(
-                    f"Copernicus_DSM_COG_30_{north_south}{abs(lat):02d}"
-                    f"_00_{east_west}{abs(lon):03d}_00_DEM"
-                )
-    return names
+            for candidate in candidates:
+                if _tile_index(candidate)[lat + TILE_ROW_OFFSET_DEG, lon + TILE_COL_OFFSET_DEG]:
+                    tiles.append((candidate, _tile_name(candidate, lat, lon)))
+                    break
+    return tiles
+
+
+def _tile_name(product: str, lat: int, lon: int) -> str:
+    north_south = "N" if lat >= 0 else "S"
+    east_west = "E" if lon >= 0 else "W"
+    return (
+        f"Copernicus_DSM_COG_{TERRAIN_PRODUCTS[product].tile_code}_{north_south}{abs(lat):02d}"
+        f"_00_{east_west}{abs(lon):03d}_00_DEM"
+    )
 
 
 @lru_cache
-def _tile_index() -> np.ndarray:
-    """180 x 360 bool grid of the tiles that exist in the GLO-90 bucket.
+def _tile_index(product: str) -> np.ndarray:
+    """180 x 360 bool grid of the tiles that exist in the product's bucket.
 
     The row is lat + 90 and the column is lon + 180.
     """
-    packed = np.frombuffer(GLO90_TILE_INDEX.read_bytes(), "uint8")
+    packed = np.frombuffer(TERRAIN_PRODUCTS[product].index.read_bytes(), "uint8")
     return np.unpackbits(packed).reshape(TILE_GRID_SHAPE).astype(bool)
 
 
@@ -213,7 +267,7 @@ def terrain_res(bounds: Bbox) -> float:
 def with_margin(bounds: Bbox, res: float) -> Bbox:
     """Bounds grown by one pixel.
 
-    GLO-90 tiles are half a pixel off-grid, so the margin is cropped after merging.
+    Copernicus tiles are half a pixel off-grid, so the margin is cropped after merging.
     """
     west, south, east, north = bounds
     return (west - res, south - res, east + res, north + res)
@@ -259,7 +313,7 @@ class SourceUnavailable(RuntimeError):
 
 
 class RealSource:
-    """CHIRPS COGs and GLO-90 tiles over HTTP."""
+    """CHIRPS COGs and GLO-30 / GLO-90 tiles over HTTP."""
 
     def __init__(self, latest: str | None = None) -> None:
         # An optional fixed 'YYYY-MM' (SOE_LATEST); otherwise the latest month is probed and cached.
@@ -348,17 +402,24 @@ class RealSource:
             west, east = west - WORLD_WIDTH_DEG, east - WORLD_WIDTH_DEG
 
         padded_bounds = with_margin((west, south, east, north), res)
-        names = glo90_tiles(padded_bounds)
+        product = terrain_product(res)
+        names = terrain_tiles(padded_bounds, product)
         if not names:
             return None
 
+        # Nearest would decimate GLO-30 where the cells are coarser than 30 m.
+        resampling = Resampling.average if product == "glo30" else Resampling.nearest
+        urls = [TERRAIN_PRODUCTS[tile_product].url.format(n=name) for tile_product, name in names]
         with ExitStack() as open_tiles:
-            tiles = [
-                open_tiles.enter_context(_open_tile(GLO90_URL.format(n=name)))
-                for name in names
-            ]
+            tiles = [open_tiles.enter_context(_open_tile(url)) for url in urls]
             with rasterio.Env(**GDAL_OPTS):
-                merged, _ = merge(tiles, bounds=padded_bounds, res=res, nodata=0)
+                merged, _ = merge(
+                    tiles,
+                    bounds=padded_bounds,
+                    res=res,
+                    nodata=0,
+                    resampling=resampling,
+                )
 
         elevation = _crop_margin(merged[0], bounds, res)
         if east == 180:
@@ -396,7 +457,7 @@ def _crop_margin(merged: np.ndarray, bounds: Bbox, res: float) -> np.ndarray:
 
 
 def _open_tile(url: str) -> DatasetReader:
-    """Open one GLO-90 tile, retrying a few times because the bucket drops connections."""
+    """Open one terrain tile, retrying a few times because the bucket drops connections."""
     for attempt in range(1, TILE_OPEN_ATTEMPTS + 1):
         try:
             with rasterio.Env(**GDAL_OPTS):
@@ -505,9 +566,13 @@ class Dataset(ABC):
         """Colour-scale range of a series layer, from the stats of its values."""
         return [stats["min"], stats["p98"]]
 
-    def notice(self, bbox: Bbox) -> str | None:
-        """A limits notice for a read of bbox, or None."""
-        return None
+    def sources_for(self, bbox: Bbox) -> list[dict]:
+        """The sources a read of bbox uses, the main one first."""
+        return [self.source]
+
+    def notices(self, bbox: Bbox) -> list[str]:
+        """Limits notices for a read of bbox."""
+        return []
 
 
 class StaticDataset(Dataset):
@@ -582,20 +647,40 @@ class RainDataset(SeriesDataset):
 
 
 class TerrainDataset(StaticDataset):
-    """Copernicus GLO-90 elevation, read at a resolution that depends on the area size."""
+    """Copernicus GLO-30 or GLO-90 elevation, read at a resolution that depends on the area size."""
 
     def tile_count(self, bbox: Bbox) -> int:
-        return len(glo90_tiles(with_margin(bbox, terrain_res(bbox))))
+        return len(self._tiles(bbox))
 
     def res_for(self, bbox: Bbox) -> float:
         return terrain_res(bbox)
 
-    def notice(self, bbox: Bbox) -> str | None:
+    def sources_for(self, bbox: Bbox) -> list[dict]:
+        used = {product for product, _ in self._tiles(bbox)}
+        products = [product for product in TERRAIN_PRODUCTS if product in used]
+        return [SOURCES[product] for product in products or [terrain_product(terrain_res(bbox))]]
+
+    def notices(self, bbox: Bbox) -> list[str]:
         res = terrain_res(bbox)
-        if res > NATIVE_TERRAIN_RES_DEG * (1 + NATIVE_RES_TOLERANCE):
+        product = terrain_product(res)
+        native = TERRAIN_PRODUCTS[product]
+        notices = []
+        if res > native.res_deg * (1 + NATIVE_RES_TOLERANCE):
             cell_size_m = round(res * LONGITUDE_DEGREE_AT_EQUATOR_M)
-            return f"Terrain resampled to {cell_size_m} m cells (source 90 m)."
-        return None
+            notices.append(
+                f"Terrain resampled to {cell_size_m} m cells (source {native.cell_m} m)."
+            )
+
+        has_fallback = any(tile_product != product for tile_product, _ in self._tiles(bbox))
+        if has_fallback:
+            fallback = TERRAIN_PRODUCTS["glo90"]
+            notices.append(
+                f"Terrain uses {fallback.cell_m} m Copernicus GLO-90 where GLO-30 is not public."
+            )
+        return notices
+
+    def _tiles(self, bbox: Bbox) -> list[tuple[str, str]]:
+        return terrain_tiles(bbox, terrain_product(terrain_res(bbox)))
 
     def read(self, bbox: Bbox, res: float) -> tuple[np.ndarray, Affine]:
         """Elevation over bbox at cell size `res`: (int16 array, transform)."""
@@ -618,12 +703,12 @@ def make_registry(backend: RealSource | SyntheticSource) -> Registry:
             long_name="Monthly precipitation",
             step="P1M",
         ),
-        "glo90_terrain": TerrainDataset(
-            id="glo90_terrain",
+        "copdem_terrain": TerrainDataset(
+            id="copdem_terrain",
             title="Terrain",
             units="m",
-            resolution_deg=NATIVE_TERRAIN_RES_DEG,
-            source=SOURCES["glo90"],
+            resolution_deg=GLO30_RES_DEG,
+            source=SOURCES["glo30"],
             arrays={"elevation": "elevation", "hillshade": "hillshade"},
             encoding={"elevation": ("int16", 1, 0, None), "hillshade": ("uint8", 1, 0, None)},
             style={"kind": "terrain", "hillshade": {"azimuth": 315, "altitude": 45}},

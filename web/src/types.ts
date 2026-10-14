@@ -105,6 +105,7 @@ export interface LayerDoc {
   title: string;
   units: string;
   source: CreditDoc;
+  fallback_sources?: CreditDoc[]; // sources of tiles the main one lacks
   style: {
     kind: string;
     colormap?: string;

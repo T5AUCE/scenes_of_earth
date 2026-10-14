@@ -7,6 +7,7 @@ import pytest
 
 from soe import sources
 from soe.sources import (
+    SOURCES,
     Dataset,
     RealSource,
     SeriesDataset,
@@ -14,11 +15,12 @@ from soe.sources import (
     SyntheticSource,
     _tile_index,
     block_mean,
-    glo90_tiles,
     make_registry,
     month_list,
     terrain_by_blocks,
+    terrain_product,
     terrain_res,
+    terrain_tiles,
 )
 from tests.helpers import RAIN, TERRAIN
 
@@ -39,7 +41,8 @@ def test_block_mean_is_nan_aware():
 
 
 def test_terrain_res_budget():
-    assert terrain_res((36.5, -1.5, 37.5, -0.5)) == pytest.approx(1 / 1200)
+    assert terrain_res((36.5, -1.5, 37.5, -0.5)) == pytest.approx(0.05 / 102)
+    assert terrain_res((36.5, -1.5, 36.8, -1.2)) == pytest.approx(1 / 3600)
     assert terrain_res((33, -4, 42, 6)) == pytest.approx(0.005)
     assert terrain_res((-70, -30, -30, 10)) == pytest.approx(0.025)
     assert terrain_res((19, 41, 191, 60)) == pytest.approx(0.05)
@@ -55,14 +58,58 @@ def test_terrain_res_budget():
 
 
 def test_tile_index():
-    assert _tile_index().sum() == 26475
-    assert glo90_tiles((6, 0, 7, 1)) == ["Copernicus_DSM_COG_30_N00_00_E006_00_DEM"]
-    assert glo90_tiles((-130, -10, -120, 0)) == []  # mid-Pacific
-    assert TERRAIN.tile_count([-130, -10, -120, 0]) == 0
-    assert glo90_tiles((179, -18, 181, -17)) == [
-        "Copernicus_DSM_COG_30_S18_00_E179_00_DEM",
-        "Copernicus_DSM_COG_30_S18_00_W180_00_DEM",
+    assert _tile_index("glo90").sum() == 26475
+    assert _tile_index("glo30").sum() == 26450
+    assert terrain_tiles((6, 0, 7, 1), "glo30") == [
+        ("glo30", "Copernicus_DSM_COG_10_N00_00_E006_00_DEM"),
     ]
+    assert terrain_tiles((6, 0, 7, 1), "glo90") == [
+        ("glo90", "Copernicus_DSM_COG_30_N00_00_E006_00_DEM"),
+    ]
+    assert terrain_tiles((-130, -10, -120, 0), "glo30") == []  # mid-Pacific
+    assert TERRAIN.tile_count([-130, -10, -120, 0]) == 0
+    assert terrain_tiles((179, -18, 181, -17), "glo30") == [
+        ("glo30", "Copernicus_DSM_COG_10_S18_00_E179_00_DEM"),
+        ("glo30", "Copernicus_DSM_COG_10_S18_00_W180_00_DEM"),
+    ]
+
+
+def test_terrain_product_is_glo30_only_for_cells_finer_than_90_m():
+    assert terrain_product(1 / 1200) == "glo90"
+    assert terrain_product(0.05 / 61) == "glo30"
+    assert terrain_product(1 / 3600) == "glo30"
+
+
+def test_glo30_gap_in_the_caucasus_falls_back_to_glo90():
+    assert terrain_tiles((44, 40, 45, 41), "glo30") == [
+        ("glo90", "Copernicus_DSM_COG_30_N40_00_E044_00_DEM"),
+    ]
+
+
+def test_terrain_sources_name_the_products_a_read_uses():
+    kenya = [36.5, -1.5, 36.8, -1.2]
+    gap_edge = [42.8, 40.0, 43.2, 40.3]
+    wide = [43, 38, 46, 41]
+
+    assert TERRAIN.sources_for(kenya) == [SOURCES["glo30"]]
+    assert TERRAIN.sources_for(gap_edge) == [SOURCES["glo30"], SOURCES["glo90"]]
+    assert TERRAIN.sources_for(wide) == [SOURCES["glo90"]]
+
+
+def test_terrain_notices_name_the_source_cell_size_and_the_fallback():
+    kenya = [36.5, -1.5, 37.5, -0.5]
+    gap_edge = [42.8, 40.0, 43.2, 40.3]
+
+    assert TERRAIN.notices(kenya) == ["Terrain resampled to 55 m cells (source 30 m)."]
+    assert not any("GLO-90" in note for note in TERRAIN.notices(kenya))
+    assert any("90 m Copernicus GLO-90" in note for note in TERRAIN.notices(gap_edge))
+
+
+def test_box_ending_on_a_tile_edge_gets_no_fallback_credit():
+    edge = [42.8, 40.0, 43.0, 40.2]
+
+    assert TERRAIN.sources_for(edge) == [SOURCES["glo30"]]
+    assert not any("GLO-90" in note for note in TERRAIN.notices(edge))
 
 
 def test_terrain_blocks_equal_one_read():

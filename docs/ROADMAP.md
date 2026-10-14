@@ -28,7 +28,7 @@ stays cheap and simple. Each feature is checked for extensibility before users g
    `bundle_url`, apply scale/offset; every layer can be turned on and off.
 2. **Contract generalisation (M3 remainder):** each layer has its own mask, grid and time axis
    (monthly rain, 16-day NDVI, 5-year population; static layers have none). Check that rasters
-   past 180°E draw in the next world copy.
+   past 180°E draw in the next world copy. Monthly series also get yearly totals or means.
 3. **Scene view B:** app UI moves to React (MapLibre stays outside React's control). A panel at
    the bottom right, under the legend, expands to full screen with Charts and About tabs. Charts:
    area-mean rain and climatology, hypsometry; per-step area means in `scene.json`.
@@ -61,6 +61,9 @@ A toolbar with three tools; Esc returns to Pointer.
 
 ### Data
 
-- Keep GLO-90 for terrain. Height tint maybe later.
-- TerraClimate (CC0, no login) may replace ERA5-Land; population and vegetation over time.
+- GLO-30 terrain under 90 m cells, GLO-90 otherwise. Height tint maybe later.
+- More data layers come first: TerraClimate (monthly, CC0, no login: temperature, wind, drought)
+  may replace ERA5-Land; population and vegetation over time.
+- Daily data (CHIRPS daily, other daily layers) once there is funding: it needs global cubes on
+  R2 and adds about $2–5 a month per daily layer at 10k scenes.
 - Latitudes beyond 60°.

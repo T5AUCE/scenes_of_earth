@@ -27,7 +27,7 @@ def body(**overrides: object) -> JsonObject:
         "area": {"type": "polygon", "geometry": SQUARE},
         "start": "2015-01",
         "end": "2015-06",
-        "layers": ["glo90_terrain", "chirps_monthly"],
+        "layers": ["copdem_terrain", "chirps_monthly"],
         **overrides,
     }
 
@@ -112,7 +112,7 @@ def test_post_poll_and_serve(env):
 
     scene = client.get(done["bundle_url"]).json()
     assert scene["credits"]["lines"] and scene["id"] == scene_id
-    assert [layer["id"] for layer in scene["layers"]] == ["glo90_terrain", "chirps_monthly"]
+    assert [layer["id"] for layer in scene["layers"]] == ["copdem_terrain", "chirps_monthly"]
     # The path is the content hash.
     assert client.get(f"/scenes/{scene_id}/scene.json").json()["id"] == scene_id
 
@@ -182,7 +182,7 @@ def test_rejections_happen_before_any_read(env):
         },
         {
             "area": {"type": "polygon", "geometry": mapping(box(-100, -50, 70, 60))},
-            "layers": ["glo90_terrain"],
+            "layers": ["copdem_terrain"],
         },
     ]
 
@@ -332,9 +332,9 @@ def test_layers(env):
     client, _, _ = env
     out = client.get("/api/layers").json()
     by_id = {layer["id"]: layer for layer in out["layers"]}
-    rain, terrain = by_id["chirps_monthly"], by_id["glo90_terrain"]
+    rain, terrain = by_id["chirps_monthly"], by_id["copdem_terrain"]
 
-    assert out["default"] == ["chirps_monthly", "glo90_terrain"]
+    assert out["default"] == ["chirps_monthly", "copdem_terrain"]
     assert (rain["kind"], rain["time_varying"]) == ("series-colormap", True)
     assert rain["time"] == {"step": "P1M", "first": "1981-01", "latest": "2026-08"}
     assert (terrain["kind"], terrain["time_varying"], terrain["time"]) == ("terrain", False, None)
@@ -479,7 +479,7 @@ def test_terrain_only_ignores_months(env):
     ids = {
         client.post(
             "/api/scenes",
-            json=body(layers=["glo90_terrain"], start=start, end=end),
+            json=body(layers=["copdem_terrain"], start=start, end=end),
         ).json()["id"]
         for start, end in periods
     }

@@ -10,7 +10,7 @@ from .sources import SOURCES, Dataset, SyntheticSource
 JsonObject = dict[str, Any]  # a decoded JSON object, such as scene.json or one of its blocks
 
 VERSION = "0.2"
-TERRAIN_LAYER_ID = "glo90_terrain"
+TERRAIN_LAYER_ID = "copdem_terrain"
 
 BOUNDARY_SOURCE_FIELDS = ("licence_url", "attribution", "citation", "modified")
 SYNTHETIC_DATA_CREDIT = "Data: synthetically generated, not real measurements"
@@ -90,7 +90,7 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
         "title": dataset.title,
         "units": dataset.units,
         "time_varying": dataset.time_varying,
-        "source": dict(dataset.source),
+        "source": dict(layer_plan.sources[0]),
         "style": dict(dataset.style),
         "coverage": list(dataset.coverage),
         "grid": grid,
@@ -102,6 +102,9 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
         "time": None,
         "arrays": _array_blocks(dataset),
     }
+
+    if len(layer_plan.sources) > 1:
+        layer["fallback_sources"] = [dict(source) for source in layer_plan.sources[1:]]
 
     if dataset.time_varying:
         grid["aggregation"] = layer_plan.factor
@@ -136,7 +139,7 @@ def credits(
     synthetic: bool = False,
 ) -> JsonObject:
     """Attribution block, generated from the sources actually used."""
-    sources = [layer["source"] for layer in layer_blocks]
+    sources = _layer_sources(layer_blocks)
     if boundary_source:
         sources.append(boundary_source)
 
@@ -153,6 +156,15 @@ def credits(
             "listed in layers[].source and area.boundary."
         ),
     }
+
+
+def _layer_sources(layer_blocks: list[JsonObject]) -> list[JsonObject]:
+    """Every layer's main source, each followed by its fallback sources."""
+    return [
+        source
+        for layer in layer_blocks
+        for source in [layer["source"], *layer.get("fallback_sources", [])]
+    ]
 
 
 def validate(doc: JsonObject) -> list[str]:
@@ -180,7 +192,7 @@ def validate(doc: JsonObject) -> list[str]:
 def _attribution_problems(doc: JsonObject) -> list[str]:
     problems = []
     area = doc["area"]
-    sources = [layer["source"] for layer in doc["layers"]]
+    sources = _layer_sources(doc["layers"])
 
     if area["type"] == "boundary":
         if area.get("boundary"):

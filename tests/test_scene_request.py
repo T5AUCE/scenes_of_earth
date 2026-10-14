@@ -24,7 +24,7 @@ from soe.sources import (
 
 SQUARE = mapping(box(36.5, -1.5, 37.5, -0.5))
 PINNED_REVISION = "Tue, 01 Sep 2015 00:00:00 GMT"
-PINNED_SCENE_ID = "dbb1ffc5d99da2225a23"  # Computed before the revision refactor.
+PINNED_SCENE_ID = "70491bff037d2e7f6e8a"  # Computed after the terrain layer became copdem_terrain.
 
 
 def request_body(**overrides: object) -> str:
@@ -32,7 +32,7 @@ def request_body(**overrides: object) -> str:
         "area": {"type": "polygon", "geometry": SQUARE},
         "start": "2015-01",
         "end": "2015-06",
-        "layers": ["glo90_terrain", "chirps_monthly"],
+        "layers": ["copdem_terrain", "chirps_monthly"],
         **overrides,
     })
 
@@ -118,10 +118,10 @@ def test_scene_id_is_unchanged_for_known_inputs():
 
     scene_id = compute_scene_id(
         "poly:abc",
-        ["chirps_monthly", "glo90_terrain"],
+        ["chirps_monthly", "copdem_terrain"],
         "2015-01",
         "2015-06",
-        [registry["chirps_monthly"], registry["glo90_terrain"]],
+        [registry["chirps_monthly"], registry["copdem_terrain"]],
         {"chirps_monthly": PINNED_REVISION},
     )
 
@@ -129,7 +129,7 @@ def test_scene_id_is_unchanged_for_known_inputs():
 
 
 def test_synthetic_and_real_terrain_scenes_get_different_ids():
-    terrain = ["glo90_terrain"]
+    terrain = ["copdem_terrain"]
 
     def scene_id(registry: Registry) -> str:
         return compute_scene_id(
@@ -137,7 +137,7 @@ def test_synthetic_and_real_terrain_scenes_get_different_ids():
             terrain,
             "2015-01",
             "2015-02",
-            [registry["glo90_terrain"]],
+            [registry["copdem_terrain"]],
             revisions={},
         )
 

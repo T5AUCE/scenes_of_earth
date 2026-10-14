@@ -42,6 +42,7 @@ class LayerPlan:
     mask: np.ndarray  # uint8
     cells_inside: int
     steps: list  # ISO dates; empty for static layers
+    sources: list  # source dicts the layer reads, the main one first
     notices: list = field(default_factory=list)
 
 
@@ -337,8 +338,7 @@ def _layer_plan(
         notices.append(
             "No cell center fell inside this small area, so every cell it touches is used."
         )
-    if note := dataset.notice(bbox):
-        notices.append(note)
+    notices += dataset.notices(bbox)
 
     return LayerPlan(
         dataset.id,
@@ -350,6 +350,7 @@ def _layer_plan(
         mask.astype("uint8"),
         int(mask.sum()),
         steps,
+        dataset.sources_for(bbox),
         notices,
     )
 

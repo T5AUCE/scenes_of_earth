@@ -9,7 +9,7 @@ NAIROBI = box(36.5, -1.5, 37.5, -0.5)
 FIJI = MultiPolygon([box(178, -19, 180, -17), box(-180, -19, -178, -17)])
 
 SYNTHETIC_REGISTRY = make_registry(SyntheticSource())
-RAIN, TERRAIN = SYNTHETIC_REGISTRY["chirps_monthly"], SYNTHETIC_REGISTRY["glo90_terrain"]
+RAIN, TERRAIN = SYNTHETIC_REGISTRY["chirps_monthly"], SYNTHETIC_REGISTRY["copdem_terrain"]
 
 
 def plan_months(area: Area, datasets: list[Dataset], months: int = 12) -> Plan:

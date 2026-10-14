@@ -64,6 +64,16 @@ test("a named area credits its boundary source after the layers", () => {
   assert.equal(entries[2].name, "Area boundaries (geoBoundaries)");
 });
 
+test("a fallback source gets its own credit entry and no line is left unaccounted", () => {
+  const scene = makeScene();
+  const fallback = { name: "Fallback", licence: "CC BY 4.0", attribution: "Fallback credit" };
+  scene.layers[1].fallback_sources = [fallback];
+  scene.credits.lines.push("Fallback credit");
+
+  assert.equal(creditEntries(scene).length, 3);
+  assert.deepEqual(extraCreditLines(scene), ["Data: synthetic"]);
+});
+
 test("credit lines without a listed source are kept", () => {
   assert.deepEqual(extraCreditLines(makeScene()), ["Data: synthetic"]);
 });

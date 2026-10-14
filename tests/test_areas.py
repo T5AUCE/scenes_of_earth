@@ -6,7 +6,7 @@ from shapely.geometry import LineString, MultiPolygon, Polygon, box, mapping
 
 from soe.areas import Area, AreaError, clean_polygon, unwrap
 from soe.bundle import JsonObject
-from soe.sources import REGISTRY, glo90_tiles
+from soe.sources import REGISTRY, terrain_tiles
 from tests.helpers import FIJI, NAIROBI, RAIN, TERRAIN, plan_months
 
 
@@ -105,8 +105,8 @@ def test_plan_rejections():
     with pytest.raises(AreaError, match="too large to read"):  # 2M source cells x 240 months > 100M
         plan_months(Area(box(-60, -20, 40, 10)), [RAIN], 240)
 
-    assert REGISTRY.keys() == {"chirps_monthly", "glo90_terrain"}
-    assert len(glo90_tiles((36, -2, 38, 0))) == 4
+    assert REGISTRY.keys() == {"chirps_monthly", "copdem_terrain"}
+    assert len(terrain_tiles((36, -2, 38, 0), "glo90")) == 4
 
     with pytest.raises(AreaError, match="source tiles"):  # 8190 existing tiles > 2500
         plan_months(Area(box(-100, -50, 70, 60)), [TERRAIN], 1)
@@ -150,10 +150,10 @@ def test_plan_tiny_named_area_falls_back_to_all_touched():
 
 def test_plan_gives_each_layer_its_own_grid_and_mask():
     scene_plan = plan_months(Area(NAIROBI), [TERRAIN, RAIN])
-    terrain, rain = scene_plan.layers["glo90_terrain"], scene_plan.layers["chirps_monthly"]
+    terrain, rain = scene_plan.layers["copdem_terrain"], scene_plan.layers["chirps_monthly"]
 
-    assert terrain.res == pytest.approx(1 / 1200) and rain.res == pytest.approx(0.05)
-    assert terrain.shape == (1200, 1200) and rain.shape == (20, 20)
+    assert terrain.res == pytest.approx(0.05 / 102) and rain.res == pytest.approx(0.05)
+    assert terrain.shape == (2040, 2040) and rain.shape == (20, 20)
     assert terrain.mask.shape == terrain.shape and rain.mask.shape == rain.shape
     assert terrain.cells_inside == terrain.mask.sum() and rain.cells_inside == rain.mask.sum()
     assert terrain.factor == 1 and terrain.steps == [] and len(rain.steps) == 12
@@ -166,7 +166,7 @@ def test_output_budget_is_summed_across_layers():
 
     both = plan_months(area, [TERRAIN, RAIN], 140)  # terrain takes 12 MB of the 50
 
-    assert both.layers["chirps_monthly"].factor == 2 and both.layers["glo90_terrain"].factor == 1
+    assert both.layers["chirps_monthly"].factor == 2 and both.layers["copdem_terrain"].factor == 1
 
 
 def test_series_steps_come_from_the_dataset_axis():

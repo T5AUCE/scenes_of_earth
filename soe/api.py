@@ -46,7 +46,7 @@ PROGRESS_STEP = 0.02
 
 MAX_BODY_BYTES = 1_000_000
 LEVELS = ("country", "state", "county", "city")
-DEFAULT_LAYERS = ["chirps_monthly", "glo90_terrain"]
+DEFAULT_LAYERS = ["chirps_monthly", "copdem_terrain"]
 MAX_SEARCH_LIMIT = 50
 
 DEFAULT_MAX_BUILDS = 1
