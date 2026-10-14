@@ -417,6 +417,26 @@ def _write_time_coordinate(layer_group, steps):
     )
 
 
+def _write_array(
+    group,
+    name,
+    data,
+    dimensions,
+    attributes=None,
+):
+    array = group.create_array(
+        name,
+        shape=data.shape,
+        chunks=data.shape,
+        dtype=data.dtype,
+        compressors=COMPRESSION,
+        dimension_names=dimensions,
+        attributes=attributes or {},
+    )
+    array[...] = data
+    return array
+
+
 def _create_time_array(
     layer_group,
     dataset,
@@ -550,26 +570,6 @@ def _coordinates(transform, height, width):
         + (np.arange(height) + 0.5) * transform.e
     )
     return longitude, latitude
-
-
-def _write_array(
-    group,
-    name,
-    data,
-    dimensions,
-    attributes=None,
-):
-    array = group.create_array(
-        name,
-        shape=data.shape,
-        chunks=data.shape,
-        dtype=data.dtype,
-        compressors=COMPRESSION,
-        dimension_names=dimensions,
-        attributes=attributes or {},
-    )
-    array[...] = data
-    return array
 
 
 def encode_values(values, dtype, scale, offset, fill_value):

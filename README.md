@@ -107,20 +107,7 @@ All tests run offline with synthetic data.
 
 ## Code style
 
-Adapted from general clean and elegant code methodology. Clear code first with comments second.
-
-- **Names:** descriptive and pronounceable; nouns for variables and classes, verbs for functions. No unexplained
-  abbreviations (domain terms like `bbox`, `res` are fine). Length scales with scope. Use context to avoid redundancy.
-- **Layout:** structure vertically. One statement per line, 4-space indents in Python, 2 in TypeScript.
-  Aim for 80 columns, hard limit 100. When breaking at an operator, start the new line with it. Consistent spacing
-  around operators and after commas.
-- **Comments:** only explain **why** something confusing exists (a workaround, a data quirk, a non-obvious constraint),
-  never **what** the code does. If a comment restates the code, delete it or rename until the code says it. Comments are
-  complete sentences. A TODO names the problem and the work needed. Update or delete comments when the code changes.
-  Exception: short trailing notes on constants and fields (units, shapes, what a key means) may be fragments.
-- **Docstrings:** public modules and functions get a short PEP 257 docstring (purpose, plus inputs and outputs when not
-  obvious from the signature).
-- **Consistency:** follow the existing style of the file you edit.
+See [STYLE.md](STYLE.md).
 
 ## Data sources, licences and attribution
 

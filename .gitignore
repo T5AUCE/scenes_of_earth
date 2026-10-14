@@ -1,4 +1,7 @@
+# Agent resources
 .claude/
+CLAUDE.md
+STYLE.md
 
 # Python
 __pycache__/
@@ -9,7 +12,6 @@ venv/
 build/
 dist/
 .pytest_cache/
-CLAUDE.md
 
 # Local data (SQLite db, built scenes)
 data/

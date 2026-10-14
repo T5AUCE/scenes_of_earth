@@ -23,6 +23,9 @@ from rasterio.merge import merge
 from rasterio.transform import Affine, from_origin
 from rasterio.windows import Window
 
+# The app supports 60S-60N in v1; widen the extent here.
+SUPPORTED_BOUNDS_DEG = (-180, -60, 180, 60)  # W, S, E, N
+
 GRID = Affine(0.05, 0, -180, 0, -0.05, 60)
 NCOLS, NROWS = 7200, 2400
 CELL_DEG = 0.05  # CHIRPS cell size
@@ -466,7 +469,7 @@ class Dataset:
     style: dict  # viewer defaults
     backend: object
     long_name: str = ""  # CF long_name of the main array
-    coverage: tuple = (-180, -60, 180, 60)  # W, S, E, N
+    coverage: tuple = SUPPORTED_BOUNDS_DEG  # W, S, E, N; a narrower dataset overrides it
     anchor_res: float = 0.05  # the layer's window is cut on a grid of this cell size
     step: str | None = None  # ISO 8601 duration between time steps; None for static layers
     max_tiles: int | None = None  # request cap for tiled datasets

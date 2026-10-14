@@ -498,7 +498,7 @@ def test_failed_build_leaves_no_partial_bundle(tmp_path):
 
 def test_import_boundaries_tiny_geopackage(tmp_path):
     gpd = pytest.importorskip("geopandas")
-    from soe.cli import import_cgaz, import_ucdb
+    from soe.boundary_import import import_cgaz, import_ucdb
 
     country, state, county = box(36, -2, 38, 0), box(36, -2, 37, 0), box(36, -1, 36.5, 0)
     levels = ((0, country, "Testland"), (1, state, "West State"), (2, county, "Small County"))
