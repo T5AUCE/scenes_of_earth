@@ -5,6 +5,8 @@ month range into a static scene bundle: `scene.json`, `area.geojson` and a Zarr 
 rain and a hillshaded terrain. The browser reads the finished bundle directly. Bundles live at
 `data/scenes/{id}/`, where `{id}` is a content hash, so a finished bundle never changes and is served as immutable.
 
+Planned features and hosting: [docs/ROADMAP.md](docs/ROADMAP.md).
+
 **The devcontainer (Linux) is the supported environment.** The code also runs on Windows, but deep checkouts can hit the
 260-character path limit.
 
