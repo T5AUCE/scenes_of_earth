@@ -11,15 +11,10 @@ from fastapi.testclient import TestClient
 from shapely.geometry import box, mapping, shape
 
 from soe import db
-from soe.api import (
-    QUEUE_RETRY_AFTER_SECS,
-    SAMPLE_AREAS,
-    SOURCE_RETRY_AFTER_SECS,
-    create_app,
-    seed_sample_areas,
-)
+from soe.api import QUEUE_RETRY_AFTER_SECS, SOURCE_RETRY_AFTER_SECS, create_app
 from soe.areas import unwrap
 from soe.bundle import SYNTHETIC_DATA_CREDIT, JsonObject
+from soe.sample_areas import SAMPLE_AREAS, seed_sample_areas
 from soe.sources import CellWindow, SourceUnavailable, SyntheticSource, make_registry
 
 POLL_ATTEMPTS = 100
@@ -194,6 +189,19 @@ def test_rejections_happen_before_any_read(env):
     for extra in cases:
         response = client.post("/api/scenes", json={**body(), **extra})
         assert response.status_code == 422, (extra, response.text)
+
+    assert source.reads == 0
+
+
+def test_non_ascii_digit_months_are_rejected_before_any_read(env):
+    client, source, _ = env
+
+    for month in ("2020-0\u00b2", "\u0662020-01", "2020-\u0660\u0661"):
+        for field in ("start", "end"):
+            response = client.post("/api/scenes", json=body(**{field: month}))
+
+            assert response.status_code == 422, (field, month)
+            assert response.json()["detail"] == "start and end must be 'YYYY-MM'"
 
     assert source.reads == 0
 

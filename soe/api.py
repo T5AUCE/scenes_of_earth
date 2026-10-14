@@ -18,15 +18,15 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from shapely.geometry import shape
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
 from starlette.types import Scope
 
 from . import __version__, db
-from .areas import MAX_BODY_BYTES, AreaError, unwrap
+from .areas import AreaError
 from .build import build_scene
 from .bundle import JsonObject
+from .sample_areas import seed_sample_areas
 from .scene_request import ID_CHARS, prepare_scene, resolve_area
 from .sources import (
     REGISTRY,
@@ -44,12 +44,13 @@ IMMUTABLE_MAX_AGE_SECS = 365 * 24 * 60 * 60
 IMMUTABLE = f"public, max-age={IMMUTABLE_MAX_AGE_SECS}, immutable"
 PROGRESS_STEP = 0.02
 
+MAX_BODY_BYTES = 1_000_000
 LEVELS = ("country", "state", "county", "city")
 DEFAULT_LAYERS = ["chirps_monthly", "glo90_terrain"]
 MAX_SEARCH_LIMIT = 50
 
-SAMPLE_AREAS = Path(__file__).parent / "data" / "sample_areas.geojson"
-SAMPLE_CELL_AREA_DEG2 = 0.05**2
+DEFAULT_MAX_BUILDS = 1
+DEFAULT_MAX_QUEUE = 20
 
 SOURCE_RETRY_AFTER_SECS = 30
 QUEUE_RETRY_AFTER_SECS = 60
@@ -68,15 +69,13 @@ def create_app(
     db_path = db_path or os.environ.get("SOE_DB", "./data/soe.db")
     scenes_dir = Path(scenes_dir or os.environ.get("SOE_SCENES_DIR", "./data/scenes"))
     public = os.environ.get("SOE_PUBLIC_BASE", "/scenes").rstrip("/")
-    max_queue = max_queue or int(os.environ.get("SOE_MAX_QUEUE", "20"))
+    max_builds = max_builds or int(os.environ.get("SOE_MAX_BUILDS", DEFAULT_MAX_BUILDS))
+    max_queue = max_queue or int(os.environ.get("SOE_MAX_QUEUE", DEFAULT_MAX_QUEUE))
     
     if registry is None:
         registry = _default_registry()
     # Builds run on their own small pool, so waiting jobs never occupy Starlette's request threads.
-    executor = ThreadPoolExecutor(
-        max_builds or int(os.environ.get("SOE_MAX_BUILDS", "1")),
-        "soe-build",
-    )
+    executor = ThreadPoolExecutor(max_builds, "soe-build")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -171,7 +170,8 @@ def create_app(
         if not query:
             return []
         
-        rows = db.search(db_path, query, level, max(1, min(limit, MAX_SEARCH_LIMIT)))
+        clamped_limit = max(1, min(limit, MAX_SEARCH_LIMIT))
+        rows = db.search(db_path, query, level, clamped_limit)
         return [_area_out(row) for row in rows]
 
     @app.get("/api/areas/{area_id:path}", response_model=None)
@@ -224,37 +224,6 @@ def _default_registry() -> Registry:
     if os.environ.get("SOE_LATEST"):
         return make_registry(RealSource(os.environ["SOE_LATEST"]))
     return REGISTRY
-
-
-def seed_sample_areas(db_path: Path | str) -> None:
-    """Synthetic mode only: reload the sample outlines unless real boundaries are loaded."""
-    if db.has_boundaries_besides(db_path, "synthetic"):
-        return
-
-    features = json.loads(SAMPLE_AREAS.read_text())["features"]
-    db.add_boundaries(db_path, "synthetic", [_sample_row(feature) for feature in features])
-
-
-def _sample_row(feature: JsonObject) -> db.BoundaryValues:
-    geometry, properties = shape(feature["geometry"]), feature["properties"]
-    west, south, east, north = unwrap(geometry).bounds
-    cells = max(1, round(geometry.area / SAMPLE_CELL_AREA_DEG2))
-
-    return (
-        properties["id"],
-        properties["level"],
-        properties["name"],
-        properties["parent_name"],
-        properties["iso3"],
-        west,
-        south,
-        east,
-        north,
-        cells,
-        json.dumps(feature["geometry"]),
-        "synthetic",
-        f"{properties['license']} ({properties['source']})",
-    )
 
 
 def _warm_latest_months(registry: Registry) -> None:
@@ -349,8 +318,10 @@ async def read_body(request: Request) -> bytes:
 
 
 class SceneFiles(StaticFiles):
-    """Serves scene bundles: hides in-progress builds (.tmp) and marks files as
-    cacheable forever, since a scene id changes whenever its data would."""
+    """Serves scene bundles, hiding in-progress builds (.tmp).
+
+    Files are marked cacheable forever, since a scene id changes whenever its data would.
+    """
 
     async def get_response(self, path: str, scope: Scope) -> Response:
         if path.startswith("."):

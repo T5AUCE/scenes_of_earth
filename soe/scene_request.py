@@ -12,9 +12,17 @@ from pathlib import Path
 from shapely.geometry import mapping, shape
 
 from . import __version__, db
-from .areas import Area, AreaError, check_months, clean_polygon, plan
+from .areas import Area, AreaError, clean_polygon
 from .bundle import JsonObject
-from .sources import FIRST_MONTH, Dataset, Registry, SeriesDataset, SourceUnavailable, SyntheticSource
+from .plan import plan
+from .sources import (
+    FIRST_MONTH,
+    Dataset,
+    Registry,
+    SeriesDataset,
+    SourceUnavailable,
+    SyntheticSource,
+)
 
 ID_CHARS = 20  # hex characters of the sha256 kept as the id (80 bits; short Windows paths)
 
@@ -120,6 +128,36 @@ def _requested_period(data: JsonObject, datasets: list[Dataset]) -> tuple[str, s
     for dataset in series:
         check_months(start, end, dataset.first(), dataset.latest(), f"{dataset.title}: ")
     return start, end
+
+
+def check_months(start: object, end: object, first: str, latest: str, who: str = "") -> None:
+    """Validate 'YYYY-MM' start/end: first <= start <= end <= latest.
+
+    `who` prefixes the range messages.
+    """
+    for month in (start, end):
+        if not _is_month(month):
+            raise AreaError("start and end must be 'YYYY-MM'")
+
+    if start < first:
+        raise AreaError(f"{who}start must be {first} or later")
+    if end < start:
+        raise AreaError("end must not be before start")
+    if end > latest:
+        raise AreaError(f"{who}end must be {latest} or earlier")
+
+
+def _is_month(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 7
+        and value[4] == "-"
+        and value[:4].isascii()
+        and value[:4].isdigit()
+        and value[5:].isascii()
+        and value[5:].isdigit()
+        and 1 <= int(value[5:]) <= 12
+    )
 
 
 def _area_identity(area: Area) -> tuple[str, JsonObject]:

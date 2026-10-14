@@ -16,8 +16,9 @@ from shapely.geometry import mapping
 from zarr.codecs import GzipCodec
 
 from . import __version__
-from .areas import Area, AreaError, LayerPlan, Plan, plan as make_plan
+from .areas import Area, AreaError
 from .bundle import JsonObject, make, validate
+from .plan import LayerPlan, Plan, plan as make_plan
 from .sources import Dataset, SeriesDataset, StaticDataset
 
 ProgressCallback = Callable[[float], None]  # receives the build fraction done, 0 to 1

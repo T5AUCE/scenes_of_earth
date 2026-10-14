@@ -3,7 +3,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import __version__
-from .areas import Area, LayerPlan, Plan
+from .areas import Area
+from .plan import LayerPlan, Plan
 from .sources import SOURCES, Dataset, SyntheticSource
 
 JsonObject = dict[str, Any]  # a decoded JSON object, such as scene.json or one of its blocks

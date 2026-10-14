@@ -10,6 +10,7 @@ from soe.scene_request import (
     DRAWN_AREA_TITLE,
     ID_CHARS,
     PreparedScene,
+    check_months,
     compute_scene_id,
     prepare_scene,
 )
@@ -144,3 +145,18 @@ def test_synthetic_and_real_terrain_scenes_get_different_ids():
     real = make_registry(RealSource())
 
     assert scene_id(synthetic) != scene_id(real)
+
+
+def test_check_months_accepts_the_source_range_and_rejects_bad_ranges():
+    check_months("1981-01", "2026-08", "1981-01", "2026-08")
+
+    bad_ranges = (
+        ("1980-12", "1990-01"),
+        ("2020-05", "2020-04"),
+        ("2020-01", "2026-09"),
+        ("2020-13", "2020-14"),
+    )
+
+    for start, end in bad_ranges:
+        with pytest.raises(AreaError):
+            check_months(start, end, "1981-01", "2026-08")
