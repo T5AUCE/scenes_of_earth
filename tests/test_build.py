@@ -1,6 +1,7 @@
 """Offline tests: hillshade, synthetic end-to-end builds, bundle credits and validation."""
 import json
 import shutil
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -65,9 +66,14 @@ def test_terrain_cache_hit_builds_identical_arrays(tmp_path):
     class CountingSource(SyntheticSource):
         reads = 0
 
-        def terrain(self, bounds: tuple, res: float) -> tuple[np.ndarray, object]:
+        def terrain(
+            self,
+            bounds: tuple,
+            res: float,
+            on_block: Callable[[], None] = lambda: None,
+        ) -> tuple[np.ndarray, object]:
             self.reads += 1
-            return super().terrain(bounds, res)
+            return super().terrain(bounds, res, on_block)
 
     source = CountingSource()
     terrain = make_registry(source)["copdem_terrain"]
@@ -81,6 +87,70 @@ def test_terrain_cache_hit_builds_identical_arrays(tmp_path):
 
     assert source.reads == 1
     assert "copdem_terrain/elevation" in cold and cold == warm
+
+
+def record_progress(tmp_path: Path, area: Area = Area(NAIROBI, BOUNDARY)) -> list[tuple]:
+    seen = []
+    build_scene(
+        HASH_A,
+        area,
+        "2015-01",
+        "2015-06",
+        [TERRAIN, RAIN],
+        "Test",
+        tmp_path,
+        lambda fraction, stage: seen.append((fraction, stage)),
+    )
+    return seen
+
+
+def test_progress_never_decreases_and_ends_at_one(tmp_path):
+    fractions = [fraction for fraction, _ in record_progress(tmp_path)]
+
+    assert fractions == sorted(fractions)
+    assert fractions[-1] == 1.0 and fractions[-2] < 1.0
+
+
+def test_progress_stage_names_terrain_blocks_then_rain_months(tmp_path):
+    stages = [stage for _, stage in record_progress(tmp_path)]
+    assert any(stage and stage.startswith(f"{TERRAIN.title} 1/") for stage in stages)
+    assert any(stage and stage.startswith(RAIN.title) and "2015-0" in stage for stage in stages)
+    assert stages[-1] is None
+
+
+def test_terrain_reports_every_block_of_a_multi_block_area(tmp_path):
+    area = Area(box(0.5, 0.5, 4.5, 2.5), BOUNDARY)
+
+    stages = [stage for _, stage in record_progress(tmp_path, area)]
+
+    counts = [stage.split()[-1] for stage in stages if stage and stage.startswith(TERRAIN.title)]
+    block_count = int(counts[0].split("/")[1])
+    assert block_count > 1
+    assert counts == [f"{done}/{block_count}" for done in range(block_count + 1)] + [
+        f"{block_count}/{block_count}",
+    ]
+
+
+def test_terrain_cache_hit_gives_terrain_almost_no_share(tmp_path):
+    first = record_progress(tmp_path / "cold")
+    shutil.copytree(tmp_path / "cold" / ".cache", tmp_path / "warm" / ".cache")
+
+    warm = record_progress(tmp_path / "warm")
+
+    def terrain_end(seen: list[tuple]) -> float:
+        return max(fraction for fraction, stage in seen if stage and TERRAIN.title in stage)
+
+    assert terrain_end(first) > terrain_end(warm)
+    assert terrain_end(warm) < 0.1
+
+
+def test_terrain_cache_hit_never_shows_zero_blocks_read(tmp_path):
+    record_progress(tmp_path / "cold")
+    shutil.copytree(tmp_path / "cold" / ".cache", tmp_path / "warm" / ".cache")
+
+    stages = [stage for _, stage in record_progress(tmp_path / "warm")]
+
+    assert not any(stage and stage.startswith(f"{TERRAIN.title} 0/") for stage in stages)
 
 
 def test_build_stores_terrain_in_the_cache_folder(tmp_path):
@@ -133,7 +203,7 @@ def test_synthetic_build_across_180(tmp_path):
         layers,
         "Test",
         tmp_path,
-        lambda fraction: None,
+        lambda fraction, stage: None,
     )
 
     out = tmp_path / HASH_B
@@ -166,7 +236,7 @@ def test_synthetic_build_validates_and_opens(tmp_path):
     area = Area(NAIROBI, BOUNDARY)
     seen = []
     layers = [registry["copdem_terrain"], registry["chirps_monthly"]]
-    size = build_scene(HASH_A, area, "2015-01", "2016-12", layers, "Test", tmp_path, seen.append)
+    size = build_scene(HASH_A, area, "2015-01", "2016-12", layers, "Test", tmp_path, lambda fraction, stage: seen.append(fraction))
 
     assert size > 0 and seen[-1] == 1.0
     assert not (tmp_path / ".tmp" / HASH_A).exists()

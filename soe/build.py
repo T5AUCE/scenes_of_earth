@@ -20,9 +20,10 @@ from .areas import Area, AreaError
 from .bundle import JsonObject, make, validate
 from .plan import LayerPlan, Plan, plan as make_plan
 from .sources import Dataset, SeriesDataset, StaticDataset
-from .terrain_cache import read_cached
+from .terrain_cache import is_cached, read_cached
 
-ProgressCallback = Callable[[float], None]  # receives the build fraction done, 0 to 1
+ProgressCallback = Callable[[float, str | None], None]  # build fraction done 0-1, stage text
+LayerProgress = Callable[[float, str], None]  # the same for one layer: its fraction done, stage
 
 MAX_WORKERS = 8
 MEMORY_BUDGET_BYTES = 500_000_000
@@ -34,8 +35,11 @@ COMPRESSION = GzipCodec(level=5)
 UNIX_EPOCH = date(1970, 1, 1)
 CACHE_DIR_NAME = ".cache"  # in the scenes directory; the leading dot keeps it unserved
 
-WRITE_PROGRESS_START = 0.05
-WRITE_PROGRESS_SPAN = 0.9
+# Rough seconds of work, to split the progress bar between layers. The last 5% is the publishing.
+LAYERS_PROGRESS_SHARE = 0.95
+STATIC_BLOCK_COST = 1.0
+STATIC_CACHED_COST = 0.1  # a cache hit still costs the hillshade and the writing
+SERIES_STEP_COST = 0.2
 PERCENTILE_SAMPLES_PER_BATCH = 100_000
 
 LONGITUDE_DEGREE_AT_EQUATOR_M = 111_320
@@ -50,7 +54,7 @@ def build_scene(
     datasets: list[Dataset],
     title: str,
     scenes_dir: Path | str,
-    progress: ProgressCallback = lambda _: None,
+    progress: ProgressCallback = lambda fraction, stage: None,
 ) -> int:
     """Build or reuse the scene's bundle and return its size in bytes."""
     scenes_dir = Path(scenes_dir)
@@ -59,7 +63,7 @@ def build_scene(
     # Content-addressed bundles are immutable and can be reused.
     if final_dir.is_dir():
         size = _directory_size(final_dir)
-        progress(1.0)
+        progress(1.0, None)
         return size
 
     scene_plan = make_plan(area, datasets, start, end)
@@ -71,7 +75,6 @@ def build_scene(
             zarr_format=3,
         )
 
-        progress(WRITE_PROGRESS_START)
         layer_metadata = _write_layers(
             root,
             scene_plan,
@@ -102,7 +105,7 @@ def build_scene(
         # If another build published this scene first, keep the existing bundle.
         bundle_size = _publish_scene(temp_dir, final_dir, bundle_size)
 
-    progress(1.0)
+    progress(1.0, None)
     return bundle_size
 
 
@@ -200,9 +203,15 @@ def _write_layers(
         datasets,
         key=lambda dataset: dataset.time_varying,
     )
+    costs = {
+        dataset.id: _layer_cost(dataset, scene_plan.layers[dataset.id], cache_dir)
+        for dataset in ordered_datasets
+    }
+    progress_shares = _ProgressShares(progress, costs)
     layer_metadata = {}
     for dataset in ordered_datasets:
         layer_plan = scene_plan.layers[dataset.id]
+        layer_progress = progress_shares.for_layer(dataset.id)
         layer_group = root.create_group(dataset.id)
 
         _write_coordinates_and_mask(layer_group, layer_plan)
@@ -212,7 +221,7 @@ def _write_layers(
                 layer_group,
                 dataset,
                 layer_plan,
-                progress,
+                layer_progress,
             )
         elif isinstance(dataset, StaticDataset):
             metadata = _write_static_layer(
@@ -220,12 +229,52 @@ def _write_layers(
                 dataset,
                 layer_plan,
                 cache_dir,
+                layer_progress,
             )
         else:
             raise TypeError(f"{dataset.id}: unknown dataset kind {type(dataset).__name__}")
 
         layer_metadata[dataset.id] = metadata
     return layer_metadata
+
+
+def _layer_cost(dataset: Dataset, layer_plan: LayerPlan, cache_dir: Path) -> float:
+    """Estimated work of writing a layer, in the unit of STATIC_BLOCK_COST."""
+    if isinstance(dataset, SeriesDataset):
+        return len(layer_plan.steps) * SERIES_STEP_COST
+
+    if is_cached(dataset, layer_plan.bbox, layer_plan.res, cache_dir):
+        return STATIC_CACHED_COST
+
+    return dataset.block_count(layer_plan.bbox) * STATIC_BLOCK_COST
+
+
+class _ProgressShares:
+    """Gives each layer a share of the progress bar by its cost; the bar never moves back."""
+
+    def __init__(self, progress: ProgressCallback, costs: dict[str, float]) -> None:
+        total_cost = sum(costs.values()) or 1.0
+        self._progress = progress
+        self._shares = {
+            layer_id: LAYERS_PROGRESS_SHARE * cost / total_cost
+            for layer_id, cost in costs.items()
+        }
+        self._starts = {}
+        start = 0.0
+        for layer_id, share in self._shares.items():
+            self._starts[layer_id] = start
+            start += share
+        self._reported = 0.0
+
+    def for_layer(self, layer_id: str) -> LayerProgress:
+        def report(fraction: float, stage: str) -> None:
+            self._reported = max(
+                self._reported,
+                self._starts[layer_id] + self._shares[layer_id] * fraction,
+            )
+            self._progress(self._reported, stage)
+
+        return report
 
 
 def _write_coordinates_and_mask(layer_group: zarr.Group, layer_plan: LayerPlan) -> None:
@@ -261,14 +310,28 @@ def _write_static_layer(
     dataset: StaticDataset,
     layer_plan: LayerPlan,
     cache_dir: Path,
+    progress: LayerProgress,
 ) -> JsonObject:
     """Write an elevation raster and its derived hillshade."""
+    block_count = dataset.block_count(layer_plan.bbox)
+    blocks_read = 0
+
+    def block_read() -> None:
+        nonlocal blocks_read
+        blocks_read += 1
+        progress(blocks_read / block_count, f"{dataset.title} {blocks_read}/{block_count}")
+
+    if not is_cached(dataset, layer_plan.bbox, layer_plan.res, cache_dir):
+        progress(0, f"{dataset.title} 0/{block_count}")
+
     elevation, transform = read_cached(
         dataset,
         layer_plan.bbox,
         layer_plan.res,
         cache_dir,
+        block_read,
     )
+    progress(1, f"{dataset.title} {block_count}/{block_count}")
 
     _write_array(
         layer_group,
@@ -380,7 +443,7 @@ def _write_time_series(
     layer_group: zarr.Group,
     dataset: SeriesDataset,
     layer_plan: LayerPlan,
-    progress: ProgressCallback,
+    progress: LayerProgress,
 ) -> JsonObject:
     """Write a time series in batches and return its display statistics."""
     steps = layer_plan.steps
@@ -419,10 +482,7 @@ def _write_time_series(
             )
             batch_end = batch_start + len(batch_steps)
             series[batch_start:batch_end] = encoded_batch
-            progress(
-                WRITE_PROGRESS_START
-                + WRITE_PROGRESS_SPAN * batch_end / step_count
-            )
+            progress(batch_end / step_count, f"{dataset.title} {steps[batch_end - 1][:7]}")
 
     value_stats = statistics.finish()
     return {

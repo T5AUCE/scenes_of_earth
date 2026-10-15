@@ -95,6 +95,7 @@ def create_app(
             "id": row["id"],
             "status": row["status"],
             "progress": row["progress"],
+            "stage": row["stage"],
             "error": row["error"],
             "error_class": row["error_class"],
             "bundle_url": f"{public}/{row['id']}/scene.json" if done else None,
@@ -121,6 +122,7 @@ def create_app(
                 scene_id,
                 status="done",
                 progress=1.0,
+                stage=None,
                 bytes=size,
                 finished=db.now(),
             )
@@ -239,17 +241,22 @@ def _warm_latest_months(registry: Registry) -> None:
 
 
 class _ProgressRecorder:
-    """Writes build progress to the database, but only when moved by PROGRESS_STEP."""
+    """Writes build progress and stage text to the database, only when moved by PROGRESS_STEP."""
 
     def __init__(self, db_path: Path | str, scene_id: str) -> None:
         self._db_path = db_path
         self._scene_id = scene_id
         self._last_written = 0.0
 
-    def __call__(self, progress: float) -> None:
+    def __call__(self, progress: float, stage: str | None) -> None:
         if progress - self._last_written >= PROGRESS_STEP or progress >= 1:
             self._last_written = progress
-            db.update_scene(self._db_path, self._scene_id, progress=round(progress, 3))
+            db.update_scene(
+                self._db_path,
+                self._scene_id,
+                progress=round(progress, 3),
+                stage=stage,
+            )
 
 
 def _record_failure(db_path: Path | str, scene_id: str, error: Exception) -> None:
@@ -260,6 +267,7 @@ def _record_failure(db_path: Path | str, scene_id: str, error: Exception) -> Non
             db_path,
             scene_id,
             status="failed",
+            stage=None,
             error=message,
             error_class=type(error).__name__,
             finished=db.now(),

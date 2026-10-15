@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS scenes (
     id TEXT PRIMARY KEY,
     status TEXT NOT NULL,
     progress REAL DEFAULT 0,
+    stage TEXT,
     error TEXT,
     error_class TEXT,
     request_json TEXT NOT NULL,
@@ -82,12 +83,27 @@ def init(path: Path | str) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with connect(path) as connection:
         connection.executescript(SCHEMA)
+        _add_missing_columns(connection)
         connection.execute(
             "UPDATE scenes SET status='failed', error='interrupted', "
             "error_class='Interrupted', finished=? "
             f"WHERE status IN {ACTIVE_STATUSES}",
             (now(),),
         )
+
+
+def _add_missing_columns(connection: sqlite3.Connection) -> None:
+    """Databases created before a column was added to SCHEMA get it here."""
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(scenes)")}
+    if "stage" in columns:
+        return
+
+    try:
+        connection.execute("ALTER TABLE scenes ADD COLUMN stage TEXT")
+    except sqlite3.OperationalError as error:
+        # Another process added it between the check and the ALTER.
+        if "duplicate column" not in str(error):
+            raise
 
 
 def search(
@@ -187,8 +203,8 @@ def submit(
                 )
             else:
                 connection.execute(
-                    "UPDATE scenes SET status='queued', progress=0, error=NULL, error_class=NULL, "
-                    "finished=NULL WHERE id = ?",
+                    "UPDATE scenes SET status='queued', progress=0, stage=NULL, error=NULL, "
+                    "error_class=NULL, finished=NULL WHERE id = ?",
                     (scene_id,),
                 )
         row = _select_scene(connection, scene_id)

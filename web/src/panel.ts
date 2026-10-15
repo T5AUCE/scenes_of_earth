@@ -336,9 +336,15 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
   }
 
   function showProgress(sceneStatus: SceneStatus) {
-    status.textContent = sceneStatus.status === "running"
-      ? `Building… ${Math.round(sceneStatus.progress * 100)}%`
-      : `Scene ${sceneStatus.status}…`;
+    if (sceneStatus.status !== "running") {
+      status.textContent = `Scene ${sceneStatus.status}…`;
+      return;
+    }
+
+    const percent = Math.round(sceneStatus.progress * 100);
+    status.textContent = sceneStatus.stage
+      ? `Building… ${percent}% (${sceneStatus.stage})`
+      : `Building… ${percent}%`;
   }
 
   // The scene draws its own outline.

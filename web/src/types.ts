@@ -50,6 +50,7 @@ export interface SceneStatus {
   id: string;
   status: "queued" | "running" | "done" | "failed";
   progress: number;
+  stage?: string | null; // short text such as "Rain 2019-03"; may be missing or null
   error: string | null;
   error_class: string | null;
   bundle_url: string | null;

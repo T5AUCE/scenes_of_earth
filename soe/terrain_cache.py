@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -19,19 +20,30 @@ def read_cached(
     bbox: Bbox,
     res: float,
     cache_dir: Path,
+    on_block: Callable[[], None] | None = None,
 ) -> tuple[np.ndarray, Affine]:
-    """dataset.read(bbox, res), from cache_dir when the same raster was read before.
+    """dataset.read(bbox, res, on_block), from cache_dir when the same raster was read before.
 
-    The array is loaded fresh from disk each time, so callers never share memory.
+    The array is loaded fresh from disk each time, so callers never share memory. A cache hit
+    calls on_block never.
     """
-    path = cache_dir / f"{_cache_key(dataset, bbox, res)}.npz"
+    path = _cache_path(dataset, bbox, res, cache_dir)
     if path.is_file():
         with np.load(path) as stored:
             return stored["values"], Affine(*stored["transform"].tolist())
 
-    values, transform = dataset.read(bbox, res)
+    values, transform = dataset.read(bbox, res, on_block)
     _store(path, values, transform)
     return values, transform
+
+
+def is_cached(dataset: StaticDataset, bbox: Bbox, res: float, cache_dir: Path) -> bool:
+    """Whether read_cached would find this raster on disk."""
+    return _cache_path(dataset, bbox, res, cache_dir).is_file()
+
+
+def _cache_path(dataset: StaticDataset, bbox: Bbox, res: float, cache_dir: Path) -> Path:
+    return cache_dir / f"{_cache_key(dataset, bbox, res)}.npz"
 
 
 def _cache_key(dataset: StaticDataset, bbox: Bbox, res: float) -> str:

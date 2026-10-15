@@ -1,4 +1,6 @@
 """Shared test helpers: a real-mode source that reads synthetic data (no network)."""
+from collections.abc import Callable
+
 import numpy as np
 import pytest
 from rasterio.transform import Affine
@@ -31,8 +33,13 @@ class RevisionSource(RealSource):
     def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
         return self.data.read_rain(month, window)
 
-    def terrain(self, bounds: Bbox, res: float) -> tuple[np.ndarray, Affine]:
-        return self.data.terrain(bounds, res)
+    def terrain(
+        self,
+        bounds: Bbox,
+        res: float,
+        on_block: Callable[[], None] = lambda: None,
+    ) -> tuple[np.ndarray, Affine]:
+        return self.data.terrain(bounds, res, on_block)
 
 
 @pytest.fixture

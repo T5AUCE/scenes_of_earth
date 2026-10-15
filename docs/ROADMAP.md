@@ -13,14 +13,20 @@ stays cheap and simple. Each feature is checked for extensibility before users g
 
 ## Hosting (release)
 
-- Bundles are built on demand on one small machine and uploaded to Cloudflare R2
+- One small VPS in Europe (near the Copernicus terrain and ERA5-Land sources) runs the API,
+  the database, daily updates and builds; a large hourly machine is rented only to load a daily
+  layer's full history.
+- Bundles are built on demand on that machine and uploaded to Cloudflare R2
   (`scenes/{id}/`, `scene.json` last). The browser reads them from a Cloudflare domain and
   never builds scenes itself.
 - From the second time-varying dataset on, builds read from global cubes on R2 instead of
   the source servers.
 - Estimated cost: $8–21 a month at 1k–10k scenes, mostly the build machine.
 - Before deploy: R2 upload, a "Cache Everything" rule (Zarr chunks have no file extension),
-  CORS on the bucket, lifecycle eviction, uint16 rain encoding.
+  CORS on the bucket, lifecycle eviction, uint16 rain encoding, terrain cache eviction.
+- After deploy: time a real build on the VPS (Kenya: about 40 s of terrain from the
+  devcontainer), then pre-warm the terrain cache for every country and region in the boundary
+  list, so only drawn shapes pay the first full terrain read.
 
 ## Next
 

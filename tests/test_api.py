@@ -504,3 +504,38 @@ def test_month_range_is_checked_per_dataset(tmp_path):
 
         early_only = body(layers=["chirps_monthly"], start="1999-01", end="2000-03")
         assert client.post("/api/scenes", json=early_only).status_code == 202
+
+
+def test_status_has_a_stage_while_building_and_null_when_done(tmp_path):
+    release, reading = threading.Event(), threading.Event()
+
+    class Slow(SyntheticSource):
+        def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
+            reading.set()
+            release.wait(10)
+            return super().read_rain(month, window)
+
+    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(Slow()))
+    with TestClient(app) as client:
+        scene_id = client.post("/api/scenes", json=body()).json()["id"]
+        assert reading.wait(10)
+
+        running = client.get(f"/api/scenes/{scene_id}").json()
+        release.set()
+        done = wait_for(client, scene_id)
+
+    assert running["status"] == "running" and running["stage"].startswith("Terrain")
+    assert done["status"] == "done" and done["stage"] is None and done["progress"] == 1.0
+
+
+def test_failed_build_clears_the_stage(tmp_path):
+    class Boom(SyntheticSource):
+        def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
+            raise RuntimeError("boom")
+
+    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(Boom()))
+    with TestClient(app) as client:
+        scene_id = client.post("/api/scenes", json=body()).json()["id"]
+        failed = wait_for(client, scene_id)
+
+    assert failed["status"] == "failed" and failed["stage"] is None
