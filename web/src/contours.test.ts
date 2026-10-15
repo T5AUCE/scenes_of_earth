@@ -9,6 +9,7 @@ import {
   downsample,
   factorFor,
   maskedValues,
+  overlaps,
   pickInterval,
   smoothed,
   thresholds,
@@ -228,6 +229,34 @@ test("a view is covered when the window holds the part of it over the grid", () 
   assert.equal(covers(outer, [-5, 2, 4, 8], grid), true);
   assert.equal(covers(outer, [2, 2, 7, 8], grid), false);
   assert.equal(covers(outer, [2, 2, 6 + 1e-12, 12], grid), true);
+});
+
+test("boxes overlap only when they share area, not when edges touch", () => {
+  const box: Bbox = [0, 0, 10, 10];
+
+  assert.equal(overlaps(box, [10, 0, 20, 10]), false);
+  assert.equal(overlaps(box, [0, 10, 10, 20]), false);
+  assert.equal(overlaps(box, [11, 0, 20, 10]), false);
+  assert.equal(overlaps(box, [9, 9, 20, 20]), true);
+  assert.equal(overlaps(box, [2, 2, 3, 3]), true);
+  assert.equal(overlaps([2, 2, 3, 3], box), true);
+  assert.equal(overlaps(box, box), true);
+});
+
+test("a view shifted into the grid's world copy overlaps a window across 180", () => {
+  const gridBbox: Bbox = [170, -20, 190, -10];
+  const window: Bbox = [175, -18, 185, -12];
+  const view = viewInGridWorld([-179, -16, -170, -13], gridBbox);
+
+  assert.equal(overlaps(window, view), true);
+  assert.equal(overlaps(window, [-179, -16, -170, -13]), false);
+});
+
+test("a view past the grid edge is still covered once the window reaches the edge", () => {
+  const grid: Bbox = [0, 0, 10, 10];
+
+  assert.equal(covers([4, 0, 10, 10], [6, 2, 14, 8], grid), true);
+  assert.equal(covers([4, 0, 9, 10], [6, 2, 14, 8], grid), false);
 });
 
 test("contours of a hill stay clear of cells without data and the frame", () => {

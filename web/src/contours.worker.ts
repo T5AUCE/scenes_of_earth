@@ -36,30 +36,34 @@ export interface ContourResult {
 }
 
 let source: ContourSource | null = null;
+let wholeAreaInterval = Infinity; // Stays Infinity (no cap) until the whole-area result exists.
 
 self.onmessage = (event: MessageEvent<ContourRequest>) => {
   const request = event.data;
 
   if (request.kind === "start") {
     source = request;
-    const result = contourWindow(source, wholeGrid(source.grid), COARSE_JOB);
+    const result = contourWindow(source, wholeGrid(source.grid), COARSE_JOB, Infinity);
+    wholeAreaInterval = result.interval;
     self.postMessage(result);
     return;
   }
 
   if (!source) throw new Error("Contours were asked for detail before the elevation arrived");
 
-  self.postMessage(contourWindow(source, request.sourceWindow, request.job));
+  self.postMessage(contourWindow(source, request.sourceWindow, request.job, wholeAreaInterval));
 };
 
 function contourWindow(
   { elevation, mask, grid }: ContourSource,
   sourceWindow: GridWindow,
   job: number,
+  maxInterval: number,
 ): ContourResult {
   const sampled = smoothed(downsample(elevation, mask, grid, MAX_SIDE_CELLS, sourceWindow));
   const inside = maskedValues(sampled);
-  const interval = pickInterval(inside);
+  // Zooming in may refine the lines but never coarsen them.
+  const interval = Math.min(pickInterval(inside), maxInterval);
   const maxElevation = inside.reduce((top, value) => Math.max(top, value), 0);
   const levelRuns = contourRuns(sampled, thresholds(maxElevation, interval));
 

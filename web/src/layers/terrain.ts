@@ -4,6 +4,7 @@ import {
   COARSE_JOB,
   covers,
   factorFor,
+  overlaps,
   viewInGridWorld,
   viewWindow,
   wholeGrid,
@@ -31,6 +32,7 @@ const MAJOR_LINE_WIDTH_PX = 1.1;
 const DETAIL_DEBOUNCE_MS = 200;
 const DETAIL_MARGIN = 0.5;
 const REDRAW_SIZE_RATIO = 2;
+const OUTGROWN_VIEW_RATIO = 1.5; // View size over detail window size past which detail is dropped.
 
 /** Hillshade image and contour lines for one terrain layer. */
 export function createTerrainView(context: LayerContext): LayerView {
@@ -231,7 +233,8 @@ class ContourOverlay {
         : { factor: this.coarseFactor, sourceWindow: wholeGrid(this.grid) };
 
     return (
-      factor < current.factor
+      (this.showsDetail() && !this.coversView())
+      || factor < current.factor
       || sourceWindow.width * REDRAW_SIZE_RATIO <= current.sourceWindow.width
       || sourceWindow.height * REDRAW_SIZE_RATIO <= current.sourceWindow.height
     );
@@ -247,7 +250,20 @@ class ContourOverlay {
     this.legend.hidden = !this.isOn || !this.legend.textContent;
   };
 
+  // Detail stays while it overlaps the view, so a short gap at the edge beats flickering coarse.
   private showsDetail() {
+    if (!this.shown) return false;
+
+    const view = this.viewport();
+    const [west, south, east, north] = this.shown.bounds;
+    const isOutgrown =
+      view[2] - view[0] > (east - west) * OUTGROWN_VIEW_RATIO
+      || view[3] - view[1] > (north - south) * OUTGROWN_VIEW_RATIO;
+
+    return overlaps(this.shown.bounds, view) && !isOutgrown;
+  }
+
+  private coversView() {
     return this.shown !== null && covers(this.shown.bounds, this.viewport(), this.grid.bbox);
   }
 
