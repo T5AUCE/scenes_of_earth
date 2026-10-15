@@ -20,6 +20,7 @@ from .areas import Area, AreaError
 from .bundle import JsonObject, make, validate
 from .plan import LayerPlan, Plan, plan as make_plan
 from .sources import Dataset, SeriesDataset, StaticDataset
+from .terrain_cache import read_cached
 
 ProgressCallback = Callable[[float], None]  # receives the build fraction done, 0 to 1
 
@@ -31,6 +32,7 @@ BATCH_SIZE = 12
 TILE_SIZE_CELLS = 512
 COMPRESSION = GzipCodec(level=5)
 UNIX_EPOCH = date(1970, 1, 1)
+CACHE_DIR_NAME = ".cache"  # in the scenes directory; the leading dot keeps it unserved
 
 WRITE_PROGRESS_START = 0.05
 WRITE_PROGRESS_SPAN = 0.9
@@ -70,7 +72,13 @@ def build_scene(
         )
 
         progress(WRITE_PROGRESS_START)
-        layer_metadata = _write_layers(root, scene_plan, datasets, progress)
+        layer_metadata = _write_layers(
+            root,
+            scene_plan,
+            datasets,
+            scenes_dir / CACHE_DIR_NAME,
+            progress,
+        )
 
         scene_document = make(
             scene_id,
@@ -185,6 +193,7 @@ def _write_layers(
     root: zarr.Group,
     scene_plan: Plan,
     datasets: list[Dataset],
+    cache_dir: Path,
     progress: ProgressCallback,
 ) -> dict[str, JsonObject]:
     ordered_datasets = sorted(
@@ -210,6 +219,7 @@ def _write_layers(
                 layer_group,
                 dataset,
                 layer_plan,
+                cache_dir,
             )
         else:
             raise TypeError(f"{dataset.id}: unknown dataset kind {type(dataset).__name__}")
@@ -250,11 +260,14 @@ def _write_static_layer(
     layer_group: zarr.Group,
     dataset: StaticDataset,
     layer_plan: LayerPlan,
+    cache_dir: Path,
 ) -> JsonObject:
     """Write an elevation raster and its derived hillshade."""
-    elevation, transform = dataset.read(
+    elevation, transform = read_cached(
+        dataset,
         layer_plan.bbox,
         layer_plan.res,
+        cache_dir,
     )
 
     _write_array(

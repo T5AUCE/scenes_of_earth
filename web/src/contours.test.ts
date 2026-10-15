@@ -10,6 +10,7 @@ import {
   factorFor,
   maskedValues,
   pickInterval,
+  smoothed,
   thresholds,
   toLonLat,
   viewInGridWorld,
@@ -22,7 +23,8 @@ import type { Bbox } from "./types.ts";
 const ramp = (count: number, top: number) =>
   Float32Array.from({ length: count }, (_, index) => (index / (count - 1)) * top);
 
-test("interval is the smallest standard step giving about twelve lines", () => {
+test("interval is the smallest standard step giving about eighteen lines", () => {
+  assert.equal(pickInterval(ramp(1000, 1600)), 100);
   assert.equal(pickInterval(ramp(1000, 2400)), 200);
   assert.equal(pickInterval(ramp(1000, 400)), 50);
   assert.equal(pickInterval(ramp(1000, 20)), 10);
@@ -254,4 +256,90 @@ test("contours of a hill stay clear of cells without data and the frame", () => 
   assert.ok(points.length > 0);
   assert.ok(points.every(([x, y]) => Math.hypot(x - 20, y - 20) < 12.8));
   assert.ok(points.every(([x, y]) => x > 0 && x < nx && y > 0 && y < ny));
+});
+
+const sampledGrid = (
+  nx: number,
+  ny: number,
+  elevationAt: (x: number, y: number) => number,
+  sourceWindow = { x: 0, y: 0, width: nx, height: ny },
+) => {
+  const elevation = Float32Array.from({ length: nx * ny }, (_, cell) =>
+    elevationAt(cell % nx, Math.floor(cell / nx)),
+  );
+  const mask = new Uint8Array(nx * ny).fill(1);
+  return downsample(elevation, mask, { bbox: [0, 0, nx, ny], nx, ny }, 1024, sourceWindow);
+};
+
+const roughness = ({ values, nx, ny }: { values: Float32Array; nx: number; ny: number }) => {
+  let sum = 0;
+  for (let y = 0; y < ny; y++) {
+    for (let x = 1; x < nx; x++) sum += Math.abs(values[y * nx + x] - values[y * nx + x - 1]);
+  }
+  return sum;
+};
+
+test("smoothing a flat grid leaves every value unchanged", () => {
+  const flat = smoothed(sampledGrid(12, 9, () => 420));
+
+  assert.ok(Array.from(flat.values).every((value) => Math.abs(value - 420) < 1e-3));
+});
+
+test("smoothing does not pull data blocks toward cells without data", () => {
+  const sampled = sampledGrid(20, 10, (x) => (x < 10 ? 800 : NaN));
+
+  const blurred = smoothed(sampled);
+
+  for (let index = 0; index < blurred.values.length; index++) {
+    const expected = sampled.hasData[index] ? 800 : 0;
+    assert.ok(Number.isFinite(blurred.values[index]));
+    assert.ok(Math.abs(blurred.values[index] - expected) < 1e-3);
+  }
+});
+
+test("smoothing a block without data stays zero whatever its neighbours hold", () => {
+  const sampled = sampledGrid(9, 9, (x, y) => (x === 4 && y === 4 ? NaN : 1000));
+
+  const blurred = smoothed(sampled);
+
+  assert.equal(blurred.values[4 * 9 + 4], 0);
+  assert.ok(Math.abs(blurred.values[4 * 9 + 3] - 1000) < 1e-3);
+});
+
+test("smoothing reduces the noise between neighbouring blocks", () => {
+  const noisy = sampledGrid(40, 40, (x, y) => ((x + y) % 2 ? 100 : 0));
+
+  const blurred = smoothed(noisy);
+
+  assert.ok(roughness(blurred) < roughness(noisy) / 4);
+});
+
+test("smoothing keeps the block grid and flags", () => {
+  const sampled = sampledGrid(8, 6, (x) => x * 10);
+
+  const blurred = smoothed(sampled);
+
+  assert.deepEqual([blurred.nx, blurred.ny, blurred.factor], [8, 6, 1]);
+  assert.deepEqual(blurred.hasData, sampled.hasData);
+  assert.deepEqual(blurred.inside, sampled.inside);
+});
+
+test("a zoomed-in window with less relief gets a smaller interval", () => {
+  const slope = (x: number) => x * 10;
+  const intervalOf = (width: number) => {
+    const window = { x: 0, y: 0, width, height: 100 };
+    return pickInterval(maskedValues(smoothed(sampledGrid(200, 100, slope, window))));
+  };
+
+  assert.equal(intervalOf(200), 200);
+  assert.ok(intervalOf(40) < intervalOf(200));
+  assert.equal(intervalOf(40), 50);
+});
+
+test("the interval of a nearly flat window never drops below ten meters", () => {
+  const flatWindow = { x: 0, y: 0, width: 20, height: 20 };
+
+  const sampled = smoothed(sampledGrid(100, 100, (x) => x * 0.1, flatWindow));
+
+  assert.equal(pickInterval(maskedValues(sampled)), 10);
 });

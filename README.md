@@ -89,6 +89,8 @@ python -m soe.cli terrain-index
   average resampling), others from GLO-90; tiles GLO-30 lacks come from GLO-90 as `layers[].fallback_sources`. Coarser
   cells than the source give the notice "Terrain resampled to N m cells (source 30 m)." Terrain is refused above 2500
   existing source tiles.
+- Terrain reads are cached in `SCENES_DIR/.cache/` (keyed by dataset, source versions, bbox, res and soe version), so
+  rebuilding an area with other layers or dates does not read the tiles again. Deleting the folder is always safe.
 
 ## Environment variables
 

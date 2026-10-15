@@ -7,6 +7,7 @@ import {
   MAX_SIDE_CELLS,
   maskedValues,
   pickInterval,
+  smoothed,
   thresholds,
   toLonLat,
   wholeGrid,
@@ -35,7 +36,6 @@ export interface ContourResult {
 }
 
 let source: ContourSource | null = null;
-let wholeAreaInterval = 0;
 
 self.onmessage = (event: MessageEvent<ContourRequest>) => {
   const request = event.data;
@@ -43,26 +43,23 @@ self.onmessage = (event: MessageEvent<ContourRequest>) => {
   if (request.kind === "start") {
     source = request;
     const result = contourWindow(source, wholeGrid(source.grid), COARSE_JOB);
-    wholeAreaInterval = result.interval;
     self.postMessage(result);
     return;
   }
 
   if (!source) throw new Error("Contours were asked for detail before the elevation arrived");
 
-  self.postMessage(contourWindow(source, request.sourceWindow, request.job, wholeAreaInterval));
+  self.postMessage(contourWindow(source, request.sourceWindow, request.job));
 };
 
-// A detail window reuses the whole-area interval so the legend and the bold lines stay the same.
 function contourWindow(
   { elevation, mask, grid }: ContourSource,
   sourceWindow: GridWindow,
   job: number,
-  fixedInterval?: number,
 ): ContourResult {
-  const sampled = downsample(elevation, mask, grid, MAX_SIDE_CELLS, sourceWindow);
+  const sampled = smoothed(downsample(elevation, mask, grid, MAX_SIDE_CELLS, sourceWindow));
   const inside = maskedValues(sampled);
-  const interval = fixedInterval ?? pickInterval(inside);
+  const interval = pickInterval(inside);
   const maxElevation = inside.reduce((top, value) => Math.max(top, value), 0);
   const levelRuns = contourRuns(sampled, thresholds(maxElevation, interval));
 

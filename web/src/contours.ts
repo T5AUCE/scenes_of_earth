@@ -51,10 +51,15 @@ export const COARSE_JOB = 0;
 /** Every this-many-th contour interval is drawn bold. */
 export const MAJOR_EVERY = 5;
 const INTERVALS_M = [10, 20, 50, 100, 200, 250, 500, 1000];
-const TARGET_LINE_COUNT = 12;
+const TARGET_LINE_COUNT = 18;
 const LOW_PERCENTILE = 0.02;
 const HIGH_PERCENTILE = 0.98;
 const MAX_PERCENTILE_SAMPLES = 65536;
+
+const MIN_BLUR_SIGMA_BLOCKS = 1;
+const MAX_BLUR_SIGMA_BLOCKS = 1.5;
+const BLUR_SIGMA_PER_FACTOR = 0.25;
+const KERNEL_RADIUS_SIGMAS = 3;
 
 const WORLD_WIDTH_DEG = 360;
 const BOUNDS_TOLERANCE_DEG = 1e-9;
@@ -118,6 +123,74 @@ export function downsample(
     }
   }
   return { values, hasData, inside, nx: width, ny: height, factor, sourceWindow };
+}
+
+/**
+ * Blurs the block means with a Gaussian that skips blocks without data, so the area edge and
+ * missing cells do not bleed in; blocks without data keep 0.
+ */
+export function smoothed(sampled: Downsampled): Downsampled {
+  const { values, hasData, nx, ny, factor } = sampled;
+  const kernel = gaussianKernel(blurSigma(factor));
+  const weights = Float32Array.from(hasData);
+  const weighted = values.map((value, index) => value * weights[index]);
+
+  const blurredWeighted = blur(weighted, nx, ny, kernel);
+  const blurredWeights = blur(weights, nx, ny, kernel);
+  const blurred = values.map((_, index) =>
+    hasData[index] ? blurredWeighted[index] / blurredWeights[index] : 0,
+  );
+  return { ...sampled, values: blurred };
+}
+
+// Finer blocks get a lighter blur so zoomed-in views stay sharp.
+function blurSigma(factor: number) {
+  const sigma = MIN_BLUR_SIGMA_BLOCKS + BLUR_SIGMA_PER_FACTOR * (factor - 1);
+  return Math.min(MAX_BLUR_SIGMA_BLOCKS, sigma);
+}
+
+function gaussianKernel(sigma: number) {
+  const radius = Math.ceil(KERNEL_RADIUS_SIGMAS * sigma);
+  return Float32Array.from({ length: 2 * radius + 1 }, (_, index) => {
+    const offset = index - radius;
+    return Math.exp(-(offset * offset) / (2 * sigma * sigma));
+  });
+}
+
+function blur(values: Float32Array, nx: number, ny: number, kernel: Float32Array) {
+  return convolve(convolve(values, nx, ny, kernel, true), nx, ny, kernel, false);
+}
+
+// Samples beyond the grid edge count as zero, which the caller's weights cancel out.
+function convolve(
+  values: Float32Array,
+  nx: number,
+  ny: number,
+  kernel: Float32Array,
+  isAlongRows: boolean,
+) {
+  const radius = (kernel.length - 1) / 2;
+  const lineLength = isAlongRows ? nx : ny;
+  const lineCount = isAlongRows ? ny : nx;
+  const step = isAlongRows ? 1 : nx;
+  const lineStep = isAlongRows ? nx : 1;
+  const result = new Float32Array(values.length);
+
+  for (let line = 0; line < lineCount; line++) {
+    const lineStart = line * lineStep;
+
+    for (let position = 0; position < lineLength; position++) {
+      let sum = 0;
+      const first = Math.max(0, position - radius);
+      const last = Math.min(lineLength - 1, position + radius);
+
+      for (let neighbour = first; neighbour <= last; neighbour++) {
+        sum += kernel[neighbour - position + radius] * values[lineStart + neighbour * step];
+      }
+      result[lineStart + position * step] = sum;
+    }
+  }
+  return result;
 }
 
 /** The source cells showing a view, padded by a fraction of its size so small pans stay inside. */

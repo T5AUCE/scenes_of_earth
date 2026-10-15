@@ -29,12 +29,16 @@ stays cheap and simple. Each feature is checked for extensibility before users g
 2. **Contract generalisation (M3 remainder):** each layer has its own mask, grid and time axis
    (monthly rain, 16-day NDVI, 5-year population; static layers have none). Check that rasters
    past 180°E draw in the next world copy. Monthly series also get yearly totals or means.
-3. **Scene view B:** app UI moves to React (MapLibre stays outside React's control). A panel at
+3. **Temperature:** ERA5-Land monthly 2 m air temperature (0.1°, from 1950), the first layer that
+   shares the scrubber with rain. Needs a Copernicus Climate Data Store account on the build
+   machine.
+4. **Land cover (M5):** ESA WorldCover (10 m) as a static categorical layer, resampled by the most
+   common class in each cell, with fixed class colours and a legend.
+5. **Scene view B:** app UI moves to React (MapLibre stays outside React's control). A panel at
    the bottom right, under the legend, expands to full screen with Charts and About tabs. Charts:
-   area-mean rain and climatology, hypsometry; per-step area means in `scene.json`.
-4. **Credits and notices (M4):** credits, limits and clipping notices in the About tab; basemap
+   area-mean rain and temperature, climatology, hypsometry; per-step area means in `scene.json`.
+6. **Credits and notices (M4):** credits, limits and clipping notices in the About tab; basemap
    attribution.
-5. **Land cover (M5):** ESA WorldCover as a static categorical layer.
 
 ## Later
 
@@ -62,8 +66,9 @@ A toolbar with three tools; Esc returns to Pointer.
 ### Data
 
 - GLO-30 terrain under 90 m cells, GLO-90 otherwise. Height tint maybe later.
-- More data layers come first: TerraClimate (monthly, CC0, no login: temperature, wind, drought)
-  may replace ERA5-Land; population and vegetation over time.
-- Daily data (CHIRPS daily, other daily layers) once there is funding: it needs global cubes on
+- After temperature and land cover: TerraClimate drought and water deficit, and its +2 °C / +4 °C
+  scenarios (monthly, CC0, no login); ERA5-Land snow and soil moisture; population and vegetation
+  over time.
+- Daily data (CHIRPS daily, AgERA5 or ERA5-Land daily statistics) once there is funding: it needs global cubes on
   R2 and adds about $2–5 a month per daily layer at 10k scenes.
 - Latitudes beyond 60°.

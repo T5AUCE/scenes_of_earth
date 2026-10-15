@@ -9,24 +9,26 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, NamedTuple
 
 import numpy as np
 import rasterio
 from rasterio.enums import Resampling
-from rasterio.errors import RasterioIOError
-from rasterio.io import DatasetReader
-from rasterio.merge import merge
+from rasterio.errors import NotGeoreferencedWarning, RasterioIOError, WarpOperationError
 from rasterio.transform import Affine, from_origin
+from rasterio.warp import reproject
 from rasterio.windows import Window
+
+# The warp target is a plain array; a module filter, as catch_warnings is not thread-safe.
+warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
 
 Bbox = Sequence[float]  # W, S, E, N in degrees; a list or a tuple
 CellWindow = tuple[int, int, int, int]  # col, row, width, height on the rain grid
@@ -59,8 +61,12 @@ TILE_GRID_SHAPE = (180, 360)
 TILE_ROW_OFFSET_DEG = 90  # tile index row = lat + 90
 TILE_COL_OFFSET_DEG = 180  # tile index column = lon + 180
 TILE_EDGE_TOLERANCE_DEG = 1e-9  # a bound exactly on a tile edge must not pull in the next tile
-TILE_OPEN_ATTEMPTS = 3
-TILE_RETRY_DELAY_SECS = 1
+NARROW_TILE_FROM_LAT_DEG = 50  # tiles from this latitude poleward have fewer pixels in x
+NARROW_PIXEL_WIDTH_RATIO = 1.5  # their pixels are this much wider than the tile's height
+MIXED_BAND_PIXEL_DIVISOR = 4  # wide (edge at -1/2 px) and narrow (-3/4) tile pixels both fit
+CANVAS_MARGIN_DEG = 1  # the mosaic canvas reaches this far beyond the block, for overhangs
+BLOCK_READ_ATTEMPTS = 3
+BLOCK_RETRY_DELAY_SECS = 1
 
 HEAD_TIMEOUT_SECS = 5  # latest-month probes run on the first page load
 REVISION_TIMEOUT_SECS = 15
@@ -80,6 +86,7 @@ GDAL_OPTS = {
     "GDAL_HTTP_RETRY_DELAY": "1",
     "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
     "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".cog,.tif",
+    "CPL_VSIL_CURL_CACHE_SIZE": "200000000",  # bytes; blocks of one tile share fetched ranges
 }
 
 
@@ -91,13 +98,14 @@ class TerrainProduct:
     index: Path  # bitmap of the tiles that exist
     tile_code: str  # the number in the tile name that tells the products apart
     res_deg: float  # native cell size
+    tile_px: int  # tile height in pixels, and width below NARROW_TILE_FROM_LAT_DEG
     cell_m: int  # native cell size in metres, for notices
 
 
 # Finest first: this is also the order of a mixed scene's sources.
 TERRAIN_PRODUCTS = {
-    "glo30": TerrainProduct(GLO30_URL, GLO30_TILE_INDEX, "10", GLO30_RES_DEG, 30),
-    "glo90": TerrainProduct(GLO90_URL, GLO90_TILE_INDEX, "30", GLO90_RES_DEG, 90),
+    "glo30": TerrainProduct(GLO30_URL, GLO30_TILE_INDEX, "10", GLO30_RES_DEG, 3600, 30),
+    "glo90": TerrainProduct(GLO90_URL, GLO90_TILE_INDEX, "30", GLO90_RES_DEG, 1200, 90),
 }
 
 # Licence and attribution text, copied into every bundle (see bundle.py).
@@ -137,7 +145,9 @@ SOURCES = {
             "WorldDEM™-30"
         ),
         "citation": "doi:10.5270/ESA-c5d3d65",
-        "modified": "hillshade (Horn, az 315°, alt 45°) and resampled elevation",
+        "modified": (
+            "elevation area-averaged onto the scene grid; hillshade (Horn, az 315°, alt 45°)"
+        ),
     },
     "glo90": {
         "name": "Copernicus DEM GLO-90",
@@ -158,7 +168,9 @@ SOURCES = {
             "WorldDEM™-90"
         ),
         "citation": "doi:10.5270/ESA-c5d3d65",
-        "modified": "hillshade (Horn, az 315°, alt 45°) and resampled elevation",
+        "modified": (
+            "elevation area-averaged onto the scene grid; hillshade (Horn, az 315°, alt 45°)"
+        ),
     },
     "geoBoundaries CGAZ": {
         "name": "geoBoundaries CGAZ",
@@ -208,12 +220,26 @@ def terrain_product(res: float) -> str:
     return "glo30" if res < GLO90_RES_DEG * (1 - NATIVE_RES_TOLERANCE) else "glo90"
 
 
+class PlacedTile(NamedTuple):
+    """A terrain tile and where it sits in the (possibly unwrapped) frame of the bounds."""
+
+    product: str
+    name: str
+    lon: int  # west edge, may be above 180
+    lat: int  # south edge
+
+
 def terrain_tiles(bounds: Bbox, product: str) -> list[tuple[str, str]]:
     """(product, name) of the existing tiles covering bounds (W, S, E, N).
 
     Tiles are 1 degree and named by their south-west corner. A cell that GLO-30 does not publish
     is taken from GLO-90. Longitudes above 180 wrap, so bounds may cross the antimeridian.
     """
+    return [(tile.product, tile.name) for tile in placed_terrain_tiles(bounds, product)]
+
+
+def placed_terrain_tiles(bounds: Bbox, product: str) -> list[PlacedTile]:
+    """The tiles of terrain_tiles with their position in the frame of the bounds."""
     west, south, east, north = bounds
     candidates = list(dict.fromkeys([product, "glo90"]))
     tiles = []
@@ -223,10 +249,13 @@ def terrain_tiles(bounds: Bbox, product: str) -> list[tuple[str, str]]:
         for lon in range(
             math.floor(west + TILE_EDGE_TOLERANCE_DEG), math.ceil(east - TILE_EDGE_TOLERANCE_DEG)
         ):
-            lon = (lon + TILE_COL_OFFSET_DEG) % WORLD_WIDTH_DEG - TILE_COL_OFFSET_DEG
+            wrapped_lon = (lon + TILE_COL_OFFSET_DEG) % WORLD_WIDTH_DEG - TILE_COL_OFFSET_DEG
             for candidate in candidates:
-                if _tile_index(candidate)[lat + TILE_ROW_OFFSET_DEG, lon + TILE_COL_OFFSET_DEG]:
-                    tiles.append((candidate, _tile_name(candidate, lat, lon)))
+                if _tile_index(candidate)[
+                    lat + TILE_ROW_OFFSET_DEG, wrapped_lon + TILE_COL_OFFSET_DEG
+                ]:
+                    name = _tile_name(candidate, lat, wrapped_lon)
+                    tiles.append(PlacedTile(candidate, name, lon, lat))
                     break
     return tiles
 
@@ -267,7 +296,8 @@ def terrain_res(bounds: Bbox) -> float:
 def with_margin(bounds: Bbox, res: float) -> Bbox:
     """Bounds grown by one pixel.
 
-    Copernicus tiles are half a pixel off-grid, so the margin is cropped after merging.
+    Copernicus tiles are half a pixel off-grid, so a tile just outside the bounds can still
+    reach into them.
     """
     west, south, east, north = bounds
     return (west - res, south - res, east + res, north + res)
@@ -278,7 +308,7 @@ def terrain_by_blocks(
     res: float,
     read_block: Callable[[Bbox, float], np.ndarray | None],
 ) -> tuple[np.ndarray, Affine]:
-    """Terrain on bounds, read in parallel in blocks of whole degrees, so no block crosses 180.
+    """Terrain on bounds, read in parallel in blocks of whole degrees.
 
     read_block(block_bounds, res) returns an array, or None for a block without terrain (left at 0).
     """
@@ -390,42 +420,7 @@ class RealSource:
 
     def terrain(self, bounds: Bbox, res: float) -> tuple[np.ndarray, Affine]:
         """Elevation (int16) on bounds at res; ocean (no tile) is 0. Returns (array, transform)."""
-        return terrain_by_blocks(bounds, res, self._merge)
-
-    def _merge(self, bounds: Bbox, res: float) -> np.ndarray | None:
-        """One block: merged elevation, or None if no tile exists there.
-
-        Bounds above 180 read the tiles west of it.
-        """
-        west, south, east, north = bounds
-        if west >= 180:
-            west, east = west - WORLD_WIDTH_DEG, east - WORLD_WIDTH_DEG
-
-        padded_bounds = with_margin((west, south, east, north), res)
-        product = terrain_product(res)
-        names = terrain_tiles(padded_bounds, product)
-        if not names:
-            return None
-
-        # Nearest would decimate GLO-30 where the cells are coarser than 30 m.
-        resampling = Resampling.average if product == "glo30" else Resampling.nearest
-        urls = [TERRAIN_PRODUCTS[tile_product].url.format(n=name) for tile_product, name in names]
-        with ExitStack() as open_tiles:
-            tiles = [open_tiles.enter_context(_open_tile(url)) for url in urls]
-            with rasterio.Env(**GDAL_OPTS):
-                merged, _ = merge(
-                    tiles,
-                    bounds=padded_bounds,
-                    res=res,
-                    nodata=0,
-                    resampling=resampling,
-                )
-
-        elevation = _crop_margin(merged[0], bounds, res)
-        if east == 180:
-            # Tiles are half a pixel off-grid and the next tile is across the seam.
-            elevation[:, -1] = elevation[:, -2]
-        return elevation
+        return terrain_by_blocks(bounds, res, _warp_block)
 
 
 def _previous_month(year: int, month: int) -> tuple[int, int]:
@@ -448,24 +443,109 @@ def _head(url: str, timeout: float = HEAD_TIMEOUT_SECS) -> tuple[bool | None, st
         return None, None
 
 
-def _crop_margin(merged: np.ndarray, bounds: Bbox, res: float) -> np.ndarray:
-    """Elevation of `bounds` as int16, cropped from the merge that had a one-pixel margin."""
+def _warp_block(bounds: Bbox, res: float) -> np.ndarray | None:
+    """One block: elevation area-averaged onto its grid, or None if no tile exists there."""
+    product = terrain_product(res)
+    tiles = placed_terrain_tiles(with_margin(bounds, res), product)
+    if not tiles:
+        return None
+
+    mosaic = _mosaic_xml(tiles, bounds, product)
+    for attempt in range(BLOCK_READ_ATTEMPTS):
+        try:
+            return _average_onto_grid(mosaic, bounds, res)
+        except (RasterioIOError, WarpOperationError) as error:
+            if attempt == BLOCK_READ_ATTEMPTS - 1:
+                raise SourceUnavailable("Copernicus DEM tiles did not answer") from error
+
+            # The bucket drops connections now and then.
+            time.sleep(BLOCK_RETRY_DELAY_SECS)
+
+
+def _mosaic_xml(tiles: list[PlacedTile], bounds: Bbox, product: str) -> str:
+    """VRT that lays the tiles side by side at their true footprints, in the frame of bounds.
+
+    A tile's pixel centres sit on whole degrees, so its footprint reaches half a pixel beyond its
+    name. The canvas origin is on the half-pixel grid of the scene's product, and its pixels are
+    as wide as the block's latitude band has, so that band's tiles land on whole canvas pixels.
+    A block with tiles of both bands uses a pixel that divides both tile widths and edge offsets
+    exactly, with the origin on whole degrees.
+    """
+    west, south, east, north = bounds
+    pixel_height = TERRAIN_PRODUCTS[product].res_deg
+    if {_is_narrow_tile(tile) for tile in tiles} == {False, True}:
+        pixel_width = pixel_height / MIXED_BAND_PIXEL_DIVISOR
+        origin_shift = 0
+    else:
+        narrow = _is_narrow_band(south, north)
+        pixel_width = pixel_height * (NARROW_PIXEL_WIDTH_RATIO if narrow else 1)
+        origin_shift = pixel_width / 2
+    left = math.floor(west) - CANVAS_MARGIN_DEG - origin_shift
+    top = math.ceil(north) + CANVAS_MARGIN_DEG + pixel_height / 2
+    width = round((math.ceil(east) - math.floor(west) + 2 * CANVAS_MARGIN_DEG) / pixel_width) + 1
+    span_deg = math.ceil(north) - math.floor(south) + 2 * CANVAS_MARGIN_DEG
+    height = round(span_deg / pixel_height) + 1
+    sources = "".join(
+        _tile_source_xml(tile, left, top, pixel_width, pixel_height) for tile in tiles
+    )
+    return (
+        f'<VRTDataset rasterXSize="{width}" rasterYSize="{height}">'
+        "<SRS>EPSG:4326</SRS>"
+        f"<GeoTransform>{left}, {pixel_width}, 0, {top}, 0, {-pixel_height}</GeoTransform>"
+        f'<VRTRasterBand dataType="Float32" band="1">{sources}</VRTRasterBand>'
+        "</VRTDataset>"
+    )
+
+
+def _is_narrow_band(south: float, north: float) -> bool:
+    """Whether a block lies in the latitudes whose tiles have fewer pixels in x.
+
+    Blocks start and end on even degrees, so none straddles the 50-degree boundary.
+    """
+    return abs(south + north) / 2 >= NARROW_TILE_FROM_LAT_DEG
+
+
+def _is_narrow_tile(tile: PlacedTile) -> bool:
+    return abs(tile.lat + 0.5) >= NARROW_TILE_FROM_LAT_DEG
+
+
+def _tile_source_xml(
+    tile: PlacedTile,
+    left: float,
+    top: float,
+    pixel_width: float,
+    pixel_height: float,
+) -> str:
+    """VRT SimpleSource that draws one tile at its footprint on the canvas."""
+    tile_px = TERRAIN_PRODUCTS[tile.product].tile_px
+    narrow = _is_narrow_tile(tile)
+    width_px = round(tile_px / NARROW_PIXEL_WIDTH_RATIO) if narrow else tile_px
+    url = "/vsicurl/" + TERRAIN_PRODUCTS[tile.product].url.format(n=tile.name)
+    column = (tile.lon - 0.5 / width_px - left) / pixel_width
+    row = (top - (tile.lat + 1 + 0.5 / tile_px)) / pixel_height
+    return (
+        f'<SimpleSource><SourceFilename relativeToVRT="0">{url}</SourceFilename>'
+        "<SourceBand>1</SourceBand>"
+        f'<SrcRect xOff="0" yOff="0" xSize="{width_px}" ySize="{tile_px}"/>'
+        f'<DstRect xOff="{column}" yOff="{row}" xSize="{1 / pixel_width}" '
+        f'ySize="{1 / pixel_height}"/></SimpleSource>'
+    )
+
+
+def _average_onto_grid(mosaic: str, bounds: Bbox, res: float) -> np.ndarray:
+    """Area-average the mosaic VRT onto the output grid of bounds."""
     west, south, east, north = bounds
     height, width = round((north - south) / res), round((east - west) / res)
-    elevation = np.rint(merged[1:1 + height, 1:1 + width]).clip(-32768, 32767)
-    return elevation.astype("int16")
-
-
-def _open_tile(url: str) -> DatasetReader:
-    """Open one terrain tile, retrying a few times because the bucket drops connections."""
-    for attempt in range(1, TILE_OPEN_ATTEMPTS + 1):
-        try:
-            with rasterio.Env(**GDAL_OPTS):
-                return rasterio.open(url)
-        except RasterioIOError:
-            if attempt == TILE_OPEN_ATTEMPTS:
-                raise
-            time.sleep(TILE_RETRY_DELAY_SECS)
+    elevation = np.zeros((height, width), "float32")
+    with rasterio.Env(**GDAL_OPTS), rasterio.open(mosaic) as source:
+        reproject(
+            rasterio.band(source, 1),
+            elevation,
+            dst_transform=from_origin(west, north, res, res),
+            dst_crs="EPSG:4326",
+            resampling=Resampling.average,
+        )
+    return np.rint(elevation).clip(-32768, 32767).astype("int16")
 
 
 class SyntheticSource:

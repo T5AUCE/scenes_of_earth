@@ -6,6 +6,7 @@ import {
   factorFor,
   viewInGridWorld,
   viewWindow,
+  wholeGrid,
   windowBounds,
   type GridWindow,
 } from "../contours";
@@ -29,6 +30,7 @@ const MAJOR_LINE_WIDTH_PX = 1.1;
 
 const DETAIL_DEBOUNCE_MS = 200;
 const DETAIL_MARGIN = 0.5;
+const REDRAW_SIZE_RATIO = 2;
 
 /** Hillshade image and contour lines for one terrain layer. */
 export function createTerrainView(context: LayerContext): LayerView {
@@ -94,6 +96,8 @@ class ContourOverlay {
   private inFlight: DetailWindow | null = null;
   private isRequestPending = false;
   private shown: DetailWindow | null = null;
+  private coarseInterval = 0;
+  private detailInterval = 0;
   private lastJob = COARSE_JOB;
 
   constructor(
@@ -163,6 +167,7 @@ class ContourOverlay {
       this.showCoarse(interval, collection);
     } else if (job === this.inFlight?.job) {
       setCollection(this.map, this.detailId, collection);
+      this.detailInterval = interval;
       this.shown = this.inFlight;
       this.inFlight = null;
     }
@@ -177,7 +182,7 @@ class ContourOverlay {
 
   private showCoarse(interval: number, collection: ContourResult["collection"]) {
     setCollection(this.map, this.coarseId, collection);
-    this.legend.textContent = contourLegendText(interval, this.layer.units);
+    this.coarseInterval = interval;
     this.map.on("move", this.updateVisibility);
     this.map.on("moveend", this.scheduleDetail);
     this.scheduleDetail();
@@ -199,10 +204,7 @@ class ContourOverlay {
   // At most one window is computed at a time; the latest view is requested when it finishes.
   private requestDetail() {
     const target = viewWindow(this.grid, this.viewport(), DETAIL_MARGIN);
-    if (!this.alive || !this.worker || !target || target.factor >= this.coarseFactor) return;
-
-    const isCurrent = this.shown && this.showsDetail() && this.shown.factor <= target.factor;
-    if (isCurrent) return;
+    if (!this.alive || !this.worker || !target || !this.isFinerThanShown(target)) return;
 
     if (this.inFlight) {
       this.isRequestPending = true;
@@ -221,8 +223,24 @@ class ContourOverlay {
     post(this.worker, { kind: "detail", job: this.lastJob, sourceWindow: target.sourceWindow });
   }
 
+  // A window much smaller than the one shown is worth redrawing, as its interval can be finer.
+  private isFinerThanShown({ sourceWindow, factor }: NonNullable<ReturnType<typeof viewWindow>>) {
+    const current =
+      this.shown && this.showsDetail()
+        ? this.shown
+        : { factor: this.coarseFactor, sourceWindow: wholeGrid(this.grid) };
+
+    return (
+      factor < current.factor
+      || sourceWindow.width * REDRAW_SIZE_RATIO <= current.sourceWindow.width
+      || sourceWindow.height * REDRAW_SIZE_RATIO <= current.sourceWindow.height
+    );
+  }
+
   private readonly updateVisibility = () => {
     const detailVisible = this.isOn && this.showsDetail();
+    const interval = detailVisible ? this.detailInterval : this.coarseInterval;
+    this.legend.textContent = interval ? contourLegendText(interval, this.layer.units) : "";
 
     setVisible(this.map, this.coarseId, this.isOn && !detailVisible);
     setVisible(this.map, this.detailId, detailVisible);

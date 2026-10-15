@@ -1,9 +1,15 @@
 """Offline tests: dataset kinds and steps, tiles, terrain resolution, block mean, source probes."""
+import functools
+import http.server
+import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import numpy as np
 import pytest
+import rasterio
+from rasterio.transform import Affine
 
 from soe import sources
 from soe.sources import (
@@ -11,18 +17,28 @@ from soe.sources import (
     Dataset,
     RealSource,
     SeriesDataset,
+    SourceUnavailable,
     StaticDataset,
     SyntheticSource,
+    TerrainProduct,
     _tile_index,
+    _tile_name,
+    _warp_block,
     block_mean,
     make_registry,
     month_list,
+    placed_terrain_tiles,
     terrain_by_blocks,
     terrain_product,
     terrain_res,
     terrain_tiles,
 )
 from tests.helpers import RAIN, TERRAIN
+
+
+TILE_PX = 60  # the fake terrain tiles are small, 1 / 60 degree per pixel
+NARROW_TILE_PX = 40  # tiles from 50 degrees poleward have 2/3 of the pixels in x
+CELL_DEG = 0.05
 
 
 def vars_of(dataset: Dataset) -> dict:
@@ -192,3 +208,166 @@ def test_static_dataset_without_read_cannot_be_created():
 
 def test_time_varying_follows_the_dataset_kind():
     assert (RAIN.time_varying, TERRAIN.time_varying) == (True, False)
+
+
+class QuietHandler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+@pytest.fixture
+def fake_terrain(tmp_path, monkeypatch):
+    """Serve small GLO-90-shaped tiles from localhost; add_tile(lon, lat) creates each existing one.
+
+    Returns (add_tile, tiles) where tiles maps (lon, lat) to its pixel values. The tile index lists
+    exactly the added tiles.
+    """
+    handler = functools.partial(QuietHandler, directory=str(tmp_path))
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    product = TerrainProduct(
+        f"http://127.0.0.1:{server.server_port}/{{n}}.tif",
+        Path("unused"),
+        "30",
+        1 / TILE_PX,
+        TILE_PX,
+        90,
+    )
+    monkeypatch.setitem(sources.TERRAIN_PRODUCTS, "glo90", product)
+    index = np.zeros(sources.TILE_GRID_SHAPE, bool)
+    monkeypatch.setattr(sources, "_tile_index", lambda product_name: index)
+    tiles = {}
+    random = np.random.default_rng(1)
+
+    def add_tile(lon: int, lat: int) -> None:
+        width = NARROW_TILE_PX if abs(lat + 0.5) >= 50 else TILE_PX
+        values = random.integers(0, 3000, (TILE_PX, width)).astype("float32")
+        if width == NARROW_TILE_PX:  # a ramp: random pixels would exaggerate the stretch below
+            ramp = np.add.outer(np.arange(TILE_PX) * 5.0, np.arange(width) * 7.0)
+            values = ramp.astype("float32")
+        wrapped_lon = (lon + 180) % 360 - 180
+        profile = {
+            "driver": "GTiff",
+            "width": width,
+            "height": TILE_PX,
+            "count": 1,
+            "dtype": "float32",
+            "crs": "EPSG:4326",
+            # Copernicus tiles: pixel centres on whole degrees, so the edge is half a pixel out.
+            "transform": Affine(
+                1 / width, 0, wrapped_lon - 0.5 / width, 0, -1 / TILE_PX, lat + 1 + 0.5 / TILE_PX
+            ),
+        }
+        path = tmp_path / f"{_tile_name('glo90', lat, wrapped_lon)}.tif"
+        with rasterio.open(path, "w", **profile) as tile:
+            tile.write(values, 1)
+        index[lat + 90, wrapped_lon + 180] = True
+        tiles[(lon, lat)] = values
+
+    yield add_tile, tiles
+    server.shutdown()
+
+
+def overlap_lengths(out_edges: np.ndarray, in_edges: np.ndarray) -> np.ndarray:
+    """Length of the overlap of every output interval with every input interval."""
+    low = np.maximum(out_edges[:-1, None], in_edges[None, :-1])
+    high = np.minimum(out_edges[1:, None], in_edges[None, 1:])
+    return np.clip(high - low, 0, None)
+
+
+def area_mean(tiles: dict, bounds: tuple[float, float, float, float]) -> np.ndarray:
+    """Exact area-weighted mean of the tile pixels in every cell of bounds; no tile counts as 0."""
+    west, south, east, north = bounds
+    x_out = west + np.arange(round((east - west) / CELL_DEG) + 1) * CELL_DEG
+    y_out = north - np.arange(round((north - south) / CELL_DEG) + 1) * CELL_DEG
+    total = np.zeros((len(y_out) - 1, len(x_out) - 1))
+    for (lon, lat), values in tiles.items():
+        height, width = values.shape
+        x_in = lon - 0.5 / width + np.arange(width + 1) / width
+        y_in = lat + 1 + 0.5 / height - np.arange(height + 1) / height
+        weights_x = overlap_lengths(x_out, x_in)
+        weights_y = overlap_lengths(-y_out, -y_in)
+        total += weights_y @ values @ weights_x.T
+    return total / CELL_DEG**2
+
+
+def test_terrain_across_180_with_a_missing_tile_equals_the_area_mean(fake_terrain):
+    add_tile, tiles = fake_terrain
+    for lon, lat in ((179, -18), (180, -18), (180, -19)):  # (179, -19) is missing
+        add_tile(lon, lat)
+    bounds = (179.0, -19.0, 181.0, -17.0)
+
+    elevation, transform = RealSource().terrain(bounds, CELL_DEG)
+
+    assert np.abs(elevation - area_mean(tiles, bounds)).max() <= 0.51  # int16 rounding
+    assert (transform.c, transform.f) == (179.0, -17.0)
+    assert (elevation[20:, :19] == 0).all()  # the lower-left tile is missing
+
+
+def test_two_blocks_equal_one_block_exactly(fake_terrain):
+    add_tile, _ = fake_terrain
+    for lon, lat in ((179, -18), (180, -18), (179, -19), (180, -19)):
+        add_tile(lon, lat)
+    bounds = (179.0, -19.0, 181.0, -17.0)  # BLOCK_DEG = 2 splits it at 180
+
+    two_blocks, _ = RealSource().terrain(bounds, CELL_DEG)
+    one_block = _warp_block(bounds, CELL_DEG)
+
+    assert sources._block_edges(179.0, 181.0) == [179.0, 180, 181.0]
+    assert np.array_equal(two_blocks, one_block)
+
+
+def test_narrow_tiles_at_50_degrees_equal_the_area_mean(fake_terrain):
+    add_tile, tiles = fake_terrain
+    for lon, lat in ((10, 49), (11, 49), (10, 50)):  # (11, 50) is missing
+        add_tile(lon, lat)
+    bounds = (10.0, 49.0, 12.0, 51.0)
+
+    elevation, _ = RealSource().terrain(bounds, CELL_DEG)
+
+    assert tiles[(10, 50)].shape[1] == NARROW_TILE_PX
+    assert np.abs(elevation - area_mean(tiles, bounds)).max() <= 0.51
+    assert (elevation[:19, 21:] == 0).all()  # the upper-right tile is missing
+
+
+def test_narrow_tiles_at_minus_50_degrees_equal_the_area_mean(fake_terrain):
+    add_tile, tiles = fake_terrain
+    for lon, lat in ((10, -51), (10, -50), (11, -50)):  # (11, -51) is missing
+        add_tile(lon, lat)
+    bounds = (10.0, -51.0, 12.0, -49.0)
+
+    elevation, _ = RealSource().terrain(bounds, CELL_DEG)
+
+    assert np.abs(elevation - area_mean(tiles, bounds)).max() <= 0.51
+    assert (elevation[21:, 21:] == 0).all()  # the lower-right tile is missing
+
+
+def test_block_without_tiles_is_none(fake_terrain):
+    assert _warp_block((20.0, 20.0, 21.0, 21.0), CELL_DEG) is None
+
+
+def test_failed_block_read_is_retried_then_raised(fake_terrain, monkeypatch):
+    add_tile, _ = fake_terrain
+    add_tile(10, 10)
+    calls = []
+
+    def always_fails(mosaic: str, bounds: tuple, res: float) -> np.ndarray:
+        calls.append(1)
+        raise rasterio.errors.RasterioIOError("dropped")
+
+    monkeypatch.setattr(sources, "_average_onto_grid", always_fails)
+    monkeypatch.setattr(sources, "BLOCK_RETRY_DELAY_SECS", 0)
+
+    with pytest.raises(SourceUnavailable):
+        _warp_block((10.0, 10.0, 11.0, 11.0), CELL_DEG)
+
+    assert len(calls) == sources.BLOCK_READ_ATTEMPTS
+
+
+def test_placed_tiles_west_of_180_keep_the_unwrapped_longitude():
+    placed = placed_terrain_tiles((179.0, -19.0, 181.0, -17.0), "glo30")
+
+    assert {(tile.lon, tile.lat) for tile in placed} == {
+        (179, -19), (180, -19), (179, -18), (180, -18)
+    }
+    assert {tile.name.split("_")[6] for tile in placed if tile.lon == 180} == {"W180"}

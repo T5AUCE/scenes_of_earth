@@ -1,5 +1,6 @@
 """Offline tests: hillshade, synthetic end-to-end builds, bundle credits and validation."""
 import json
+import shutil
 from dataclasses import replace
 from pathlib import Path
 
@@ -48,6 +49,45 @@ def build_nairobi(
     out = tmp_path / HASH_A
     doc = json.loads((out / "scene.json").read_text(encoding="utf-8"))
     return doc, zarr.open_group(out / "data.zarr", mode="r")
+
+
+def array_bytes(scene_dir: Path) -> dict[str, bytes]:
+    """Every array of the bundle as raw bytes; stored chunks carry a gzip time stamp."""
+    root = zarr.open_group(scene_dir / "data.zarr", mode="r")
+    return {
+        path: member[:].tobytes()
+        for path, member in root.members(max_depth=None)
+        if isinstance(member, zarr.Array)
+    }
+
+
+def test_terrain_cache_hit_builds_identical_arrays(tmp_path):
+    class CountingSource(SyntheticSource):
+        reads = 0
+
+        def terrain(self, bounds: tuple, res: float) -> tuple[np.ndarray, object]:
+            self.reads += 1
+            return super().terrain(bounds, res)
+
+    source = CountingSource()
+    terrain = make_registry(source)["copdem_terrain"]
+    area = Area(NAIROBI, BOUNDARY)
+    build_scene(HASH_A, area, "2015-01", "2015-02", [terrain], "Test", tmp_path / "cold")
+    shutil.copytree(tmp_path / "cold" / ".cache", tmp_path / "warm" / ".cache")
+
+    build_scene(HASH_A, area, "2015-01", "2015-02", [terrain], "Test", tmp_path / "warm")
+
+    cold, warm = array_bytes(tmp_path / "cold" / HASH_A), array_bytes(tmp_path / "warm" / HASH_A)
+
+    assert source.reads == 1
+    assert "copdem_terrain/elevation" in cold and cold == warm
+
+
+def test_build_stores_terrain_in_the_cache_folder(tmp_path):
+    build_nairobi(tmp_path)
+
+    assert any((tmp_path / ".cache").glob("*.npz"))
+    assert not (tmp_path / ".cache" / "scene.json").exists()
 
 
 def test_hillshade_flat_and_slope():
