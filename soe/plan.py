@@ -1,5 +1,4 @@
 """Scene planning: each layer's grid window, aggregation factor, mask and time steps."""
-import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -9,9 +8,7 @@ from shapely.geometry import box, mapping
 from shapely.geometry.base import BaseGeometry
 
 from .areas import MAX_LONGITUDE_DEG, WORLD_WIDTH_DEG, Area, AreaError, unwrap
-from .sources import GRID, Bbox, Dataset, SeriesDataset
-
-CellSpan = tuple[int, int, int, int]  # c0, c1, r0, r1 on an anchor grid
+from .sources import CHIRPS_GRID, Bbox, CellSpan, Dataset, SeriesDataset
 
 MIN_CELLS = 25  # drawn shapes smaller than this are rejected
 PAD_DEG = 0.5  # each layer's window is padded to at least this size
@@ -23,10 +20,6 @@ MAX_SOURCE = 100_000_000
 # Raw bytes of all layers' arrays after aggregation.
 MAX_OUTPUT_BYTES = 50_000_000
 FACTORS = (1, 2, 4, 8)
-
-GRID_DECIMALS = 6  # cell indices and bounds are rounded to this to absorb float noise
-GRID_WEST_DEG = -180
-GRID_NORTH_DEG = 60
 
 
 @dataclass
@@ -146,30 +139,19 @@ def _layer_windows(
     """Anchor-grid cell window (c0, c1, r0, r1) of each layer, padded; and whether any was."""
     windows, padded = {}, False
     for dataset in datasets:
-        cell = dataset.anchor_res
-        limit_c0, limit_c1, limit_r0, limit_r1 = _span(_extent(dataset.coverage), cell)
-        c0, c1, r0, r1 = _span(parts[dataset.id].bounds, cell)
+        grid = dataset.grid
+        limit_c0, limit_c1, limit_r0, limit_r1 = grid.span(_extent(dataset.coverage))
+        c0, c1, r0, r1 = grid.span(parts[dataset.id].bounds)
         c0, c1 = max(c0, limit_c0), min(c1, limit_c1)
         r0, r1 = max(r0, limit_r0), min(r1, limit_r1)
 
-        needed_cells = round(PAD_DEG / cell)
+        needed_cells = round(PAD_DEG / grid.res)
         columns = _pad(c0, c1, limit_c0, limit_c1, needed_cells)
         rows = _pad(r0, r1, limit_r0, limit_r1, needed_cells)
         window = columns + rows
         padded |= window != (c0, c1, r0, r1)
         windows[dataset.id] = window
     return windows, padded
-
-
-def _span(bounds: Bbox, cell: float) -> CellSpan:
-    """Outward cell range (c0, c1, r0, r1) of bounds on the grid that starts at 180W, 60N."""
-    west, south, east, north = bounds
-    return (
-        math.floor(round((west - GRID_WEST_DEG) / cell, GRID_DECIMALS)),
-        math.ceil(round((east - GRID_WEST_DEG) / cell, GRID_DECIMALS)),
-        math.floor(round((GRID_NORTH_DEG - north) / cell, GRID_DECIMALS)),
-        math.ceil(round((GRID_NORTH_DEG - south) / cell, GRID_DECIMALS)),
-    )
 
 
 def _pad(
@@ -208,8 +190,8 @@ def _source_cells(windows: dict[str, CellSpan], steps: dict[str, list[str]]) -> 
 
 
 def _small_area_notices(area: Area, shared_geometry: BaseGeometry) -> list[str]:
-    c0, c1, r0, r1 = _span(shared_geometry.bounds, GRID.a)
-    window_transform = GRID @ Affine.translation(c0, r0)
+    c0, c1, r0, r1 = CHIRPS_GRID.span(shared_geometry.bounds)
+    window_transform = CHIRPS_GRID.transform @ Affine.translation(c0, r0)
     native_mask = _cell_mask(shared_geometry, window_transform, (r1 - r0, c1 - c0))
     if int(native_mask.sum()) >= MIN_CELLS:
         return []
@@ -253,19 +235,9 @@ def _layer_grid(
     window: CellSpan,
     factor: int,
 ) -> tuple[Affine, tuple[int, int], list[float], float]:
-    """(transform, (height, width), bbox, res) of a layer over anchor-grid cells c0:c1, r0:r1."""
-    c0, c1, r0, r1 = window
-    cell = dataset.anchor_res
-    bbox = [
-        round(value, GRID_DECIMALS)
-        for value in (
-            GRID_WEST_DEG + c0 * cell,
-            GRID_NORTH_DEG - r1 * cell,
-            GRID_WEST_DEG + c1 * cell,
-            GRID_NORTH_DEG - r0 * cell,
-        )
-    ]
-    res = cell * factor if dataset.time_varying else dataset.res_for(bbox)
+    """(transform, (height, width), bbox, res) of a layer over its grid cells c0:c1, r0:r1."""
+    bbox = dataset.grid.bbox(window)
+    res = dataset.grid.res * factor if dataset.time_varying else dataset.res_for(bbox)
     grid_shape = (round((bbox[3] - bbox[1]) / res), round((bbox[2] - bbox[0]) / res))
     return Affine(res, 0, bbox[0], 0, -res, bbox[3]), grid_shape, bbox, res
 

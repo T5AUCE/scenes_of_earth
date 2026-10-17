@@ -13,8 +13,10 @@ from rasterio.transform import Affine
 
 from soe import sources
 from soe.sources import (
+    CHIRPS_GRID,
     SOURCES,
     Dataset,
+    Grid,
     RealSource,
     SeriesDataset,
     SourceUnavailable,
@@ -54,6 +56,21 @@ def test_block_mean_is_nan_aware():
     means = block_mean(values, 2)
 
     assert means[0, 0] == 3 and np.isnan(means[0, 1])
+
+
+def test_chirps_grid_window_and_bbox_round_trip():
+    bbox = [36.5, -1.5, 37.5, -0.5]
+    span = CHIRPS_GRID.span(bbox)
+
+    assert CHIRPS_GRID.bbox(span) == bbox
+    assert CHIRPS_GRID.window(bbox) == (4330, 1210, 20, 20)
+
+
+def test_cell_centred_grid_has_its_cell_edges_half_a_cell_off_the_chirps_grid():
+    cell_centred = Grid(-0.05, 90.05, 0.1, 3600, 1801)
+
+    assert cell_centred.span((10.05, 20.05, 10.15, 20.15)) == (101, 102, 699, 700)
+    assert cell_centred.bbox((101, 102, 699, 700)) == [10.05, 20.05, 10.15, 20.15]
 
 
 def test_terrain_res_budget():

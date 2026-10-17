@@ -344,6 +344,8 @@ def test_layers(env):
 
 
 def test_sample_areas_seed_only_in_synthetic_mode_and_when_empty(tmp_path, monkeypatch):
+    monkeypatch.delenv("SOE_SYNTHETIC", raising=False)
+
     def app_in(name: str) -> FastAPI:
         return create_app(
             tmp_path / name / "soe.db",

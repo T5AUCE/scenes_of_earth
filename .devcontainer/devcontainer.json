@@ -16,10 +16,11 @@
 	},
 	"otherPortsAttributes": { "onAutoForward": "ignore" },
 
-	"postCreateCommand": "pip install -e '.[import,dev]'",
+	"postCreateCommand": "pip install -e '.[import,dev]' && npm config set prefix ~/.npm-global && npm install -g @anthropic-ai/claude-code",
 
 	"mounts": ["source=claude-code-config,target=/home/vscode/.claude,type=volume"],
 	"containerEnv": { "CLAUDE_CONFIG_DIR": "/home/vscode/.claude" },
+	"remoteEnv": { "PATH": "/home/vscode/.npm-global/bin:${containerEnv:PATH}" },
 
 	"customizations": {
 	"vscode": {

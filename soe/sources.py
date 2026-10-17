@@ -1,7 +1,7 @@
 """Data sources: CHIRPS rain, Copernicus GLO-30/90 terrain, a synthetic stand-in, licence text.
 
-Rain grid: global CHIRPS 0.05 degree grid, row 0 is the north edge (60N).
-Windows are integer (col, row, width, height) cell windows on that grid, so reads are never
+Each dataset has a Grid; CHIRPS is global at 0.05 degrees with row 0 at 60N.
+Windows are integer (col, row, width, height) cell windows on a dataset's Grid, so reads are never
 resampled.
 """
 import math
@@ -31,19 +31,71 @@ from rasterio.windows import Window
 warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
 
 Bbox = Sequence[float]  # W, S, E, N in degrees; a list or a tuple
-CellWindow = tuple[int, int, int, int]  # col, row, width, height on the rain grid
+CellWindow = tuple[int, int, int, int]  # col, row, width, height on a dataset's grid
+CellSpan = tuple[int, int, int, int]  # c0, c1, r0, r1 on a dataset's grid
 Encoding = tuple[str, float, float, int | None]  # dtype, scale_factor, add_offset, fill
 Registry = dict[str, "Dataset"]  # dataset id -> dataset
 
 # The app supports 60S-60N in v1; widen the extent here.
 SUPPORTED_BOUNDS_DEG = (-180, -60, 180, 60)  # W, S, E, N
 
-GRID = Affine(0.05, 0, -180, 0, -0.05, 60)
-NCOLS, NROWS = 7200, 2400
 CELL_DEG = 0.05  # CHIRPS cell size
 CELLS_PER_DEG2_AT_CHIRPS_RES = 400  # (1 / 0.05) ** 2
 FIRST_MONTH = "1981-01"
+
+GRID_DECIMALS = 6  # cell indices and bounds are rounded to this to absorb float noise
 WORLD_WIDTH_DEG = 360
+
+
+@dataclass(frozen=True)
+class Grid:
+    """A dataset's cell grid: cell (0, 0) has its north-west corner at (west_deg, north_deg).
+
+    Row 0 is the north edge. Only whole cells are addressed, so reads are never resampled.
+    """
+
+    west_deg: float
+    north_deg: float
+    res: float  # cell size, degrees
+    columns: int  # in the whole grid; longitudes wrap after this many
+    rows: int
+
+    @property
+    def transform(self) -> Affine:
+        return Affine(self.res, 0, self.west_deg, 0, -self.res, self.north_deg)
+
+    def span(self, bounds: Bbox) -> CellSpan:
+        """Outward cell range (c0, c1, r0, r1) of bounds."""
+        west, south, east, north = bounds
+        return (
+            math.floor(round((west - self.west_deg) / self.res, GRID_DECIMALS)),
+            math.ceil(round((east - self.west_deg) / self.res, GRID_DECIMALS)),
+            math.floor(round((self.north_deg - north) / self.res, GRID_DECIMALS)),
+            math.ceil(round((self.north_deg - south) / self.res, GRID_DECIMALS)),
+        )
+
+    def bbox(self, span: CellSpan) -> list[float]:
+        """[W, S, E, N] of a cell range."""
+        c0, c1, r0, r1 = span
+        return [
+            round(value, GRID_DECIMALS)
+            for value in (
+                self.west_deg + c0 * self.res,
+                self.north_deg - r1 * self.res,
+                self.west_deg + c1 * self.res,
+                self.north_deg - r0 * self.res,
+            )
+        ]
+
+    def window(self, bbox: Bbox) -> CellWindow:
+        """Integer (col, row, width, height) window of a grid-aligned bbox."""
+        west, south, east, north = bbox
+        col = round((west - self.west_deg) / self.res)
+        row = round((self.north_deg - north) / self.res)
+        return col, row, round((east - west) / self.res), round((north - south) / self.res)
+
+
+CHIRPS_GRID = Grid(-180, 60, CELL_DEG, 7200, 2400)
 
 GLO30_RES_DEG = 1 / 3600
 GLO90_RES_DEG = 1 / 1200
@@ -428,7 +480,7 @@ class RealSource:
 
         with rasterio.Env(**GDAL_OPTS):
             with rasterio.open(_chirps_url(month)) as dataset:
-                if (dataset.width, dataset.height) != (NCOLS, NROWS):
+                if (dataset.width, dataset.height) != (CHIRPS_GRID.columns, CHIRPS_GRID.rows):
                     raise RuntimeError(f"unexpected CHIRPS grid {dataset.width}x{dataset.height}")
                 rain = dataset.read(1, window=Window(col, row, width, height)).astype("float32")
 
@@ -632,13 +684,6 @@ def block_mean(values: np.ndarray, factor: int) -> np.ndarray:
     return np.where(counts > 0, sums / np.maximum(counts, 1), np.nan).astype("float32")
 
 
-def window_of(bbox: Bbox) -> CellWindow:
-    """Integer (col, row, width, height) window on the global rain grid for a grid-aligned bbox."""
-    west, south, east, north = bbox
-    col, row = round((west + 180) / CELL_DEG), round((60 - north) / CELL_DEG)
-    return col, row, round((east - west) / CELL_DEG), round((north - south) / CELL_DEG)
-
-
 @dataclass
 class Dataset(ABC):
     """A layer the backend can build; subclass StaticDataset or SeriesDataset, not this."""
@@ -655,9 +700,9 @@ class Dataset(ABC):
     encoding: dict  # role -> (stored dtype, scale_factor, add_offset, fill value or None)
     style: dict  # viewer defaults
     backend: object
+    grid: Grid  # the layer's window is cut on this grid
     long_name: str = ""  # CF long_name of the main array
     coverage: tuple = SUPPORTED_BOUNDS_DEG  # W, S, E, N; a narrower dataset overrides it
-    anchor_res: float = 0.05  # the layer's window is cut on a grid of this cell size
     step: str | None = None  # ISO 8601 duration between time steps; None for static layers
     max_tiles: int | None = None  # request cap for tiled datasets
 
@@ -713,7 +758,7 @@ class StaticDataset(Dataset):
 
 
 class SeriesDataset(Dataset):
-    """A layer with a time axis, read one step at a time on the anchor grid."""
+    """A layer with a time axis, read one step at a time on its grid."""
 
     time_varying = True
 
@@ -761,13 +806,14 @@ class RainDataset(SeriesDataset):
 
     def read_month(self, month: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
         """Rain of month 'YYYY-MM' over a grid-aligned bbox, block-averaged by `factor`."""
-        col, row, width, height = window_of(bbox)
-        col %= NCOLS
-        rain = self.backend.read_rain(month, (col, row, min(width, NCOLS - col), height))
+        columns = self.grid.columns
+        col, row, width, height = self.grid.window(bbox)
+        col %= columns
+        rain = self.backend.read_rain(month, (col, row, min(width, columns - col), height))
         
-        if col + width > NCOLS:
+        if col + width > columns:
             # The window continues past 180 degrees, so the rest is at the west edge of the grid.
-            west_edge = self.backend.read_rain(month, (0, row, col + width - NCOLS, height))
+            west_edge = self.backend.read_rain(month, (0, row, col + width - columns, height))
             rain = np.hstack([rain, west_edge])
 
         return block_mean(rain, factor)
@@ -838,6 +884,7 @@ def make_registry(backend: RealSource | SyntheticSource) -> Registry:
             encoding={"value": ("uint16", 0.1, 0, 65535)},
             style={"kind": "series-colormap", "colormap": "Blues"},
             backend=backend,
+            grid=CHIRPS_GRID,
             long_name="Monthly precipitation",
             step="P1M",
         ),
@@ -851,6 +898,7 @@ def make_registry(backend: RealSource | SyntheticSource) -> Registry:
             encoding={"elevation": ("int16", 1, 0, None), "hillshade": ("uint8", 1, 0, None)},
             style={"kind": "terrain", "hillshade": {"azimuth": 315, "altitude": 45}},
             backend=backend,
+            grid=CHIRPS_GRID,
             max_tiles=2500,
         ),
     }
