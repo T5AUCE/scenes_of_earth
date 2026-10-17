@@ -11,7 +11,7 @@ import pytest
 import rasterio
 from rasterio.transform import Affine
 
-from soe import sources
+from soe.sources import chirps, terrain
 from soe.sources import (
     CHIRPS_GRID,
     SOURCES,
@@ -22,19 +22,22 @@ from soe.sources import (
     SourceUnavailable,
     StaticDataset,
     SyntheticSource,
+    hillshade,
+    make_registry,
+    month_list,
+    terrain_tiles,
+)
+from soe.sources.months import previous_month
+from soe.sources.grid import block_mean
+from soe.sources.terrain import (
     TerrainProduct,
     _tile_index,
     _tile_name,
     _warp_block,
-    block_mean,
-    hillshade,
-    make_registry,
-    month_list,
     placed_terrain_tiles,
     terrain_by_blocks,
     terrain_product,
     terrain_res,
-    terrain_tiles,
 )
 from tests.helpers import NAIROBI, RAIN, TERRAIN
 
@@ -163,14 +166,14 @@ def test_terrain_blocks_equal_one_read():
 
 def test_latest_month_probe_picks_the_newest_existing_month(monkeypatch):
     now = datetime.now(timezone.utc)
-    newest_existing = sources._previous_month(*sources._previous_month(now.year, now.month))
+    newest_existing = previous_month(*previous_month(now.year, now.month))
     existing_urls = set()
     year, month = newest_existing
     for _ in range(3):
-        existing_urls.add(sources._chirps_url(f"{year:04d}-{month:02d}"))
-        year, month = sources._previous_month(year, month)
+        existing_urls.add(chirps._chirps_url(f"{year:04d}-{month:02d}"))
+        year, month = previous_month(year, month)
 
-    monkeypatch.setattr(sources, "_head", lambda url: (url in existing_urls, None))
+    monkeypatch.setattr(chirps, "_head", lambda url: (url in existing_urls, None))
 
     latest = RealSource().latest_month()
 
@@ -179,9 +182,9 @@ def test_latest_month_probe_picks_the_newest_existing_month(monkeypatch):
 
 def test_latest_month_is_rechecked_soon_when_a_newer_month_was_unreachable(monkeypatch):
     now = datetime.now(timezone.utc)
-    this_month = sources._chirps_url(f"{now.year:04d}-{now.month:02d}")
+    this_month = chirps._chirps_url(f"{now.year:04d}-{now.month:02d}")
     monkeypatch.setattr(
-        sources,
+        chirps,
         "_head",
         lambda url: (None, None) if url == this_month else (True, None),
     )
@@ -190,7 +193,7 @@ def test_latest_month_is_rechecked_soon_when_a_newer_month_was_unreachable(monke
     source.latest_month()
 
     ttl = source._probed[1] - time.time()
-    assert ttl <= sources.OFFLINE_LATEST_TTL_SECS
+    assert ttl <= chirps.OFFLINE_LATEST_TTL_SECS
 
 
 def test_read_month_wraps_at_180():
@@ -270,9 +273,9 @@ def fake_terrain(tmp_path, monkeypatch):
         TILE_PX,
         90,
     )
-    monkeypatch.setitem(sources.TERRAIN_PRODUCTS, "glo90", product)
-    index = np.zeros(sources.TILE_GRID_SHAPE, bool)
-    monkeypatch.setattr(sources, "_tile_index", lambda product_name: index)
+    monkeypatch.setitem(terrain.TERRAIN_PRODUCTS, "glo90", product)
+    index = np.zeros(terrain.TILE_GRID_SHAPE, bool)
+    monkeypatch.setattr(terrain, "_tile_index", lambda product_name: index)
     tiles = {}
     random = np.random.default_rng(1)
 
@@ -358,7 +361,7 @@ def test_two_blocks_equal_one_block_exactly(fake_terrain):
     two_blocks, _ = RealSource().terrain(bounds, CELL_DEG)
     one_block = _warp_block(bounds, CELL_DEG)
 
-    assert sources._block_edges(179.0, 181.0) == [179.0, 180, 181.0]
+    assert terrain._block_edges(179.0, 181.0) == [179.0, 180, 181.0]
     assert np.array_equal(two_blocks, one_block)
 
 
@@ -400,13 +403,13 @@ def test_failed_block_read_is_retried_then_raised(fake_terrain, monkeypatch):
         calls.append(1)
         raise rasterio.errors.RasterioIOError("dropped")
 
-    monkeypatch.setattr(sources, "_average_onto_grid", always_fails)
-    monkeypatch.setattr(sources, "BLOCK_RETRY_DELAY_SECS", 0)
+    monkeypatch.setattr(terrain, "_average_onto_grid", always_fails)
+    monkeypatch.setattr(terrain, "BLOCK_RETRY_DELAY_SECS", 0)
 
     with pytest.raises(SourceUnavailable):
         _warp_block((10.0, 10.0, 11.0, 11.0), CELL_DEG)
 
-    assert len(calls) == sources.BLOCK_READ_ATTEMPTS
+    assert len(calls) == terrain.BLOCK_READ_ATTEMPTS
 
 
 def test_placed_tiles_west_of_180_keep_the_unwrapped_longitude():

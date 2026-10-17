@@ -5,7 +5,7 @@ from typing import Any
 from . import __version__
 from .areas import Area
 from .plan import LayerPlan, Plan
-from .sources import SOURCES, Dataset, SyntheticSource
+from .sources import SOURCES, Dataset
 
 JsonObject = dict[str, Any]  # a decoded JSON object, such as scene.json or one of its blocks
 
@@ -33,7 +33,7 @@ def make(
     ]
 
     boundary_source = SOURCES[area.boundary["source"]] if area.named else None
-    synthetic = any(isinstance(dataset.backend, SyntheticSource) for dataset in datasets)
+    synthetic = any(dataset.synthetic for dataset in datasets)
     layer_notices = [note for layer in plan.layers.values() for note in layer.notices]
 
     return {

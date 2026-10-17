@@ -10,7 +10,7 @@ import numpy as np
 from rasterio.transform import Affine
 
 from . import __version__
-from .sources import Bbox, StaticDataset, SyntheticSource
+from .sources import Bbox, StaticDataset
 
 KEY_HEX_CHARS = 32
 
@@ -54,7 +54,7 @@ def _cache_key(dataset: StaticDataset, bbox: Bbox, res: float) -> str:
         "style": dataset.style,
         "roles": list(dataset.roles),
         "sources": [source.get("version") for source in dataset.sources_for(bbox)],
-        "synthetic": isinstance(dataset.backend, SyntheticSource),
+        "synthetic": dataset.synthetic,
         "bbox": list(bbox),
         "res": res,
         "soe": __version__,

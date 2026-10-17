@@ -24,7 +24,7 @@ dev = ["pytest", "httpx"]
 soe = "soe.cli:main"
 
 [tool.setuptools]
-packages = ["soe"]
+packages = ["soe", "soe.sources"]
 
 [tool.setuptools.package-data]
 soe = ["data/glo30_tiles.bin", "data/glo90_tiles.bin", "data/sample_areas.geojson"]

@@ -22,7 +22,6 @@ from .sources import (
     Registry,
     SeriesDataset,
     SourceUnavailable,
-    SyntheticSource,
 )
 
 ID_CHARS = 20  # hex characters of the sha256 kept as the id (80 bits; short Windows paths)
@@ -177,7 +176,7 @@ def _current_revisions(
 def _current_revision(db_path: Path | str, dataset: Dataset, month: str) -> str | None:
     """Stored revision while fresh; if the source is down, a stale stored one."""
     # Offline answers must not reach the stored real ones.
-    if isinstance(dataset.backend, SyntheticSource):
+    if dataset.synthetic:
         return dataset.current_revision(month)
 
     stored_revision, age_secs = db.get_revision(db_path, dataset.id, month) or (None, None)
@@ -211,6 +210,6 @@ def compute_scene_id(
     The terrain product (GLO-30 or GLO-90) follows from the area's size, so the geometry covers it.
     """
     versions = {dataset.id: dataset.source.get("version") for dataset in datasets}
-    synthetic = {dataset.id: isinstance(dataset.backend, SyntheticSource) for dataset in datasets}
+    synthetic = {dataset.id: dataset.synthetic for dataset in datasets}
     content = [geometry_id, layers, start, end, versions, revisions, synthetic, __version__]
     return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:ID_CHARS]

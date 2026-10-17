@@ -127,7 +127,7 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
   rights reserved" (with "-30" for GLO-30). Art. 6(c) disclaimer: "The organisations in charge of the Copernicus
   programme by law or by delegation do not incur any liability for any use of the Copernicus WorldDEM™-90" (likewise
   "-30"). Citation: doi:10.5270/ESA-c5d3d65.
-  Subsequent users of a bundle receive the same obligations. The same text is in `soe/sources.py`.
+  Subsequent users of a bundle receive the same obligations. The same text is in `soe/sources/licences.py`.
 - **Boundaries: geoBoundaries CGAZ**, CC BY 4.0. Runfola, D. et al. (2020) geoBoundaries: A global database of political
   administrative boundaries. PLoS ONE 15(4): e0231866. https://www.geoboundaries.org. Simplified to 0.01 degrees and
   clipped to 60S-60N. CC BY 4.0 for CGAZ itself is the repository-wide licence for geoBoundaries derivatives, not a
