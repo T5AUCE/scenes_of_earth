@@ -10,7 +10,6 @@ import os
 import re
 import threading
 from collections.abc import AsyncIterator
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -24,10 +23,10 @@ from starlette.types import Scope
 
 from . import __version__, db
 from .areas import AreaError
-from .build import build_scene
 from .bundle import JsonObject
+from .jobs import SceneJobs
 from .sample_areas import seed_sample_areas
-from .scene_request import ID_CHARS, prepare_scene, resolve_area
+from .scene_request import ID_CHARS
 from .sources import (
     REGISTRY,
     Dataset,
@@ -50,7 +49,6 @@ MAX_SEARCH_LIMIT = 50
 
 DEFAULT_MAX_BUILDS = 1
 DEFAULT_MAX_QUEUE = 20
-PROGRESS_STEP = 0.02  # fraction of the build; smaller moves are not written to the database
 
 SOURCE_RETRY_AFTER_SECS = 30
 QUEUE_RETRY_AFTER_SECS = 60
@@ -74,8 +72,7 @@ def create_app(
     
     if registry is None:
         registry = _default_registry()
-    # Builds run on their own small pool, so waiting jobs never occupy Starlette's request threads.
-    executor = ThreadPoolExecutor(max_builds, "soe-build")
+    jobs = SceneJobs(db_path, scenes_dir, registry, max_builds, max_queue)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -85,7 +82,7 @@ def create_app(
             seed_sample_areas(db_path)
         threading.Thread(target=_warm_latest_months, args=(registry,), daemon=True).start()
         yield
-        executor.shutdown(wait=False, cancel_futures=True)
+        jobs.shutdown()
 
     app = FastAPI(title="Scenes of Earth", version=__version__, lifespan=lifespan)
 
@@ -100,57 +97,6 @@ def create_app(
             "error_class": row["error_class"],
             "bundle_url": f"{public}/{row['id']}/scene.json" if done else None,
         }
-
-    def run_job(scene_id: str) -> None:
-        try:
-            request = json.loads(db.get_scene(db_path, scene_id)["request_json"])
-            db.update_scene(db_path, scene_id, status="running")
-
-            area = resolve_area(db_path, request["area"])
-            size = build_scene(
-                scene_id,
-                area,
-                request["start"],
-                request["end"],
-                [registry[layer_id] for layer_id in request["layers"]],
-                request["title"],
-                scenes_dir,
-                _ProgressRecorder(db_path, scene_id),
-            )
-            db.update_scene(
-                db_path,
-                scene_id,
-                status="done",
-                progress=1.0,
-                stage=None,
-                bytes=size,
-                finished=db.now(),
-            )
-        except Exception as error:
-            log.exception("scene %s failed", scene_id)
-            _record_failure(db_path, scene_id, error)
-
-    def prepare(body: bytes) -> tuple[int, JsonObject, bool]:
-        """Register a scene request. Returns (status code, payload, start the job?)."""
-        prepared = prepare_scene(db_path, registry, body)
-        bundle_exists = (scenes_dir / prepared.scene_id / "scene.json").exists()
-        try:
-            row, start_job = db.submit(
-                db_path,
-                prepared.scene_id,
-                prepared.request_json,
-                bundle_exists,
-                max_queue,
-            )
-        except db.Busy:
-            raise HTTPException(
-                503,
-                "too many scenes are being built, retry later",
-                headers={"Retry-After": str(QUEUE_RETRY_AFTER_SECS)},
-            )
-
-        status_code = 202 if row["status"] in ("queued", "running") else 200
-        return status_code, scene_out(row), start_job
 
     @app.get("/api/health", response_model=None)
     def health() -> JsonObject:
@@ -188,7 +134,7 @@ def create_app(
     async def post_scene(request: Request) -> JSONResponse:
         body = await read_body(request)
         try:
-            status_code, out, start_job = await run_in_threadpool(prepare, body)
+            row = await run_in_threadpool(jobs.submit, body)
         except AreaError as error:
             raise HTTPException(422, str(error))
         except SourceUnavailable:
@@ -197,11 +143,15 @@ def create_app(
                 "data source unavailable, retry shortly",
                 headers={"Retry-After": str(SOURCE_RETRY_AFTER_SECS)},
             )
+        except db.Busy:
+            raise HTTPException(
+                503,
+                "too many scenes are being built, retry later",
+                headers={"Retry-After": str(QUEUE_RETRY_AFTER_SECS)},
+            )
 
-        if start_job:
-            executor.submit(run_job, out["id"])
-
-        return JSONResponse(out, status_code)
+        status_code = 202 if row["status"] in ("queued", "running") else 200
+        return JSONResponse(scene_out(row), status_code)
 
     @app.get("/api/scenes/{scene_id}", response_model=None)
     def get_scene(scene_id: str) -> JsonObject:
@@ -238,42 +188,6 @@ def _warm_latest_months(registry: Registry) -> None:
             dataset.latest()
         except Exception:
             log.warning("could not warm latest month of %s", dataset.id, exc_info=True)
-
-
-class _ProgressRecorder:
-    """Writes build progress and stage text to the database, only when moved by PROGRESS_STEP."""
-
-    def __init__(self, db_path: Path | str, scene_id: str) -> None:
-        self._db_path = db_path
-        self._scene_id = scene_id
-        self._last_written = 0.0
-
-    def __call__(self, progress: float, stage: str | None) -> None:
-        if progress - self._last_written >= PROGRESS_STEP or progress >= 1:
-            self._last_written = progress
-            db.update_scene(
-                self._db_path,
-                self._scene_id,
-                progress=round(progress, 3),
-                stage=stage,
-            )
-
-
-def _record_failure(db_path: Path | str, scene_id: str, error: Exception) -> None:
-    # Only our own AreaError texts are safe to show; other errors may contain server paths.
-    message = str(error) if isinstance(error, AreaError) else "build failed; see the server log"
-    try:
-        db.update_scene(
-            db_path,
-            scene_id,
-            status="failed",
-            stage=None,
-            error=message,
-            error_class=type(error).__name__,
-            finished=db.now(),
-        )
-    except Exception:
-        log.exception("scene %s: could not record the failure", scene_id)
 
 
 def _layer_out(dataset: Dataset) -> JsonObject:

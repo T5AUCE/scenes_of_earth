@@ -8,15 +8,14 @@ import numpy as np
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from shapely.geometry import box, mapping, shape
+from shapely.geometry import box, mapping
 
 from soe import db
 from soe.api import QUEUE_RETRY_AFTER_SECS, SOURCE_RETRY_AFTER_SECS, create_app
-from soe.areas import unwrap
 from soe.bundle import SYNTHETIC_DATA_CREDIT, JsonObject
-from soe.sample_areas import SAMPLE_AREAS, seed_sample_areas
 from soe.scene_request import ID_CHARS
 from soe.sources import CellWindow, SourceUnavailable, SyntheticSource, make_registry
+from tests.helpers import boundary_row
 
 POLL_ATTEMPTS = 100
 POLL_INTERVAL_SECS = 0.1
@@ -31,22 +30,6 @@ def body(**overrides: object) -> JsonObject:
         "layers": ["copdem_terrain", "chirps_monthly"],
         **overrides,
     }
-
-
-def boundary_row(
-    boundary_id: str,
-    level: str,
-    name: str,
-    parent_name: str | None = None,
-    iso3: str | None = None,
-    bbox: tuple[float, float, float, float] = (0, 0, 1, 1),
-    cells: int = 400,
-    geometry: str = "{}",
-    source: str = "geoBoundaries CGAZ",
-    licence: str = "CC BY 4.0",
-) -> db.BoundaryValues:
-    """One boundaries row in the column order of db.INSERT_BOUNDARY."""
-    return (boundary_id, level, name, parent_name, iso3, *bbox, cells, geometry, source, licence)
 
 
 def wait_for(client: TestClient, scene_id: str, wanted_status: str = "done") -> JsonObject:
@@ -218,23 +201,6 @@ def test_scene_id_must_be_hex(env):
     assert client.get("/api/scenes/" + "0" * ID_CHARS).status_code == 404
 
 
-def test_startup_marks_interrupted_and_repost_requeues(tmp_path):
-    path = str(tmp_path / "soe.db")
-    scene_id = "a" * ID_CHARS
-    db.init(path)
-    db.submit(path, scene_id, "{}", True)
-    db.update_scene(path, scene_id, status="running")
-    db.init(path)  # simulated restart
-
-    row = db.get_scene(path, scene_id)
-    assert row["status"] == "failed" and row["error"] == "interrupted"
-
-    row, start = db.submit(path, scene_id, "{}", True)
-    assert start and row["status"] == "queued" and row["error"] is None
-
-    assert db.submit(path, scene_id, "{}", True)[1] is False
-
-
 def test_malformed_requests_are_4xx_not_500(env):
     client, _, _ = env
     huge_int = body()
@@ -386,43 +352,6 @@ def test_sample_areas_seed_only_in_synthetic_mode_and_when_empty(tmp_path, monke
 
     with TestClient(app_in("other")) as client:
         assert sample_ids(client) == set()
-
-
-def test_sample_area_geometries_are_valid_raw_and_unwrapped():
-    features = json.loads(SAMPLE_AREAS.read_text())["features"]
-
-    for feature in features:
-        geometry = shape(feature["geometry"])
-
-        assert geometry.is_valid, feature["properties"]["id"]
-        assert unwrap(geometry).is_valid, feature["properties"]["id"]
-
-
-def test_sample_areas_reload_on_startup_and_real_boundaries_suppress_them(tmp_path):
-    db_path = tmp_path / "soe.db"
-    db.init(db_path)
-    stale_sample = boundary_row(
-        "sample:old",
-        "state",
-        "Sample: Old strip",
-        cells=1,
-        source="synthetic",
-        licence="none (hand-drawn sample)",
-    )
-    db.add_boundaries(db_path, "synthetic", [stale_sample])
-
-    seed_sample_areas(db_path)
-
-    assert db.get_boundary(db_path, "sample:old") is None
-    assert db.get_boundary(db_path, "sample:kenya")["licence"].startswith("Public Domain")
-
-    real_boundary = boundary_row("x", "state", "Other")
-    db.add_boundaries(db_path, "geoBoundaries CGAZ", [real_boundary])
-    db.add_boundaries(db_path, "synthetic", [stale_sample])
-
-    seed_sample_areas(db_path)
-
-    assert db.get_boundary(db_path, "sample:old") is not None
 
 
 def test_startup_survives_a_failing_latest_month_warmup(tmp_path):

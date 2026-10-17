@@ -1,8 +1,9 @@
-"""Database tests: schema upgrades of existing files."""
+"""Database tests: schema upgrades of existing files and scene state across restarts."""
 import sqlite3
 from pathlib import Path
 
 from soe import db
+from soe.scene_request import ID_CHARS
 
 OLD_SCENES_TABLE = """
     CREATE TABLE scenes (
@@ -57,3 +58,20 @@ def test_resubmitting_a_failed_scene_clears_its_stage(tmp_path):
     row, _ = db.submit(path, "a", "{}", bundle_exists=False)
 
     assert row["status"] == "queued" and row["stage"] is None
+
+
+def test_startup_marks_interrupted_and_repost_requeues(tmp_path):
+    path = str(tmp_path / "soe.db")
+    scene_id = "a" * ID_CHARS
+    db.init(path)
+    db.submit(path, scene_id, "{}", True)
+    db.update_scene(path, scene_id, status="running")
+    db.init(path)  # simulated restart
+
+    row = db.get_scene(path, scene_id)
+    assert row["status"] == "failed" and row["error"] == "interrupted"
+
+    row, start = db.submit(path, scene_id, "{}", True)
+    assert start and row["status"] == "queued" and row["error"] is None
+
+    assert db.submit(path, scene_id, "{}", True)[1] is False

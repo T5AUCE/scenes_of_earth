@@ -1,4 +1,4 @@
-"""Offline tests: hillshade, synthetic end-to-end builds, bundle credits and validation."""
+"""Offline tests: hillshade, build progress and synthetic end-to-end builds."""
 import json
 import shutil
 from collections.abc import Callable
@@ -12,7 +12,7 @@ from shapely.geometry import box
 
 from soe.areas import Area, AreaError
 from soe.build import build_scene, hillshade
-from soe.bundle import SYNTHETIC_DATA_CREDIT, JsonObject, credits, validate
+from soe.bundle import validate
 from soe.sources import (
     SOURCES,
     CellWindow,
@@ -20,38 +20,20 @@ from soe.sources import (
     make_registry,
     terrain_res,
 )
-from tests.helpers import FIJI, NAIROBI, RAIN, TERRAIN, plan_months
-
-BOUNDARY = {
-    "id": "cgaz:ADM1:TEST",
-    "name": "Testland",
-    "level": "state",
-    "iso3": "KEN",
-    "source": "geoBoundaries CGAZ",
-    "licence": "CC BY 4.0",
-}
-
-HASH_A, HASH_B, HASH_C = "a" * 20, "b" * 20, "c" * 20
+from tests.helpers import (
+    BOUNDARY,
+    FIJI,
+    HASH_A,
+    HASH_B,
+    HASH_C,
+    NAIROBI,
+    RAIN,
+    TERRAIN,
+    build_nairobi,
+    plan_months,
+)
 
 ProgressEvent = tuple[float, str | None]  # (fraction done, stage text) of one progress call
-
-
-def build_nairobi(
-    tmp_path: Path,
-    months: tuple[str, str] = ("2015-01", "2016-02"),
-) -> tuple[JsonObject, zarr.Group]:
-    build_scene(
-        HASH_A,
-        Area(NAIROBI, BOUNDARY),
-        months[0],
-        months[1],
-        [TERRAIN, RAIN],
-        "Test",
-        tmp_path,
-    )
-    out = tmp_path / HASH_A
-    doc = json.loads((out / "scene.json").read_text(encoding="utf-8"))
-    return doc, zarr.open_group(out / "data.zarr", mode="r")
 
 
 def array_bytes(scene_dir: Path) -> dict[str, bytes]:
@@ -404,49 +386,3 @@ def test_store_has_consolidated_metadata(tmp_path):
     expected = {"chirps_monthly/precip", "chirps_monthly/mask", "copdem_terrain/elevation"}
 
     assert expected <= meta.keys()
-
-
-def test_validate_catches_missing_attribution(tmp_path):
-    build_scene(HASH_B, Area(NAIROBI), "2015-01", "2015-03", [TERRAIN, RAIN], "T", tmp_path)
-
-    doc = json.loads((tmp_path / HASH_B / "scene.json").read_text(encoding="utf-8"))
-    del doc["layers"][0]["source"]["disclaimer"]
-
-    assert any("disclaimer" in problem for problem in validate(doc))
-
-    doc["layers"][1]["source"]["attribution"] = ""
-    assert any("attribution" in problem for problem in validate(doc))
-
-
-def test_validate_checks_the_layer_contract(tmp_path):
-    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
-    terrain, rain = doc["layers"]
-
-    rain["time"]["count"] = 5
-    terrain["time"] = {"count": 0, "values": []}
-    terrain["mask"]["cells_inside"] = 0
-    del rain["grid"]
-
-    problems = validate(doc)
-
-    assert any("time axis" in problem for problem in problems)
-    assert any("static layer" in problem for problem in problems)
-    assert any("mask has no cells" in problem for problem in problems)
-    assert any("missing grid" in problem for problem in problems)
-
-
-def test_credits_of_a_real_mode_sample_boundary_do_not_claim_synthetic_data():
-    layer_blocks = [{"source": SOURCES["chirps"]}, {"source": SOURCES["glo90"]}]
-
-    lines = credits(layer_blocks, SOURCES["synthetic"])["lines"]
-
-    assert not any("synthetic" in line.lower() for line in lines)
-    assert any("geoBoundaries" in line for line in lines)
-
-
-def test_credits_announce_synthetic_data_only_for_the_synthetic_source():
-    layer_blocks = [{"source": SOURCES["chirps"]}]
-    line = SYNTHETIC_DATA_CREDIT
-
-    assert line in credits(layer_blocks, None, synthetic=True)["lines"]
-    assert line not in credits(layer_blocks, None)["lines"]

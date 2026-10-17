@@ -16,17 +16,17 @@ PADDED_NOTICE = f"The map area was padded to at least {PAD_DEG} x {PAD_DEG} degr
 AREA_TOLERANCE = 1e-9  # relative; below this a clipped area counts as unchanged
 
 # Source cells times steps, summed over time-varying layers and checked before any read.
-MAX_SOURCE = 100_000_000
+MAX_SOURCE_CELL_STEPS = 100_000_000
 # Raw bytes of all layers' arrays after aggregation.
 MAX_OUTPUT_BYTES = 50_000_000
-FACTORS = (1, 2, 4, 8)
+AGGREGATION_FACTORS = (1, 2, 4, 8)
 
 
 @dataclass
 class LayerPlan:
     """Grid, mask and time steps of one layer."""
 
-    ds_id: str
+    dataset_id: str
     transform: Affine  # of this layer's grid
     shape: tuple[int, int]  # (height, width)
     bbox: list[float]  # [W, S, E, N]
@@ -175,7 +175,7 @@ def _pad(
 
 
 def _check_source_size(windows: dict[str, CellSpan], steps: dict[str, list[str]]) -> None:
-    if _source_cells(windows, steps) > MAX_SOURCE:
+    if _source_cells(windows, steps) > MAX_SOURCE_CELL_STEPS:
         raise AreaError(
             "area and period are too large to read; choose a smaller area or fewer months"
         )
@@ -255,12 +255,12 @@ def _aggregation_factor(
     budget: int,
 ) -> tuple[int, dict[str, CellSpan]]:
     """Smallest block-mean factor whose series fit the budget, with the windows snapped to it."""
-    for factor in FACTORS:
+    for factor in AGGREGATION_FACTORS:
         snapped = {dataset.id: _snap_window(windows[dataset.id], factor) for dataset in series}
         if _series_bytes(series, snapped, steps, factor) <= budget:
             return factor, snapped
 
-    raise AreaError(f"area and period are too large even at {FACTORS[-1]}x aggregation")
+    raise AreaError(f"area and period are too large even at {AGGREGATION_FACTORS[-1]}x aggregation")
 
 
 def _snap_window(window: CellSpan, factor: int) -> CellSpan:
