@@ -6,6 +6,7 @@ the file's Last-Modified date). It is part of the scene id, so revised data gets
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +29,7 @@ ID_CHARS = 20  # hex characters of the sha256 kept as the id (80 bits; short Win
 
 DRAWN_AREA_TITLE = "Drawn area"
 MAX_TITLE_CHARS = 120
+MONTH_PATTERN = re.compile(r"[0-9]{4}-(0[1-9]|1[0-2])")  # 'YYYY-MM'; ASCII digits only
 
 # A stored source revision is reused this long without asking the source again.
 REVISION_FRESH_SECS = 6 * 60 * 60
@@ -131,10 +133,7 @@ def _requested_period(data: JsonObject, datasets: list[Dataset]) -> tuple[str, s
 
 
 def check_months(start: object, end: object, first: str, latest: str, who: str = "") -> None:
-    """Validate 'YYYY-MM' start/end: first <= start <= end <= latest.
-
-    `who` prefixes the range messages.
-    """
+    """Validate 'YYYY-MM' start/end: first <= start <= end <= latest; `who` prefixes messages."""
     for month in (start, end):
         if not _is_month(month):
             raise AreaError("start and end must be 'YYYY-MM'")
@@ -148,16 +147,7 @@ def check_months(start: object, end: object, first: str, latest: str, who: str =
 
 
 def _is_month(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and len(value) == 7
-        and value[4] == "-"
-        and value[:4].isascii()
-        and value[:4].isdigit()
-        and value[5:].isascii()
-        and value[5:].isdigit()
-        and 1 <= int(value[5:]) <= 12
-    )
+    return isinstance(value, str) and MONTH_PATTERN.fullmatch(value) is not None
 
 
 def _area_identity(area: Area) -> tuple[str, JsonObject]:

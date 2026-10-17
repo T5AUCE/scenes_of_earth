@@ -48,6 +48,22 @@ export function summaryText(scene: Scene) {
   ].join(" · ");
 }
 
+function areaText(scene: Scene) {
+  return `≈ ${Math.round(areaKm2(scene)).toLocaleString("en")} km²`;
+}
+
+function periodText(scene: Scene) {
+  const axes = scene.layers.flatMap((layer) => (layer.time ? [layer.time] : []));
+  if (!axes.length) return "no time axis";
+
+  const times = unionTimes(axes.map((axis) => axis.values));
+  const steps = axes.map((axis) => axis.step);
+  const first = formatTime(times[0], steps);
+  const last = formatTime(times[times.length - 1], steps);
+
+  return first === last ? first : `${first} to ${last}`;
+}
+
 /** The credited source names on one line. */
 export const creditsLine = (scene: Scene) =>
   creditEntries(scene).map((entry) => entry.name).join(" · ");
@@ -80,41 +96,6 @@ export function renderAbout(scene: Scene) {
   root.append(definitionList(versionRows(scene)));
 
   return root;
-}
-
-/** The Credits tab: each source, the basemap and the terms. */
-export function renderCredits(scene: Scene) {
-  const root = makeHtmlElement("div");
-
-  for (const entry of creditEntries(scene)) root.append(creditCard(entry));
-
-  const basemap = makeHtmlElement("section", "", root);
-  makeHtmlElement("h4", "Basemap", basemap);
-  makeHtmlElement("p", BASEMAP_CREDIT, basemap);
-  makeHtmlElement("p", NO_FALLBACK_NOTE, basemap);
-
-  const terms = makeHtmlElement("section", "", root);
-  for (const line of extraCreditLines(scene)) makeHtmlElement("p", line, terms);
-
-  makeHtmlElement("p", scene.credits.endorsement, terms);
-
-  return root;
-}
-
-function areaText(scene: Scene) {
-  return `≈ ${Math.round(areaKm2(scene)).toLocaleString("en")} km²`;
-}
-
-function periodText(scene: Scene) {
-  const axes = scene.layers.flatMap((layer) => (layer.time ? [layer.time] : []));
-  if (!axes.length) return "no time axis";
-
-  const times = unionTimes(axes.map((axis) => axis.values));
-  const steps = axes.map((axis) => axis.step);
-  const first = formatTime(times[0], steps);
-  const last = formatTime(times[times.length - 1], steps);
-
-  return first === last ? first : `${first} to ${last}`;
 }
 
 function appendNotices(root: HTMLElement, scene: Scene) {
@@ -150,6 +131,34 @@ function versionRows(scene: Scene): [string, string][] {
   return rows;
 }
 
+function definitionList(rows: [string, string][]) {
+  const list = makeHtmlElement("dl");
+  for (const [term, description] of rows) {
+    makeHtmlElement("dt", term, list);
+    makeHtmlElement("dd", description, list);
+  }
+  return list;
+}
+
+/** The Credits tab: each source, the basemap and the terms. */
+export function renderCredits(scene: Scene) {
+  const root = makeHtmlElement("div");
+
+  for (const entry of creditEntries(scene)) root.append(creditCard(entry));
+
+  const basemap = makeHtmlElement("section", "", root);
+  makeHtmlElement("h4", "Basemap", basemap);
+  makeHtmlElement("p", BASEMAP_CREDIT, basemap);
+  makeHtmlElement("p", NO_FALLBACK_NOTE, basemap);
+
+  const terms = makeHtmlElement("section", "", root);
+  for (const line of extraCreditLines(scene)) makeHtmlElement("p", line, terms);
+
+  makeHtmlElement("p", scene.credits.endorsement, terms);
+
+  return root;
+}
+
 function creditCard(entry: CreditEntry) {
   const card = makeHtmlElement("section");
   makeHtmlElement("h4", entry.version ? `${entry.name} (${entry.version})` : entry.name, card);
@@ -165,15 +174,6 @@ function creditCard(entry: CreditEntry) {
   if (entry.disclaimer) makeHtmlElement("p", entry.disclaimer, card).className = "disclaimer";
 
   return card;
-}
-
-function definitionList(rows: [string, string][]) {
-  const list = makeHtmlElement("dl");
-  for (const [term, description] of rows) {
-    makeHtmlElement("dt", term, list);
-    makeHtmlElement("dd", description, list);
-  }
-  return list;
 }
 
 // The address comes from the bundle, so only web links become clickable.

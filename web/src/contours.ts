@@ -180,9 +180,9 @@ function convolve(
     const lineStart = line * lineStep;
 
     for (let position = 0; position < lineLength; position++) {
-      let sum = 0;
       const first = Math.max(0, position - radius);
       const last = Math.min(lineLength - 1, position + radius);
+      let sum = 0;
 
       for (let neighbour = first; neighbour <= last; neighbour++) {
         sum += kernel[neighbour - position + radius] * values[lineStart + neighbour * step];
@@ -200,9 +200,8 @@ export function viewWindow(
   margin: number,
   maxSide = MAX_SIDE_CELLS,
 ) {
-  const [west, south, east, north] = grid.bbox;
-  const degreesPerColumn = (east - west) / grid.nx;
-  const degreesPerRow = (north - south) / grid.ny;
+  const [west, , , north] = grid.bbox;
+  const { degreesPerColumn, degreesPerRow } = cellDegrees(grid);
 
   const left = (view[0] - west) / degreesPerColumn;
   const right = (view[2] - west) / degreesPerColumn;
@@ -222,9 +221,8 @@ export function viewWindow(
 
 /** The bbox of a window of source cells. */
 export function windowBounds(grid: ContourGrid, { x, y, width, height }: GridWindow): Bbox {
-  const [west, south, east, north] = grid.bbox;
-  const degreesPerColumn = (east - west) / grid.nx;
-  const degreesPerRow = (north - south) / grid.ny;
+  const [west, , , north] = grid.bbox;
+  const { degreesPerColumn, degreesPerRow } = cellDegrees(grid);
 
   return [
     west + x * degreesPerColumn,
@@ -347,11 +345,9 @@ export function toLonLat(
   blocks: Pick<Downsampled, "nx" | "ny" | "factor" | "sourceWindow">,
   interval: number,
 ): ContourFeatureCollection {
-  const [west, south, east, north] = grid.bbox;
-  const degreesPerColumn = (east - west) / grid.nx;
-  const degreesPerRow = (north - south) / grid.ny;
+  const [west, , , north] = grid.bbox;
+  const { degreesPerColumn, degreesPerRow } = cellDegrees(grid);
   const majorInterval = MAJOR_EVERY * interval;
-
   const { sourceWindow, factor } = blocks;
 
   const sourceColumn = (x: number) =>
@@ -383,4 +379,12 @@ function sourceCells(position: number, blockCount: number, sourceCount: number, 
   if (position <= fullBlocks) return position * factor;
 
   return fullBlocks * factor + (position - fullBlocks) * (sourceCount - fullBlocks * factor);
+}
+
+function cellDegrees(grid: ContourGrid) {
+  const [west, south, east, north] = grid.bbox;
+  return {
+    degreesPerColumn: (east - west) / grid.nx,
+    degreesPerRow: (north - south) / grid.ny,
+  };
 }

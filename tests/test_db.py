@@ -1,5 +1,6 @@
 """Database tests: schema upgrades of existing files."""
 import sqlite3
+from pathlib import Path
 
 from soe import db
 
@@ -18,7 +19,7 @@ OLD_SCENES_TABLE = """
 """
 
 
-def scene_columns(path) -> set[str]:
+def scene_columns(path: Path | str) -> set[str]:
     with db.connect(path) as connection:
         return {row["name"] for row in connection.execute("PRAGMA table_info(scenes)")}
 

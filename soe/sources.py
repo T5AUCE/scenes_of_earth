@@ -295,22 +295,27 @@ def placed_terrain_tiles(bounds: Bbox, product: str) -> list[PlacedTile]:
     """The tiles of terrain_tiles with their position in the frame of the bounds."""
     west, south, east, north = bounds
     candidates = list(dict.fromkeys([product, "glo90"]))
-    tiles = []
     first_lat = max(math.floor(south + TILE_EDGE_TOLERANCE_DEG), -TILE_ROW_OFFSET_DEG)
     last_lat = min(math.ceil(north - TILE_EDGE_TOLERANCE_DEG), TILE_ROW_OFFSET_DEG)
+    first_lon = math.floor(west + TILE_EDGE_TOLERANCE_DEG)
+    last_lon = math.ceil(east - TILE_EDGE_TOLERANCE_DEG)
+    tiles = []
     for lat in range(first_lat, last_lat):
-        for lon in range(
-            math.floor(west + TILE_EDGE_TOLERANCE_DEG), math.ceil(east - TILE_EDGE_TOLERANCE_DEG)
-        ):
-            wrapped_lon = (lon + TILE_COL_OFFSET_DEG) % WORLD_WIDTH_DEG - TILE_COL_OFFSET_DEG
-            for candidate in candidates:
-                if _tile_index(candidate)[
-                    lat + TILE_ROW_OFFSET_DEG, wrapped_lon + TILE_COL_OFFSET_DEG
-                ]:
-                    name = _tile_name(candidate, lat, wrapped_lon)
-                    tiles.append(PlacedTile(candidate, name, lon, lat))
-                    break
+        for lon in range(first_lon, last_lon):
+            tile = _placed_tile(candidates, lat, lon)
+            if tile is not None:
+                tiles.append(tile)
     return tiles
+
+
+def _placed_tile(candidates: list[str], lat: int, lon: int) -> PlacedTile | None:
+    """The tile at (lat, lon) from the first candidate product that has it, or None."""
+    wrapped_lon = (lon + TILE_COL_OFFSET_DEG) % WORLD_WIDTH_DEG - TILE_COL_OFFSET_DEG
+    row, column = lat + TILE_ROW_OFFSET_DEG, wrapped_lon + TILE_COL_OFFSET_DEG
+    for candidate in candidates:
+        if _tile_index(candidate)[row, column]:
+            return PlacedTile(candidate, _tile_name(candidate, lat, wrapped_lon), lon, lat)
+    return None
 
 
 def _tile_name(product: str, lat: int, lon: int) -> str:
@@ -417,7 +422,7 @@ class RealSource:
     def __init__(self, latest: str | None = None) -> None:
         # An optional fixed 'YYYY-MM' (SOE_LATEST); otherwise the latest month is probed and cached.
         self._latest = latest
-        self._probed = None
+        self._probed = None  # (month, expiry time) of the last probe
         self._probe_lock = threading.Lock()
 
     def latest_month(self) -> str:
@@ -544,25 +549,17 @@ def _mosaic_xml(tiles: list[PlacedTile], bounds: Bbox, product: str) -> str:
     """VRT that lays the tiles side by side at their true footprints, in the frame of bounds.
 
     A tile's pixel centres sit on whole degrees, so its footprint reaches half a pixel beyond its
-    name. The canvas origin is on the half-pixel grid of the scene's product, and its pixels are
-    as wide as the block's latitude band has, so that band's tiles land on whole canvas pixels.
-    A block with tiles of both bands uses a pixel that divides both tile widths and edge offsets
-    exactly, with the origin on whole degrees.
+    name. The canvas origin is on the half-pixel grid of the scene's product.
     """
     west, south, east, north = bounds
     pixel_height = TERRAIN_PRODUCTS[product].res_deg
-    if {_is_narrow_tile(tile) for tile in tiles} == {False, True}:
-        pixel_width = pixel_height / MIXED_BAND_PIXEL_DIVISOR
-        origin_shift = 0
-    else:
-        narrow = _is_narrow_band(south, north)
-        pixel_width = pixel_height * (NARROW_PIXEL_WIDTH_RATIO if narrow else 1)
-        origin_shift = pixel_width / 2
+    pixel_width, origin_shift = _canvas_pixel(tiles, south, north, pixel_height)
     left = math.floor(west) - CANVAS_MARGIN_DEG - origin_shift
     top = math.ceil(north) + CANVAS_MARGIN_DEG + pixel_height / 2
-    width = round((math.ceil(east) - math.floor(west) + 2 * CANVAS_MARGIN_DEG) / pixel_width) + 1
-    span_deg = math.ceil(north) - math.floor(south) + 2 * CANVAS_MARGIN_DEG
-    height = round(span_deg / pixel_height) + 1
+    width_deg = math.ceil(east) - math.floor(west) + 2 * CANVAS_MARGIN_DEG
+    height_deg = math.ceil(north) - math.floor(south) + 2 * CANVAS_MARGIN_DEG
+    width = round(width_deg / pixel_width) + 1
+    height = round(height_deg / pixel_height) + 1
     sources = "".join(
         _tile_source_xml(tile, left, top, pixel_width, pixel_height) for tile in tiles
     )
@@ -573,6 +570,26 @@ def _mosaic_xml(tiles: list[PlacedTile], bounds: Bbox, product: str) -> str:
         f'<VRTRasterBand dataType="Float32" band="1">{sources}</VRTRasterBand>'
         "</VRTDataset>"
     )
+
+
+def _canvas_pixel(
+    tiles: list[PlacedTile],
+    south: float,
+    north: float,
+    pixel_height: float,
+) -> tuple[float, float]:
+    """(canvas pixel width, west shift of the canvas origin from whole degrees).
+
+    The pixels are as wide as the block's latitude band has, so that band's tiles land on whole
+    canvas pixels. A block with tiles of both bands uses a pixel that divides both tile widths and
+    edge offsets exactly, with the origin on whole degrees.
+    """
+    if {_is_narrow_tile(tile) for tile in tiles} == {False, True}:
+        return pixel_height / MIXED_BAND_PIXEL_DIVISOR, 0
+
+    narrow = _is_narrow_band(south, north)
+    pixel_width = pixel_height * (NARROW_PIXEL_WIDTH_RATIO if narrow else 1)
+    return pixel_width, pixel_width / 2
 
 
 def _is_narrow_band(south: float, north: float) -> bool:
@@ -852,9 +869,6 @@ class TerrainDataset(StaticDataset):
             )
         return notices
 
-    def _tiles(self, bbox: Bbox) -> list[tuple[str, str]]:
-        return terrain_tiles(bbox, terrain_product(terrain_res(bbox)))
-
     def block_count(self, bbox: Bbox) -> int:
         return terrain_block_count(tuple(bbox))
 
@@ -869,6 +883,9 @@ class TerrainDataset(StaticDataset):
             return self.backend.terrain(tuple(bbox), res)
 
         return self.backend.terrain(tuple(bbox), res, on_block)
+
+    def _tiles(self, bbox: Bbox) -> list[tuple[str, str]]:
+        return terrain_tiles(bbox, terrain_product(terrain_res(bbox)))
 
 
 def make_registry(backend: RealSource | SyntheticSource) -> Registry:

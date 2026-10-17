@@ -205,35 +205,32 @@ class ContourOverlay {
 
   // At most one window is computed at a time; the latest view is requested when it finishes.
   private requestDetail() {
+    if (!this.alive || !this.worker) return;
+
     const target = viewWindow(this.grid, this.viewport(), DETAIL_MARGIN);
-    if (!this.alive || !this.worker || !target || !this.isFinerThanShown(target)) return;
+    if (!target || !this.isFinerThanShown(target)) return;
 
     if (this.inFlight) {
       this.isRequestPending = true;
       return;
     }
 
-    this.lastJob++;
-
-    this.inFlight = {
-      job: this.lastJob,
-      factor: target.factor,
-      bounds: windowBounds(this.grid, target.sourceWindow),
-      sourceWindow: target.sourceWindow,
-    };
-
-    post(this.worker, { kind: "detail", job: this.lastJob, sourceWindow: target.sourceWindow });
+    const job = ++this.lastJob;
+    const { sourceWindow, factor } = target;
+    this.inFlight = { job, factor, bounds: windowBounds(this.grid, sourceWindow), sourceWindow };
+    post(this.worker, { kind: "detail", job, sourceWindow });
   }
 
   // A window much smaller than the one shown is worth redrawing, as its interval can be finer.
   private isFinerThanShown({ sourceWindow, factor }: NonNullable<ReturnType<typeof viewWindow>>) {
+    const showsDetail = this.showsDetail();
     const current =
-      this.shown && this.showsDetail()
+      this.shown && showsDetail
         ? this.shown
         : { factor: this.coarseFactor, sourceWindow: wholeGrid(this.grid) };
 
     return (
-      (this.showsDetail() && !this.coversView())
+      (showsDetail && !this.coversView())
       || factor < current.factor
       || sourceWindow.width * REDRAW_SIZE_RATIO <= current.sourceWindow.width
       || sourceWindow.height * REDRAW_SIZE_RATIO <= current.sourceWindow.height
@@ -244,10 +241,10 @@ class ContourOverlay {
     const detailVisible = this.isOn && this.showsDetail();
     const interval = detailVisible ? this.detailInterval : this.coarseInterval;
     this.legend.textContent = interval ? contourLegendText(interval, this.layer.units) : "";
+    this.legend.hidden = !this.isOn || !this.legend.textContent;
 
     setVisible(this.map, this.coarseId, this.isOn && !detailVisible);
     setVisible(this.map, this.detailId, detailVisible);
-    this.legend.hidden = !this.isOn || !this.legend.textContent;
   };
 
   // Detail stays while it overlaps the view, so a short gap at the edge beats flickering coarse.

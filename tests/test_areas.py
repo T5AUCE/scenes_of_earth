@@ -95,8 +95,8 @@ def test_plan_rejections():
     with pytest.raises(AreaError, match="too small"):
         plan_months(Area(box(36.8, -1.1, 36.9, -1.0)), [RAIN])
 
+    wide = box(0, 0, 90, 10).union(box(180, 0, 270, 10)).union(box(90, 0, 91, 1))
     with pytest.raises(AreaError, match="more than 180 degrees"):
-        wide = box(0, 0, 90, 10).union(box(180, 0, 270, 10)).union(box(90, 0, 91, 1))
         plan_months(Area(wide), [RAIN])
 
     with pytest.raises(AreaError, match="outside"):

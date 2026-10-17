@@ -28,6 +28,7 @@ class RevisionSource(RealSource):
         self.revision_calls += 1
         if self.down:
             raise SourceUnavailable("down")
+
         return self.revision
 
     def read_rain(self, month: str, window: CellWindow) -> np.ndarray:

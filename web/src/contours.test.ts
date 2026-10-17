@@ -8,6 +8,7 @@ import {
   covers,
   downsample,
   factorFor,
+  MAX_SIDE_CELLS,
   maskedValues,
   overlaps,
   pickInterval,
@@ -291,13 +292,14 @@ const sampledGrid = (
   nx: number,
   ny: number,
   elevationAt: (x: number, y: number) => number,
-  sourceWindow = { x: 0, y: 0, width: nx, height: ny },
+  sourceWindow = wholeGrid({ nx, ny }),
 ) => {
   const elevation = Float32Array.from({ length: nx * ny }, (_, cell) =>
     elevationAt(cell % nx, Math.floor(cell / nx)),
   );
   const mask = new Uint8Array(nx * ny).fill(1);
-  return downsample(elevation, mask, { bbox: [0, 0, nx, ny], nx, ny }, 1024, sourceWindow);
+  const grid = { bbox: [0, 0, nx, ny] as Bbox, nx, ny };
+  return downsample(elevation, mask, grid, MAX_SIDE_CELLS, sourceWindow);
 };
 
 const roughness = ({ values, nx, ny }: { values: Float32Array; nx: number; ny: number }) => {

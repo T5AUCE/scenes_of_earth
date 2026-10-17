@@ -33,6 +33,7 @@ BATCH_SIZE = 12
 TILE_SIZE_CELLS = 512
 COMPRESSION = GzipCodec(level=5)
 UNIX_EPOCH = date(1970, 1, 1)
+MONTH_LABEL_CHARS = 7  # "YYYY-MM" of an ISO date, for stage texts
 CACHE_DIR_NAME = ".cache"  # in the scenes directory; the leading dot keeps it unserved
 
 # Rough seconds of work, to split the progress bar between layers. The last 5% is the publishing.
@@ -101,9 +102,9 @@ def build_scene(
             scene_plan,
         )
 
-        bundle_size = _directory_size(temp_dir)
+        built_size = _directory_size(temp_dir)
         # If another build published this scene first, keep the existing bundle.
-        bundle_size = _publish_scene(temp_dir, final_dir, bundle_size)
+        bundle_size = _publish_scene(temp_dir, final_dir, built_size)
 
     progress(1.0, None)
     return bundle_size
@@ -122,76 +123,6 @@ def _temporary_scene_directory(scenes_dir: Path | str, scene_id: str) -> Iterato
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def _publish_scene(temp_dir: Path, final_dir: Path, built_size: int) -> int:
-    if final_dir.is_dir():
-        return _directory_size(final_dir)
-
-    try:
-        os.replace(temp_dir, final_dir)
-    except OSError:
-        # Another build may have published the same scene concurrently.
-        if final_dir.is_dir():
-            return _directory_size(final_dir)
-        raise
-
-    return built_size
-
-
-def _finalize_scene(
-    root: zarr.Group,
-    temp_dir: Path,
-    scene_document: JsonObject,
-    title: str,
-    area: Area,
-    scene_plan: Plan,
-) -> None:
-    problems = validate(scene_document)
-    if problems:
-        raise RuntimeError(
-            "Invalid scene.json: " + "; ".join(problems)
-        )
-
-    root.attrs.update(
-        {
-            "title": title,
-            "conventions": "CF-1.8",
-            "generator": f"soe {__version__}",
-            "credits": scene_document["credits"],
-        }
-    )
-
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message="Consolidated metadata is currently not part",
-        )
-        zarr.consolidate_metadata(str(temp_dir / "data.zarr"))
-
-    area_name = (area.boundary or {}).get("name", title)
-    area_feature = {
-        "type": "Feature",
-        "properties": {"name": area_name},
-        "geometry": mapping(scene_plan.geometry),
-    }
-
-    (temp_dir / "area.geojson").write_text(
-        json.dumps(area_feature),
-        encoding="utf-8",
-    )
-    (temp_dir / "scene.json").write_text(
-        json.dumps(scene_document, indent=1),
-        encoding="utf-8",
-    )
-
-
-def _directory_size(directory: Path | str) -> int:
-    return sum(
-        file_path.stat().st_size
-        for file_path in Path(directory).rglob("*")
-        if file_path.is_file()
-    )
-
-
 def _write_layers(
     root: zarr.Group,
     scene_plan: Plan,
@@ -199,10 +130,7 @@ def _write_layers(
     cache_dir: Path,
     progress: ProgressCallback,
 ) -> dict[str, JsonObject]:
-    ordered_datasets = sorted(
-        datasets,
-        key=lambda dataset: dataset.time_varying,
-    )
+    ordered_datasets = sorted(datasets, key=lambda dataset: dataset.time_varying)
     costs = {
         dataset.id: _layer_cost(dataset, scene_plan.layers[dataset.id], cache_dir)
         for dataset in ordered_datasets
@@ -210,31 +138,13 @@ def _write_layers(
     progress_shares = _ProgressShares(progress, costs)
     layer_metadata = {}
     for dataset in ordered_datasets:
-        layer_plan = scene_plan.layers[dataset.id]
-        layer_progress = progress_shares.for_layer(dataset.id)
-        layer_group = root.create_group(dataset.id)
-
-        _write_coordinates_and_mask(layer_group, layer_plan)
-
-        if isinstance(dataset, SeriesDataset):
-            metadata = _write_time_series(
-                layer_group,
-                dataset,
-                layer_plan,
-                layer_progress,
-            )
-        elif isinstance(dataset, StaticDataset):
-            metadata = _write_static_layer(
-                layer_group,
-                dataset,
-                layer_plan,
-                cache_dir,
-                layer_progress,
-            )
-        else:
-            raise TypeError(f"{dataset.id}: unknown dataset kind {type(dataset).__name__}")
-
-        layer_metadata[dataset.id] = metadata
+        layer_metadata[dataset.id] = _write_layer(
+            root.create_group(dataset.id),
+            dataset,
+            scene_plan.layers[dataset.id],
+            cache_dir,
+            progress_shares.for_layer(dataset.id),
+        )
     return layer_metadata
 
 
@@ -277,6 +187,22 @@ class _ProgressShares:
         return report
 
 
+def _write_layer(
+    layer_group: zarr.Group,
+    dataset: Dataset,
+    layer_plan: LayerPlan,
+    cache_dir: Path,
+    progress: LayerProgress,
+) -> JsonObject:
+    """Write one layer's coordinates, mask and data arrays; return its build result."""
+    _write_coordinates_and_mask(layer_group, layer_plan)
+    if isinstance(dataset, SeriesDataset):
+        return _write_time_series(layer_group, dataset, layer_plan, progress)
+    if isinstance(dataset, StaticDataset):
+        return _write_static_layer(layer_group, dataset, layer_plan, cache_dir, progress)
+    raise TypeError(f"{dataset.id}: unknown dataset kind {type(dataset).__name__}")
+
+
 def _write_coordinates_and_mask(layer_group: zarr.Group, layer_plan: LayerPlan) -> None:
     """Write cell-centre coordinates and the area mask."""
     height, width = layer_plan.shape
@@ -303,6 +229,13 @@ def _write_coordinates_and_mask(layer_group: zarr.Group, layer_plan: LayerPlan) 
         ["lat", "lon"],
         {"long_name": "1 = cell centre inside the area"},
     )
+
+
+def _coordinates(transform: Affine, height: int, width: int) -> tuple[np.ndarray, np.ndarray]:
+    """Return cell-centre longitude and latitude coordinates."""
+    longitude = transform.c + (np.arange(width) + 0.5) * transform.a
+    latitude = transform.f + (np.arange(height) + 0.5) * transform.e
+    return longitude, latitude
 
 
 def _write_static_layer(
@@ -376,17 +309,10 @@ def hillshade(
     altitude: float = 45,
 ) -> np.ndarray:
     """Return uint8 hillshade (0-255) for a north-up grid with cells in degrees."""
-    elevation = np.pad(
-        elevation.astype("float64"),
-        1,
-        mode="edge",
-    )
+    elevation = np.pad(elevation.astype("float64"), 1, mode="edge")
 
     height = elevation.shape[0] - 2
-    latitude = (
-        latitude_top
-        - (np.arange(height) + 0.5) * resolution_degrees
-    )
+    latitude = latitude_top - (np.arange(height) + 0.5) * resolution_degrees
 
     # Gradients need cell sizes in metres to match elevation units.
     cell_width = (
@@ -418,25 +344,17 @@ def hillshade(
     azimuth_radians = np.radians(azimuth)
     altitude_radians = np.radians(altitude)
 
-    light_east = (
-        np.sin(azimuth_radians) * np.cos(altitude_radians)
-    )
-    light_north = (
-        np.cos(azimuth_radians) * np.cos(altitude_radians)
-    )
+    light_east = np.sin(azimuth_radians) * np.cos(altitude_radians)
+    light_north = np.cos(azimuth_radians) * np.cos(altitude_radians)
     light_up = np.sin(altitude_radians)
 
     illumination = (
         -gradient_east * light_east
         - gradient_north * light_north
         + light_up
-    ) / np.sqrt(
-        gradient_east**2 + gradient_north**2 + 1
-    )
+    ) / np.sqrt(gradient_east**2 + gradient_north**2 + 1)
 
-    return np.rint(
-        illumination.clip(0, 1) * 255
-    ).astype("uint8")
+    return np.rint(illumination.clip(0, 1) * 255).astype("uint8")
 
 
 def _write_time_series(
@@ -482,7 +400,8 @@ def _write_time_series(
             )
             batch_end = batch_start + len(batch_steps)
             series[batch_start:batch_end] = encoded_batch
-            progress(batch_end / step_count, f"{dataset.title} {steps[batch_end - 1][:7]}")
+            last_month = steps[batch_end - 1][:MONTH_LABEL_CHARS]
+            progress(batch_end / step_count, f"{dataset.title} {last_month}")
 
     value_stats = statistics.finish()
     return {
@@ -510,26 +429,6 @@ def _write_time_coordinate(layer_group: zarr.Group, steps: list[str]) -> None:
             "calendar": "standard",
         },
     )
-
-
-def _write_array(
-    group: zarr.Group,
-    name: str,
-    data: np.ndarray,
-    dimensions: list[str],
-    attributes: JsonObject | None = None,
-) -> zarr.Array:
-    array = group.create_array(
-        name,
-        shape=data.shape,
-        chunks=data.shape,
-        dtype=data.dtype,
-        compressors=COMPRESSION,
-        dimension_names=dimensions,
-        attributes=attributes or {},
-    )
-    array[...] = data
-    return array
 
 
 def _create_time_array(
@@ -567,42 +466,6 @@ def _create_time_array(
             "scale_factor": scale,
             "add_offset": offset,
         },
-    )
-
-
-def _read_batch(
-    executor: ThreadPoolExecutor,
-    dataset: SeriesDataset,
-    layer_plan: LayerPlan,
-    steps: list[str],
-) -> np.ndarray:
-    rasters = executor.map(
-        lambda step: dataset.read_step(
-            step,
-            layer_plan.bbox,
-            layer_plan.factor,
-        ),
-        steps,
-    )
-    return np.stack(list(rasters))
-
-
-def _choose_worker_count(layer_plan: LayerPlan) -> int:
-    """Limit concurrent raster reads using the estimated memory budget."""
-    height, width = layer_plan.shape
-    estimated_bytes_per_step = (
-        height
-        * width
-        * layer_plan.factor**2
-        * ESTIMATED_BYTES_PER_CELL
-    )
-    workers_allowed_by_memory = (
-        MEMORY_BUDGET_BYTES
-        // max(1, estimated_bytes_per_step)
-    )
-    return max(
-        1,
-        min(MAX_WORKERS, workers_allowed_by_memory),
     )
 
 
@@ -644,32 +507,44 @@ class _StatisticsAccumulator:
         if self._value_count == 0:
             raise AreaError("No valid data inside the area")
 
-        percentile_98 = np.percentile(
-            np.concatenate(self._samples),
-            98,
-        )
+        percentile_98 = np.percentile(np.concatenate(self._samples), 98)
+        mean = self._value_sum / self._value_count
         return {
             "min": round(float(self._minimum), 2),
             "max": round(float(self._maximum), 2),
-            "mean": round(
-                self._value_sum / self._value_count,
-                2,
-            ),
+            "mean": round(mean, 2),
             "p98": round(float(percentile_98), 2),
         }
 
 
-def _coordinates(transform: Affine, height: int, width: int) -> tuple[np.ndarray, np.ndarray]:
-    """Return cell-centre longitude and latitude coordinates."""
-    longitude = (
-        transform.c
-        + (np.arange(width) + 0.5) * transform.a
+def _choose_worker_count(layer_plan: LayerPlan) -> int:
+    """Limit concurrent raster reads using the estimated memory budget."""
+    height, width = layer_plan.shape
+    estimated_bytes_per_step = (
+        height
+        * width
+        * layer_plan.factor**2
+        * ESTIMATED_BYTES_PER_CELL
     )
-    latitude = (
-        transform.f
-        + (np.arange(height) + 0.5) * transform.e
+    workers_allowed_by_memory = MEMORY_BUDGET_BYTES // max(1, estimated_bytes_per_step)
+    return max(1, min(MAX_WORKERS, workers_allowed_by_memory))
+
+
+def _read_batch(
+    executor: ThreadPoolExecutor,
+    dataset: SeriesDataset,
+    layer_plan: LayerPlan,
+    steps: list[str],
+) -> np.ndarray:
+    rasters = executor.map(
+        lambda step: dataset.read_step(
+            step,
+            layer_plan.bbox,
+            layer_plan.factor,
+        ),
+        steps,
     )
-    return longitude, latitude
+    return np.stack(list(rasters))
 
 
 def encode_values(
@@ -680,12 +555,94 @@ def encode_values(
     fill_value: int,
 ) -> np.ndarray:
     """Quantize floats to integers, using fill_value for NaN values."""
-    quantized = np.rint(
-        (values - offset) / scale
-    ).clip(0, fill_value - 1)
-    encoded = np.where(
-        np.isnan(values),
-        fill_value,
-        quantized,
-    )
+    quantized = np.rint((values - offset) / scale).clip(0, fill_value - 1)
+    encoded = np.where(np.isnan(values), fill_value, quantized)
     return encoded.astype(dtype)
+
+
+def _finalize_scene(
+    root: zarr.Group,
+    temp_dir: Path,
+    scene_document: JsonObject,
+    title: str,
+    area: Area,
+    scene_plan: Plan,
+) -> None:
+    problems = validate(scene_document)
+    if problems:
+        raise RuntimeError("Invalid scene.json: " + "; ".join(problems))
+
+    root.attrs.update(
+        {
+            "title": title,
+            "conventions": "CF-1.8",
+            "generator": f"soe {__version__}",
+            "credits": scene_document["credits"],
+        }
+    )
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Consolidated metadata is currently not part",
+        )
+        zarr.consolidate_metadata(str(temp_dir / "data.zarr"))
+
+    area_name = (area.boundary or {}).get("name", title)
+    area_feature = {
+        "type": "Feature",
+        "properties": {"name": area_name},
+        "geometry": mapping(scene_plan.geometry),
+    }
+
+    (temp_dir / "area.geojson").write_text(
+        json.dumps(area_feature),
+        encoding="utf-8",
+    )
+    (temp_dir / "scene.json").write_text(
+        json.dumps(scene_document, indent=1),
+        encoding="utf-8",
+    )
+
+
+def _publish_scene(temp_dir: Path, final_dir: Path, built_size: int) -> int:
+    if final_dir.is_dir():
+        return _directory_size(final_dir)
+
+    try:
+        os.replace(temp_dir, final_dir)
+    except OSError:
+        # Another build may have published the same scene concurrently.
+        if final_dir.is_dir():
+            return _directory_size(final_dir)
+        raise
+
+    return built_size
+
+
+def _directory_size(directory: Path | str) -> int:
+    return sum(
+        file_path.stat().st_size
+        for file_path in Path(directory).rglob("*")
+        if file_path.is_file()
+    )
+
+
+def _write_array(
+    group: zarr.Group,
+    name: str,
+    data: np.ndarray,
+    dimensions: list[str],
+    attributes: JsonObject | None = None,
+) -> zarr.Array:
+    array = group.create_array(
+        name,
+        shape=data.shape,
+        chunks=data.shape,
+        dtype=data.dtype,
+        compressors=COMPRESSION,
+        dimension_names=dimensions,
+        attributes=attributes or {},
+    )
+    array[...] = data
+    return array

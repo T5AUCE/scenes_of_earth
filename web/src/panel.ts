@@ -355,11 +355,6 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
   }
 }
 
-function bboxGeometry([west, south, east, north]: Bbox): AreaFeature["geometry"] {
-  const ring = [[west, south], [east, south], [east, north], [west, north], [west, south]];
-  return { type: "Polygon", coordinates: [ring] };
-}
-
 function createControls(root: HTMLElement) {
   const searchBox = makeHtmlElement("div", "", root);
   searchBox.className = "search-box";
@@ -405,7 +400,12 @@ function createControls(root: HTMLElement) {
 // Layers come from the backend; none are hard-coded here.
 async function loadLayerChoices({ layerBox, start, end }: ReturnType<typeof createControls>) {
   const { layers, default: defaultIds } = await getLayers();
+  appendLayerBoxes(layerBox, layers, defaultIds);
+  setMonthRange(start, end, layers);
+  return layers;
+}
 
+function appendLayerBoxes(layerBox: HTMLElement, layers: Layer[], defaultIds: string[]) {
   for (const layer of layers) {
     const label = makeHtmlElement("label", "", layerBox);
     const box = document.createElement("input");
@@ -414,20 +414,21 @@ async function loadLayerChoices({ layerBox, start, end }: ReturnType<typeof crea
     box.checked = defaultIds.includes(layer.id);
     label.append(box, ` ${layer.title} (${layer.units})`);
   }
+}
 
+// Only months that every time-varying layer has can be built, so the range is their overlap.
+function setMonthRange(start: HTMLInputElement, end: HTMLInputElement, layers: Layer[]) {
   const axes = layers.flatMap((layer) => (layer.time ? [layer.time] : []));
-  if (axes.length) {
-    const commonFirst = axes.map((axis) => axis.first).sort().at(-1)!;
-    const commonLatest = axes.map((axis) => axis.latest).sort()[0];
-    const defaultStart = addMonths(commonLatest, 1 - DEFAULT_MONTHS);
+  if (!axes.length) return;
 
-    start.min = end.min = commonFirst;
-    start.max = end.max = commonLatest;
-    end.value = commonLatest;
-    start.value = defaultStart < commonFirst ? commonFirst : defaultStart;
-  }
+  const commonFirst = axes.map((axis) => axis.first).sort().at(-1)!;
+  const commonLatest = axes.map((axis) => axis.latest).sort()[0];
+  const defaultStart = addMonths(commonLatest, 1 - DEFAULT_MONTHS);
 
-  return layers;
+  start.min = end.min = commonFirst;
+  start.max = end.max = commonLatest;
+  end.value = commonLatest;
+  start.value = defaultStart < commonFirst ? commonFirst : defaultStart;
 }
 
 function addMonths(yearMonth: string, delta: number) {
@@ -437,6 +438,11 @@ function addMonths(yearMonth: string, delta: number) {
   const shiftedMonth = String((totalMonths % MONTHS_PER_YEAR) + 1).padStart(2, "0");
 
   return `${shiftedYear}-${shiftedMonth}`;
+}
+
+function bboxGeometry([west, south, east, north]: Bbox): AreaFeature["geometry"] {
+  const ring = [[west, south], [east, south], [east, north], [west, north], [west, south]];
+  return { type: "Polygon", coordinates: [ring] };
 }
 
 const wait = (milliseconds: number) =>

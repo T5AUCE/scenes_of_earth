@@ -151,7 +151,7 @@ export interface Scene {
 export interface Part {
   id: string;
   label: string;
-  layerIds: string[]; // map layers shown or hidden together
+  layerIds: string[];
   onToggle?(visible: boolean): void;
 }
 

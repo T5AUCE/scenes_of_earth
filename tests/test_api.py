@@ -15,6 +15,7 @@ from soe.api import QUEUE_RETRY_AFTER_SECS, SOURCE_RETRY_AFTER_SECS, create_app
 from soe.areas import unwrap
 from soe.bundle import SYNTHETIC_DATA_CREDIT, JsonObject
 from soe.sample_areas import SAMPLE_AREAS, seed_sample_areas
+from soe.scene_request import ID_CHARS
 from soe.sources import CellWindow, SourceUnavailable, SyntheticSource, make_registry
 
 POLL_ATTEMPTS = 100
@@ -32,6 +33,22 @@ def body(**overrides: object) -> JsonObject:
     }
 
 
+def boundary_row(
+    boundary_id: str,
+    level: str,
+    name: str,
+    parent_name: str | None = None,
+    iso3: str | None = None,
+    bbox: tuple[float, float, float, float] = (0, 0, 1, 1),
+    cells: int = 400,
+    geometry: str = "{}",
+    source: str = "geoBoundaries CGAZ",
+    licence: str = "CC BY 4.0",
+) -> db.BoundaryValues:
+    """One boundaries row in the column order of db.INSERT_BOUNDARY."""
+    return (boundary_id, level, name, parent_name, iso3, *bbox, cells, geometry, source, licence)
+
+
 def wait_for(client: TestClient, scene_id: str, wanted_status: str = "done") -> JsonObject:
     for _ in range(POLL_ATTEMPTS):
         scene = client.get(f"/api/scenes/{scene_id}").json()
@@ -47,36 +64,16 @@ def env(tmp_path):
     app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(source))
     with TestClient(app) as client:
         geometry = box(36.5, -1.5, 37.5, -0.5)
-        nairobi = (
+        nairobi = boundary_row(
             "cgaz:ADM1:NBO",
             "state",
             "Nairobi",
             "Kenya",
             "KEN",
-            36.5,
-            -1.5,
-            37.5,
-            -0.5,
-            400,
-            json.dumps(mapping(geometry)),
-            "geoBoundaries CGAZ",
-            "CC BY 4.0",
+            geometry.bounds,
+            geometry=json.dumps(mapping(geometry)),
         )
-        washington = (
-            "cgaz:ADM2:WA",
-            "county",
-            "Washington County",
-            "Maine",
-            "USA",
-            0,
-            0,
-            1,
-            1,
-            400,
-            "{}",
-            "geoBoundaries CGAZ",
-            "CC BY 4.0",
-        )
+        washington = boundary_row("cgaz:ADM2:WA", "county", "Washington County", "Maine", "USA")
         db.add_boundaries(
             str(tmp_path / "soe.db"),
             "geoBoundaries CGAZ",
@@ -123,7 +120,8 @@ def test_post_poll_and_serve(env):
     reads = source.reads
     repeat = client.post("/api/scenes", json=body())
 
-    assert repeat.status_code == 200 and repeat.json()["id"] == scene_id and len(scene_id) == 20
+    assert repeat.status_code == 200 and repeat.json()["id"] == scene_id
+    assert len(scene_id) == ID_CHARS
     assert source.reads == reads
 
     # A rounded-off shape, and the same ring rotated and reversed, dedupe too.
@@ -216,13 +214,13 @@ def test_body_cap_and_bad_json(env):
 def test_scene_id_must_be_hex(env):
     client, _, _ = env
     assert client.get("/api/scenes/../etc").status_code == 404
-    assert client.get("/api/scenes/" + "Z" * 20).status_code == 404
-    assert client.get("/api/scenes/" + "0" * 20).status_code == 404
+    assert client.get("/api/scenes/" + "Z" * ID_CHARS).status_code == 404
+    assert client.get("/api/scenes/" + "0" * ID_CHARS).status_code == 404
 
 
 def test_startup_marks_interrupted_and_repost_requeues(tmp_path):
     path = str(tmp_path / "soe.db")
-    scene_id = "a" * 20
+    scene_id = "a" * ID_CHARS
     db.init(path)
     db.submit(path, scene_id, "{}", True)
     db.update_scene(path, scene_id, status="running")
@@ -384,22 +382,7 @@ def test_sample_areas_seed_only_in_synthetic_mode_and_when_empty(tmp_path, monke
 
     db_path = str(tmp_path / "other" / "soe.db")  # a non-empty table is left alone
     db.init(db_path)
-    other = (
-        "x",
-        "state",
-        "Other",
-        None,
-        None,
-        0,
-        0,
-        1,
-        1,
-        400,
-        "{}",
-        "geoBoundaries CGAZ",
-        "CC BY 4.0",
-    )
-    db.add_boundaries(db_path, "geoBoundaries CGAZ", [other])
+    db.add_boundaries(db_path, "geoBoundaries CGAZ", [boundary_row("x", "state", "Other")])
 
     with TestClient(app_in("other")) as client:
         assert sample_ids(client) == set()
@@ -418,20 +401,13 @@ def test_sample_area_geometries_are_valid_raw_and_unwrapped():
 def test_sample_areas_reload_on_startup_and_real_boundaries_suppress_them(tmp_path):
     db_path = tmp_path / "soe.db"
     db.init(db_path)
-    stale_sample = (
+    stale_sample = boundary_row(
         "sample:old",
         "state",
         "Sample: Old strip",
-        None,
-        None,
-        0,
-        0,
-        1,
-        1,
-        1,
-        "{}",
-        "synthetic",
-        "none (hand-drawn sample)",
+        cells=1,
+        source="synthetic",
+        licence="none (hand-drawn sample)",
     )
     db.add_boundaries(db_path, "synthetic", [stale_sample])
 
@@ -440,21 +416,7 @@ def test_sample_areas_reload_on_startup_and_real_boundaries_suppress_them(tmp_pa
     assert db.get_boundary(db_path, "sample:old") is None
     assert db.get_boundary(db_path, "sample:kenya")["licence"].startswith("Public Domain")
 
-    real_boundary = (
-        "x",
-        "state",
-        "Other",
-        None,
-        None,
-        0,
-        0,
-        1,
-        1,
-        400,
-        "{}",
-        "geoBoundaries CGAZ",
-        "CC BY 4.0",
-    )
+    real_boundary = boundary_row("x", "state", "Other")
     db.add_boundaries(db_path, "geoBoundaries CGAZ", [real_boundary])
     db.add_boundaries(db_path, "synthetic", [stale_sample])
 

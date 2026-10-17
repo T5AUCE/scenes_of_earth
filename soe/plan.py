@@ -28,26 +28,26 @@ class LayerPlan:
 
     ds_id: str
     transform: Affine  # of this layer's grid
-    shape: tuple  # (height, width)
-    bbox: list  # [W, S, E, N]
+    shape: tuple[int, int]  # (height, width)
+    bbox: list[float]  # [W, S, E, N]
     res: float  # cell size, degrees
     factor: int  # block-mean aggregation of time-varying layers; 1 otherwise
     mask: np.ndarray  # uint8
     cells_inside: int
-    steps: list  # ISO dates; empty for static layers
-    sources: list  # source dicts the layer reads, the main one first
-    notices: list = field(default_factory=list)
+    steps: list[str]  # ISO dates; empty for static layers
+    sources: list[dict]  # source dicts the layer reads, the main one first
+    notices: list[str] = field(default_factory=list)
 
 
 @dataclass
 class Plan:
     """The result of plan(): one LayerPlan per dataset plus what is shared."""
 
-    geometry: object  # clipped to the coverage shared by all layers
-    layers: dict  # dataset id -> LayerPlan
-    bbox: list  # [W, S, E, N] around all layers
+    geometry: BaseGeometry  # clipped to the coverage shared by all layers
+    layers: dict[str, LayerPlan]  # dataset id -> LayerPlan
+    bbox: list[float]  # [W, S, E, N] around all layers
     clipped: bool
-    notices: list = field(default_factory=list)
+    notices: list[str] = field(default_factory=list)
 
 
 def plan(area: Area, datasets: list[Dataset], start: str, end: str) -> Plan:
@@ -242,10 +242,10 @@ def _layer_grid(
     return Affine(res, 0, bbox[0], 0, -res, bbox[3]), grid_shape, bbox, res
 
 
-def _layer_bytes(dataset: Dataset, grid_shape: tuple[int, int], steps: int = 1) -> int:
+def _layer_bytes(dataset: Dataset, grid_shape: tuple[int, int], step_count: int = 1) -> int:
     """Raw bytes of a layer's arrays: every array per step, plus one mask byte per cell."""
     bytes_per_step = sum(np.dtype(encoding[0]).itemsize for encoding in dataset.encoding.values())
-    return grid_shape[0] * grid_shape[1] * (steps * bytes_per_step + 1)
+    return grid_shape[0] * grid_shape[1] * (step_count * bytes_per_step + 1)
 
 
 def _aggregation_factor(

@@ -151,7 +151,9 @@ def test_terrain_blocks_equal_one_read():
         res = terrain_res(bounds)
         whole, _ = synthetic.terrain(bounds, res)
         blocks, transform = terrain_by_blocks(
-            bounds, res, lambda block, block_res: synthetic.terrain(block, block_res)[0]
+            bounds,
+            res,
+            lambda block, block_res: synthetic.terrain(block, block_res)[0],
         )
 
         assert np.abs(whole.astype(int) - blocks).max() <= 1  # float rounding at block edges only
@@ -178,7 +180,9 @@ def test_latest_month_is_rechecked_soon_when_a_newer_month_was_unreachable(monke
     now = datetime.now(timezone.utc)
     this_month = sources._chirps_url(f"{now.year:04d}-{now.month:02d}")
     monkeypatch.setattr(
-        sources, "_head", lambda url: (None, None) if url == this_month else (True, None)
+        sources,
+        "_head",
+        lambda url: (None, None) if url == this_month else (True, None),
     )
     source = RealSource()
 
@@ -272,7 +276,12 @@ def fake_terrain(tmp_path, monkeypatch):
             "crs": "EPSG:4326",
             # Copernicus tiles: pixel centres on whole degrees, so the edge is half a pixel out.
             "transform": Affine(
-                1 / width, 0, wrapped_lon - 0.5 / width, 0, -1 / TILE_PX, lat + 1 + 0.5 / TILE_PX
+                1 / width,
+                0,
+                wrapped_lon - 0.5 / width,
+                0,
+                -1 / TILE_PX,
+                lat + 1 + 0.5 / TILE_PX,
             ),
         }
         path = tmp_path / f"{_tile_name('glo90', lat, wrapped_lon)}.tif"
@@ -285,14 +294,10 @@ def fake_terrain(tmp_path, monkeypatch):
     server.shutdown()
 
 
-def overlap_lengths(out_edges: np.ndarray, in_edges: np.ndarray) -> np.ndarray:
-    """Length of the overlap of every output interval with every input interval."""
-    low = np.maximum(out_edges[:-1, None], in_edges[None, :-1])
-    high = np.minimum(out_edges[1:, None], in_edges[None, 1:])
-    return np.clip(high - low, 0, None)
-
-
-def area_mean(tiles: dict, bounds: tuple[float, float, float, float]) -> np.ndarray:
+def area_mean(
+    tiles: dict[tuple[int, int], np.ndarray],
+    bounds: tuple[float, float, float, float],
+) -> np.ndarray:
     """Exact area-weighted mean of the tile pixels in every cell of bounds; no tile counts as 0."""
     west, south, east, north = bounds
     x_out = west + np.arange(round((east - west) / CELL_DEG) + 1) * CELL_DEG
@@ -306,6 +311,13 @@ def area_mean(tiles: dict, bounds: tuple[float, float, float, float]) -> np.ndar
         weights_y = overlap_lengths(-y_out, -y_in)
         total += weights_y @ values @ weights_x.T
     return total / CELL_DEG**2
+
+
+def overlap_lengths(out_edges: np.ndarray, in_edges: np.ndarray) -> np.ndarray:
+    """Length of the overlap of every output interval with every input interval."""
+    low = np.maximum(out_edges[:-1, None], in_edges[None, :-1])
+    high = np.minimum(out_edges[1:, None], in_edges[None, 1:])
+    return np.clip(high - low, 0, None)
 
 
 def test_terrain_across_180_with_a_missing_tile_equals_the_area_mean(fake_terrain):
@@ -385,6 +397,9 @@ def test_placed_tiles_west_of_180_keep_the_unwrapped_longitude():
     placed = placed_terrain_tiles((179.0, -19.0, 181.0, -17.0), "glo30")
 
     assert {(tile.lon, tile.lat) for tile in placed} == {
-        (179, -19), (180, -19), (179, -18), (180, -18)
+        (179, -19),
+        (180, -19),
+        (179, -18),
+        (180, -18),
     }
     assert {tile.name.split("_")[6] for tile in placed if tile.lon == 180} == {"W180"}

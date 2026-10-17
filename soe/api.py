@@ -42,7 +42,6 @@ from .sources import (
 ID_RE = re.compile(r"[0-9a-f]{%d}" % ID_CHARS)
 IMMUTABLE_MAX_AGE_SECS = 365 * 24 * 60 * 60
 IMMUTABLE = f"public, max-age={IMMUTABLE_MAX_AGE_SECS}, immutable"
-PROGRESS_STEP = 0.02
 
 MAX_BODY_BYTES = 1_000_000
 LEVELS = ("country", "state", "county", "city")
@@ -51,6 +50,7 @@ MAX_SEARCH_LIMIT = 50
 
 DEFAULT_MAX_BUILDS = 1
 DEFAULT_MAX_QUEUE = 20
+PROGRESS_STEP = 0.02  # fraction of the build; smaller moves are not written to the database
 
 SOURCE_RETRY_AFTER_SECS = 30
 QUEUE_RETRY_AFTER_SECS = 60

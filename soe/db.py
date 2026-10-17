@@ -55,10 +55,10 @@ CREATE TABLE IF NOT EXISTS source_revisions (
 LEVEL_RANK = (
     "CASE level WHEN 'country' THEN 0 WHEN 'state' THEN 1 WHEN 'county' THEN 2 ELSE 3 END"
 )
+ACTIVE_STATUSES = "('queued','running')"
 
 SQLITE_TIMEOUT_SECS = 5
 BUSY_TIMEOUT_MS = SQLITE_TIMEOUT_SECS * 1000
-ACTIVE_STATUSES = "('queued','running')"
 
 INSERT_BOUNDARY = """
     INSERT OR REPLACE INTO boundaries (
@@ -112,6 +112,7 @@ def search(
     level: str | None = None,
     limit: int = 20,
 ) -> list[Record]:
+    """Boundaries whose name starts with `query`, or has a word that does; best matches first."""
     # User text must match literally, so LIKE wildcards are escaped with '!'.
     query = query.replace("!", "!!").replace("%", "!%").replace("_", "!_")
     prefix_pattern, word_pattern = f"{query}%", f"% {query}%"
@@ -134,6 +135,7 @@ def search(
 
 
 def get_boundary(path: Path | str, boundary_id: str) -> Record | None:
+    """The full boundaries row, geometry included, or None."""
     with connect(path) as connection:
         row = connection.execute(
             "SELECT * FROM boundaries WHERE id = ?",
@@ -168,12 +170,14 @@ def has_boundaries_besides(path: Path | str, source: str) -> bool:
 
 
 def get_scene(path: Path | str, scene_id: str) -> Record | None:
+    """The scene job's row, or None."""
     with connect(path) as connection:
         row = _select_scene(connection, scene_id)
     return dict(row) if row else None
 
 
 def update_scene(path: Path | str, scene_id: str, **fields: SqlValue) -> None:
+    """Set the given columns of a scene job's row."""
     assignments = ", ".join(f"{column} = ?" for column in fields)
     with connect(path) as connection:
         connection.execute(
@@ -189,24 +193,18 @@ def submit(
     bundle_exists: bool,
     max_active: int | None = None,
 ) -> tuple[Record, bool]:
-    """Register a scene job; `scene_id` is the content hash."""
+    """Register a scene job; `scene_id` is the content hash.
+
+    Returns (the job's row, whether the caller should start the build). Raises Busy when a new
+    build would exceed `max_active` queued or running jobs.
+    """
     with connect(path) as connection:
         connection.execute("BEGIN IMMEDIATE")
         row = _select_scene(connection, scene_id)
         start = _needs_build(row, bundle_exists)
         if start:
             _check_capacity(connection, max_active)
-            if row is None:
-                connection.execute(
-                    "INSERT INTO scenes (id, status, request_json, created) VALUES (?,?,?,?)",
-                    (scene_id, "queued", request_json, now()),
-                )
-            else:
-                connection.execute(
-                    "UPDATE scenes SET status='queued', progress=0, stage=NULL, error=NULL, "
-                    "error_class=NULL, finished=NULL WHERE id = ?",
-                    (scene_id,),
-                )
+            _queue_scene(connection, scene_id, request_json, is_new=row is None)
         row = _select_scene(connection, scene_id)
         connection.execute("COMMIT")
     return dict(row), start
@@ -231,6 +229,27 @@ def _check_capacity(connection: sqlite3.Connection, max_active: int | None) -> N
     ).fetchone()[0]
     if active >= max_active:
         raise Busy()
+
+
+def _queue_scene(
+    connection: sqlite3.Connection,
+    scene_id: str,
+    request_json: str,
+    is_new: bool,
+) -> None:
+    """Insert a new job as queued, or reset an existing one to queued."""
+    if is_new:
+        connection.execute(
+            "INSERT INTO scenes (id, status, request_json, created) VALUES (?,?,?,?)",
+            (scene_id, "queued", request_json, now()),
+        )
+        return
+
+    connection.execute(
+        "UPDATE scenes SET status='queued', progress=0, stage=NULL, error=NULL, "
+        "error_class=NULL, finished=NULL WHERE id = ?",
+        (scene_id,),
+    )
 
 
 def get_revision(path: Path | str, dataset_id: str, month: str) -> tuple[str, float] | None:
@@ -259,6 +278,7 @@ def set_revision(path: Path | str, dataset_id: str, month: str, revision: str) -
 
 @contextmanager
 def connect(path: Path | str) -> Iterator[sqlite3.Connection]:
+    """An autocommit WAL connection with a busy timeout, closed on exit."""
     # isolation_level=None is autocommit; submit() and add_boundaries() use explicit BEGIN.
     connection = sqlite3.connect(
         path,
@@ -276,4 +296,5 @@ def connect(path: Path | str) -> Iterator[sqlite3.Connection]:
 
 
 def now() -> str:
+    """The current UTC time as an ISO 8601 string, to the second."""
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
