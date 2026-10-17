@@ -244,7 +244,7 @@ def _layer_grid(
 
 def _layer_bytes(dataset: Dataset, grid_shape: tuple[int, int], step_count: int = 1) -> int:
     """Raw bytes of a layer's arrays: every array per step, plus one mask byte per cell."""
-    bytes_per_step = sum(np.dtype(encoding[0]).itemsize for encoding in dataset.encoding.values())
+    bytes_per_step = sum(np.dtype(spec.dtype).itemsize for spec in dataset.roles.values())
     return grid_shape[0] * grid_shape[1] * (step_count * bytes_per_step + 1)
 
 

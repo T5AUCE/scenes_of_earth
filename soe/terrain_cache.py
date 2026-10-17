@@ -21,20 +21,21 @@ def read_cached(
     res: float,
     cache_dir: Path,
     on_block: Callable[[], None] | None = None,
-) -> tuple[np.ndarray, Affine]:
-    """dataset.read(bbox, res, on_block), from cache_dir when the same raster was read before.
+) -> tuple[dict[str, np.ndarray], Affine]:
+    """dataset.read(bbox, res, on_block), from cache_dir when the same rasters were read before.
 
-    The array is loaded fresh from disk each time, so callers never share memory. A cache hit
+    The arrays are loaded fresh from disk each time, so callers never share memory. A cache hit
     calls on_block never.
     """
     path = _cache_path(dataset, bbox, res, cache_dir)
     if path.is_file():
         with np.load(path) as stored:
-            return stored["values"], Affine(*stored["transform"].tolist())
+            arrays = {role: stored[role] for role in dataset.roles}
+            return arrays, Affine(*stored["transform"].tolist())
 
-    values, transform = dataset.read(bbox, res, on_block)
-    _store(path, values, transform)
-    return values, transform
+    arrays, transform = dataset.read(bbox, res, on_block)
+    _store(path, arrays, transform)
+    return arrays, transform
 
 
 def is_cached(dataset: StaticDataset, bbox: Bbox, res: float, cache_dir: Path) -> bool:
@@ -50,6 +51,8 @@ def _cache_key(dataset: StaticDataset, bbox: Bbox, res: float) -> str:
     """Hash of everything that determines the raster."""
     request = {
         "dataset": dataset.id,
+        "style": dataset.style,
+        "roles": list(dataset.roles),
         "sources": [source.get("version") for source in dataset.sources_for(bbox)],
         "synthetic": isinstance(dataset.backend, SyntheticSource),
         "bbox": list(bbox),
@@ -60,13 +63,13 @@ def _cache_key(dataset: StaticDataset, bbox: Bbox, res: float) -> str:
     return hashlib.sha256(encoded).hexdigest()[:KEY_HEX_CHARS]
 
 
-def _store(path: Path, values: np.ndarray, transform: Affine) -> None:
+def _store(path: Path, arrays: dict[str, np.ndarray], transform: Affine) -> None:
     """Write through a temporary file, so a reader never sees a partial one."""
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temp_name = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
         with os.fdopen(descriptor, "wb") as temp_file:
-            np.savez(temp_file, values=values, transform=np.array(transform[:6]))
+            np.savez(temp_file, transform=np.array(transform[:6]), **arrays)
         os.replace(temp_name, path)
     except BaseException:
         Path(temp_name).unlink(missing_ok=True)

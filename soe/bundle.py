@@ -10,7 +10,6 @@ from .sources import SOURCES, Dataset, SyntheticSource
 JsonObject = dict[str, Any]  # a decoded JSON object, such as scene.json or one of its blocks
 
 VERSION = "0.2"
-TERRAIN_LAYER_ID = "copdem_terrain"
 
 BOUNDARY_SOURCE_FIELDS = ("licence_url", "attribution", "citation", "modified")
 SYNTHETIC_DATA_CREDIT = "Data: synthetically generated, not real measurements"
@@ -121,14 +120,13 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
 
 def _array_blocks(dataset: Dataset) -> dict[str, JsonObject]:
     blocks = {}
-    for role, name in dataset.arrays.items():
-        dtype, scale_factor, add_offset, fill = dataset.encoding[role]
+    for role, spec in dataset.roles.items():
         blocks[role] = {
-            "path": f"{dataset.id}/{name}",
-            "dtype": dtype,
-            "scale_factor": scale_factor,
-            "add_offset": add_offset,
-            "fill": fill,
+            "path": f"{dataset.id}/{spec.name}",
+            "dtype": spec.dtype,
+            "scale_factor": spec.scale,
+            "add_offset": spec.offset,
+            "fill": spec.fill,
         }
     return blocks
 
@@ -212,6 +210,8 @@ def _attribution_problems(doc: JsonObject) -> list[str]:
             problems.append(f"{name}: attribution not in credits.lines")
         if source.get("disclaimer") and source["disclaimer"] not in disclaimers:
             problems.append(f"{name}: disclaimer not in credits.disclaimers")
+        if source.get("disclaimer_required") and not source.get("disclaimer"):
+            problems.append(f"{name}: missing disclaimer")
     return problems
 
 
@@ -234,7 +234,4 @@ def _layer_problems(layer: JsonObject) -> list[str]:
 
     if not layer["time_varying"] and time_axis is not None:
         problems.append(f"{layer_id}: static layer has a time axis")
-
-    if layer_id == TERRAIN_LAYER_ID and not layer["source"].get("disclaimer"):
-        problems.append(f"{TERRAIN_LAYER_ID}: missing disclaimer")
     return problems

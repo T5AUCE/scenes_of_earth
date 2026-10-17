@@ -100,7 +100,10 @@ CHIRPS_GRID = Grid(-180, 60, CELL_DEG, 7200, 2400)
 GLO30_RES_DEG = 1 / 3600
 GLO90_RES_DEG = 1 / 1200
 NATIVE_RES_TOLERANCE = 1e-9  # relative; coarser than this counts as resampled
-LONGITUDE_DEGREE_AT_EQUATOR_M = 111_320  # for the notice's approximate cell size
+
+LONGITUDE_DEGREE_AT_EQUATOR_M = 111_320
+LATITUDE_DEGREE_M = 110_574
+
 TERRAIN_BUDGET_PX = 2048 * 2048
 MAX_TERRAIN_SIDE_PX = 4096
 MAX_TERRAIN_DIVISIONS = 180  # 0.05 / 180 is the native 30 m cell
@@ -197,6 +200,7 @@ SOURCES = {
             "delegation do not incur any liability for any use of the Copernicus "
             "WorldDEM™-30"
         ),
+        "disclaimer_required": True,
         "citation": "doi:10.5270/ESA-c5d3d65",
         "modified": (
             "elevation area-averaged onto the scene grid; hillshade (Horn, az 315°, alt 45°)"
@@ -220,6 +224,7 @@ SOURCES = {
             "delegation do not incur any liability for any use of the Copernicus "
             "WorldDEM™-90"
         ),
+        "disclaimer_required": True,
         "citation": "doi:10.5270/ESA-c5d3d65",
         "modified": (
             "elevation area-averaged onto the scene grid; hillshade (Horn, az 315°, alt 45°)"
@@ -359,6 +364,62 @@ def with_margin(bounds: Bbox, res: float) -> Bbox:
     """
     west, south, east, north = bounds
     return (west - res, south - res, east + res, north + res)
+
+
+def hillshade(
+    elevation: np.ndarray,
+    resolution_degrees: float,
+    latitude_top: float,
+    azimuth: float = 315,
+    altitude: float = 45,
+) -> np.ndarray:
+    """Return uint8 hillshade (0-255) for a north-up grid with cells in degrees."""
+    elevation = np.pad(elevation.astype("float64"), 1, mode="edge")
+
+    height = elevation.shape[0] - 2
+    latitude = latitude_top - (np.arange(height) + 0.5) * resolution_degrees
+
+    # Gradients need cell sizes in metres to match elevation units.
+    cell_width = (
+        resolution_degrees
+        * LONGITUDE_DEGREE_AT_EQUATOR_M
+        * np.cos(np.radians(latitude))
+    )[:, None].clip(min=1)
+    cell_height = resolution_degrees * LATITUDE_DEGREE_M
+
+    northwest = elevation[:-2, :-2]
+    north = elevation[:-2, 1:-1]
+    northeast = elevation[:-2, 2:]
+    west = elevation[1:-1, :-2]
+    east = elevation[1:-1, 2:]
+    southwest = elevation[2:, :-2]
+    south = elevation[2:, 1:-1]
+    southeast = elevation[2:, 2:]
+
+    gradient_east = (
+        (northeast + 2 * east + southeast)
+        - (northwest + 2 * west + southwest)
+    ) / (8 * cell_width)
+
+    gradient_north = (
+        (northwest + 2 * north + northeast)
+        - (southwest + 2 * south + southeast)
+    ) / (8 * cell_height)
+
+    azimuth_radians = np.radians(azimuth)
+    altitude_radians = np.radians(altitude)
+
+    light_east = np.sin(azimuth_radians) * np.cos(altitude_radians)
+    light_north = np.cos(azimuth_radians) * np.cos(altitude_radians)
+    light_up = np.sin(altitude_radians)
+
+    illumination = (
+        -gradient_east * light_east
+        - gradient_north * light_north
+        + light_up
+    ) / np.sqrt(gradient_east**2 + gradient_north**2 + 1)
+
+    return np.rint(illumination.clip(0, 1) * 255).astype("uint8")
 
 
 def terrain_by_blocks(
@@ -701,6 +762,18 @@ def block_mean(values: np.ndarray, factor: int) -> np.ndarray:
     return np.where(counts > 0, sums / np.maximum(counts, 1), np.nan).astype("float32")
 
 
+class Role(NamedTuple):
+    """One data array of a layer: where it is stored, how, and how the viewer decodes it."""
+
+    name: str  # array name inside the Zarr group of the layer
+    dtype: str  # stored dtype
+    scale: float = 1  # decoded = stored * scale + offset
+    offset: float = 0
+    fill: int | None = None  # stored value that means "no data"
+    units: str = ""  # CF attributes of the array; omitted when empty
+    long_name: str = ""
+
+
 @dataclass
 class Dataset(ABC):
     """A layer the backend can build; subclass StaticDataset or SeriesDataset, not this."""
@@ -713,12 +786,10 @@ class Dataset(ABC):
     units: str
     resolution_deg: float  # native cell size
     source: dict  # licence, licence_url, attribution, citation, modified, version, ...
-    arrays: dict  # role -> data array name inside the Zarr group `id`
-    encoding: dict  # role -> (stored dtype, scale_factor, add_offset, fill value or None)
+    roles: dict[str, Role]  # by role, e.g. value, elevation, hillshade
     style: dict  # viewer defaults
     backend: object
     grid: Grid  # the layer's window is cut on this grid
-    long_name: str = ""  # CF long_name of the main array
     coverage: tuple = SUPPORTED_BOUNDS_DEG  # W, S, E, N; a narrower dataset overrides it
     step: str | None = None  # ISO 8601 duration between time steps; None for static layers
     max_tiles: int | None = None  # request cap for tiled datasets
@@ -767,8 +838,8 @@ class StaticDataset(Dataset):
         bbox: Bbox,
         res: float,
         on_block: Callable[[], None] | None = None,
-    ) -> tuple[np.ndarray, Affine]:
-        """Values over bbox at cell size `res`: (2D array, transform).
+    ) -> tuple[dict[str, np.ndarray], Affine]:
+        """Values over bbox at cell size `res`: ({role: 2D array in the stored dtype}, transform).
 
         on_block() is called each time one of block_count(bbox) parts has been read.
         """
@@ -877,12 +948,22 @@ class TerrainDataset(StaticDataset):
         bbox: Bbox,
         res: float,
         on_block: Callable[[], None] | None = None,
-    ) -> tuple[np.ndarray, Affine]:
-        """Elevation over bbox at cell size `res`: (int16 array, transform)."""
+    ) -> tuple[dict[str, np.ndarray], Affine]:
+        """Elevation (int16) and its hillshade (uint8) over bbox at cell size `res`."""
         if on_block is None:
-            return self.backend.terrain(tuple(bbox), res)
+            elevation, transform = self.backend.terrain(tuple(bbox), res)
+        else:
+            elevation, transform = self.backend.terrain(tuple(bbox), res, on_block)
 
-        return self.backend.terrain(tuple(bbox), res, on_block)
+        light = self.style["hillshade"]
+        shade = hillshade(
+            elevation,
+            abs(transform.a),
+            transform.f,
+            light["azimuth"],
+            light["altitude"],
+        )
+        return {"elevation": elevation, "hillshade": shade}, transform
 
     def _tiles(self, bbox: Bbox) -> list[tuple[str, str]]:
         return terrain_tiles(bbox, terrain_product(terrain_res(bbox)))
@@ -890,6 +971,7 @@ class TerrainDataset(StaticDataset):
 
 def make_registry(backend: RealSource | SyntheticSource) -> Registry:
     """The two datasets, reading through `backend` (RealSource or SyntheticSource)."""
+    light = {"azimuth": 315, "altitude": 45}
     return {
         "chirps_monthly": RainDataset(
             id="chirps_monthly",
@@ -897,12 +979,19 @@ def make_registry(backend: RealSource | SyntheticSource) -> Registry:
             units="mm/month",
             resolution_deg=CELL_DEG,
             source=SOURCES["chirps"],
-            arrays={"value": "precip"},
-            encoding={"value": ("uint16", 0.1, 0, 65535)},
+            roles={
+                "value": Role(
+                    "precip",
+                    "uint16",
+                    scale=0.1,
+                    fill=65535,
+                    units="mm/month",
+                    long_name="Monthly precipitation",
+                ),
+            },
             style={"kind": "series-colormap", "colormap": "Blues"},
             backend=backend,
             grid=CHIRPS_GRID,
-            long_name="Monthly precipitation",
             step="P1M",
         ),
         "copdem_terrain": TerrainDataset(
@@ -911,9 +1000,21 @@ def make_registry(backend: RealSource | SyntheticSource) -> Registry:
             units="m",
             resolution_deg=GLO30_RES_DEG,
             source=SOURCES["glo30"],
-            arrays={"elevation": "elevation", "hillshade": "hillshade"},
-            encoding={"elevation": ("int16", 1, 0, None), "hillshade": ("uint8", 1, 0, None)},
-            style={"kind": "terrain", "hillshade": {"azimuth": 315, "altitude": 45}},
+            roles={
+                "elevation": Role(
+                    "elevation",
+                    "int16",
+                    units="m",
+                    long_name="Elevation (resampled)",
+                ),
+                "hillshade": Role(
+                    "hillshade",
+                    "uint8",
+                    long_name=f"Hillshade, azimuth {light['azimuth']}, "
+                    f"altitude {light['altitude']} (0-255)",
+                ),
+            },
+            style={"kind": "terrain", "hillshade": light},
             backend=backend,
             grid=CHIRPS_GRID,
             max_tiles=2500,

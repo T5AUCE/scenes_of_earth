@@ -8,15 +8,19 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from rasterio.transform import Affine
 from shapely.geometry import box
 
 from soe.areas import Area, AreaError
-from soe.build import build_scene, hillshade
+from soe.build import build_scene
 from soe.bundle import validate
 from soe.sources import (
     SOURCES,
     CellWindow,
+    Role,
+    StaticDataset,
     SyntheticSource,
+    hillshade,
     make_registry,
     terrain_res,
 )
@@ -386,3 +390,32 @@ def test_store_has_consolidated_metadata(tmp_path):
     expected = {"chirps_monthly/precip", "chirps_monthly/mask", "copdem_terrain/elevation"}
 
     assert expected <= meta.keys()
+
+
+def test_static_dataset_with_its_own_role_is_written_without_a_special_case(tmp_path):
+    class LandCover(StaticDataset):
+        def read(self, bbox, res, on_block=None):
+            height, width = round((bbox[3] - bbox[1]) / res), round((bbox[2] - bbox[0]) / res)
+            return {"classes": np.full((height, width), 40, "uint8")}, Affine(
+                res, 0, bbox[0], 0, -res, bbox[3]
+            )
+
+    classes = Role("landcover", "uint8", fill=0, long_name="Land cover class")
+    dataset = LandCover(
+        **{
+            **vars(TERRAIN),
+            "id": "landcover",
+            "resolution_deg": 0.01,
+            "roles": {"classes": classes},
+        }
+    )
+
+    build_scene(HASH_A, Area(NAIROBI), "2015-01", "2015-02", [dataset], "Test", tmp_path)
+
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    array = zarr.open_group(tmp_path / HASH_A / "data.zarr", mode="r")["landcover/landcover"]
+
+    assert doc["layers"][0]["arrays"]["classes"]["path"] == "landcover/landcover"
+    assert doc["layers"][0]["arrays"]["classes"]["fill"] == 0
+    assert array.dtype == "uint8" and array.attrs["long_name"] == "Land cover class"
+    assert (array[:] == 40).all()

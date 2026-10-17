@@ -72,6 +72,8 @@ A toolbar with three tools; Esc returns to Pointer.
 ### Data
 
 - GLO-30 terrain under 90 m cells, GLO-90 otherwise. Height tint maybe later.
+- After temperature: ERA5-Land monthly 10 m wind (direction, speed and steadiness) as arrows;
+  daily wind with the other daily layers.
 - After temperature and land cover: TerraClimate drought and water deficit, and its +2 °C / +4 °C
   scenarios (monthly, CC0, no login); ERA5-Land snow and soil moisture; population and vegetation
   over time.

@@ -27,6 +27,7 @@ from soe.sources import (
     _tile_name,
     _warp_block,
     block_mean,
+    hillshade,
     make_registry,
     month_list,
     placed_terrain_tiles,
@@ -35,7 +36,7 @@ from soe.sources import (
     terrain_res,
     terrain_tiles,
 )
-from tests.helpers import RAIN, TERRAIN
+from tests.helpers import NAIROBI, RAIN, TERRAIN
 
 
 TILE_PX = 60  # the fake terrain tiles are small, 1 / 60 degree per pixel
@@ -225,6 +226,21 @@ def test_static_dataset_without_read_cannot_be_created():
 
     with pytest.raises(TypeError, match="read"):
         NoRead(**vars_of(TERRAIN))
+
+
+def test_terrain_read_returns_elevation_and_the_hillshade_derived_from_it():
+    arrays, transform = TERRAIN.read(NAIROBI.bounds, 0.01)
+
+    assert arrays.keys() == TERRAIN.roles.keys()
+    assert arrays["elevation"].dtype == np.int16 and arrays["hillshade"].dtype == np.uint8
+    assert np.array_equal(
+        arrays["hillshade"],
+        hillshade(arrays["elevation"], 0.01, transform.f, 315, 45),
+    )
+
+
+def test_every_terrain_source_has_a_disclaimer():
+    assert all(SOURCES[product].get("disclaimer") for product in ("glo30", "glo90"))
 
 
 def test_time_varying_follows_the_dataset_kind():

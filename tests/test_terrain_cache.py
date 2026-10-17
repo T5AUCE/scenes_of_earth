@@ -1,4 +1,6 @@
 """Offline tests: the terrain cache returns what a read would, and its key tracks every input."""
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -24,23 +26,25 @@ def test_cache_hit_equals_the_miss_byte_for_byte(tmp_path):
     source = CountingSource()
     dataset = make_registry(source)["copdem_terrain"]
 
-    miss_values, miss_transform = read_cached(dataset, BBOX, RES, tmp_path)
-    hit_values, hit_transform = read_cached(dataset, BBOX, RES, tmp_path)
+    miss_arrays, miss_transform = read_cached(dataset, BBOX, RES, tmp_path)
+    hit_arrays, hit_transform = read_cached(dataset, BBOX, RES, tmp_path)
 
     assert source.reads == 1
-    assert hit_values.dtype == miss_values.dtype == np.int16
-    assert hit_values.tobytes() == miss_values.tobytes()
+    assert hit_arrays.keys() == miss_arrays.keys() == dataset.roles.keys()
+    assert hit_arrays["elevation"].dtype == np.int16 and hit_arrays["hillshade"].dtype == np.uint8
+    for role in dataset.roles:
+        assert hit_arrays[role].tobytes() == miss_arrays[role].tobytes()
+        assert hit_arrays[role] is not miss_arrays[role]
     assert hit_transform == miss_transform
-    assert hit_values is not miss_values
 
 
 def test_cache_hit_gives_a_fresh_array_the_caller_may_change(tmp_path):
     first, _ = read_cached(TERRAIN, BBOX, RES, tmp_path)
-    first[:] = 0
+    first["elevation"][:] = 0
 
     second, _ = read_cached(TERRAIN, BBOX, RES, tmp_path)
 
-    assert second.any()
+    assert second["elevation"].any()
 
 
 def test_key_changes_with_bbox_res_and_soe_version(monkeypatch):
@@ -92,3 +96,15 @@ def test_key_differs_between_the_synthetic_and_the_real_source():
     real = make_registry(RealSource())["copdem_terrain"]
 
     assert _cache_key(synthetic, BBOX, RES) != _cache_key(real, BBOX, RES)
+
+
+def test_key_changes_with_the_roles_a_dataset_stores():
+    fewer = replace(TERRAIN, roles={"elevation": TERRAIN.roles["elevation"]})
+
+    assert _cache_key(fewer, BBOX, RES) != _cache_key(TERRAIN, BBOX, RES)
+
+
+def test_key_changes_with_the_hillshade_light():
+    moved_light = replace(TERRAIN, style={"kind": "terrain", "hillshade": {"azimuth": 0}})
+
+    assert _cache_key(moved_light, BBOX, RES) != _cache_key(TERRAIN, BBOX, RES)

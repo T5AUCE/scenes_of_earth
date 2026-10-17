@@ -19,7 +19,7 @@ from . import __version__
 from .areas import Area, AreaError
 from .bundle import JsonObject, make, validate
 from .plan import LayerPlan, Plan, plan as make_plan
-from .sources import Dataset, SeriesDataset, StaticDataset
+from .sources import Dataset, Role, SeriesDataset, StaticDataset
 from .terrain_cache import is_cached, read_cached
 
 ProgressCallback = Callable[[float, str | None], None]  # build fraction done 0-1, stage text
@@ -39,12 +39,9 @@ CACHE_DIR_NAME = ".cache"  # in the scenes directory; the leading dot keeps it u
 # Rough seconds of work, to split the progress bar between layers. The last 5% is the publishing.
 LAYERS_PROGRESS_SHARE = 0.95
 STATIC_BLOCK_COST = 1.0
-STATIC_CACHED_COST = 0.1  # a cache hit still costs the hillshade and the writing
+STATIC_CACHED_COST = 0.1  # a cache hit still costs the writing
 SERIES_STEP_COST = 0.2
 PERCENTILE_SAMPLES_PER_BATCH = 100_000
-
-LONGITUDE_DEGREE_AT_EQUATOR_M = 111_320
-LATITUDE_DEGREE_M = 110_574
 
 
 def build_scene(
@@ -245,7 +242,7 @@ def _write_static_layer(
     cache_dir: Path,
     progress: LayerProgress,
 ) -> JsonObject:
-    """Write an elevation raster and its derived hillshade."""
+    """Write every role of a static dataset."""
     block_count = dataset.block_count(layer_plan.bbox)
     blocks_read = 0
 
@@ -257,7 +254,7 @@ def _write_static_layer(
     if not is_cached(dataset, layer_plan.bbox, layer_plan.res, cache_dir):
         progress(0, f"{dataset.title} 0/{block_count}")
 
-    elevation, transform = read_cached(
+    arrays, _ = read_cached(
         dataset,
         layer_plan.bbox,
         layer_plan.res,
@@ -266,95 +263,16 @@ def _write_static_layer(
     )
     progress(1, f"{dataset.title} {block_count}/{block_count}")
 
-    _write_array(
-        layer_group,
-        dataset.arrays["elevation"],
-        elevation,
-        ["lat", "lon"],
-        {
-            "units": dataset.units,
-            "long_name": "Elevation (resampled)",
-        },
-    )
-
-    shade_settings = dataset.style["hillshade"]
-    shade = hillshade(
-        elevation,
-        abs(transform.a),
-        transform.f,
-        shade_settings["azimuth"],
-        shade_settings["altitude"],
-    )
-    shade_description = (
-        f"Hillshade, azimuth {shade_settings['azimuth']}, "
-        f"altitude {shade_settings['altitude']} (0-255)"
-    )
-
-    _write_array(
-        layer_group,
-        dataset.arrays["hillshade"],
-        shade,
-        ["lat", "lon"],
-        {"long_name": shade_description},
-    )
+    for role, spec in dataset.roles.items():
+        _write_array(layer_group, spec.name, arrays[role], ["lat", "lon"], _attributes(spec))
 
     return {}
 
 
-def hillshade(
-    elevation: np.ndarray,
-    resolution_degrees: float,
-    latitude_top: float,
-    azimuth: float = 315,
-    altitude: float = 45,
-) -> np.ndarray:
-    """Return uint8 hillshade (0-255) for a north-up grid with cells in degrees."""
-    elevation = np.pad(elevation.astype("float64"), 1, mode="edge")
-
-    height = elevation.shape[0] - 2
-    latitude = latitude_top - (np.arange(height) + 0.5) * resolution_degrees
-
-    # Gradients need cell sizes in metres to match elevation units.
-    cell_width = (
-        resolution_degrees
-        * LONGITUDE_DEGREE_AT_EQUATOR_M
-        * np.cos(np.radians(latitude))
-    )[:, None].clip(min=1)
-    cell_height = resolution_degrees * LATITUDE_DEGREE_M
-
-    northwest = elevation[:-2, :-2]
-    north = elevation[:-2, 1:-1]
-    northeast = elevation[:-2, 2:]
-    west = elevation[1:-1, :-2]
-    east = elevation[1:-1, 2:]
-    southwest = elevation[2:, :-2]
-    south = elevation[2:, 1:-1]
-    southeast = elevation[2:, 2:]
-
-    gradient_east = (
-        (northeast + 2 * east + southeast)
-        - (northwest + 2 * west + southwest)
-    ) / (8 * cell_width)
-
-    gradient_north = (
-        (northwest + 2 * north + northeast)
-        - (southwest + 2 * south + southeast)
-    ) / (8 * cell_height)
-
-    azimuth_radians = np.radians(azimuth)
-    altitude_radians = np.radians(altitude)
-
-    light_east = np.sin(azimuth_radians) * np.cos(altitude_radians)
-    light_north = np.cos(azimuth_radians) * np.cos(altitude_radians)
-    light_up = np.sin(altitude_radians)
-
-    illumination = (
-        -gradient_east * light_east
-        - gradient_north * light_north
-        + light_up
-    ) / np.sqrt(gradient_east**2 + gradient_north**2 + 1)
-
-    return np.rint(illumination.clip(0, 1) * 255).astype("uint8")
+def _attributes(spec: Role) -> JsonObject:
+    """The CF attributes of a role's array."""
+    attributes = {"units": spec.units, "long_name": spec.long_name}
+    return {key: value for key, value in attributes.items() if value}
 
 
 def _write_time_series(
@@ -366,18 +284,10 @@ def _write_time_series(
     """Write a time series in batches and return its display statistics."""
     steps = layer_plan.steps
     step_count = len(steps)
-    dtype, scale, offset, fill_value = dataset.encoding["value"]
+    spec = dataset.roles["value"]
 
     _write_time_coordinate(layer_group, steps)
-    series = _create_time_array(
-        layer_group,
-        dataset,
-        layer_plan,
-        dtype,
-        scale,
-        offset,
-        fill_value,
-    )
+    series = _create_time_array(layer_group, spec, layer_plan)
     statistics = _StatisticsAccumulator()
     worker_count = _choose_worker_count(layer_plan)
 
@@ -393,10 +303,10 @@ def _write_time_series(
             statistics.add(raster_batch, layer_plan.mask)
             encoded_batch = encode_values(
                 raster_batch,
-                dtype,
-                scale,
-                offset,
-                fill_value,
+                spec.dtype,
+                spec.scale,
+                spec.offset,
+                spec.fill,
             )
             batch_end = batch_start + len(batch_steps)
             series[batch_start:batch_end] = encoded_batch
@@ -433,12 +343,8 @@ def _write_time_coordinate(layer_group: zarr.Group, steps: list[str]) -> None:
 
 def _create_time_array(
     layer_group: zarr.Group,
-    dataset: Dataset,
+    spec: Role,
     layer_plan: LayerPlan,
-    dtype: str,
-    scale: float,
-    offset: float,
-    fill_value: int,
 ) -> zarr.Array:
     """Create the chunked and sharded Zarr array for a time series."""
     step_count = len(layer_plan.steps)
@@ -449,22 +355,21 @@ def _create_time_array(
     )
 
     return layer_group.create_array(
-        dataset.arrays["value"],
+        spec.name,
         shape=(step_count, height, width),
         chunks=(1, *spatial_chunks),
         shards=(
             min(step_count, BATCH_SIZE),
             *spatial_chunks,
         ),
-        dtype=dtype,
-        fill_value=fill_value,
+        dtype=spec.dtype,
+        fill_value=spec.fill,
         compressors=COMPRESSION,
         dimension_names=["time", "lat", "lon"],
         attributes={
-            "units": dataset.units,
-            "long_name": dataset.long_name,
-            "scale_factor": scale,
-            "add_offset": offset,
+            **_attributes(spec),
+            "scale_factor": spec.scale,
+            "add_offset": spec.offset,
         },
     )
 

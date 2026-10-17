@@ -12,12 +12,21 @@ def test_validate_catches_missing_attribution(tmp_path):
     build_scene(HASH_B, Area(NAIROBI), "2015-01", "2015-03", [TERRAIN, RAIN], "T", tmp_path)
 
     doc = json.loads((tmp_path / HASH_B / "scene.json").read_text(encoding="utf-8"))
-    del doc["layers"][0]["source"]["disclaimer"]
+    doc["layers"][0]["source"]["disclaimer"] = "not in credits.disclaimers"
 
     assert any("disclaimer" in problem for problem in validate(doc))
 
     doc["layers"][1]["source"]["attribution"] = ""
     assert any("attribution" in problem for problem in validate(doc))
+
+
+def test_validate_requires_the_disclaimer_a_source_marks_required(tmp_path):
+    build_scene(HASH_B, Area(NAIROBI), "2015-01", "2015-03", [TERRAIN, RAIN], "T", tmp_path)
+
+    doc = json.loads((tmp_path / HASH_B / "scene.json").read_text(encoding="utf-8"))
+    del doc["layers"][0]["source"]["disclaimer"]
+
+    assert any("missing disclaimer" in problem for problem in validate(doc))
 
 
 def test_validate_checks_the_layer_contract(tmp_path):
