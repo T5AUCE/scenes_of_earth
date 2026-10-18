@@ -8,7 +8,7 @@ import type {
   SceneStatus,
 } from "./types";
 
-const SCENE_VERSION = "0.3";
+const SCENE_VERSION = "0.4";
 const SCENE_ID_CHARS = 20; // Must match ID_CHARS in soe/scene_request.py.
 const SCENE_ID_PATTERN = new RegExp(`^[0-9a-f]{${SCENE_ID_CHARS}}$`);
 
