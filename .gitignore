@@ -23,3 +23,6 @@ data/
 # Frontend
 node_modules/
 web/dist/
+
+# Personal credentials (CDS key); linked into ~ by postCreateCommand
+.secrets/

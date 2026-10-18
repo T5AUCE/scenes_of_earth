@@ -17,7 +17,7 @@
 	},
 	"otherPortsAttributes": { "onAutoForward": "ignore" },
 
-	"postCreateCommand": "sudo chown vscode:vscode ~/.local ~/.local/share && sudo chown -R vscode:vscode ~/.local/share/opencode ~/.config/opencode && pip install -e '.[import,dev]' && npm config set prefix ~/.npm-global && npm install -g @anthropic-ai/claude-code opencode-ai@1.19.3",
+	"postCreateCommand": "sudo chown vscode:vscode ~/.local ~/.local/share && sudo chown -R vscode:vscode ~/.local/share/opencode ~/.config/opencode && pip install -e '.[import,dev]' && npm config set prefix ~/.npm-global && npm install -g @anthropic-ai/claude-code opencode-ai@1.19.3 && { [ ! -f .secrets/cdsapirc ] || ln -sfn \"$PWD/.secrets/cdsapirc\" ~/.cdsapirc; }",
 
 	// Unconfined seccomp/AppArmor lets bwrap create user namespaces (gpt-agent.sh read-only sandbox).
 	"runArgs": ["--security-opt", "seccomp=unconfined", "--security-opt", "apparmor=unconfined"],

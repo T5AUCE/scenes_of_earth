@@ -1,42 +1,26 @@
 import type {
   ExpressionSpecification,
   GeoJSONSource,
-  LngLat,
   Map as MapLibreMap,
-  PaddingOptions,
 } from "maplibre-gl";
 
 import { loadAreaFeature } from "./api";
 import { makeHtmlElement } from "./html";
 import { polygonParts, tileAreaGeometry, type TileArea } from "./label-filter";
 import {
-  fitCamera,
-  fitToBbox,
-  lockPan,
   MAX_ZOOM,
   moveLabelsIntoArea,
   removeLayerAndSource,
   WORLD_VIEW,
 } from "./map";
 import { shiftLongitudes, worldShift } from "./render/mercator";
+import { flightDuration, flyIn, watchResize } from "./scene-camera";
 import { createScenePanel, PANEL_TABS, type PanelTab } from "./scene-panel";
 import { sceneUrl, timeForPrefix } from "./scene-url";
 import type { AreaFeature, Bbox, Scene } from "./types";
 import { mountScene, OUTLINE_ID } from "./view";
 
 type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
-
-const FLY_DURATION_MS = 1800;
-const SNAP_BACK_MS = 250;
-const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
-
-const USER_INPUT_EVENTS = ["wheel", "mousedown", "touchstart"];
-// Capture and non-passive, so a gesture can be stopped before the map handles it.
-const LISTEN_FIRST = { capture: true, passive: false };
-
-// Zooming out may pass the fitted zoom by this much before it eases back.
-const FIT_OVERSHOOT_ZOOM = 0.15;
-const FIT_TOLERANCE_ZOOM = 0.001;
 
 const MASK_ID = "soe-scene-mask";
 const MASK_OPACITY = 1;
@@ -49,12 +33,6 @@ const PAGE_BACKGROUND_PROPERTY = "--page-background";
 const HALF_WORLD_DEG = 180;
 // Mercator has no poles.
 const MAX_LATITUDE_DEG = 85;
-
-// Space kept between the fitted area and whatever covers or borders the map.
-const EDGE_MARGIN_PX = 24;
-const STATUS_BADGE_ID = "status";
-const PHONE_QUERY = "(max-width: 600px)";
-const RESIZE_DEBOUNCE_MS = 200;
 
 /**
  * How entering a scene treats history. push: a new entry; replace: the entry the page was opened
@@ -74,8 +52,6 @@ export interface SceneRoots {
   timeBar: HTMLElement;
   dialog: HTMLDialogElement;
 }
-
-type FittedCamera = { center: LngLat; zoom: number };
 
 type Camera = { center: { lng: number; lat: number } | [number, number]; zoom: number };
 
@@ -189,7 +165,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     let isLanded = false;
     const fadeZoom = () => (isLanded ? undefined : flight.zoom);
 
-    const flight = flyIn(scene, () => {
+    const flight = flyIn(map, scene, roots, () => {
       isLanded = true;
       hideDataBelow(mounted.layerIds, undefined);
       refreshMaskAndLabels(undefined);
@@ -245,54 +221,6 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     if (entry === "keep" && history.state?.panel) history.replaceState(null, "", url);
   }
 
-  // The area is centred in the part of the map that the column and the time bar leave open.
-  function flyIn(scene: Scene, onLanded: () => void) {
-    const padding = scenePadding();
-    const camera = fitCamera(map, scene.area.bbox, padding);
-
-    fitToBbox(map, scene.area.bbox, { padding, duration: flightDuration() });
-
-    const hold = camera ? holdView(camera, onLanded) : null;
-    let fitted = camera;
-
-    return {
-      get zoom() {
-        return fitted?.zoom;
-      },
-
-      stopClamp: () => hold?.stop(),
-
-      // The window changed size, so the area is centred again in the space that is left.
-      refit() {
-        const next = fitCamera(map, scene.area.bbox, scenePadding());
-        if (!next || !hold) return;
-
-        hold.refit(next);
-        fitted = next;
-      },
-    };
-  }
-
-  function scenePadding(): PaddingOptions {
-    const column = roots.column.getBoundingClientRect();
-    const timeBar = roots.timeBar.getBoundingClientRect();
-    const edges = { top: EDGE_MARGIN_PX, bottom: EDGE_MARGIN_PX, left: EDGE_MARGIN_PX };
-
-    if (matchMedia(PHONE_QUERY).matches) {
-      const badge = document.getElementById(STATUS_BADGE_ID)!.getBoundingClientRect();
-      const top = badge.bottom + EDGE_MARGIN_PX;
-      const bottom = window.innerHeight - column.top + EDGE_MARGIN_PX;
-
-      return { ...edges, top, right: EDGE_MARGIN_PX, bottom };
-    }
-
-    const right = window.innerWidth - column.left + EDGE_MARGIN_PX;
-    const timeBarTop = timeBar.height ? timeBar.top : window.innerHeight;
-    const bottom = window.innerHeight - timeBarTop + EDGE_MARGIN_PX;
-
-    return { ...edges, right, bottom };
-  }
-
   // Data and labels wait for the complete mask, so unmasked data never shows.
   function hideDataBelow(layerIds: string[], fittedZoom: number | undefined) {
     for (const id of layerIds) map.setLayerZoomRange(id, dataMinZoom(fittedZoom), MAX_ZOOM);
@@ -307,95 +235,6 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
     restoreLabels();
     restoreLabels = moveLabelsIntoArea(map, labelArea, dataMinZoom(fittedZoom));
-  }
-
-  // The limits start after the flight, because they would cut it short.
-  function holdView(first: FittedCamera, onLanded: () => void) {
-    let fitted = first;
-    let isHolding = false;
-    let isSnapping = false;
-    // Set when the user took over from the snap-back, until that gesture has ended.
-    let isSnapBackPaused = false;
-    let stopPanLock = () => {};
-    const canvasContainer = map.getCanvasContainer();
-
-    const snapBack = () => {
-      const isAtFit = map.getZoom() >= fitted.zoom - FIT_TOLERANCE_ZOOM;
-      if (isSnapping || isSnapBackPaused || isAtFit) return;
-
-      isSnapping = true;
-      map.easeTo({
-        center: fitted.center,
-        zoom: fitted.zoom,
-        duration: SNAP_BACK_MS,
-        easing: easeOut,
-      });
-    };
-
-    const endMove = () => {
-      isSnapping = false;
-      isSnapBackPaused = false;
-    };
-
-    const takeOverFromSnapBack = (event: Event) => {
-      // A trackpad's zoom-out stream would hold the dip open, so it is dropped at the fitted zoom.
-      if (isZoomOut(event) && map.getZoom() <= fitted.zoom + FIT_TOLERANCE_ZOOM) {
-        event.stopPropagation();
-        event.preventDefault();
-        return;
-      }
-
-      if (!isSnapping) return;
-
-      isSnapBackPaused = true;
-      isSnapping = false;
-      map.stop();
-    };
-
-    const apply = () => {
-      map.off("moveend", apply);
-      isHolding = true;
-      map.setMinZoom(fitted.zoom - FIT_OVERSHOOT_ZOOM);
-      map.on("zoomend", snapBack);
-      map.on("moveend", endMove);
-      stopPanLock = lockPan(map, fitted);
-
-      for (const type of USER_INPUT_EVENTS) {
-        canvasContainer.addEventListener(type, takeOverFromSnapBack, LISTEN_FIRST);
-      }
-
-      onLanded();
-    };
-
-    if (map.isMoving()) map.on("moveend", apply);
-    else apply();
-
-    return {
-      refit(next: FittedCamera) {
-        const wasAtFit = map.getZoom() <= fitted.zoom + FIT_TOLERANCE_ZOOM;
-        fitted = next;
-        if (!isHolding) return;
-
-        stopPanLock();
-        map.setMinZoom(next.zoom - FIT_OVERSHOOT_ZOOM);
-        stopPanLock = lockPan(map, next);
-
-        if (wasAtFit) map.jumpTo({ center: next.center, zoom: next.zoom });
-      },
-
-      stop() {
-        map.off("moveend", apply);
-        map.off("moveend", endMove);
-        map.off("zoomend", snapBack);
-
-        for (const type of USER_INPUT_EVENTS) {
-          canvasContainer.removeEventListener(type, takeOverFromSnapBack, LISTEN_FIRST);
-        }
-
-        stopPanLock();
-        map.setMinZoom(null);
-      },
-    };
   }
 
   async function showAreaMask(
@@ -513,27 +352,6 @@ function worldRing(holes: number[][][]) {
   ];
 }
 
-const isZoomOut = (event: Event) => event.type === "wheel" && (event as WheelEvent).deltaY > 0;
-
-// A soft landing makes the snap-back feel elastic rather than abrupt.
-const easeOut = (progress: number) => 1 - (1 - progress) ** 3;
-
-function watchResize(onSettled: () => void) {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-
-  const onResize = () => {
-    clearTimeout(timer);
-    timer = setTimeout(onSettled, RESIZE_DEBOUNCE_MS);
-  };
-
-  window.addEventListener("resize", onResize);
-
-  return () => {
-    window.removeEventListener("resize", onResize);
-    clearTimeout(timer);
-  };
-}
-
 const dataMinZoom = (fittedZoom: number | undefined) =>
   fittedZoom === undefined ? 0 : fittedZoom - DATA_APPEARS_ZOOM;
 
@@ -556,5 +374,3 @@ function maskOpacity(fittedZoom?: number): number | ExpressionSpecification {
     MASK_OPACITY,
   ];
 }
-
-const flightDuration = () => (matchMedia(REDUCED_MOTION_QUERY).matches ? 0 : FLY_DURATION_MS);
