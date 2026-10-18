@@ -68,6 +68,20 @@ test("downsampling flags blocks with data apart from blocks inside the area", ()
   assert.deepEqual(Array.from(small.inside), [1, 0, 0, 0]);
 });
 
+test("elevation filled outside the area keeps the blocks inside as they were", () => {
+  const grid = { bbox: [0, 0, 4, 2] as Bbox, nx: 4, ny: 2 };
+  const elevation = [0, 10, 20, 30, 0, 10, 20, 30];
+  const mask = [1, 1, 0, 0, 1, 1, 0, 0];
+  const filled = elevation.map((value, cell) => (mask[cell] ? value : NaN));
+
+  const whole = smoothed(downsample(elevation, mask, grid, 4));
+  const small = smoothed(downsample(filled, mask, grid, 4));
+
+  assert.deepEqual(Array.from(small.hasData), mask);
+  assert.deepEqual(Array.from(small.inside), Array.from(whole.inside));
+  assert.ok(small.values.every((value, cell) => Number.isFinite(value) && (mask[cell] || !value)));
+});
+
 test("a ring that leaves the mask is cut into runs at the mask edge", () => {
   const nx = 6;
   const ny = 4;

@@ -19,7 +19,14 @@ from . import __version__
 from .areas import Area, AreaError
 from .bundle import JsonObject, make, validate
 from .plan import LayerPlan, Plan, plan as make_plan
-from .sources import Dataset, Role, SeriesDataset, StaticDataset
+from .sources import (
+    STOP_COUNT,
+    TOP_PERCENTILE,
+    Dataset,
+    Role,
+    SeriesDataset,
+    StaticDataset,
+)
 from .terrain_cache import is_cached, read_cached
 
 ProgressCallback = Callable[[float, str | None], None]  # build fraction done 0-1, stage text
@@ -264,15 +271,34 @@ def _write_static_layer(
     progress(1, f"{dataset.title} {block_count}/{block_count}")
 
     for role, spec in dataset.roles.items():
-        _write_array(layer_group, spec.name, arrays[role], ["lat", "lon"], _attributes(spec))
+        _write_array(
+            layer_group,
+            spec.name,
+            _fill_outside(arrays[role], layer_plan.mask, spec),
+            ["lat", "lon"],
+            _attributes(spec),
+            spec.fill,
+        )
 
     return {}
 
 
+def _fill_outside(data: np.ndarray, area_mask: np.ndarray, spec: Role) -> np.ndarray:
+    """Replace the cells outside the area with the role's fill value."""
+    if spec.fill is None:
+        raise ValueError(f"{spec.name}: a static role needs a fill value to hide outside cells")
+
+    return np.where(area_mask.astype(bool), data, spec.fill).astype(data.dtype)
+
+
 def _attributes(spec: Role) -> JsonObject:
-    """The CF attributes of a role's array."""
-    attributes = {"units": spec.units, "long_name": spec.long_name}
-    return {key: value for key, value in attributes.items() if value}
+    """The CF attributes of a role's array; the scale and offset are always set."""
+    labels = {"units": spec.units, "long_name": spec.long_name}
+    return {
+        **{key: value for key, value in labels.items() if value},
+        "scale_factor": spec.scale,
+        "add_offset": spec.offset,
+    }
 
 
 def _write_time_series(
@@ -285,6 +311,7 @@ def _write_time_series(
     steps = layer_plan.steps
     step_count = len(steps)
     spec = dataset.roles["value"]
+    area_mask = layer_plan.mask.astype(bool)
 
     _write_time_coordinate(layer_group, steps)
     series = _create_time_array(layer_group, spec, layer_plan)
@@ -300,9 +327,9 @@ def _write_time_series(
                 layer_plan,
                 batch_steps,
             )
-            statistics.add(raster_batch, layer_plan.mask)
+            statistics.add(raster_batch, area_mask)
             encoded_batch = encode_values(
-                raster_batch,
+                np.where(area_mask, raster_batch, np.nan),
                 spec.dtype,
                 spec.scale,
                 spec.offset,
@@ -315,7 +342,7 @@ def _write_time_series(
 
     value_stats = statistics.finish()
     return {
-        "domain": dataset.domain(value_stats),
+        "stops": dataset.stops(value_stats, statistics.quantiles(STOP_COUNT)),
         "stats": value_stats,
     }
 
@@ -366,11 +393,7 @@ def _create_time_array(
         fill_value=spec.fill,
         compressors=COMPRESSION,
         dimension_names=["time", "lat", "lon"],
-        attributes={
-            **_attributes(spec),
-            "scale_factor": spec.scale,
-            "add_offset": spec.offset,
-        },
+        attributes=_attributes(spec),
     )
 
 
@@ -387,7 +410,7 @@ class _StatisticsAccumulator:
 
     def add(self, raster_batch: np.ndarray, area_mask: np.ndarray) -> None:
         """Accumulate valid values from one batch."""
-        values = raster_batch[:, area_mask.astype(bool)]
+        values = raster_batch[:, area_mask]
         values = values[np.isfinite(values)]
 
         if values.size == 0:
@@ -407,12 +430,17 @@ class _StatisticsAccumulator:
             )
         )
 
+    def quantiles(self, count: int) -> list[float]:
+        """Sample values at `count` evenly spaced percentiles from 0 to TOP_PERCENTILE."""
+        percentiles = np.linspace(0, TOP_PERCENTILE, count)
+        return np.percentile(np.concatenate(self._samples), percentiles).tolist()
+
     def finish(self) -> dict[str, float]:
         """Return rounded statistics or raise when no valid data exists."""
         if self._value_count == 0:
             raise AreaError("No valid data inside the area")
 
-        percentile_98 = np.percentile(np.concatenate(self._samples), 98)
+        percentile_98 = np.percentile(np.concatenate(self._samples), TOP_PERCENTILE)
         mean = self._value_sum / self._value_count
         return {
             "min": round(float(self._minimum), 2),
@@ -539,12 +567,14 @@ def _write_array(
     data: np.ndarray,
     dimensions: list[str],
     attributes: JsonObject | None = None,
+    fill_value: int | None = None,
 ) -> zarr.Array:
     array = group.create_array(
         name,
         shape=data.shape,
         chunks=data.shape,
         dtype=data.dtype,
+        fill_value=fill_value,
         compressors=COMPRESSION,
         dimension_names=dimensions,
         attributes=attributes or {},

@@ -24,7 +24,7 @@ from soe.sources import (
 
 SQUARE = mapping(box(36.5, -1.5, 37.5, -0.5))
 PINNED_REVISION = "Tue, 01 Sep 2015 00:00:00 GMT"
-PINNED_SCENE_ID = "9e8ef2e98210f6cee060"  # Computed for soe 0.3.0 (terrain reader and cache).
+PINNED_SCENE_ID = "313bb298ef920f4d2901"  # Computed for soe 0.4.0 (scene format 0.3).
 
 
 def request_body(**overrides: object) -> str:

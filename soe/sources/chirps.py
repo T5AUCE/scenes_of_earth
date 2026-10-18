@@ -50,8 +50,9 @@ class RainDataset(SeriesDataset):
     def current_revision(self, last_month: str) -> str | None:
         return self.backend.current_revision(last_month)
 
-    def domain(self, stats: dict[str, float]) -> list[float]:
-        return [0, stats["p98"]]
+    def stops_floor(self, stats: dict[str, float]) -> float:
+        """Rainfall scales start at zero even when the sampled minimum is positive."""
+        return 0
 
     def read_step(self, step: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
         """The month that starts on the ISO date `step`."""

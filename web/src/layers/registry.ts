@@ -9,22 +9,23 @@ import { createTerrainView } from "./terrain";
 
 const CACHED_STEPS = 24;
 const SERIES_OPACITY = 0.8;
-const DEFAULT_COLORMAP = "Blues";
 
 /** Renderers by style.kind; later stack numbers draw on top of earlier ones. */
 export const LAYER_KINDS = new Map([
-  ["series-colormap", { stack: 1, create: createSeriesView }],
+  ["field", { stack: 1, create: createSeriesView }],
   ["terrain", { stack: 2, create: createTerrainView }],
 ]);
 
 function createSeriesView({ map, store, layer, beforeId, report }: LayerContext): LayerView {
   const id = `${layer.id}-series`;
-  const { colormap = DEFAULT_COLORMAP, domain } = layer.style;
+  const { palette, stops } = layer.style;
   const { time: timeAxis } = layer;
-  if (!domain || !timeAxis) throw new Error(`Layer "${layer.id}" needs a domain and a time axis`);
+  if (!palette || !stops || !timeAxis) {
+    throw new Error(`Layer "${layer.id}" needs a palette, stops and a time axis`);
+  }
 
   const valueDoc = arrayDoc(layer, "value");
-  const colors = lut(colormap);
+  const colors = lut(palette);
   let alive = true;
   // A slow read of an older step must not overwrite the one being displayed.
   let shownStep = -1;
@@ -48,7 +49,7 @@ function createSeriesView({ map, store, layer, beforeId, report }: LayerContext)
       const values = await readStep(step);
       if (!alive || step !== shownStep) return;
 
-      const rgba = paintColormap(values, table, colors, domain);
+      const rgba = paintColormap(values, table, colors, stops);
       setImage(map, id, new ImageData(rgba, table.width, table.height));
       map.setPaintProperty(id, "raster-opacity", SERIES_OPACITY);
 
@@ -80,7 +81,7 @@ function createSeriesView({ map, store, layer, beforeId, report }: LayerContext)
       if (shownStep < 0) hideImage();
       else drawLatestStep(shownStep);
     },
-    legend: () => gradientLegend(colors, domain, layer.units),
+    legend: () => gradientLegend(colors, stops, layer.units),
     destroy() {
       alive = false;
       removeLayerAndSource(map, id);

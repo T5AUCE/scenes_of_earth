@@ -9,13 +9,15 @@ import numpy as np
 import pytest
 import zarr
 from rasterio.transform import Affine
-from shapely.geometry import box
+from shapely.geometry import Polygon, box
 
 from soe.areas import Area, AreaError
 from soe.build import build_scene
 from soe.bundle import validate
+from soe.plan import plan
 from soe.sources import (
     SOURCES,
+    Bbox,
     CellWindow,
     Role,
     StaticDataset,
@@ -270,9 +272,23 @@ def test_synthetic_build_validates_and_opens(tmp_path):
 
     assert lat[0] > lat[-1] and doc["area"]["bbox"][3] == pytest.approx(lat[0] + 0.025)
 
-    p98 = doc["layers"][-1]["style"]["domain"][1]
 
-    assert 0 < p98 <= doc["layers"][-1]["stats"]["max"]
+def test_stops_increase_and_cover_all_steps(tmp_path):
+    doc, _ = build_nairobi(tmp_path)
+    rain = doc["layers"][-1]
+    stops = rain["style"]["stops"]
+
+    assert 2 <= len(stops) <= 9
+    assert stops == sorted(set(stops))
+    assert stops[-1] == pytest.approx(rain["stats"]["p98"], rel=0.05)
+    assert "domain" not in rain["style"]
+
+
+def test_rain_stops_start_at_zero(tmp_path):
+    doc, _ = build_nairobi(tmp_path)
+
+    assert doc["layers"][-1]["stats"]["min"] > 0
+    assert doc["layers"][-1]["style"]["stops"][0] == 0
 
 
 def test_build_with_aggregation_factor_2(tmp_path):
@@ -392,16 +408,22 @@ def test_store_has_consolidated_metadata(tmp_path):
     assert expected <= meta.keys()
 
 
-def test_static_dataset_with_its_own_role_is_written_without_a_special_case(tmp_path):
+def land_cover_dataset(classes: Role) -> StaticDataset:
+    """A static layer with one uint8 role of the given spec, read as the constant 40."""
+
     class LandCover(StaticDataset):
-        def read(self, bbox, res, on_block=None):
+        def read(
+            self,
+            bbox: Bbox,
+            res: float,
+            on_block: Callable[[], None] | None = None,
+        ) -> tuple[dict[str, np.ndarray], Affine]:
             height, width = round((bbox[3] - bbox[1]) / res), round((bbox[2] - bbox[0]) / res)
             return {"classes": np.full((height, width), 40, "uint8")}, Affine(
                 res, 0, bbox[0], 0, -res, bbox[3]
             )
 
-    classes = Role("landcover", "uint8", fill=0, long_name="Land cover class")
-    dataset = LandCover(
+    return LandCover(
         **{
             **vars(TERRAIN),
             "id": "landcover",
@@ -410,12 +432,81 @@ def test_static_dataset_with_its_own_role_is_written_without_a_special_case(tmp_
         }
     )
 
+
+def test_static_dataset_with_its_own_role_is_written_without_a_special_case(tmp_path):
+    classes = Role("landcover", "uint8", scale=2, offset=1, fill=7, long_name="Land cover class")
+    dataset = land_cover_dataset(classes)
+
     build_scene(HASH_A, Area(NAIROBI), "2015-01", "2015-02", [dataset], "Test", tmp_path)
 
     doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
     array = zarr.open_group(tmp_path / HASH_A / "data.zarr", mode="r")["landcover/landcover"]
 
     assert doc["layers"][0]["arrays"]["classes"]["path"] == "landcover/landcover"
-    assert doc["layers"][0]["arrays"]["classes"]["fill"] == 0
+    assert doc["layers"][0]["arrays"]["classes"]["fill"] == 7
     assert array.dtype == "uint8" and array.attrs["long_name"] == "Land cover class"
+    assert (array.attrs["scale_factor"], array.attrs["add_offset"]) == (2, 1)
+    assert array.metadata.fill_value == 7
     assert (array[:] == 40).all()
+
+
+def test_static_role_without_a_fill_value_fails_the_build_without_a_bundle(tmp_path):
+    dataset = land_cover_dataset(Role("landcover", "uint8"))
+
+    with pytest.raises(ValueError, match="needs a fill value"):
+        build_scene(HASH_A, Area(NAIROBI), "2015-01", "2015-02", [dataset], "Test", tmp_path)
+
+    assert not (tmp_path / HASH_A).exists()
+
+
+TRIANGLE = Polygon([(36.5, -1.5), (37.5, -1.5), (36.5, -0.5)])
+
+
+def build_triangle(tmp_path: Path) -> tuple[dict, zarr.Group]:
+    """Build a terrain and rain scene over a triangle, so a third of the grid is outside."""
+    build_scene(
+        HASH_A,
+        Area(TRIANGLE, BOUNDARY),
+        "2015-01",
+        "2015-03",
+        [TERRAIN, RAIN],
+        "Test",
+        tmp_path,
+    )
+    out = tmp_path / HASH_A
+    doc = json.loads((out / "scene.json").read_text(encoding="utf-8"))
+    return doc, zarr.open_group(out / "data.zarr", mode="r")
+
+
+def test_cells_outside_the_area_hold_the_fill_value_in_every_layer(tmp_path):
+    doc, root = build_triangle(tmp_path)
+    arrays = {
+        (layer["id"], role): (layer, array_doc)
+        for layer in doc["layers"]
+        for role, array_doc in layer["arrays"].items()
+    }
+
+    assert len(arrays) == 3
+
+    for layer, array_doc in arrays.values():
+        outside = root[layer["mask"]["path"]][...] == 0
+        stored = root[array_doc["path"]][...]
+
+        assert outside.any() and (~outside).any()
+        assert (stored[..., outside] == array_doc["fill"]).all()
+        assert (stored[..., ~outside] != array_doc["fill"]).any()
+
+
+def test_hillshade_at_the_area_edge_is_computed_before_masking(tmp_path):
+    doc, root = build_triangle(tmp_path)
+    terrain = next(layer for layer in doc["layers"] if layer["id"] == "copdem_terrain")
+    inside = root[terrain["mask"]["path"]][...] == 1
+    layer_plan = plan(Area(TRIANGLE, BOUNDARY), [TERRAIN, RAIN], "2015-01", "2015-03").layers[
+        "copdem_terrain"
+    ]
+    unmasked, _ = TERRAIN.read(tuple(layer_plan.bbox), layer_plan.res)
+
+    stored = root["copdem_terrain/hillshade"][...]
+
+    assert (stored[inside] == unmasked["hillshade"][inside]).all()
+    assert stored[inside].max() <= 254

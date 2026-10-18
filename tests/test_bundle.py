@@ -46,6 +46,52 @@ def test_validate_checks_the_layer_contract(tmp_path):
     assert any("missing grid" in problem for problem in problems)
 
 
+def test_bundle_rejects_unsorted_stops_and_missing_encodings(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    terrain, rain = doc["layers"]
+
+    rain["style"]["stops"] = [0, 50, 20]
+    del terrain["style"]["encodings"]
+
+    problems = validate(doc)
+
+    assert any("must not decrease" in problem for problem in problems)
+    assert any("encodings" in problem for problem in problems)
+
+    rain["style"]["stops"] = [0] * 10
+
+    assert any("2-9 values" in problem for problem in validate(doc))
+
+
+def test_bundle_rejects_stops_that_are_not_finite_numbers(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    rain = doc["layers"][1]
+
+    for stops in (["a", "b"], [False, True], [0, float("nan")], [0, float("inf")], [0, "b"], 5):
+        rain["style"]["stops"] = stops
+
+        assert any("stops" in problem for problem in validate(doc)), stops
+
+    rain["style"]["stops"] = [3, 3]
+
+    assert validate(doc) == []
+
+
+def test_bundle_rejects_non_text_style_names(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    terrain, rain = doc["layers"]
+
+    terrain["style"]["kind"] = 3
+    terrain["style"]["parts"] = ["contours", 1]
+    rain["style"]["palette"] = None
+
+    problems = validate(doc)
+
+    assert any("style.kind" in problem for problem in problems)
+    assert any("style.parts" in problem for problem in problems)
+    assert any("style.palette" in problem for problem in problems)
+
+
 def test_credits_of_a_real_mode_sample_boundary_do_not_claim_synthetic_data():
     layer_blocks = [{"source": SOURCES["chirps"]}, {"source": SOURCES["glo90"]}]
 

@@ -29,6 +29,10 @@ GLO30_RES_DEG = 1 / 3600
 GLO90_RES_DEG = 1 / 1200
 NATIVE_RES_TOLERANCE = 1e-9  # relative; coarser than this counts as resampled
 
+HILLSHADE_FILL = 255  # stored for cells without data, so real shades stop one below it
+HILLSHADE_MAX = HILLSHADE_FILL - 1
+ELEVATION_FILL = -32768  # the int16 minimum, below any real ground
+
 LONGITUDE_DEGREE_AT_EQUATOR_M = 111_320
 LATITUDE_DEGREE_M = 110_574
 
@@ -175,7 +179,7 @@ def hillshade(
     azimuth: float = 315,
     altitude: float = 45,
 ) -> np.ndarray:
-    """Return uint8 hillshade (0-255) for a north-up grid with cells in degrees."""
+    """Return uint8 hillshade (0-HILLSHADE_MAX) for a north-up grid with cells in degrees."""
     elevation = np.pad(elevation.astype("float64"), 1, mode="edge")
 
     height = elevation.shape[0] - 2
@@ -221,7 +225,7 @@ def hillshade(
         + light_up
     ) / np.sqrt(gradient_east**2 + gradient_north**2 + 1)
 
-    return np.rint(illumination.clip(0, 1) * 255).astype("uint8")
+    return np.rint(illumination.clip(0, 1) * 255).clip(max=HILLSHADE_MAX).astype("uint8")
 
 
 def terrain_by_blocks(

@@ -1,4 +1,5 @@
 """The dataset contract: roles, static and series datasets, and the registry type."""
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -13,6 +14,10 @@ Registry = dict[str, "Dataset"]  # dataset id -> dataset
 
 # The app supports 60S-60N in v1; widen the extent here.
 SUPPORTED_BOUNDS_DEG = (-180, -60, 180, 60)  # W, S, E, N
+
+STOP_COUNT = 9  # colour stops of a series layer, one per palette colour
+STOP_DIGITS = 2  # significant digits of the stops span that a stop keeps
+TOP_PERCENTILE = 98  # the last stop; values above it share the top colour
 
 
 class Role(NamedTuple):
@@ -64,9 +69,29 @@ class Dataset(ABC):
         """
         return None
 
-    def domain(self, stats: dict[str, float]) -> list[float]:
-        """Colour-scale range of a series layer, from the stats of its values."""
-        return [stats["min"], stats["p98"]]
+    def stops(self, stats: dict[str, float], quantiles: list[float]) -> list[float]:
+        """Fitted colour stops of a series layer, increasing, at most STOP_COUNT.
+
+        `quantiles` are the values at STOP_COUNT evenly spaced percentiles from 0 to
+        TOP_PERCENTILE. Each stop is the mean of an even stretch and the quantile, so
+        skewed data is spread over the palette without crowding the low colours. Stops are
+        rounded to a step set by the span (so 288-300 K keeps whole degrees), and repeats are
+        dropped. A constant field has no span; its stops are the same value twice.
+        """
+        low = self.stops_floor(stats)
+        high = stats["p98"]
+        if high <= low:
+            return [low, high]
+
+        even = np.linspace(low, high, STOP_COUNT)
+        blended = [low, *((even[1:] + np.array(quantiles[1:])) / 2)]
+        decimals = STOP_DIGITS - 1 - math.floor(math.log10(high - low))
+        increasing = _strictly_increasing([round(float(stop), decimals) for stop in blended])
+        return increasing if len(increasing) >= 2 else [low, high]
+
+    def stops_floor(self, stats: dict[str, float]) -> float:
+        """The first colour stop of a series layer."""
+        return stats["min"]
 
     def sources_for(self, bbox: Bbox) -> list[dict]:
         """The sources a read of bbox uses, the main one first."""
@@ -119,3 +144,12 @@ class SeriesDataset(Dataset):
     @abstractmethod
     def read_step(self, step: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
         """The step that starts on the ISO date `step`, block-averaged by `factor`."""
+
+
+def _strictly_increasing(values: list[float]) -> list[float]:
+    """The values, without any that does not exceed the one kept before it."""
+    kept: list[float] = []
+    for value in values:
+        if not kept or value > kept[-1]:
+            kept.append(value)
+    return kept

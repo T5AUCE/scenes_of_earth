@@ -299,7 +299,7 @@ def test_layers(env):
     rain, terrain = by_id["chirps_monthly"], by_id["copdem_terrain"]
 
     assert out["default"] == ["chirps_monthly", "copdem_terrain"]
-    assert (rain["kind"], rain["time_varying"]) == ("series-colormap", True)
+    assert (rain["kind"], rain["time_varying"]) == ("field", True)
     assert rain["time"] == {"step": "P1M", "first": "1981-01", "latest": "2026-08"}
     assert (terrain["kind"], terrain["time_varying"], terrain["time"]) == ("terrain", False, None)
     assert rain["title"] == "Rainfall" and rain["units"] == "mm/month"

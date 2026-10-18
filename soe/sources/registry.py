@@ -4,7 +4,13 @@ from .datasets import Registry, Role
 from .grid import CELL_DEG
 from .licences import SOURCES
 from .synthetic import SyntheticSource
-from .terrain import GLO30_RES_DEG, CopernicusDemReader, TerrainDataset
+from .terrain import (
+    ELEVATION_FILL,
+    GLO30_RES_DEG,
+    HILLSHADE_FILL,
+    CopernicusDemReader,
+    TerrainDataset,
+)
 
 
 class RealSource(ChirpsReader, CopernicusDemReader):
@@ -33,7 +39,11 @@ def make_registry(backend: RealSource | SyntheticSource) -> Registry:
                     long_name="Monthly precipitation",
                 ),
             },
-            style={"kind": "series-colormap", "colormap": "Blues"},
+            style={
+                "kind": "field",
+                "encodings": ["ramp", "dots", "isolines", "chroma"],
+                "palette": "ink-blue",
+            },
             backend=backend,
             grid=CHIRPS_GRID,
             step="P1M",
@@ -49,17 +59,24 @@ def make_registry(backend: RealSource | SyntheticSource) -> Registry:
                 "elevation": Role(
                     "elevation",
                     "int16",
+                    fill=ELEVATION_FILL,
                     units="m",
                     long_name="Elevation (resampled)",
                 ),
                 "hillshade": Role(
                     "hillshade",
                     "uint8",
+                    fill=HILLSHADE_FILL,
                     long_name=f"Hillshade, azimuth {light['azimuth']}, "
-                    f"altitude {light['altitude']} (0-255)",
+                    f"altitude {light['altitude']} (0-254)",
                 ),
             },
-            style={"kind": "terrain", "hillshade": light},
+            style={
+                "kind": "terrain",
+                "encodings": ["shade"],
+                "parts": ["contours"],
+                "hillshade": light,
+            },
             backend=backend,
             grid=CHIRPS_GRID,
             max_tiles=2500,

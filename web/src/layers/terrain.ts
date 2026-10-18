@@ -50,11 +50,12 @@ export function createTerrainView(context: LayerContext): LayerView {
 
   const drawHillshade = async () => {
     const openedStore = await store;
-    const shade = await readArray(openedStore, arrayDoc(layer, "hillshade").path, [null, null]);
+    const shadeDoc = arrayDoc(layer, "hillshade");
+    const raw = await readArray(openedStore, shadeDoc.path, [null, null]);
     if (!alive) return;
 
     const table = sampleTable(layer.grid, maxTextureSize(map));
-    const rgba = paintHillshade(shade, table);
+    const rgba = paintHillshade(decode(raw, shadeDoc), table);
     setImage(map, id, new ImageData(rgba, table.width, table.height));
   };
 

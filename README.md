@@ -75,10 +75,17 @@ python -m soe.cli terrain-index
 
 - `area.bbox` is `[W, S, E, N]` with W < E always. A shape across the antimeridian is unwrapped into one frame, so E may be
   above 180 (up to 360) and `lon` arrays rise past 180, as MapLibre's `LngLatBounds` does. `area.geojson` is in the same frame.
-- `scene.json` is version 0.2. Each layer has its own `grid` (crs, bbox, res, nx, ny; `aggregation` for series), `mask`,
+- `scene.json` is version 0.3. Each layer has its own `grid` (crs, bbox, res, nx, ny; `aggregation` for series), `mask`,
   `coverage`, `time` (`step` as an ISO 8601 duration, `count`, explicit `values`, or `null` for static layers) and
   `arrays` keyed by role (`value`, `elevation`, `hillshade`) with `dtype`, `scale_factor`, `add_offset` and `fill`.
-  The viewer's colour domain is `style.domain`. Stored value = (real value - add_offset) / scale_factor.
+  Each layer's `style` has `kind` (`field` for a continuous grid, `terrain`), `encodings` (the display types it offers, best
+  first; a viewer skips names it does not know) and optional `parts` (extra display types drawn alongside, e.g. terrain's
+  `contours`). A series layer also has `palette` (default colours) and `style.stops`: 2-9 increasing values fitted to the
+  area over all steps (half an even stretch, half quantiles, rounded to two significant digits of the span so a 288-300
+  field keeps whole degrees; rain starts at 0; a constant field has equal ends), evenly spaced along the palette.
+  Stored value = (real value - add_offset) / scale_factor; every array also carries `scale_factor`, `add_offset` and, when
+  set, the Zarr `fill_value`. Cells outside the area's `mask` hold the fill value in every array of every layer (terrain's
+  hillshade is computed first, so its edge is not darkened); the viewer reads them as no data.
 - Rain is stored as uint16 at 0.1 mm (fill 65535, values above 6553.4 mm are clipped). Series are chunked one step per
   chunk and sharded 12 steps per shard; static arrays are one chunk each. The root `zarr.json` has consolidated metadata.
 - Budgets: the raw size of all layers' arrays together is capped at 50 MB, and the source cells x steps read for all

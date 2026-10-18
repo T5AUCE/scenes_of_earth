@@ -12,15 +12,16 @@
 
 	"portsAttributes": {
 		"8000": { "label": "api", "onAutoForward": "silent" },
-		"5173": { "label": "web", "onAutoForward": "notify" }
+		"5173": { "label": "web", "onAutoForward": "notify" },
+		"4174": { "label": "reports", "onAutoForward": "silent" }
 	},
 	"otherPortsAttributes": { "onAutoForward": "ignore" },
 
-	"postCreateCommand": "pip install -e '.[import,dev]' && npm config set prefix ~/.npm-global && npm install -g @anthropic-ai/claude-code",
+	"postCreateCommand": "pip install -e '.[import,dev]' && npm config set prefix ~/.npm-global && npm install -g @anthropic-ai/claude-code opencode-ai@0.0.0-next-202606270058",
 
 	"mounts": ["source=claude-code-config,target=/home/vscode/.claude,type=volume"],
 	"containerEnv": { "CLAUDE_CONFIG_DIR": "/home/vscode/.claude" },
-	"remoteEnv": { "PATH": "/home/vscode/.npm-global/bin:${containerEnv:PATH}" },
+	"remoteEnv": { "PATH": "/home/vscode/.local/bin:/home/vscode/.npm-global/bin:${containerEnv:PATH}" },
 
 	"customizations": {
 	"vscode": {

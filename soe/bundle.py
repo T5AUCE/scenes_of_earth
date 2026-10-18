@@ -1,15 +1,18 @@
 """scene.json: build it from a plan and validate it (including attribution rules)."""
+import math
 from datetime import datetime, timezone
 from typing import Any
 
 from . import __version__
 from .areas import Area
 from .plan import LayerPlan, Plan
-from .sources import SOURCES, Dataset
+from .sources import SOURCES, STOP_COUNT, Dataset
 
 JsonObject = dict[str, Any]  # a decoded JSON object, such as scene.json or one of its blocks
 
-VERSION = "0.2"
+VERSION = "0.3"
+
+MIN_STOPS = 2
 
 BOUNDARY_SOURCE_FIELDS = ("licence_url", "attribution", "citation", "modified")
 SYNTHETIC_DATA_CREDIT = "Data: synthetically generated, not real measurements"
@@ -107,7 +110,7 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
 
     if dataset.time_varying:
         grid["aggregation"] = layer_plan.factor
-        layer["style"]["domain"] = result["domain"]
+        layer["style"]["stops"] = result["stops"]
         layer["time"] = {
             "step": dataset.step,
             "count": len(layer_plan.steps),
@@ -234,4 +237,48 @@ def _layer_problems(layer: JsonObject) -> list[str]:
 
     if not layer["time_varying"] and time_axis is not None:
         problems.append(f"{layer_id}: static layer has a time axis")
+
+    return problems + _style_problems(layer_id, layer["style"], layer["time_varying"])
+
+
+def _style_problems(layer_id: str, style: JsonObject, time_varying: bool) -> list[str]:
+    problems = []
+    if not isinstance(style.get("kind"), str):
+        problems.append(f"{layer_id}: style.kind must be a name")
+
+    if not _is_name_list(style.get("encodings"), required=True):
+        problems.append(f"{layer_id}: style.encodings must be a non-empty list of names")
+
+    if not _is_name_list(style.get("parts", []), required=False):
+        problems.append(f"{layer_id}: style.parts must be a list of names")
+
+    if time_varying and not isinstance(style.get("palette"), str):
+        problems.append(f"{layer_id}: style.palette must be a name")
+
+    if time_varying:
+        problems += _stops_problems(layer_id, style.get("stops"))
     return problems
+
+
+def _is_name_list(names: object, required: bool) -> bool:
+    if not isinstance(names, list) or (required and not names):
+        return False
+
+    return all(isinstance(name, str) for name in names)
+
+
+def _stops_problems(layer_id: str, stops: object) -> list[str]:
+    if not isinstance(stops, list) or not MIN_STOPS <= len(stops) <= STOP_COUNT:
+        return [f"{layer_id}: style.stops must have {MIN_STOPS}-{STOP_COUNT} values"]
+
+    if not all(_is_finite_number(stop) for stop in stops):
+        return [f"{layer_id}: style.stops must be finite numbers"]
+
+    if any(high < low for low, high in zip(stops, stops[1:])):
+        return [f"{layer_id}: style.stops must not decrease"]
+
+    return []
+
+
+def _is_finite_number(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)

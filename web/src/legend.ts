@@ -1,5 +1,5 @@
 import { MAJOR_EVERY } from "./contours";
-import { COLOR_CHANNELS, LAST_ENTRY, RGBA_CHANNELS } from "./render/colormap";
+import { COLOR_CHANNELS, LAST_ENTRY, legendTicks, RGBA_CHANNELS } from "./render/colormap";
 
 const GRADIENT_STOP_ENTRIES = [0, 64, 128, 192, 255];
 
@@ -8,14 +8,14 @@ export function contourLegendText(interval: number, units: string) {
   return `Contours every ${interval} ${units} (bold every ${interval * MAJOR_EVERY})`;
 }
 
-/** A colour bar with labels for the low and high end of the domain. */
+/** A colour bar with labels at some of the stops, each under its own colour. */
 export function gradientLegend(
   colors: Uint8ClampedArray,
-  domain: [number, number],
+  stops: number[],
   units: string,
 ) {
   const element = document.createElement("div");
-  element.append(gradientBar(colors), domainLabels(domain, units));
+  element.append(gradientBar(colors), stopLabels(stops, units));
   return element;
 }
 
@@ -34,16 +34,20 @@ function gradientBar(colors: Uint8ClampedArray) {
   return bar;
 }
 
-function domainLabels([low, high]: [number, number], units: string) {
-  const lowLabel = document.createElement("span");
-  lowLabel.textContent = String(low);
-
-  // The top of the scale is the 98th percentile.
-  const highLabel = document.createElement("span");
-  highLabel.textContent = `≥ ${Number(high.toPrecision(3))} ${units}`;
-
+function stopLabels(stops: number[], units: string) {
   const labels = document.createElement("div");
   labels.className = "legend-labels";
-  labels.append(lowLabel, highLabel);
+  labels.style.position = "relative";
+  labels.style.height = "1.3em";
+  for (const { position, value } of legendTicks(stops)) {
+    const label = document.createElement("span");
+    label.style.position = "absolute";
+    label.style.left = `${position * 100}%`;
+    label.style.transform = `translateX(${-position * 100}%)`;
+    label.style.whiteSpace = "nowrap";
+    // The top of the scale is the 98th percentile.
+    label.textContent = position === 1 ? `≥ ${value} ${units}` : String(value);
+    labels.append(label);
+  }
   return labels;
 }

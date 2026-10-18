@@ -5,7 +5,9 @@ synthetic.py stands in for both offline, registry.py lists the datasets.
 """
 from .chirps import CHIRPS_GRID, FIRST_MONTH, RainDataset
 from .datasets import (
+    STOP_COUNT,
     SUPPORTED_BOUNDS_DEG,
+    TOP_PERCENTILE,
     Dataset,
     Registry,
     Role,
@@ -35,8 +37,10 @@ __all__ = [
     "FIRST_MONTH",
     "REGISTRY",
     "SOURCES",
+    "STOP_COUNT",
     "SUPPORTED_BOUNDS_DEG",
     "TERRAIN_PRODUCTS",
+    "TOP_PERCENTILE",
     "TILE_COL_OFFSET_DEG",
     "TILE_GRID_SHAPE",
     "TILE_ROW_OFFSET_DEG",

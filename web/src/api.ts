@@ -8,7 +8,7 @@ import type {
   SceneStatus,
 } from "./types";
 
-const SCENE_VERSION = "0.2";
+const SCENE_VERSION = "0.3";
 const SCENE_ID_CHARS = 20; // Must match ID_CHARS in soe/scene_request.py.
 const SCENE_ID_PATTERN = new RegExp(`^[0-9a-f]{${SCENE_ID_CHARS}}$`);
 
@@ -76,7 +76,9 @@ export async function loadScene(bundleUrl: string): Promise<Scene> {
   const base = new URL(bundleUrl, location.href);
   const scene = await request<Scene>(base.href);
   if (scene.version !== SCENE_VERSION) {
-    throw new Error(`Scene format ${scene.version} is not supported; rebuild this scene.`);
+    throw new Error(
+      `This scene was made by an older version (format ${scene.version}); pick the area again.`,
+    );
   }
 
   scene.area.geometry_href = new URL(scene.area.geometry_href, base).href;

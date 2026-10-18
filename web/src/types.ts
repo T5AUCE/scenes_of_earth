@@ -109,8 +109,10 @@ export interface LayerDoc {
   fallback_sources?: CreditDoc[]; // sources of tiles the main one lacks
   style: {
     kind: string;
-    colormap?: string;
-    domain?: [number, number];
+    encodings: string[]; // display types the layer offers, best first
+    parts?: string[]; // extra display types drawn alongside the main one
+    palette?: string; // default colours of a field layer
+    stops?: number[]; // fitted values of the palette's colours, 2-9 increasing
   };
   grid: GridDoc;
   mask: { path: string; cells_inside: number };

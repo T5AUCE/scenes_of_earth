@@ -1,6 +1,7 @@
 import type { SampleTable } from "./mercator";
 
 const LUT_ENTRIES = 256;
+const LEGEND_TICK_COUNT = 5;
 /** Index of the last colormap entry. */
 export const LAST_ENTRY = LUT_ENTRIES - 1;
 
@@ -13,7 +14,7 @@ const BLACK = 0;
 const FLAT_GROUND_HILLSHADE = 180;
 
 // ColorBrewer Blues, 9 classes.
-const BLUES = [
+const INK_BLUE = [
   [247, 251, 255],
   [222, 235, 247],
   [198, 219, 239],
@@ -25,12 +26,12 @@ const BLUES = [
   [8, 48, 107],
 ];
 
-const COLORMAPS: Record<string, number[][]> = { Blues: BLUES };
+const PALETTES: Record<string, number[][]> = { "ink-blue": INK_BLUE };
 
-/** A lookup table of 256 opaque RGBA entries for a named colormap. */
+/** A lookup table of 256 opaque RGBA entries for a named palette. */
 export function lut(name: string) {
-  const stops = COLORMAPS[name];
-  if (!stops) throw new Error(`Unknown colormap "${name}"`);
+  const stops = PALETTES[name];
+  if (!stops) throw new Error(`Unknown palette "${name}"`);
 
   const table = new Uint8ClampedArray(LUT_ENTRIES * RGBA_CHANNELS);
   for (let entry = 0; entry < LUT_ENTRIES; entry++) {
@@ -49,28 +50,55 @@ export function lut(name: string) {
   return table;
 }
 
-/** RGBA pixels coloured by value across the domain; NaN cells stay transparent. */
+/** Where a value falls on the palette, 0-1: the stops are evenly spaced along it. */
+export function stopPosition(value: number, stops: number[]) {
+  const last = stops.length - 1;
+  if (value <= stops[0]) return 0;
+  if (value >= stops[last]) return 1;
+
+  let upper = 1;
+  while (stops[upper] < value) upper++;
+
+  const lower = upper - 1;
+  return (lower + (value - stops[lower]) / (stops[upper] - stops[lower])) / last;
+}
+
+/** Up to LEGEND_TICK_COUNT stops to label: each with its position on the palette, 0-1. */
+export function legendTicks(stops: number[]) {
+  const last = stops.length - 1;
+  const indexes = new Set(
+    Array.from({ length: LEGEND_TICK_COUNT }, (_, tick) =>
+      Math.round((tick / (LEGEND_TICK_COUNT - 1)) * last),
+    ),
+  );
+
+  return [...indexes].map((index) => ({ position: index / last, value: stops[index] }));
+}
+
+/** RGBA pixels coloured by value across the stops; NaN cells stay transparent. */
 export function paintColormap(
   values: Float32Array,
   table: SampleTable,
   colors: Uint8ClampedArray,
-  [low, high]: [number, number],
+  stops: number[],
 ) {
   const rgba = new Uint8ClampedArray(table.src.length * RGBA_CHANNELS);
-  const span = high - low;
   for (let pixel = 0; pixel < table.src.length; pixel++) {
     const cell = table.src[pixel];
     const value = values[cell];
     if (Number.isNaN(value)) continue;
 
-    const position = span > 0 ? Math.min(1, Math.max(0, (value - low) / span)) : 0;
+    const position = stopPosition(value, stops);
     const colorStart = Math.round(position * LAST_ENTRY) * RGBA_CHANNELS;
     rgba.set(colors.subarray(colorStart, colorStart + RGBA_CHANNELS), pixel * RGBA_CHANNELS);
   }
   return rgba;
 }
 
-/** Neutral is transparent so flat ground shows the basemap; slopes darken or lighten from it. */
+/**
+ * Neutral is transparent so flat ground shows the basemap; slopes darken or lighten from it.
+ * NaN cells (no data) stay transparent.
+ */
 export function paintHillshade(
   shade: ArrayLike<number>,
   table: SampleTable,
@@ -80,6 +108,8 @@ export function paintHillshade(
   for (let pixel = 0; pixel < table.src.length; pixel++) {
     const cell = table.src[pixel];
     const value = shade[cell];
+    if (Number.isNaN(value)) continue;
+
     const isLighter = value > neutral;
     const strength = isLighter
       ? (value - neutral) / (OPAQUE - neutral)

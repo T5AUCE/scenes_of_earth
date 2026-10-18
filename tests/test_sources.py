@@ -422,3 +422,46 @@ def test_placed_tiles_west_of_180_keep_the_unwrapped_longitude():
         (180, -18),
     }
     assert {tile.name.split("_")[6] for tile in placed if tile.lon == 180} == {"W180"}
+
+
+def test_stops_blend_an_even_stretch_with_the_quantiles():
+    rain = make_registry(SyntheticSource())["chirps_monthly"]
+    stats = {"min": 1.0, "max": 400.0, "mean": 50.0, "p98": 160.0}
+    quantiles = np.linspace(0, 80, 9).tolist()
+
+    stops = rain.stops(stats, quantiles)
+
+    assert stops == [0, 20, 30, 40, 60, 80, 90, 100, 120]
+
+
+def test_stops_keep_whole_degrees_on_a_narrow_field_far_from_zero():
+    terrain = make_registry(SyntheticSource())["copdem_terrain"]
+    stats = {"min": 288.0, "max": 301.0, "mean": 295.0, "p98": 300.0}
+
+    stops = terrain.stops(stats, np.linspace(288, 300, 9).tolist())
+
+    assert stops == [288, 290, 291, 292, 294, 296, 297, 298, 300]
+
+
+def test_stops_of_a_wide_field_far_from_zero_are_not_coarser_than_its_span():
+    terrain = make_registry(SyntheticSource())["copdem_terrain"]
+    stats = {"min": 1234.0, "max": 1262.0, "mean": 1250.0, "p98": 1260.0}
+
+    stops = terrain.stops(stats, np.linspace(1234, 1260, 9).tolist())
+
+    assert stops == [1234, 1237, 1240, 1244, 1247, 1250, 1254, 1257, 1260]
+
+
+def test_stops_round_to_the_span_and_drop_repeats():
+    terrain = make_registry(SyntheticSource())["copdem_terrain"]
+    stats = {"min": 0.0, "max": 120.0, "mean": 5.0, "p98": 100.0}
+    quantiles = [0, 0, 0, 0, 0, 0, 0, 0, 100]
+
+    assert terrain.stops(stats, quantiles) == [0, 10, 20, 30, 40, 100]
+
+
+def test_stops_of_a_constant_field_are_the_same_value_twice():
+    terrain = make_registry(SyntheticSource())["copdem_terrain"]
+    stats = {"min": 5.0, "max": 5.0, "mean": 5.0, "p98": 5.0}
+
+    assert terrain.stops(stats, [5.0] * 9) == [5, 5]

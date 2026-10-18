@@ -1,5 +1,9 @@
 # Agent resources
 .claude/
+.opencode/
+opencode.jsonc
+reports/
+open-report
 CLAUDE.md
 STYLE.md
 
