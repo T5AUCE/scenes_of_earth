@@ -6,7 +6,7 @@ from shapely.geometry import LineString, MultiPolygon, Polygon, box, mapping
 
 from soe.areas import Area, AreaError, clean_polygon, unwrap
 from soe.bundle import JsonObject
-from soe.sources import REGISTRY, terrain_tiles
+from soe.sources import RealSource, make_registry, terrain_tiles
 from tests.helpers import COARSE, FIJI, NAIROBI, RAIN, TERRAIN, plan_months
 
 
@@ -92,7 +92,7 @@ def test_unwrap_and_plan_across_180():
     assert scene_plan.bbox[2] > 180 and layer_plan.bbox[2] > 180 and layer_plan.mask.sum() > 0
 
 
-def test_plan_rejections():
+def test_plan_rejections(tmp_path):
     with pytest.raises(AreaError, match="too small"):
         plan_months(Area(box(36.8, -1.1, 36.9, -1.0)), [RAIN])
 
@@ -106,7 +106,8 @@ def test_plan_rejections():
     with pytest.raises(AreaError, match="too large to read"):  # 2M source cells x 240 months > 100M
         plan_months(Area(box(-60, -20, 40, 10)), [RAIN], 240)
 
-    assert REGISTRY.keys() == {"chirps_monthly", "copdem_terrain"}
+    without_cube = make_registry(RealSource(cubes_dir=tmp_path))
+    assert without_cube.keys() == {"chirps_monthly", "copdem_terrain"}
     assert len(terrain_tiles((36, -2, 38, 0), "glo90")) == 4
 
     with pytest.raises(AreaError, match="source tiles"):  # 8190 existing tiles > 2500

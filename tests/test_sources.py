@@ -13,14 +13,14 @@ import rasterio
 import zarr
 from rasterio.transform import Affine
 
-from soe.era5land_ingest import write_months
+from soe.era5land_temperature_ingest import write_months
 from soe.sources import (
     CHIRPS_GRID,
-    ERA5_LAND_GRID,
+    ERA5_LAND_TEMPERATURE_GRID,
     SOURCES,
     Bbox,
     Dataset,
-    Era5LandCube,
+    Era5LandTemperatureCube,
     Grid,
     RealSource,
     Role,
@@ -28,7 +28,7 @@ from soe.sources import (
     SourceUnavailable,
     StaticDataset,
     SyntheticSource,
-    TemperatureDataset,
+    Era5LandTemperatureDataset,
     chirps,
     hillshade,
     make_registry,
@@ -54,6 +54,7 @@ from tests.helpers import NAIROBI, RAIN, TERRAIN
 TILE_PX = 60  # the fake terrain tiles are small, 1 / 60 degree per pixel
 NARROW_TILE_PX = 40  # tiles from 50 degrees poleward have 2/3 of the pixels in x
 CELL_DEG = 0.05
+CUBE_SHAPE = (ERA5_LAND_TEMPERATURE_GRID.rows, ERA5_LAND_TEMPERATURE_GRID.columns)
 
 
 def vars_of(dataset: Dataset) -> dict:
@@ -123,7 +124,7 @@ def test_cell_centred_grid_has_its_cell_edges_half_a_cell_off_the_chirps_grid():
 
 
 def test_temperature_grid_has_cell_centres_on_tenth_degrees():
-    grid = ERA5_LAND_GRID
+    grid = ERA5_LAND_TEMPERATURE_GRID
     columns = np.arange(grid.columns)
     rows = np.arange(grid.rows)
     longitudes = grid.west_deg + (columns + 0.5) * grid.res
@@ -135,9 +136,9 @@ def test_temperature_grid_has_cell_centres_on_tenth_degrees():
 
 
 def test_temperature_grid_reaches_60_south_within_its_rows():
-    _, _, _, last_row = ERA5_LAND_GRID.span((0, -60, 1, 60))
+    _, _, _, last_row = ERA5_LAND_TEMPERATURE_GRID.span((0, -60, 1, 60))
 
-    assert last_row == ERA5_LAND_GRID.rows
+    assert last_row == ERA5_LAND_TEMPERATURE_GRID.rows
 
 
 class FakeCube:
@@ -150,8 +151,8 @@ class FakeCube:
         return self.markers
 
 
-def temperature_over(markers: dict[str, str]) -> TemperatureDataset:
-    synthetic = make_registry(SyntheticSource())["era5land_t2m"]
+def temperature_over(markers: dict[str, str]) -> Era5LandTemperatureDataset:
+    synthetic = make_registry(SyntheticSource())["era5land_temperature"]
     return replace(synthetic, backend=FakeCube(markers))
 
 
@@ -202,7 +203,7 @@ def test_every_source_with_a_disclaimer_requires_it():
 
 
 def test_missing_cube_is_unavailable_and_not_listed(tmp_path):
-    cube = Era5LandCube(tmp_path)
+    cube = Era5LandTemperatureCube(tmp_path)
 
     assert not cube.has_t2m()
     with pytest.raises(SourceUnavailable, match="not ingested"):
@@ -210,11 +211,11 @@ def test_missing_cube_is_unavailable_and_not_listed(tmp_path):
 
 
 def test_cube_read_decodes_celsius_and_fill(tmp_path):
-    field = np.full((ERA5_LAND_GRID.rows, ERA5_LAND_GRID.columns), -5.5, "float32")
+    field = np.full(CUBE_SHAPE, -5.5, "float32")
     field[1, 2] = np.nan
     write_months(tmp_path, [("2016-01", field, "0001")])
 
-    window = Era5LandCube(tmp_path).read_t2m("2016-01", (1, 0, 3, 2))
+    window = Era5LandTemperatureCube(tmp_path).read_t2m("2016-01", (1, 0, 3, 2))
 
     assert window.dtype == np.float32 and window.shape == (2, 3)
     assert window[0, 0] == pytest.approx(-5.5)
@@ -222,10 +223,10 @@ def test_cube_read_decodes_celsius_and_fill(tmp_path):
 
 
 def test_cube_read_wraps_at_180(tmp_path):
-    columns = np.arange(ERA5_LAND_GRID.columns, dtype="float32") / 100
-    field = np.tile(columns, (ERA5_LAND_GRID.rows, 1))
+    columns = np.arange(ERA5_LAND_TEMPERATURE_GRID.columns, dtype="float32") / 100
+    field = np.tile(columns, (ERA5_LAND_TEMPERATURE_GRID.rows, 1))
     write_months(tmp_path, [("2016-01", field, "0001")])
-    temperature = make_registry(RealSource(cubes_dir=tmp_path))["era5land_t2m"]
+    temperature = make_registry(RealSource(cubes_dir=tmp_path))["era5land_temperature"]
 
     values = temperature.read_step("2016-01-01", [179.85, 0.05, 180.15, 0.35])
 
@@ -235,14 +236,14 @@ def test_cube_read_wraps_at_180(tmp_path):
 
 @pytest.mark.parametrize("factor", [2, 4])
 def test_cube_read_past_60_south_is_padded_to_whole_blocks(tmp_path, factor):
-    field = np.full((ERA5_LAND_GRID.rows, ERA5_LAND_GRID.columns), 5, "float32")
+    field = np.full(CUBE_SHAPE, 5, "float32")
     write_months(tmp_path, [("2016-01", field, "0001")])
-    temperature = make_registry(RealSource(cubes_dir=tmp_path))["era5land_t2m"]
+    temperature = make_registry(RealSource(cubes_dir=tmp_path))["era5land_temperature"]
     two_rows_past_the_last = (1800, 1808, 1190, 1202)
 
     values = temperature.read_step(
         "2016-01-01",
-        ERA5_LAND_GRID.bbox(two_rows_past_the_last),
+        ERA5_LAND_TEMPERATURE_GRID.bbox(two_rows_past_the_last),
         factor,
     )
 
@@ -251,22 +252,22 @@ def test_cube_read_past_60_south_is_padded_to_whole_blocks(tmp_path, factor):
 
 
 def test_empty_or_unreadable_cube_is_unavailable(tmp_path):
-    cube_path = tmp_path / "era5land_t2m.zarr"
+    cube_path = tmp_path / "era5land_temperature.zarr"
     zarr.create_group(cube_path, attributes={"months": {}})
-    cube = Era5LandCube(tmp_path)
+    cube = Era5LandTemperatureCube(tmp_path)
 
     assert not cube.has_t2m()
     with pytest.raises(SourceUnavailable, match="not ingested"):
         cube.t2m_months()
 
     (cube_path / "zarr.json").write_text("{not json")
-    assert not Era5LandCube(tmp_path).has_t2m()
+    assert not Era5LandTemperatureCube(tmp_path).has_t2m()
 
 
 def test_cube_months_are_reread_after_an_ingest(tmp_path):
-    field = np.full((ERA5_LAND_GRID.rows, ERA5_LAND_GRID.columns), 10, "float32")
+    field = np.full(CUBE_SHAPE, 10, "float32")
     write_months(tmp_path, [("2016-01", field, "0001")])
-    cube = Era5LandCube(tmp_path)
+    cube = Era5LandTemperatureCube(tmp_path)
     assert list(cube.t2m_months()) == ["2016-01"]
 
     write_months(tmp_path, [("2016-02", field, "0005")])

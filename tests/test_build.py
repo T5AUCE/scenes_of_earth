@@ -572,19 +572,19 @@ def test_layer_notices_see_the_planned_steps():
 
 def test_temperature_below_zero_survives_the_bundle(tmp_path):
     cold = box(10, 55.5, 11, 56.5)  # synthetic October at 56 degrees north is about -8
-    temperature = make_registry(SyntheticSource())["era5land_t2m"]
+    temperature = make_registry(SyntheticSource())["era5land_temperature"]
     build_scene(HASH_A, Area(cold, BOUNDARY), "2015-10", "2015-10", [temperature], "Test", tmp_path)
     root = zarr.open_group(tmp_path / HASH_A / "data.zarr", mode="r")
-    t2m = root["era5land_t2m/t2m"]
+    t2m = root["era5land_temperature/t2m"]
 
-    inside = root["era5land_t2m/mask"][...] == 1
+    inside = root["era5land_temperature/mask"][...] == 1
     decoded = t2m[0][inside] * t2m.attrs["scale_factor"]
 
     assert t2m.dtype == "int16" and (decoded < -5).all()
 
 
 def test_temperature_layer_states_mean_and_its_own_grid(tmp_path):
-    temperature = make_registry(SyntheticSource())["era5land_t2m"]
+    temperature = make_registry(SyntheticSource())["era5land_temperature"]
     build_scene(HASH_A, Area(NAIROBI, BOUNDARY), "2015-01", "2015-03", [temperature], "T", tmp_path)
 
     doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
@@ -597,7 +597,7 @@ def test_temperature_layer_states_mean_and_its_own_grid(tmp_path):
 
 
 def test_scene_with_preliminary_months_carries_the_notice(tmp_path):
-    temperature = make_registry(SyntheticSource())["era5land_t2m"]
+    temperature = make_registry(SyntheticSource())["era5land_temperature"]
     build_scene(HASH_A, Area(NAIROBI, BOUNDARY), "2026-06", "2026-08", [temperature], "T", tmp_path)
 
     doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))

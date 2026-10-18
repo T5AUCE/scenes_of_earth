@@ -63,14 +63,14 @@ The import is large (several hundred MB of input). CGAZ draws disputed borders t
 
 ## Temperature cube (once, then monthly)
 
-Builds read ERA5-Land monthly 2 m temperature from a Zarr cube on local disk (`SOE_CUBES_DIR/era5land_t2m.zarr`), so a
+Builds read ERA5-Land monthly 2 m temperature from a Zarr cube on local disk (`SOE_CUBES_DIR/era5land_temperature.zarr`), so a
 build makes no network calls for it. The cube is filled from the Copernicus Climate Data Store (CDS), one request per
 year. Needs a CDS account, the key in `~/.cdsapirc`
 (https://cds.climate.copernicus.eu/how-to-api), and the licence accepted on the dataset page
 (https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land-monthly-means).
 
 ```
-python -m soe.cli ingest-era5land --from 2016-01
+python -m soe.cli ingest-era5land-temperature --from 2016-01
 ```
 
 The first run starts at `--from`; later runs continue after the last stored month and fetch again every month still

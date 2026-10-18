@@ -36,10 +36,11 @@ stays cheap and simple. Each feature is checked for extensibility before users g
    (monthly rain, 16-day NDVI, 5-year population; static layers have none). Check that rasters
    past 180°E draw in the next world copy. Monthly series also get yearly totals or means.
 3. **Temperature:** ERA5-Land monthly 2 m air temperature (0.1°), the first layer that shares the
-   scrubber with rain. Reader, cube writer, CDS ingest and frontend are in; the first real ingest
-   (`python -m soe.cli ingest-era5land --from 2016-01`, needs a CDS key) and the checks on Kenya
-   and Fiji are next. It is opt-in until isolines and the bivariate display land; the cube is
-   backfilled to 1950 on the VPS at deploy, with a monthly refresh.
+   scrubber with rain. The reader, cube writer, CDS ingest and frontend are in. Next come the
+   first real ingest (`python -m soe.cli ingest-era5land-temperature --from 2016-01`, which needs
+   a CDS key) and the checks on Kenya and Fiji. The layer is opt-in until isolines and the
+   bivariate display land. The backfill on the VPS at deploy starts at 2016-01 and is followed by
+   a monthly refresh; older history is deferred.
 4. **Land cover (M5):** ESA WorldCover (10 m) as a static categorical layer, resampled by the most
    common class in each cell, with fixed class colours and a legend.
 5. **Scene view B:** app UI moves to React (MapLibre stays outside React's control). A panel at

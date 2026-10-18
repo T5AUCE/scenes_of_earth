@@ -341,7 +341,7 @@ def test_layers_list_omits_temperature_without_a_cube(tmp_path):
 
 
 def test_layers_list_survives_an_empty_cube_left_by_a_failed_ingest(tmp_path):
-    zarr.create_group(tmp_path / "cubes" / "era5land_t2m.zarr", attributes={"months": {}})
+    zarr.create_group(tmp_path / "cubes" / "era5land_temperature.zarr", attributes={"months": {}})
     source = RealSource(latest="2026-08", cubes_dir=tmp_path / "cubes")
     app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(source))
 
@@ -349,11 +349,11 @@ def test_layers_list_survives_an_empty_cube_left_by_a_failed_ingest(tmp_path):
         response = client.get("/api/layers")
 
     assert response.status_code == 200
-    assert "era5land_t2m" not in [layer["id"] for layer in response.json()["layers"]]
+    assert "era5land_temperature" not in [layer["id"] for layer in response.json()["layers"]]
 
 
 def test_layers_list_leaves_out_temperature_while_the_cube_is_updating(tmp_path):
-    cube_path = tmp_path / "cubes" / "era5land_t2m.zarr"
+    cube_path = tmp_path / "cubes" / "era5land_temperature.zarr"
     group = zarr.create_group(cube_path, attributes={"months": {"2016-01": "0001:a"}})
     group.create_array("t2m", shape=(1, 1, 1), dtype="int16")
     source = RealSource(latest="2026-08", cubes_dir=tmp_path / "cubes")
@@ -363,7 +363,7 @@ def test_layers_list_leaves_out_temperature_while_the_cube_is_updating(tmp_path)
     with TestClient(create_app(tmp_path / "soe.db", tmp_path / "scenes", registry)) as client:
         response = client.get("/api/layers")
 
-    assert "era5land_t2m" in registry
+    assert "era5land_temperature" in registry
     assert response.status_code == 200
     assert [layer["id"] for layer in response.json()["layers"]] == [
         "chirps_monthly",
@@ -400,7 +400,7 @@ def test_temperature_period_before_the_cube_start_is_refused_before_any_read(tmp
     with TestClient(app) as client:
         response = client.post(
             "/api/scenes",
-            json=body(layers=["era5land_t2m"], start="2015-12", end="2016-02"),
+            json=body(layers=["era5land_temperature"], start="2015-12", end="2016-02"),
         )
 
     assert response.status_code == 422

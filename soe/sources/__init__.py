@@ -1,7 +1,8 @@
 """Data sources: one module per source, the dataset contract and the registry.
 
-Importers use these names; the modules are the homes: chirps.py, era5land.py and terrain.py read
-a source, synthetic.py stands in for all of them offline, registry.py lists the datasets.
+Importers use these names, while the modules hold the code. Each of chirps.py,
+era5land_temperature.py and terrain.py reads one source, synthetic.py stands in for all of them
+offline, and registry.py lists the datasets.
 """
 from .chirps import CHIRPS_GRID, RainDataset
 from .datasets import (
@@ -14,7 +15,12 @@ from .datasets import (
     SeriesDataset,
     StaticDataset,
 )
-from .era5land import DEFAULT_CUBES_DIR, ERA5_LAND_GRID, Era5LandCube, TemperatureDataset
+from .era5land_temperature import (
+    DEFAULT_CUBES_DIR,
+    ERA5_LAND_TEMPERATURE_GRID,
+    Era5LandTemperatureCube,
+    Era5LandTemperatureDataset,
+)
 from .grid import CELL_DEG, Bbox, CellSpan, CellWindow, Grid, read_wrapped
 from .licences import SOURCES
 from .periods import (
@@ -43,7 +49,7 @@ __all__ = [
     "CELL_DEG",
     "CHIRPS_GRID",
     "DEFAULT_CUBES_DIR",
-    "ERA5_LAND_GRID",
+    "ERA5_LAND_TEMPERATURE_GRID",
     "REGISTRY",
     "REQUEST_FORMATS",
     "REQUEST_STEP",
@@ -59,7 +65,8 @@ __all__ = [
     "CellSpan",
     "CellWindow",
     "Dataset",
-    "Era5LandCube",
+    "Era5LandTemperatureCube",
+    "Era5LandTemperatureDataset",
     "Grid",
     "RainDataset",
     "RealSource",
@@ -69,7 +76,6 @@ __all__ = [
     "SourceUnavailable",
     "StaticDataset",
     "SyntheticSource",
-    "TemperatureDataset",
     "TerrainDataset",
     "add_duration",
     "hillshade",

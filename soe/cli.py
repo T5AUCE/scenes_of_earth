@@ -1,4 +1,9 @@
-"""Command line: `python -m soe.cli import-boundaries --cgaz DIR --ucdb FILE`."""
+"""Run the offline data jobs from the command line.
+
+The module imports country and city boundaries into SQLite, rebuilds the Copernicus terrain
+tile indexes and ingests ERA5-Land monthly temperature into the local cube. Run
+`python -m soe.cli --help` to see the commands and their options.
+"""
 import argparse
 import logging
 import os
@@ -11,7 +16,7 @@ import numpy as np
 
 from . import db
 from .boundary_import import import_cgaz, import_ucdb
-from .era5land_ingest import ingest
+from .era5land_temperature_ingest import ingest
 from .sources import (
     DEFAULT_CUBES_DIR,
     REQUEST_STEP,
@@ -30,7 +35,7 @@ DOWNLOAD_TIMEOUT_SECS = 60
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Run the `terrain-index`, `ingest-era5land` or `import-boundaries` command in `argv`."""
+    """Run the `terrain-index`, `ingest-era5land-temperature` or `import-boundaries` command."""
     parser = _build_parser()
     args = parser.parse_args(argv)
 
@@ -39,7 +44,7 @@ def main(argv: list[str] | None = None) -> None:
             print(f"{product} tiles:", build_tile_index(product, terrain_product.index))
         return
 
-    if args.command == "ingest-era5land":
+    if args.command == "ingest-era5land-temperature":
         if not is_request_label(args.start, REQUEST_STEP):
             parser.error("--from must be YYYY-MM")
 
@@ -73,7 +78,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="rebuild the GLO-30 and GLO-90 tile bitmaps in soe/data (downloads 2 MB)",
     )
     ingest_parser = subparsers.add_parser(
-        "ingest-era5land",
+        "ingest-era5land-temperature",
         help="download ERA5-Land monthly temperature from the CDS into the local cube",
     )
     ingest_parser.add_argument(

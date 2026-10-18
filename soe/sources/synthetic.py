@@ -1,12 +1,15 @@
-"""Deterministic fake data for offline runs and tests."""
+"""Deterministic fake rain, terrain and temperature that stand in for the real readers.
+
+Offline runs and tests use it, so nothing here needs the network or a temperature cube.
+"""
 from collections.abc import Callable
 
 import numpy as np
 from rasterio.transform import Affine, from_origin
 
 from .chirps import FIRST_MONTH, MONTH_CHARS
-from .era5land import (
-    ERA5_LAND_GRID,
+from .era5land_temperature import (
+    ERA5_LAND_TEMPERATURE_GRID,
     FINAL_EXPVER,
     MONTHS_PER_YEAR,
     PRELIMINARY_EXPVER,
@@ -54,7 +57,7 @@ class SyntheticSource:
         seasonal = np.sin(month_index(month) * 2 * np.pi / MONTHS_PER_YEAR)
         cols, rows = np.meshgrid(np.arange(col, col + width), np.arange(row, row + height))
 
-        lat = ERA5_LAND_GRID.north_deg - rows * ERA5_LAND_GRID.res
+        lat = ERA5_LAND_TEMPERATURE_GRID.north_deg - rows * ERA5_LAND_TEMPERATURE_GRID.res
         temperature = 28 - 0.5 * np.abs(lat) + 8 * seasonal
         temperature = temperature.astype("float32")
         temperature[(cols * 5 + rows * 11) % 13 == 0] = np.nan  # Holes exercise NaN-aware means.

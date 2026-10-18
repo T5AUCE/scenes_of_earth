@@ -3,11 +3,11 @@ from pathlib import Path
 
 from .chirps import CHIRPS_GRID, ChirpsReader, RainDataset
 from .datasets import Registry, Role
-from .era5land import (
+from .era5land_temperature import (
     DEFAULT_CUBES_DIR,
-    ERA5_LAND_GRID,
-    Era5LandCube,
-    TemperatureDataset,
+    ERA5_LAND_TEMPERATURE_GRID,
+    Era5LandTemperatureCube,
+    Era5LandTemperatureDataset,
 )
 from .grid import CELL_DEG
 from .licences import SOURCES
@@ -21,8 +21,8 @@ from .terrain import (
 )
 
 
-class RealSource(ChirpsReader, CopernicusDemReader, Era5LandCube):
-    """The real readers of every dataset: HTTP for rain and terrain, local disk for temperature."""
+class RealSource(ChirpsReader, CopernicusDemReader, Era5LandTemperatureCube):
+    """The real readers of every dataset. HTTP for rain and terrain, local disk for temperature."""
 
     synthetic = False
 
@@ -32,7 +32,7 @@ class RealSource(ChirpsReader, CopernicusDemReader, Era5LandCube):
         cubes_dir: Path | str = DEFAULT_CUBES_DIR,
     ) -> None:
         ChirpsReader.__init__(self, latest)
-        Era5LandCube.__init__(self, cubes_dir)
+        Era5LandTemperatureCube.__init__(self, cubes_dir)
 
 
 def make_registry(backend: RealSource | SyntheticSource) -> Registry:
@@ -106,13 +106,13 @@ def make_registry(backend: RealSource | SyntheticSource) -> Registry:
         ),
     }
     if backend.has_t2m():
-        registry["era5land_t2m"] = _temperature(backend)
+        registry["era5land_temperature"] = _era5land_temperature(backend)
     return registry
 
 
-def _temperature(backend: RealSource | SyntheticSource) -> TemperatureDataset:
-    return TemperatureDataset(
-        id="era5land_t2m",
+def _era5land_temperature(backend: RealSource | SyntheticSource) -> Era5LandTemperatureDataset:
+    return Era5LandTemperatureDataset(
+        id="era5land_temperature",
         title="Temperature",
         units="°C",
         resolution_deg=0.1,
@@ -133,7 +133,7 @@ def _temperature(backend: RealSource | SyntheticSource) -> TemperatureDataset:
             "palette": "climate",
         },
         backend=backend,
-        grid=ERA5_LAND_GRID,
+        grid=ERA5_LAND_TEMPERATURE_GRID,
         step="P1M",
         cell_method="mean",
         synthetic=backend.synthetic,

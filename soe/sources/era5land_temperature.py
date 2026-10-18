@@ -1,4 +1,9 @@
-"""ERA5-Land monthly 2 m temperature: the dataset, its grid and the reader of the local cube."""
+"""Monthly mean 2 m air temperature from ERA5-Land, read from a Zarr cube on local disk.
+
+The dataset tells the planner which months the cube holds and which revision they are in, and
+it marks preliminary months with a notice. The cube class reads cells from the files that
+`soe.era5land_temperature_ingest` writes, so a build makes no network calls for temperature.
+"""
 import hashlib
 from itertools import groupby
 from pathlib import Path
@@ -11,10 +16,10 @@ from .datasets import SeriesDataset
 from .grid import Bbox, CellWindow, Grid, block_mean, read_wrapped
 from .remote import SourceUnavailable
 
-# Cell centres sit on 0.1 degree multiples, half a cell off the CHIRPS grid.
-ERA5_LAND_GRID = Grid(-180.05, 60.05, 0.1, 3600, 1201)
+# Cell centres lie on 0.1 degree multiples, which puts the cell edges half a cell off CHIRPS.
+ERA5_LAND_TEMPERATURE_GRID = Grid(-180.05, 60.05, 0.1, 3600, 1201)
 
-CUBE_NAME = "era5land_t2m.zarr"
+CUBE_NAME = "era5land_temperature.zarr"
 CUBE_ARRAY = "t2m"
 CUBE_TIME_ORIGIN = "1950-01"  # index 0 of the cube's time axis
 CUBE_SCALE = 0.01  # stored = degrees C / CUBE_SCALE
@@ -30,7 +35,7 @@ REVISION_HEX_CHARS = 12
 MONTHS_PER_YEAR = 12
 
 
-class TemperatureDataset(SeriesDataset):
+class Era5LandTemperatureDataset(SeriesDataset):
     """ERA5-Land monthly mean 2 m air temperature, read from the local cube."""
 
     def first(self) -> str:
@@ -69,12 +74,12 @@ class TemperatureDataset(SeriesDataset):
         return block_mean(temperature, factor)
 
 
-class Era5LandCube:
-    """The ERA5-Land temperature cube on local disk, written by `soe.era5land_ingest`."""
+class Era5LandTemperatureCube:
+    """Reads the temperature cube that `soe.era5land_temperature_ingest` keeps on local disk."""
 
     def __init__(self, cubes_dir: Path | str = DEFAULT_CUBES_DIR) -> None:
         self._cube_path = Path(cubes_dir) / CUBE_NAME
-        self._months_read = None  # (zarr.json mtime, months) of the last read
+        self._months_read = None  # (change stamp, months) from the last load
 
     def has_t2m(self) -> bool:
         """Whether the cube holds at least one month and is not being updated."""
@@ -90,32 +95,41 @@ class Era5LandCube:
 
         Raises SourceUnavailable while the cube is missing, unreadable, empty or being updated.
         """
-        modified = self._modified()
-        if self._months_read is None or self._months_read[0] != modified:
-            self._months_read = (modified, self._load_months())
-        if not self._months_read[1]:
-            raise SourceUnavailable(NOT_INGESTED)
-
-        return self._months_read[1]
+        return self._months_at(self._modified())
 
     def read_t2m(self, month: str, window: CellWindow) -> np.ndarray:
         """One month of the window as float32 degrees C; fill and rows past 60S become NaN.
 
-        Raises SourceUnavailable if an ingest started or finished while the window was read.
+        The cube must be published and unchanged from before it is checked until the window has
+        been read, so the bytes always belong to the markers. Otherwise this raises
+        SourceUnavailable.
         """
-        self.t2m_months()
-        modified_before = self._modified()
+        stamp = self._modified()
+        self._months_at(stamp)
         col, row, width, height = window
         array = zarr.open_group(self._cube_path, mode="r")[CUBE_ARRAY]
-        stored_height = max(0, min(height, ERA5_LAND_GRID.rows - row))
+        stored_height = max(0, min(height, ERA5_LAND_TEMPERATURE_GRID.rows - row))
         stored = array[month_index(month), row:row + stored_height, col:col + width]
-        if self._modified() != modified_before:
+        if self._modified() != stamp:
             raise SourceUnavailable(UPDATING)
 
         temperature = np.full((height, width), np.nan, "float32")
         decoded = stored.astype("float32") * np.float32(CUBE_SCALE)
         temperature[:stored_height] = np.where(stored == CUBE_FILL, np.nan, decoded)
         return temperature
+
+    def _months_at(self, stamp: int) -> dict[str, str]:
+        """The published months while the cube still has `stamp`, read once per stamp."""
+        if self._months_read is None or self._months_read[0] != stamp:
+            months = self._load_months()
+            if self._modified() != stamp:
+                raise SourceUnavailable(UPDATING)
+
+            self._months_read = (stamp, months)
+        if not self._months_read[1]:
+            raise SourceUnavailable(NOT_INGESTED)
+
+        return self._months_read[1]
 
     def _modified(self) -> int:
         """Change stamp of the cube's published state, which every ingest step updates."""

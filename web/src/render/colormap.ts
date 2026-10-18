@@ -26,7 +26,8 @@ const INK_BLUE = [
   [8, 48, 107],
 ];
 
-// OKLCH hue path 255→165→45 at C 0.125, the bivariate's wet row.
+// The ramp follows the bivariate palette's wet row (OKLCH hue 255 to 165 to 45 at chroma 0.125) so
+// temperature looks the same on its own as it does when paired with rain.
 const CLIMATE = [
   [0x44, 0x7d, 0xc4],
   [0x00, 0x89, 0xba],

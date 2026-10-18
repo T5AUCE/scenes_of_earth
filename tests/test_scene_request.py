@@ -213,19 +213,19 @@ def test_local_source_revision_is_not_cached(db_path):
 
     cube = MovingCube()
     temperature = replace(
-        make_registry(SyntheticSource())["era5land_t2m"],
+        make_registry(SyntheticSource())["era5land_temperature"],
         backend=cube,
         synthetic=False,
     )
-    registry = {"era5land_t2m": temperature}
-    body = request_body(layers=["era5land_t2m"], start="2016-01", end="2016-02")
+    registry = {"era5land_temperature": temperature}
+    body = request_body(layers=["era5land_temperature"], start="2016-01", end="2016-02")
 
     first = prepare_scene(db_path, registry, body)
     cube.marker = "0001:final"
     second = prepare_scene(db_path, registry, body)
 
     assert second.scene_id != first.scene_id
-    assert db.get_revision(db_path, "era5land_t2m", "2016-01-01/2016-02-01") is None
+    assert db.get_revision(db_path, "era5land_temperature", "2016-01-01/2016-02-01") is None
 
 
 def test_request_without_layers_gets_the_default_layers(db_path):

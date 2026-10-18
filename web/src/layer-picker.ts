@@ -59,7 +59,8 @@ function checkedAxes(layerBox: HTMLElement, layers: Layer[]) {
   return checked.flatMap((layer) => (layer.time ? [layer.time] : []));
 }
 
-// Only months that every checked time-varying layer has can be built: their overlap.
+// The range follows only the checked layers, so unchecking temperature brings back the
+// longer rain range.
 function setMonthRange(start: HTMLInputElement, end: HTMLInputElement, axes: TimeAxis[]) {
   const range = commonRange(axes);
   if (!range) return;
