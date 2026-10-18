@@ -203,7 +203,8 @@ function createSceneTimeline(
   if (!axes.length || !period) return null;
 
   const steps = axes.map((axis) => axis.step);
-  const times = scrubberTimes(axes.map((axis) => axis.values), period);
+  const timeValues = axes.map((axis) => axis.values);
+  const times = scrubberTimes(timeValues, period);
 
   return createTimeline(times, steps, (time) => {
     views.forEach((view) => view.setTime(time));

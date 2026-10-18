@@ -29,7 +29,7 @@ def make(
     datasets: list[Dataset],
     info: dict[str, JsonObject],
 ) -> JsonObject:
-    """Assemble scene.json. Layer blocks come from the dataset registry metadata."""
+    """Assemble scene.json from the plan, dataset metadata and per-layer build results."""
     boundary = _boundary_block(area) if area.named else None
     static_layers_first = sorted(datasets, key=lambda dataset: dataset.time_varying)
     
@@ -137,16 +137,16 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
 
 
 def _array_blocks(dataset: Dataset) -> dict[str, JsonObject]:
-    blocks = {}
-    for role, spec in dataset.roles.items():
-        blocks[role] = {
+    return {
+        role: {
             "path": f"{dataset.id}/{spec.name}",
             "dtype": spec.dtype,
             "scale_factor": spec.scale,
             "add_offset": spec.offset,
             "fill": spec.fill,
         }
-    return blocks
+        for role, spec in dataset.roles.items()
+    }
 
 
 def credits(
@@ -154,7 +154,7 @@ def credits(
     boundary_source: dict[str, str] | None,
     synthetic: bool = False,
 ) -> JsonObject:
-    """Attribution block, generated from the sources actually used."""
+    """Generate attribution for the sources actually used and any synthetic data."""
     sources = _layer_sources(layer_blocks)
     if boundary_source:
         sources.append(boundary_source)
@@ -212,7 +212,12 @@ def _period_problems(doc: JsonObject) -> list[str]:
     if not has_series:
         return [] if period is None else ["period must be null without time-varying layers"]
 
-    if not isinstance(period, dict) or not period["start"] < period["end"]:
+    if not isinstance(period, dict):
+        return ["period must have start before end when a layer is time-varying"]
+
+    start = period.get("start")
+    end = period.get("end")
+    if not (isinstance(start, str) and isinstance(end, str) and start and start < end):
         return ["period must have start before end when a layer is time-varying"]
 
     return []
@@ -319,7 +324,11 @@ def _stops_problems(layer_id: str, stops: object) -> list[str]:
 
 
 def _is_finite_number(value: object) -> bool:
-    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+    return (
+        isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
 
 
 def _classes_problems(layer_id: str, classes: object) -> list[str]:

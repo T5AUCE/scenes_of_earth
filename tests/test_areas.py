@@ -11,15 +11,16 @@ from tests.helpers import COARSE, FIJI, NAIROBI, RAIN, TERRAIN, plan_months
 
 
 def poly(x0: float, y0: float, x1: float, y1: float) -> JsonObject:
+    """Return a GeoJSON rectangle with the given opposite corners."""
     return mapping(box(x0, y0, x1, y1))
 
 
 def test_clean_polygon_rules():
-    ok = clean_polygon({"type": "Feature", "geometry": poly(36.5, -1.5, 37.5, -0.5)})
-    assert ok.area == pytest.approx(1.0)
+    polygon = clean_polygon({"type": "Feature", "geometry": poly(36.5, -1.5, 37.5, -0.5)})
+    assert polygon.area == pytest.approx(1.0)
 
     bowtie = {"type": "Polygon", "coordinates": [[[0, 0], [1, 1], [1, 0], [0, 1], [0, 0]]]}
-    assert clean_polygon(bowtie).area > 0  # repaired by make_valid
+    assert clean_polygon(bowtie).area > 0
 
     bad = [
         {"type": "Point", "coordinates": [0, 0]},

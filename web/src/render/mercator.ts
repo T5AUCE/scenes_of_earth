@@ -25,19 +25,11 @@ const ROW_COUNT_TOLERANCE = 1e-9;
 const WORLD_WIDTH_DEG = 360;
 const ANTIMERIDIAN_DEG = 180;
 
-/** Web Mercator y of a latitude in degrees. */
-export function mercY(lat: number) {
-  return Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
-}
-
 /**
  * The grid cell each output pixel shows. Rows are even in Mercator y because MapLibre stretches
  * images linearly in Web Mercator.
  */
-export function sampleTable(
-  grid: Grid,
-  maxTextureSize = MAX_TEXTURE_SIZE_PX,
-): SampleTable {
+export function sampleTable(grid: Grid, maxTextureSize = MAX_TEXTURE_SIZE_PX): SampleTable {
   const { nx, ny } = grid;
   const [, south, , north] = grid.bbox;
   const rowDegrees = (north - south) / ny;
@@ -60,6 +52,20 @@ export function sampleTable(
     }
   }
   return { width, height, src };
+}
+
+// The shortest row in Mercator y sets the output resolution, so no grid row is skipped.
+function finestRowHeight({ bbox, ny }: Grid) {
+  const [, south, , north] = bbox;
+  const rowDegrees = (north - south) / ny;
+
+  let finest = Infinity;
+  for (let row = 0; row < ny; row++) {
+    const rowTop = mercY(north - row * rowDegrees);
+    const rowBottom = mercY(north - (row + 1) * rowDegrees);
+    finest = Math.min(finest, rowTop - rowBottom);
+  }
+  return finest;
 }
 
 /** The corners of an image over bbox, moved east by `shift` (see worldShift). */
@@ -94,18 +100,9 @@ export function shiftLongitudes(coordinates: Coordinates, degrees: number): Coor
   return (coordinates as Coordinates[]).map((inner) => shiftLongitudes(inner, degrees));
 }
 
-// The shortest row in Mercator y sets the output resolution, so no grid row is skipped.
-function finestRowHeight({ bbox, ny }: Grid) {
-  const [, south, , north] = bbox;
-  const rowDegrees = (north - south) / ny;
-
-  let finest = Infinity;
-  for (let row = 0; row < ny; row++) {
-    const rowTop = mercY(north - row * rowDegrees);
-    const rowBottom = mercY(north - (row + 1) * rowDegrees);
-    finest = Math.min(finest, rowTop - rowBottom);
-  }
-  return finest;
+/** Web Mercator y of a latitude in degrees. */
+export function mercY(lat: number) {
+  return Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
 }
 
 function latFromMercY(y: number) {

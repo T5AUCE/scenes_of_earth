@@ -88,18 +88,6 @@ def create_app(
 
     app = FastAPI(title="Scenes of Earth", version=__version__, lifespan=lifespan)
 
-    def scene_out(row: db.Record) -> JsonObject:
-        done = row["status"] == "done"
-        return {
-            "id": row["id"],
-            "status": row["status"],
-            "progress": row["progress"],
-            "stage": row["stage"],
-            "error": row["error"],
-            "error_class": row["error_class"],
-            "bundle_url": f"{public}/{row['id']}/scene.json" if done else None,
-        }
-
     @app.get("/api/health", response_model=None)
     def health() -> JsonObject:
         return {"ok": True, "version": __version__}
@@ -156,6 +144,19 @@ def create_app(
         status_code = 202 if row["status"] in ("queued", "running") else 200
         return JSONResponse(scene_out(row), status_code)
 
+    def scene_out(row: db.Record) -> JsonObject:
+        done = row["status"] == "done"
+
+        return {
+            "id": row["id"],
+            "status": row["status"],
+            "progress": row["progress"],
+            "stage": row["stage"],
+            "error": row["error"],
+            "error_class": row["error_class"],
+            "bundle_url": f"{public}/{row['id']}/scene.json" if done else None,
+        }
+
     @app.get("/api/scenes/{scene_id}", response_model=None)
     def get_scene(scene_id: str) -> JsonObject:
         row = db.get_scene(db_path, scene_id) if ID_RE.fullmatch(scene_id) else None
@@ -210,15 +211,6 @@ def _layer_out(dataset: Dataset) -> JsonObject:
     }
 
 
-def _area_geometry(row: db.Record) -> JsonObject:
-    """The boundary shape in the longitude frame of its bbox, so it is not cut apart at 180."""
-    geometry = json.loads(row["geom_geojson"])
-    if row["bbox_e"] <= MAX_LONGITUDE_DEG:
-        return geometry
-
-    return mapping(unwrap(shape(geometry)))
-
-
 def _area_out(row: db.Record) -> JsonObject:
     return {
         "id": row["id"],
@@ -231,8 +223,17 @@ def _area_out(row: db.Record) -> JsonObject:
     }
 
 
+def _area_geometry(row: db.Record) -> JsonObject:
+    """Return the boundary in its bbox's longitude frame to avoid splitting it at 180."""
+    geometry = json.loads(row["geom_geojson"])
+    if row["bbox_e"] <= MAX_LONGITUDE_DEG:
+        return geometry
+
+    return mapping(unwrap(shape(geometry)))
+
+
 async def read_body(request: Request) -> bytes:
-    """Request body, capped at MAX_BODY_BYTES (413 beyond; 400 for a malformed Content-Length)."""
+    """Read at most MAX_BODY_BYTES; reject excess with 413 and malformed Content-Length with 400."""
     try:
         declared = int(request.headers.get("content-length") or 0)
     except ValueError:
@@ -255,6 +256,7 @@ class SceneFiles(StaticFiles):
     """
 
     async def get_response(self, path: str, scope: Scope) -> Response:
+        """Hide temporary builds and mark successful bundle responses immutable."""
         if path.startswith("."):
             raise StarletteHTTPException(404)
 

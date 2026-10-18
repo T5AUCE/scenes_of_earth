@@ -12,7 +12,6 @@ from rasterio.windows import Window
 
 from .datasets import SeriesDataset
 from .grid import CELL_DEG, Bbox, CellWindow, Grid, block_mean, read_wrapped
-from .periods import previous_month
 from .remote import GDAL_OPTS, SourceUnavailable
 
 FIRST_MONTH = "1981-01"
@@ -70,12 +69,13 @@ class ChirpsReader:
     """CHIRPS monthly COGs over HTTP."""
 
     def __init__(self, latest: str | None = None) -> None:
-        # An optional fixed 'YYYY-MM' (SOE_LATEST); otherwise the latest month is probed and cached.
+        """Use a fixed latest month ('YYYY-MM') or probe and cache it on demand."""
         self._latest = latest
         self._probed = None  # (month, expiry time) of the last probe
         self._probe_lock = threading.Lock()
 
     def latest_month(self) -> str:
+        """Return the fixed or cached latest month, probing when the cache expires."""
         if self._latest:
             return self._latest
 
@@ -91,8 +91,8 @@ class ChirpsReader:
                 found = self._assumed_latest_month(now)
                 complete = False
 
-            ttl = LATEST_TTL_SECS if complete else OFFLINE_LATEST_TTL_SECS
-            self._probed = (found, time.time() + ttl)
+            ttl_secs = LATEST_TTL_SECS if complete else OFFLINE_LATEST_TTL_SECS
+            self._probed = (found, time.time() + ttl_secs)
             return found
 
     def _probe_latest_month(self, now: datetime) -> tuple[str | None, bool]:
@@ -133,11 +133,10 @@ class ChirpsReader:
         """One month at native resolution as float32; fill values (< 0) become NaN."""
         col, row, width, height = window
 
-        with rasterio.Env(**GDAL_OPTS):
-            with rasterio.open(_chirps_url(month)) as dataset:
-                if (dataset.width, dataset.height) != (CHIRPS_GRID.columns, CHIRPS_GRID.rows):
-                    raise RuntimeError(f"unexpected CHIRPS grid {dataset.width}x{dataset.height}")
-                rain = dataset.read(1, window=Window(col, row, width, height)).astype("float32")
+        with rasterio.Env(**GDAL_OPTS), rasterio.open(_chirps_url(month)) as dataset:
+            if (dataset.width, dataset.height) != (CHIRPS_GRID.columns, CHIRPS_GRID.rows):
+                raise RuntimeError(f"unexpected CHIRPS grid {dataset.width}x{dataset.height}")
+            rain = dataset.read(1, window=Window(col, row, width, height)).astype("float32")
 
         rain[rain < 0] = np.nan
         return rain
@@ -157,3 +156,8 @@ def _head(url: str, timeout: float = HEAD_TIMEOUT_SECS) -> tuple[bool | None, st
         return (False if error.code == 404 else None), None
     except (urllib.error.URLError, OSError):
         return None, None
+
+
+def previous_month(year: int, month: int) -> tuple[int, int]:
+    """The (year, month) before the given one."""
+    return (year - 1, 12) if month == 1 else (year, month - 1)

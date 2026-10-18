@@ -31,6 +31,7 @@ class Grid:
 
     @property
     def transform(self) -> Affine:
+        """Return the affine transform from grid edges to longitude and latitude."""
         return Affine(self.res, 0, self.west_deg, 0, -self.res, self.north_deg)
 
     def span(self, bounds: Bbox) -> CellSpan:
@@ -61,7 +62,9 @@ class Grid:
         west, south, east, north = bbox
         col = round((west - self.west_deg) / self.res)
         row = round((self.north_deg - north) / self.res)
-        return col, row, round((east - west) / self.res), round((north - south) / self.res)
+        width = round((east - west) / self.res)
+        height = round((north - south) / self.res)
+        return col, row, width, height
 
 
 def read_wrapped(

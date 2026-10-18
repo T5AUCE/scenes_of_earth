@@ -20,16 +20,6 @@ openSharedScene("replace");
 window.addEventListener("popstate", followHistory);
 showBackendStatus();
 
-// Back and Forward only move between entries; the address says where the page now is.
-function followHistory() {
-  const route = routeFor(location.search, history.state);
-  if (route.kind === "world") return sceneMode.exit();
-
-  if (route.id === sceneMode.sceneId()) return sceneMode.showFullscreen(route.panel);
-
-  openSharedScene("keep");
-}
-
 // ?scene= comes from the address bar, so it is checked before it reaches a request.
 function openSharedScene(entry: SceneEntry) {
   const route = routeFor(location.search, history.state);
@@ -42,6 +32,15 @@ function openSharedScene(entry: SceneEntry) {
       ready.showStatus("The scene id in the address is not valid.");
     })
     .catch((error) => showBadge(`Cannot open the scene: ${error.message}`, "down"));
+}
+
+// Back and Forward only move between entries; the address says where the page now is.
+function followHistory() {
+  const route = routeFor(location.search, history.state);
+  if (route.kind === "world") return sceneMode.exit();
+  if (route.id === sceneMode.sceneId()) return sceneMode.showFullscreen(route.panel);
+
+  openSharedScene("keep");
 }
 
 function showBackendStatus() {

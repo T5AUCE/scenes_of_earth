@@ -23,10 +23,8 @@ PAD_DEG = 0.5  # each layer's window is padded to at least this size
 PADDED_NOTICE = f"The map area was padded to at least {PAD_DEG} x {PAD_DEG} degrees for context."
 AREA_TOLERANCE = 1e-9  # relative; below this a clipped area counts as unchanged
 
-# Source cells times steps, summed over time-varying layers and checked before any read.
-MAX_SOURCE_CELL_STEPS = 100_000_000
-# Raw bytes of all layers' arrays after aggregation.
-MAX_OUTPUT_BYTES = 50_000_000
+MAX_SOURCE_CELL_STEPS = 100_000_000  # summed over series before any read
+MAX_OUTPUT_BYTES = 50_000_000  # raw arrays after aggregation
 MAX_SERIES_RES_DEG = 0.4  # coarsest cell size a series may be averaged to
 RES_TOLERANCE_DEG = 1e-9
 
@@ -69,13 +67,17 @@ def plan(area: Area, datasets: list[Dataset], start: str | None, end: str | None
     geometry = unwrap(area.geom)
     _check_longitude_span(geometry)
 
-    parts, layer_notices, shared_geometry, clipped = _clip_to_coverage(geometry, datasets)
-    windows, padded = _layer_windows(datasets, parts)
+    layer_geometries, layer_notices, shared_geometry, clipped = _clip_to_coverage(
+        geometry,
+        datasets,
+    )
+    windows, padded = _layer_windows(datasets, layer_geometries)
     notices = [PADDED_NOTICE] if padded else []
 
     series = [dataset for dataset in datasets if isinstance(dataset, SeriesDataset)]
     period = request_range(start, end, REQUEST_STEP) if series else None
     steps = {dataset.id: dataset.steps(*period) for dataset in series}
+    _check_steps_exist(steps)
     _check_source_size(windows, steps)
 
     notices += _small_area_notices(area, shared_geometry)
@@ -90,7 +92,7 @@ def plan(area: Area, datasets: list[Dataset], start: str | None, end: str | None
     layers = {
         dataset.id: _layer_plan(
             dataset,
-            parts[dataset.id],
+            layer_geometries[dataset.id],
             windows[dataset.id],
             factors.get(dataset.id, 1),
             steps.get(dataset.id, []),
@@ -114,8 +116,10 @@ def _clip_to_coverage(
     datasets: list[Dataset],
 ) -> tuple[dict[str, BaseGeometry], dict[str, list[str]], BaseGeometry, bool]:
     """Per-layer clipped geometry, per-layer notices, the geometry all layers share, was clipped."""
-    parts, layer_notices = {}, {}
-    shared_geometry, clipped = geometry, False
+    layer_geometries = {}
+    layer_notices = {}
+    shared_geometry = geometry
+    clipped = False
     for dataset in datasets:
         part = geometry.intersection(box(*_extent(dataset.coverage)))
         if part.is_empty or part.area == 0:
@@ -125,15 +129,15 @@ def _clip_to_coverage(
         if part.area < geometry.area * (1 - AREA_TOLERANCE):
             clipped = True
             layer_notices[dataset.id].append(
-                f"Part of the area lies outside {dataset.title} coverage and was clipped."
+                f"Part of the area lies outside {dataset.title} coverage and was clipped.",
             )
-        parts[dataset.id] = part
+        layer_geometries[dataset.id] = part
         shared_geometry = shared_geometry.intersection(part)
 
     if shared_geometry.is_empty or shared_geometry.area == 0:
         raise AreaError("area is outside the coverage shared by the selected layers")
 
-    return parts, layer_notices, shared_geometry, clipped
+    return layer_geometries, layer_notices, shared_geometry, clipped
 
 
 def _extent(coverage: Bbox) -> Bbox:
@@ -145,14 +149,15 @@ def _extent(coverage: Bbox) -> Bbox:
 
 def _layer_windows(
     datasets: list[Dataset],
-    parts: dict[str, BaseGeometry],
+    layer_geometries: dict[str, BaseGeometry],
 ) -> tuple[dict[str, CellSpan], bool]:
     """Anchor-grid cell window (c0, c1, r0, r1) of each layer, padded; and whether any was."""
-    windows, padded = {}, False
+    windows = {}
+    padded = False
     for dataset in datasets:
         grid = dataset.grid
         limit_c0, limit_c1, limit_r0, limit_r1 = grid.span(_extent(dataset.coverage))
-        c0, c1, r0, r1 = grid.span(parts[dataset.id].bounds)
+        c0, c1, r0, r1 = grid.span(layer_geometries[dataset.id].bounds)
         c0, c1 = max(c0, limit_c0), min(c1, limit_c1)
         r0, r1 = max(r0, limit_r0), min(r1, limit_r1)
 
@@ -185,10 +190,16 @@ def _pad(
     return low, high
 
 
+def _check_steps_exist(steps: dict[str, list[str]]) -> None:
+    for dataset_id, dataset_steps in steps.items():
+        if not dataset_steps:
+            raise AreaError(f"{dataset_id} has no data in the requested period")
+
+
 def _check_source_size(windows: dict[str, CellSpan], steps: dict[str, list[str]]) -> None:
     if _source_cells(windows, steps) > MAX_SOURCE_CELL_STEPS:
         raise AreaError(
-            "area and period are too large to read; choose a smaller area or fewer months"
+            "area and period are too large to read; choose a smaller area or fewer months",
         )
 
 
@@ -209,7 +220,7 @@ def _small_area_notices(area: Area, shared_geometry: BaseGeometry) -> list[str]:
 
     if not area.named:
         raise AreaError(
-            f"drawn shape is too small (needs at least {MIN_CELLS} 0.05° cells, about 750 km2)"
+            f"drawn shape is too small (needs at least {MIN_CELLS} 0.05° cells, about 750 km2)",
         )
 
     return [
@@ -231,7 +242,7 @@ def _budget_after_static_layers(
         if dataset.max_tiles and dataset.tile_count(bbox) > dataset.max_tiles:
             raise AreaError(
                 f"{dataset.id} needs more than {dataset.max_tiles} source tiles; "
-                "choose a smaller area"
+                "choose a smaller area",
             )
         budget -= _layer_bytes(dataset, grid_shape)
 
@@ -249,8 +260,10 @@ def _layer_grid(
     """(transform, (height, width), bbox, res) of a layer over its grid cells c0:c1, r0:r1."""
     bbox = dataset.grid.bbox(window)
     res = dataset.grid.res * factor if dataset.time_varying else dataset.res_for(bbox)
-    grid_shape = (round((bbox[3] - bbox[1]) / res), round((bbox[2] - bbox[0]) / res))
-    return Affine(res, 0, bbox[0], 0, -res, bbox[3]), grid_shape, bbox, res
+    height = round((bbox[3] - bbox[1]) / res)
+    width = round((bbox[2] - bbox[0]) / res)
+    transform = Affine(res, 0, bbox[0], 0, -res, bbox[3])
+    return transform, (height, width), bbox, res
 
 
 def _layer_bytes(dataset: Dataset, grid_shape: tuple[int, int], step_count: int = 1) -> int:
@@ -281,7 +294,7 @@ def _aggregation_factors(
         finest = _finest_coarsenable(series, factors)
         if finest is None:
             raise AreaError(
-                f"area and period are too large even at {MAX_SERIES_RES_DEG:g} degree aggregation"
+                f"area and period are too large even at {MAX_SERIES_RES_DEG:g} degree aggregation",
             )
 
         factors[finest.id] *= 2
@@ -294,7 +307,9 @@ def _finest_coarsenable(
     """The series with the finest output cells that can double its factor within the cap."""
     max_res = MAX_SERIES_RES_DEG + RES_TOLERANCE_DEG
     coarsenable = [
-        dataset for dataset in series if dataset.grid.res * factors[dataset.id] * 2 <= max_res
+        dataset
+        for dataset in series
+        if dataset.grid.res * factors[dataset.id] * 2 <= max_res
     ]
     return min(
         coarsenable,
@@ -347,13 +362,13 @@ def _layer_plan(
     if factor > 1:
         notices.append(
             f"{dataset.title} was averaged over {factor}x{factor} cells "
-            f"({res:g} degrees) to fit the size budget."
+            f"({res:g} degrees) to fit the size budget.",
         )
 
     mask, used_touched = _layer_mask(dataset, geometry, transform, grid_shape)
     if used_touched:
         notices.append(
-            "No cell center fell inside this small area, so every cell it touches is used."
+            "No cell center fell inside this small area, so every cell it touches is used.",
         )
     notices += dataset.notices(bbox)
 

@@ -60,7 +60,10 @@ export function createTerrainView(context: LayerContext): LayerView {
   };
 
   return {
-    parts: [{ id, label: layer.title, layerIds: [id] }, contourOverlay.part],
+    parts: [
+      { id, label: layer.title, layerIds: [id] },
+      contourOverlay.part,
+    ],
     options: [],
     time: null,
     ready: drawHillshade(),
@@ -81,7 +84,7 @@ interface DetailWindow {
   sourceWindow: GridWindow;
 }
 
-// Whole-area contours come first; zoomed in, a worker redraws the visible window at a finer factor.
+// A worker keeps contour computation from blocking map interactions.
 class ContourOverlay {
   readonly legend = makeHtmlElement("div");
   readonly part: Part;
@@ -225,10 +228,9 @@ class ContourOverlay {
   // A window much smaller than the one shown is worth redrawing, as its interval can be finer.
   private isFinerThanShown({ sourceWindow, factor }: NonNullable<ReturnType<typeof viewWindow>>) {
     const showsDetail = this.showsDetail();
-    const current =
-      this.shown && showsDetail
-        ? this.shown
-        : { factor: this.coarseFactor, sourceWindow: wholeGrid(this.grid) };
+    const current = this.shown && showsDetail
+      ? this.shown
+      : { factor: this.coarseFactor, sourceWindow: wholeGrid(this.grid) };
 
     return (
       (showsDetail && !this.coversView())

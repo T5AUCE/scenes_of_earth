@@ -30,13 +30,16 @@ PINNED_SCENE_ID = "1bc8cd034f0b0bb6577d"  # Computed for soe 0.5.0 (scene format
 
 
 def request_body(**overrides: object) -> str:
-    return json.dumps({
-        "area": {"type": "polygon", "geometry": SQUARE},
-        "start": "2015-01",
-        "end": "2015-06",
-        "layers": ["copdem_terrain", "chirps_monthly"],
-        **overrides,
-    })
+    """Encode a six-month Nairobi polygon request with optional overrides."""
+    return json.dumps(
+        {
+            "area": {"type": "polygon", "geometry": SQUARE},
+            "start": "2015-01",
+            "end": "2015-06",
+            "layers": ["copdem_terrain", "chirps_monthly"],
+            **overrides,
+        },
+    )
 
 
 @pytest.fixture

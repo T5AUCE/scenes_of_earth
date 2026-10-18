@@ -227,7 +227,7 @@ def _check_capacity(connection: sqlite3.Connection, max_active: int | None) -> N
         return
 
     active = connection.execute(
-        f"SELECT COUNT(*) FROM scenes WHERE status IN {ACTIVE_STATUSES}"
+        f"SELECT COUNT(*) FROM scenes WHERE status IN {ACTIVE_STATUSES}",
     ).fetchone()[0]
     if active >= max_active:
         raise Busy()

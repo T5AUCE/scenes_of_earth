@@ -1,6 +1,8 @@
 """Bundle tests: scene.json validation and credit lines."""
 import json
 
+import pytest
+
 from soe.areas import Area
 from soe.build import build_scene
 from soe.bundle import SYNTHETIC_DATA_CREDIT, credits, validate
@@ -173,3 +175,12 @@ def test_credits_announce_synthetic_data_only_for_the_synthetic_source():
 
     assert line in credits(layer_blocks, None, synthetic=True)["lines"]
     assert line not in credits(layer_blocks, None)["lines"]
+
+
+@pytest.mark.parametrize("missing", [("start",), ("end",), ("start", "end")])
+def test_period_without_an_endpoint_is_a_problem_not_an_error(tmp_path, missing):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    for key in missing:
+        del doc["period"][key]
+
+    assert any("period must have start before end" in problem for problem in validate(doc))

@@ -12,7 +12,6 @@ import pytest
 import rasterio
 from rasterio.transform import Affine
 
-from soe.sources import chirps, terrain
 from soe.sources import (
     CHIRPS_GRID,
     SOURCES,
@@ -25,13 +24,16 @@ from soe.sources import (
     SourceUnavailable,
     StaticDataset,
     SyntheticSource,
+    chirps,
     hillshade,
     make_registry,
     read_wrapped,
+    terrain,
     terrain_tiles,
 )
+from soe.sources.chirps import previous_month
 from soe.sources.grid import block_mean
-from soe.sources.periods import add_duration, previous_month
+from soe.sources.periods import add_duration
 from soe.sources.terrain import (
     TerrainProduct,
     _tile_index,
@@ -44,13 +46,13 @@ from soe.sources.terrain import (
 )
 from tests.helpers import NAIROBI, RAIN, TERRAIN
 
-
 TILE_PX = 60  # the fake terrain tiles are small, 1 / 60 degree per pixel
 NARROW_TILE_PX = 40  # tiles from 50 degrees poleward have 2/3 of the pixels in x
 CELL_DEG = 0.05
 
 
 def vars_of(dataset: Dataset) -> dict:
+    """Return all declared dataclass fields, including inherited fields."""
     return {name: getattr(dataset, name) for name in dataset.__dataclass_fields__}
 
 
@@ -122,7 +124,13 @@ def test_terrain_res_budget():
     assert terrain_res((-70, -30, -30, 10)) == pytest.approx(0.025)
     assert terrain_res((19, 41, 191, 60)) == pytest.approx(0.05)
 
-    boxes = ((33, -4, 42, 6), (-70, -30, -30, 10), (19, 41, 191, 60), (0, 0, 2, 2), (0, 0, 0.5, 40))
+    boxes = (
+        (33, -4, 42, 6),
+        (-70, -30, -30, 10),
+        (19, 41, 191, 60),
+        (0, 0, 2, 2),
+        (0, 0, 0.5, 40),
+    )
 
     for bounds in boxes:
         res = terrain_res(bounds)
@@ -230,8 +238,8 @@ def test_latest_month_is_rechecked_soon_when_a_newer_month_was_unreachable(monke
 
     source.latest_month()
 
-    ttl = source._probed[1] - time.time()
-    assert ttl <= chirps.OFFLINE_LATEST_TTL_SECS
+    ttl_secs = source._probed[1] - time.time()
+    assert ttl_secs <= chirps.OFFLINE_LATEST_TTL_SECS
 
 
 def test_read_month_wraps_at_180():
@@ -340,7 +348,8 @@ def fake_terrain(tmp_path, monkeypatch):
     def add_tile(lon: int, lat: int) -> None:
         width = NARROW_TILE_PX if abs(lat + 0.5) >= 50 else TILE_PX
         values = random.integers(0, 3000, (TILE_PX, width)).astype("float32")
-        if width == NARROW_TILE_PX:  # a ramp: random pixels would exaggerate the stretch below
+        # Random pixels would exaggerate the stretch of the narrow tiles.
+        if width == NARROW_TILE_PX:
             ramp = np.add.outer(np.arange(TILE_PX) * 5.0, np.arange(width) * 7.0)
             values = ramp.astype("float32")
         wrapped_lon = (lon + 180) % 360 - 180

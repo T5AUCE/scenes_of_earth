@@ -43,9 +43,9 @@ UNIX_EPOCH = date(1970, 1, 1)
 MONTH_LABEL_CHARS = 7  # "YYYY-MM" of an ISO date, for stage texts
 CACHE_DIR_NAME = ".cache"  # in the scenes directory; the leading dot keeps it unserved
 
-# Rough seconds of work, to split the progress bar between layers. The last 5% is the publishing.
+# Publishing needs the final 5% of the progress bar.
 LAYERS_PROGRESS_SHARE = 0.95
-STATIC_BLOCK_COST = 1.0
+STATIC_BLOCK_COST = 1.0  # relative work, in rough seconds
 STATIC_CACHED_COST = 0.1  # a cache hit still costs the writing
 SERIES_STEP_COST = 0.2
 PERCENTILE_SAMPLES_PER_BATCH = 100_000
@@ -353,10 +353,7 @@ def _write_time_series(
 def _write_time_coordinate(layer_group: zarr.Group, steps: list[str]) -> None:
     """Write dates as integer days since the Unix epoch."""
     days_since_epoch = np.array(
-        [
-            (date.fromisoformat(step) - UNIX_EPOCH).days
-            for step in steps
-        ],
+        [(date.fromisoformat(step) - UNIX_EPOCH).days for step in steps],
         dtype="int32",
     )
     _write_array(
@@ -442,11 +439,6 @@ class _StatisticsAccumulator:
             )
         )
 
-    def quantiles(self, count: int) -> list[float]:
-        """Sample values at `count` evenly spaced percentiles from 0 to TOP_PERCENTILE."""
-        percentiles = np.linspace(0, TOP_PERCENTILE, count)
-        return np.percentile(np.concatenate(self._samples), percentiles).tolist()
-
     def finish(self) -> dict[str, float]:
         """Return rounded statistics or raise when no valid data exists."""
         if self._value_count == 0:
@@ -454,12 +446,18 @@ class _StatisticsAccumulator:
 
         percentile_98 = np.percentile(np.concatenate(self._samples), TOP_PERCENTILE)
         mean = self._value_sum / self._value_count
+
         return {
             "min": round(float(self._minimum), 2),
             "max": round(float(self._maximum), 2),
             "mean": round(mean, 2),
             "p98": round(float(percentile_98), 2),
         }
+
+    def quantiles(self, count: int) -> list[float]:
+        """Sample values at `count` evenly spaced percentiles from 0 to TOP_PERCENTILE."""
+        percentiles = np.linspace(0, TOP_PERCENTILE, count)
+        return np.percentile(np.concatenate(self._samples), percentiles).tolist()
 
 
 def _choose_worker_count(layer_plan: LayerPlan) -> int:
@@ -529,9 +527,14 @@ def _finalize_scene(
             "conventions": "CF-1.8",
             "generator": f"soe {__version__}",
             "credits": scene_document["credits"],
-        }
+        },
     )
 
+    _consolidate_metadata(temp_dir)
+    _write_scene_documents(temp_dir, scene_document, title, area, scene_plan)
+
+
+def _consolidate_metadata(temp_dir: Path) -> None:
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",
@@ -539,6 +542,14 @@ def _finalize_scene(
         )
         zarr.consolidate_metadata(str(temp_dir / "data.zarr"))
 
+
+def _write_scene_documents(
+    temp_dir: Path,
+    scene_document: JsonObject,
+    title: str,
+    area: Area,
+    scene_plan: Plan,
+) -> None:
     area_name = (area.boundary or {}).get("name", title)
     area_feature = {
         "type": "Feature",

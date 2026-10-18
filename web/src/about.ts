@@ -12,8 +12,7 @@ import type { Scene } from "./types";
 
 /** Id of the notices heading; the docked panel scrolls the About tab to it. */
 export const NOTICES_HEADING_ID = "notices-heading";
-// "YYYY-MM-DDTHH:MM" is the part of an ISO timestamp that is shown.
-const ISO_MINUTE_CHARS = 16;
+const ISO_MINUTE_CHARS = 16; // "YYYY-MM-DDTHH:MM"
 const WEB_LINK_PATTERN = /^https?:\/\//;
 
 const BASEMAP_CREDIT = "Basemap: OpenFreeMap, © OpenMapTiles, data from OpenStreetMap.";
@@ -56,7 +55,8 @@ function periodText(scene: Scene) {
   const axes = scene.layers.flatMap((layer) => (layer.time ? [layer.time] : []));
   if (!axes.length || !scene.period) return "no time axis";
 
-  const times = scrubberTimes(axes.map((axis) => axis.values), scene.period);
+  const timeValues = axes.map((axis) => axis.values);
+  const times = scrubberTimes(timeValues, scene.period);
   const steps = axes.map((axis) => axis.step);
   const first = formatTime(times[0], steps);
   const last = formatTime(times[times.length - 1], steps);

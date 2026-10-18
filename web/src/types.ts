@@ -3,8 +3,6 @@ import type { Map as MapLibreMap } from "maplibre-gl";
 import type { Store } from "./data";
 import type { Coordinates } from "./render/mercator";
 
-// Shapes of backend responses (only the fields the frontend uses).
-
 export interface Health {
   ok: boolean;
   version: string;
@@ -13,6 +11,7 @@ export interface Health {
 /** [W, S, E, N] in degrees; E may exceed 180 across the antimeridian. */
 export type Bbox = [number, number, number, number];
 
+/** One layer offered by /api/layers, before a scene is built. */
 export interface Layer {
   id: string;
   title: string;
@@ -20,8 +19,7 @@ export interface Layer {
   kind: string; // style.kind: how to render it
   time_varying: boolean;
   coverage: Bbox;
-  // first and last are request periods of request_step, such as "YYYY-MM"
-  time: { step: string; first: string; last: string } | null;
+  time: { step: string; first: string; last: string } | null; // request periods, e.g. "YYYY-MM"
 }
 
 export interface LayersResponse {
@@ -58,6 +56,7 @@ export interface SceneStatus {
   bundle_url: string | null;
 }
 
+/** A layer's stored grid, as scene.json describes it. */
 export interface GridDoc {
   bbox: Bbox;
   res: number; // degrees
@@ -65,6 +64,7 @@ export interface GridDoc {
   ny: number;
 }
 
+/** Storage and decoding metadata for one array role in scene.json. */
 export interface ArrayDoc {
   path: string;
   dtype: string;
@@ -73,6 +73,7 @@ export interface ArrayDoc {
   fill: number | null;
 }
 
+/** A layer's available period starts and exclusive end, as ISO dates. */
 export interface TimeDoc {
   step: string; // ISO 8601 duration, e.g. P1M
   values: string[]; // "YYYY-MM-DD" period starts
@@ -112,6 +113,7 @@ export interface BoundaryDoc {
   modified?: string;
 }
 
+/** One built layer's sources, display choices, grid and stored arrays. */
 export interface LayerDoc {
   id: string;
   title: string;
@@ -139,6 +141,7 @@ export interface AreaFeature {
   geometry: { type: string; coordinates: Coordinates };
 }
 
+/** The scene.json fields the frontend consumes. */
 export interface Scene {
   version: string;
   id: string;
@@ -177,7 +180,7 @@ export interface LayerContext {
   layer: LayerDoc;
   shift: number; // longitude offset of the scene's world copy, the same for all its layers
   beforeId: string | undefined;
-  // For failures after the layer is mounted, e.g. a month that cannot be read.
+  /** Report failures after mounting, such as a step that cannot be read. */
   report(error: unknown): void;
 }
 

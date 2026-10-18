@@ -16,7 +16,9 @@ export const LAYER_KINDS = new Map([
   ["terrain", { stack: 2, create: createTerrainView }],
 ]);
 
-function createSeriesView({ map, store, layer, shift, beforeId, report }: LayerContext): LayerView {
+function createSeriesView(
+  { map, store, layer, shift, beforeId, report }: LayerContext,
+): LayerView {
   const id = `${layer.id}-series`;
   const { palette, stops } = layer.style;
   const { time: timeAxis } = layer;
@@ -24,7 +26,7 @@ function createSeriesView({ map, store, layer, shift, beforeId, report }: LayerC
     throw new Error(`Layer "${layer.id}" needs a palette, stops and a time axis`);
   }
 
-  const valueDoc = arrayDoc(layer, "value");
+  const valueArray = arrayDoc(layer, "value");
   const colors = lut(palette);
   let alive = true;
   // A slow read of an older step must not overwrite the one being displayed.
@@ -38,8 +40,9 @@ function createSeriesView({ map, store, layer, shift, beforeId, report }: LayerC
   const table = sampleTable(layer.grid, maxTextureSize(map));
 
   const readStep = cacheByIndex(CACHED_STEPS, async (step) => {
-    const raw = await readArray(await store, valueDoc.path, [step, null, null]);
-    return decode(raw, valueDoc);
+    const openedStore = await store;
+    const raw = await readArray(openedStore, valueArray.path, [step, null, null]);
+    return decode(raw, valueArray);
   });
 
   const hideImage = () => map.setPaintProperty(id, "raster-opacity", 0);

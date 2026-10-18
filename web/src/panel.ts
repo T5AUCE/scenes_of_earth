@@ -353,6 +353,22 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
 }
 
 function createControls(root: HTMLElement) {
+  const { search, level, results } = createSearchControls(root);
+  const chosen = makeHtmlElement("div", NO_AREA_TEXT, root);
+  chosen.className = "chosen";
+
+  const layerBox = makeHtmlElement("fieldset", "", root);
+  makeHtmlElement("legend", "Layers", layerBox);
+
+  const { start, end } = createMonthInputs(root);
+  const build = makeHtmlElement("button", "Build scene", root);
+  const status = makeHtmlElement("div", "", root);
+  status.className = "status";
+
+  return { search, level, results, chosen, layerBox, start, end, build, status };
+}
+
+function createSearchControls(root: HTMLElement) {
   const searchBox = makeHtmlElement("div", "", root);
   searchBox.className = "search-box";
 
@@ -374,28 +390,27 @@ function createControls(root: HTMLElement) {
   results.setAttribute("role", "listbox");
   results.hidden = true;
 
-  const chosen = makeHtmlElement("div", NO_AREA_TEXT, root);
-  chosen.className = "chosen";
+  return { search, level, results };
+}
 
-  const layerBox = makeHtmlElement("fieldset", "", root);
-  makeHtmlElement("legend", "Layers", layerBox);
-
+function createMonthInputs(root: HTMLElement) {
   const months = makeHtmlElement("div", "", root);
   const start = document.createElement("input");
   const end = document.createElement("input");
   start.type = end.type = "month";
   months.append("From ", start, " to ", end);
 
-  const build = makeHtmlElement("button", "Build scene", root);
-
-  const status = makeHtmlElement("div", "", root);
-  status.className = "status";
-
-  return { search, level, results, chosen, layerBox, start, end, build, status };
+  return { start, end };
 }
 
 function bboxGeometry([west, south, east, north]: Bbox): AreaFeature["geometry"] {
-  const ring = [[west, south], [east, south], [east, north], [west, north], [west, south]];
+  const ring = [
+    [west, south],
+    [east, south],
+    [east, north],
+    [west, north],
+    [west, south],
+  ];
   return { type: "Polygon", coordinates: [ring] };
 }
 

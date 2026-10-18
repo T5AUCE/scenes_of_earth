@@ -28,6 +28,7 @@ from soe.sources import (
 )
 from tests.helpers import (
     BOUNDARY,
+    COARSE,
     FIJI,
     HASH_A,
     HASH_B,
@@ -40,6 +41,8 @@ from tests.helpers import (
 )
 
 ProgressEvent = tuple[float, str | None]  # (fraction done, stage text) of one progress call
+
+TRIANGLE = Polygon([(36.5, -1.5), (37.5, -1.5), (36.5, -0.5)])
 
 
 def array_bytes(scene_dir: Path) -> dict[str, bytes]:
@@ -206,9 +209,9 @@ def test_synthetic_build_across_180(tmp_path):
     root = zarr.open_group(out / "data.zarr", mode="r")
 
     for name in ("chirps_monthly", "copdem_terrain"):
-        lon = root[name]["lon"][:]
+        longitude = root[name]["lon"][:]
 
-        assert np.all(np.diff(lon) > 0) and lon[-1] > 180
+        assert np.all(np.diff(longitude) > 0) and longitude[-1] > 180
 
     terrain = root["copdem_terrain"]
     bbox = doc["area"]["bbox"]
@@ -268,9 +271,12 @@ def test_synthetic_build_validates_and_opens(tmp_path):
     assert root["copdem_terrain/hillshade"].dtype == "uint8"
     assert root["copdem_terrain/elevation"].dtype == "int16"
 
-    lat = root["chirps_monthly/lat"][...]
+    latitude = root["chirps_monthly/lat"][...]
 
-    assert lat[0] > lat[-1] and doc["area"]["bbox"][3] == pytest.approx(lat[0] + 0.025)
+    assert (
+        latitude[0] > latitude[-1]
+        and doc["area"]["bbox"][3] == pytest.approx(latitude[0] + 0.025)
+    )
 
 
 def test_stops_increase_and_cover_all_steps(tmp_path):
@@ -317,6 +323,26 @@ def test_build_with_aggregation_factor_2(tmp_path):
     precip = store["chirps_monthly/precip"]
 
     assert precip.shape == (72, 300, 300) and precip[0][150, 150] != 65535
+
+
+def test_series_at_different_factors_keep_grid_and_array_shapes_consistent(tmp_path):
+    area = Area(box(30, -10, 50, 10), BOUNDARY)
+    # 140 months come to 56 MB at native resolution, so only the finer rain layer is averaged.
+    months = 140
+    end = f"{1990 + (months - 1) // 12}-{(months - 1) % 12 + 1:02d}"
+
+    build_scene(HASH_A, area, "1990-01", end, [RAIN, COARSE], "Two", tmp_path)
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    store = zarr.open_group(str(tmp_path / HASH_A / "data.zarr"), mode="r")
+
+    assert validate(doc) == []
+    layers = {layer["id"]: layer for layer in doc["layers"]}
+    assert layers["chirps_monthly"]["grid"]["aggregation"] == 2
+    assert layers["coarse_monthly"]["grid"]["aggregation"] == 1
+    for layer_id, layer in layers.items():
+        grid = layer["grid"]
+        for block in layer["arrays"].values():
+            assert store[block["path"]].shape[-2:] == (grid["ny"], grid["nx"])
 
 
 def test_layer_outside_its_coverage_is_refused_before_read(tmp_path):
@@ -430,31 +456,6 @@ def test_store_has_consolidated_metadata(tmp_path):
     assert expected <= meta.keys()
 
 
-def land_cover_dataset(classes: Role) -> StaticDataset:
-    """A static layer with one uint8 role of the given spec, read as the constant 40."""
-
-    class LandCover(StaticDataset):
-        def read(
-            self,
-            bbox: Bbox,
-            res: float,
-            on_block: Callable[[], None] | None = None,
-        ) -> tuple[dict[str, np.ndarray], Affine]:
-            height, width = round((bbox[3] - bbox[1]) / res), round((bbox[2] - bbox[0]) / res)
-            return {"classes": np.full((height, width), 40, "uint8")}, Affine(
-                res, 0, bbox[0], 0, -res, bbox[3]
-            )
-
-    return LandCover(
-        **{
-            **vars(TERRAIN),
-            "id": "landcover",
-            "resolution_deg": 0.01,
-            "roles": {"classes": classes},
-        }
-    )
-
-
 def test_static_dataset_with_its_own_role_is_written_without_a_special_case(tmp_path):
     classes = Role("landcover", "uint8", scale=2, offset=1, fill=7, long_name="Land cover class")
     dataset = land_cover_dataset(classes)
@@ -472,6 +473,32 @@ def test_static_dataset_with_its_own_role_is_written_without_a_special_case(tmp_
     assert (array[:] == 40).all()
 
 
+def land_cover_dataset(classes: Role) -> StaticDataset:
+    """Make a static layer with one uint8 role, read as the constant 40."""
+
+    class LandCover(StaticDataset):
+        def read(
+            self,
+            bbox: Bbox,
+            res: float,
+            on_block: Callable[[], None] | None = None,
+        ) -> tuple[dict[str, np.ndarray], Affine]:
+            height = round((bbox[3] - bbox[1]) / res)
+            width = round((bbox[2] - bbox[0]) / res)
+            arrays = {"classes": np.full((height, width), 40, "uint8")}
+            transform = Affine(res, 0, bbox[0], 0, -res, bbox[3])
+            return arrays, transform
+
+    return LandCover(
+        **{
+            **vars(TERRAIN),
+            "id": "landcover",
+            "resolution_deg": 0.01,
+            "roles": {"classes": classes},
+        },
+    )
+
+
 def test_static_role_without_a_fill_value_fails_the_build_without_a_bundle(tmp_path):
     dataset = land_cover_dataset(Role("landcover", "uint8"))
 
@@ -479,9 +506,6 @@ def test_static_role_without_a_fill_value_fails_the_build_without_a_bundle(tmp_p
         build_scene(HASH_A, Area(NAIROBI), "2015-01", "2015-02", [dataset], "Test", tmp_path)
 
     assert not (tmp_path / HASH_A).exists()
-
-
-TRIANGLE = Polygon([(36.5, -1.5), (37.5, -1.5), (36.5, -0.5)])
 
 
 def build_triangle(tmp_path: Path) -> tuple[dict, zarr.Group]:

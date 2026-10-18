@@ -1,4 +1,5 @@
 """Period arithmetic on ISO dates and ISO 8601 durations (PnY, PnM, PnD)."""
+
 import re
 from datetime import date, timedelta
 
@@ -23,7 +24,8 @@ def add_duration(iso_date: str, duration: str, sign: int = 1) -> str:
     if parsed is None:
         raise ValueError(f"unsupported duration {duration}")
 
-    count, unit = sign * int(parsed[1]), parsed[2]
+    count = sign * int(parsed[1])
+    unit = parsed[2]
     start = date.fromisoformat(iso_date)
     if unit == "D":
         return (start + timedelta(days=count)).isoformat()
@@ -36,12 +38,18 @@ def add_duration(iso_date: str, duration: str, sign: int = 1) -> str:
 def is_request_label(value: object, step: str) -> bool:
     """Whether `value` names one request period of `step`, such as 'YYYY-MM' for P1M."""
     pattern = REQUEST_PATTERNS.get(step)
-    return pattern is not None and isinstance(value, str) and pattern.fullmatch(value) is not None
+    return (
+        pattern is not None
+        and isinstance(value, str)
+        and pattern.fullmatch(value) is not None
+    )
 
 
 def request_range(start: str, end: str, step: str) -> tuple[str, str]:
     """ISO dates (first day, day after the last) of the request periods start..end inclusive."""
-    return _period_start(start, step), add_duration(_period_start(end, step), step)
+    first_day = _period_start(start, step)
+    last_period_start = _period_start(end, step)
+    return first_day, add_duration(last_period_start, step)
 
 
 def request_label(iso_date: str, step: str) -> str:
@@ -54,7 +62,3 @@ def _period_start(label: str, step: str) -> str:
         raise ValueError(f"{label!r} does not name a {step} period")
 
     return label + FIRST_DAY_TEMPLATE[len(label):]
-
-
-def previous_month(year: int, month: int) -> tuple[int, int]:
-    return (year - 1, 12) if month == 1 else (year, month - 1)

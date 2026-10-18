@@ -33,8 +33,7 @@ ID_CHARS = 20  # hex characters of the sha256 kept as the id (80 bits; short Win
 DRAWN_AREA_TITLE = "Drawn area"
 MAX_TITLE_CHARS = 120
 
-# A stored source revision is reused this long without asking the source again.
-REVISION_FRESH_SECS = 6 * 60 * 60
+REVISION_FRESH_SECS = 6 * 60 * 60  # reuse a revision without another source probe
 
 log = logging.getLogger("soe")
 
@@ -229,6 +228,6 @@ def compute_scene_id(
     """
     versions = {dataset.id: dataset.source.get("version") for dataset in datasets}
     synthetic = {dataset.id: dataset.synthetic for dataset in datasets}
-    dated = [*period, REQUEST_STEP] if period else None
-    content = [geometry_id, layers, dated, versions, revisions, synthetic, __version__]
+    dated_period = [*period, REQUEST_STEP] if period else None
+    content = [geometry_id, layers, dated_period, versions, revisions, synthetic, __version__]
     return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:ID_CHARS]

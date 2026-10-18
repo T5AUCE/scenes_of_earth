@@ -22,25 +22,6 @@ POLL_INTERVAL_SECS = 0.1
 SQUARE = mapping(box(36.5, -1.5, 37.5, -0.5))
 
 
-def body(**overrides: object) -> JsonObject:
-    return {
-        "area": {"type": "polygon", "geometry": SQUARE},
-        "start": "2015-01",
-        "end": "2015-06",
-        "layers": ["copdem_terrain", "chirps_monthly"],
-        **overrides,
-    }
-
-
-def wait_for(client: TestClient, scene_id: str, wanted_status: str = "done") -> JsonObject:
-    for _ in range(POLL_ATTEMPTS):
-        scene = client.get(f"/api/scenes/{scene_id}").json()
-        if scene["status"] in (wanted_status, "failed"):
-            return scene
-        time.sleep(POLL_INTERVAL_SECS)
-    raise AssertionError("timeout")
-
-
 @pytest.fixture
 def env(tmp_path):
     source = SyntheticSource()
@@ -93,13 +74,12 @@ def test_post_poll_and_serve(env):
     scene = client.get(done["bundle_url"]).json()
     assert scene["credits"]["lines"] and scene["id"] == scene_id
     assert [layer["id"] for layer in scene["layers"]] == ["copdem_terrain", "chirps_monthly"]
-    # The path is the content hash.
     assert client.get(f"/scenes/{scene_id}/scene.json").json()["id"] == scene_id
 
     assert client.get(f"/scenes/{scene_id}/data.zarr/zarr.json").status_code == 200
     assert client.get(f"/scenes/.tmp/{scene_id}/scene.json").status_code == 404
 
-    # The same request again is done at once, without new rain reads.
+    # Immutable bundles must be reusable without new reads.
     reads = source.reads
     repeat = client.post("/api/scenes", json=body())
 
@@ -107,7 +87,6 @@ def test_post_poll_and_serve(env):
     assert len(scene_id) == ID_CHARS
     assert source.reads == reads
 
-    # A rounded-off shape, and the same ring rotated and reversed, dedupe too.
     jittered = body()
     jittered["area"]["geometry"] = mapping(box(36.50001, -1.5, 37.5, -0.50001))
 
@@ -125,6 +104,42 @@ def test_post_poll_and_serve(env):
 
     # Bundles are content-addressed, so they are served as immutable.
     assert "immutable" in client.get(f"/scenes/{scene_id}/scene.json").headers["cache-control"]
+
+
+def body(**overrides: object) -> JsonObject:
+    """Make a six-month Nairobi polygon request with optional overrides."""
+    return {
+        "area": {"type": "polygon", "geometry": SQUARE},
+        "start": "2015-01",
+        "end": "2015-06",
+        "layers": ["copdem_terrain", "chirps_monthly"],
+        **overrides,
+    }
+
+
+def wait_for(client: TestClient, scene_id: str, wanted_status: str = "done") -> JsonObject:
+    """Poll until the scene reaches the wanted status or fails; raise on timeout."""
+    for _ in range(POLL_ATTEMPTS):
+        scene = client.get(f"/api/scenes/{scene_id}").json()
+        if scene["status"] in (wanted_status, "failed"):
+            return scene
+        time.sleep(POLL_INTERVAL_SECS)
+    raise AssertionError("timeout")
+
+
+def test_series_without_steps_is_refused_before_any_read(tmp_path):
+    source = SyntheticSource()
+    registry = make_registry(source)
+    registry["chirps_monthly"] = no_steps_rain = replace(registry["chirps_monthly"])
+    no_steps_rain.steps = lambda start, end: []
+    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", registry)
+
+    with TestClient(app) as client:
+        response = client.post("/api/scenes", json=body())
+
+    assert response.status_code == 422
+    assert "no data in the requested period" in response.text
+    assert source.reads == 0
 
 
 def test_boundary_scene(env):

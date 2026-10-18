@@ -79,7 +79,6 @@ type FittedCamera = { center: LngLat; zoom: number };
 
 type Camera = { center: { lng: number; lat: number } | [number, number]; zoom: number };
 
-// What the caller must know about the scene that is showing.
 interface ActiveScene {
   id: string;
   panel: ReturnType<typeof createScenePanel>;
@@ -417,7 +416,6 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   }
 }
 
-// The label of the scene's current step, and the link that says so.
 function createSceneClock(sceneId: string) {
   let label: string | null = null;
   let isEntered = false;
@@ -503,7 +501,9 @@ function outlines(geometry: AreaFeature["geometry"]) {
 function worldRing(holes: number[][][]) {
   const longitudes = holes.flat().map(([longitude]) => longitude);
   const centre = (Math.min(...longitudes) + Math.max(...longitudes)) / 2;
-  const [west, east] = [centre - HALF_WORLD_DEG, centre + HALF_WORLD_DEG];
+  const west = centre - HALF_WORLD_DEG;
+  const east = centre + HALF_WORLD_DEG;
+
   return [
     [west, -MAX_LATITUDE_DEG],
     [east, -MAX_LATITUDE_DEG],
@@ -518,7 +518,6 @@ const isZoomOut = (event: Event) => event.type === "wheel" && (event as WheelEve
 // A soft landing makes the snap-back feel elastic rather than abrupt.
 const easeOut = (progress: number) => 1 - (1 - progress) ** 3;
 
-// Calls back once the window has stopped changing size; returns the undo.
 function watchResize(onSettled: () => void) {
   let timer: ReturnType<typeof setTimeout> | undefined;
 

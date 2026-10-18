@@ -63,7 +63,10 @@ export function fitToBbox(
   options: { padding?: PaddingOptions; duration?: number; maxZoom?: number } = {},
 ) {
   map.fitBounds(
-    [[west, south], [east, north]],
+    [
+      [west, south],
+      [east, north],
+    ],
     { padding: FIT_PADDING_PX, maxZoom: MAX_FIT_ZOOM, ...options },
   );
 }
@@ -75,7 +78,10 @@ export function fitCamera(
   padding: PaddingOptions,
 ) {
   const camera = map.cameraForBounds(
-    [[west, south], [east, north]],
+    [
+      [west, south],
+      [east, north],
+    ],
     { padding, maxZoom: MAX_FIT_ZOOM },
   );
   if (!camera?.center || camera.zoom === undefined) return undefined;

@@ -13,8 +13,7 @@ from .periods import add_duration
 
 Registry = dict[str, "Dataset"]  # dataset id -> dataset
 
-# The app supports 60S-60N in v1; widen the extent here.
-SUPPORTED_BOUNDS_DEG = (-180, -60, 180, 60)  # W, S, E, N
+SUPPORTED_BOUNDS_DEG = (-180, -60, 180, 60)  # W, S, E, N; supported v1 extent
 
 STOP_COUNT = 9  # colour stops of a series layer, one per palette colour
 STOP_DIGITS = 2  # significant digits of the stops span that a stop keeps
@@ -37,7 +36,7 @@ class Role(NamedTuple):
 class Dataset(ABC):
     """A layer the backend can build; subclass StaticDataset or SeriesDataset, not this."""
 
-    # Set only by StaticDataset/SeriesDataset; some code branches on it, some on isinstance.
+    # Both isinstance checks and published metadata must agree on the dataset kind.
     time_varying: ClassVar[bool]  # published in scene.json and /api/layers
 
     id: str
@@ -88,8 +87,8 @@ class Dataset(ABC):
         if high <= low:
             return [low, high]
 
-        even = np.linspace(low, high, STOP_COUNT)
-        blended = [low, *((even[1:] + np.array(quantiles[1:])) / 2)]
+        evenly_spaced = np.linspace(low, high, STOP_COUNT)
+        blended = [low, *((evenly_spaced[1:] + np.array(quantiles[1:])) / 2)]
         decimals = STOP_DIGITS - 1 - math.floor(math.log10(high - low))
         increasing = _strictly_increasing([round(float(stop), decimals) for stop in blended])
         return increasing if len(increasing) >= 2 else [low, high]
@@ -135,6 +134,7 @@ class SeriesDataset(Dataset):
     time_varying = True
 
     def __post_init__(self) -> None:
+        """Reject fill values that could be confused with encoded measurements."""
         for spec in self.roles.values():
             _check_series_fill(self.id, spec)
 

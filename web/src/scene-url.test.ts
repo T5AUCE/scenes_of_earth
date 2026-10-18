@@ -28,8 +28,8 @@ test("a scene link reads the time and ignores a malformed one", () => {
     panel: null,
   });
 
-  const timeOf = (t: string) =>
-    (routeFor(`?scene=${id}&t=${t}`, null) as { time: string | null }).time;
+  const timeOf = (label: string) =>
+    (routeFor(`?scene=${id}&t=${label}`, null) as { time: string | null }).time;
 
   assert.equal(timeOf("2026"), "2026");
   assert.equal(timeOf("2026-03-17"), "2026-03-17");

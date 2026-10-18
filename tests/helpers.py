@@ -38,7 +38,7 @@ HASH_A, HASH_B, HASH_C = "a" * 20, "b" * 20, "c" * 20
 
 
 def plan_months(area: Area, datasets: list[Dataset], months: int = 12) -> Plan:
-    """plan() for a period of `months` months starting 1990-01."""
+    """Plan `months` months starting in 1990-01."""
     end = f"{1990 + (months - 1) // 12}-{(months - 1) % 12 + 1:02d}"
     return plan(area, datasets, "1990-01", end)
 
@@ -57,9 +57,9 @@ def build_nairobi(
         "Test",
         tmp_path,
     )
-    out = tmp_path / HASH_A
-    doc = json.loads((out / "scene.json").read_text(encoding="utf-8"))
-    return doc, zarr.open_group(out / "data.zarr", mode="r")
+    scene_dir = tmp_path / HASH_A
+    document = json.loads((scene_dir / "scene.json").read_text(encoding="utf-8"))
+    return document, zarr.open_group(scene_dir / "data.zarr", mode="r")
 
 
 def boundary_row(

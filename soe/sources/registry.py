@@ -68,8 +68,10 @@ def make_registry(backend: RealSource | SyntheticSource) -> Registry:
                     "hillshade",
                     "uint8",
                     fill=HILLSHADE_FILL,
-                    long_name=f"Hillshade, azimuth {light['azimuth']}, "
-                    f"altitude {light['altitude']} (0-254)",
+                    long_name=(
+                        f"Hillshade, azimuth {light['azimuth']}, "
+                        f"altitude {light['altitude']} (0-254)"
+                    ),
                 ),
             },
             style={
