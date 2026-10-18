@@ -54,14 +54,17 @@ PERCENTILE_SAMPLES_PER_BATCH = 100_000
 def build_scene(
     scene_id: str,
     area: Area,
-    start: str,
-    end: str,
+    start: str | None,
+    end: str | None,
     datasets: list[Dataset],
     title: str,
     scenes_dir: Path | str,
     progress: ProgressCallback = lambda fraction, stage: None,
 ) -> int:
-    """Build or reuse the scene's bundle and return its size in bytes."""
+    """Build or reuse the scene's bundle and return its size in bytes.
+
+    `start` and `end` are request periods ('YYYY-MM'), or None for scenes without series.
+    """
     scenes_dir = Path(scenes_dir)
     final_dir = scenes_dir / scene_id
 
@@ -314,7 +317,7 @@ def _write_time_series(
     area_mask = layer_plan.mask.astype(bool)
 
     _write_time_coordinate(layer_group, steps)
-    series = _create_time_array(layer_group, spec, layer_plan)
+    series = _create_time_array(layer_group, dataset, spec, layer_plan)
     statistics = _StatisticsAccumulator()
     worker_count = _choose_worker_count(layer_plan)
 
@@ -370,6 +373,7 @@ def _write_time_coordinate(layer_group: zarr.Group, steps: list[str]) -> None:
 
 def _create_time_array(
     layer_group: zarr.Group,
+    dataset: SeriesDataset,
     spec: Role,
     layer_plan: LayerPlan,
 ) -> zarr.Array:
@@ -393,8 +397,16 @@ def _create_time_array(
         fill_value=spec.fill,
         compressors=COMPRESSION,
         dimension_names=["time", "lat", "lon"],
-        attributes=_attributes(spec),
+        attributes=_series_attributes(dataset, spec),
     )
+
+
+def _series_attributes(dataset: SeriesDataset, spec: Role) -> JsonObject:
+    """The attributes of a role, plus the CF cell_methods of the dataset's period summary."""
+    if dataset.cell_method is None:
+        return _attributes(spec)
+
+    return {**_attributes(spec), "cell_methods": f"time: {dataset.cell_method}"}
 
 
 class _StatisticsAccumulator:
@@ -487,8 +499,14 @@ def encode_values(
     offset: float,
     fill_value: int,
 ) -> np.ndarray:
-    """Quantize floats to integers, using fill_value for NaN values."""
-    quantized = np.rint((values - offset) / scale).clip(0, fill_value - 1)
+    """Quantize floats to integers, using fill_value for NaN values.
+
+    fill_value is the dtype's minimum or maximum, and no real value is encoded onto it.
+    """
+    limits = np.iinfo(dtype)
+    lowest = limits.min + (fill_value == limits.min)
+    highest = limits.max - (fill_value == limits.max)
+    quantized = np.rint((values - offset) / scale).clip(lowest, highest)
     encoded = np.where(np.isnan(values), fill_value, quantized)
     return encoded.astype(dtype)
 

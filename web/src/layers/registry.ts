@@ -16,7 +16,7 @@ export const LAYER_KINDS = new Map([
   ["terrain", { stack: 2, create: createTerrainView }],
 ]);
 
-function createSeriesView({ map, store, layer, beforeId, report }: LayerContext): LayerView {
+function createSeriesView({ map, store, layer, shift, beforeId, report }: LayerContext): LayerView {
   const id = `${layer.id}-series`;
   const { palette, stops } = layer.style;
   const { time: timeAxis } = layer;
@@ -30,7 +30,7 @@ function createSeriesView({ map, store, layer, beforeId, report }: LayerContext)
   // A slow read of an older step must not overwrite the one being displayed.
   let shownStep = -1;
 
-  addImageLayer(map, id, layer.grid.bbox, beforeId, {
+  addImageLayer(map, id, layer.grid.bbox, shift, beforeId, {
     "raster-opacity": 0,
     "raster-resampling": "nearest",
   });
@@ -77,7 +77,7 @@ function createSeriesView({ map, store, layer, beforeId, report }: LayerContext)
     ],
     time: timeAxis,
     setTime(time) {
-      shownStep = stepAt(timeAxis.values, time);
+      shownStep = stepAt(timeAxis.values, timeAxis.end, time);
       if (shownStep < 0) hideImage();
       else drawLatestStep(shownStep);
     },

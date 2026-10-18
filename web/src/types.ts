@@ -20,10 +20,12 @@ export interface Layer {
   kind: string; // style.kind: how to render it
   time_varying: boolean;
   coverage: Bbox;
-  time: { step: string; first: string; latest: string } | null; // first/latest are "YYYY-MM"
+  // first and last are request periods of request_step, such as "YYYY-MM"
+  time: { step: string; first: string; last: string } | null;
 }
 
 export interface LayersResponse {
+  request_step: string; // ISO 8601 duration of the periods a scene request names, e.g. P1M
   default: string[];
   layers: Layer[];
 }
@@ -74,6 +76,15 @@ export interface ArrayDoc {
 export interface TimeDoc {
   step: string; // ISO 8601 duration, e.g. P1M
   values: string[]; // "YYYY-MM-DD" period starts
+  end: string; // "YYYY-MM-DD", the day after the last period
+  method: string | null; // how a step summarises its period: sum, mean, point or max
+}
+
+/** The requested range of a scene, as ISO dates. */
+export interface Period {
+  start: string;
+  end: string; // the day after the last period
+  step: string;
 }
 
 /** Licence and attribution of one data source, as the bundle states them. */
@@ -113,6 +124,7 @@ export interface LayerDoc {
     parts?: string[]; // extra display types drawn alongside the main one
     palette?: string; // default colours of a field layer
     stops?: number[]; // fitted values of the palette's colours, 2-9 increasing
+    classes?: { value: number; label: string; color: string }[]; // categorical layers
   };
   grid: GridDoc;
   mask: { path: string; cells_inside: number };
@@ -139,6 +151,7 @@ export interface Scene {
     geometry_href: string;
     clipped_to_coverage: boolean;
   };
+  period: Period | null; // null for a scene without time-varying layers
   layers: LayerDoc[];
   data: { href: string };
   notices: { limits: string[] };
@@ -162,6 +175,7 @@ export interface LayerContext {
   map: MapLibreMap;
   store: Promise<Store>;
   layer: LayerDoc;
+  shift: number; // longitude offset of the scene's world copy, the same for all its layers
   beforeId: string | undefined;
   // For failures after the layer is mounted, e.g. a month that cannot be read.
   report(error: unknown): void;

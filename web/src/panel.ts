@@ -273,7 +273,7 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
 
       status.textContent = "Bundle ready.";
       const scene = await loadScene(finished.bundle_url!);
-      if (thisRun === run) enterScene(scene, { month: null, entry: "push" });
+      if (thisRun === run) enterScene(scene, { time: null, entry: "push" });
     } catch (error) {
       if (thisRun !== run) return;
 

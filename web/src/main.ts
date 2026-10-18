@@ -37,7 +37,7 @@ function openSharedScene(entry: SceneEntry) {
 
   Promise.all([panel, mapLoaded])
     .then(([ready]) => {
-      if (isSceneId(route.id)) return ready.openScene(route.id, { month: route.month, entry });
+      if (isSceneId(route.id)) return ready.openScene(route.id, { time: route.time, entry });
 
       ready.showStatus("The scene id in the address is not valid.");
     })

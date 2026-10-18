@@ -6,9 +6,21 @@ const MONTH_CHARS = 7; // "YYYY-MM"
 /** The steps of several time axes, sorted and without duplicates. */
 export const unionTimes = (axes: string[][]) => [...new Set(axes.flat())].sort();
 
-/** Index of the last value at or before time, or -1 when time lies outside the axis. */
-export function stepAt(values: string[], time: string) {
-  const isOutsideAxis = !values.length || time < values[0] || time > values[values.length - 1];
+/**
+ * The scrubber's positions: the steps of all axes inside the period, plus its start, so a coarse
+ * layer that began earlier still has a position where the period begins.
+ */
+export function scrubberTimes(axes: string[][], period: { start: string; end: string }) {
+  const inside = axes.flat().filter((time) => time >= period.start && time < period.end);
+  return unionTimes([inside, [period.start]]);
+}
+
+/**
+ * Index of the last value at or before time, or -1 when time lies outside the axis. The last
+ * step holds until `end`, the day after its period.
+ */
+export function stepAt(values: string[], end: string, time: string) {
+  const isOutsideAxis = !values.length || time < values[0] || time >= end;
   if (isOutsideAxis) return -1;
 
   let index = 0;

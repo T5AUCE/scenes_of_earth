@@ -8,14 +8,14 @@ import numpy as np
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from shapely.geometry import box, mapping
+from shapely.geometry import box, mapping, shape
 
 from soe import db
 from soe.api import QUEUE_RETRY_AFTER_SECS, SOURCE_RETRY_AFTER_SECS, create_app
 from soe.bundle import SYNTHETIC_DATA_CREDIT, JsonObject
 from soe.scene_request import ID_CHARS
 from soe.sources import CellWindow, SourceUnavailable, SyntheticSource, make_registry
-from tests.helpers import boundary_row
+from tests.helpers import FIJI, boundary_row
 
 POLL_ATTEMPTS = 100
 POLL_INTERVAL_SECS = 0.1
@@ -299,12 +299,41 @@ def test_layers(env):
     rain, terrain = by_id["chirps_monthly"], by_id["copdem_terrain"]
 
     assert out["default"] == ["chirps_monthly", "copdem_terrain"]
+    assert out["request_step"] == "P1M"
     assert (rain["kind"], rain["time_varying"]) == ("field", True)
-    assert rain["time"] == {"step": "P1M", "first": "1981-01", "latest": "2026-08"}
+    assert rain["time"] == {"step": "P1M", "first": "1981-01", "last": "2026-08"}
     assert (terrain["kind"], terrain["time_varying"], terrain["time"]) == ("terrain", False, None)
     assert rain["title"] == "Rainfall" and rain["units"] == "mm/month"
     assert rain["coverage"] == [-180, -60, 180, 60]
     assert terrain["coverage"] == [-180, -60, 180, 60]
+
+
+def test_layers_list_request_bounds_in_request_granularity(env):
+    client, _, _ = env
+
+    rain = next(layer for layer in client.get("/api/layers").json()["layers"] if layer["time"])
+
+    assert (rain["time"]["first"], rain["time"]["last"]) == ("1981-01", "2026-08")
+
+
+def test_area_geometry_is_in_the_same_frame_as_its_bbox(env):
+    client, _, tmp_path = env
+    fiji = boundary_row(
+        "cgaz:ADM0:FJI",
+        "country",
+        "Fiji",
+        iso3="FJI",
+        bbox=(178, -19, 182, -17),
+        geometry=json.dumps(mapping(FIJI)),
+    )
+    db.add_boundaries(str(tmp_path / "soe.db"), "geoBoundaries CGAZ", [fiji])
+
+    area = client.get("/api/areas/cgaz:ADM0:FJI").json()
+    west, _, east, _ = area["bbox"]
+    shape_west, _, shape_east, _ = shape(area["geometry"]).bounds
+
+    assert west <= shape_west and shape_east <= east
+    assert shape_east == 182
 
 
 def test_sample_areas_seed_only_in_synthetic_mode_and_when_empty(tmp_path, monkeypatch):

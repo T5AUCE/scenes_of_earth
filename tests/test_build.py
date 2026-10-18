@@ -12,7 +12,7 @@ from rasterio.transform import Affine
 from shapely.geometry import Polygon, box
 
 from soe.areas import Area, AreaError
-from soe.build import build_scene
+from soe.build import build_scene, encode_values
 from soe.bundle import validate
 from soe.plan import plan
 from soe.sources import (
@@ -344,6 +344,28 @@ def test_layer_outside_its_coverage_is_refused_before_read(tmp_path):
     assert any("clipped" in note for note in scene_plan.layers["copdem_terrain"].notices)
     assert scene_plan.layers["chirps_monthly"].notices == []
     assert scene_plan.clipped and scene_plan.layers["copdem_terrain"].bbox[3] <= 30
+
+
+def test_negative_values_survive_int16_encoding():
+    values = np.array([-5.5, 0, 20, np.nan])
+
+    encoded = encode_values(values, "int16", 0.01, 0, -32768)
+
+    assert encoded.tolist() == [-550, 0, 2000, -32768]
+
+
+def test_no_value_encodes_to_a_minimum_fill():
+    values = np.array([-1e9, -327.68, -327.67])
+
+    encoded = encode_values(values, "int16", 0.01, 0, -32768)
+
+    assert encoded.tolist() == [-32767, -32767, -32767]
+
+
+def test_no_value_encodes_to_a_maximum_fill():
+    encoded = encode_values(np.array([1e9, 6553.5]), "uint16", 0.1, 0, 65535)
+
+    assert encoded.tolist() == [65534, 65534]
 
 
 def test_failed_build_leaves_no_partial_bundle(tmp_path):

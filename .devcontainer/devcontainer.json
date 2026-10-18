@@ -17,9 +17,16 @@
 	},
 	"otherPortsAttributes": { "onAutoForward": "ignore" },
 
-	"postCreateCommand": "pip install -e '.[import,dev]' && npm config set prefix ~/.npm-global && npm install -g @anthropic-ai/claude-code opencode-ai@0.0.0-next-202606270058",
+	"postCreateCommand": "sudo chown vscode:vscode ~/.local ~/.local/share && sudo chown -R vscode:vscode ~/.local/share/opencode ~/.config/opencode && pip install -e '.[import,dev]' && npm config set prefix ~/.npm-global && npm install -g @anthropic-ai/claude-code opencode-ai@1.19.3",
 
-	"mounts": ["source=claude-code-config,target=/home/vscode/.claude,type=volume"],
+	// Unconfined seccomp/AppArmor lets bwrap create user namespaces (gpt-agent.sh read-only sandbox).
+	"runArgs": ["--security-opt", "seccomp=unconfined", "--security-opt", "apparmor=unconfined"],
+	// Volumes keep Claude Code and opencode logins (and opencode sessions) across rebuilds.
+	"mounts": [
+		"source=claude-code-config,target=/home/vscode/.claude,type=volume",
+		"source=opencode-data,target=/home/vscode/.local/share/opencode,type=volume",
+		"source=opencode-config,target=/home/vscode/.config/opencode,type=volume"
+	],
 	"containerEnv": { "CLAUDE_CONFIG_DIR": "/home/vscode/.claude" },
 	"remoteEnv": { "PATH": "/home/vscode/.local/bin:/home/vscode/.npm-global/bin:${containerEnv:PATH}" },
 

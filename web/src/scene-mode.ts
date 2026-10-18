@@ -20,7 +20,7 @@ import {
 } from "./map";
 import { shiftLongitudes, worldShift } from "./render/mercator";
 import { createScenePanel, PANEL_TABS, type PanelTab } from "./scene-panel";
-import { sceneUrl, timeForMonth } from "./scene-url";
+import { sceneUrl, timeForPrefix } from "./scene-url";
 import type { AreaFeature, Bbox, Scene } from "./types";
 import { mountScene, OUTLINE_ID } from "./view";
 
@@ -62,9 +62,9 @@ const RESIZE_DEBOUNCE_MS = 200;
  */
 export type SceneEntry = "push" | "replace" | "keep";
 
-/** How a scene is entered: the month to show and its history entry. */
+/** How a scene is entered: the time to show (a year, month or day) and its history entry. */
 export interface EnterOptions {
-  month: string | null;
+  time: string | null;
   entry: SceneEntry;
 }
 
@@ -96,7 +96,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
   return { enter, exit, sceneId: () => current?.id ?? null, showFullscreen };
 
-  function enter(scene: Scene, { month, entry }: EnterOptions) {
+  function enter(scene: Scene, { time: linkedTime, entry }: EnterOptions) {
     leaveCurrentScene();
 
     const cards = openColumn(scene, entry);
@@ -105,16 +105,16 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     const mounted = mountScene(map, scene, {
       cards,
       timeBar: roots.timeBar,
-      onTime: (time, label) => {
-        clock.update(time, label);
+      onTime: (_time, label) => {
+        clock.update(label);
         current?.panel.setTimeLabel(label);
       },
     });
 
-    restoreTime(mounted.timeline, month);
+    restoreTime(mounted.timeline, linkedTime);
     const panel = mountPanel(scene, mounted.timeline, clock);
 
-    recordEntry(scene.id, clock.time, entry);
+    recordEntry(scene.id, clock.label, entry);
     clock.markEntered();
 
     current = startScene(scene, mounted, panel, clock);
@@ -164,7 +164,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   function mountPanel(scene: Scene, timeline: SceneTimeline, clock: SceneClock) {
     const panel = createScenePanel(scene, roots.dialog, {
       requestOpen(tab: PanelTab) {
-        history.pushState({ panel: tab }, "", sceneUrl(scene.id, clock.time));
+        history.pushState({ panel: tab }, "", sceneUrl(scene.id, clock.label));
         panel.openFull(tab);
       },
       requestClose() {
@@ -237,8 +237,8 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     exit();
   }
 
-  function recordEntry(id: string, time: string | null, entry: SceneEntry) {
-    const url = sceneUrl(id, time);
+  function recordEntry(id: string, label: string | null, entry: SceneEntry) {
+    const url = sceneUrl(id, label);
     if (entry === "push") history.pushState(null, "", url);
     if (entry === "replace") history.replaceState(null, "", url);
 
@@ -417,30 +417,24 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   }
 }
 
-// The current step of the scene, and the link that says so.
+// The label of the scene's current step, and the link that says so.
 function createSceneClock(sceneId: string) {
-  let time: string | null = null;
   let label: string | null = null;
   let isEntered = false;
 
   return {
-    get time() {
-      return time;
-    },
-
     get label() {
       return label;
     },
 
-    update(newTime: string, newLabel: string) {
-      time = newTime;
+    update(newLabel: string) {
       label = newLabel;
       if (isEntered) this.syncUrl();
     },
 
     // Scrubbing replaces the entry, so Back is never flooded with months.
     syncUrl() {
-      history.replaceState(history.state, "", sceneUrl(sceneId, time));
+      history.replaceState(history.state, "", sceneUrl(sceneId, label));
     },
 
     markEntered() {
@@ -453,10 +447,10 @@ type SceneClock = ReturnType<typeof createSceneClock>;
 
 type SceneTimeline = ReturnType<typeof mountScene>["timeline"];
 
-function restoreTime(timeline: SceneTimeline, month: string | null) {
-  if (!timeline || !month) return;
+function restoreTime(timeline: SceneTimeline, linkedTime: string | null) {
+  if (!timeline || !linkedTime) return;
 
-  const time = timeForMonth(timeline.times, month);
+  const time = timeForPrefix(timeline.times, linkedTime);
   if (time) timeline.goTo(time);
 }
 

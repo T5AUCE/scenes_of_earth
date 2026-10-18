@@ -32,8 +32,8 @@ Frontend (`web/`): `npm install`, then `npm run dev` (port 5173), `npm run build
 how to share it. The page draws terrain hillshade, contour lines (computed in a browser worker, interval chosen
 automatically) and the rain series from the bundle's Zarr store, each toggleable, with a time slider and a blocky or smooth rain look.
 
-API: `GET /api/health`, `GET /api/layers` (per layer: id, title, kind, units, coverage, time step with first and latest month,
-and the default set),
+API: `GET /api/health`, `GET /api/layers` (per layer: id, title, kind, units, coverage, time step with the first and last request period,
+`request_step`, and the default set),
 `GET /api/areas/search?q=&level=&limit=`, `GET /api/areas/{id}`, `POST /api/scenes`,
 `GET /api/scenes/{id}`, and the static files under `/scenes/{id}/`. `POST /api/scenes` takes
 `{"area": {"type": "boundary", "id": ...} | {"type": "polygon", "geometry": GeoJSON}, "start": "YYYY-MM",
@@ -75,10 +75,12 @@ python -m soe.cli terrain-index
 
 - `area.bbox` is `[W, S, E, N]` with W < E always. A shape across the antimeridian is unwrapped into one frame, so E may be
   above 180 (up to 360) and `lon` arrays rise past 180, as MapLibre's `LngLatBounds` does. `area.geojson` is in the same frame.
-- `scene.json` is version 0.3. Each layer has its own `grid` (crs, bbox, res, nx, ny; `aggregation` for series), `mask`,
-  `coverage`, `time` (`step` as an ISO 8601 duration, `count`, explicit `values`, or `null` for static layers) and
+- `scene.json` is version 0.4. The top-level `period` (`start`, `end` exclusive, `step`; ISO dates) is the requested range,
+  or `null` for a scene without series. Each layer has its own `grid` (crs, bbox, res, nx, ny; `aggregation` for series), `mask`,
+  `coverage`, `time` (`step` as an ISO 8601 duration, `end` = the day after the last step's period, `method` = how a step summarises
+  its period (`sum`, `mean`, `point`, `max`), `count`, explicit `values`, or `null` for static layers) and
   `arrays` keyed by role (`value`, `elevation`, `hillshade`) with `dtype`, `scale_factor`, `add_offset` and `fill`.
-  Each layer's `style` has `kind` (`field` for a continuous grid, `terrain`), `encodings` (the display types it offers, best
+  Each layer's `style` has `kind` (`field` for a continuous grid, `categorical` with `style.classes` `[{value, label, color}]`, `terrain`), `encodings` (the display types it offers, best
   first; a viewer skips names it does not know) and optional `parts` (extra display types drawn alongside, e.g. terrain's
   `contours`). A series layer also has `palette` (default colours) and `style.stops`: 2-9 increasing values fitted to the
   area over all steps (half an even stretch, half quantiles, rounded to two significant digits of the span so a 288-300
@@ -89,7 +91,8 @@ python -m soe.cli terrain-index
 - Rain is stored as uint16 at 0.1 mm (fill 65535, values above 6553.4 mm are clipped). Series are chunked one step per
   chunk and sharded 12 steps per shard; static arrays are one chunk each. The root `zarr.json` has consolidated metadata.
 - Budgets: the raw size of all layers' arrays together is capped at 50 MB, and the source cells x steps read for all
-  time-varying layers together at 100M. Terrain is planned first; all time-varying layers then share one aggregation factor.
+  time-varying layers together at 100M. Terrain is planned first; each time-varying layer then gets its own aggregation
+  factor (the finest output coarsened first, never beyond 0.4 degrees).
 - In v1 every layer is anchored to the 60S-60N grid of 0.05 degree cells that starts at 180W. `area.geojson` is the area
   clipped to the coverage of all selected layers, so one layer's mask can reach slightly beyond the outline.
 - Terrain cells are 0.05/k degrees (k up to 180, about 4.2 Mpx at most). Cells finer than 90 m are read from GLO-30 (with

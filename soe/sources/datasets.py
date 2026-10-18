@@ -9,6 +9,7 @@ import numpy as np
 from rasterio.transform import Affine
 
 from .grid import Bbox, Grid
+from .periods import add_duration
 
 Registry = dict[str, "Dataset"]  # dataset id -> dataset
 
@@ -50,8 +51,12 @@ class Dataset(ABC):
     grid: Grid  # the layer's window is cut on this grid
     coverage: tuple = SUPPORTED_BOUNDS_DEG  # W, S, E, N; a narrower dataset overrides it
     step: str | None = None  # ISO 8601 duration between time steps; None for static layers
+    cell_method: str | None = None  # how a step summarises its period: sum, mean, point or max
     max_tiles: int | None = None  # request cap for tiled datasets
     synthetic: bool = False  # offline stand-in data, kept apart from real revisions
+
+    def __post_init__(self) -> None:
+        """Runs after construction; subclasses check their invariants here."""
 
     def tile_count(self, bbox: Bbox) -> int:
         """Number of source tiles a read of bbox needs (0 for untiled data)."""
@@ -61,11 +66,11 @@ class Dataset(ABC):
         """Cell size of a static layer over bbox."""
         return self.resolution_deg
 
-    def current_revision(self, last_month: str) -> str | None:
-        """The provider's current revision marker of `last_month`, or None for static data.
+    def current_revision(self, steps: list[str]) -> str | None:
+        """The provider's current revision marker of the period starts `steps`, or None.
 
-        A revision is a string that changes whenever the provider republishes that month's
-        data. It is part of the scene id, so revised data gets a new scene.
+        A revision is a string that changes whenever the provider republishes data of any of
+        those periods. It is part of the scene id, so revised data gets a new scene.
         """
         return None
 
@@ -129,21 +134,44 @@ class SeriesDataset(Dataset):
 
     time_varying = True
 
+    def __post_init__(self) -> None:
+        for spec in self.roles.values():
+            _check_series_fill(self.id, spec)
+
     @abstractmethod
     def first(self) -> str:
-        """First available month, 'YYYY-MM'."""
+        """Start of the first available period, an ISO date."""
 
     @abstractmethod
     def latest(self) -> str:
-        """Latest available month, 'YYYY-MM'."""
+        """Start of the latest available period, an ISO date."""
 
-    @abstractmethod
+    def period_end(self, step: str) -> str:
+        """The ISO date after the period that starts on `step`."""
+        return add_duration(step, self.step)
+
     def steps(self, start: str, end: str) -> list[str]:
-        """Period starts (ISO dates) of the months start..end ('YYYY-MM')."""
+        """Starts (ISO dates) of the periods that overlap [start, end) and are available."""
+        latest = self.latest()
+        steps = []
+        step = self.first()
+        while step < end and step <= latest:
+            following = self.period_end(step)
+            if following > start:
+                steps.append(step)
+            step = following
+        return steps
 
     @abstractmethod
     def read_step(self, step: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
         """The step that starts on the ISO date `step`, block-averaged by `factor`."""
+
+
+def _check_series_fill(dataset_id: str, spec: Role) -> None:
+    """A series role's fill must be an end of its dtype range, so no value is clipped onto it."""
+    limits = np.iinfo(spec.dtype)
+    if spec.fill not in (limits.min, limits.max):
+        raise ValueError(f"{dataset_id}: {spec.name} needs a fill at the end of its dtype range")
 
 
 def _strictly_increasing(values: list[float]) -> list[float]:

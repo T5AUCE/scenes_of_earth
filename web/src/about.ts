@@ -7,7 +7,7 @@ import {
   noticeCount,
   type CreditEntry,
 } from "./scene-info";
-import { formatTime, unionTimes } from "./timeline";
+import { formatTime, scrubberTimes } from "./timeline";
 import type { Scene } from "./types";
 
 /** Id of the notices heading; the docked panel scrolls the About tab to it. */
@@ -54,9 +54,9 @@ function areaText(scene: Scene) {
 
 function periodText(scene: Scene) {
   const axes = scene.layers.flatMap((layer) => (layer.time ? [layer.time] : []));
-  if (!axes.length) return "no time axis";
+  if (!axes.length || !scene.period) return "no time axis";
 
-  const times = unionTimes(axes.map((axis) => axis.values));
+  const times = scrubberTimes(axes.map((axis) => axis.values), scene.period);
   const steps = axes.map((axis) => axis.step);
   const first = formatTime(times[0], steps);
   const last = formatTime(times[times.length - 1], steps);

@@ -1,6 +1,6 @@
 """Cell grids: the Grid of a dataset, and the bbox, window and span types on it."""
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -62,6 +62,25 @@ class Grid:
         col = round((west - self.west_deg) / self.res)
         row = round((self.north_deg - north) / self.res)
         return col, row, round((east - west) / self.res), round((north - south) / self.res)
+
+
+def read_wrapped(
+    grid: Grid,
+    bbox: Bbox,
+    read_window: Callable[[CellWindow], np.ndarray],
+) -> np.ndarray:
+    """Cells of a grid-aligned bbox, joining the west edge on when it runs past 180 degrees.
+
+    `read_window` reads one window of the grid that does not cross the grid's east edge.
+    """
+    col, row, width, height = grid.window(bbox)
+    col %= grid.columns
+    east_width = min(width, grid.columns - col)
+    cells = read_window((col, row, east_width, height))
+    if east_width == width:
+        return cells
+
+    return np.hstack([cells, read_window((0, row, width - east_width, height))])
 
 
 def block_mean(values: np.ndarray, factor: int) -> np.ndarray:

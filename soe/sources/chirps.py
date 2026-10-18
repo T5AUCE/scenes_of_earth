@@ -11,11 +11,12 @@ import rasterio
 from rasterio.windows import Window
 
 from .datasets import SeriesDataset
-from .grid import CELL_DEG, Bbox, CellWindow, Grid, block_mean
-from .months import month_list, previous_month
+from .grid import CELL_DEG, Bbox, CellWindow, Grid, block_mean, read_wrapped
+from .periods import previous_month
 from .remote import GDAL_OPTS, SourceUnavailable
 
 FIRST_MONTH = "1981-01"
+MONTH_CHARS = 7  # of an ISO date: 'YYYY-MM'
 
 CHIRPS_GRID = Grid(-180, 60, CELL_DEG, 7200, 2400)
 
@@ -36,19 +37,16 @@ class RainDataset(SeriesDataset):
     """CHIRPS monthly rain."""
 
     def first(self) -> str:
-        """First available month, 'YYYY-MM'."""
-        return FIRST_MONTH
+        """Start of the first available month, an ISO date."""
+        return f"{FIRST_MONTH}-01"
 
     def latest(self) -> str:
-        """Latest available month, 'YYYY-MM'."""
-        return self.backend.latest_month()
+        """Start of the latest available month, an ISO date."""
+        return f"{self.backend.latest_month()}-01"
 
-    def steps(self, start: str, end: str) -> list[str]:
-        """Period starts ('YYYY-MM-DD') of the months start..end ('YYYY-MM')."""
-        return [f"{month}-01" for month in month_list(start, end)]
-
-    def current_revision(self, last_month: str) -> str | None:
-        return self.backend.current_revision(last_month)
+    def current_revision(self, steps: list[str]) -> str | None:
+        """CHIRPS republishes a month as a whole, so the last month's marker stands for all."""
+        return self.backend.current_revision(steps[-1][:MONTH_CHARS])
 
     def stops_floor(self, stats: dict[str, float]) -> float:
         """Rainfall scales start at zero even when the sampled minimum is positive."""
@@ -56,20 +54,15 @@ class RainDataset(SeriesDataset):
 
     def read_step(self, step: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
         """The month that starts on the ISO date `step`."""
-        return self.read_month(step[:7], bbox, factor)
+        return self.read_month(step[:MONTH_CHARS], bbox, factor)
 
     def read_month(self, month: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
         """Rain of month 'YYYY-MM' over a grid-aligned bbox, block-averaged by `factor`."""
-        columns = self.grid.columns
-        col, row, width, height = self.grid.window(bbox)
-        col %= columns
-        rain = self.backend.read_rain(month, (col, row, min(width, columns - col), height))
-
-        if col + width > columns:
-            # The window continues past 180 degrees, so the rest is at the west edge of the grid.
-            west_edge = self.backend.read_rain(month, (0, row, col + width - columns, height))
-            rain = np.hstack([rain, west_edge])
-
+        rain = read_wrapped(
+            self.grid,
+            bbox,
+            lambda window: self.backend.read_rain(month, window),
+        )
         return block_mean(rain, factor)
 
 

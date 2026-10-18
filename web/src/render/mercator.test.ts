@@ -56,9 +56,21 @@ test("Mercator y grows faster than latitude away from the equator", () => {
 });
 
 test("corners shift one world west only when the centre is above 180", () => {
-  assert.deepEqual(imageCorners([177, -20, 180, -15])[0], [177, -15]);
-  assert.deepEqual(imageCorners([170, -20, 190, -15])[1], [190, -15]);
-  assert.deepEqual(imageCorners([175, -20, 195, -15])[0], [-185, -15]);
+  const corners = (bbox: [number, number, number, number]) => imageCorners(bbox, worldShift(bbox));
+
+  assert.deepEqual(corners([177, -20, 180, -15])[0], [177, -15]);
+  assert.deepEqual(corners([170, -20, 190, -15])[1], [190, -15]);
+  assert.deepEqual(corners([175, -20, 195, -15])[0], [-185, -15]);
+});
+
+test("layers of one scene share the world shift when their bboxes straddle 180 differently", () => {
+  const westernLayer: [number, number, number, number] = [176, -20, 181, -15];
+  const easternLayer: [number, number, number, number] = [180, -20, 190, -15];
+  const sceneShift = worldShift([176, -20, 190, -15]);
+
+  assert.notEqual(worldShift(westernLayer), worldShift(easternLayer));
+  assert.equal(imageCorners(westernLayer, sceneShift)[0][0], 176 - 360);
+  assert.equal(imageCorners(easternLayer, sceneShift)[0][0], 180 - 360);
 });
 
 test("the table is narrower than the grid when the texture limit is smaller", () => {
@@ -76,7 +88,7 @@ test("the outline shifts by the same amount as the image corners", () => {
 
   assert.equal(worldShift(eastern), -360);
   assert.equal(worldShift([170, -20, 190, -15]), 0);
-  assert.equal(imageCorners(eastern)[0][0], eastern[0] + worldShift(eastern));
+  assert.equal(imageCorners(eastern, worldShift(eastern))[0][0], eastern[0] + worldShift(eastern));
 });
 
 test("shifting longitudes keeps latitudes and nesting", () => {

@@ -155,15 +155,16 @@ export function firstSymbolId(map: MapLibreMap) {
   return map.getStyle().layers.find((layer) => layer.type === "symbol")?.id;
 }
 
-/** Adds an image layer over the bbox; its source starts empty until setImage. */
+/** Adds an image layer over the bbox moved east by `shift`; its source is empty until setImage. */
 export function addImageLayer(
   map: MapLibreMap,
   id: string,
   bbox: Bbox,
+  shift: number,
   beforeId: string | undefined,
   paint: Record<string, string | number>,
 ) {
-  map.addSource(id, { type: "image", coordinates: imageCorners(bbox) });
+  map.addSource(id, { type: "image", coordinates: imageCorners(bbox, shift) });
   map.addLayer(
     { id, type: "raster", source: id, paint: { "raster-fade-duration": 0, ...paint } },
     beforeId,

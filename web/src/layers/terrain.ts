@@ -17,7 +17,7 @@ import { makeHtmlElement } from "../html";
 import { contourLegendText } from "../legend";
 import { addImageLayer, maxTextureSize, removeLayerAndSource, setImage } from "../map";
 import { paintHillshade } from "../render/colormap";
-import { sampleTable, worldShift } from "../render/mercator";
+import { sampleTable } from "../render/mercator";
 import type { Bbox, LayerContext, LayerDoc, LayerView, Part } from "../types";
 
 type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
@@ -36,11 +36,11 @@ const OUTGROWN_VIEW_RATIO = 1.5; // View size over detail window size past which
 
 /** Hillshade image and contour lines for one terrain layer. */
 export function createTerrainView(context: LayerContext): LayerView {
-  const { map, store, layer, beforeId } = context;
+  const { map, store, layer, shift, beforeId } = context;
   const id = `${layer.id}-hillshade`;
   let alive = true;
 
-  addImageLayer(map, id, layer.grid.bbox, beforeId, {
+  addImageLayer(map, id, layer.grid.bbox, shift, beforeId, {
     "raster-opacity": HILLSHADE_OPACITY,
     "raster-resampling": "linear",
   });
@@ -104,7 +104,7 @@ class ContourOverlay {
   private lastJob = COARSE_JOB;
 
   constructor(
-    { map, store, layer, beforeId, report }: LayerContext,
+    { map, store, layer, shift, beforeId, report }: LayerContext,
     maskRead: Promise<ArrayLike<number>>,
   ) {
     this.map = map;
@@ -112,7 +112,7 @@ class ContourOverlay {
     this.report = report;
     this.coarseId = `${layer.id}-contours`;
     this.detailId = `${layer.id}-contours-detail`;
-    this.grid = shiftedGrid(layer);
+    this.grid = shiftedGrid(layer, shift);
     this.coarseFactor = factorFor(this.grid.nx, this.grid.ny);
     this.legend.hidden = true;
 
@@ -307,8 +307,7 @@ function post(worker: Worker, request: ContourRequest) {
 }
 
 // Lines are drawn in the same world copy as the hillshade image.
-function shiftedGrid({ grid }: LayerDoc) {
-  const shift = worldShift(grid.bbox);
+function shiftedGrid({ grid }: LayerDoc, shift: number) {
   const [west, south, east, north] = grid.bbox;
   const bbox: Bbox = [west + shift, south, east + shift, north];
   return { ...grid, bbox };

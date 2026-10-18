@@ -8,7 +8,15 @@ from shapely.geometry import box, mapping
 from shapely.geometry.base import BaseGeometry
 
 from .areas import MAX_LONGITUDE_DEG, WORLD_WIDTH_DEG, Area, AreaError, unwrap
-from .sources import CHIRPS_GRID, Bbox, CellSpan, Dataset, SeriesDataset
+from .sources import (
+    CHIRPS_GRID,
+    REQUEST_STEP,
+    Bbox,
+    CellSpan,
+    Dataset,
+    SeriesDataset,
+    request_range,
+)
 
 MIN_CELLS = 25  # drawn shapes smaller than this are rejected
 PAD_DEG = 0.5  # each layer's window is padded to at least this size
@@ -19,7 +27,8 @@ AREA_TOLERANCE = 1e-9  # relative; below this a clipped area counts as unchanged
 MAX_SOURCE_CELL_STEPS = 100_000_000
 # Raw bytes of all layers' arrays after aggregation.
 MAX_OUTPUT_BYTES = 50_000_000
-AGGREGATION_FACTORS = (1, 2, 4, 8)
+MAX_SERIES_RES_DEG = 0.4  # coarsest cell size a series may be averaged to
+RES_TOLERANCE_DEG = 1e-9
 
 
 @dataclass
@@ -47,14 +56,15 @@ class Plan:
     layers: dict[str, LayerPlan]  # dataset id -> LayerPlan
     bbox: list[float]  # [W, S, E, N] around all layers
     clipped: bool
+    period: tuple[str, str] | None  # ISO dates (first day, day after the last); None without series
     notices: list[str] = field(default_factory=list)
 
 
-def plan(area: Area, datasets: list[Dataset], start: str, end: str) -> Plan:
-    """Work out each layer's grid, mask and time steps, with one aggregation factor for all series.
+def plan(area: Area, datasets: list[Dataset], start: str | None, end: str | None) -> Plan:
+    """Work out each layer's grid, mask and time steps, with an aggregation factor per series.
 
-    Raises AreaError if the request is refused. `start` and `end` ('YYYY-MM') matter only to
-    time-varying layers.
+    Raises AreaError if the request is refused. `start` and `end` (request periods, such as
+    'YYYY-MM') matter only to time-varying layers.
     """
     geometry = unwrap(area.geom)
     _check_longitude_span(geometry)
@@ -64,15 +74,16 @@ def plan(area: Area, datasets: list[Dataset], start: str, end: str) -> Plan:
     notices = [PADDED_NOTICE] if padded else []
 
     series = [dataset for dataset in datasets if isinstance(dataset, SeriesDataset)]
-    steps = {dataset.id: dataset.steps(start, end) for dataset in series}
+    period = request_range(start, end, REQUEST_STEP) if series else None
+    steps = {dataset.id: dataset.steps(*period) for dataset in series}
     _check_source_size(windows, steps)
 
     notices += _small_area_notices(area, shared_geometry)
 
     budget_for_series = _budget_after_static_layers(datasets, windows)
-    factor = 1
+    factors = {}
     if series:
-        factor, series_windows = _aggregation_factor(series, windows, steps, budget_for_series)
+        factors, series_windows = _aggregation_factors(series, windows, steps, budget_for_series)
         windows.update(series_windows)
         _check_source_size(windows, steps)
 
@@ -81,7 +92,7 @@ def plan(area: Area, datasets: list[Dataset], start: str, end: str) -> Plan:
             dataset,
             parts[dataset.id],
             windows[dataset.id],
-            factor if dataset.time_varying else 1,
+            factors.get(dataset.id, 1),
             steps.get(dataset.id, []),
             layer_notices[dataset.id],
         )
@@ -89,7 +100,7 @@ def plan(area: Area, datasets: list[Dataset], start: str, end: str) -> Plan:
     }
     bbox = _enclosing_bbox([layer.bbox for layer in layers.values()])
 
-    return Plan(shared_geometry, layers, bbox, clipped, notices)
+    return Plan(shared_geometry, layers, bbox, clipped, period, notices)
 
 
 def _check_longitude_span(geometry: BaseGeometry) -> None:
@@ -248,19 +259,52 @@ def _layer_bytes(dataset: Dataset, grid_shape: tuple[int, int], step_count: int 
     return grid_shape[0] * grid_shape[1] * (step_count * bytes_per_step + 1)
 
 
-def _aggregation_factor(
+def _aggregation_factors(
     series: list[SeriesDataset],
     windows: dict[str, CellSpan],
     steps: dict[str, list[str]],
     budget: int,
-) -> tuple[int, dict[str, CellSpan]]:
-    """Smallest block-mean factor whose series fit the budget, with the windows snapped to it."""
-    for factor in AGGREGATION_FACTORS:
-        snapped = {dataset.id: _snap_window(windows[dataset.id], factor) for dataset in series}
-        if _series_bytes(series, snapped, steps, factor) <= budget:
-            return factor, snapped
+) -> tuple[dict[str, int], dict[str, CellSpan]]:
+    """Block-mean factor of each series so all fit the budget, and the windows snapped to them.
 
-    raise AreaError(f"area and period are too large even at {AGGREGATION_FACTORS[-1]}x aggregation")
+    The series with the finest output cells is coarsened first, so resolutions stay close.
+    """
+    factors = {dataset.id: 1 for dataset in series}
+    while True:
+        snapped = {
+            dataset.id: _snap_window(windows[dataset.id], factors[dataset.id])
+            for dataset in series
+        }
+        if _series_bytes(series, snapped, steps, factors) <= budget:
+            return factors, snapped
+
+        finest = _finest_coarsenable(series, factors)
+        if finest is None:
+            raise AreaError(
+                f"area and period are too large even at {MAX_SERIES_RES_DEG:g} degree aggregation"
+            )
+
+        factors[finest.id] *= 2
+
+
+def _finest_coarsenable(
+    series: list[SeriesDataset],
+    factors: dict[str, int],
+) -> SeriesDataset | None:
+    """The series with the finest output cells that can double its factor within the cap."""
+    max_res = MAX_SERIES_RES_DEG + RES_TOLERANCE_DEG
+    coarsenable = [
+        dataset for dataset in series if dataset.grid.res * factors[dataset.id] * 2 <= max_res
+    ]
+    return min(
+        coarsenable,
+        key=lambda dataset: (
+            dataset.grid.res * factors[dataset.id],
+            factors[dataset.id],
+            dataset.id,
+        ),
+        default=None,
+    )
 
 
 def _snap_window(window: CellSpan, factor: int) -> CellSpan:
@@ -278,12 +322,13 @@ def _series_bytes(
     series: list[SeriesDataset],
     windows: dict[str, CellSpan],
     steps: dict[str, list[str]],
-    factor: int,
+    factors: dict[str, int],
 ) -> int:
-    """Output bytes of all series once each window is averaged over factor x factor blocks."""
+    """Output bytes of all series once each window is averaged over its factor x factor blocks."""
     total_bytes = 0
     for dataset in series:
         c0, c1, r0, r1 = windows[dataset.id]
+        factor = factors[dataset.id]
         grid_shape = ((r1 - r0) // factor, (c1 - c0) // factor)
         total_bytes += _layer_bytes(dataset, grid_shape, len(steps[dataset.id]))
     return total_bytes

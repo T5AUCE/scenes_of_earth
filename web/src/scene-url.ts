@@ -1,14 +1,14 @@
-const MONTH_CHARS = 7; // "YYYY-MM"
-const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
+// "YYYY", "YYYY-MM" or "YYYY-MM-DD"; the finest step of a scene decides how much a link keeps.
+const TIME_PATTERN = /^\d{4}(-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?)?$/;
 
-/** Where an address points: the world view, or a scene with an optional month and open tab. */
+/** Where an address points: the world view, or a scene with an optional time and open tab. */
 export type Route =
   | { kind: "world" }
-  | { kind: "scene"; id: string; month: string | null; panel: string | null };
+  | { kind: "scene"; id: string; time: string | null; panel: string | null };
 
-/** `time` is a full "YYYY-MM-DD" step start; the link keeps only the month. */
-export function sceneUrl(id: string, time: string | null) {
-  return time ? `?scene=${id}&t=${time.slice(0, MONTH_CHARS)}` : `?scene=${id}`;
+/** `label` is the step's formatTime text, so the link keeps the finest step's precision. */
+export function sceneUrl(id: string, label: string | null) {
+  return label ? `?scene=${id}&t=${label}` : `?scene=${id}`;
 }
 
 /**
@@ -20,13 +20,13 @@ export function routeFor(search: string, state: { panel?: string } | null): Rout
   const id = parameters.get("scene");
   if (!id) return { kind: "world" };
 
-  const month = parameters.get("t");
-  const isMonth = month !== null && MONTH_PATTERN.test(month);
+  const time = parameters.get("t");
+  const isTime = time !== null && TIME_PATTERN.test(time);
 
-  return { kind: "scene", id, month: isMonth ? month : null, panel: state?.panel ?? null };
+  return { kind: "scene", id, time: isTime ? time : null, panel: state?.panel ?? null };
 }
 
-/** A month in the link selects the first step that starts in it. */
-export function timeForMonth(times: string[], month: string) {
-  return times.find((time) => time.startsWith(month));
+/** A year, month or day in the link selects the first step that starts in it. */
+export function timeForPrefix(times: string[], prefix: string) {
+  return times.find((time) => time.startsWith(prefix));
 }

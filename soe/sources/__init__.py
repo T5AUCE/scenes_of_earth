@@ -3,7 +3,7 @@
 Importers use these names; the modules are the homes: chirps.py and terrain.py read a source,
 synthetic.py stands in for both offline, registry.py lists the datasets.
 """
-from .chirps import CHIRPS_GRID, FIRST_MONTH, RainDataset
+from .chirps import CHIRPS_GRID, RainDataset
 from .datasets import (
     STOP_COUNT,
     SUPPORTED_BOUNDS_DEG,
@@ -14,9 +14,16 @@ from .datasets import (
     SeriesDataset,
     StaticDataset,
 )
-from .grid import CELL_DEG, Bbox, CellSpan, CellWindow, Grid
+from .grid import CELL_DEG, Bbox, CellSpan, CellWindow, Grid, read_wrapped
 from .licences import SOURCES
-from .months import month_list
+from .periods import (
+    REQUEST_FORMATS,
+    REQUEST_STEP,
+    add_duration,
+    is_request_label,
+    request_label,
+    request_range,
+)
 from .registry import REGISTRY, RealSource, make_registry
 from .remote import SourceUnavailable
 from .synthetic import SyntheticSource
@@ -34,8 +41,9 @@ from .terrain import (
 __all__ = [
     "CELL_DEG",
     "CHIRPS_GRID",
-    "FIRST_MONTH",
     "REGISTRY",
+    "REQUEST_FORMATS",
+    "REQUEST_STEP",
     "SOURCES",
     "STOP_COUNT",
     "SUPPORTED_BOUNDS_DEG",
@@ -58,9 +66,13 @@ __all__ = [
     "StaticDataset",
     "SyntheticSource",
     "TerrainDataset",
+    "add_duration",
     "hillshade",
+    "is_request_label",
     "make_registry",
-    "month_list",
+    "read_wrapped",
+    "request_label",
+    "request_range",
     "terrain_res",
     "terrain_tiles",
 ]

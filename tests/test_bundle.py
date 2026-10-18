@@ -92,6 +92,72 @@ def test_bundle_rejects_non_text_style_names(tmp_path):
     assert any("style.palette" in problem for problem in problems)
 
 
+def test_scene_json_states_the_requested_period(tmp_path):
+    doc, store = build_nairobi(tmp_path, ("2015-01", "2016-02"))
+    rain = doc["layers"][1]
+
+    assert doc["version"] == "0.4"
+    assert doc["period"] == {"start": "2015-01-01", "end": "2016-03-01", "step": "P1M"}
+    assert rain["time"]["method"] == "sum"
+    assert store["chirps_monthly/precip"].attrs["cell_methods"] == "time: sum"
+
+
+def test_static_only_scene_has_no_period(tmp_path):
+    build_scene(HASH_B, Area(NAIROBI), None, None, [TERRAIN], "T", tmp_path)
+
+    doc = json.loads((tmp_path / HASH_B / "scene.json").read_text(encoding="utf-8"))
+
+    assert doc["period"] is None and validate(doc) == []
+
+    doc["period"] = {"start": "2015-01-01", "end": "2015-02-01", "step": "P1M"}
+
+    assert any("period must be null" in problem for problem in validate(doc))
+
+
+def test_time_end_is_the_end_of_the_last_period(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-11", "2015-12"))
+    rain = doc["layers"][1]
+
+    assert rain["time"]["values"][-1] == "2015-12-01" and rain["time"]["end"] == "2016-01-01"
+
+    rain["time"]["end"] = "2015-12-01"
+
+    assert any("time.end" in problem for problem in validate(doc))
+
+
+def test_categorical_layer_without_classes_is_invalid(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    terrain = doc["layers"][0]
+    terrain["style"]["kind"] = "categorical"
+
+    assert any("style.classes" in problem for problem in validate(doc))
+
+    terrain["style"]["classes"] = [
+        {"value": 10, "label": "Tree cover", "color": "#006400"},
+        {"value": 20, "label": "Shrubland", "color": "#ffbb22"},
+    ]
+
+    assert validate(doc) == []
+
+    terrain["style"]["classes"][1]["value"] = 10
+
+    assert any("unique" in problem for problem in validate(doc))
+
+    terrain["style"]["classes"][1].update(value=20, color="orange")
+
+    assert any("#rrggbb" in problem for problem in validate(doc))
+
+
+def test_field_layer_without_stops_is_invalid_even_when_static(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    doc["layers"][0]["style"]["kind"] = "field"
+
+    problems = validate(doc)
+
+    assert any("style.palette" in problem for problem in problems)
+    assert any("style.stops" in problem for problem in problems)
+
+
 def test_credits_of_a_real_mode_sample_boundary_do_not_claim_synthetic_data():
     layer_blocks = [{"source": SOURCES["chirps"]}, {"source": SOURCES["glo90"]}]
 

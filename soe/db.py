@@ -43,12 +43,12 @@ CREATE TABLE IF NOT EXISTS scenes (
     finished TEXT
 );
 
-CREATE TABLE IF NOT EXISTS source_revisions (
+CREATE TABLE IF NOT EXISTS period_revisions (
     dataset_id TEXT NOT NULL,
-    month TEXT NOT NULL,
+    period TEXT NOT NULL,
     revision TEXT NOT NULL,
     checked TEXT NOT NULL,
-    PRIMARY KEY (dataset_id, month)
+    PRIMARY KEY (dataset_id, period)
 );
 """
 
@@ -83,6 +83,8 @@ def init(path: Path | str) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with connect(path) as connection:
         connection.executescript(SCHEMA)
+        # The old per-month revision cache is only a cache, so it is dropped, not migrated.
+        connection.execute("DROP TABLE IF EXISTS source_revisions")
         _add_missing_columns(connection)
         connection.execute(
             "UPDATE scenes SET status='failed', error='interrupted', "
@@ -252,12 +254,12 @@ def _queue_scene(
     )
 
 
-def get_revision(path: Path | str, dataset_id: str, month: str) -> tuple[str, float] | None:
+def get_revision(path: Path | str, dataset_id: str, period: str) -> tuple[str, float] | None:
     """(stored revision, seconds since the source was asked) or None."""
     with connect(path) as connection:
         row = connection.execute(
-            "SELECT revision, checked FROM source_revisions WHERE dataset_id = ? AND month = ?",
-            (dataset_id, month),
+            "SELECT revision, checked FROM period_revisions WHERE dataset_id = ? AND period = ?",
+            (dataset_id, period),
         ).fetchone()
     if row is None:
         return None
@@ -266,13 +268,13 @@ def get_revision(path: Path | str, dataset_id: str, month: str) -> tuple[str, fl
     return row["revision"], age.total_seconds()
 
 
-def set_revision(path: Path | str, dataset_id: str, month: str, revision: str) -> None:
-    """Store the source's revision of a month and the time it was asked."""
+def set_revision(path: Path | str, dataset_id: str, period: str, revision: str) -> None:
+    """Store the source's revision of a period and the time it was asked."""
     with connect(path) as connection:
         connection.execute(
-            "INSERT OR REPLACE INTO source_revisions (dataset_id, month, revision, checked) "
+            "INSERT OR REPLACE INTO period_revisions (dataset_id, period, revision, checked) "
             "VALUES (?,?,?,?)",
-            (dataset_id, month, revision, now()),
+            (dataset_id, period, revision, now()),
         )
 
 

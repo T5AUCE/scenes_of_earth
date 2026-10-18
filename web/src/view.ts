@@ -6,7 +6,7 @@ import { makeHtmlElement } from "./html";
 import { LAYER_KINDS } from "./layers/registry";
 import { firstSymbolId, removeLayerAndSource } from "./map";
 import { shiftLongitudes, worldShift } from "./render/mercator";
-import { createTimeline, formatTime, unionTimes } from "./timeline";
+import { createTimeline, formatTime, scrubberTimes } from "./timeline";
 import type { LayerDoc, LayerView, Scene } from "./types";
 
 type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
@@ -56,13 +56,14 @@ export function mountScene(
     const store = openStore(scene.data.href);
     store.catch((error) => addNote(`Cannot open the data: ${error.message}`));
 
-    addOutline(map, scene, addNote, () => isMounted);
-    views.push(...mountLayerViews(map, scene.layers, store, addNote));
+    const shift = worldShift(scene.area.bbox);
+    addOutline(map, scene, shift, addNote, () => isMounted);
+    views.push(...mountLayerViews(map, scene.layers, store, shift, addNote));
 
     for (const view of views) box.append(layerCard(map, view));
     box.append(outlineCard(map));
 
-    timeline = createSceneTimeline(views, onTime);
+    timeline = createSceneTimeline(views, scene.period, onTime);
     if (timeline) timeBar.append(timeline.element);
   } catch (error) {
     unmount();
@@ -78,10 +79,10 @@ export function mountScene(
 function addOutline(
   map: MapLibreMap,
   scene: Scene,
+  shift: number,
   addNote: (text: string) => void,
   isMounted: () => boolean,
 ) {
-  const shift = worldShift(scene.area.bbox);
   const data = shift === 0 ? scene.area.geometry_href : EMPTY_FEATURES;
 
   map.addSource(OUTLINE_ID, { type: "geojson", data });
@@ -125,6 +126,7 @@ function mountLayerViews(
   map: MapLibreMap,
   layers: LayerDoc[],
   store: Promise<Store>,
+  shift: number,
   addNote: (text: string) => void,
 ) {
   const layersWithKind = layers.map((layer) => ({
@@ -145,7 +147,7 @@ function mountLayerViews(
     const report = (error: unknown) => addNote(`${layer.title}: ${(error as Error).message}`);
 
     try {
-      const view = kind!.create({ map, store, layer, beforeId: OUTLINE_ID, report });
+      const view = kind!.create({ map, store, layer, shift, beforeId: OUTLINE_ID, report });
       view.ready?.catch(report);
       views.push(view);
     } catch (error) {
@@ -192,13 +194,18 @@ function setVisible(map: MapLibreMap, layerIds: string[], visible: boolean) {
   }
 }
 
-function createSceneTimeline(views: LayerView[], onTime: SceneSlots["onTime"]) {
+function createSceneTimeline(
+  views: LayerView[],
+  period: Scene["period"],
+  onTime: SceneSlots["onTime"],
+) {
   const axes = views.flatMap((view) => (view.time ? [view.time] : []));
-  if (!axes.length) return null;
+  if (!axes.length || !period) return null;
 
   const steps = axes.map((axis) => axis.step);
+  const times = scrubberTimes(axes.map((axis) => axis.values), period);
 
-  return createTimeline(unionTimes(axes.map((axis) => axis.values)), steps, (time) => {
+  return createTimeline(times, steps, (time) => {
     views.forEach((view) => view.setTime(time));
     onTime(time, formatTime(time, steps));
   });

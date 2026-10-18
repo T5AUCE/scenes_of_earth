@@ -3,6 +3,7 @@ import functools
 import http.server
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,20 +16,22 @@ from soe.sources import chirps, terrain
 from soe.sources import (
     CHIRPS_GRID,
     SOURCES,
+    Bbox,
     Dataset,
     Grid,
     RealSource,
+    Role,
     SeriesDataset,
     SourceUnavailable,
     StaticDataset,
     SyntheticSource,
     hillshade,
     make_registry,
-    month_list,
+    read_wrapped,
     terrain_tiles,
 )
-from soe.sources.months import previous_month
 from soe.sources.grid import block_mean
+from soe.sources.periods import add_duration, previous_month
 from soe.sources.terrain import (
     TerrainProduct,
     _tile_index,
@@ -51,8 +54,43 @@ def vars_of(dataset: Dataset) -> dict:
     return {name: getattr(dataset, name) for name in dataset.__dataclass_fields__}
 
 
-def test_months():
-    assert month_list("2015-11", "2016-02") == ["2015-11", "2015-12", "2016-01", "2016-02"]
+def test_monthly_steps_cover_each_requested_month():
+    steps = RAIN.steps("2015-11-01", "2016-03-01")
+
+    assert steps == ["2015-11-01", "2015-12-01", "2016-01-01", "2016-02-01"]
+
+
+def test_five_year_steps_include_the_period_holding_the_start():
+    class Population(SeriesDataset):
+        def first(self) -> str:
+            return "2000-01-01"
+
+        def latest(self) -> str:
+            return "2020-01-01"
+
+        def read_step(self, step: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
+            raise NotImplementedError
+
+    population = Population(**{**vars(RAIN), "id": "population", "step": "P5Y"})
+
+    steps = population.steps("2007-03-01", "2016-01-01")
+
+    assert steps == ["2005-01-01", "2010-01-01", "2015-01-01"]
+
+
+def test_steps_stop_at_the_latest_available_period():
+    assert RAIN.steps("2026-07-01", "2027-01-01") == ["2026-07-01", "2026-08-01"]
+
+
+def test_period_end_of_a_month_is_the_next_month_start():
+    assert RAIN.period_end("2015-12-01") == "2016-01-01"
+    assert add_duration("2016-03-01", "P1M", sign=-1) == "2016-02-01"
+    assert add_duration("2020-01-01", "P16D") == "2020-01-17"
+
+
+def test_unsupported_duration_is_refused():
+    with pytest.raises(ValueError, match="unsupported duration"):
+        add_duration("2015-01-01", "PT6H")
 
 
 def test_block_mean_is_nan_aware():
@@ -208,19 +246,39 @@ def test_read_month_wraps_at_180():
     assert np.array_equal(rain_month, block_mean(np.hstack([left, right]), 2), equal_nan=True)
 
 
+def test_wrapped_read_joins_both_edges_on_a_tenth_degree_grid():
+    grid = Grid(-180.05, 60.05, 0.1, 3600, 1200)
+    reads = []
+
+    def read_window(window: tuple[int, int, int, int]) -> np.ndarray:
+        reads.append(window)
+        col, row, width, height = window
+        return np.tile(np.arange(col, col + width), (height, 1)).astype("float32")
+
+    cells = read_wrapped(grid, [179.45, -1.05, 180.65, 0.05], read_window)
+
+    assert reads == [(3595, 600, 5, 11), (0, 600, 7, 11)]
+    assert cells.shape == (11, 12)
+    assert cells[0].tolist() == [3595, 3596, 3597, 3598, 3599, 0, 1, 2, 3, 4, 5, 6]
+
+
 def test_series_dataset_without_read_step_cannot_be_created():
     class HalfSeries(SeriesDataset):
         def first(self) -> str:
-            return "1990-01"
+            return "1990-01-01"
 
         def latest(self) -> str:
-            return "1990-12"
-
-        def steps(self, start: str, end: str) -> list[str]:
-            return []
+            return "1990-12-01"
 
     with pytest.raises(TypeError, match="read_step"):
         HalfSeries(**vars_of(RAIN))
+
+
+def test_role_with_fill_inside_the_value_range_is_refused():
+    roles = {"value": Role("precip", "uint16", scale=0.1, fill=7)}
+
+    with pytest.raises(ValueError, match="fill at the end of its dtype range"):
+        replace(RAIN, roles=roles)
 
 
 def test_static_dataset_without_read_cannot_be_created():

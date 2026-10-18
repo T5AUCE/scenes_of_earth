@@ -62,10 +62,9 @@ export function sampleTable(
   return { width, height, src };
 }
 
-/** A centre above 180 gives MapLibre an out-of-range tile, so the image moves one world west. */
-export function imageCorners(bbox: Bbox): Corners {
+/** The corners of an image over bbox, moved east by `shift` (see worldShift). */
+export function imageCorners(bbox: Bbox, shift: number): Corners {
   const [west, south, east, north] = bbox;
-  const shift = worldShift(bbox);
 
   return [
     [west + shift, north],
@@ -75,7 +74,11 @@ export function imageCorners(bbox: Bbox): Corners {
   ];
 }
 
-/** The longitude offset that moves an image, and anything drawn with it, into the visible world. */
+/**
+ * The longitude offset that moves a scene's images, and anything drawn with them, into the
+ * visible world: a centre above 180 gives MapLibre an out-of-range tile, so it moves one world
+ * west. Take it from the scene's bbox, so all its layers share one world copy.
+ */
 export function worldShift([west, , east]: Bbox) {
   const isEastOfAntimeridian = (west + east) / 2 > ANTIMERIDIAN_DEG;
   return isEastOfAntimeridian ? -WORLD_WIDTH_DEG : 0;

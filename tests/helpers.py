@@ -1,5 +1,6 @@
 """Shared test shapes, synthetic datasets, boundary rows and plan and build shortcuts."""
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import zarr
@@ -10,13 +11,19 @@ from soe.areas import Area
 from soe.build import build_scene
 from soe.bundle import JsonObject
 from soe.plan import Plan, plan
-from soe.sources import Dataset, SyntheticSource, make_registry
+from soe.sources import Dataset, Grid, SyntheticSource, make_registry
 
 NAIROBI = box(36.5, -1.5, 37.5, -0.5)
 FIJI = MultiPolygon([box(178, -19, 180, -17), box(-180, -19, -178, -17)])
 
 SYNTHETIC_REGISTRY = make_registry(SyntheticSource())
 RAIN, TERRAIN = SYNTHETIC_REGISTRY["chirps_monthly"], SYNTHETIC_REGISTRY["copdem_terrain"]
+COARSE = replace(
+    RAIN,
+    id="coarse_monthly",
+    resolution_deg=0.1,
+    grid=Grid(-180, 60, 0.1, 3600, 1200),
+)
 
 BOUNDARY = {
     "id": "cgaz:ADM1:TEST",

@@ -1,18 +1,21 @@
 """scene.json: build it from a plan and validate it (including attribution rules)."""
 import math
+import re
 from datetime import datetime, timezone
 from typing import Any
 
 from . import __version__
 from .areas import Area
 from .plan import LayerPlan, Plan
-from .sources import SOURCES, STOP_COUNT, Dataset
+from .sources import REQUEST_STEP, SOURCES, STOP_COUNT, Dataset
 
 JsonObject = dict[str, Any]  # a decoded JSON object, such as scene.json or one of its blocks
 
-VERSION = "0.3"
+VERSION = "0.4"
 
 MIN_STOPS = 2
+STYLE_KINDS = ("field", "categorical", "terrain")
+COLOUR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
 
 BOUNDARY_SOURCE_FIELDS = ("licence_url", "attribution", "citation", "modified")
 SYNTHETIC_DATA_CREDIT = "Data: synthetically generated, not real measurements"
@@ -53,6 +56,7 @@ def make(
             "geometry_href": "area.geojson",
             "clipped_to_coverage": plan.clipped,
         },
+        "period": _period_block(plan),
         "layers": layer_blocks,
         "data": {
             "href": "data.zarr",
@@ -61,6 +65,15 @@ def make(
         "notices": {"limits": plan.notices + layer_notices},
         "credits": credits(layer_blocks, boundary_source, synthetic),
     }
+
+
+def _period_block(plan: Plan) -> JsonObject | None:
+    """The requested period: ISO dates, the end exclusive; None for a scene without series."""
+    if plan.period is None:
+        return None
+
+    start, end = plan.period
+    return {"start": start, "end": end, "step": REQUEST_STEP}
 
 
 def _boundary_block(area: Area) -> JsonObject:
@@ -113,6 +126,8 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
         layer["style"]["stops"] = result["stops"]
         layer["time"] = {
             "step": dataset.step,
+            "end": dataset.period_end(layer_plan.steps[-1]),
+            "method": dataset.cell_method,
             "count": len(layer_plan.steps),
             "path": f"{dataset.id}/time",
             "values": layer_plan.steps,
@@ -170,7 +185,7 @@ def _layer_sources(layer_blocks: list[JsonObject]) -> list[JsonObject]:
 
 def validate(doc: JsonObject) -> list[str]:
     """Return a list of problems (empty when the bundle is fine)."""
-    required = ("version", "id", "area", "layers", "data", "credits", "notices")
+    required = ("version", "id", "area", "period", "layers", "data", "credits", "notices")
     missing = [f"missing {key}" for key in required if key not in doc]
     if missing:
         return missing
@@ -184,10 +199,23 @@ def validate(doc: JsonObject) -> list[str]:
     if not (west < east and south < north):
         problems.append("bbox is not W < E and S < N")
 
+    problems += _period_problems(doc)
     problems += _attribution_problems(doc)
     for layer in doc["layers"]:
         problems += _layer_problems(layer)
     return problems
+
+
+def _period_problems(doc: JsonObject) -> list[str]:
+    period = doc["period"]
+    has_series = any(layer["time_varying"] for layer in doc["layers"])
+    if not has_series:
+        return [] if period is None else ["period must be null without time-varying layers"]
+
+    if not isinstance(period, dict) or not period["start"] < period["end"]:
+        return ["period must have start before end when a layer is time-varying"]
+
+    return []
 
 
 def _attribution_problems(doc: JsonObject) -> list[str]:
@@ -230,21 +258,28 @@ def _layer_problems(layer: JsonObject) -> list[str]:
         problems.append(f"{layer_id}: mask has no cells")
 
     time_axis = layer.get("time")
-    time_axis_is_consistent = bool(time_axis) and time_axis["count"] == len(time_axis["values"])
+    time_axis_is_consistent = (
+        bool(time_axis)
+        and bool(time_axis["values"])
+        and time_axis["count"] == len(time_axis["values"])
+    )
 
     if layer["time_varying"] and not time_axis_is_consistent:
         problems.append(f"{layer_id}: time axis missing or count does not match values")
+    elif layer["time_varying"] and not time_axis["values"][-1] < time_axis.get("end", ""):
+        problems.append(f"{layer_id}: time.end must be after the last time value")
 
     if not layer["time_varying"] and time_axis is not None:
         problems.append(f"{layer_id}: static layer has a time axis")
 
-    return problems + _style_problems(layer_id, layer["style"], layer["time_varying"])
+    return problems + _style_problems(layer_id, layer["style"])
 
 
-def _style_problems(layer_id: str, style: JsonObject, time_varying: bool) -> list[str]:
+def _style_problems(layer_id: str, style: JsonObject) -> list[str]:
+    kind = style.get("kind")
     problems = []
-    if not isinstance(style.get("kind"), str):
-        problems.append(f"{layer_id}: style.kind must be a name")
+    if kind not in STYLE_KINDS:
+        problems.append(f"{layer_id}: style.kind must be one of: " + ", ".join(STYLE_KINDS))
 
     if not _is_name_list(style.get("encodings"), required=True):
         problems.append(f"{layer_id}: style.encodings must be a non-empty list of names")
@@ -252,11 +287,14 @@ def _style_problems(layer_id: str, style: JsonObject, time_varying: bool) -> lis
     if not _is_name_list(style.get("parts", []), required=False):
         problems.append(f"{layer_id}: style.parts must be a list of names")
 
-    if time_varying and not isinstance(style.get("palette"), str):
-        problems.append(f"{layer_id}: style.palette must be a name")
+    if kind == "field":
+        if not isinstance(style.get("palette"), str):
+            problems.append(f"{layer_id}: style.palette must be a name")
 
-    if time_varying:
         problems += _stops_problems(layer_id, style.get("stops"))
+
+    if kind == "categorical":
+        problems += _classes_problems(layer_id, style.get("classes"))
     return problems
 
 
@@ -282,3 +320,28 @@ def _stops_problems(layer_id: str, stops: object) -> list[str]:
 
 def _is_finite_number(value: object) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _classes_problems(layer_id: str, classes: object) -> list[str]:
+    if not isinstance(classes, list) or not classes:
+        return [f"{layer_id}: style.classes must be a non-empty list"]
+
+    values = [entry.get("value") for entry in classes if isinstance(entry, dict)]
+    if len(values) != len(classes) or not all(_is_int(value) for value in values):
+        return [f"{layer_id}: style.classes need an integer value each"]
+
+    if len(set(values)) != len(values):
+        return [f"{layer_id}: style.classes values must be unique"]
+
+    if not all(entry.get("label") and _is_colour(entry.get("color")) for entry in classes):
+        return [f"{layer_id}: style.classes need a label and a #rrggbb color each"]
+
+    return []
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_colour(value: object) -> bool:
+    return isinstance(value, str) and COLOUR_PATTERN.fullmatch(value) is not None

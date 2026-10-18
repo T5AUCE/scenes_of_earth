@@ -7,7 +7,7 @@ from shapely.geometry import LineString, MultiPolygon, Polygon, box, mapping
 from soe.areas import Area, AreaError, clean_polygon, unwrap
 from soe.bundle import JsonObject
 from soe.sources import REGISTRY, terrain_tiles
-from tests.helpers import FIJI, NAIROBI, RAIN, TERRAIN, plan_months
+from tests.helpers import COARSE, FIJI, NAIROBI, RAIN, TERRAIN, plan_months
 
 
 def poly(x0: float, y0: float, x1: float, y1: float) -> JsonObject:
@@ -167,6 +167,39 @@ def test_output_budget_is_summed_across_layers():
     both = plan_months(area, [TERRAIN, RAIN], 140)  # terrain takes 12 MB of the 50
 
     assert both.layers["chirps_monthly"].factor == 2 and both.layers["copdem_terrain"].factor == 1
+
+
+def test_each_series_gets_its_own_factor():
+    area = Area(box(30, -10, 50, 10))  # 160k rain cells, 40k coarse cells
+
+    layers = plan_months(area, [RAIN, COARSE], 140).layers  # 56 MB at native resolution
+
+    assert (layers["chirps_monthly"].factor, layers["coarse_monthly"].factor) == (2, 1)
+    assert layers["chirps_monthly"].res == pytest.approx(layers["coarse_monthly"].res)
+
+
+def test_finest_series_is_coarsened_first():
+    area = Area(box(30, -10, 50, 10))
+
+    layers = plan_months(area, [RAIN, COARSE], 400).layers  # 64 MB even once rain is at 0.1
+
+    assert (layers["chirps_monthly"].res, layers["coarse_monthly"].res) == pytest.approx((0.1, 0.2))
+
+
+def test_series_that_fit_keep_native_resolution():
+    layers = plan_months(Area(NAIROBI), [RAIN, COARSE]).layers
+
+    assert (layers["chirps_monthly"].factor, layers["coarse_monthly"].factor) == (1, 1)
+    resolutions = (layers["chirps_monthly"].res, layers["coarse_monthly"].res)
+
+    assert resolutions == pytest.approx((0.05, 0.1))
+
+
+def test_refuses_when_every_series_is_at_the_resolution_cap(monkeypatch):
+    monkeypatch.setattr("soe.plan.MAX_OUTPUT_BYTES", 10_000)
+
+    with pytest.raises(AreaError, match="even at 0.4 degree aggregation"):
+        plan_months(Area(box(36, -2, 38, 0)), [RAIN, COARSE], 240)
 
 
 def test_series_steps_come_from_the_dataset_axis():

@@ -10,7 +10,7 @@ from soe.scene_request import (
     DRAWN_AREA_TITLE,
     ID_CHARS,
     PreparedScene,
-    check_months,
+    check_period,
     compute_scene_id,
     prepare_scene,
 )
@@ -20,11 +20,13 @@ from soe.sources import (
     SourceUnavailable,
     SyntheticSource,
     make_registry,
+    request_range,
 )
+from tests.helpers import RAIN
 
 SQUARE = mapping(box(36.5, -1.5, 37.5, -0.5))
 PINNED_REVISION = "Tue, 01 Sep 2015 00:00:00 GMT"
-PINNED_SCENE_ID = "313bb298ef920f4d2901"  # Computed for soe 0.4.0 (scene format 0.3).
+PINNED_SCENE_ID = "1bc8cd034f0b0bb6577d"  # Computed for soe 0.5.0 (scene format 0.4).
 
 
 def request_body(**overrides: object) -> str:
@@ -95,7 +97,7 @@ def test_fresh_stored_revision_is_not_asked_again(db_path, revision_source):
 def test_synthetic_backend_does_not_touch_the_revision_table(db_path):
     prepare_scene(db_path, make_registry(SyntheticSource()), request_body())
 
-    assert db.get_revision(db_path, "chirps_monthly", "2015-06") is None
+    assert db.get_revision(db_path, "chirps_monthly", "2015-01-01/2015-06-01") is None
 
 
 def test_changed_revision_after_recovery_gives_a_new_scene_id(
@@ -119,8 +121,7 @@ def test_scene_id_is_unchanged_for_known_inputs():
     scene_id = compute_scene_id(
         "poly:abc",
         ["chirps_monthly", "copdem_terrain"],
-        "2015-01",
-        "2015-06",
+        ("2015-01-01", "2015-07-01"),
         [registry["chirps_monthly"], registry["copdem_terrain"]],
         {"chirps_monthly": PINNED_REVISION},
     )
@@ -135,8 +136,7 @@ def test_synthetic_and_real_terrain_scenes_get_different_ids():
         return compute_scene_id(
             "g",
             terrain,
-            "2015-01",
-            "2015-02",
+            None,
             [registry["copdem_terrain"]],
             revisions={},
         )
@@ -147,8 +147,8 @@ def test_synthetic_and_real_terrain_scenes_get_different_ids():
     assert scene_id(synthetic) != scene_id(real)
 
 
-def test_check_months_accepts_the_source_range_and_rejects_bad_ranges():
-    check_months("1981-01", "2026-08", "1981-01", "2026-08")
+def test_check_period_accepts_the_source_range_and_rejects_bad_ranges():
+    check_period("1981-01", "2026-08", RAIN)
 
     bad_ranges = (
         ("1980-12", "1990-01"),
@@ -159,4 +159,42 @@ def test_check_months_accepts_the_source_range_and_rejects_bad_ranges():
 
     for start, end in bad_ranges:
         with pytest.raises(AreaError):
-            check_months(start, end, "1981-01", "2026-08")
+            check_period(start, end, RAIN)
+
+
+def test_period_outside_a_dataset_is_refused_before_any_read(db_path):
+    source = SyntheticSource()
+
+    with pytest.raises(AreaError, match="end must be 2026-08 or earlier"):
+        prepare_scene(db_path, make_registry(source), request_body(end="2026-09"))
+
+    assert source.reads == 0
+
+
+def test_same_period_gives_the_same_scene_id():
+    terrain = make_registry(SyntheticSource())["copdem_terrain"]
+    months = request_range("2015-01", "2015-12", "P1M")
+    year = request_range("2015", "2015", "P1Y")
+
+    def scene_id(period: tuple[str, str]) -> str:
+        return compute_scene_id("g", ["chirps_monthly"], period, [terrain], {})
+
+    assert scene_id(months) == scene_id(year)
+    assert scene_id(months) != scene_id(request_range("2015-01", "2015-11", "P1M"))
+
+
+def test_revision_is_asked_with_every_step_of_the_range(db_path, revision_source):
+    class Recording(type(RAIN)):
+        asked: list[str]
+
+        def current_revision(self, steps: list[str]) -> str:
+            self.asked = steps
+            return "recorded"
+
+    registry = make_registry(revision_source)
+    rain = registry["chirps_monthly"]
+    registry["chirps_monthly"] = Recording(**{name: getattr(rain, name) for name in vars(rain)})
+
+    prepare_scene(db_path, registry, request_body(end="2015-03"))
+
+    assert registry["chirps_monthly"].asked == ["2015-01-01", "2015-02-01", "2015-03-01"]

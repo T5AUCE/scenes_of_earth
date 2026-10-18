@@ -1,12 +1,12 @@
 """Scene preparation: validate a scene request and give it its content-addressed id.
 
-A revision is a marker that changes whenever the provider republishes a month's data (CHIRPS:
-the file's Last-Modified date). It is part of the scene id, so revised data gets a new scene.
+A revision is a marker that changes whenever the provider republishes data of the requested
+periods (CHIRPS: the Last-Modified date of the last month's file). It is part of the scene id, so
+revised data gets a new scene.
 """
 import hashlib
 import json
 import logging
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,20 +15,23 @@ from shapely.geometry import mapping, shape
 from . import __version__, db
 from .areas import Area, AreaError, clean_polygon
 from .bundle import JsonObject
-from .plan import plan
+from .plan import Plan, plan
 from .sources import (
-    FIRST_MONTH,
+    REQUEST_FORMATS,
+    REQUEST_STEP,
     Dataset,
     Registry,
     SeriesDataset,
     SourceUnavailable,
+    add_duration,
+    is_request_label,
+    request_label,
 )
 
 ID_CHARS = 20  # hex characters of the sha256 kept as the id (80 bits; short Windows paths)
 
 DRAWN_AREA_TITLE = "Drawn area"
 MAX_TITLE_CHARS = 120
-MONTH_PATTERN = re.compile(r"[0-9]{4}-(0[1-9]|1[0-2])")  # 'YYYY-MM'; ASCII digits only
 
 # A stored source revision is reused this long without asking the source again.
 REVISION_FRESH_SECS = 6 * 60 * 60
@@ -53,11 +56,17 @@ def prepare_scene(db_path: Path | str, registry: Registry, body: bytes | str) ->
     area = resolve_area(db_path, data.get("area"))
     start, end = _requested_period(data, datasets)
     # Planning refuses a bad request before any data is read.
-    plan(area, datasets, start, end)
+    scene_plan = plan(area, datasets, start, end)
 
     geometry_id, area_spec = _area_identity(area)
-    revisions = _current_revisions(db_path, datasets, end)
-    scene_id = compute_scene_id(geometry_id, layers, start, end, datasets, revisions)
+    revisions = _current_revisions(db_path, datasets, scene_plan)
+    scene_id = compute_scene_id(
+        geometry_id,
+        layers,
+        scene_plan.period,
+        datasets,
+        revisions,
+    )
     request = {
         "area": area_spec,
         "layers": layers,
@@ -119,34 +128,41 @@ def resolve_area(db_path: Path | str, spec: object) -> Area:
     raise AreaError("area.type must be 'boundary' or 'polygon'")
 
 
-def _requested_period(data: JsonObject, datasets: list[Dataset]) -> tuple[str, str]:
+def _requested_period(data: JsonObject, datasets: list[Dataset]) -> tuple[str | None, str | None]:
     series = [dataset for dataset in datasets if isinstance(dataset, SeriesDataset)]
     if not series:
-        # Months are irrelevant here, so every terrain-only request is one scene.
-        return FIRST_MONTH, FIRST_MONTH
+        # Periods are irrelevant here, so every terrain-only request is one scene.
+        return None, None
 
     start, end = data.get("start"), data.get("end")
     for dataset in series:
-        check_months(start, end, dataset.first(), dataset.latest(), f"{dataset.title}: ")
+        check_period(start, end, dataset, f"{dataset.title}: ")
     return start, end
 
 
-def check_months(start: object, end: object, first: str, latest: str, who: str = "") -> None:
-    """Validate 'YYYY-MM' start/end: first <= start <= end <= latest; `who` prefixes messages."""
-    for month in (start, end):
-        if not _is_month(month):
-            raise AreaError("start and end must be 'YYYY-MM'")
+def check_period(start: object, end: object, dataset: SeriesDataset, who: str = "") -> None:
+    """Validate request periods: the one holding first() <= start <= end <= the last available.
 
+    `who` prefixes the messages.
+    """
+    for label in (start, end):
+        if not is_request_label(label, REQUEST_STEP):
+            raise AreaError(f"start and end must be '{REQUEST_FORMATS[REQUEST_STEP]}'")
+
+    first, last = request_bounds(dataset)
     if start < first:
         raise AreaError(f"{who}start must be {first} or later")
     if end < start:
         raise AreaError("end must not be before start")
-    if end > latest:
-        raise AreaError(f"{who}end must be {latest} or earlier")
+    if end > last:
+        raise AreaError(f"{who}end must be {last} or earlier")
 
 
-def _is_month(value: object) -> bool:
-    return isinstance(value, str) and MONTH_PATTERN.fullmatch(value) is not None
+def request_bounds(dataset: SeriesDataset) -> tuple[str, str]:
+    """First and last request period ('YYYY-MM') a request may name for the dataset."""
+    first = request_label(dataset.first(), REQUEST_STEP)
+    last_start = add_duration(dataset.period_end(dataset.latest()), REQUEST_STEP, -1)
+    return first, request_label(last_start, REQUEST_STEP)
 
 
 def _area_identity(area: Area) -> tuple[str, JsonObject]:
@@ -163,53 +179,56 @@ def _area_identity(area: Area) -> tuple[str, JsonObject]:
 def _current_revisions(
     db_path: Path | str,
     datasets: list[Dataset],
-    month: str,
+    scene_plan: Plan,
 ) -> dict[str, str | None]:
-    """Revision of `month` for each time-varying dataset."""
+    """Revision of the planned periods of each time-varying dataset."""
     return {
-        dataset.id: _current_revision(db_path, dataset, month)
+        dataset.id: _current_revision(db_path, dataset, scene_plan.layers[dataset.id].steps)
         for dataset in datasets
         if dataset.time_varying
     }
 
 
-def _current_revision(db_path: Path | str, dataset: Dataset, month: str) -> str | None:
+def _current_revision(db_path: Path | str, dataset: Dataset, steps: list[str]) -> str | None:
     """Stored revision while fresh; if the source is down, a stale stored one."""
     # Offline answers must not reach the stored real ones.
     if dataset.synthetic:
-        return dataset.current_revision(month)
+        return dataset.current_revision(steps)
 
-    stored_revision, age_secs = db.get_revision(db_path, dataset.id, month) or (None, None)
+    period = f"{steps[0]}/{steps[-1]}"
+    stored_revision, age_secs = db.get_revision(db_path, dataset.id, period) or (None, None)
     if stored_revision is not None and age_secs < REVISION_FRESH_SECS:
         return stored_revision
 
     try:
-        revision = dataset.current_revision(month)
+        revision = dataset.current_revision(steps)
     except SourceUnavailable:
         if stored_revision is None:
             raise
 
-        log.warning("%s revision of %s: source down, using stored one", dataset.id, month)
+        log.warning("%s revision of %s: source down, using stored one", dataset.id, period)
         return stored_revision
 
     if revision is not None:
-        db.set_revision(db_path, dataset.id, month, revision)
+        db.set_revision(db_path, dataset.id, period, revision)
     return revision
 
 
 def compute_scene_id(
     geometry_id: str,
     layers: list[str],
-    start: str,
-    end: str,
+    period: tuple[str, str] | None,
     datasets: list[Dataset],
     revisions: dict[str, str | None],
 ) -> str:
     """Content hash of the canonical request, dataset versions, revisions and generator.
 
     The terrain product (GLO-30 or GLO-90) follows from the area's size, so the geometry covers it.
+    `period` is the ISO date range [first day, day after the last), or None without series, so
+    the id does not depend on how the request spelled its start and end.
     """
     versions = {dataset.id: dataset.source.get("version") for dataset in datasets}
     synthetic = {dataset.id: dataset.synthetic for dataset in datasets}
-    content = [geometry_id, layers, start, end, versions, revisions, synthetic, __version__]
+    dated = [*period, REQUEST_STEP] if period else None
+    content = [geometry_id, layers, dated, versions, revisions, synthetic, __version__]
     return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:ID_CHARS]

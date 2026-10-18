@@ -47,6 +47,7 @@ def make_registry(backend: RealSource | SyntheticSource) -> Registry:
             backend=backend,
             grid=CHIRPS_GRID,
             step="P1M",
+            cell_method="sum",
             synthetic=backend.synthetic,
         ),
         "copdem_terrain": TerrainDataset(

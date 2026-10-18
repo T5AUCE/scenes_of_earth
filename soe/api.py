@@ -17,18 +17,20 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from shapely.geometry import mapping, shape
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
 from starlette.types import Scope
 
 from . import __version__, db
-from .areas import AreaError
+from .areas import MAX_LONGITUDE_DEG, AreaError, unwrap
 from .bundle import JsonObject
 from .jobs import SceneJobs
 from .sample_areas import seed_sample_areas
-from .scene_request import ID_CHARS
+from .scene_request import ID_CHARS, request_bounds
 from .sources import (
     REGISTRY,
+    REQUEST_STEP,
     Dataset,
     RealSource,
     Registry,
@@ -105,6 +107,7 @@ def create_app(
     @app.get("/api/layers", response_model=None)
     def layers() -> JsonObject:
         return {
+            "request_step": REQUEST_STEP,
             "default": [layer_id for layer_id in DEFAULT_LAYERS if layer_id in registry],
             "layers": [_layer_out(dataset) for dataset in registry.values()],
         }
@@ -128,7 +131,7 @@ def create_app(
         if row is None:
             raise HTTPException(404, "unknown area")
         
-        return {**_area_out(row), "geometry": json.loads(row["geom_geojson"])}
+        return {**_area_out(row), "geometry": _area_geometry(row)}
 
     @app.post("/api/scenes")
     async def post_scene(request: Request) -> JSONResponse:
@@ -193,11 +196,8 @@ def _warm_latest_months(registry: Registry) -> None:
 def _layer_out(dataset: Dataset) -> JsonObject:
     time_axis = None
     if isinstance(dataset, SeriesDataset):
-        time_axis = {
-            "step": dataset.step,
-            "first": dataset.first(),
-            "latest": dataset.latest(),
-        }
+        first, last = request_bounds(dataset)
+        time_axis = {"step": dataset.step, "first": first, "last": last}
 
     return {
         "id": dataset.id,
@@ -208,6 +208,15 @@ def _layer_out(dataset: Dataset) -> JsonObject:
         "coverage": list(dataset.coverage),
         "time": time_axis,
     }
+
+
+def _area_geometry(row: db.Record) -> JsonObject:
+    """The boundary shape in the longitude frame of its bbox, so it is not cut apart at 180."""
+    geometry = json.loads(row["geom_geojson"])
+    if row["bbox_e"] <= MAX_LONGITUDE_DEG:
+        return geometry
+
+    return mapping(unwrap(shape(geometry)))
 
 
 def _area_out(row: db.Record) -> JsonObject:
