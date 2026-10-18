@@ -1,12 +1,14 @@
 """Offline tests: drawn-shape validation, unwrapping across 180 and scene planning."""
 from dataclasses import replace
 
+import numpy as np
 import pytest
 from shapely.geometry import LineString, MultiPolygon, Polygon, box, mapping
 
 from soe.areas import Area, AreaError, clean_polygon, unwrap
 from soe.bundle import JsonObject
-from soe.sources import RealSource, make_registry, terrain_tiles
+from soe.plan import LayerPlan
+from soe.sources import RealSource, SyntheticSource, make_registry, terrain_tiles
 from tests.helpers import COARSE, FIJI, NAIROBI, RAIN, TERRAIN, plan_months
 
 
@@ -136,18 +138,113 @@ def test_plan_aggregates_and_snaps():
     assert len(layer_plan.steps) == 120
 
 
-def test_plan_tiny_named_area_falls_back_to_all_touched():
+def test_plan_tiny_named_area_keeps_a_cell_and_pads_the_window():
     tiny = box(36.99, -1.01, 37.0, -1.0)  # sits between cell centres
     scene_plan = plan_months(Area(tiny, {"name": "Tinyville"}), [RAIN])
     layer_plan = scene_plan.layers["chirps_monthly"]
 
     assert layer_plan.cells_inside >= 1
-    assert any("touches" in note for note in layer_plan.notices)
     assert any("padded" in note for note in scene_plan.notices)
 
     west, south, east, north = scene_plan.bbox
 
     assert east - west >= 0.5 - 1e-9 and north - south >= 0.5 - 1e-9
+
+
+def test_plan_keeps_every_cell_an_off_grid_area_touches():
+    off_grid = box(177.04, -18.01, 177.96, -17.04)
+    layer_plan = plan_months(Area(off_grid), [RAIN]).layers["chirps_monthly"]
+    height, width = layer_plan.shape
+
+    assert layer_plan.bbox == pytest.approx([177, -18.05, 178, -17])
+    assert layer_plan.shape == (21, 20)
+    assert _ones_bbox(layer_plan) == (0, height - 1, 0, width - 1)
+    assert layer_plan.mask.all()
+    assert layer_plan.cells_inside == layer_plan.mask.sum()
+
+
+def _ones_bbox(layer_plan: LayerPlan) -> tuple[int, int, int, int]:
+    """Return the first and last row and column that hold a one."""
+    rows, columns = np.nonzero(layer_plan.mask)
+    return int(rows.min()), int(rows.max()), int(columns.min()), int(columns.max())
+
+
+def test_plan_keeps_every_cell_an_off_grid_area_touches_on_the_half_cell_offset_grid():
+    temperature = make_registry(SyntheticSource())["era5land_temperature"]
+    off_grid = box(36.52, -1.48, 37.48, -0.52)
+    layer_plan = plan_months(Area(off_grid), [temperature]).layers["era5land_temperature"]
+    height, width = layer_plan.shape
+
+    assert layer_plan.bbox == pytest.approx([36.45, -1.55, 37.55, -0.45])
+    assert layer_plan.shape == (11, 11)
+    assert _ones_bbox(layer_plan) == (0, height - 1, 0, width - 1)
+    assert layer_plan.mask.all()
+
+
+def test_plan_edge_aligned_area_does_not_add_a_row_or_column():
+    layer_plan = plan_months(Area(box(177, -18, 178, -17)), [RAIN]).layers["chirps_monthly"]
+
+    assert layer_plan.shape == (20, 20)
+    assert layer_plan.mask.all()
+
+
+def test_plan_keeps_a_sub_cell_island_beside_a_large_polygon():
+    large = box(177, -18, 177.5, -17.5)
+    island = box(178.001, -18.009, 178.009, -18.001)
+    layer_plan = plan_months(Area(MultiPolygon([large, island])), [RAIN]).layers["chirps_monthly"]
+
+    assert _mask_at(layer_plan, 177.25, -17.75) == 1
+    assert _mask_at(layer_plan, 178.005, -18.005) == 1
+    assert _mask_at(layer_plan, 177.75, -17.75) == 0
+
+
+def _mask_at(layer_plan: LayerPlan, lon: float, lat: float) -> int:
+    """Return the mask value of the cell that contains the point."""
+    column, row = ~layer_plan.transform @ (lon, lat)
+    return int(layer_plan.mask[int(row), int(column)])
+
+
+def test_plan_keeps_a_sub_cell_island_east_of_180():
+    large = box(179.4, -17, 179.9, -16.5)
+    island = box(-179.799, -16.209, -179.791, -16.201)
+    layer_plan = plan_months(Area(MultiPolygon([large, island])), [RAIN]).layers["chirps_monthly"]
+
+    assert layer_plan.bbox[2] > 180
+    assert _mask_at(layer_plan, 179.65, -16.75) == 1
+    assert _mask_at(layer_plan, 180.205, -16.205) == 1
+    assert _mask_at(layer_plan, 180.205, -16.4) == 0
+
+
+def test_plan_leaves_cells_wholly_inside_a_hole_out_of_the_mask():
+    hole = box(36.51, -1.49, 37.49, -0.51)
+    holed = Polygon(box(36, -2, 38, 0).exterior.coords, [hole.exterior.coords])
+    layer_plan = plan_months(Area(holed), [RAIN]).layers["chirps_monthly"]
+
+    assert _mask_at(layer_plan, 37, -1) == 0
+    assert _mask_at(layer_plan, 36.25, -1) == 1
+    assert _mask_at(layer_plan, 36.525, -1) == 1
+
+
+def test_drawn_area_with_enough_touched_cells_but_too_few_centres_is_rejected():
+    narrow = box(36.526, -1.549, 36.724, -1.251)
+    named_plan = plan_months(Area(narrow, {"name": "Narrow Island"}), [RAIN])
+
+    assert named_plan.layers["chirps_monthly"].cells_inside >= 25
+
+    with pytest.raises(AreaError, match="too small"):
+        plan_months(Area(narrow), [RAIN])
+
+
+def test_coarsened_mask_keeps_the_off_grid_edge_cells(monkeypatch):
+    monkeypatch.setattr("soe.plan.MAX_OUTPUT_BYTES", 500)
+    off_grid = box(36.54, -1.46, 37.46, -0.54)
+    layer_plan = plan_months(Area(off_grid), [RAIN], months=1).layers["chirps_monthly"]
+
+    assert layer_plan.factor == 2
+    assert layer_plan.res == pytest.approx(0.1)
+    assert layer_plan.bbox == pytest.approx([36.5, -1.5, 37.5, -0.5])
+    assert layer_plan.shape == (10, 10)
+    assert layer_plan.mask.all()
 
 
 def test_plan_gives_each_layer_its_own_grid_and_mask():

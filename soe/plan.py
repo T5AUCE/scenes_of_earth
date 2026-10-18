@@ -365,11 +365,10 @@ def _layer_plan(
             f"({res:g} degrees) to fit the size budget.",
         )
 
-    mask, used_touched = _layer_mask(dataset, geometry, transform, grid_shape)
-    if used_touched:
-        notices.append(
-            "No cell center fell inside this small area, so every cell it touches is used.",
-        )
+    mask = _cell_mask(geometry, transform, grid_shape, all_touched=True)
+    if not mask.any():
+        raise AreaError(f"area does not cover any {dataset.title} cells")
+
     notices += dataset.notices(bbox, steps)
 
     return LayerPlan(
@@ -385,24 +384,6 @@ def _layer_plan(
         dataset.sources_for(bbox),
         notices,
     )
-
-
-def _layer_mask(
-    dataset: Dataset,
-    geometry: BaseGeometry,
-    transform: Affine,
-    grid_shape: tuple[int, int],
-) -> tuple[np.ndarray, bool]:
-    """(mask, whether it fell back to every touched cell because no cell center was inside)."""
-    mask = _cell_mask(geometry, transform, grid_shape)
-    if mask.any():
-        return mask, False
-
-    mask = _cell_mask(geometry, transform, grid_shape, all_touched=True)
-    if not mask.any():
-        raise AreaError(f"area does not cover any {dataset.title} cells")
-
-    return mask, True
 
 
 def _enclosing_bbox(bboxes: list[list[float]]) -> list[float]:

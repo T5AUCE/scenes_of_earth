@@ -32,9 +32,10 @@ const SMOOTHING_LINES = [
     + "and then smoothly interpolated, so they are close to the real relief but not exact at "
     + "very fine scale; zooming in recomputes them in finer blocks.",
   "The values in the files are the cell values of the stored grid, never the smoothed picture; "
-    + "terrain may be stored in coarser cells than its 30 m or 90 m source. Area averages use "
-    + "the raw cells whose centre lies inside the outline. For a very small area with no cell "
-    + "centre inside, every cell it touches is used and a notice says so.",
+    + "terrain may be stored in coarser cells than its 30 m or 90 m source. Bundles generated "
+    + "with version 0.5.1 or later keep every cell touched by the area. Area averages give each "
+    + "valid cell equal weight, including edge cells that extend outside the outline. Older "
+    + "bundles use cell centres, with touched cells only when no centre lies inside the area.",
 ];
 
 /** One line on the scene: area, period and layer count. */

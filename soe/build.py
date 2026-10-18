@@ -234,7 +234,7 @@ def _write_coordinates_and_mask(layer_group: zarr.Group, layer_plan: LayerPlan) 
         "mask",
         layer_plan.mask,
         ["lat", "lon"],
-        {"long_name": "1 = cell centre inside the area"},
+        {"long_name": "1 = cell touched by the area"},
     )
 
 

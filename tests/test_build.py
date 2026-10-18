@@ -20,6 +20,7 @@ from soe.sources import (
     Bbox,
     CellWindow,
     Role,
+    SeriesDataset,
     StaticDataset,
     SyntheticSource,
     hillshade,
@@ -541,6 +542,65 @@ def test_cells_outside_the_area_hold_the_fill_value_in_every_layer(tmp_path):
         assert outside.any() and (~outside).any()
         assert (stored[..., outside] == array_doc["fill"]).all()
         assert (stored[..., ~outside] != array_doc["fill"]).any()
+
+
+def test_finite_touched_cell_survives_masking_while_source_no_data_stays_missing(tmp_path):
+    marked = _rain_with_marked_boundary(missing_cell=True)
+    off_grid = box(36.54, -1.46, 37.46, -0.54)
+    build_scene(HASH_A, Area(off_grid, BOUNDARY), "2015-01", "2015-01", [marked], "Test", tmp_path)
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    root = zarr.open_group(tmp_path / HASH_A / "data.zarr", mode="r")
+    layer = doc["layers"][0]
+    mask = root["chirps_monthly/mask"][...]
+    precip = root["chirps_monthly/precip"][0]
+    fill = layer["arrays"]["value"]["fill"]
+    height, width = precip.shape
+    valid_cells = height * width - 1
+    ordinary_cells = valid_cells - height
+    expected_mean = (50 * height + 10 * ordinary_cells) / valid_cells
+
+    assert layer["mask"]["rule"] == "touched by the area"
+    assert layer["mask"]["cells_inside"] == mask.sum()
+    assert root["chirps_monthly/mask"].attrs["long_name"] == "1 = cell touched by the area"
+    assert mask[:, 0].all() and mask[5, 5] == 1
+    assert (precip[:, 0] * layer["arrays"]["value"]["scale_factor"] == 50).all()
+    assert precip[5, 5] == fill
+    assert layer["stats"]["mean"] == pytest.approx(expected_mean, abs=0.01)
+
+
+def _rain_with_marked_boundary(missing_cell: bool = False) -> SeriesDataset:
+    """Return rain with a distinct western edge and an optional missing interior cell."""
+
+    class MarkedRain(type(RAIN)):
+        def read_step(
+            self,
+            step: str,
+            bbox: Bbox,
+            factor: int = 1,
+        ) -> np.ndarray:
+            """Return a known field for checking touched-cell masking and statistics."""
+            res = self.grid.res * factor
+            height = round((bbox[3] - bbox[1]) / res)
+            width = round((bbox[2] - bbox[0]) / res)
+            raster = np.full((height, width), 10, "float32")
+            raster[:, 0] = 50
+            if missing_cell:
+                raster[5, 5] = np.nan
+            return raster
+
+    return MarkedRain(**vars(RAIN))
+
+
+def test_area_statistics_follow_the_touched_cells(tmp_path):
+    marked = _rain_with_marked_boundary()
+    off_grid = box(36.54, -1.46, 37.46, -0.54)
+    build_scene(HASH_A, Area(off_grid, BOUNDARY), "2015-01", "2015-01", [marked], "Test", tmp_path)
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    width = 20
+    expected_mean = (50 + 10 * (width - 1)) / width
+
+    assert doc["layers"][0]["stats"]["max"] == 50
+    assert doc["layers"][0]["stats"]["mean"] == pytest.approx(expected_mean, abs=0.01)
 
 
 def test_hillshade_at_the_area_edge_is_computed_before_masking(tmp_path):

@@ -111,7 +111,7 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
         "grid": grid,
         "mask": {
             "path": f"{dataset.id}/mask",
-            "rule": "cell centre inside",
+            "rule": "touched by the area",
             "cells_inside": layer_plan.cells_inside,
         },
         "time": None,
