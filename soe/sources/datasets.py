@@ -53,6 +53,7 @@ class Dataset(ABC):
     cell_method: str | None = None  # how a step summarises its period: sum, mean, point or max
     max_tiles: int | None = None  # request cap for tiled datasets
     synthetic: bool = False  # offline stand-in data, kept apart from real revisions
+    remote: bool = True  # revisions are asked from a remote server, so they are cached
 
     def __post_init__(self) -> None:
         """Runs after construction; subclasses check their invariants here."""
@@ -101,8 +102,8 @@ class Dataset(ABC):
         """The sources a read of bbox uses, the main one first."""
         return [self.source]
 
-    def notices(self, bbox: Bbox) -> list[str]:
-        """Limits notices for a read of bbox."""
+    def notices(self, bbox: Bbox, steps: list[str]) -> list[str]:
+        """Limits notices for a read of bbox over the period starts `steps`."""
         return []
 
 

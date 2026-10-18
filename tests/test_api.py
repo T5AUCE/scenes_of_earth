@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+import zarr
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from shapely.geometry import box, mapping, shape
@@ -14,7 +15,13 @@ from soe import db
 from soe.api import QUEUE_RETRY_AFTER_SECS, SOURCE_RETRY_AFTER_SECS, create_app
 from soe.bundle import SYNTHETIC_DATA_CREDIT, JsonObject
 from soe.scene_request import ID_CHARS
-from soe.sources import CellWindow, SourceUnavailable, SyntheticSource, make_registry
+from soe.sources import (
+    CellWindow,
+    RealSource,
+    SourceUnavailable,
+    SyntheticSource,
+    make_registry,
+)
 from tests.helpers import FIJI, boundary_row
 
 POLL_ATTEMPTS = 100
@@ -321,6 +328,84 @@ def test_layers(env):
     assert rain["title"] == "Rainfall" and rain["units"] == "mm/month"
     assert rain["coverage"] == [-180, -60, 180, 60]
     assert terrain["coverage"] == [-180, -60, 180, 60]
+
+
+def test_layers_list_omits_temperature_without_a_cube(tmp_path):
+    source = RealSource(latest="2026-08", cubes_dir=tmp_path / "cubes")
+    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(source))
+
+    with TestClient(app) as client:
+        ids = [layer["id"] for layer in client.get("/api/layers").json()["layers"]]
+
+    assert ids == ["chirps_monthly", "copdem_terrain"]
+
+
+def test_layers_list_survives_an_empty_cube_left_by_a_failed_ingest(tmp_path):
+    zarr.create_group(tmp_path / "cubes" / "era5land_t2m.zarr", attributes={"months": {}})
+    source = RealSource(latest="2026-08", cubes_dir=tmp_path / "cubes")
+    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(source))
+
+    with TestClient(app) as client:
+        response = client.get("/api/layers")
+
+    assert response.status_code == 200
+    assert "era5land_t2m" not in [layer["id"] for layer in response.json()["layers"]]
+
+
+def test_layers_list_leaves_out_temperature_while_the_cube_is_updating(tmp_path):
+    cube_path = tmp_path / "cubes" / "era5land_t2m.zarr"
+    group = zarr.create_group(cube_path, attributes={"months": {"2016-01": "0001:a"}})
+    group.create_array("t2m", shape=(1, 1, 1), dtype="int16")
+    source = RealSource(latest="2026-08", cubes_dir=tmp_path / "cubes")
+    registry = make_registry(source)
+    group.attrs["pending"] = ["2016-01"]
+
+    with TestClient(create_app(tmp_path / "soe.db", tmp_path / "scenes", registry)) as client:
+        response = client.get("/api/layers")
+
+    assert "era5land_t2m" in registry
+    assert response.status_code == 200
+    assert [layer["id"] for layer in response.json()["layers"]] == [
+        "chirps_monthly",
+        "copdem_terrain",
+    ]
+
+
+def test_request_without_layers_builds_the_defaults_not_temperature(tmp_path):
+    class LateCube(SyntheticSource):
+        def t2m_months(self) -> dict[str, str]:
+            return {"2016-01": "0001:a", "2016-02": "0001:b"}
+
+    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(LateCube()))
+    request = body()
+    del request["layers"]
+
+    with TestClient(app) as client:
+        response = client.post("/api/scenes", json=request)
+        done = wait_for(client, response.json()["id"])
+        layers = client.get(done["bundle_url"]).json()["layers"]
+
+    assert response.status_code == 202
+    assert sorted(layer["id"] for layer in layers) == ["chirps_monthly", "copdem_terrain"]
+
+
+def test_temperature_period_before_the_cube_start_is_refused_before_any_read(tmp_path):
+    class LateCube(SyntheticSource):
+        def t2m_months(self) -> dict[str, str]:
+            return {"2016-01": "0001:a", "2016-02": "0001:b"}
+
+    source = LateCube()
+    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(source))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/scenes",
+            json=body(layers=["era5land_t2m"], start="2015-12", end="2016-02"),
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Temperature: start must be 2016-01 or later"
+    assert source.reads == 0
 
 
 def test_layers_list_request_bounds_in_request_granularity(env):

@@ -28,6 +28,7 @@ from .sources import (
     request_label,
 )
 
+DEFAULT_LAYERS = ["chirps_monthly", "copdem_terrain"]  # what a request without layers builds
 ID_CHARS = 20  # hex characters of the sha256 kept as the id (80 bits; short Windows paths)
 
 DRAWN_AREA_TITLE = "Drawn area"
@@ -88,7 +89,7 @@ def _parse_body(body: bytes | str) -> JsonObject:
 
 
 def _requested_layers(data: JsonObject, registry: Registry) -> list[str]:
-    layers = data.get("layers", list(registry))
+    layers = data.get("layers", default_layers(registry))
     valid = (
         isinstance(layers, list)
         and layers
@@ -98,6 +99,11 @@ def _requested_layers(data: JsonObject, registry: Registry) -> list[str]:
         raise AreaError("layers must be a non-empty list of: " + ", ".join(registry))
 
     return sorted(set(layers))
+
+
+def default_layers(registry: Registry) -> list[str]:
+    """The layers of DEFAULT_LAYERS that the registry has."""
+    return [layer_id for layer_id in DEFAULT_LAYERS if layer_id in registry]
 
 
 def _requested_title(data: JsonObject) -> str | None:
@@ -190,8 +196,8 @@ def _current_revisions(
 
 def _current_revision(db_path: Path | str, dataset: Dataset, steps: list[str]) -> str | None:
     """Stored revision while fresh; if the source is down, a stale stored one."""
-    # Offline answers must not reach the stored real ones.
-    if dataset.synthetic:
+    # Offline answers must not reach the stored real ones; a local source is cheap to ask.
+    if dataset.synthetic or not dataset.remote:
         return dataset.current_revision(steps)
 
     period = f"{steps[0]}/{steps[-1]}"

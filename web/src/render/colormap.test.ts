@@ -22,6 +22,15 @@ test("NaN cells are transparent", () => {
   assert.deepEqual(alphaOf(rgba), [255, 0]);
 });
 
+test("climate palette runs from slate blue to terracotta", () => {
+  const colors = lut("climate");
+  const [firstRed, , firstBlue] = colors.slice(0, COLOR_CHANNELS);
+  const [lastRed, , lastBlue] = colors.slice(-RGBA_CHANNELS);
+
+  assert.ok(firstBlue > firstRed);
+  assert.ok(lastRed > lastBlue);
+});
+
 test("values outside the stops take the end colours", () => {
   const colors = lut("ink-blue");
   const rgba = paintColormap(Float32Array.of(-5, 0, 10, 99), table([0, 1, 2, 3]), colors, [0, 10]);

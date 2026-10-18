@@ -1,6 +1,14 @@
 """The datasets the backend can build, and the readers they read through."""
+from pathlib import Path
+
 from .chirps import CHIRPS_GRID, ChirpsReader, RainDataset
 from .datasets import Registry, Role
+from .era5land import (
+    DEFAULT_CUBES_DIR,
+    ERA5_LAND_GRID,
+    Era5LandCube,
+    TemperatureDataset,
+)
 from .grid import CELL_DEG
 from .licences import SOURCES
 from .synthetic import SyntheticSource
@@ -13,16 +21,27 @@ from .terrain import (
 )
 
 
-class RealSource(ChirpsReader, CopernicusDemReader):
-    """The real readers of every dataset, over HTTP."""
+class RealSource(ChirpsReader, CopernicusDemReader, Era5LandCube):
+    """The real readers of every dataset: HTTP for rain and terrain, local disk for temperature."""
 
     synthetic = False
 
+    def __init__(
+        self,
+        latest: str | None = None,
+        cubes_dir: Path | str = DEFAULT_CUBES_DIR,
+    ) -> None:
+        ChirpsReader.__init__(self, latest)
+        Era5LandCube.__init__(self, cubes_dir)
+
 
 def make_registry(backend: RealSource | SyntheticSource) -> Registry:
-    """The two datasets, reading through `backend` (RealSource or SyntheticSource)."""
+    """The datasets, reading through `backend` (RealSource or SyntheticSource).
+
+    Temperature is listed only when the backend has its cube, so no layer lacks data.
+    """
     light = {"azimuth": 315, "altitude": 45}
-    return {
+    registry = {
         "chirps_monthly": RainDataset(
             id="chirps_monthly",
             title="Rainfall",
@@ -86,6 +105,40 @@ def make_registry(backend: RealSource | SyntheticSource) -> Registry:
             synthetic=backend.synthetic,
         ),
     }
+    if backend.has_t2m():
+        registry["era5land_t2m"] = _temperature(backend)
+    return registry
+
+
+def _temperature(backend: RealSource | SyntheticSource) -> TemperatureDataset:
+    return TemperatureDataset(
+        id="era5land_t2m",
+        title="Temperature",
+        units="°C",
+        resolution_deg=0.1,
+        source=SOURCES["era5land"],
+        roles={
+            "value": Role(
+                "t2m",
+                "int16",
+                scale=0.1,
+                fill=-32768,
+                units="degC",
+                long_name="Monthly mean 2 m air temperature",
+            ),
+        },
+        style={
+            "kind": "field",
+            "encodings": ["ramp", "isolines", "warmth"],
+            "palette": "climate",
+        },
+        backend=backend,
+        grid=ERA5_LAND_GRID,
+        step="P1M",
+        cell_method="mean",
+        synthetic=backend.synthetic,
+        remote=False,
+    )
 
 
 REGISTRY = make_registry(RealSource())

@@ -1,5 +1,6 @@
 """Scene preparation tests: validation, revision cache and scene ids (no network)."""
 import json
+from dataclasses import replace
 
 import pytest
 from shapely.geometry import box, mapping
@@ -201,3 +202,37 @@ def test_revision_is_asked_with_every_step_of_the_range(db_path, revision_source
     prepare_scene(db_path, registry, request_body(end="2015-03"))
 
     assert registry["chirps_monthly"].asked == ["2015-01-01", "2015-02-01", "2015-03-01"]
+
+
+def test_local_source_revision_is_not_cached(db_path):
+    class MovingCube:
+        marker = "0005:first"
+
+        def t2m_months(self) -> dict[str, str]:
+            return {"2016-01": self.marker, "2016-02": self.marker}
+
+    cube = MovingCube()
+    temperature = replace(
+        make_registry(SyntheticSource())["era5land_t2m"],
+        backend=cube,
+        synthetic=False,
+    )
+    registry = {"era5land_t2m": temperature}
+    body = request_body(layers=["era5land_t2m"], start="2016-01", end="2016-02")
+
+    first = prepare_scene(db_path, registry, body)
+    cube.marker = "0001:final"
+    second = prepare_scene(db_path, registry, body)
+
+    assert second.scene_id != first.scene_id
+    assert db.get_revision(db_path, "era5land_t2m", "2016-01-01/2016-02-01") is None
+
+
+def test_request_without_layers_gets_the_default_layers(db_path):
+    registry = make_registry(SyntheticSource())
+    request = json.loads(request_body())
+    del request["layers"]
+
+    prepared = prepare_scene(db_path, registry, json.dumps(request))
+
+    assert json.loads(prepared.request_json)["layers"] == ["chirps_monthly", "copdem_terrain"]

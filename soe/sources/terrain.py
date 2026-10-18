@@ -429,7 +429,7 @@ class TerrainDataset(StaticDataset):
         products = [product for product in TERRAIN_PRODUCTS if product in used]
         return [SOURCES[product] for product in products or [terrain_product(terrain_res(bbox))]]
 
-    def notices(self, bbox: Bbox) -> list[str]:
+    def notices(self, bbox: Bbox, steps: list[str]) -> list[str]:
         res = terrain_res(bbox)
         product = terrain_product(res)
         native = TERRAIN_PRODUCTS[product]

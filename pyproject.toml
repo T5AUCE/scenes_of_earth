@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-import = ["geopandas"]
+import = ["geopandas", "cdsapi>=0.7.4"]
 dev = ["pytest", "httpx"]
 
 [project.scripts]

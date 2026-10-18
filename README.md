@@ -61,6 +61,24 @@ python -m soe.cli import-boundaries --cgaz <folder> --ucdb <GHS_UCDB file or zip
 
 The import is large (several hundred MB of input). CGAZ draws disputed borders to US State Department definitions.
 
+## Temperature cube (once, then monthly)
+
+Builds read ERA5-Land monthly 2 m temperature from a Zarr cube on local disk (`SOE_CUBES_DIR/era5land_t2m.zarr`), so a
+build makes no network calls for it. The cube is filled from the Copernicus Climate Data Store (CDS), one request per
+year. Needs a CDS account, the key in `~/.cdsapirc`
+(https://cds.climate.copernicus.eu/how-to-api), and the licence accepted on the dataset page
+(https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land-monthly-means).
+
+```
+python -m soe.cli ingest-era5land --from 2016-01
+```
+
+The first run starts at `--from`; later runs continue after the last stored month and fetch again every month still
+marked preliminary (final data replaces it about two months later, and the scene then gets a new id). The newest month
+may be skipped when the CDS has not published it yet. Restart the server after the first ingest, so the layer is listed.
+Builds that need temperature get 503 while an ingest is publishing (seconds per month); if an ingest fails in that step,
+the layer stays unavailable until the next run, which refetches the affected months. Run it monthly, around the 8th.
+
 ## Terrain tile index
 
 `soe/data/glo30_tiles.bin` and `soe/data/glo90_tiles.bin` list which GLO-30 and GLO-90 tiles exist (ocean tiles do
@@ -93,7 +111,9 @@ python -m soe.cli terrain-index
 - Budgets: the raw size of all layers' arrays together is capped at 50 MB, and the source cells x steps read for all
   time-varying layers together at 100M. Terrain is planned first; each time-varying layer then gets its own aggregation
   factor (the finest output coarsened first, never beyond 0.4 degrees).
-- In v1 every layer is anchored to the 60S-60N grid of 0.05 degree cells that starts at 180W. `area.geojson` is the area
+- Temperature is stored as int16 at 0.1 °C (fill -32768), `time.method` `mean`, on its own 0.1 degree grid whose cell
+  centres lie on 0.1 degree multiples (half a cell off the rain grid). It is listed only when the cube below exists.
+- Rain and terrain are anchored to the 60S-60N grid of 0.05 degree cells that starts at 180W. `area.geojson` is the area
   clipped to the coverage of all selected layers, so one layer's mask can reach slightly beyond the outline.
 - Terrain cells are 0.05/k degrees (k up to 180, about 4.2 Mpx at most). Cells finer than 90 m are read from GLO-30 (with
   average resampling), others from GLO-90; tiles GLO-30 lacks come from GLO-90 as `layers[].fallback_sources`. Coarser
@@ -113,6 +133,7 @@ python -m soe.cli terrain-index
 | `SOE_MAX_QUEUE` | `20` | Queued plus running jobs before new ones get 503 |
 | `SOE_SYNTHETIC` | `0` | `1` uses fake offline data |
 | `SOE_LATEST` | probed | Fix the latest CHIRPS month (`YYYY-MM`) and skip the probe |
+| `SOE_CUBES_DIR` | `./data/cubes` | Where the temperature cube is read from and written to |
 
 ## Tests
 
@@ -130,6 +151,13 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
 - **Rain: CHIRPS v3** (Climate Hazards Center, UC Santa Barbara), CC BY 4.0. Funk, C. et al. (2026) The Climate Hazards
   Center Infrared Precipitation with Stations, Version 3. Scientific Data 13, 718, doi:10.1038/s41597-026-07096-4;
   dataset doi:10.15780/G2JQ0P. https://www.chc.ucsb.edu/data/chirps3
+- **Temperature: ERA5-Land monthly averaged data from 1950 to present** (ECMWF, Copernicus Climate Change Service),
+  CC BY 4.0. Required attribution: "contains modified Copernicus Climate Change Service information 2026
+  (ERA5-Land)". Disclaimer: "Neither the European Commission nor ECMWF is responsible for any use that may be made of
+  the Copernicus information or data it contains." Citation: Muñoz Sabater, J. (2019): ERA5-Land monthly averaged data
+  from 1950 to present. Copernicus Climate Change Service (C3S) Climate Data Store (CDS), doi:10.24381/cds.68d2bb30;
+  Muñoz-Sabater, J. et al. (2021) Earth Syst. Sci. Data 13, 4349-4383, doi:10.5194/essd-13-4349-2021. Converted from K to
+  °C and cropped to 60S-60N; preliminary (ERA5-Land-T) months carry a notice. The same text is in `soe/sources/licences.py`.
 - **Terrain: Copernicus DEM GLO-30 Public and GLO-90** (Copernicus WorldDEM-30 / -90 licences, free and open; GLO-90 is
   the fallback where GLO-30 has no tile). Hillshade and resampled elevation are adapted data, so the notice is
   required: "produced using Copernicus WorldDEM™-90 © DLR e.V.

@@ -26,7 +26,20 @@ const INK_BLUE = [
   [8, 48, 107],
 ];
 
-const PALETTES: Record<string, number[][]> = { "ink-blue": INK_BLUE };
+// OKLCH hue path 255→165→45 at C 0.125, the bivariate's wet row.
+const CLIMATE = [
+  [0x44, 0x7d, 0xc4],
+  [0x00, 0x89, 0xba],
+  [0x07, 0x91, 0xa3],
+  [0x02, 0x98, 0x8f],
+  [0x18, 0x9d, 0x73],
+  [0x67, 0x99, 0x48],
+  [0x97, 0x8f, 0x20],
+  [0xba, 0x81, 0x22],
+  [0xcf, 0x76, 0x4c],
+];
+
+const PALETTES: Record<string, number[][]> = { "ink-blue": INK_BLUE, climate: CLIMATE };
 
 /** A lookup table of 256 opaque RGBA entries for a named palette. */
 export function lut(name: string) {

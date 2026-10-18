@@ -17,6 +17,31 @@ SOURCES = {
             "resolution"
         ),
     },
+    "era5land": {
+        "name": "ERA5-Land monthly averaged data from 1950 to present",
+        "version": "ERA5-Land (2019)",
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": (
+            "Temperature: contains modified Copernicus Climate Change Service information "
+            "2026 (ERA5-Land)"
+        ),
+        "disclaimer": (
+            "Neither the European Commission nor ECMWF is responsible for any use that may "
+            "be made of the Copernicus information or data it contains."
+        ),
+        "disclaimer_required": True,
+        "citation": (
+            "Muñoz Sabater, J. (2019): ERA5-Land monthly averaged data from 1950 to present. "
+            "Copernicus Climate Change Service (C3S) Climate Data Store (CDS). "
+            "doi:10.24381/cds.68d2bb30; Muñoz-Sabater, J. et al. (2021) Earth Syst. Sci. Data "
+            "13, 4349-4383, doi:10.5194/essd-13-4349-2021"
+        ),
+        "modified": (
+            "converted from K to °C; cropped to 60°S-60°N; block-mean aggregation when stated "
+            "in the layer resolution; preliminary (ERA5-Land-T) months flagged"
+        ),
+    },
     "glo30": {
         "name": "Copernicus DEM GLO-30 Public",
         "version": "2021",

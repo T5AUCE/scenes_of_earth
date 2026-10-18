@@ -11,11 +11,15 @@ import numpy as np
 
 from . import db
 from .boundary_import import import_cgaz, import_ucdb
+from .era5land_ingest import ingest
 from .sources import (
+    DEFAULT_CUBES_DIR,
+    REQUEST_STEP,
     TERRAIN_PRODUCTS,
     TILE_COL_OFFSET_DEG,
     TILE_GRID_SHAPE,
     TILE_ROW_OFFSET_DEG,
+    is_request_label,
 )
 
 TILE_LIST_URLS = {
@@ -26,13 +30,21 @@ DOWNLOAD_TIMEOUT_SECS = 60
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Run the `terrain-index` or `import-boundaries` command given in `argv`."""
+    """Run the `terrain-index`, `ingest-era5land` or `import-boundaries` command in `argv`."""
     parser = _build_parser()
     args = parser.parse_args(argv)
 
     if args.command == "terrain-index":
         for product, terrain_product in TERRAIN_PRODUCTS.items():
             print(f"{product} tiles:", build_tile_index(product, terrain_product.index))
+        return
+
+    if args.command == "ingest-era5land":
+        if not is_request_label(args.start, REQUEST_STEP):
+            parser.error("--from must be YYYY-MM")
+
+        logging.basicConfig(level=logging.INFO)
+        ingest(args.cubes, args.start)
         return
 
     if not (args.cgaz or args.ucdb):
@@ -59,6 +71,22 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "terrain-index",
         help="rebuild the GLO-30 and GLO-90 tile bitmaps in soe/data (downloads 2 MB)",
+    )
+    ingest_parser = subparsers.add_parser(
+        "ingest-era5land",
+        help="download ERA5-Land monthly temperature from the CDS into the local cube",
+    )
+    ingest_parser.add_argument(
+        "--from",
+        dest="start",
+        required=True,
+        metavar="YYYY-MM",
+        help="first month of a new cube; later runs continue after the last stored month",
+    )
+    ingest_parser.add_argument(
+        "--cubes",
+        default=os.environ.get("SOE_CUBES_DIR", DEFAULT_CUBES_DIR),
+        help="folder of the cubes (default: SOE_CUBES_DIR or ./data/cubes)",
     )
     return parser
 

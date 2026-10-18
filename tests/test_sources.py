@@ -10,13 +10,17 @@ from pathlib import Path
 import numpy as np
 import pytest
 import rasterio
+import zarr
 from rasterio.transform import Affine
 
+from soe.era5land_ingest import write_months
 from soe.sources import (
     CHIRPS_GRID,
+    ERA5_LAND_GRID,
     SOURCES,
     Bbox,
     Dataset,
+    Era5LandCube,
     Grid,
     RealSource,
     Role,
@@ -24,6 +28,7 @@ from soe.sources import (
     SourceUnavailable,
     StaticDataset,
     SyntheticSource,
+    TemperatureDataset,
     chirps,
     hillshade,
     make_registry,
@@ -117,6 +122,158 @@ def test_cell_centred_grid_has_its_cell_edges_half_a_cell_off_the_chirps_grid():
     assert cell_centred.bbox((101, 102, 699, 700)) == [10.05, 20.05, 10.15, 20.15]
 
 
+def test_temperature_grid_has_cell_centres_on_tenth_degrees():
+    grid = ERA5_LAND_GRID
+    columns = np.arange(grid.columns)
+    rows = np.arange(grid.rows)
+    longitudes = grid.west_deg + (columns + 0.5) * grid.res
+    latitudes = grid.north_deg - (rows + 0.5) * grid.res
+
+    assert np.allclose(longitudes * 10, np.round(longitudes * 10))
+    assert np.allclose(latitudes * 10, np.round(latitudes * 10))
+    assert (longitudes[0], latitudes[0], latitudes[-1]) == pytest.approx((-180, 60, -60))
+
+
+def test_temperature_grid_reaches_60_south_within_its_rows():
+    _, _, _, last_row = ERA5_LAND_GRID.span((0, -60, 1, 60))
+
+    assert last_row == ERA5_LAND_GRID.rows
+
+
+class FakeCube:
+    """A cube backend with fixed month markers."""
+
+    def __init__(self, markers: dict[str, str]) -> None:
+        self.markers = markers
+
+    def t2m_months(self) -> dict[str, str]:
+        return self.markers
+
+
+def temperature_over(markers: dict[str, str]) -> TemperatureDataset:
+    synthetic = make_registry(SyntheticSource())["era5land_t2m"]
+    return replace(synthetic, backend=FakeCube(markers))
+
+
+def test_temperature_revision_changes_when_a_preliminary_month_turns_final():
+    preliminary = temperature_over({"2026-07": "0001:aaaa", "2026-08": "0005:bbbb"})
+    final = temperature_over({"2026-07": "0001:aaaa", "2026-08": "0001:cccc"})
+    steps = ["2026-07-01", "2026-08-01"]
+
+    assert preliminary.current_revision(steps) != final.current_revision(steps)
+
+
+def test_temperature_revision_ignores_months_outside_the_steps():
+    before = temperature_over({"2026-07": "0001:aaaa", "2026-08": "0005:bbbb"})
+    after = temperature_over({"2026-07": "0001:aaaa", "2026-08": "0001:cccc"})
+
+    assert before.current_revision(["2026-07-01"]) == after.current_revision(["2026-07-01"])
+
+
+def test_preliminary_steps_get_one_notice_per_run():
+    temperature = temperature_over(
+        {
+            "2026-01": "0005:a",
+            "2026-02": "0005:a",
+            "2026-03": "0001:a",
+            "2026-04": "0005:a",
+        },
+    )
+    steps = ["2026-01-01", "2026-02-01", "2026-03-01", "2026-04-01"]
+
+    notices = temperature.notices([0, 0, 1, 1], steps)
+
+    assert len(notices) == 2
+    assert notices[0].startswith("Temperature 2026-01 to 2026-02 is preliminary")
+    assert notices[1].startswith("Temperature 2026-04 is preliminary")
+
+
+def test_final_steps_get_no_notice():
+    temperature = temperature_over({"2026-01": "0001:a", "2026-02": "0001:b"})
+
+    assert temperature.notices([0, 0, 1, 1], ["2026-01-01", "2026-02-01"]) == []
+
+
+def test_every_source_with_a_disclaimer_requires_it():
+    with_disclaimer = [source for source in SOURCES.values() if "disclaimer" in source]
+
+    assert len(with_disclaimer) >= 3
+    assert all(source["disclaimer_required"] for source in with_disclaimer)
+
+
+def test_missing_cube_is_unavailable_and_not_listed(tmp_path):
+    cube = Era5LandCube(tmp_path)
+
+    assert not cube.has_t2m()
+    with pytest.raises(SourceUnavailable, match="not ingested"):
+        cube.t2m_months()
+
+
+def test_cube_read_decodes_celsius_and_fill(tmp_path):
+    field = np.full((ERA5_LAND_GRID.rows, ERA5_LAND_GRID.columns), -5.5, "float32")
+    field[1, 2] = np.nan
+    write_months(tmp_path, [("2016-01", field, "0001")])
+
+    window = Era5LandCube(tmp_path).read_t2m("2016-01", (1, 0, 3, 2))
+
+    assert window.dtype == np.float32 and window.shape == (2, 3)
+    assert window[0, 0] == pytest.approx(-5.5)
+    assert np.isnan(window[1, 1]) and not np.isnan(window[1, 0])
+
+
+def test_cube_read_wraps_at_180(tmp_path):
+    columns = np.arange(ERA5_LAND_GRID.columns, dtype="float32") / 100
+    field = np.tile(columns, (ERA5_LAND_GRID.rows, 1))
+    write_months(tmp_path, [("2016-01", field, "0001")])
+    temperature = make_registry(RealSource(cubes_dir=tmp_path))["era5land_t2m"]
+
+    values = temperature.read_step("2016-01-01", [179.85, 0.05, 180.15, 0.35])
+
+    assert values.shape == (3, 3)
+    assert values[0] == pytest.approx([35.99, 0, 0.01])
+
+
+@pytest.mark.parametrize("factor", [2, 4])
+def test_cube_read_past_60_south_is_padded_to_whole_blocks(tmp_path, factor):
+    field = np.full((ERA5_LAND_GRID.rows, ERA5_LAND_GRID.columns), 5, "float32")
+    write_months(tmp_path, [("2016-01", field, "0001")])
+    temperature = make_registry(RealSource(cubes_dir=tmp_path))["era5land_t2m"]
+    two_rows_past_the_last = (1800, 1808, 1190, 1202)
+
+    values = temperature.read_step(
+        "2016-01-01",
+        ERA5_LAND_GRID.bbox(two_rows_past_the_last),
+        factor,
+    )
+
+    assert values.shape == (12 // factor, 8 // factor)
+    assert values == pytest.approx(5)
+
+
+def test_empty_or_unreadable_cube_is_unavailable(tmp_path):
+    cube_path = tmp_path / "era5land_t2m.zarr"
+    zarr.create_group(cube_path, attributes={"months": {}})
+    cube = Era5LandCube(tmp_path)
+
+    assert not cube.has_t2m()
+    with pytest.raises(SourceUnavailable, match="not ingested"):
+        cube.t2m_months()
+
+    (cube_path / "zarr.json").write_text("{not json")
+    assert not Era5LandCube(tmp_path).has_t2m()
+
+
+def test_cube_months_are_reread_after_an_ingest(tmp_path):
+    field = np.full((ERA5_LAND_GRID.rows, ERA5_LAND_GRID.columns), 10, "float32")
+    write_months(tmp_path, [("2016-01", field, "0001")])
+    cube = Era5LandCube(tmp_path)
+    assert list(cube.t2m_months()) == ["2016-01"]
+
+    write_months(tmp_path, [("2016-02", field, "0005")])
+
+    assert list(cube.t2m_months()) == ["2016-01", "2016-02"]
+
+
 def test_terrain_res_budget():
     assert terrain_res((36.5, -1.5, 37.5, -0.5)) == pytest.approx(0.05 / 102)
     assert terrain_res((36.5, -1.5, 36.8, -1.2)) == pytest.approx(1 / 3600)
@@ -183,16 +340,16 @@ def test_terrain_notices_name_the_source_cell_size_and_the_fallback():
     kenya = [36.5, -1.5, 37.5, -0.5]
     gap_edge = [42.8, 40.0, 43.2, 40.3]
 
-    assert TERRAIN.notices(kenya) == ["Terrain resampled to 55 m cells (source 30 m)."]
-    assert not any("GLO-90" in note for note in TERRAIN.notices(kenya))
-    assert any("90 m Copernicus GLO-90" in note for note in TERRAIN.notices(gap_edge))
+    assert TERRAIN.notices(kenya, []) == ["Terrain resampled to 55 m cells (source 30 m)."]
+    assert not any("GLO-90" in note for note in TERRAIN.notices(kenya, []))
+    assert any("90 m Copernicus GLO-90" in note for note in TERRAIN.notices(gap_edge, []))
 
 
 def test_box_ending_on_a_tile_edge_gets_no_fallback_credit():
     edge = [42.8, 40.0, 43.0, 40.2]
 
     assert TERRAIN.sources_for(edge) == [SOURCES["glo30"]]
-    assert not any("GLO-90" in note for note in TERRAIN.notices(edge))
+    assert not any("GLO-90" in note for note in TERRAIN.notices(edge, []))
 
 
 def test_terrain_blocks_equal_one_read():

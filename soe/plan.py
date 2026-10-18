@@ -370,7 +370,7 @@ def _layer_plan(
         notices.append(
             "No cell center fell inside this small area, so every cell it touches is used.",
         )
-    notices += dataset.notices(bbox)
+    notices += dataset.notices(bbox, steps)
 
     return LayerPlan(
         dataset.id,

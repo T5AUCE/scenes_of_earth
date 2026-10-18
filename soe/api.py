@@ -1,8 +1,8 @@
 """FastAPI app: boundary search, scene build jobs, and static scene files.
 
 Config (environment): SOE_DB, SOE_SCENES_DIR, SOE_PUBLIC_BASE, SOE_MAX_BUILDS, SOE_MAX_QUEUE,
-SOE_SYNTHETIC, SOE_LATEST. With SOE_SYNTHETIC=1 an empty boundaries table is seeded from
-soe/data/sample_areas.geojson.
+SOE_SYNTHETIC, SOE_LATEST, SOE_CUBES_DIR. With SOE_SYNTHETIC=1 an empty boundaries table is
+seeded from soe/data/sample_areas.geojson.
 """
 import json
 import logging
@@ -27,9 +27,9 @@ from .areas import MAX_LONGITUDE_DEG, AreaError, unwrap
 from .bundle import JsonObject
 from .jobs import SceneJobs
 from .sample_areas import seed_sample_areas
-from .scene_request import ID_CHARS, request_bounds
+from .scene_request import ID_CHARS, default_layers, request_bounds
 from .sources import (
-    REGISTRY,
+    DEFAULT_CUBES_DIR,
     REQUEST_STEP,
     Dataset,
     RealSource,
@@ -46,7 +46,6 @@ IMMUTABLE = f"public, max-age={IMMUTABLE_MAX_AGE_SECS}, immutable"
 
 MAX_BODY_BYTES = 1_000_000
 LEVELS = ("country", "state", "county", "city")
-DEFAULT_LAYERS = ["chirps_monthly", "copdem_terrain"]
 MAX_SEARCH_LIMIT = 50
 
 DEFAULT_MAX_BUILDS = 1
@@ -96,8 +95,8 @@ def create_app(
     def layers() -> JsonObject:
         return {
             "request_step": REQUEST_STEP,
-            "default": [layer_id for layer_id in DEFAULT_LAYERS if layer_id in registry],
-            "layers": [_layer_out(dataset) for dataset in registry.values()],
+            "default": default_layers(registry),
+            "layers": _available_layers(registry),
         }
 
     @app.get("/api/areas/search", response_model=None)
@@ -177,9 +176,8 @@ def create_app(
 def _default_registry() -> Registry:
     if os.environ.get("SOE_SYNTHETIC") == "1":
         return make_registry(SyntheticSource())
-    if os.environ.get("SOE_LATEST"):
-        return make_registry(RealSource(os.environ["SOE_LATEST"]))
-    return REGISTRY
+    cubes_dir = os.environ.get("SOE_CUBES_DIR", DEFAULT_CUBES_DIR)
+    return make_registry(RealSource(os.environ.get("SOE_LATEST"), cubes_dir))
 
 
 def _warm_latest_months(registry: Registry) -> None:
@@ -192,6 +190,17 @@ def _warm_latest_months(registry: Registry) -> None:
             dataset.latest()
         except Exception:
             log.warning("could not warm latest month of %s", dataset.id, exc_info=True)
+
+
+def _available_layers(registry: Registry) -> list[JsonObject]:
+    """The layers of the registry, without those whose data is unavailable right now."""
+    layers = []
+    for dataset in registry.values():
+        try:
+            layers.append(_layer_out(dataset))
+        except SourceUnavailable:
+            log.warning("%s is unavailable, left out of the layer list", dataset.id)
+    return layers
 
 
 def _layer_out(dataset: Dataset) -> JsonObject:
