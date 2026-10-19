@@ -38,6 +38,9 @@ const PICKED_LINE_WIDTH_PX = 3;
 
 const AREA_LABEL_SUFFIX = "-in-area";
 
+// Projection round-off must not trigger another synchronous move event at the pan limit.
+const CENTRE_TOLERANCE_WORLDS = 1e-12;
+
 interface DrawableImage {
   updateImage(options: { image: ImageData }): void;
 }
@@ -107,7 +110,10 @@ export function lockPan(map: MapLibreMap, fitted: { center: LngLat; zoom: number
     const limitY = panLimit(clientHeight / fittedWorldPx, fitted.zoom, zoom);
     const x = clampAround(centre.x, fittedCentre.x, limitX);
     const y = clampAround(centre.y, fittedCentre.y, limitY);
-    if (x === centre.x && y === centre.y) return;
+    if (
+      Math.abs(x - centre.x) <= CENTRE_TOLERANCE_WORLDS
+      && Math.abs(y - centre.y) <= CENTRE_TOLERANCE_WORLDS
+    ) return;
 
     map.setCenter(new MercatorCoordinate(x, y, 0).toLngLat());
   };

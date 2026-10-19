@@ -39,10 +39,10 @@ test("multidirectional lighting is transparent on flat ground even at zero stren
   }
 });
 
-test("exaggeration stays within 0 to 1 over the whole slider range", () => {
+test("exaggeration stays within 0 to 3.5 over the whole slider range", () => {
   for (const strength of STRENGTHS) {
     for (const value of exaggerations(strength)) {
-      assert.ok(value >= 0 && value <= 1, `strength ${strength} gave ${value}`);
+      assert.ok(value >= 0 && value <= 3.5, `strength ${strength} gave ${value}`);
     }
   }
 });

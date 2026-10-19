@@ -14,7 +14,8 @@ const hooks = registerHooks({
     return next(new URL(`${specifier}.ts`, context.parentURL).href, context);
   },
 });
-const { gradientLegend } = await import("./legend.ts").finally(() => hooks.deregister());
+const { contourLegendText, gradientLegend } =
+  await import("./legend.ts").finally(() => hooks.deregister());
 
 const KENYA_RAINFALL_STOPS = [0, 10, 30, 40, 60, 80, 100, 130, 200];
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
@@ -32,6 +33,16 @@ afterEach(() => {
   }
 
   Reflect.deleteProperty(globalThis, "document");
+});
+
+test("the fitted Fiji contour legend describes only visible bold lines", () => {
+  assert.equal(contourLegendText(1000, 100), "Contours every 1000 m (all bold)");
+  assert.equal(contourLegendText(100, 100), "Contours every 100 m (all bold)");
+});
+
+test("the contour legend keeps the bold step when finer minor lines are visible", () => {
+  assert.equal(contourLegendText(50, 100), "Contours every 50 m (bold every 100 m)");
+  assert.equal(contourLegendText(50, 100, "ft"), "Contours every 50 ft (bold every 100 ft)");
 });
 
 test("Kenya rainfall keeps numeric ticks and shows its units once outside them", () => {

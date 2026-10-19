@@ -1,0 +1,22 @@
+{
+  "spots": [
+    {
+      "name": "Nairobi",
+      "area": "sample:kenya",
+      "centre": [36.82, -1.29],
+      "zooms": ["fitted", 9, 12]
+    },
+    {
+      "name": "VitiLevu-Sigatoka-valley",
+      "area": "sample:fiji",
+      "centre": [177.55, -18.0],
+      "zooms": ["fitted", 9, 12]
+    },
+    {
+      "name": "Burkina-centre",
+      "area": "sample:burkina-faso",
+      "centre": [-1.7, 12.2],
+      "zooms": ["fitted", 9, 12]
+    }
+  ]
+}

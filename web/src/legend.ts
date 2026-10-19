@@ -4,7 +4,8 @@ const GRADIENT_STOP_ENTRIES = [0, 64, 128, 192, 255];
 
 /** The legend line for contours. */
 export function contourLegendText(interval: number, boldInterval: number, units = "m") {
-  return `Contours every ${interval} ${units} (bold every ${boldInterval} ${units})`;
+  const emphasis = interval >= boldInterval ? "all bold" : `bold every ${boldInterval} ${units}`;
+  return `Contours every ${interval} ${units} (${emphasis})`;
 }
 
 /** A colour bar with stop labels under their colours and a separate units caption. */

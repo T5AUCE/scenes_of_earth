@@ -4,6 +4,7 @@ import type {
   ExpressionSpecification,
   FilterSpecification,
   Map as MapLibreMap,
+  SymbolLayerSpecification,
 } from "maplibre-gl";
 
 import {
@@ -27,6 +28,7 @@ const BOLD_LINE_WIDTH_PX = 1.1;
 const LABEL_SIZE_PX = 10;
 const LABEL_SPACING_PX = 350;
 const LABEL_HALO_WIDTH_PX = 1;
+const LABEL_MAX_ANGLE_DEG = 120;
 const PAGE_BACKGROUND_PROPERTY = "--page-background";
 
 // Version 0.1.1 materializes only one pixel of padding before tracing contours.
@@ -140,8 +142,10 @@ export class ContourOverlay {
     if (tiers.length === 0) return;
 
     const id = `${this.sourceId}-labels`;
-    const font = this.map.getStyle().layers.find((layer) => layer.type === "symbol")
-      ?.layout?.["text-font"];
+    const font = this.map.getStyle().layers.find(
+      (layer): layer is SymbolLayerSpecification =>
+        layer.type === "symbol" && layer.layout?.["text-font"] !== undefined,
+    )?.layout?.["text-font"];
     const finest = tiers.at(-1)!;
     this.map.addLayer(
       {
@@ -156,6 +160,7 @@ export class ContourOverlay {
           "symbol-spacing": LABEL_SPACING_PX,
           "symbol-sort-key": labelPriority(),
           "text-size": LABEL_SIZE_PX,
+          "text-max-angle": LABEL_MAX_ANGLE_DEG,
           "text-field": labelField(tiers),
           ...(font ? { "text-font": font } : {}),
         },

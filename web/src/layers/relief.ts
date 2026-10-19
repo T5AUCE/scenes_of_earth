@@ -2,10 +2,12 @@ import type { LayerSpecification } from "maplibre-gl";
 
 type HillshadePaint = NonNullable<Extract<LayerSpecification, { type: "hillshade" }>["paint"]>;
 
-/** Configure visit-only strength with 1 as the default and 0 as no shading. */
-export const RELIEF_STRENGTH = { min: 0, max: 2, step: 0.1, initial: 1 };
+/** Configure visit-only strength with 2 as the default and 0 as no shading. */
+export const RELIEF_STRENGTH = { min: 0, max: 5, step: 0.1, initial: 2 };
 
-const MAX_EXAGGERATION = 1;
+// The style spec caps exaggeration at 1, but MapLibre does not range-check expression output and
+// the multidirectional shader scales slopes linearly, so larger values still steepen the shading.
+const MAX_EXAGGERATION = 3.5;
 const LOW_DETAIL_ZOOM = 4;
 const HIGH_DETAIL_ZOOM = 12;
 // Low zoom needs gentler shading because MapLibre already steepens slopes there.

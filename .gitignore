@@ -23,6 +23,7 @@ data/
 # Frontend
 node_modules/
 web/dist/
+web/.trial-cache/
 
 # Personal credentials (CDS key); linked into ~ by postCreateCommand
 .secrets/

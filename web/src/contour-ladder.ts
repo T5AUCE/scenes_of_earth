@@ -8,8 +8,8 @@ export const CONTOUR_OVERZOOM = 1;
 /** Zoom levels a tier takes to reach full opacity after it first shows. */
 export const FADE_SPAN_ZOOM = 0.75;
 
-/** Add the next finer labelled height where bold lines sit far apart. Off until a trial asks. */
-export const LABEL_SPARSE_FALLBACK = false;
+/** Add the next finer labelled height where bold lines sit far apart; the M5 trial asked for it. */
+export const LABEL_SPARSE_FALLBACK = true;
 
 const MIN_LINE_GAP_PX = 2.5;
 const MIN_BOLD_LEVELS = 3;

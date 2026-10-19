@@ -79,9 +79,9 @@ test("the ladder has a 10 m floor and freezes at z12 or the DEM overzoom ceiling
   assert.ok(capped.tiers.every((tier) => tier.entryZoom <= 9));
 });
 
-test("labels stay bold-only by default and the sparse switch only adds a finer tier", () => {
+test("labels are bold-only without the sparse switch, which only adds a finer tier", () => {
   for (const sample of [FIJI, KENYA, FLAT]) {
-    const bold = contourLadder(sample, 0);
+    const bold = contourLadder(sample, 0, { labelSparseFallback: false });
     assert.deepEqual(bold.labelTiers.map((tier) => tier.interval), [bold.boldInterval]);
     const sparse = contourLadder(sample, 0, { labelSparseFallback: true });
     let previous: number[] = [];
@@ -92,6 +92,7 @@ test("labels stay bold-only by default and the sparse switch only adds a finer t
     }
   }
   assert.equal(contourLadder(FLAT, 12, { labelSparseFallback: true }).labelTiers.length, 2);
+  assert.equal(contourLadder(FLAT, 12).labelTiers.length, 2);
 });
 
 test("the ladder is deterministic and does not mutate its statistics", () => {
