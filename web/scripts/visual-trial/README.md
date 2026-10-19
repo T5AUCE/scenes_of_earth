@@ -66,6 +66,8 @@ their remaining budget expires, and `Retry-After` waits cannot extend the deadli
   has no ocean tiles and the basemap has a known font gap, so some of these failures are expected.
 - `errors` counts distinct console and MapLibre diagnostics. `error_samples` lists up to five.
 - `legend` contains the contour legend line when one is present.
+- `legend_classes` lists the visible categorical legend labels in panel order for each view.
+  It is empty when no class labels are shown or the view has no sample.
 
 Contour layer ids are matched by the patterns at the top of `measure.mjs`.
 

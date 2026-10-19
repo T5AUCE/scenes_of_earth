@@ -100,6 +100,7 @@ export function viewRecord({ spot, scene, zoom, sample, failures, messages, time
     errors: unique.length,
     error_samples: unique.slice(0, MAX_LISTED_MESSAGES),
     legend: sample?.legend ?? null,
+    legend_classes: sample?.classLabels ?? [],
     timed_out: timedOut,
   };
 }

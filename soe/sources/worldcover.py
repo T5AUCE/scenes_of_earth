@@ -83,6 +83,21 @@ def worldcover_tiles(bounds: Bbox) -> list[PlacedTile]:
     return tiles
 
 
+def _tile_edge(degrees: float) -> int:
+    """The tile edge at or below degrees."""
+    return math.floor(degrees / TILE_DEG) * TILE_DEG
+
+
+@lru_cache
+def _tile_index() -> np.ndarray:
+    """60 x 120 bool grid of the tiles that exist in the bucket.
+
+    The row is (lat + 90) / 3 and the column is (lon + 180) / 3.
+    """
+    packed = np.frombuffer(WORLDCOVER_TILE_INDEX.read_bytes(), "uint8")
+    return np.unpackbits(packed).reshape(WORLDCOVER_GRID_SHAPE).astype(bool)
+
+
 def index_cell(lat: int, file_lon: int) -> tuple[int, int]:
     """(row, column) in the tile index of the tile with this south-west corner."""
     return (lat + 90) // TILE_DEG, (file_lon + 180) // TILE_DEG
@@ -131,6 +146,17 @@ def land_cover_by_tiles(
     return classes, from_origin(west, north, res, res)
 
 
+def _tile_part(tile: PlacedTile, bounds: Bbox) -> Bbox:
+    """The part of bounds inside the tile."""
+    west, south, east, north = bounds
+    return (
+        max(west, tile.lon),
+        max(south, tile.lat),
+        min(east, tile.lon + TILE_DEG),
+        min(north, tile.lat + TILE_DEG),
+    )
+
+
 class WorldCoverReader:
     """ESA WorldCover tiles over HTTP."""
 
@@ -146,78 +172,6 @@ class WorldCoverReader:
         read. Returns (array, transform).
         """
         return land_cover_by_tiles(bounds, res, _read_tile, on_block)
-
-
-class LandCoverDataset(StaticDataset):
-    """The most common ESA WorldCover class in each cell, at a size set by the area."""
-
-    def tile_count(self, bbox: Bbox) -> int:
-        return len(worldcover_tiles(bbox))
-
-    def res_for(self, bbox: Bbox) -> float:
-        return budget_res(bbox, STATIC_BUDGET_PX, MAX_STATIC_SIDE_PX, MAX_STATIC_DIVISIONS)
-
-    def block_count(self, bbox: Bbox) -> int:
-        return self.tile_count(bbox)
-
-    def read(
-        self,
-        bbox: Bbox,
-        res: float,
-        on_block: Callable[[], None] | None = None,
-    ) -> tuple[dict[str, np.ndarray], Affine]:
-        """Return uint8 classes over bbox at cell size `res`."""
-        classes, transform = self.backend.land_cover(
-            tuple(bbox),
-            res,
-            on_block or (lambda: None),
-        )
-        return {"value": classes}, transform
-
-    def notices(self, bbox: Bbox, steps: list[str]) -> list[str]:
-        _, south, _, north = bbox
-        centre_latitude = (south + north) / 2
-        cell_m = (
-            self.res_for(bbox)
-            * LONGITUDE_DEGREE_AT_EQUATOR_M
-            * math.cos(math.radians(centre_latitude))
-        )
-        return [
-            f"Land cover shows the most common class in each {cell_m:,.0f} m cell "
-            "(source 10 m).",
-        ]
-
-
-def _tile_edge(degrees: float) -> int:
-    """The tile edge at or below degrees."""
-    return math.floor(degrees / TILE_DEG) * TILE_DEG
-
-
-def _tile_name(lat: int, lon: int) -> str:
-    north_south = "N" if lat >= 0 else "S"
-    east_west = "E" if lon >= 0 else "W"
-    return f"{north_south}{abs(lat):02d}{east_west}{abs(lon):03d}"
-
-
-@lru_cache
-def _tile_index() -> np.ndarray:
-    """60 x 120 bool grid of the tiles that exist in the bucket.
-
-    The row is (lat + 90) / 3 and the column is (lon + 180) / 3.
-    """
-    packed = np.frombuffer(WORLDCOVER_TILE_INDEX.read_bytes(), "uint8")
-    return np.unpackbits(packed).reshape(WORLDCOVER_GRID_SHAPE).astype(bool)
-
-
-def _tile_part(tile: PlacedTile, bounds: Bbox) -> Bbox:
-    """The part of bounds inside the tile."""
-    west, south, east, north = bounds
-    return (
-        max(west, tile.lon),
-        max(south, tile.lat),
-        min(east, tile.lon + TILE_DEG),
-        min(north, tile.lat + TILE_DEG),
-    )
 
 
 def _read_tile(tile: PlacedTile, part: Bbox, res: float) -> np.ndarray:
@@ -248,3 +202,53 @@ def _read_tile(tile: PlacedTile, part: Bbox, res: float) -> np.ndarray:
         return classes
 
     return read_with_retries(warp, "ESA WorldCover tiles did not answer")
+
+
+class LandCoverDataset(StaticDataset):
+    """The most common ESA WorldCover class in each cell, at a size set by the area."""
+
+    def tile_count(self, bbox: Bbox) -> int:
+        """Return the number of available WorldCover tiles intersecting bbox."""
+        return len(worldcover_tiles(bbox))
+
+    def res_for(self, bbox: Bbox) -> float:
+        """Return the cell size in degrees that fits bbox within the static pixel budget."""
+        return budget_res(bbox, STATIC_BUDGET_PX, MAX_STATIC_SIDE_PX, MAX_STATIC_DIVISIONS)
+
+    def block_count(self, bbox: Bbox) -> int:
+        """Return the number of tile reads used to report build progress."""
+        return self.tile_count(bbox)
+
+    def read(
+        self,
+        bbox: Bbox,
+        res: float,
+        on_block: Callable[[], None] | None = None,
+    ) -> tuple[dict[str, np.ndarray], Affine]:
+        """Return uint8 classes over bbox at cell size `res`."""
+        classes, transform = self.backend.land_cover(
+            tuple(bbox),
+            res,
+            on_block or (lambda: None),
+        )
+        return {"value": classes}, transform
+
+    def notices(self, bbox: Bbox, steps: list[str]) -> list[str]:
+        """Return a notice explaining the output cell size and source resolution."""
+        _, south, _, north = bbox
+        centre_latitude = (south + north) / 2
+        cell_m = (
+            self.res_for(bbox)
+            * LONGITUDE_DEGREE_AT_EQUATOR_M
+            * math.cos(math.radians(centre_latitude))
+        )
+        return [
+            f"Land cover shows the most common class in each {cell_m:,.0f} m cell "
+            "(source 10 m).",
+        ]
+
+
+def _tile_name(lat: int, lon: int) -> str:
+    north_south = "N" if lat >= 0 else "S"
+    east_west = "E" if lon >= 0 else "W"
+    return f"{north_south}{abs(lat):02d}{east_west}{abs(lon):03d}"

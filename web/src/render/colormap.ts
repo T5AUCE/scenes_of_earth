@@ -107,6 +107,27 @@ export function paintClasses(
   return rgba;
 }
 
+/** RGBA of a class raster, where colorsById[id - 1] is the colour of class index id. */
+export function paintClassIds(ids: Uint8Array, colorsById: number[][]) {
+  const rgba = new Uint8ClampedArray(ids.length * RGBA_CHANNELS);
+  const palette = Uint8ClampedArray.of(
+    0,
+    0,
+    0,
+    0,
+    ...colorsById.flatMap((color) => [...color, OPAQUE]),
+  );
+  for (let pixel = 0; pixel < ids.length; pixel++) {
+    const entry = ids[pixel] * RGBA_CHANNELS;
+    const start = pixel * RGBA_CHANNELS;
+    rgba[start] = palette[entry];
+    rgba[start + 1] = palette[entry + 1];
+    rgba[start + 2] = palette[entry + 2];
+    rgba[start + 3] = palette[entry + 3];
+  }
+  return rgba;
+}
+
 function hexToRgb(hex: string) {
   return [1, 3, 5].map((start) => parseInt(hex.slice(start, start + 2), 16));
 }

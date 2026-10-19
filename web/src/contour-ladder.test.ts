@@ -277,6 +277,27 @@ test("the configured contour buffer stays inside the plugin's materialized paddi
   overlay.destroy();
 });
 
+test("the relief backdrop is coarser than the main source and flat once the main source loads", (context) => {
+  mockPage(context);
+  const map = new TestMap();
+  const view = createTerrainView(layerContext(map));
+  const backdrop = map.sources.get("terrain-relief-backdrop")!;
+  const lastPaint = () => JSON.stringify(map.paints.at(-1)![1]);
+
+  assert.ok(backdrop.maxzoom < map.sources.get("terrain-relief").maxzoom);
+  assert.ok(view.parts[0].layerIds.includes("terrain-relief-backdrop"));
+
+  map.emit("zoom");
+  const shaded = lastPaint();
+  map.mainSourceLoaded = true;
+  map.emit("zoom");
+
+  assert.notEqual(lastPaint(), shaded);
+  assert.ok(lastPaint().includes("0"));
+  view.destroy();
+  assert.ok(!map.sources.has("terrain-relief-backdrop"));
+});
+
 test("shared relief and contour layers keep their mask-gated zoom bounds", (context) => {
   mockPage(context);
   const map = new TestMap();
@@ -376,7 +397,12 @@ class TestMap {
   addLayer(layer: { id: string }) { this.layers.set(layer.id, layer); }
   removeLayer(id: string) { this.layers.delete(id); }
   removeSource(id: string) { this.sources.delete(id); }
-  setPaintProperty() {}
+  mainSourceLoaded = false;
+  readonly paints: [string, unknown][] = [];
+
+  getCanvas() { return { clientWidth: 1000 }; }
+  isSourceLoaded() { return this.mainSourceLoaded; }
+  setPaintProperty(id: string, _property: string, value: unknown) { this.paints.push([id, value]); }
   setLayerZoomRange(id: string, minzoom: number, maxzoom: number) {
     Object.assign(this.layers.get(id), { minzoom, maxzoom });
   }

@@ -234,7 +234,7 @@ export interface LayerControl {
 /** Own a drawn layer's controls and time axis along with its legend and teardown. */
 export interface LayerView {
   parts: Part[];
-  options: { label: string; set(on: boolean): void; note?: string }[];
+  options: { label: string; set(on: boolean): void; note?: string; initial?: boolean }[];
   time: TimeDoc | null;
   ready?: Promise<void>; // rejects when the layer's data cannot be read
   setTime(time: string): void;

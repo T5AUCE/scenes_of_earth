@@ -55,7 +55,7 @@ function stopLabels(stops: number[]) {
   return labels;
 }
 
-/** One row per class present in the area: a swatch in the active colour and the class name. */
+/** Render a swatch and name for each class present in the area. */
 export function classLegend(
   classes: ClassDoc[],
   presentValues: Set<number>,

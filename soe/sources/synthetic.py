@@ -90,6 +90,7 @@ class SyntheticSource:
         res: float,
         on_block: Callable[[], None] = lambda: None,
     ) -> tuple[np.ndarray, Affine]:
+        """Return deterministic class bands over bounds with zeroes where no tile exists."""
         return land_cover_by_tiles(bounds, res, _synthetic_classes, on_block)
 
 

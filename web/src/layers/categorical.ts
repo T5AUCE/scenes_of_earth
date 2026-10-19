@@ -1,12 +1,15 @@
 import { arrayDoc, decode, readArray } from "../data";
 import { classLegend } from "../legend";
 import { addImageLayer, maxTextureSize, removeLayerAndSource, setImage } from "../map";
-import { classColors, paintClasses } from "../render/colormap";
+import { classColors, paintClasses, paintClassIds } from "../render/colormap";
 import { sampleTable } from "../render/mercator";
+import { cellClassIds, smoothClassIds } from "../render/smooth-classes";
+import type { ClassRaster } from "../render/smooth-classes";
 import type { LayerContext, LayerView } from "../types";
 
 const CATEGORICAL_OPACITY = 0.8;
 const OFFICIAL_COLORS_NOTE = "Default colours are softened; ESA colours are the product's own.";
+const SMOOTH_NOTE = "Edges smoothed for display; classes are per cell.";
 
 /** Render a static class layer, with a legend of the classes present in the area. */
 export function createCategoricalView(
@@ -20,8 +23,11 @@ export function createCategoricalView(
   const softened = classColors(classes, palette);
   const official = classColors(classes);
   const legendBox = document.createElement("div");
+  const classValues = classes.map(({ value }) => value);
   let colors = softened;
+  let smooth = true;
   let values: Float32Array | null = null;
+  let smoothRaster: ClassRaster | null = null;
   let alive = true;
 
   addImageLayer(map, id, layer.grid.bbox, shift, beforeId, {
@@ -29,13 +35,31 @@ export function createCategoricalView(
     "raster-resampling": "nearest",
   });
 
-  const table = sampleTable(layer.grid, maxTextureSize(map));
+  const textureSize = maxTextureSize(map);
+  const table = sampleTable(layer.grid, textureSize);
+
+  // The smoothed raster is built once because only the colours change between repaints.
+  const smoothedRaster = (cellValues: Float32Array) => {
+    smoothRaster ??= smoothClassIds(
+      cellClassIds(cellValues, classValues),
+      layer.grid,
+      table,
+      textureSize,
+    );
+    return smoothRaster;
+  };
 
   const repaint = () => {
     if (!values) return;
 
-    const rgba = paintClasses(values, table, colors);
-    setImage(map, id, new ImageData(rgba, table.width, table.height));
+    if (smooth) {
+      const { ids, width, height } = smoothedRaster(values);
+      const rgba = paintClassIds(ids, classValues.map((value) => colors.get(value) ?? [0, 0, 0]));
+      setImage(map, id, new ImageData(rgba, width, height));
+    } else {
+      const rgba = paintClasses(values, table, colors);
+      setImage(map, id, new ImageData(rgba, table.width, table.height));
+    }
     legendBox.replaceChildren(classLegend(classes, new Set(values), colors));
   };
 
@@ -50,6 +74,15 @@ export function createCategoricalView(
   return {
     parts: [{ id, label: layer.title, layerIds: [id] }],
     options: [
+      {
+        label: "Smooth edges",
+        note: SMOOTH_NOTE,
+        initial: true,
+        set: (on) => {
+          smooth = on;
+          repaint();
+        },
+      },
       {
         label: "ESA colours",
         note: OFFICIAL_COLORS_NOTE,

@@ -327,3 +327,26 @@ def test_land_cover_layer_is_valid_and_credits_worldcover(tmp_path):
     assert layer["style"]["kind"] == "categorical" and layer["style"]["palette"] == "painted"
     assert layer["arrays"]["value"]["fill"] == 0
     assert SOURCES["worldcover"]["attribution"] in doc["credits"]["lines"]
+
+
+@pytest.mark.parametrize("style_palette", [{}, {"palette": "painted"}])
+def test_categorical_palette_may_be_missing_or_known(tmp_path, style_palette):
+    build_scene(HASH_A, Area(NAIROBI), None, None, [LAND_COVER], "T", tmp_path)
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    style = doc["layers"][0]["style"]
+    del style["palette"]
+    style.update(style_palette)
+
+    assert validate(doc) == []
+
+
+@pytest.mark.parametrize("palette", ["unknown", "ink-blue", "", None, 1, True, [], {}])
+def test_categorical_palette_rejects_unknown_names_and_non_text_values(tmp_path, palette):
+    build_scene(HASH_A, Area(NAIROBI), None, None, [LAND_COVER], "T", tmp_path)
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    layer = doc["layers"][0]
+    layer["style"]["palette"] = palette
+
+    assert validate(doc) == [
+        f"{layer['id']}: style.palette must be omitted or one of: painted",
+    ]

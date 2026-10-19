@@ -5,6 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { runInNewContext } from "node:vm";
 
 import { newContext, trialSpot } from "./browser.mjs";
 import { installCache, isFresh, readEntry, writeEntry } from "./cache.mjs";
@@ -97,6 +98,7 @@ test("the first view keeps failures emitted before the outline is ready", async 
     labelLines: [],
     centre: [0, 0],
     cardText: "",
+    classLabels: ["Tree cover", "Shrubland"],
   };
   const mapErrors = ["early map error"];
   const page = {
@@ -125,12 +127,66 @@ test("the first view keeps failures emitted before the outline is ready", async 
   );
 
   assert.equal(records[0].failed_requests, 1);
+  assert.deepEqual(records[0].legend_classes, ["Tree cover", "Shrubland"]);
   assert.deepEqual(records[0].error_samples, [
     "pageerror: early JavaScript error",
     "early map error",
   ]);
   assert.equal(records[1].failed_requests, 0);
   assert.equal(records[1].errors, 0);
+  assert.deepEqual(records[1].legend_classes, ["Tree cover", "Shrubland"]);
+});
+
+test("categorical records include only the class labels shown in each view", async () => {
+  const labels = [
+    { innerText: "Tree cover", checkVisibility: () => true },
+    { innerText: "Shrubland", checkVisibility: () => false },
+    { innerText: " Grassland ", checkVisibility: () => true },
+  ];
+  const card = {
+    innerText: "Land cover\nTree cover\nGrassland",
+    querySelectorAll: (selector) => {
+      assert.equal(selector, ".legend-swatch + span");
+      return labels;
+    },
+  };
+  const sandbox = {
+    document: { querySelectorAll: () => [card] },
+    window: {
+      __trialMaskReady: true,
+      __trialLayersReady: true,
+      __map: {
+        getStyle: () => ({ layers: [] }),
+        getCanvas: () => ({ clientWidth: 1280, clientHeight: 800 }),
+        getZoom: () => 8,
+        areTilesLoaded: () => true,
+      },
+    },
+  };
+  const page = {
+    on: () => {},
+    goto: async () => {},
+    waitForFunction: async () => {},
+    evaluate: async (callback, patterns) => {
+      if (callback.name === "waitForIdle") return true;
+      if (callback.name !== "takeSample") return [];
+
+      const sample = runInNewContext(`(${callback})(patterns)`, { ...sandbox, patterns });
+      return JSON.parse(JSON.stringify(sample));
+    },
+    close: async () => {},
+  };
+  const records = await trialSpot(
+    { newPage: async () => page },
+    "https://example.test",
+    { name: "Land cover", enable: [], zooms: ["fitted"] },
+    "scene",
+    { screens: false },
+  );
+
+  assert.deepEqual(records[0].legend_classes, ["Tree cover", "Grassland"]);
+  assert.equal(records[0].legend, null);
+  assert.equal(records[0].timed_out, false);
 });
 
 test("slug keeps file names simple", () => {
@@ -171,6 +227,7 @@ test("viewRecord counts failures by kind and lists each message once", () => {
   assert.equal(record.glyph_404, 1);
   assert.equal(record.failed_requests, 1);
   assert.equal(record.errors, 2);
+  assert.deepEqual(record.legend_classes, []);
 });
 
 test("viewRecord reports a view without a sample as not loaded", () => {
@@ -187,6 +244,7 @@ test("viewRecord reports a view without a sample as not loaded", () => {
   assert.equal(record.label_features, null);
   assert.equal(record.tiles_loaded, false);
   assert.equal(record.timed_out, true);
+  assert.deepEqual(record.legend_classes, []);
 });
 
 test("mutable cache entries require revalidation across runs even before max-age", () => {

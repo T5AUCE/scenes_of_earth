@@ -204,6 +204,11 @@ body.scene-mode #panel {
   gap: 0 14px;
 }
 
+#scene-column .card .option-checks {
+  display: flex;
+  gap: 0 14px;
+}
+
 #scene-column .card .option-note {
   margin: 0 0 4px 20px;
   font-size: 11px;

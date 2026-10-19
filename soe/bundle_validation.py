@@ -11,6 +11,9 @@ MIN_STOPS = 2
 STYLE_KINDS = ("field", "categorical", "terrain")
 COLOUR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
 
+# The web duplicates these names in render/colormap.ts CLASS_PALETTES.
+CLASS_PALETTES = ("painted",)
+
 TILE_URL_PARTS = ("{z}", "{x}", "{y}")
 TILE_ENCODINGS = ("terrarium",)
 TERRAIN_STATS = (
@@ -182,6 +185,11 @@ def _style_problems(layer_id: str, style: JsonObject) -> list[str]:
         problems += _stops_problems(layer_id, style.get("stops"))
 
     if kind == "categorical":
+        if "palette" in style and style["palette"] not in CLASS_PALETTES:
+            problems.append(
+                f"{layer_id}: style.palette must be omitted or one of: "
+                + ", ".join(CLASS_PALETTES),
+            )
         problems += _classes_problems(layer_id, style.get("classes"))
     return problems
 

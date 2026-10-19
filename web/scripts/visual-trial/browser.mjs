@@ -309,5 +309,10 @@ function takeSample([linePattern, labelPattern]) {
     tilesLoaded: map.areTilesLoaded(),
     sceneReady: window.__trialMaskReady === true && window.__trialLayersReady === true,
     cardText: cards.map((card) => card.innerText).join("\n"),
+    classLabels: cards.flatMap((card) =>
+      [...card.querySelectorAll(".legend-swatch + span")]
+        .filter((label) => label.checkVisibility({ visibilityProperty: true }))
+        .map((label) => label.innerText.trim()),
+    ),
   };
 }

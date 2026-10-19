@@ -1,8 +1,8 @@
 """Run the offline data jobs from the command line.
 
 The module imports country and city boundaries into SQLite. It rebuilds the Copernicus terrain
-tile indexes and the ESA WorldCover tile index. It also ingests ERA5-Land and ERA5 monthly cubes into local folders. Run
-`python -m soe.cli --help` to see the commands and their options.
+tile indexes and the ESA WorldCover tile index. It also ingests ERA5-Land and ERA5 monthly cubes
+into local folders. Run `python -m soe.cli --help` to see the commands and their options.
 """
 import argparse
 import json
