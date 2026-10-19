@@ -109,7 +109,7 @@ def test_plan_rejections(tmp_path):
         plan_months(Area(box(-60, -20, 40, 10)), [RAIN], 240)
 
     without_cube = make_registry(RealSource(cubes_dir=tmp_path))
-    assert without_cube.keys() == {"copdem_terrain"}
+    assert without_cube.keys() == {"terrain"}
     assert len(terrain_tiles((36, -2, 38, 0), "glo90")) == 4
 
     with pytest.raises(AreaError, match="source tiles"):  # 8190 existing tiles > 2500
@@ -249,7 +249,7 @@ def test_coarsened_mask_keeps_the_off_grid_edge_cells(monkeypatch):
 
 def test_plan_gives_each_layer_its_own_grid_and_mask():
     scene_plan = plan_months(Area(NAIROBI), [TERRAIN, RAIN])
-    terrain, rain = scene_plan.layers["copdem_terrain"], scene_plan.layers["chirps_monthly"]
+    terrain, rain = scene_plan.layers["terrain"], scene_plan.layers["chirps_monthly"]
 
     assert terrain.res == pytest.approx(0.05 / 102) and rain.res == pytest.approx(0.05)
     assert terrain.shape == (2040, 2040) and rain.shape == (20, 20)
@@ -261,11 +261,12 @@ def test_plan_gives_each_layer_its_own_grid_and_mask():
 def test_output_budget_is_summed_across_layers():
     area = Area(box(30, -10, 50, 10))  # 160k rain cells
 
-    assert plan_months(area, [RAIN], 140).layers["chirps_monthly"].factor == 1  # 44.8 MB
+    assert plan_months(area, [RAIN], 150).layers["chirps_monthly"].factor == 1  # 48 MB of values
 
-    both = plan_months(area, [TERRAIN, RAIN], 140)  # terrain takes 12 MB of the 50
+    # Terrain's 4 MB mask pushes the combined scene over the 50 MB budget.
+    both = plan_months(area, [TERRAIN, RAIN], 150)
 
-    assert both.layers["chirps_monthly"].factor == 2 and both.layers["copdem_terrain"].factor == 1
+    assert both.layers["chirps_monthly"].factor == 2 and both.layers["terrain"].factor == 1
 
 
 @pytest.mark.parametrize(("budget_bytes", "factor"), [(2400, 1), (2399, 2)])

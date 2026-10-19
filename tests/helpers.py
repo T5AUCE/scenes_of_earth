@@ -19,7 +19,7 @@ NAIROBI = box(36.5, -1.5, 37.5, -0.5)
 FIJI = MultiPolygon([box(178, -19, 180, -17), box(-180, -19, -178, -17)])
 
 SYNTHETIC_REGISTRY = make_registry(SyntheticSource())
-RAIN, TERRAIN = SYNTHETIC_REGISTRY["chirps_monthly"], SYNTHETIC_REGISTRY["copdem_terrain"]
+RAIN, TERRAIN = SYNTHETIC_REGISTRY["chirps_monthly"], SYNTHETIC_REGISTRY["terrain"]
 COARSE = replace(
     RAIN,
     id="coarse_monthly",
