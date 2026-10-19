@@ -8,14 +8,16 @@ export function contourLegendText(interval: number, units: string) {
   return `Contours every ${interval} ${units} (bold every ${interval * MAJOR_EVERY})`;
 }
 
-/** A colour bar with labels at some of the stops, each under its own colour. */
+/** A colour bar with stop labels under their colours and a separate units caption. */
 export function gradientLegend(
   colors: Uint8ClampedArray,
   stops: number[],
   units: string,
 ) {
   const element = document.createElement("div");
-  element.append(gradientBar(colors), stopLabels(stops, units));
+  const unitsCaption = document.createElement("div");
+  unitsCaption.textContent = units;
+  element.append(unitsCaption, gradientBar(colors), stopLabels(stops));
   return element;
 }
 
@@ -34,7 +36,7 @@ function gradientBar(colors: Uint8ClampedArray) {
   return bar;
 }
 
-function stopLabels(stops: number[], units: string) {
+function stopLabels(stops: number[]) {
   const labels = document.createElement("div");
   labels.className = "legend-labels";
   labels.style.position = "relative";
@@ -46,7 +48,7 @@ function stopLabels(stops: number[], units: string) {
     label.style.transform = `translateX(${-position * 100}%)`;
     label.style.whiteSpace = "nowrap";
     // The top of the scale is the 98th percentile.
-    label.textContent = position === 1 ? `≥ ${value} ${units}` : String(value);
+    label.textContent = position === 1 ? `≥ ${value}` : String(value);
     labels.append(label);
   }
   return labels;

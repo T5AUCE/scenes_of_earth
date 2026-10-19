@@ -76,6 +76,7 @@ export class ContourOverlay {
       id: this.coarseId,
       label: "Contours",
       layerIds: [this.coarseId, this.detailId],
+      note: this.legend,
       onToggle: (visible) => {
         this.isOn = visible;
         this.updateVisibility();

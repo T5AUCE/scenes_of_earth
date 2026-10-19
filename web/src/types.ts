@@ -171,6 +171,10 @@ export interface Part {
   label: string;
   layerIds: string[];
   onToggle?(visible: boolean): void;
+  /** Sliders shown under the part's checkbox while the part is on. */
+  controls?: LayerControl[];
+  /** A small note under the checkbox, such as the contour interval. */
+  note?: HTMLElement;
 }
 
 /** What a layer renderer gets to draw one layer. */
@@ -184,9 +188,11 @@ export interface LayerContext {
   report(error: unknown): void;
 }
 
-/** A slider in a layer's display menu; its value lasts for the visit only. */
+/** A slider under a part's checkbox; its value lasts for the visit only. */
 export interface LayerControl {
   label: string;
+  /** A short instruction shown above the slider. */
+  hint?: string;
   min: number;
   max: number;
   step: number;
@@ -198,7 +204,6 @@ export interface LayerControl {
 export interface LayerView {
   parts: Part[];
   options: { label: string; set(on: boolean): void }[];
-  controls?: LayerControl[];
   time: TimeDoc | null;
   ready?: Promise<void>; // rejects when the layer's data cannot be read
   setTime(time: string): void;

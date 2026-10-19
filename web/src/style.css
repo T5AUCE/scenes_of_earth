@@ -204,17 +204,17 @@ body.scene-mode #panel {
   color: #666;
 }
 
-#scene-column .card .layer-menu {
-  margin-top: 4px;
-  font-size: 12px;
+#scene-column .card .part-controls {
+  margin: 0 0 4px 20px;
 }
 
-#scene-column .card .layer-menu summary {
-  cursor: pointer;
-  color: #444;
+#scene-column .card .part-controls .control-hint {
+  font-size: 11px;
+  color: #666;
 }
 
-#scene-column .card .layer-menu input[type="range"] {
+#scene-column .card .part-controls input[type="range"] {
+  display: block;
   width: 100%;
 }
 

@@ -1,26 +1,26 @@
 import { makeHtmlElement } from "../html";
 import type { LayerControl } from "../types";
 
-/** A collapsed "Display" section with one slider per control. */
-export function layerMenu(controls: LayerControl[]) {
-  const menu = makeHtmlElement("details");
-  menu.className = "layer-menu";
-  makeHtmlElement("summary", "Display", menu);
-
-  for (const control of controls) menu.append(sliderRow(control));
-  return menu;
+/** Builds the sliders shown directly under a part's checkbox, labelled for screen readers only. */
+export function partControls(controls: LayerControl[]) {
+  const box = makeHtmlElement("div");
+  box.className = "part-controls";
+  for (const control of controls) {
+    if (control.hint) makeHtmlElement("div", control.hint, box).className = "control-hint";
+    box.append(slider(control));
+  }
+  return box;
 }
 
-function sliderRow({ label, min, max, step, value, set }: LayerControl) {
-  const row = makeHtmlElement("label", `${label} `);
-  const slider = document.createElement("input");
-  slider.type = "range";
-  slider.min = String(min);
-  slider.max = String(max);
-  slider.step = String(step);
-  slider.value = String(value);
-  slider.oninput = () => set(Number(slider.value));
-
-  row.append(slider);
-  return row;
+function slider({ label, min, max, step, value, set }: LayerControl) {
+  const input = document.createElement("input");
+  input.type = "range";
+  input.ariaLabel = label;
+  input.title = label;
+  input.min = String(min);
+  input.max = String(max);
+  input.step = String(step);
+  input.value = String(value);
+  input.oninput = () => set(Number(input.value));
+  return input;
 }

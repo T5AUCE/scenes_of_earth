@@ -40,6 +40,7 @@ export function createTerrainView(context: LayerContext): LayerView {
 
   const strength: LayerControl = {
     label: "Relief strength",
+    hint: "Change intensity using slider",
     min: RELIEF_STRENGTH.min,
     max: RELIEF_STRENGTH.max,
     step: RELIEF_STRENGTH.step,
@@ -54,14 +55,13 @@ export function createTerrainView(context: LayerContext): LayerView {
 
   return {
     parts: [
-      { id, label: "Relief", layerIds: [id] },
+      { id, label: "Relief", layerIds: [id], controls: [strength] },
       contourOverlay.part,
     ],
     options: [],
-    controls: [strength],
     time: null,
     setTime: () => {},
-    legend: () => contourOverlay.legend,
+    legend: () => null,
     destroy: () => {
       map.off("error", reportTilesUnavailable);
       contourOverlay.destroy();

@@ -3,7 +3,7 @@ import type { GeoJSONSource, Map as MapLibreMap } from "maplibre-gl";
 import { loadAreaFeature } from "./api";
 import { openStore, type Store } from "./data";
 import { makeHtmlElement } from "./html";
-import { layerMenu } from "./layers/layer-menu";
+import { partControls } from "./layers/layer-menu";
 import { LAYER_KINDS } from "./layers/registry";
 import { firstSymbolId, removeLayerAndSource } from "./map";
 import { shiftLongitudes, worldShift } from "./render/mercator";
@@ -163,20 +163,25 @@ function layerCard(map: MapLibreMap, view: LayerView) {
   card.className = "card";
 
   for (const part of view.parts) {
+    const sliders = part.controls ? partControls(part.controls) : null;
     card.append(
       checkbox(part.label, true, (on) => {
         setVisible(map, part.layerIds, on);
         part.onToggle?.(on);
+        if (sliders) sliders.hidden = !on;
       }),
     );
+    if (sliders) card.append(sliders);
+    if (part.note) {
+      part.note.classList.add("option-note");
+      card.append(part.note);
+    }
   }
 
   for (const option of view.options) {
     card.append(checkbox(option.label, false, option.set));
     makeHtmlElement("div", OPTION_NOTE, card).className = "option-note";
   }
-
-  if (view.controls) card.append(layerMenu(view.controls));
 
   const legend = view.legend();
   if (legend) card.append(legend);
