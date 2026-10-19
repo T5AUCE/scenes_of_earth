@@ -1,10 +1,15 @@
 import type { Bbox } from "../types";
 
-/** The source cell for each output pixel of a Web Mercator image. */
+/** The nearest source cells and optional coverage of a Web Mercator image. */
 export interface SampleTable {
   width: number;
   height: number;
   src: Int32Array; // per output pixel: source cell index
+  footprint?: {
+    sourceWidth: number;
+    rowEdges: Float64Array;
+    rowCenters: Float64Array;
+  };
 }
 
 interface Grid {
@@ -21,15 +26,20 @@ type Corners = [[number, number], [number, number], [number, number], [number, n
 const MAX_TEXTURE_SIZE_PX = 4096;
 // Keeps rounding noise from adding a row to an already exact fit.
 const ROW_COUNT_TOLERANCE = 1e-9;
+const CELL_EDGE_TOLERANCE_CELLS = 1e-9;
 
 const WORLD_WIDTH_DEG = 360;
 const ANTIMERIDIAN_DEG = 180;
 
 /**
  * The grid cell each output pixel shows. Rows are even in Mercator y because MapLibre stretches
- * images linearly in Web Mercator.
+ * images linearly in Web Mercator. Fields can opt into footprint coverage for NaN samples.
  */
-export function sampleTable(grid: Grid, maxTextureSize = MAX_TEXTURE_SIZE_PX): SampleTable {
+export function sampleTable(
+  grid: Grid,
+  maxTextureSize = MAX_TEXTURE_SIZE_PX,
+  { preserveCoverage = false }: { preserveCoverage?: boolean } = {},
+): SampleTable {
   const { nx, ny } = grid;
   const [, south, , north] = grid.bbox;
   const rowDegrees = (north - south) / ny;
@@ -51,7 +61,32 @@ export function sampleTable(grid: Grid, maxTextureSize = MAX_TEXTURE_SIZE_PX): S
       src[pixelRow * width + pixelColumn] = gridRow * nx + gridColumn;
     }
   }
-  return { width, height, src };
+  const table: SampleTable = { width, height, src };
+  if (preserveCoverage) {
+    table.footprint = pixelFootprints(grid, height, yTop, pixelHeight);
+  }
+  return table;
+}
+
+function pixelFootprints(grid: Grid, height: number, yTop: number, pixelHeight: number) {
+  const [, south, , north] = grid.bbox;
+  const rowDegrees = (north - south) / grid.ny;
+  const rowEdges = new Float64Array(height + 1);
+  const rowCenters = new Float64Array(height);
+  for (let row = 0; row <= height; row++) {
+    const latitude = latFromMercY(yTop - row * pixelHeight);
+    const edge = (north - latitude) / rowDegrees;
+    const rounded = Math.round(edge);
+    // Exact cell edges must not acquire neighbours through projection rounding.
+    rowEdges[row] = Math.abs(edge - rounded) < CELL_EDGE_TOLERANCE_CELLS ? rounded : edge;
+    if (row < height) {
+      const centerLatitude = latFromMercY(yTop - (row + 0.5) * pixelHeight);
+      rowCenters[row] = (north - centerLatitude) / rowDegrees;
+    }
+  }
+  rowEdges[0] = 0;
+  rowEdges[height] = grid.ny;
+  return { sourceWidth: grid.nx, rowEdges, rowCenters };
 }
 
 // The shortest row in Mercator y sets the output resolution, so no grid row is skipped.

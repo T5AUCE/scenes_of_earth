@@ -31,7 +31,7 @@ export function createSeriesView(
     "raster-resampling": "nearest",
   });
 
-  const table = sampleTable(layer.grid, maxTextureSize(map));
+  const table = sampleTable(layer.grid, maxTextureSize(map), { preserveCoverage: true });
 
   const readStep = cacheByIndex(CACHED_STEPS, async (step) => {
     const openedStore = await store;

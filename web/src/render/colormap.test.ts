@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { decode } from "../data.ts";
+import type { Bbox } from "../types.ts";
 import {
   COLOR_CHANNELS,
   legendTicks,
@@ -11,6 +12,8 @@ import {
   RGBA_CHANNELS,
   stopPosition,
 } from "./colormap.ts";
+import { mercY, sampleTable } from "./mercator.ts";
+import type { SampleTable } from "./mercator.ts";
 
 const table = (src: number[]) => ({ width: src.length, height: 1, src: Int32Array.from(src) });
 const alphaOf = (rgba: Uint8ClampedArray) =>
@@ -20,6 +23,98 @@ test("NaN cells are transparent", () => {
   const rgba = paintColormap(Float32Array.of(5, NaN), table([0, 1]), lut("ink-blue"), [0, 10]);
 
   assert.deepEqual(alphaOf(rgba), [255, 0]);
+});
+
+test("Fiji rainfall covers the point whose nearest sample falls south of its finite cell", () => {
+  const grid = { bbox: [177, -19.2, 181.65, -12.45] as Bbox, nx: 93, ny: 135 };
+  const samples = sampleTable(grid, undefined, { preserveCoverage: true });
+  const pixel = pixelAt(samples, grid.bbox, 179.225, -16.691719876);
+  const values = new Float32Array(grid.nx * grid.ny).fill(NaN);
+  values[84 * grid.nx + 44] = 384.7;
+  const colors = lut("ink-blue");
+  const rgba = paintColormap(values, samples, colors, [0, values[84 * grid.nx + 44]]);
+
+  assert.equal(samples.src[pixel], 85 * grid.nx + 44);
+  assert.deepEqual(
+    rgba.slice(pixel * RGBA_CHANNELS, (pixel + 1) * RGBA_CHANNELS),
+    colors.slice(-RGBA_CHANNELS),
+  );
+});
+
+test("Fiji temperature covers the point sampling north of its finite cell", () => {
+  const grid = { bbox: [176.95, -19.25, 181.65, -12.45] as Bbox, nx: 47, ny: 68 };
+  const samples = sampleTable(grid, undefined, { preserveCoverage: true });
+  const pixel = pixelAt(samples, grid.bbox, 179.902406751, -18.5745);
+  const values = new Float32Array(grid.nx * grid.ny).fill(NaN);
+  values[61 * grid.nx + 29] = 26.8;
+  const colors = lut("climate");
+  const rgba = paintColormap(values, samples, colors, [0, values[61 * grid.nx + 29]]);
+
+  assert.equal(samples.src[pixel], 60 * grid.nx + 29);
+  assert.deepEqual(
+    rgba.slice(pixel * RGBA_CHANNELS, (pixel + 1) * RGBA_CHANNELS),
+    colors.slice(-RGBA_CHANNELS),
+  );
+});
+
+test("a finite nearest sample keeps its colour even when other cells overlap", () => {
+  const grid = { bbox: [180, -3, 186, 3] as Bbox, nx: 6, ny: 6 };
+  const samples = sampleTable(grid, 2, { preserveCoverage: true });
+  const values = new Float32Array(36).fill(10);
+  values[samples.src[0]] = 0;
+  const colors = lut("climate");
+  const rgba = paintColormap(values, samples, colors, [0, 10]);
+
+  assert.deepEqual(rgba.slice(0, RGBA_CHANNELS), colors.slice(0, RGBA_CHANNELS));
+});
+
+test("capped pixels use the nearest finite overlap without interpolating", () => {
+  const grid = { bbox: [180, -5, 190, 5] as Bbox, nx: 10, ny: 10 };
+  const samples = sampleTable(grid, 2, { preserveCoverage: true });
+  const values = new Float32Array(grid.nx * grid.ny).fill(NaN);
+  values[0] = 0;
+  values[4 * grid.nx + 3] = 10;
+  values[2 * grid.nx + 3] = Infinity;
+  const colors = lut("climate");
+  const rgba = paintColormap(values, samples, colors, [0, 10]);
+
+  assert.ok(Number.isNaN(values[samples.src[0]]));
+  assert.deepEqual(rgba.slice(0, RGBA_CHANNELS), colors.slice(-RGBA_CHANNELS));
+  assert.deepEqual(alphaOf(rgba), [255, 0, 0, 0]);
+});
+
+test("an empty footprint stays transparent beside finite cells touching only its edges", () => {
+  const grid = { bbox: [180, -3, 186, 3] as Bbox, nx: 6, ny: 6 };
+  const samples = sampleTable(grid, 2, { preserveCoverage: true });
+  const values = new Float32Array(36).fill(NaN);
+  values[3] = 10;
+  values[3 * grid.nx] = 10;
+  const rgba = paintColormap(values, samples, lut("climate"), [0, 10]);
+
+  assert.deepEqual(rgba.slice(0, RGBA_CHANNELS), new Uint8ClampedArray(RGBA_CHANNELS));
+  assert.deepEqual(alphaOf(rgba), [0, 255, 255, 0]);
+});
+
+test("a field boundary east of 180 keeps its source column when filling a footprint", () => {
+  const grid = { bbox: [177, -19.2, 181.65, -12.45] as Bbox, nx: 93, ny: 135 };
+  const samples = sampleTable(grid, undefined, { preserveCoverage: true });
+  const pixel = pixelAt(samples, grid.bbox, 180.725, -17.01);
+  const values = new Float32Array(grid.nx * grid.ny).fill(NaN);
+  values[91 * grid.nx + 74] = 10;
+  const rgba = paintColormap(values, samples, lut("ink-blue"), [0, 10]);
+
+  assert.equal(samples.src[pixel], 90 * grid.nx + 74);
+  assert.equal(alphaOf(rgba)[pixel], 255);
+});
+
+test("hillshade ignores footprint fallback even when an overlapping source cell is finite", () => {
+  const grid = { bbox: [180, -3, 186, 3] as Bbox, nx: 6, ny: 6 };
+  const samples = sampleTable(grid, 2, { preserveCoverage: true });
+  const shade = new Float32Array(36).fill(NaN);
+  shade[0] = 0;
+  const rgba = paintHillshade(shade, samples);
+
+  assert.deepEqual(alphaOf(rgba), [0, 0, 0, 0]);
 });
 
 test("climate palette runs from slate blue to terracotta", () => {
@@ -93,3 +188,12 @@ test("masked hillshade cells are transparent", () => {
 
   assert.deepEqual(alphaOf(rgba), [255, 0, 252]);
 });
+
+function pixelAt(samples: SampleTable, bbox: Bbox, longitude: number, latitude: number) {
+  const [west, south, east, north] = bbox;
+  const column = Math.floor(((longitude - west) / (east - west)) * samples.width);
+  const row = Math.floor(
+    ((mercY(north) - mercY(latitude)) / (mercY(north) - mercY(south))) * samples.height,
+  );
+  return row * samples.width + column;
+}

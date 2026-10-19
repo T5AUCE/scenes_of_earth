@@ -83,6 +83,29 @@ test("the table is narrower than the grid when the texture limit is smaller", ()
   assert.equal(table.src[39], 98);
 });
 
+test("coverage lookup preserves nearest samples and is opt-in", () => {
+  const grid = gridOf([177, -19.2, 181.65, -12.45], 93, 135);
+  const nearest = sampleTable(grid);
+  const coverage = sampleTable(grid, undefined, { preserveCoverage: true });
+
+  assert.equal(nearest.footprint, undefined);
+  assert.equal(coverage.width, nearest.width);
+  assert.equal(coverage.height, nearest.height);
+  assert.deepEqual(coverage.src, nearest.src);
+});
+
+test("capped footprints span every overlapping source row and column east of 180", () => {
+  const grid = gridOf([180, -3, 186, 3], 6, 6);
+  const table = sampleTable(grid, 2, { preserveCoverage: true });
+
+  assert.equal(table.width, 2);
+  assert.equal(table.height, 2);
+  assert.equal(table.footprint?.sourceWidth, 6);
+  assert.deepEqual([...table.footprint!.rowEdges], [0, 3, 6]);
+  assert.deepEqual([...table.src], [7, 10, 25, 28]);
+  assert.deepEqual(imageCorners(grid.bbox, 0)[1], [186, 3]);
+});
+
 test("the outline shifts by the same amount as the image corners", () => {
   const eastern: [number, number, number, number] = [175, -20, 195, -15];
 

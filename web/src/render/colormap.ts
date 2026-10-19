@@ -89,7 +89,7 @@ export function legendTicks(stops: number[]) {
   return [...indexes].map((index) => ({ position: index / last, value: stops[index] }));
 }
 
-/** RGBA pixels coloured by value across the stops; NaN cells stay transparent. */
+/** Colour nearest values, using finite footprint overlaps only when opted in and nearest is NaN. */
 export function paintColormap(
   values: Float32Array,
   table: SampleTable,
@@ -99,7 +99,8 @@ export function paintColormap(
   const rgba = new Uint8ClampedArray(table.src.length * RGBA_CHANNELS);
   for (let pixel = 0; pixel < table.src.length; pixel++) {
     const cell = table.src[pixel];
-    const value = values[cell];
+    const nearest = values[cell];
+    const value = Number.isNaN(nearest) ? overlappingValue(values, table, pixel) : nearest;
     if (Number.isNaN(value)) continue;
 
     const position = stopPosition(value, stops);
@@ -107,6 +108,35 @@ export function paintColormap(
     rgba.set(colors.subarray(colorStart, colorStart + RGBA_CHANNELS), pixel * RGBA_CHANNELS);
   }
   return rgba;
+}
+
+function overlappingValue(values: Float32Array, table: SampleTable, pixel: number) {
+  if (!table.footprint) return NaN;
+
+  const { sourceWidth, rowEdges, rowCenters } = table.footprint;
+  const pixelRow = Math.floor(pixel / table.width);
+  const pixelColumn = pixel % table.width;
+  const columnStart = (pixelColumn * sourceWidth) / table.width;
+  const columnEnd = ((pixelColumn + 1) * sourceWidth) / table.width;
+  const centerColumn = (columnStart + columnEnd) / 2;
+  const centerRow = rowCenters[pixelRow];
+  let nearestDistance = Infinity;
+  let nearestValue = NaN;
+  for (let row = Math.floor(rowEdges[pixelRow]); row < Math.ceil(rowEdges[pixelRow + 1]); row++) {
+    for (let column = Math.floor(columnStart); column < Math.ceil(columnEnd); column++) {
+      const value = values[row * sourceWidth + column];
+      if (!Number.isFinite(value)) continue;
+
+      const rowDistance = row + 0.5 - centerRow;
+      const columnDistance = column + 0.5 - centerColumn;
+      const distance = rowDistance ** 2 + columnDistance ** 2;
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestValue = value;
+      }
+    }
+  }
+  return nearestValue;
 }
 
 /**
