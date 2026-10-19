@@ -1,7 +1,6 @@
 """Read Copernicus elevation for area statistics and describe the viewer's terrain tiles."""
 import math
 import os
-import time
 import warnings
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,15 +12,21 @@ from typing import NamedTuple
 import numpy as np
 import rasterio
 from rasterio.enums import Resampling
-from rasterio.errors import NotGeoreferencedWarning, RasterioIOError, WarpOperationError
+from rasterio.errors import NotGeoreferencedWarning
 from rasterio.transform import Affine, from_origin
 from rasterio.warp import reproject
 
 from ..areas import WORLD_WIDTH_DEG
 from .datasets import StaticDataset
-from .grid import CELL_DEG, CELLS_PER_DEG2_AT_CHIRPS_RES, Bbox
+from .grid import (
+    MAX_STATIC_DIVISIONS,
+    MAX_STATIC_SIDE_PX,
+    STATIC_BUDGET_PX,
+    Bbox,
+    budget_res,
+)
 from .licences import SOURCES
-from .remote import GDAL_OPTS, SourceUnavailable
+from .remote import GDAL_OPTS, read_with_retries
 
 # The warp target is a plain array; a module filter, as catch_warnings is not thread-safe.
 warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
@@ -35,9 +40,6 @@ ELEVATION_FILL = -32768  # the int16 minimum, below any real ground
 LONGITUDE_DEGREE_AT_EQUATOR_M = 111_320
 LATITUDE_DEGREE_M = 110_574
 
-TERRAIN_BUDGET_PX = 2048 * 2048
-MAX_TERRAIN_SIDE_PX = 4096
-MAX_TERRAIN_DIVISIONS = 180  # 0.05 / 180 is the native 30 m cell
 BLOCK_DEG = 2  # terrain is read in blocks of this many whole degrees
 TERRAIN_THREADS = 32
 
@@ -52,8 +54,6 @@ NARROW_PIXEL_WIDTH_RATIO = 1.5  # their pixels are this much wider than the tile
 # Wide tile edges sit 1/2 and narrow ones 3/4 of a pixel height off whole degrees; 1/4 fits both.
 MIXED_BAND_PIXEL_DIVISOR = 4
 CANVAS_MARGIN_DEG = 1  # the mosaic canvas reaches this far beyond the block, for overhangs
-BLOCK_READ_ATTEMPTS = 3
-BLOCK_RETRY_DELAY_SECS = 1
 
 TERRAIN_TILES_ENV = "SOE_TERRAIN_TILES"
 TERRAIN_TILES_URL = "https://tiles.mapterhorn.com/{z}/{x}/{y}.webp"
@@ -158,17 +158,8 @@ def _tile_index(product: str) -> np.ndarray:
 
 
 def terrain_res(bounds: Bbox) -> float:
-    """Terrain cell size 0.05 / k degrees, so whole degrees are a whole number of cells.
-
-    It gives about 4.2 Mpx and at most 4096 px on the long side, never finer than native.
-    """
-    west, south, east, north = bounds
-    width, height = east - west, north - south
-    divisions = min(
-        math.isqrt(int(TERRAIN_BUDGET_PX / (CELLS_PER_DEG2_AT_CHIRPS_RES * width * height))),
-        int(MAX_TERRAIN_SIDE_PX * CELL_DEG / max(width, height)),
-    )
-    return CELL_DEG / min(max(divisions, 1), MAX_TERRAIN_DIVISIONS)
+    """Terrain cell size 0.05 / k degrees, so whole degrees are a whole number of cells."""
+    return budget_res(bounds, STATIC_BUDGET_PX, MAX_STATIC_SIDE_PX, MAX_STATIC_DIVISIONS)
 
 
 def with_margin(bounds: Bbox, res: float) -> Bbox:
@@ -307,16 +298,10 @@ def _warp_block(bounds: Bbox, res: float) -> np.ndarray | None:
         return None
 
     mosaic = _mosaic_xml(tiles, bounds, product)
-    for attempt in range(BLOCK_READ_ATTEMPTS):
-        try:
-            return _average_onto_grid(mosaic, bounds, res)
-        # GDAL reports a tile download that fails inside the warp as WarpOperationError.
-        except (RasterioIOError, WarpOperationError) as error:
-            if attempt == BLOCK_READ_ATTEMPTS - 1:
-                raise SourceUnavailable("Copernicus DEM tiles did not answer") from error
-
-            # The bucket drops connections now and then.
-            time.sleep(BLOCK_RETRY_DELAY_SECS)
+    return read_with_retries(
+        lambda: _average_onto_grid(mosaic, bounds, res),
+        "Copernicus DEM tiles did not answer",
+    )
 
 
 def _mosaic_xml(tiles: list[PlacedTile], bounds: Bbox, product: str) -> str:

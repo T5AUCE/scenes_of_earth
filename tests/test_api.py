@@ -371,7 +371,7 @@ def test_layers_list_omits_rain_and_temperature_without_their_cubes(tmp_path):
     with TestClient(app) as client:
         ids = [layer["id"] for layer in client.get("/api/layers").json()["layers"]]
 
-    assert ids == ["terrain"]
+    assert ids == ["terrain", "esa_worldcover"]
 
 
 def test_layers_list_survives_an_empty_cube_left_by_a_failed_ingest(tmp_path):
@@ -396,7 +396,7 @@ def test_layers_list_omits_rain_without_its_fallback_cube(tmp_path):
     with TestClient(app) as client:
         ids = [layer["id"] for layer in client.get("/api/layers").json()["layers"]]
 
-    assert ids == ["terrain", "era5land_temperature"]
+    assert ids == ["terrain", "esa_worldcover", "era5land_temperature"]
 
 
 @pytest.mark.parametrize(
@@ -622,3 +622,30 @@ def test_failed_build_clears_the_stage(tmp_path):
         failed = wait_for(client, scene_id)
 
     assert failed["status"] == "failed" and failed["stage"] is None
+
+
+def test_land_cover_builds_offline_and_is_not_a_default_layer(env):
+    client, _, _ = env
+    request = body(layers=["esa_worldcover"])
+    scene_id = client.post("/api/scenes", json=request).json()["id"]
+
+    assert wait_for(client, scene_id)["status"] == "done"
+    assert "esa_worldcover" not in client.get("/api/layers").json()["default"]
+
+
+def test_land_cover_over_open_sea_is_refused_before_any_read(tmp_path):
+    class NoReads(SyntheticSource):
+        def land_cover(self, *args: object) -> None:
+            raise AssertionError("read before the refusal")
+
+    sea = mapping(box(-150, 0, -148, 2))
+    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(NoReads()))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/scenes",
+            json=body(area={"type": "polygon", "geometry": sea}, layers=["esa_worldcover"]),
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Land cover has no data in this area"

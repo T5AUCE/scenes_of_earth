@@ -34,6 +34,7 @@ from tests.helpers import (
     HASH_A,
     HASH_B,
     HASH_C,
+    LAND_COVER,
     NAIROBI,
     RAIN,
     TERRAIN,
@@ -955,3 +956,37 @@ def test_preliminary_rain_fill_in_a_later_batch_keeps_its_month_in_the_notice(tm
         "The ERA5 rain that fills gaps in Rainfall 2026-07 is preliminary; final data "
         "replaces it about two months later, and the scene then gets a new id.",
     ]
+
+
+def test_land_cover_layer_writes_uint8_classes_that_are_zero_outside_the_mask(tmp_path):
+    area = Area(TRIANGLE, BOUNDARY)
+    build_scene(HASH_A, area, None, None, [LAND_COVER], "Test", tmp_path)
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    root = zarr.open_group(str(tmp_path / HASH_A / "data.zarr"), mode="r")
+    classes = root["esa_worldcover/class"][...]
+    inside = root["esa_worldcover/mask"][...] == 1
+    valid = {entry["value"] for entry in doc["layers"][0]["style"]["classes"]}
+
+    assert classes.dtype == np.uint8
+    assert not inside.all() and (classes[~inside] == 0).all()
+    assert set(np.unique(classes[inside])) <= valid
+    assert validate(doc) == []
+
+
+def test_land_cover_notice_states_the_cell_size_and_the_source_resolution(tmp_path):
+    build_scene(HASH_A, Area(NAIROBI, BOUNDARY), None, None, [LAND_COVER], "Test", tmp_path)
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+
+    assert (
+        "Land cover shows the most common class in each 55 m cell (source 10 m)."
+        in doc["notices"]["limits"]
+    )
+    assert SOURCES["worldcover"]["attribution"] in doc["credits"]["lines"]
+
+
+def test_land_cover_across_180_has_the_same_classes_on_both_sides(tmp_path):
+    build_scene(HASH_A, Area(FIJI, BOUNDARY), None, None, [LAND_COVER], "Test", tmp_path)
+    root = zarr.open_group(str(tmp_path / HASH_A / "data.zarr"), mode="r")
+    classes = root["esa_worldcover/class"][...]
+
+    assert (classes > 0).any(axis=0).all()

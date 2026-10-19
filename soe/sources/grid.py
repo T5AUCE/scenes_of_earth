@@ -13,6 +13,10 @@ CellSpan = tuple[int, int, int, int]  # c0, c1, r0, r1 on a dataset's grid
 CELL_DEG = 0.05  # CHIRPS cell size, the base resolution of terrain and boundaries
 CELLS_PER_DEG2_AT_CHIRPS_RES = 400  # (1 / 0.05) ** 2
 
+STATIC_BUDGET_PX = 2048 * 2048  # pixels of a static layer such as terrain or land cover
+MAX_STATIC_SIDE_PX = 4096
+MAX_STATIC_DIVISIONS = 180  # 0.05 / 180 is the native 30 m cell
+
 GRID_DECIMALS = 6  # cell indices and bounds are rounded to this to absorb float noise
 
 
@@ -65,6 +69,26 @@ class Grid:
         width = round((east - west) / self.res)
         height = round((north - south) / self.res)
         return col, row, width, height
+
+
+def budget_res(
+    bounds: Bbox,
+    budget_px: int,
+    max_side_px: int,
+    max_divisions: int,
+) -> float:
+    """Cell size 0.05 / k degrees of a static layer, so whole degrees are a whole number of cells.
+
+    It stays within budget_px pixels and max_side_px on the long side, and never gets finer
+    than 0.05 / max_divisions.
+    """
+    west, south, east, north = bounds
+    width, height = east - west, north - south
+    divisions = min(
+        math.isqrt(int(budget_px / (CELLS_PER_DEG2_AT_CHIRPS_RES * width * height))),
+        int(max_side_px * CELL_DEG / max(width, height)),
+    )
+    return CELL_DEG / min(max(divisions, 1), max_divisions)
 
 
 def read_wrapped(

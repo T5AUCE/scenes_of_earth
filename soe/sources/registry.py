@@ -18,13 +18,19 @@ from .grid import CELL_DEG
 from .licences import SOURCES
 from .synthetic import SyntheticSource
 from .terrain import GLO30_RES_DEG, CopernicusDemReader, TerrainDataset, terrain_tiles_block
+from .worldcover import (
+    WORLDCOVER_CLASSES,
+    WORLDCOVER_RES_DEG,
+    LandCoverDataset,
+    WorldCoverReader,
+)
 
 
 CUBE_SPECS = (ERA5_LAND_TEMPERATURE_CUBE, ERA5_TEMPERATURE_CUBE, ERA5_PRECIPITATION_CUBE)
 
 
-class RealSource(ChirpsReader, CopernicusDemReader, CubeStore):
-    """Read CHIRPS and terrain over HTTP and the monthly cubes from local disk."""
+class RealSource(ChirpsReader, CopernicusDemReader, WorldCoverReader, CubeStore):
+    """Read CHIRPS, terrain and land cover over HTTP and the monthly cubes from local disk."""
 
     synthetic = False
 
@@ -47,6 +53,7 @@ def make_registry(backend: RealSource | SyntheticSource) -> Registry:
     if backend.has_cube(ERA5_PRECIPITATION_CUBE):
         registry["chirps_monthly"] = _chirps_monthly(backend)
     registry["terrain"] = _terrain(backend)
+    registry["esa_worldcover"] = _land_cover(backend)
     if backend.has_cube(ERA5_LAND_TEMPERATURE_CUBE) and backend.has_cube(ERA5_TEMPERATURE_CUBE):
         registry["era5land_temperature"] = _era5land_temperature(backend)
     return registry
@@ -101,6 +108,35 @@ def _terrain(backend: RealSource | SyntheticSource) -> TerrainDataset:
         max_tiles=2500,
         synthetic=backend.synthetic,
         tiles=terrain_tiles_block(),
+    )
+
+
+def _land_cover(backend: RealSource | SyntheticSource) -> LandCoverDataset:
+    return LandCoverDataset(
+        id="esa_worldcover",
+        title="Land cover",
+        units="",
+        resolution_deg=WORLDCOVER_RES_DEG,
+        source=SOURCES["worldcover"],
+        roles={
+            "value": Role(
+                "class",
+                "uint8",
+                fill=0,
+                long_name="ESA WorldCover 2021 class",
+            ),
+        },
+        style={
+            "kind": "categorical",
+            "encodings": ["fill"],
+            "palette": "painted",
+            "classes": WORLDCOVER_CLASSES,
+        },
+        backend=backend,
+        grid=CHIRPS_GRID,
+        max_tiles=400,
+        needs_tiles=True,
+        synthetic=backend.synthetic,
     )
 
 

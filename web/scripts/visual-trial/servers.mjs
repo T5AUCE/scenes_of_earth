@@ -11,22 +11,48 @@ const HOST = "127.0.0.1";
 const READY_TIMEOUT_MS = 60 * 1000;
 const READY_POLL_MS = 250;
 const STOP_GRACE_MS = 5 * 1000;
+const PORT_PROBE_TIMEOUT_MS = 1000;
 
 const children = [];
+let shutdownPromise = null;
 
 /** Starts the real backend and Vite; resolves to the app URL. Call stopServers when done. */
 export async function startServers() {
+  if (shutdownPromise) throw new Error("cannot start servers after shutdown has begun");
+
   const [backendPort, vitePort] = [await freePort(), await freePort()];
   const backendUrl = `http://${HOST}:${backendPort}`;
 
-  launch("backend", backendPort, "python", [
-    "-m", "uvicorn", "main:app", "--host", HOST, "--port", String(backendPort),
-  ], REPO_DIR, {});
+  launch(
+    "backend",
+    backendPort,
+    "python",
+    [
+      "-m",
+      "uvicorn",
+      "main:app",
+      "--host",
+      HOST,
+      "--port",
+      String(backendPort),
+    ],
+    REPO_DIR,
+    {},
+  );
   // Vite's file watcher misses edits on this mount, so every run needs a fresh server.
-  launch("vite", vitePort, process.execPath, [
-    path.join(WEB_DIR, "node_modules/vite/bin/vite.js"),
-    "--port", String(vitePort), "--strictPort",
-  ], WEB_DIR, { SOE_BACKEND: backendUrl });
+  launch(
+    "vite",
+    vitePort,
+    process.execPath,
+    [
+      path.join(WEB_DIR, "node_modules/vite/bin/vite.js"),
+      "--port",
+      String(vitePort),
+      "--strictPort",
+    ],
+    WEB_DIR,
+    { SOE_BACKEND: backendUrl },
+  );
 
   await waitUntilReady(`${backendUrl}/api/health`);
   const appUrl = `http://${HOST}:${vitePort}`;
@@ -36,7 +62,12 @@ export async function startServers() {
 }
 
 /** Stops the processes this module started and confirms their ports are free. */
-export async function stopServers() {
+export function stopServers() {
+  shutdownPromise ??= stopStartedServers();
+  return shutdownPromise;
+}
+
+async function stopStartedServers() {
   const started = children.splice(0);
   await Promise.all(started.map(stopChild));
   for (const { name, port } of started) {
@@ -80,7 +111,7 @@ async function waitUntilReady(url) {
       const response = await fetch(url);
       if (response.ok) return;
     } catch {
-      // The server is not listening yet.
+      // Connection failures are expected while the server starts listening.
     }
     await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS));
   }
@@ -98,10 +129,19 @@ function freePort() {
   });
 }
 
-function isOpen(port) {
+/** Bounds port checks so cleanup can report an occupied or unresponsive port without hanging. */
+export function isOpen(port) {
   return new Promise((resolve) => {
     const socket = net.connect(port, HOST);
-    socket.once("connect", () => socket.destroy() || resolve(true));
+    socket.setTimeout(PORT_PROBE_TIMEOUT_MS);
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve(true);
+    });
     socket.once("error", () => resolve(false));
+    socket.once("timeout", () => {
+      socket.destroy();
+      resolve(true);
+    });
   });
 }

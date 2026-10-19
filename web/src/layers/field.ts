@@ -8,6 +8,7 @@ import type { LayerContext, LayerView } from "../types";
 
 const CACHED_STEPS = 24;
 const SERIES_OPACITY = 0.8;
+const SMOOTH_NOTE = "Smoothed for display; values are per cell.";
 
 /** Render a field time series with cached steps and a fitted colour legend. */
 export function createSeriesView(
@@ -69,6 +70,7 @@ export function createSeriesView(
     options: [
       {
         label: "Smooth",
+        note: SMOOTH_NOTE,
         set: (on) => map.setPaintProperty(id, "raster-resampling", on ? "linear" : "nearest"),
       },
     ],

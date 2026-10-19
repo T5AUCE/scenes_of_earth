@@ -109,7 +109,7 @@ def test_plan_rejections(tmp_path):
         plan_months(Area(box(-60, -20, 40, 10)), [RAIN], 240)
 
     without_cube = make_registry(RealSource(cubes_dir=tmp_path))
-    assert without_cube.keys() == {"terrain"}
+    assert without_cube.keys() == {"terrain", "esa_worldcover"}
     assert len(terrain_tiles((36, -2, 38, 0), "glo90")) == 4
 
     with pytest.raises(AreaError, match="source tiles"):  # 8190 existing tiles > 2500

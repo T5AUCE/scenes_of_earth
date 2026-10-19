@@ -20,6 +20,7 @@ FIJI = MultiPolygon([box(178, -19, 180, -17), box(-180, -19, -178, -17)])
 
 SYNTHETIC_REGISTRY = make_registry(SyntheticSource())
 RAIN, TERRAIN = SYNTHETIC_REGISTRY["chirps_monthly"], SYNTHETIC_REGISTRY["terrain"]
+LAND_COVER = SYNTHETIC_REGISTRY["esa_worldcover"]
 COARSE = replace(
     RAIN,
     id="coarse_monthly",

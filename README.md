@@ -108,6 +108,16 @@ Rebuild them only if a bucket's tile list changes:
 python -m soe.cli terrain-index
 ```
 
+## Land cover tile index
+
+`soe/data/worldcover_tiles.bin` lists the ESA WorldCover 3 degree tiles that exist (it has no ocean tiles), so planning
+stays offline and a request over open sea is refused with 422 before any read. Rebuild it only if the product's grid
+changes:
+
+```
+python -m soe.cli worldcover-index
+```
+
 ## Area contract notes
 
 - `area.bbox` is `[W, S, E, N]` with W < E always. A shape across the antimeridian is unwrapped into one frame, so E may be
@@ -140,6 +150,12 @@ python -m soe.cli terrain-index
   `p2`, `p98`, `slope_p50_deg`, `slope_p90_deg`, `cell_m`), taken inside the mask, which choose the contour intervals. The tile
   URL is part of the scene id, so pointing `SOE_TERRAIN_TILES` at another copy renames the scenes. With `SOE_SYNTHETIC=1` the
   statistics are fake while the tiles are still the real hosted ones.
+- Land cover (`esa_worldcover`, not a default layer) is a static `categorical` layer with a uint8 `value` array (0 = no data
+  or outside the area) on cells of 0.05/k degrees (the same budget as terrain), holding the most common ESA WorldCover class
+  in each cell. It reads the tile's COG overview with at least 16 source pixels per cell (the 0.5 degree spike agreed with
+  full resolution on 96.7-97.8 % of cells). `style.classes` holds the official colours; `style.palette: "painted"` names the
+  softer set the viewer holds by default, and its "ESA colours" option switches to the official ones. Land cover is refused
+  above 400 source tiles.
 - The statistics are read on cells of 0.05/k degrees (k up to 180, about 4.2 Mpx at most). Cells finer than 90 m are read
   from GLO-30 (with average resampling), others from GLO-90; tiles GLO-30 lacks come from GLO-90 as
   `layers[].fallback_sources`. Terrain is refused above 2500 existing source tiles.
@@ -212,6 +228,10 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
   elevation sources under their own licences (CC BY 4.0, public domain, Etalab 2.0, DL-DE BY 2.0 and others). Credit:
   "© Mapterhorn". The viewer fetches the tiles from the hosted endpoint, whose terms are not yet published, so a copy on
   our own storage waits for their answer. The same text is in `soe/sources/licences.py`.
+- **Land cover: ESA WorldCover 10 m 2021 v200**, CC BY 4.0. Credit: "© ESA WorldCover project 2021 / Contains modified
+  Copernicus Sentinel data (2021) processed by ESA WorldCover consortium". Zanaga, D. et al. (2022) ESA WorldCover 10 m 2021
+  v200. doi:10.5281/zenodo.7254221. Modified: most common class per output cell from the COG overview with at least 16
+  source pixels per cell. The same text is in `soe/sources/licences.py`.
 - **Boundaries: geoBoundaries CGAZ**, CC BY 4.0. Runfola, D. et al. (2020) geoBoundaries: A global database of political
   administrative boundaries. PLoS ONE 15(4): e0231866. https://www.geoboundaries.org. Simplified to 0.01 degrees and
   clipped to 60S-60N. CC BY 4.0 for CGAZ itself is the repository-wide licence for geoBoundaries derivatives, not a

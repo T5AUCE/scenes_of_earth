@@ -18,9 +18,6 @@ const OUTLINE_COLOR = "#333";
 const OUTLINE_WIDTH_PX = 1.5;
 const EMPTY_FEATURES: GeoJsonData = { type: "FeatureCollection", features: [] };
 
-// The only options so far are display smoothing; the data itself is never changed by them.
-const OPTION_NOTE = "Smoothed for display; values are per cell.";
-
 /** Where a scene puts its pieces; the caller owns the containers. */
 export interface SceneSlots {
   cards: HTMLElement;
@@ -176,7 +173,9 @@ function layerCard(map: MapLibreMap, view: LayerView) {
     );
     if (index === 0 && view.options.length > 0) {
       for (const option of view.options) row.append(checkbox(option.label, false, option.set));
-      makeHtmlElement("div", OPTION_NOTE, card).className = "option-note";
+      for (const { note } of view.options) {
+        if (note) makeHtmlElement("div", note, card).className = "option-note";
+      }
     }
     if (sliders) card.append(sliders);
     if (part.note) {

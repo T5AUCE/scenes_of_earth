@@ -1,10 +1,11 @@
 """Run the offline data jobs from the command line.
 
 The module imports country and city boundaries into SQLite. It rebuilds the Copernicus terrain
-tile indexes. It also ingests ERA5-Land and ERA5 monthly cubes into local folders. Run
+tile indexes and the ESA WorldCover tile index. It also ingests ERA5-Land and ERA5 monthly cubes into local folders. Run
 `python -m soe.cli --help` to see the commands and their options.
 """
 import argparse
+import json
 import logging
 import os
 import re
@@ -26,22 +27,30 @@ from .sources import (
     TILE_ROW_OFFSET_DEG,
     is_request_label,
 )
+from .sources.worldcover import WORLDCOVER_GRID_SHAPE, WORLDCOVER_TILE_INDEX, index_cell
 
 TILE_LIST_URLS = {
     "glo30": "https://copernicus-dem-30m.s3.amazonaws.com/tileList.txt",
     "glo90": "https://copernicus-dem-90m.s3.amazonaws.com/tileList.txt",
 }
+WORLDCOVER_GRID_URL = (
+    "https://esa-worldcover.s3.eu-central-1.amazonaws.com/esa_worldcover_grid.geojson"
+)
 DOWNLOAD_TIMEOUT_SECS = 60
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Run the `terrain-index`, `ingest-cube` or `import-boundaries` command."""
+    """Run the `terrain-index`, `worldcover-index`, `ingest-cube` or `import-boundaries` command."""
     parser = _build_parser()
     args = parser.parse_args(argv)
 
     if args.command == "terrain-index":
         for product, terrain_product in TERRAIN_PRODUCTS.items():
             print(f"{product} tiles:", build_tile_index(product, terrain_product.index))
+        return
+
+    if args.command == "worldcover-index":
+        print("WorldCover tiles:", build_worldcover_index(WORLDCOVER_TILE_INDEX))
         return
 
     if args.command == "ingest-cube":
@@ -76,6 +85,10 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "terrain-index",
         help="rebuild the GLO-30 and GLO-90 tile bitmaps in soe/data (downloads 2 MB)",
+    )
+    subparsers.add_parser(
+        "worldcover-index",
+        help="rebuild the ESA WorldCover tile bitmap in soe/data (downloads 0.5 MB)",
     )
     ingest_parser = subparsers.add_parser(
         "ingest-cube",
@@ -114,6 +127,27 @@ def _listed_tiles(product: str) -> Iterator[tuple[int, int]]:
     pattern = rf"Copernicus_DSM_COG_{tile_code}_([NS])(\d+)_00_([EW])(\d+)_00_DEM"
     matches = (re.match(pattern, line) for line in lines)
     for match in filter(None, matches):
+        north_or_south, lat_digits, east_or_west, lon_digits = match.groups()
+        lat = int(lat_digits) if north_or_south == "N" else -int(lat_digits)
+        lon = int(lon_digits) if east_or_west == "E" else -int(lon_digits)
+        yield lat, lon
+
+
+def build_worldcover_index(path: Path | str) -> int:
+    """Write the bitmap of the existing ESA WorldCover tiles from the product's grid file."""
+    exists = np.zeros(WORLDCOVER_GRID_SHAPE, bool)
+    for lat, lon in _worldcover_grid_tiles():
+        exists[index_cell(lat, lon)] = True
+    Path(path).write_bytes(np.packbits(exists).tobytes())
+    return int(exists.sum())
+
+
+def _worldcover_grid_tiles() -> Iterator[tuple[int, int]]:
+    """(lat, lon) of the south-west corner of each tile in the product's grid file."""
+    with urllib.request.urlopen(WORLDCOVER_GRID_URL, timeout=DOWNLOAD_TIMEOUT_SECS) as response:
+        grid = json.load(response)
+    for feature in grid["features"]:
+        match = re.fullmatch(r"([NS])(\d+)([EW])(\d+)", feature["properties"]["ll_tile"])
         north_or_south, lat_digits, east_or_west, lon_digits = match.groups()
         lat = int(lat_digits) if north_or_south == "N" else -int(lat_digits)
         lon = int(lon_digits) if east_or_west == "E" else -int(lon_digits)

@@ -241,7 +241,11 @@ def _budget_after_static_layers(
             continue
 
         _, grid_shape, bbox, _ = _layer_grid(dataset, windows[dataset.id], 1)
-        if dataset.max_tiles and dataset.tile_count(bbox) > dataset.max_tiles:
+        tile_count = dataset.tile_count(bbox)
+        if dataset.needs_tiles and tile_count == 0:
+            raise AreaError(f"{dataset.title} has no data in this area")
+
+        if dataset.max_tiles and tile_count > dataset.max_tiles:
             raise AreaError(
                 f"{dataset.id} needs more than {dataset.max_tiles} source tiles; "
                 "choose a smaller area",

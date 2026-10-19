@@ -1,3 +1,4 @@
+import type { ClassDoc } from "../types";
 import type { SampleTable } from "./mercator";
 
 const LUT_ENTRIES = 256;
@@ -39,6 +40,34 @@ const CLIMATE = [
 
 const PALETTES: Record<string, number[][]> = { "ink-blue": INK_BLUE, climate: CLIMATE };
 
+/**
+ * Softened colours of land cover classes, by palette name. Classes or palettes that are missing
+ * here use the layer's own colours.
+ */
+export const CLASS_PALETTES: Record<string, Record<number, string>> = {
+  painted: {
+    10: "#456d3b",
+    20: "#cd9242",
+    30: "#dfd77e",
+    40: "#d099d0",
+    50: "#c55d4c",
+    60: "#c3baaf",
+    70: "#eaf2f4",
+    80: "#447ab0",
+    90: "#49a0a1",
+    95: "#75c399",
+    100: "#f6e7c2",
+  },
+};
+
+/** The RGB of each class value from the named palette, else from the class's own colour. */
+export function classColors(classes: ClassDoc[], palette?: string) {
+  const named = palette ? CLASS_PALETTES[palette] : undefined;
+  return new Map(
+    classes.map(({ value, color }) => [value, hexToRgb(named?.[value] ?? color)]),
+  );
+}
+
 /** A lookup table of 256 opaque RGBA entries for a named palette. */
 export function lut(name: string) {
   const stops = PALETTES[name];
@@ -59,6 +88,27 @@ export function lut(name: string) {
     table[entry * RGBA_CHANNELS + COLOR_CHANNELS] = OPAQUE;
   }
   return table;
+}
+
+/** Colour nearest values by class; NaN and values without a colour stay transparent. */
+export function paintClasses(
+  values: Float32Array,
+  table: SampleTable,
+  colorsByValue: Map<number, number[]>,
+) {
+  const rgba = new Uint8ClampedArray(table.src.length * RGBA_CHANNELS);
+  for (let pixel = 0; pixel < table.src.length; pixel++) {
+    const color = colorsByValue.get(values[table.src[pixel]]);
+    if (!color) continue;
+
+    rgba.set(color, pixel * RGBA_CHANNELS);
+    rgba[pixel * RGBA_CHANNELS + COLOR_CHANNELS] = OPAQUE;
+  }
+  return rgba;
+}
+
+function hexToRgb(hex: string) {
+  return [1, 3, 5].map((start) => parseInt(hex.slice(start, start + 2), 16));
 }
 
 /** Where a value falls on the palette from 0 to 1, with the stops evenly spaced along it. */

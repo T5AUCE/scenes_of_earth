@@ -1,4 +1,4 @@
-"""Generate deterministic offline stand-ins for rainfall and terrain as well as cube data.
+"""Generate deterministic offline stand-ins for rainfall, terrain, land cover and cube data.
 
 Offline runs and tests use it, so nothing here needs the network or a cube.
 """
@@ -14,6 +14,7 @@ from .era5land_temperature import ERA5_LAND_TEMPERATURE_CUBE
 from .grid import Bbox, CellWindow
 from .periods import MONTH_CHARS, add_duration
 from .terrain import terrain_block_count
+from .worldcover import WORLDCOVER_CLASSES, PlacedTile, land_cover_by_tiles
 
 
 class SyntheticSource:
@@ -82,6 +83,25 @@ class SyntheticSource:
         for _ in range(terrain_block_count(bounds)):
             on_block()
         return elevation.astype("int16"), transform
+
+    def land_cover(
+        self,
+        bounds: Bbox,
+        res: float,
+        on_block: Callable[[], None] = lambda: None,
+    ) -> tuple[np.ndarray, Affine]:
+        return land_cover_by_tiles(bounds, res, _synthetic_classes, on_block)
+
+
+def _synthetic_classes(tile: PlacedTile, part: Bbox, res: float) -> np.ndarray:
+    """Return diagonal class bands in the frame of the bounds, so they continue across 180."""
+    west, south, east, north = part
+    width, height = round((east - west) / res), round((north - south) / res)
+    lon = west + (np.arange(width) + 0.5) * res
+    lat = north - (np.arange(height) + 0.5) * res
+    bands = np.floor(lon * 4)[None, :] + np.floor(lat * 4)[:, None]
+    values = np.array([entry["value"] for entry in WORLDCOVER_CLASSES], "uint8")
+    return values[bands.astype(int) % len(values)]
 
 
 def _land_temperature(month: str, cols: np.ndarray, rows: np.ndarray, spec: CubeSpec) -> np.ndarray:

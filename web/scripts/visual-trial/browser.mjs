@@ -10,7 +10,7 @@ import {
   CONTOUR_LINE_PATTERN,
   classifyFailure,
   contourLegend,
-  sameSample,
+  isSettled,
   slug,
   viewRecord,
   zoomLabel,
@@ -24,7 +24,7 @@ const TOOL_DIRS = [
 const BROWSER_NAME = "chrome-headless-shell";
 const LIBS_SUBDIR = "libs/usr/lib/x86_64-linux-gnu";
 
-const VIEWPORT = { width: 1280, height: 800 };
+const VIEWPORT_PX = { width: 1280, height: 800 };
 const OUTLINE_LAYER_ID = "soe-area-outline";
 const SCENE_READY_TIMEOUT_MS = 90 * 1000;
 export const VIEW_TIMEOUT_MS = 60 * 1000;
@@ -55,10 +55,18 @@ function findExecutable(browsersDir) {
   return match ? path.join(browsersDir, match) : null;
 }
 
-/** A browser context whose pages expose the app's map as window.__map and record its errors. */
+/** Creates a context that exposes map diagnostics and scene readiness without app edits. */
 export async function newContext(browser) {
-  const context = await browser.newContext({ viewport: VIEWPORT });
+  const context = await browser.newContext({ viewport: VIEWPORT_PX });
   await context.addInitScript(exposeMap);
+  await exposeMapModule(context);
+  await exposeMaskReadiness(context);
+  await exposeLayerReadiness(context);
+
+  return context;
+}
+
+async function exposeMapModule(context) {
   await context.route("**/src/map.ts*", async (route) => {
     const response = await route.fetch();
     const source = await response.text();
@@ -67,8 +75,38 @@ export async function newContext(browser) {
 
     await route.fulfill({ response, body: exposed });
   });
+}
 
-  return context;
+async function exposeMaskReadiness(context) {
+  await context.route("**/src/scene-mode.ts*", async (route) => {
+    const response = await route.fetch();
+    const source = await response.text();
+    const exposed = source.replace(
+      /this\.isReady = true;/,
+      "window.__trialMaskReady = true;\nthis.isReady = true;",
+    );
+    if (exposed === source) throw new Error("scene mask readiness hook no longer matches");
+
+    await route.fulfill({ response, body: exposed });
+  });
+}
+
+async function exposeLayerReadiness(context) {
+  await context.route("**/src/view.ts*", async (route) => {
+    const response = await route.fetch();
+    const source = await response.text();
+    const exposed = source.replace(
+      /const layerIds = views\.flatMap/,
+      `window.__trialLayersReady = false;
+      Promise.all(views.map((view) => view.ready)).then(() => {
+        window.__trialLayersReady = views.length === scene.layers.length;
+      }).catch((error) => window.__trialErrors.push(String(error)));
+      const layerIds = views.flatMap`,
+    );
+    if (exposed === source) throw new Error("scene layer readiness hook no longer matches");
+
+    await route.fulfill({ response, body: exposed });
+  });
 }
 
 /** Measures every zoom of the spot in a new page of the context; returns one record per zoom. */
@@ -83,7 +121,8 @@ export async function trialSpot(context, appUrl, spot, sceneId, options) {
     }
     return records;
   } catch (error) {
-    return [failedRecord(spot, sceneId, error)];
+    const mapErrors = await page.evaluate(() => window.__trialErrors ?? []).catch(() => []);
+    return [failedRecord(spot, sceneId, error, watcher, mapErrors)];
   } finally {
     await page.close();
   }
@@ -92,6 +131,8 @@ export async function trialSpot(context, appUrl, spot, sceneId, options) {
 // MapLibre errors are collected from the moment the map is created, so early failures count too.
 function exposeMap() {
   window.__trialErrors = [];
+  window.__trialMaskReady = false;
+  window.__trialLayersReady = false;
   let map;
   Object.defineProperty(window, "__map", {
     configurable: true,
@@ -133,10 +174,6 @@ async function openScene(page, appUrl, sceneId, enable) {
 }
 
 async function trialView(page, watcher, spot, sceneId, zoom, options) {
-  watcher.failures.length = 0;
-  watcher.messages.length = 0;
-  await page.evaluate(() => window.__trialErrors.splice(0));
-
   let timedOut = false;
   let sample = null;
   try {
@@ -153,8 +190,8 @@ async function trialView(page, watcher, spot, sceneId, zoom, options) {
     scene: sceneId,
     zoom,
     sample: sample && { ...sample, legend: contourLegend(sample.cardText) },
-    failures: watcher.failures,
-    messages: [...watcher.messages, ...mapErrors.filter((text) => !/glyph|AJAX/i.test(text))],
+    failures: watcher.failures.splice(0),
+    messages: [...watcher.messages.splice(0), ...mapErrors],
     timedOut,
   });
   if (options.screens) {
@@ -165,15 +202,19 @@ async function trialView(page, watcher, spot, sceneId, zoom, options) {
   return record;
 }
 
-// The view counts as settled when two successive idle samples agree and every tile is loaded.
 async function settledSample(page) {
   const deadline = Date.now() + VIEW_TIMEOUT_MS;
+  await page.waitForFunction(
+    () => window.__trialMaskReady === true && window.__trialLayersReady === true,
+    null,
+    { timeout: VIEW_TIMEOUT_MS },
+  );
   let previous = null;
   while (Date.now() < deadline) {
     const idle = await page.evaluate(waitForIdle, deadline - Date.now());
     const patterns = [CONTOUR_LINE_PATTERN.source, CONTOUR_LABEL_PATTERN.source];
     const sample = await page.evaluate(takeSample, patterns);
-    if (idle && sample.tilesLoaded && sameSample(previous, sample)) {
+    if (isSettled(previous, sample, idle)) {
       return { sample, timedOut: false };
     }
     previous = sample;
@@ -182,19 +223,23 @@ async function settledSample(page) {
   return { sample: previous, timedOut: true };
 }
 
-function failedRecord(spot, sceneId, error) {
+function failedRecord(spot, sceneId, error, watcher, mapErrors) {
   return viewRecord({
     spot: spot.name,
     scene: sceneId,
     zoom: "fitted",
     sample: null,
-    failures: [],
-    messages: [`spot failed: ${error.message.split("\n")[0]}`],
+    failures: watcher.failures,
+    messages: [
+      ...watcher.messages,
+      ...mapErrors,
+      `spot failed: ${error.message.split("\n")[0]}`,
+    ],
     timedOut: true,
   });
 }
 
-// The functions below run inside the page, so they cannot use anything from this module.
+// Playwright serializes these callbacks, so their dependencies must stay inside each function.
 
 function jumpTo([centre, zoom]) {
   window.__map.jumpTo({ center: centre, zoom });
@@ -262,6 +307,7 @@ function takeSample([linePattern, labelPattern]) {
     labelLines: labels.flatMap(toPixels),
     lineCount: rendered(idsOf("line", linePattern)).length,
     tilesLoaded: map.areTilesLoaded(),
+    sceneReady: window.__trialMaskReady === true && window.__trialLayersReady === true,
     cardText: cards.map((card) => card.innerText).join("\n"),
   };
 }

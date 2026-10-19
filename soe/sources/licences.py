@@ -130,6 +130,23 @@ SOURCES = {
         ),
         "modified": "shading and contours drawn in the viewer from the elevation tiles",
     },
+    "worldcover": {
+        "name": "ESA WorldCover 10 m 2021 v200",
+        "version": "2021 v200",
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": (
+            "Land cover: © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel "
+            "data (2021) processed by ESA WorldCover consortium"
+        ),
+        "citation": (
+            "Zanaga, D. et al. (2022) ESA WorldCover 10 m 2021 v200. doi:10.5281/zenodo.7254221"
+        ),
+        "modified": (
+            "most common class per output cell from the COG overview with ≥16 source pixels "
+            "per cell"
+        ),
+    },
     "geoBoundaries CGAZ": {
         "name": "geoBoundaries CGAZ",
         "licence": "CC BY 4.0",

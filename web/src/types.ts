@@ -135,6 +135,13 @@ export interface TerrainStats {
   cell_m: number;
 }
 
+/** One class of a categorical layer, with the layer's own colour for it. */
+export interface ClassDoc {
+  value: number;
+  label: string;
+  color: string; // #rrggbb
+}
+
 /** One built layer's sources, display choices, grid and stored arrays. */
 export interface LayerDoc {
   id: string;
@@ -146,9 +153,9 @@ export interface LayerDoc {
     kind: string;
     encodings: string[]; // display types the layer offers, best first
     parts?: string[]; // extra display types drawn alongside the main one
-    palette?: string; // default colours of a field layer
+    palette?: string; // default colours of a field layer, or of a categorical layer's classes
     stops?: number[]; // fitted values of the palette's colours, 2-9 increasing
-    classes?: { value: number; label: string; color: string }[]; // categorical layers
+    classes?: ClassDoc[]; // categorical layers
   };
   grid: GridDoc;
   mask: { path: string; cells_inside: number };
@@ -227,7 +234,7 @@ export interface LayerControl {
 /** Own a drawn layer's controls and time axis along with its legend and teardown. */
 export interface LayerView {
   parts: Part[];
-  options: { label: string; set(on: boolean): void }[];
+  options: { label: string; set(on: boolean): void; note?: string }[];
   time: TimeDoc | null;
   ready?: Promise<void>; // rejects when the layer's data cannot be read
   setTime(time: string): void;

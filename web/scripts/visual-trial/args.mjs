@@ -1,4 +1,4 @@
-/** Command-line parsing and places-file loading for the visual trial. */
+/** Parses command-line options and validates visual trial places files. */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,7 +59,7 @@ export function loadPlaces(text) {
   return checkPlaces(JSON.parse(fs.readFileSync(file, "utf8")), file);
 }
 
-/** Validates a parsed places file and fills the optional fields. Throws naming the problem. */
+/** Validates places and fills defaults. Throws an error that names the invalid field. */
 export function checkPlaces(data, file = "places") {
   if (!Array.isArray(data.spots) || !data.spots.length) {
     throw new Error(`${file}: "spots" must be a non-empty list`);

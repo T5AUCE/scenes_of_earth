@@ -43,38 +43,73 @@ async function resolveArea(appUrl, text) {
 
 async function buildScene(appUrl, body) {
   const deadline = Date.now() + BUILD_TIMEOUT_MS;
-  let scene = await postScene(appUrl, body);
+  let scene = await postScene(appUrl, body, deadline);
   while (scene.status !== "done") {
     if (scene.status === "failed") throw new Error(`build of ${scene.id} failed: ${scene.error}`);
-    if (Date.now() > deadline) throw new Error(`build of ${scene.id} did not finish in time`);
-
     console.error(`building ${scene.id}: ${scene.stage ?? scene.status}`);
-    await new Promise((resolve) => setTimeout(resolve, BUILD_POLL_MS));
-    const response = await fetch(`${appUrl}/api/scenes/${scene.id}`);
+    await waitWithinDeadline(BUILD_POLL_MS, deadline);
+    const response = await fetch(`${appUrl}/api/scenes/${scene.id}`, {
+      signal: AbortSignal.timeout(getRemainingMs(deadline)),
+    });
+    if (!response.ok) throw new Error(`GET /api/scenes/${scene.id} ${response.status}`);
+
     scene = await response.json();
   }
+  getRemainingMs(deadline);
 
   return scene.id;
 }
 
-async function postScene(appUrl, body) {
+/** Retries temporary source failures without exceeding the shared build deadline. */
+export async function postScene(appUrl, body, deadline) {
   for (;;) {
     const response = await fetch(`${appUrl}/api/scenes`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(getRemainingMs(deadline)),
     });
     if (response.status === 503) {
-      const delaySecs = Number(response.headers.get("Retry-After")) || RETRY_AFTER_FALLBACK_SECS;
-      await new Promise((resolve) => setTimeout(resolve, delaySecs * 1000));
+      const delayMs = getRetryDelayMs(response.headers.get("Retry-After"), deadline);
+      await response.body?.cancel();
+      await waitWithinDeadline(delayMs, deadline);
       continue;
     }
     if (!response.ok) {
       throw new Error(`POST /api/scenes ${response.status}: ${await response.text()}`);
     }
 
-    return response.json();
+    const scene = await response.json();
+    getRemainingMs(deadline);
+    return scene;
   }
+}
+
+/** Returns the remaining request budget and rejects an expired build before another fetch. */
+export function getRemainingMs(deadline, nowMs = Date.now()) {
+  const remaining = deadline - nowMs;
+  if (remaining <= 0) throw new Error("scene build deadline expired");
+
+  return remaining;
+}
+
+/** Caps either form of Retry-After to the build's remaining budget. */
+export function getRetryDelayMs(retryAfter, deadline, nowMs = Date.now()) {
+  const seconds = retryAfter === null ? NaN : Number(retryAfter);
+  const dateMs = Date.parse(retryAfter);
+  const requestedMs = Number.isFinite(seconds)
+    ? Math.max(0, seconds * 1000)
+    : Number.isFinite(dateMs)
+      ? Math.max(0, dateMs - nowMs)
+      : RETRY_AFTER_FALLBACK_SECS * 1000;
+
+  return Math.min(requestedMs, getRemainingMs(deadline, nowMs));
+}
+
+async function waitWithinDeadline(delayMs, deadline) {
+  const boundedMs = Math.min(delayMs, getRemainingMs(deadline));
+  await new Promise((resolve) => setTimeout(resolve, boundedMs));
+  getRemainingMs(deadline);
 }
 
 function requestKey(spot) {

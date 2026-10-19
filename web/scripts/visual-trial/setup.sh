@@ -1,15 +1,25 @@
 #!/usr/bin/env bash
-# Installs a headless Chromium and the system libraries it needs into ~/.cache/soe-visual-trial,
-# without root and without touching the system. Re-run it after the container is rebuilt.
-# An existing /tmp/opencode/m5-visual-tools is used as is, so this script then has nothing to do.
+# Local installation avoids root access and system package changes.
 set -euo pipefail
 
 CACHE_DIR="${SOE_TRIAL_BROWSER_DIR:-$HOME/.cache/soe-visual-trial}"
 LEGACY_DIR=/tmp/opencode/m5-visual-tools
 WEB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LIB_PACKAGES=(
-  libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libdbus-1-3 libdrm2
-  libdrm-common libgbm1 libxcomposite1 libxdamage1 libxfixes3 libxi6 libxkbcommon0 libxrandr2
+  libasound2t64
+  libatk-bridge2.0-0t64
+  libatk1.0-0t64
+  libatspi2.0-0t64
+  libdbus-1-3
+  libdrm2
+  libdrm-common
+  libgbm1
+  libxcomposite1
+  libxdamage1
+  libxfixes3
+  libxi6
+  libxkbcommon0
+  libxrandr2
 )
 
 if [ -d "$LEGACY_DIR/browsers" ] && [ ! -d "$CACHE_DIR/browsers" ]; then
@@ -17,10 +27,13 @@ if [ -d "$LEGACY_DIR/browsers" ] && [ ! -d "$CACHE_DIR/browsers" ]; then
   exit 0
 fi
 
-mkdir -p "$CACHE_DIR/libs" "$CACHE_DIR/debs"
+mkdir -p "$CACHE_DIR"
+CACHE_DIR="$(realpath "$CACHE_DIR")"
+mkdir -p "$CACHE_DIR/libs" "$CACHE_DIR/debs" "$CACHE_DIR/tmp"
 
 if ! ls "$CACHE_DIR"/browsers/chromium_headless_shell-* > /dev/null 2>&1; then
   PLAYWRIGHT_BROWSERS_PATH="$CACHE_DIR/browsers" \
+    TMPDIR="$CACHE_DIR/tmp" \
     node "$WEB_DIR/node_modules/playwright-core/cli.js" install chromium-headless-shell
 fi
 

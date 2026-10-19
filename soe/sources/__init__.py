@@ -1,9 +1,9 @@
 """Expose the dataset contracts and registry alongside the source readers.
 
 Importers use these names, while the modules hold the code. Each of chirps.py,
-era5land_temperature.py and terrain.py reads one source. The era5.py module holds the general
-ERA5 cubes that fill the gaps of the first two. The synthetic.py module stands in for all of
-them offline. The registry.py module lists the datasets.
+era5land_temperature.py, terrain.py and worldcover.py reads one source. The era5.py module holds
+the general ERA5 cubes that fill the gaps of the first two. The synthetic.py module stands in for
+all of them offline. The registry.py module lists the datasets.
 """
 from .chirps import CHIRPS_GRID, RainDataset
 from .cubes import DEFAULT_CUBES_DIR, CubeSpec, CubeStore, MonthlyCube
@@ -51,6 +51,7 @@ from .terrain import (
     terrain_res,
     terrain_tiles,
 )
+from .worldcover import LandCoverDataset, WorldCoverReader
 
 __all__ = [
     "CELL_DEG",
@@ -85,6 +86,7 @@ __all__ = [
     "Fallback",
     "FilledStep",
     "Grid",
+    "LandCoverDataset",
     "MonthlyCube",
     "RainDataset",
     "RealSource",
@@ -95,6 +97,7 @@ __all__ = [
     "StaticDataset",
     "SyntheticSource",
     "TerrainDataset",
+    "WorldCoverReader",
     "add_duration",
     "is_request_label",
     "make_registry",

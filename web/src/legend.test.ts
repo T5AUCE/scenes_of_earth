@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { afterEach, beforeEach, test } from "node:test";
 
-import { lut } from "./render/colormap.ts";
+import { classColors, lut } from "./render/colormap.ts";
 
 const legendUrl = new URL("./legend.ts", import.meta.url).href;
 const hooks = registerHooks({
@@ -14,7 +14,7 @@ const hooks = registerHooks({
     return next(new URL(`${specifier}.ts`, context.parentURL).href, context);
   },
 });
-const { contourLegendText, gradientLegend } =
+const { classLegend, contourLegendText, gradientLegend } =
   await import("./legend.ts").finally(() => hooks.deregister());
 
 const KENYA_RAINFALL_STOPS = [0, 10, 30, 40, 60, 80, 100, 130, 200];
@@ -126,6 +126,39 @@ test("a constant two-stop field keeps both endpoints without units in either tic
     labels.children.map((label) => label.style.transform),
     ["translateX(0%)", "translateX(-100%)"],
   );
+});
+
+test("the class legend lists only the classes present, in class order", () => {
+  const classes = [
+    { value: 10, label: "Tree cover", color: "#006400" },
+    { value: 20, label: "Shrubland", color: "#ffbb22" },
+    { value: 30, label: "Grassland", color: "#ffff4c" },
+  ];
+  const legend = classLegend(
+    classes,
+    new Set([30, 10]),
+    classColors(classes),
+  ) as unknown as TestElement;
+
+  assert.deepEqual(
+    legend.children.map((row) => row.textContent),
+    ["Tree cover", "Grassland"],
+  );
+});
+
+test("class legend swatches follow the active colours", () => {
+  const classes = [{ value: 10, label: "Tree cover", color: "#006400" }];
+  const swatchOf = (palette?: string) => {
+    const legend = classLegend(
+      classes,
+      new Set([10]),
+      classColors(classes, palette),
+    ) as unknown as TestElement;
+    return legend.children[0].children[0].style.background;
+  };
+
+  assert.equal(swatchOf(), "rgb(0, 100, 0)");
+  assert.equal(swatchOf("painted"), "rgb(69, 109, 59)");
 });
 
 function renderLegend(stops: number[], units: string, palette = "ink-blue") {

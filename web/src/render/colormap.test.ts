@@ -4,9 +4,12 @@ import { test } from "node:test";
 import { decode } from "../data.ts";
 import type { Bbox } from "../types.ts";
 import {
+  CLASS_PALETTES,
+  classColors,
   COLOR_CHANNELS,
   legendTicks,
   lut,
+  paintClasses,
   paintColormap,
   RGBA_CHANNELS,
   stopPosition,
@@ -168,3 +171,31 @@ function pixelAt(samples: SampleTable, bbox: Bbox, longitude: number, latitude: 
   );
   return row * samples.width + column;
 }
+
+const WORLDCOVER_CLASSES = [10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100].map((value) => ({
+  value,
+  label: `Class ${value}`,
+  color: "#102030",
+}));
+
+test("the painted palette has a colour for every WorldCover class", () => {
+  const painted = Object.keys(CLASS_PALETTES.painted).map(Number);
+
+  assert.deepEqual(painted, WORLDCOVER_CLASSES.map(({ value }) => value));
+});
+
+test("class colours come from the named palette and fall back to the layer's own", () => {
+  const classes = [...WORLDCOVER_CLASSES, { value: 110, label: "New", color: "#ff0000" }];
+
+  assert.deepEqual(classColors(classes, "painted").get(10), [0x45, 0x6d, 0x3b]);
+  assert.deepEqual(classColors(classes, "painted").get(110), [255, 0, 0]);
+  assert.deepEqual(classColors(classes, "unknown").get(10), [0x10, 0x20, 0x30]);
+  assert.deepEqual(classColors(classes).get(10), [0x10, 0x20, 0x30]);
+});
+
+test("paintClasses colours known classes and leaves fill and unknown values transparent", () => {
+  const colors = new Map([[10, [1, 2, 3]]]);
+  const rgba = paintClasses(Float32Array.of(10, NaN, 99), table([0, 1, 2]), colors);
+
+  assert.deepEqual([...rgba], [1, 2, 3, 255, 0, 0, 0, 0, 0, 0, 0, 0]);
+});

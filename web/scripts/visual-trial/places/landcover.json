@@ -1,0 +1,32 @@
+{
+  "spots": [
+    {
+      "name": "Kenya",
+      "area": "sample:kenya",
+      "centre": [37.0, 0.5],
+      "zooms": ["fitted", 7],
+      "layers": ["terrain", "esa_worldcover"]
+    },
+    {
+      "name": "Nairobi",
+      "area": "sample:nairobi",
+      "centre": [36.82, -1.29],
+      "zooms": ["fitted", 10, 12],
+      "layers": ["terrain", "esa_worldcover"]
+    },
+    {
+      "name": "Fiji-west-of-180",
+      "area": "sample:fiji",
+      "centre": [177.55, -18.0],
+      "zooms": ["fitted", 9],
+      "layers": ["terrain", "esa_worldcover"]
+    },
+    {
+      "name": "Fiji-east-of-180",
+      "area": "sample:fiji",
+      "centre": [180.1, -16.85],
+      "zooms": [9],
+      "layers": ["terrain", "esa_worldcover"]
+    }
+  ]
+}

@@ -38,10 +38,12 @@ from soe.sources import (
     terrain,
     terrain_tiles,
 )
+from soe.sources import remote
 from soe.sources.chirps import previous_month
 from soe.sources.fallback import read_nearest
 from soe.sources.grid import block_mean
 from soe.sources.periods import add_duration
+from soe.sources import worldcover
 from soe.sources.terrain import (
     LATITUDE_DEGREE_M,
     TerrainProduct,
@@ -53,6 +55,12 @@ from soe.sources.terrain import (
     terrain_by_blocks,
     terrain_product,
     terrain_res,
+)
+from soe.sources.worldcover import (
+    PlacedTile,
+    _read_tile,
+    overview_factor,
+    worldcover_tiles,
 )
 from tests.helpers import NAIROBI, RAIN, TERRAIN, write_cube
 
@@ -908,12 +916,12 @@ def test_failed_block_read_is_retried_then_raised(fake_terrain, monkeypatch):
         raise rasterio.errors.RasterioIOError("dropped")
 
     monkeypatch.setattr(terrain, "_average_onto_grid", always_fails)
-    monkeypatch.setattr(terrain, "BLOCK_RETRY_DELAY_SECS", 0)
+    monkeypatch.setattr(remote, "BLOCK_RETRY_DELAY_SECS", 0)
 
     with pytest.raises(SourceUnavailable):
         _warp_block((10.0, 10.0, 11.0, 11.0), CELL_DEG)
 
-    assert len(calls) == terrain.BLOCK_READ_ATTEMPTS
+    assert len(calls) == remote.BLOCK_READ_ATTEMPTS
 
 
 def test_placed_tiles_west_of_180_keep_the_unwrapped_longitude():
@@ -969,3 +977,127 @@ def test_stops_of_a_constant_field_are_the_same_value_twice():
     stats = {"min": 5.0, "max": 5.0, "mean": 5.0, "p98": 5.0}
 
     assert terrain.stops(stats, [5.0] * 9) == [5, 5]
+
+
+def test_worldcover_tiles_are_named_by_their_south_west_corner():
+    nairobi = worldcover_tiles((36.5, -1.5, 37.5, -0.5))
+    nebraska = worldcover_tiles((-100.5, 40.5, -99.5, 41.5))
+
+    assert [tile.name for tile in nairobi] == ["S03E036"]
+    assert [tile.name for tile in nebraska] == ["N39W102"]
+
+
+def test_worldcover_tile_edges_floor_to_three_degrees_for_negative_coordinates():
+    tiles = worldcover_tiles((-60.5, -3.5, -59.5, -2.5))
+
+    assert {(tile.lon, tile.lat) for tile in tiles} == {(-63, -6), (-63, -3), (-60, -6), (-60, -3)}
+
+
+def test_worldcover_bounds_on_a_tile_edge_do_not_pull_in_the_next_tile():
+    assert [tile.name for tile in worldcover_tiles((36.0, -3.0, 39.0, 0.0))] == ["S03E036"]
+
+
+def test_worldcover_tiles_wrap_past_180_and_keep_the_unwrapped_longitude():
+    tiles = worldcover_tiles((178.0, -19.0, 182.0, -17.0))
+
+    assert {(tile.name, tile.lon, tile.file_lon) for tile in tiles} == {
+        ("S21E177", 177, 177),
+        ("S21W180", 180, -180),
+        ("S18E177", 177, 177),
+        ("S18W180", 180, -180),
+    }
+
+
+def test_worldcover_minus_180_is_the_w180_tile():
+    tiles = worldcover_tiles((-180.0, -19.0, -179.0, -18.5))
+
+    assert [(tile.name, tile.lon, tile.file_lon) for tile in tiles] == [("S21W180", -180, -180)]
+
+
+def test_open_sea_has_no_worldcover_tile():
+    assert worldcover_tiles((-150.0, 0.0, -149.0, 1.0)) == []
+
+
+@pytest.mark.parametrize(
+    ("res_in_source_pixels", "factor"),
+    [(1, 1), (3.99, 1), (4, 1), (7.99, 1), (8, 2), (15.99, 2), (16, 4), (32, 8), (255, 32)],
+)
+def test_overview_factor_gives_each_cell_at_least_16_samples(res_in_source_pixels, factor):
+    assert overview_factor(res_in_source_pixels * worldcover.WORLDCOVER_RES_DEG) == factor
+
+
+def test_overview_factor_stops_at_the_coarsest_overview():
+    assert overview_factor(0.05) == 64
+    assert overview_factor(1.0) == 64
+
+
+@pytest.mark.parametrize("cell_px", [4, 8])
+def test_land_cover_cell_is_the_most_common_class_of_its_samples(tmp_path, monkeypatch, cell_px):
+    cells = 120 // cell_px
+    classes = _majority_pattern(cells, cell_px)
+    _write_class_tile(tmp_path / "S03E036.tif", classes)
+    monkeypatch.setattr(worldcover, "WORLDCOVER_URL", str(tmp_path / "{n}.tif"))
+    res = cell_px * worldcover.WORLDCOVER_RES_DEG
+    part = (36.0, -3.0, 36.0 + cells * res, -3.0 + cells * res)
+
+    read = _read_tile(PlacedTile("S03E036", 36, -3, 36), part, res)
+
+    majority = np.where((np.add.outer(np.arange(cells), np.arange(cells)) % 2) == 0, 10, 20)
+    assert read.shape == (cells, cells)
+    assert (read == majority).all()
+
+
+def test_land_cover_ignores_no_data_samples(tmp_path, monkeypatch):
+    classes = np.zeros((120, 120), "uint8")
+    classes[:4, :4] = 0
+    classes[0, 0] = 30
+    classes[3, 3] = 30
+    _write_class_tile(tmp_path / "S03E036.tif", classes)
+    monkeypatch.setattr(worldcover, "WORLDCOVER_URL", str(tmp_path / "{n}.tif"))
+    res = 4 * worldcover.WORLDCOVER_RES_DEG
+    part = (36.0, -3.0 + 116 * worldcover.WORLDCOVER_RES_DEG, 36.0 + res, -3.0 + 0.01)
+
+    read = _read_tile(PlacedTile("S03E036", 36, -3, 36), part, res)
+
+    assert read.tolist() == [[30]]
+
+
+def _majority_pattern(cells: int, cell_px: int) -> np.ndarray:
+    """Class samples where each cell's majority class alternates 10 and 20 like a chessboard.
+
+    Samples come in 2 x 2 blocks, so that a mode overview of the tile is exact.
+    """
+    blocks = cell_px // 2
+    in_cell = np.arange(blocks * blocks).reshape(blocks, blocks) < round(blocks * blocks * 0.6)
+    cell = np.kron(in_cell, np.ones((2, 2), bool))
+    classes = np.zeros((cells * cell_px,) * 2, "uint8")
+    for row in range(cells):
+        for column in range(cells):
+            major, minor = (10, 20) if (row + column) % 2 == 0 else (20, 10)
+            rows = slice(row * cell_px, (row + 1) * cell_px)
+            columns = slice(column * cell_px, (column + 1) * cell_px)
+            classes[rows, columns] = np.where(cell, major, minor)
+    return classes
+
+
+def _write_class_tile(path: Path, classes: np.ndarray) -> None:
+    """A WorldCover-like GeoTIFF of the south-west corner of tile S03E036, with a mode overview."""
+    height, width = classes.shape
+    profile = {
+        "driver": "GTiff",
+        "width": width,
+        "height": height,
+        "count": 1,
+        "dtype": "uint8",
+        "nodata": 0,
+        "crs": "EPSG:4326",
+        "transform": from_origin(
+            36.0,
+            -3.0 + height * worldcover.WORLDCOVER_RES_DEG,
+            worldcover.WORLDCOVER_RES_DEG,
+            worldcover.WORLDCOVER_RES_DEG,
+        ),
+    }
+    with rasterio.open(path, "w", **profile) as tile:
+        tile.write(classes, 1)
+        tile.build_overviews([2], rasterio.enums.Resampling.mode)

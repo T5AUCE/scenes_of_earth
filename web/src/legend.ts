@@ -1,4 +1,5 @@
 import { COLOR_CHANNELS, LAST_ENTRY, legendTicks, RGBA_CHANNELS } from "./render/colormap";
+import type { ClassDoc } from "./types";
 
 const GRADIENT_STOP_ENTRIES = [0, 64, 128, 192, 255];
 
@@ -52,4 +53,24 @@ function stopLabels(stops: number[]) {
     labels.append(label);
   }
   return labels;
+}
+
+/** One row per class present in the area: a swatch in the active colour and the class name. */
+export function classLegend(
+  classes: ClassDoc[],
+  presentValues: Set<number>,
+  colors: Map<number, number[]>,
+) {
+  const element = document.createElement("div");
+  for (const { value, label } of classes.filter((entry) => presentValues.has(entry.value))) {
+    const row = document.createElement("div");
+    const swatch = document.createElement("span");
+    swatch.className = "legend-swatch";
+    swatch.style.background = `rgb(${colors.get(value)!.join(", ")})`;
+    const name = document.createElement("span");
+    name.textContent = label;
+    row.append(swatch, name);
+    element.append(row);
+  }
+  return element;
 }

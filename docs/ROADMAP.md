@@ -45,8 +45,9 @@ stays cheap and simple. Each feature is checked for extensibility before users g
    a monthly refresh.
 4. **M5: relief tiles → contours → land cover.** Relief shading and contours now share Mapterhorn
    tiles with a stable nested ladder and scene format 0.5. The three-view contour trial remains.
-   Next is ESA WorldCover (10 m) as a static categorical layer, resampled by the most common
-   class in each cell, with fixed class colours and a legend.
+   ESA WorldCover (10 m) is now a static categorical layer (opt-in, drawn below fields),
+   resampled by the most common class in each cell, with a softened default palette, an "ESA
+   colours" option and a legend of the classes present.
 5. **Scene view B:** app UI moves to React (MapLibre stays outside React's control). A panel at
    the bottom right, under the legend, expands to full screen with Charts and About tabs. Charts:
    area-mean rain and temperature, climatology, hypsometry; per-step area means in `scene.json`.

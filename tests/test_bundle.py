@@ -7,7 +7,7 @@ from soe.areas import Area
 from soe.build import build_scene
 from soe.bundle import SYNTHETIC_DATA_CREDIT, credits, validate
 from soe.sources import SOURCES
-from tests.helpers import HASH_B, NAIROBI, RAIN, TERRAIN, build_nairobi
+from tests.helpers import HASH_A, HASH_B, LAND_COVER, NAIROBI, RAIN, TERRAIN, build_nairobi
 
 
 def test_validate_catches_missing_attribution(tmp_path):
@@ -316,3 +316,14 @@ def test_tiles_need_positive_size_and_nonnegative_zoom(tmp_path):
 
     assert any("tiles.tile_size is out of range" in problem for problem in problems)
     assert any("tiles.maxzoom is out of range" in problem for problem in problems)
+
+
+def test_land_cover_layer_is_valid_and_credits_worldcover(tmp_path):
+    build_scene(HASH_A, Area(NAIROBI), None, None, [LAND_COVER], "T", tmp_path)
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    layer = doc["layers"][0]
+
+    assert validate(doc) == []
+    assert layer["style"]["kind"] == "categorical" and layer["style"]["palette"] == "painted"
+    assert layer["arrays"]["value"]["fill"] == 0
+    assert SOURCES["worldcover"]["attribution"] in doc["credits"]["lines"]

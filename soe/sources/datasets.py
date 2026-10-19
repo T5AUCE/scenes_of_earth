@@ -82,6 +82,7 @@ class Dataset(ABC):
     step: str | None = None  # ISO 8601 duration between time steps; None for static layers
     cell_method: str | None = None  # how a step summarises its period: sum, mean, point or max
     max_tiles: int | None = None  # request cap for tiled datasets
+    needs_tiles: bool = False  # a bbox without source tiles has no data, so the request is refused
     synthetic: bool = False  # offline stand-in data, kept apart from real revisions
     remote: bool = True  # has a remote revision, which scene preparation caches
     fallback: Fallback | None = None  # series layers only
