@@ -42,7 +42,7 @@ log = logging.getLogger("soe")
 
 @dataclass
 class PreparedScene:
-    """A validated request: the scene id and the request JSON stored with the build job."""
+    """A validated request with its scene id and the request JSON stored with the build job."""
 
     scene_id: str
     request_json: str
@@ -148,7 +148,7 @@ def _requested_period(data: JsonObject, datasets: list[Dataset]) -> tuple[str | 
 
 
 def check_period(start: object, end: object, dataset: SeriesDataset, who: str = "") -> None:
-    """Validate request periods: the one holding first() <= start <= end <= the last available.
+    """Validate that the request's first and last months are ordered and available.
 
     `who` prefixes the messages.
     """

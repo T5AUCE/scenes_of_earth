@@ -1,4 +1,4 @@
-"""Shared test helpers: a real-mode source that reads synthetic data (no network)."""
+"""Share a real-mode source that reads synthetic data so tests need no network."""
 from collections.abc import Callable
 
 import numpy as np

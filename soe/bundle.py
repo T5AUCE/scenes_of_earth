@@ -72,7 +72,7 @@ def make(
 
 
 def _period_block(plan: Plan) -> JsonObject | None:
-    """The requested period: ISO dates, the end exclusive; None for a scene without series."""
+    """Return the requested period as ISO dates with an exclusive end, or None without series."""
     if plan.period is None:
         return None
 

@@ -1,4 +1,4 @@
-"""Bundle tests: scene.json validation and credit lines."""
+"""Test scene.json validation and the credit lines of a bundle."""
 import json
 
 import pytest

@@ -45,7 +45,7 @@ export function searchUrl(query: string, level: string) {
   return `/api/areas/search?${parameters}`;
 }
 
-/** Whether text is a scene id: the first SCENE_ID_CHARS hex characters of the backend's hash. */
+/** Whether text is a scene id, the first SCENE_ID_CHARS hex characters of the backend's hash. */
 export const isSceneId = (text: string) => SCENE_ID_PATTERN.test(text);
 
 /** The build status of one scene. */
@@ -59,7 +59,7 @@ export const getArea = (id: string) =>
 /** The area outline (area.geojson) at href. */
 export const loadAreaFeature = (href: string) => request<AreaFeature>(href);
 
-/** Submits a scene build request. */
+/** Submit a scene build request. */
 export const postScene = (body: SceneRequest) =>
   request<SceneStatus>(
     "/api/scenes",

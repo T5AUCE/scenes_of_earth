@@ -1,4 +1,4 @@
-"""Offline tests: dataset kinds and steps, tiles, terrain resolution, block mean, source probes."""
+"""Test offline dataset steps, tiles, terrain resolution, block means and source probes."""
 import functools
 import http.server
 import threading
@@ -277,21 +277,39 @@ def test_revision_of_a_month_the_cube_lost_is_unavailable():
         rain.local_revision(["2026-06-01", "2026-07-01"])
 
 
-def test_rain_preliminary_fallback_months_get_one_notice_per_run():
+def test_rain_preliminary_months_filled_by_the_fallback_get_one_notice_per_run():
     markers = {"2026-04": "0001:a", "2026-05": "0005:a", "2026-06": "0005:a", "2026-07": "0001:a"}
     rain = replace(RAIN, backend=FakeRainBackend(markers))
     steps = ["2026-04-01", "2026-05-01", "2026-06-01", "2026-07-01"]
 
-    notices = rain.notices([0, 0, 1, 1], steps)
+    notices = rain.fallback_notices(steps, [True, True, True, True])
 
     assert len(notices) == 1
     assert "Rainfall 2026-05 to 2026-06" in notices[0] and "preliminary" in notices[0]
 
 
+def test_rain_preliminary_months_the_fallback_did_not_fill_get_no_notice():
+    markers = {"2026-05": "0005:a", "2026-06": "0005:a", "2026-07": "0005:a"}
+    rain = replace(RAIN, backend=FakeRainBackend(markers))
+    steps = ["2026-05-01", "2026-06-01", "2026-07-01"]
+
+    notices = rain.fallback_notices(steps, [True, False, True])
+
+    assert len(notices) == 2
+    assert "Rainfall 2026-05 is" in notices[0] and "Rainfall 2026-07 is" in notices[1]
+    assert rain.fallback_notices(steps, [False, False, False]) == []
+
+
 def test_rain_final_fallback_months_get_no_notice():
     rain = replace(RAIN, backend=FakeRainBackend({"2026-06": "0001:a", "2026-07": "0001:b"}))
 
-    assert rain.notices([0, 0, 1, 1], ["2026-06-01", "2026-07-01"]) == []
+    assert rain.fallback_notices(["2026-06-01", "2026-07-01"], [True, True]) == []
+
+
+def test_rain_has_no_notice_before_the_build_shows_the_fallback_was_used():
+    rain = replace(RAIN, backend=FakeRainBackend({"2026-05": "0005:a"}))
+
+    assert rain.notices([0, 0, 1, 1], ["2026-05-01"]) == []
 
 
 def test_rain_months_are_those_chirps_and_the_fallback_cube_hold():
@@ -754,7 +772,7 @@ def fake_terrain(tmp_path, monkeypatch):
             "count": 1,
             "dtype": "float32",
             "crs": "EPSG:4326",
-            # Copernicus tiles: pixel centres on whole degrees, so the edge is half a pixel out.
+            # Copernicus tiles have pixel centres on whole degrees, so the edge is half a pixel out.
             "transform": Affine(
                 1 / width,
                 0,

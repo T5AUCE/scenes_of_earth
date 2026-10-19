@@ -183,8 +183,9 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
   ERA5 monthly averaged data on single levels from 1940 to present. Copernicus Climate Change Service (C3S) Climate Data
   Store (CDS), doi:10.24381/cds.f17050d7; Hersbach, H. et al. (2020) Q. J. R. Meteorol. Soc. 146, 1999-2049,
   doi:10.1002/qj.3803. Converted from K to °C or from m per day to mm per month, cropped to 60S-60N and sampled at the
-  centre of each native layer cell where the main source has no value; preliminary (ERA5T) months carry a notice. The credit
-  appears in a bundle only when it holds filled cells. The same text is in `soe/sources/licences.py`.
+  centre of each native layer cell where the main source has no value. Rainfall carries a notice for preliminary (ERA5T)
+  months only where ERA5 filled an in-area cell. Temperature flags requested months that are preliminary in either cube.
+  The credit appears in a bundle only when it holds filled cells. The same text is in `soe/sources/licences.py`.
 - **Terrain: Copernicus DEM GLO-30 Public and GLO-90** (Copernicus WorldDEM-30 / -90 licences, free and open; GLO-90 is
   the fallback where GLO-30 has no tile). Hillshade and resampled elevation are adapted data, so the notice is
   required: "produced using Copernicus WorldDEM™-90 © DLR e.V.

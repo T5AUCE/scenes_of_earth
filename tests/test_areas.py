@@ -1,4 +1,4 @@
-"""Offline tests: drawn-shape validation, unwrapping across 180 and scene planning."""
+"""Test offline how drawn shapes are validated, unwrapped across 180 degrees and planned."""
 from dataclasses import replace
 
 import numpy as np

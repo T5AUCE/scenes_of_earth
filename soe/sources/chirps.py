@@ -1,4 +1,4 @@
-"""CHIRPS monthly rain: the dataset, its grid and the reader of the COGs."""
+"""Read CHIRPS monthly rain from its COGs and describe the dataset with its grid."""
 import threading
 import time
 import urllib.error
@@ -53,12 +53,16 @@ class RainDataset(SeriesDataset):
         labels = [step[:MONTH_CHARS] for step in steps]
         return revision_digest(*month_markers(self.fallback_months(), labels))
 
-    def notices(self, bbox: Bbox, steps: list[str]) -> list[str]:
-        """Return one notice for each run of requested months that are preliminary in the fallback
-        cube.
-        """
+    def fallback_notices(self, steps: list[str], filled: list[bool]) -> list[str]:
+        """Return one notice for each run of months where preliminary ERA5 rain filled a gap."""
         labels = [step[:MONTH_CHARS] for step in steps]
-        runs = preliminary_runs(labels, self.fallback_months())
+        markers = self.fallback_months()
+        # An empty marker is never preliminary, so months the fallback did not fill drop out.
+        used = {
+            label: markers[label] if was_filled else ""
+            for label, was_filled in zip(labels, filled)
+        }
+        runs = preliminary_runs(labels, used)
         return [_preliminary_notice(run[0], run[-1]) for run in runs]
 
     def stops_floor(self, stats: dict[str, float]) -> float:
@@ -101,7 +105,7 @@ class ChirpsReader:
             now = datetime.now(timezone.utc)
             found, complete = self._probe_latest_month(now)
             if found is None:
-                # Offline: assume the usual two-month lag, and probe again soon.
+                # When offline, assume the usual two-month lag and probe again soon.
                 found = self._assumed_latest_month(now)
                 complete = False
 
@@ -169,7 +173,7 @@ def _chirps_url(month: str) -> str:
 
 
 def _head(url: str, timeout: float = HEAD_TIMEOUT_SECS) -> tuple[bool | None, str | None]:
-    """(exists, Last-Modified) for a URL: (False, None) on 404, (None, None) if unreachable."""
+    """Return whether a URL exists and its Last-Modified date; (None, None) if unreachable."""
     try:
         request = urllib.request.Request(url, method="HEAD")
         with urllib.request.urlopen(request, timeout=timeout) as response:

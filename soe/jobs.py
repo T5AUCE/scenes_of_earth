@@ -1,4 +1,4 @@
-"""Scene build jobs: queue a validated request, build its bundle, record status in the db."""
+"""Queue validated scene requests, build their bundles in a small pool and record each status."""
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor

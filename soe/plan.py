@@ -1,4 +1,4 @@
-"""Scene planning: each layer's grid window, aggregation factor, mask and time steps."""
+"""Plan a scene by choosing each layer's grid window, aggregation factor, mask and time steps."""
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -49,7 +49,7 @@ class LayerPlan:
 
 @dataclass
 class Plan:
-    """The result of plan(): one LayerPlan per dataset plus what is shared."""
+    """The result of plan(), holding one LayerPlan per dataset and what the layers share."""
 
     geometry: BaseGeometry  # clipped to the coverage shared by all layers
     layers: dict[str, LayerPlan]  # dataset id -> LayerPlan
@@ -142,7 +142,7 @@ def _clip_to_coverage(
 
 
 def _extent(coverage: Bbox) -> Bbox:
-    """Coverage as (W, S, E, N) in the unwrapped frame: a global coverage reaches 360 east."""
+    """Return coverage as (W, S, E, N) in the unwrapped frame, so a global one reaches 360."""
     west, south, east, north = coverage
     is_global = (west, east) == (-MAX_LONGITUDE_DEG, MAX_LONGITUDE_DEG)
     return west, south, WORLD_WIDTH_DEG if is_global else east, north

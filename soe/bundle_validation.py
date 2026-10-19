@@ -110,7 +110,7 @@ def _layer_problems(layer: JsonObject) -> list[str]:
 
 
 def _source_array_problems(layer: JsonObject) -> list[str]:
-    """Return problems with the optional provenance array, which only a layer with a fallback has."""
+    """Return problems with the optional provenance array of a layer with a fallback."""
     block = layer.get("arrays", {}).get(SOURCE_ROLE.name)
     if block is None:
         return []

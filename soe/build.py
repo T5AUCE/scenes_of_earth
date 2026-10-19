@@ -348,7 +348,7 @@ def _write_time_series(
     _write_time_coordinate(layer_group, steps)
     series = _create_time_array(layer_group, dataset, spec, layer_plan)
     statistics = _StatisticsAccumulator()
-    provenance = _Provenance(area_mask)
+    provenance = _Provenance(area_mask, step_count)
     worker_count = _choose_worker_count(layer_plan)
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -361,7 +361,7 @@ def _write_time_series(
                 batch_steps,
             )
             statistics.add(raster_batch, area_mask)
-            provenance.add(raster_batch, filled_batch)
+            provenance.add(batch_start, raster_batch, filled_batch)
             encoded_batch = encode_values(
                 np.where(area_mask, raster_batch, np.nan),
                 spec.dtype,
@@ -378,13 +378,14 @@ def _write_time_series(
     return {
         "stops": dataset.stops(value_stats, statistics.quantiles(STOP_COUNT)),
         "stats": value_stats,
-        **_write_provenance(layer_group, dataset, provenance),
+        **_write_provenance(layer_group, dataset, steps, provenance),
     }
 
 
 def _write_provenance(
     layer_group: zarr.Group,
     dataset: SeriesDataset,
+    steps: list[str],
     provenance: "_Provenance",
 ) -> JsonObject:
     """Write the `source` array when the fallback gave a value, and return the layer's notes."""
@@ -408,15 +409,16 @@ def _write_provenance(
 
     return {
         "fallback_used": bool(fallback_cells),
-        "notices": provenance.notices(dataset),
+        "notices": provenance.notices(dataset, steps),
     }
 
 
 class _Provenance:
     """Track which source contributes values to each cell inside the area."""
 
-    def __init__(self, area_mask: np.ndarray) -> None:
+    def __init__(self, area_mask: np.ndarray, step_count: int) -> None:
         self._area_mask = area_mask
+        self._step_filled = np.zeros(step_count, bool)
         self._from_main = np.zeros(area_mask.shape, bool)
         self._from_fallback = np.zeros(area_mask.shape, bool)
         self._missing = np.zeros(area_mask.shape, bool)  # lacks a value in some step
@@ -426,12 +428,19 @@ class _Provenance:
         """Return the number of cells inside the area that took a fallback value in some step."""
         return int((self._from_fallback & self._area_mask).sum())
 
-    def add(self, raster_batch: np.ndarray, filled_batch: np.ndarray | None) -> None:
-        """Account for a batch of steps; `filled_batch` is None when there is no fallback."""
+    def add(
+        self,
+        batch_start: int,
+        raster_batch: np.ndarray,
+        filled_batch: np.ndarray | None,
+    ) -> None:
+        """Account for the steps from `batch_start`; `filled_batch` is None without a fallback."""
         present = np.isfinite(raster_batch)
         filled = np.zeros_like(present) if filled_batch is None else filled_batch
         self._from_main |= (present & ~filled).any(axis=0)
         self._from_fallback |= filled.any(axis=0)
+        batch_end = batch_start + len(filled)
+        self._step_filled[batch_start:batch_end] = (filled & self._area_mask).any(axis=(1, 2))
         self._missing |= (~present).any(axis=0)
 
     def codes(self) -> np.ndarray:
@@ -439,7 +448,7 @@ class _Provenance:
         codes = self._from_main * FROM_MAIN + self._from_fallback * FROM_FALLBACK
         return np.where(self._area_mask, codes, 0).astype("uint8")
 
-    def notices(self, dataset: SeriesDataset) -> list[str]:
+    def notices(self, dataset: SeriesDataset, steps: list[str]) -> list[str]:
         """Return notes on the cells that took fallback values and those that still lack a value."""
         inside = int(self._area_mask.sum())
         missing = int((self._missing & self._area_mask).sum())
@@ -447,6 +456,7 @@ class _Provenance:
         if self.fallback_cells:
             notice = dataset.fallback.notice
             notices.append(notice.format(filled=self.fallback_cells, inside=inside))
+            notices += dataset.fallback_notices(steps, self._step_filled.tolist())
         if missing:
             notices.append(
                 f"{dataset.title} has no value from either source in {missing} of {inside} cells "

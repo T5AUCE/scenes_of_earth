@@ -1,4 +1,4 @@
-"""Offline tests: hillshade, build progress and synthetic end-to-end builds."""
+"""Test offline hillshade, build progress and synthetic end-to-end builds."""
 import json
 import shutil
 from collections.abc import Callable
@@ -875,13 +875,76 @@ def test_build_with_unchanged_local_revisions_publishes(tmp_path):
     assert (tmp_path / HASH_A / "scene.json").exists()
 
 
-def test_scene_with_preliminary_rain_months_carries_the_notice(tmp_path):
-    rain = make_registry(SyntheticSource())["chirps_monthly"]
+def test_preliminary_rain_months_without_fallback_use_carry_no_rain_notice(tmp_path):
+    rain = rain_with_gaps(lambda step: [])
     build_scene(HASH_A, Area(NAIROBI, BOUNDARY), "2026-06", "2026-08", [rain], "T", tmp_path)
 
     doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
 
-    assert doc["notices"]["limits"][0] == (
-        "The ERA5 rain that fills gaps in Rainfall 2026-07 to 2026-08 is preliminary; final data "
+    assert doc["notices"]["limits"] == []
+
+
+def test_preliminary_rain_months_filled_by_the_fallback_carry_the_notice(tmp_path):
+    rain = rain_with_gaps(lambda step: [(3, 4)] if step.startswith("2026-07") else [])
+    build_scene(HASH_A, Area(NAIROBI, BOUNDARY), "2026-06", "2026-08", [rain], "T", tmp_path)
+
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+
+    assert (
+        "The ERA5 rain that fills gaps in Rainfall 2026-07 is preliminary; final data "
         "replaces it about two months later, and the scene then gets a new id."
+    ) in doc["notices"]["limits"]
+
+
+def test_preliminary_rain_filled_only_outside_the_area_carries_no_fallback_notice(tmp_path):
+    rain = rain_with_gaps(lambda step: [(0, 19)])
+    area = Area(TRIANGLE, BOUNDARY)
+    build_scene(HASH_A, area, "2026-07", "2026-08", [rain], "T", tmp_path)
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    root = zarr.open_group(tmp_path / HASH_A / "data.zarr", mode="r")
+
+    assert root["chirps_monthly/mask"][0, 19] == 0
+    assert doc["notices"]["limits"] == []
+    assert "source" not in root["chirps_monthly"]
+    assert "fallback_sources" not in doc["layers"][0]
+    assert SOURCES["era5"]["attribution"] not in doc["credits"]["lines"]
+
+
+def test_preliminary_rain_gaps_the_fallback_cannot_fill_carry_only_the_missing_notice(tmp_path):
+    rain = rain_with_gaps(lambda step: [(3, 4)], EmptyFallbackSource())
+    build_scene(HASH_A, Area(NAIROBI, BOUNDARY), "2026-07", "2026-08", [rain], "T", tmp_path)
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+
+    assert doc["notices"]["limits"] == [
+        "Rainfall has no value from either source in 1 of 400 cells in some months.",
+    ]
+    assert "source" not in doc["layers"][0]["arrays"]
+    assert "fallback_sources" not in doc["layers"][0]
+
+
+@pytest.mark.parametrize("preliminary_gaps", [[], [(0, 19)]])
+def test_final_rain_fills_do_not_trigger_a_notice_for_unfilled_preliminary_months(
+    tmp_path,
+    preliminary_gaps,
+):
+    rain = rain_with_gaps(
+        lambda step: [(10, 3)] if step.startswith("2026-06") else preliminary_gaps,
     )
+    build_scene(HASH_A, Area(TRIANGLE, BOUNDARY), "2026-06", "2026-08", [rain], "T", tmp_path)
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+
+    assert len(doc["notices"]["limits"]) == 1
+    assert doc["notices"]["limits"][0].startswith("Rainfall uses ERA5 model rain")
+    assert "source" in doc["layers"][0]["arrays"]
+
+
+def test_preliminary_rain_fill_in_a_later_batch_keeps_its_month_in_the_notice(tmp_path):
+    rain = rain_with_gaps(lambda step: [(3, 4)] if step.startswith("2026-07") else [])
+    build_scene(HASH_A, Area(NAIROBI, BOUNDARY), "2025-06", "2026-08", [rain], "T", tmp_path)
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    preliminary = [notice for notice in doc["notices"]["limits"] if "preliminary" in notice]
+
+    assert preliminary == [
+        "The ERA5 rain that fills gaps in Rainfall 2026-07 is preliminary; final data "
+        "replaces it about two months later, and the scene then gets a new id.",
+    ]

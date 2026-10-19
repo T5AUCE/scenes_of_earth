@@ -35,6 +35,8 @@ from soe.sources import (
 )
 from soe.sources.cubes import month_index
 
+pytestmark = pytest.mark.slow
+
 GRIB_SECTION1_BYTES = 52  # long enough to hold the ECMWF experiment version
 EXPVER_IN_SECTION1_BYTES = 45
 UNPUBLISHED = "None of the data you have requested is available yet, please try again later."

@@ -117,8 +117,8 @@ export function imageCorners(bbox: Bbox, shift: number): Corners {
 
 /**
  * The longitude offset that moves a scene's images, and anything drawn with them, into the
- * visible world: a centre above 180 gives MapLibre an out-of-range tile, so it moves one world
- * west. Take it from the scene's bbox, so all its layers share one world copy.
+ * visible world. A centre above 180 gives MapLibre an out-of-range tile, so it moves one world
+ * west. Take it from the scene's bbox so that all its layers share one world copy.
  */
 export function worldShift([west, , east]: Bbox) {
   const isEastOfAntimeridian = (west + east) / 2 > ANTIMERIDIAN_DEG;

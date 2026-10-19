@@ -1,4 +1,4 @@
-"""The dataset contract: roles, static and series datasets, and the registry type."""
+"""Define the dataset contract that readers implement, with its roles and the registry type."""
 import hashlib
 import math
 from abc import ABC, abstractmethod
@@ -28,7 +28,7 @@ FROM_FALLBACK = 2
 
 
 class Role(NamedTuple):
-    """One data array of a layer: where it is stored, how, and how the viewer decodes it."""
+    """One data array of a layer, with how it is stored and how the viewer decodes it."""
 
     name: str  # array name inside the Zarr group of the layer
     dtype: str  # stored dtype
@@ -163,9 +163,10 @@ class StaticDataset(Dataset):
         res: float,
         on_block: Callable[[], None] | None = None,
     ) -> tuple[dict[str, np.ndarray], Affine]:
-        """Values over bbox at cell size `res`: ({role: 2D array in the stored dtype}, transform).
+        """Return the values over bbox at cell size `res` and their transform.
 
-        on_block() is called each time one of block_count(bbox) parts has been read.
+        The values map each role to a 2D array in the stored dtype. `on_block` is called each
+        time one of the block_count(bbox) parts has been read.
         """
 
 
@@ -230,6 +231,10 @@ class SeriesDataset(Dataset):
             lambda window: self.backend.read_cube(self.fallback.cube, month, window),
         )
         return block_mean(sampled, factor)
+
+    def fallback_notices(self, steps: list[str], filled: list[bool]) -> list[str]:
+        """Return notes on the fallback values a build used; `filled` flags each of `steps`."""
+        return []
 
     def fallback_months(self) -> dict[str, str]:
         """Return the marker of each month of the fallback's cube, oldest first."""

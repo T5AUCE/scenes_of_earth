@@ -64,7 +64,7 @@ export function lut(name: string) {
   return table;
 }
 
-/** Where a value falls on the palette, 0-1: the stops are evenly spaced along it. */
+/** Where a value falls on the palette from 0 to 1, with the stops evenly spaced along it. */
 export function stopPosition(value: number, stops: number[]) {
   const last = stops.length - 1;
   if (value <= stops[0]) return 0;
@@ -77,7 +77,7 @@ export function stopPosition(value: number, stops: number[]) {
   return (lower + (value - stops[lower]) / (stops[upper] - stops[lower])) / last;
 }
 
-/** Up to LEGEND_TICK_COUNT stops to label: each with its position on the palette, 0-1. */
+/** Up to LEGEND_TICK_COUNT stops to label, each with its position on the palette from 0 to 1. */
 export function legendTicks(stops: number[]) {
   const last = stops.length - 1;
   const indexes = new Set(

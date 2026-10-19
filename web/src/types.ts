@@ -134,7 +134,7 @@ export interface LayerDoc {
   arrays: Record<string, ArrayDoc>; // by role, e.g. value, elevation, hillshade, source
 }
 
-/** area.geojson: one Feature holding the area's outline. */
+/** The area.geojson file, which is one Feature holding the area's outline. */
 export interface AreaFeature {
   type: "Feature";
   properties: Record<string, unknown>;

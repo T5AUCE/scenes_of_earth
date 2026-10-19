@@ -1,4 +1,4 @@
-"""Scene preparation tests: validation, revision cache and scene ids (no network)."""
+"""Test scene request validation, the revision cache and scene ids without network."""
 import json
 from dataclasses import replace
 
