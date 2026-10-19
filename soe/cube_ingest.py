@@ -10,7 +10,7 @@ import hashlib
 import logging
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from itertools import groupby
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -363,7 +363,9 @@ def read_months(
             raise ValueError(f"expected {spec.grib_unit} values, got {tags.get('GRIB_UNIT')}")
 
         valid_seconds = int(tags["GRIB_VALID_TIME"].split()[0])
-        month = datetime.fromtimestamp(valid_seconds, timezone.utc).strftime("%Y-%m")
+        valid_time = datetime.fromtimestamp(valid_seconds, timezone.utc)
+        # ERA5 monthly accumulations can be stamped at 18:00 on the previous month's last day.
+        month = (valid_time + timedelta(days=1)).strftime("%Y-%m")
         source = dataset.read(band, masked=True).astype("float32").filled(np.nan)
         # Unit conversion clamps, so a -inf cell would otherwise turn into a plausible zero.
         if spec.complete and not np.isfinite(source).all():

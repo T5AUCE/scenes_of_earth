@@ -5,6 +5,7 @@ Check GRIB decoding and grid placement. Verify update recovery and CDS request s
 import hashlib
 import json
 from collections.abc import Iterator
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -721,6 +722,45 @@ def test_precipitation_in_metres_per_day_becomes_mm_for_the_whole_month(tmp_path
         [(_, values, _)] = read_months(dataset, ["0001"], ERA5_PRECIPITATION)
 
     assert values[5, 5] == pytest.approx(2 * days, rel=1e-5)
+
+
+@pytest.mark.parametrize(
+    ("valid_time", "month", "days"),
+    [
+        ("2019-12-31T18:00:00+00:00", "2020-01", 31),
+        ("2020-01-31T18:00:00+00:00", "2020-02", 29),
+        ("2021-01-31T18:00:00+00:00", "2021-02", 28),
+    ],
+)
+def test_precipitation_stamped_before_month_uses_next_month_and_its_day_count(
+    tmp_path,
+    valid_time,
+    month,
+    days,
+):
+    path = tmp_path / "field.tif"
+    valid_seconds = int(datetime.fromisoformat(valid_time).timestamp())
+    write_raster(
+        path,
+        ERA5_GRID.west_deg,
+        ERA5_GRID.res,
+        ERA5_GRID.columns,
+        ERA5_GRID.rows,
+        np.full(ERA5_SHAPE, 0.002),
+        [valid_seconds],
+        ERA5_GRID.north_deg,
+        unit="[m]",
+    )
+    with rasterio.open(path) as dataset:
+        write_months(
+            tmp_path,
+            ERA5_PRECIPITATION,
+            read_months(dataset, ["0001"], ERA5_PRECIPITATION),
+        )
+    cube = MonthlyCube(ERA5_PRECIPITATION.cube, tmp_path)
+
+    assert list(cube.months()) == [month]
+    assert cube.read(month, (5, 5, 1, 1))[0, 0] == pytest.approx(2 * days)
 
 
 def test_precipitation_packing_noise_below_zero_becomes_zero(tmp_path):
