@@ -68,7 +68,7 @@ export function createSeriesView(
     parts: [{ id, label: layer.title, layerIds: [id] }],
     options: [
       {
-        label: `Smooth ${layer.title.toLowerCase()}`,
+        label: "Smooth",
         set: (on) => map.setPaintProperty(id, "raster-resampling", on ? "linear" : "nearest"),
       },
     ],

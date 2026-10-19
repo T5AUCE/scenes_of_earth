@@ -162,26 +162,28 @@ function layerCard(map: MapLibreMap, view: LayerView) {
   const card = makeHtmlElement("section");
   card.className = "card";
 
-  for (const part of view.parts) {
+  // Options such as Smooth share the first part's line to save vertical space.
+  view.parts.forEach((part, index) => {
     const sliders = part.controls ? partControls(part.controls) : null;
-    card.append(
+    const row = makeHtmlElement("div", "", card);
+    row.className = "check-row";
+    row.append(
       checkbox(part.label, true, (on) => {
         setVisible(map, part.layerIds, on);
         part.onToggle?.(on);
         if (sliders) sliders.hidden = !on;
       }),
     );
+    if (index === 0 && view.options.length > 0) {
+      for (const option of view.options) row.append(checkbox(option.label, false, option.set));
+      makeHtmlElement("div", OPTION_NOTE, card).className = "option-note";
+    }
     if (sliders) card.append(sliders);
     if (part.note) {
       part.note.classList.add("option-note");
       card.append(part.note);
     }
-  }
-
-  for (const option of view.options) {
-    card.append(checkbox(option.label, false, option.set));
-    makeHtmlElement("div", OPTION_NOTE, card).className = "option-note";
-  }
+  });
 
   const legend = view.legend();
   if (legend) card.append(legend);
