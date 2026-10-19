@@ -1,27 +1,23 @@
-"""Deterministic fake rain, terrain and temperature that stand in for the real readers.
+"""Generate deterministic offline stand-ins for rainfall and terrain as well as cube data.
 
-Offline runs and tests use it, so nothing here needs the network or a temperature cube.
+Offline runs and tests use it, so nothing here needs the network or a cube.
 """
 from collections.abc import Callable
 
 import numpy as np
 from rasterio.transform import Affine, from_origin
 
-from .chirps import FIRST_MONTH, MONTH_CHARS
-from .era5land_temperature import (
-    ERA5_LAND_TEMPERATURE_GRID,
-    FINAL_EXPVER,
-    MONTHS_PER_YEAR,
-    PRELIMINARY_EXPVER,
-    month_index,
-)
+from .chirps import FIRST_MONTH
+from .cubes import FINAL_EXPVER, MONTHS_PER_YEAR, PRELIMINARY_EXPVER, CubeSpec, month_index
+from .era5 import ERA5_PRECIPITATION_CUBE, ERA5_TEMPERATURE_CUBE
+from .era5land_temperature import ERA5_LAND_TEMPERATURE_CUBE
 from .grid import Bbox, CellWindow
-from .periods import add_duration
+from .periods import MONTH_CHARS, add_duration
 from .terrain import terrain_block_count
 
 
 class SyntheticSource:
-    """Deterministic fake data, no network. `reads` counts rain and temperature reads."""
+    """Provide deterministic offline data and count rain and cube reads in `reads`."""
 
     synthetic = True
 
@@ -35,12 +31,12 @@ class SyntheticSource:
     def current_revision(self, month: str) -> str:
         return "synthetic"
 
-    def has_t2m(self) -> bool:
-        """Always true: the synthetic cube needs no files."""
+    def has_cube(self, spec: CubeSpec) -> bool:
+        """Return True because the synthetic cubes need no files."""
         return True
 
-    def t2m_months(self) -> dict[str, str]:
-        """Months from 1981-01 to the latest, the last two preliminary."""
+    def cube_months(self, spec: CubeSpec) -> dict[str, str]:
+        """Return monthly markers from 1981-01 and mark the latest two months preliminary."""
         months = []
         month_start = f"{FIRST_MONTH}-01"
         while month_start[:MONTH_CHARS] <= self._latest:
@@ -50,18 +46,14 @@ class SyntheticSource:
         expvers = [FINAL_EXPVER] * (len(months) - 2) + [PRELIMINARY_EXPVER] * 2
         return {month: f"{expver}:synthetic" for month, expver in zip(months, expvers)}
 
-    def read_t2m(self, month: str, window: CellWindow) -> np.ndarray:
-        """Fake temperature in degrees C of one month, seasonal and falling poleward."""
+    def read_cube(self, spec: CubeSpec, month: str, window: CellWindow) -> np.ndarray:
+        """Return fake values of one month in the cube's units, with NaN for rows past the grid."""
         self.reads += 1
         col, row, width, height = window
-        seasonal = np.sin(month_index(month) * 2 * np.pi / MONTHS_PER_YEAR)
         cols, rows = np.meshgrid(np.arange(col, col + width), np.arange(row, row + height))
-
-        lat = ERA5_LAND_TEMPERATURE_GRID.north_deg - rows * ERA5_LAND_TEMPERATURE_GRID.res
-        temperature = 28 - 0.5 * np.abs(lat) + 8 * seasonal
-        temperature = temperature.astype("float32")
-        temperature[(cols * 5 + rows * 11) % 13 == 0] = np.nan  # Holes exercise NaN-aware means.
-        return temperature
+        values = CUBE_FIELDS[spec.name](month, cols, rows, spec).astype("float32")
+        values[rows >= spec.grid.rows] = np.nan
+        return values
 
     def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
         self.reads += 1
@@ -90,3 +82,38 @@ class SyntheticSource:
         for _ in range(terrain_block_count(bounds)):
             on_block()
         return elevation.astype("int16"), transform
+
+
+def _land_temperature(month: str, cols: np.ndarray, rows: np.ndarray, spec: CubeSpec) -> np.ndarray:
+    """Return a seasonal field that falls poleward and has holes to exercise NaN-aware means."""
+    temperature = _temperature(month, rows, spec)
+    temperature[(cols * 5 + rows * 11) % 13 == 0] = np.nan
+    return temperature
+
+
+def _era5_temperature(month: str, cols: np.ndarray, rows: np.ndarray, spec: CubeSpec) -> np.ndarray:
+    """Return a field a degree cooler than the land field, without holes."""
+    return _temperature(month, rows, spec) - 1
+
+
+def _era5_precipitation(
+    month: str,
+    cols: np.ndarray,
+    rows: np.ndarray,
+    spec: CubeSpec,
+) -> np.ndarray:
+    month_number = int(month[:4]) * 12 + int(month[5:7])
+    return 70 + 30 * np.sin(cols / 6 + month_number * 0.5) * np.cos(rows / 5)
+
+
+def _temperature(month: str, rows: np.ndarray, spec: CubeSpec) -> np.ndarray:
+    seasonal = np.sin(month_index(month) * 2 * np.pi / MONTHS_PER_YEAR)
+    lat = spec.grid.north_deg - rows * spec.grid.res
+    return 28 - 0.5 * np.abs(lat) + 8 * seasonal
+
+
+CUBE_FIELDS = {
+    ERA5_LAND_TEMPERATURE_CUBE.name: _land_temperature,
+    ERA5_TEMPERATURE_CUBE.name: _era5_temperature,
+    ERA5_PRECIPITATION_CUBE.name: _era5_precipitation,
+}

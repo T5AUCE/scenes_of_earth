@@ -4,6 +4,7 @@ import re
 from datetime import date, timedelta
 
 REQUEST_STEP = "P1M"  # granularity of a scene request's start and end
+MONTH_CHARS = 7  # of an ISO date: 'YYYY-MM'
 
 DURATION_PATTERN = re.compile(r"P([0-9]+)([YMD])")
 REQUEST_PATTERNS = {

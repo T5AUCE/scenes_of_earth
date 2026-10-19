@@ -1,43 +1,45 @@
-"""Download ERA5-Land monthly 2 m temperature and store it in the local cube.
+"""Download monthly ERA5-Land and ERA5 variables and store each one in its local cube.
 
 Months are requested from the Climate Data Store one year at a time as GRIB. Each file is checked
-against the cube grid and converted from Kelvin to Celsius. The cube is written in a way that
-lets readers see new data only together with its revision marker. Months that are still
-preliminary are fetched again on later runs, so that final data replaces them.
+against the cube grid and converted to the cube's units. A cube is written in a way that lets
+readers see new data only together with its revision marker. Months that are still preliminary
+are fetched again on later runs, so that final data replaces them.
 """
+import calendar
 import hashlib
 import logging
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from itertools import groupby
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 import rasterio
 import zarr
 
 from .build import COMPRESSION, encode_values
-from .sources import ERA5_LAND_TEMPERATURE_GRID
-from .sources.chirps import MONTH_CHARS, previous_month
-from .sources.era5land_temperature import (
-    CUBE_ARRAY,
-    CUBE_FILL,
-    CUBE_NAME,
-    CUBE_SCALE,
+from .sources import (
+    ERA5_LAND_TEMPERATURE_CUBE,
+    ERA5_PRECIPITATION_CUBE,
+    ERA5_TEMPERATURE_CUBE,
+    CubeSpec,
+    Grid,
+)
+from .sources.chirps import previous_month
+from .sources.cubes import (
     CUBE_TIME_ORIGIN,
     FINAL_EXPVER,
     PRELIMINARY_EXPVER,
     is_preliminary,
     month_index,
 )
-from .sources.periods import add_duration
+from .sources.periods import MONTH_CHARS, add_duration
 
 if TYPE_CHECKING:
     import cdsapi
 
-CDS_DATASET = "reanalysis-era5-land-monthly-means"
 DOWNLOADS_DIR = ".downloads"  # holds each GRIB file until it has been stored
 
 UNPUBLISHED_MESSAGES = ("none of the data you have requested is available yet",)
@@ -59,26 +61,42 @@ LARGE_MESSAGE_UNIT_BYTES = 120
 LARGE_MESSAGE_LENGTH_MASK = 0x7FFFFF
 EXPVER_OFFSET_BYTES = 45  # in section 1; octets 46-49
 EXPVER_CHARS = 4
-KELVIN_UNIT = "[K]"
 RESOLUTION_TOLERANCE_DEG = 1e-6
-CENTRE_TOLERANCE_CELLS = 1e-6  # how far a cell centre may lie from a 0.1 degree multiple
+CENTRE_TOLERANCE_CELLS = 1e-6  # how far a cell centre may lie from a multiple of the cell size
 CELSIUS_ZERO_K = 273.15
+MM_PER_M = 1000
 TIME_CHUNK_MONTHS = 12
 LAT_LON_CHUNK_CELLS = 32
 LAT_LON_SHARD_CELLS = 512
 
 log = logging.getLogger("soe")
 
-CUBE_FIELD_SHAPE = (ERA5_LAND_TEMPERATURE_GRID.rows, ERA5_LAND_TEMPERATURE_GRID.columns)
-
-MonthField = tuple[str, np.ndarray, str]  # month 'YYYY-MM', degrees C on the cube grid, expver
+MonthField = tuple[str, np.ndarray, str]  # month 'YYYY-MM', values in the cube's units, expver
 
 
-def ingest(cube_dir: Path | str, start_month: str, client: "cdsapi.Client | None" = None) -> None:
+class IngestSpec(NamedTuple):
+    """Describe how to download a cube variable and convert it to the cube units."""
+
+    cube: CubeSpec
+    cds_dataset: str
+    variable: str
+    grib_unit: str  # as GDAL reports it with GRIB_NORMALIZE_UNITS=NO
+    convert: Callable[[np.ndarray, str], np.ndarray]  # (values in grib_unit, month) -> cube units
+    complete: bool  # the source has a value in every cell, so a gap marks a damaged file
+
+
+def ingest(
+    cube_dir: Path | str,
+    spec: IngestSpec,
+    start_month: str,
+    client: "cdsapi.Client | None" = None,
+) -> None:
     """Add the published months from `start_month` to the cube, and refresh preliminary ones.
 
-    The first run starts at `start_month`; later runs continue after the last stored month.
-    Needs the `cdsapi` package and a CDS key in ~/.cdsapirc unless a `client` is given.
+    The first run starts at `start_month`; later runs continue after the last stored month. A
+    `start_month` before the first stored month adds the earlier months, newest year first, so the
+    stored months stay contiguous. The ingest requires the `cdsapi` package and a CDS key in
+    `~/.cdsapirc` unless a client is supplied.
     """
     if client is None:
         import cdsapi
@@ -87,14 +105,15 @@ def ingest(cube_dir: Path | str, start_month: str, client: "cdsapi.Client | None
 
     cube_dir = Path(cube_dir)
     newest = _newest_month()
-    attrs = _cube_attrs(cube_dir)
-    months = _wanted_months(attrs.get("months", {}), attrs.get("pending", []), start_month, newest)
+    attrs = _cube_attrs(cube_dir, spec.cube)
+    stored = attrs.get("months", {})
+    months = _wanted_months(stored, attrs.get("pending", []), start_month, newest)
     downloads = cube_dir / DOWNLOADS_DIR
     downloads.mkdir(parents=True, exist_ok=True)
 
-    for batch in _batches(months, newest):
-        log.info("ERA5-Land temperature: requesting %s to %s", batch[0], batch[-1])
-        _ingest_batch(client, cube_dir, batch, downloads, batch == [newest])
+    for batch in _batches(months, newest, min(stored, default=None)):
+        log.info("%s: requesting %s to %s", spec.cube.title, batch[0], batch[-1])
+        _ingest_batch(client, cube_dir, spec, batch, downloads, batch == [newest])
 
 
 def _newest_month() -> str:
@@ -103,8 +122,8 @@ def _newest_month() -> str:
     return "{:04d}-{:02d}".format(*previous_month(now.year, now.month))
 
 
-def _cube_attrs(cube_dir: Path) -> dict:
-    path = cube_dir / CUBE_NAME
+def _cube_attrs(cube_dir: Path, cube: CubeSpec) -> dict:
+    path = cube_dir / f"{cube.name}.zarr"
     return dict(zarr.open_group(path, mode="r").attrs) if path.exists() else {}
 
 
@@ -114,69 +133,93 @@ def _wanted_months(
     start_month: str,
     newest: str,
 ) -> list[str]:
-    """New months up to `newest`, plus the stored months that are still preliminary or pending."""
+    """Return the months that need fetching in ascending order.
+
+    These are the new months up to `newest` and the earlier ones back to `start_month`. They also
+    include the stored months that are still preliminary or pending.
+    """
     first = _next_month(max(stored)) if stored else start_month
-    new = []
-    month = first
-    while month <= newest:
-        new.append(month)
-        month = _next_month(month)
+    new = _months_between(first, newest)
+    earlier = _months_between(start_month, _previous_month(min(stored))) if stored else []
 
     preliminary = [month for month, marker in stored.items() if is_preliminary(marker)]
-    return sorted({*new, *preliminary, *pending})
+    return sorted({*new, *earlier, *preliminary, *pending})
+
+
+def _months_between(first: str, last: str) -> list[str]:
+    """Return the inclusive month range or an empty list when `first` is after `last`."""
+    months = []
+    month = first
+    while month <= last:
+        months.append(month)
+        month = _next_month(month)
+    return months
 
 
 def _next_month(month: str) -> str:
     return add_duration(f"{month}-01", "P1M")[:MONTH_CHARS]
 
 
-def _batches(months: list[str], newest: str) -> list[list[str]]:
-    """One batch per year; the newest month is alone, as it may not be published yet."""
+def _previous_month(month: str) -> str:
+    return add_duration(f"{month}-01", "P1M", -1)[:MONTH_CHARS]
+
+
+def _batches(months: list[str], newest: str, first_stored: str | None = None) -> list[list[str]]:
+    """Group requested months by year in an order that keeps stored months contiguous.
+
+    Earlier years are fetched newest first so each batch joins the stored interval. The newest
+    month is requested separately because it may not be published yet.
+    """
     older = [month for month in months if month != newest]
     batches = [list(year_months) for _, year_months in groupby(older, lambda month: month[:4])]
+    if first_stored is not None:
+        earlier = [batch for batch in batches if batch[0] < first_stored]
+        batches = [*reversed(earlier), *batches[len(earlier):]]
     return [*batches, [newest]] if newest in months else batches
 
 
 def _ingest_batch(
     client: "cdsapi.Client",
     cube_dir: Path,
+    spec: IngestSpec,
     batch: list[str],
     downloads: Path,
     may_be_unpublished: bool,
 ) -> None:
-    target = downloads / f"{batch[0]}.grib"
+    target = downloads / f"{spec.cube.name}-{batch[0]}.grib"
     try:
-        if _retrieve(client, batch, target, may_be_unpublished):
-            write_months(cube_dir, read_grib_months(target))
+        if _retrieve(client, spec, batch, target, may_be_unpublished):
+            write_months(cube_dir, spec, read_grib_months(target, spec))
     finally:
         target.unlink(missing_ok=True)
 
 
 def _retrieve(
     client: "cdsapi.Client",
+    spec: IngestSpec,
     batch: list[str],
     target: Path,
     may_be_unpublished: bool,
 ) -> bool:
     """Download the batch; False when the CDS says that the newest month is not published yet."""
     try:
-        client.retrieve(CDS_DATASET, _request(batch), str(target))
+        client.retrieve(spec.cds_dataset, _request(spec, batch), str(target))
     except Exception as error:
         # cdsapi raises a plain Exception, so the message is the only way to tell this case.
         unpublished = any(text in str(error).lower() for text in UNPUBLISHED_MESSAGES)
         if not (may_be_unpublished and unpublished):
             raise
 
-        log.info("ERA5-Land temperature of %s is not published yet", batch[0])
+        log.info("%s of %s is not published yet", spec.cube.title, batch[0])
         return False
 
     return True
 
 
-def _request(batch: list[str]) -> dict:
+def _request(spec: IngestSpec, batch: list[str]) -> dict:
     return {
         "product_type": ["monthly_averaged_reanalysis"],
-        "variable": ["2m_temperature"],
+        "variable": [spec.variable],
         "year": [batch[0][:4]],
         "month": [month[5:MONTH_CHARS] for month in batch],
         "time": ["00:00"],
@@ -186,11 +229,13 @@ def _request(batch: list[str]) -> dict:
     }
 
 
-def read_grib_months(path: Path | str) -> Iterator[MonthField]:
-    """(month, degrees C on the cube grid, expver) of each message in a CDS GRIB file."""
+def read_grib_months(path: Path | str, spec: IngestSpec) -> Iterator[MonthField]:
+    """Yield each GRIB message as its month and cube-grid values together with its experiment
+    version.
+    """
     expvers = grib_expvers(path)
     with open_grib(path) as dataset:
-        yield from read_months(dataset, expvers)
+        yield from read_months(dataset, expvers, spec)
 
 
 def grib_expvers(path: Path | str) -> list[str]:
@@ -299,33 +344,38 @@ def open_grib(path: Path | str) -> Iterator[rasterio.DatasetReader]:
 def read_months(
     dataset: rasterio.DatasetReader,
     expvers: list[str],
+    spec: IngestSpec,
 ) -> Iterator[MonthField]:
-    """Each band of an open raster as (month, degrees C on the cube grid, expver).
+    """Yield each raster band as its month and cube-grid values together with its experiment
+    version.
 
-    Raises ValueError unless the bands match `expvers`, are in Kelvin, and the grid is the
-    cube's 0.1 degree grid, in any longitude origin.
+    Raise ValueError unless the band count matches `expvers` and the raster uses the expected units
+    and cube grid.
     """
     if dataset.count != len(expvers):
         raise ValueError(f"{dataset.count} bands but {len(expvers)} GRIB messages")
 
-    rows, columns = _cube_positions(dataset)
+    grid = spec.cube.grid
+    rows, columns = _cube_positions(dataset, grid)
     for band, expver in enumerate(expvers, start=1):
         tags = dataset.tags(band)
-        if tags.get("GRIB_UNIT") != KELVIN_UNIT:
-            raise ValueError(f"expected temperature in {KELVIN_UNIT}, got {tags.get('GRIB_UNIT')}")
+        if tags.get("GRIB_UNIT") != spec.grib_unit:
+            raise ValueError(f"expected {spec.grib_unit} values, got {tags.get('GRIB_UNIT')}")
 
         valid_seconds = int(tags["GRIB_VALID_TIME"].split()[0])
         month = datetime.fromtimestamp(valid_seconds, timezone.utc).strftime("%Y-%m")
-        kelvin = dataset.read(band, masked=True).astype("float32")
+        source = dataset.read(band, masked=True).astype("float32").filled(np.nan)
+        # Unit conversion clamps, so a -inf cell would otherwise turn into a plausible zero.
+        if spec.complete and not np.isfinite(source).all():
+            raise ValueError(f"{month}: the source has no value in some cells")
 
-        celsius = np.full(CUBE_FIELD_SHAPE, np.nan, "float32")
-        celsius[np.ix_(rows, columns)] = kelvin.filled(np.nan) - CELSIUS_ZERO_K
-        yield month, celsius, expver
+        values = np.full((grid.rows, grid.columns), np.nan, "float32")
+        values[np.ix_(rows, columns)] = spec.convert(source, month)
+        yield month, values, expver
 
 
-def _cube_positions(dataset: rasterio.DatasetReader) -> tuple[np.ndarray, np.ndarray]:
+def _cube_positions(dataset: rasterio.DatasetReader, grid: Grid) -> tuple[np.ndarray, np.ndarray]:
     """Cube (rows, columns) of the raster's rows and columns, whatever its longitude origin."""
-    grid = ERA5_LAND_TEMPERATURE_GRID
     transform = dataset.transform
     straight = max(abs(transform.b), abs(transform.d)) < RESOLUTION_TOLERANCE_DEG
     right_size = (
@@ -337,7 +387,7 @@ def _cube_positions(dataset: rasterio.DatasetReader) -> tuple[np.ndarray, np.nda
 
     lon_centres = transform.c + (np.arange(dataset.width) + 0.5) * transform.a
     lat_centres = transform.f + (np.arange(dataset.height) + 0.5) * transform.e
-    # Cell centres lie on 0.1 degree multiples, so the cube's first centre is -180.
+    # Cell centres lie on multiples of the cell size, so the cube's first centre is -180.
     columns_exact = (lon_centres + 180) / grid.res
     rows_exact = (grid.north_deg - grid.res / 2 - lat_centres) / grid.res
     columns, rows = np.rint(columns_exact), np.rint(rows_exact)
@@ -346,7 +396,7 @@ def _cube_positions(dataset: rasterio.DatasetReader) -> tuple[np.ndarray, np.nda
         and np.allclose(rows_exact, rows, rtol=0, atol=CENTRE_TOLERANCE_CELLS)
     )
     if not on_centres:
-        raise ValueError("cell centres are not on 0.1 degree multiples")
+        raise ValueError(f"cell centres are not on {grid.res} degree multiples")
 
     columns = columns.astype(int) % grid.columns
     rows = rows.astype(int)
@@ -358,27 +408,28 @@ def _cube_positions(dataset: rasterio.DatasetReader) -> tuple[np.ndarray, np.nda
     return rows, columns
 
 
-def write_months(cube_dir: Path | str, months: Iterable[MonthField]) -> None:
+def write_months(cube_dir: Path | str, spec: IngestSpec, months: Iterable[MonthField]) -> None:
     """Store months in the cube, creating it if needed, and mark each with its revision.
 
-    A month must follow the last stored one or replace a stored one. Every month is checked and
+    A month must replace a stored one, follow the last stored one, or precede the first as part of
+    a contiguous batch. Every month is checked and
     encoded before anything is written. The cube is then flagged as updating, which readers
     treat as unavailable, until the data and all markers are published in one step. If a write
     fails, the flag stays and the next run of these months clears it.
     """
     cube_dir = Path(cube_dir)
-    attrs = _cube_attrs(cube_dir)
+    attrs = _cube_attrs(cube_dir, spec.cube)
     markers = dict(attrs.get("months", {}))
-    staged = _stage_months(months, markers)
+    staged = _stage_months(months, markers, spec)
     if not staged:
         return
 
-    group = _open_cube(cube_dir)
+    group = _open_cube(cube_dir, spec.cube)
     staged_months = {month for month, _, _ in staged}
     pending = sorted({*attrs.get("pending", []), *staged_months})
     _begin_update(group, pending)
     for month, encoded, marker in staged:
-        _store_month(group[CUBE_ARRAY], month, encoded)
+        _store_month(group[spec.cube.array], month, encoded)
         markers[month] = marker
 
     _publish(group, markers, [month for month in pending if month not in staged_months])
@@ -387,57 +438,80 @@ def write_months(cube_dir: Path | str, months: Iterable[MonthField]) -> None:
 def _stage_months(
     months: Iterable[MonthField],
     stored: dict[str, str],
+    spec: IngestSpec,
 ) -> list[tuple[str, np.ndarray, str]]:
     """Check that each month fits the cube, then return it with its encoded values and marker."""
+    cube = spec.cube
     markers = dict(stored)
     staged = []
-    for month, celsius, expver in months:
-        if celsius.shape != CUBE_FIELD_SHAPE:
-            raise ValueError(f"{month}: field shape {celsius.shape} is not the cube grid")
+    for month, values, expver in months:
+        if values.shape != (cube.grid.rows, cube.grid.columns):
+            raise ValueError(f"{month}: field shape {values.shape} is not the cube grid")
+        if spec.complete and not np.isfinite(values).all():
+            raise ValueError(f"{month}: the source has no value in some cells")
 
-        _check_not_a_gap(month, markers)
-        encoded = encode_values(celsius, "int16", CUBE_SCALE, 0, CUBE_FILL)
+        _check_before_origin(month)
+        _check_in_range(month, values, cube)
+        encoded = encode_values(values, cube.dtype, cube.scale, 0, cube.fill)
         marker = f"{expver}:{hashlib.sha256(encoded.tobytes()).hexdigest()[:12]}"
         markers[month] = marker
         staged.append((month, encoded, marker))
+
+    _check_not_a_gap(markers)
     return staged
 
 
-def _check_not_a_gap(month: str, markers: dict[str, str]) -> None:
+def _check_in_range(month: str, values: np.ndarray, cube: CubeSpec) -> None:
+    """Reject a month that the cube's encoding would clip, which a wrong unit would cause."""
+    finite = values[np.isfinite(values)]
+    limits = np.iinfo(cube.dtype)
+    lowest = (limits.min + (cube.fill == limits.min)) * cube.scale
+    highest = (limits.max - (cube.fill == limits.max)) * cube.scale
+    if finite.size and (finite.min() < lowest or finite.max() > highest):
+        raise ValueError(f"{month}: values outside {lowest:g} to {highest:g} {cube.units}")
+
+
+def _check_before_origin(month: str) -> None:
     if month_index(month) < 0:
         raise ValueError(f"{month} is before the cube's first month {CUBE_TIME_ORIGIN}")
-    if markers and month not in markers and month_index(month) != month_index(max(markers)) + 1:
-        raise ValueError(f"{month} would leave a gap after {max(markers)}")
 
 
-def _open_cube(cube_dir: Path) -> zarr.Group:
-    group = zarr.open_group(cube_dir / CUBE_NAME, mode="a")
+def _check_not_a_gap(markers: dict[str, str]) -> None:
+    """Reject months that are not consecutive, whatever order the batch had them in."""
+    ordered = sorted(markers)
+    for before, after in zip(ordered, ordered[1:]):
+        if month_index(after) != month_index(before) + 1:
+            raise ValueError(f"{after} would leave a gap after {before}")
+
+
+def _open_cube(cube_dir: Path, cube: CubeSpec) -> zarr.Group:
+    group = zarr.open_group(cube_dir / f"{cube.name}.zarr", mode="a")
     if "months" not in group.attrs:
         group.attrs.update(
             {
                 "time_origin": CUBE_TIME_ORIGIN,
                 "grid": [
-                    ERA5_LAND_TEMPERATURE_GRID.west_deg,
-                    ERA5_LAND_TEMPERATURE_GRID.north_deg,
-                    ERA5_LAND_TEMPERATURE_GRID.res,
-                    ERA5_LAND_TEMPERATURE_GRID.columns,
-                    ERA5_LAND_TEMPERATURE_GRID.rows,
+                    cube.grid.west_deg,
+                    cube.grid.north_deg,
+                    cube.grid.res,
+                    cube.grid.columns,
+                    cube.grid.rows,
                 ],
                 "months": {},
                 "pending": [],
             },
         )
-    if CUBE_ARRAY not in group:
+    if cube.array not in group:
         group.create_array(
-            CUBE_ARRAY,
-            shape=(0, ERA5_LAND_TEMPERATURE_GRID.rows, ERA5_LAND_TEMPERATURE_GRID.columns),
+            cube.array,
+            shape=(0, cube.grid.rows, cube.grid.columns),
             chunks=(TIME_CHUNK_MONTHS, LAT_LON_CHUNK_CELLS, LAT_LON_CHUNK_CELLS),
             shards=(TIME_CHUNK_MONTHS, LAT_LON_SHARD_CELLS, LAT_LON_SHARD_CELLS),
-            dtype="int16",
-            fill_value=CUBE_FILL,
+            dtype=cube.dtype,
+            fill_value=cube.fill,
             compressors=COMPRESSION,
             dimension_names=["time", "lat", "lon"],
-            attributes={"units": "degC", "scale_factor": CUBE_SCALE, "add_offset": 0},
+            attributes={"units": cube.units, "scale_factor": cube.scale, "add_offset": 0},
         )
     return group
 
@@ -456,3 +530,45 @@ def _store_month(array: zarr.Array, month: str, encoded: np.ndarray) -> None:
 
 def _publish(group: zarr.Group, markers: dict[str, str], pending: list[str]) -> None:
     group.attrs.update({"months": dict(sorted(markers.items())), "pending": pending})
+
+
+def _kelvin_to_celsius(values: np.ndarray, month: str) -> np.ndarray:
+    return values - CELSIUS_ZERO_K
+
+
+def _metres_per_day_to_mm_per_month(values: np.ndarray, month: str) -> np.ndarray:
+    """Monthly mean precipitation is a depth per day, so the month's total is days times that."""
+    days = calendar.monthrange(int(month[:4]), int(month[5:MONTH_CHARS]))[1]
+    # GRIB packing noise can leave tiny negative precipitation values.
+    return np.maximum(values * MM_PER_M * days, 0)
+
+
+INGEST_SPECS = {
+    spec.cube.name: spec
+    for spec in (
+        IngestSpec(
+            ERA5_LAND_TEMPERATURE_CUBE,
+            "reanalysis-era5-land-monthly-means",
+            "2m_temperature",
+            "[K]",
+            _kelvin_to_celsius,
+            complete=False,
+        ),
+        IngestSpec(
+            ERA5_TEMPERATURE_CUBE,
+            "reanalysis-era5-single-levels-monthly-means",
+            "2m_temperature",
+            "[K]",
+            _kelvin_to_celsius,
+            complete=True,
+        ),
+        IngestSpec(
+            ERA5_PRECIPITATION_CUBE,
+            "reanalysis-era5-single-levels-monthly-means",
+            "total_precipitation",
+            "[m]",
+            _metres_per_day_to_mm_per_month,
+            complete=True,
+        ),
+    )
+}

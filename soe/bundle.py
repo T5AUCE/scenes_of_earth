@@ -13,7 +13,7 @@ from .bundle_validation import (
     validate,
 )
 from .plan import LayerPlan, Plan
-from .sources import REQUEST_STEP, SOURCES, STOP_COUNT, Dataset
+from .sources import REQUEST_STEP, SOURCE_ROLE, SOURCES, STOP_COUNT, Dataset
 
 VERSION = "0.4"
 
@@ -40,7 +40,11 @@ def make(
 
     boundary_source = SOURCES[area.boundary["source"]] if area.named else None
     synthetic = any(dataset.synthetic for dataset in datasets)
-    layer_notices = [note for layer in plan.layers.values() for note in layer.notices]
+    layer_notices = [
+        note
+        for dataset in datasets
+        for note in plan.layers[dataset.id].notices + info[dataset.id].get("notices", [])
+    ]
 
     return {
         "version": VERSION,
@@ -115,11 +119,14 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
             "cells_inside": layer_plan.cells_inside,
         },
         "time": None,
-        "arrays": _array_blocks(dataset),
+        "arrays": _array_blocks(dataset, result),
     }
 
-    if len(layer_plan.sources) > 1:
-        layer["fallback_sources"] = [dict(source) for source in layer_plan.sources[1:]]
+    fallback_sources = layer_plan.sources[1:]
+    if result.get("fallback_used"):
+        fallback_sources = [*fallback_sources, dataset.fallback.source]
+    if fallback_sources:
+        layer["fallback_sources"] = [dict(source) for source in fallback_sources]
 
     if dataset.time_varying:
         grid["aggregation"] = layer_plan.factor
@@ -136,7 +143,11 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
     return layer
 
 
-def _array_blocks(dataset: Dataset) -> dict[str, JsonObject]:
+def _array_blocks(dataset: Dataset, result: JsonObject) -> dict[str, JsonObject]:
+    roles = dict(dataset.roles)
+    if result.get("fallback_used"):
+        roles[SOURCE_ROLE.name] = SOURCE_ROLE
+
     return {
         role: {
             "path": f"{dataset.id}/{spec.name}",
@@ -145,7 +156,7 @@ def _array_blocks(dataset: Dataset) -> dict[str, JsonObject]:
             "add_offset": spec.offset,
             "fill": spec.fill,
         }
-        for role, spec in dataset.roles.items()
+        for role, spec in roles.items()
     }
 
 
@@ -159,13 +170,14 @@ def credits(
     if boundary_source:
         sources.append(boundary_source)
 
-    lines = [source["attribution"] for source in sources]
+    lines = list(dict.fromkeys(source["attribution"] for source in sources))
     if synthetic:
         lines.append(SYNTHETIC_DATA_CREDIT)
 
+    disclaimers = (source["disclaimer"] for source in sources if source.get("disclaimer"))
     return {
         "lines": lines,
-        "disclaimers": [source["disclaimer"] for source in sources if source.get("disclaimer")],
+        "disclaimers": list(dict.fromkeys(disclaimers)),
         "endorsement": "Scenes of Earth is not endorsed by the data providers.",
         "terms_passthrough": (
             "Reuse of this bundle's data is subject to each source's licence "

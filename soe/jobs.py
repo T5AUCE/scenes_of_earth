@@ -6,7 +6,7 @@ from pathlib import Path
 
 from . import db
 from .areas import AreaError
-from .build import build_scene
+from .build import SourceChanged, build_scene
 from .scene_request import prepare_scene, resolve_area
 from .sources import Registry
 
@@ -77,6 +77,7 @@ class SceneJobs:
             request["title"],
             self._scenes_dir,
             _ProgressRecorder(self._db_path, scene_id),
+            request.get("local_revisions"),
         )
         db.update_scene(
             self._db_path,
@@ -109,8 +110,13 @@ class _ProgressRecorder:
 
 
 def _record_failure(db_path: Path | str, scene_id: str, error: Exception) -> None:
-    # Only our own AreaError texts are safe to show; other errors may contain server paths.
-    message = str(error) if isinstance(error, AreaError) else "build failed; see the server log"
+    # Only our own error texts are safe to show; other errors may contain server paths.
+    if isinstance(error, AreaError):
+        message = str(error)
+    elif isinstance(error, SourceChanged):
+        message = "The data changed while the scene was waiting; request the scene again."
+    else:
+        message = "build failed; see the server log"
     try:
         db.update_scene(
             db_path,

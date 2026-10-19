@@ -16,18 +16,21 @@ from soe.scene_request import (
     prepare_scene,
 )
 from soe.sources import (
+    CubeSpec,
     RealSource,
     Registry,
+    SeriesDataset,
     SourceUnavailable,
     SyntheticSource,
     make_registry,
     request_range,
 )
-from tests.helpers import RAIN
+from tests.conftest import RevisionSource
+from tests.helpers import RAIN, write_cube
 
 SQUARE = mapping(box(36.5, -1.5, 37.5, -0.5))
 PINNED_REVISION = "Tue, 01 Sep 2015 00:00:00 GMT"
-PINNED_SCENE_ID = "1bc8cd034f0b0bb6577d"  # Computed for soe 0.5.0 (scene format 0.4).
+PINNED_SCENE_ID = "2c3c308689dfad4c5e1a"  # Computed for soe 0.6.0 (scene format 0.4).
 
 
 def request_body(**overrides: object) -> str:
@@ -101,7 +104,7 @@ def test_fresh_stored_revision_is_not_asked_again(db_path, revision_source):
 def test_synthetic_backend_does_not_touch_the_revision_table(db_path):
     prepare_scene(db_path, make_registry(SyntheticSource()), request_body())
 
-    assert db.get_revision(db_path, "chirps_monthly", "2015-01-01/2015-06-01") is None
+    assert db.get_revision(db_path, "chirps_monthly:remote", "2015-01-01/2015-06-01") is None
 
 
 def test_changed_revision_after_recovery_gives_a_new_scene_id(
@@ -119,15 +122,16 @@ def test_changed_revision_after_recovery_gives_a_new_scene_id(
     assert second.scene_id != first.scene_id
 
 
-def test_scene_id_is_unchanged_for_known_inputs():
-    registry = make_registry(RealSource())
+def test_scene_id_is_unchanged_for_known_inputs(tmp_path):
+    write_cube(tmp_path, "era5_precipitation", 0)
+    registry = make_registry(RealSource(cubes_dir=tmp_path))
 
     scene_id = compute_scene_id(
         "poly:abc",
         ["chirps_monthly", "copdem_terrain"],
         ("2015-01-01", "2015-07-01"),
         [registry["chirps_monthly"], registry["copdem_terrain"]],
-        {"chirps_monthly": PINNED_REVISION},
+        {"chirps_monthly": (PINNED_REVISION, "local")},
     )
 
     assert scene_id == PINNED_SCENE_ID
@@ -191,7 +195,7 @@ def test_revision_is_asked_with_every_step_of_the_range(db_path, revision_source
     class Recording(type(RAIN)):
         asked: list[str]
 
-        def current_revision(self, steps: list[str]) -> str:
+        def remote_revision(self, steps: list[str]) -> str:
             self.asked = steps
             return "recorded"
 
@@ -208,7 +212,7 @@ def test_local_source_revision_is_not_cached(db_path):
     class MovingCube:
         marker = "0005:first"
 
-        def t2m_months(self) -> dict[str, str]:
+        def cube_months(self, spec: CubeSpec) -> dict[str, str]:
             return {"2016-01": self.marker, "2016-02": self.marker}
 
     cube = MovingCube()
@@ -225,7 +229,31 @@ def test_local_source_revision_is_not_cached(db_path):
     second = prepare_scene(db_path, registry, body)
 
     assert second.scene_id != first.scene_id
-    assert db.get_revision(db_path, "era5land_temperature", "2016-01-01/2016-02-01") is None
+    assert db.get_revision(db_path, "era5land_temperature:remote", "2016-01-01/2016-02-01") is None
+
+
+def test_scene_id_changes_when_only_the_fallback_cube_is_revised(db_path):
+    class Cubes:
+        fallback_marker = "0005:first"
+
+        def cube_months(self, spec: CubeSpec) -> dict[str, str]:
+            marker = "0001:land" if spec.name == "era5land_temperature" else self.fallback_marker
+            return {"2016-01": marker, "2016-02": marker}
+
+    cubes = Cubes()
+    temperature = replace(
+        make_registry(SyntheticSource())["era5land_temperature"],
+        backend=cubes,
+        synthetic=False,
+    )
+    registry = {"era5land_temperature": temperature}
+    body = request_body(layers=["era5land_temperature"], start="2016-01", end="2016-02")
+
+    first = prepare_scene(db_path, registry, body)
+    cubes.fallback_marker = "0001:final"
+    second = prepare_scene(db_path, registry, body)
+
+    assert second.scene_id != first.scene_id
 
 
 def test_request_without_layers_gets_the_default_layers(db_path):
@@ -236,3 +264,92 @@ def test_request_without_layers_gets_the_default_layers(db_path):
     prepared = prepare_scene(db_path, registry, json.dumps(request))
 
     assert json.loads(prepared.request_json)["layers"] == ["chirps_monthly", "copdem_terrain"]
+
+
+def revised_cube_months(
+    source: RevisionSource,
+    monkeypatch: pytest.MonkeyPatch,
+    month: str,
+) -> None:
+    """Make the fallback cube of `month` hold new data, as an ingest would."""
+    months = source.data.cube_months
+
+    def cube_months(spec: CubeSpec) -> dict[str, str]:
+        return {**months(spec), month: "0001:revised"}
+
+    monkeypatch.setattr(source, "cube_months", cube_months)
+
+
+def test_rain_scene_id_follows_the_fallback_cube_while_the_chirps_revision_is_cached(
+    db_path,
+    monkeypatch,
+    revision_source,
+):
+    registry = make_registry(revision_source)
+    first = prepare_scene(db_path, registry, request_body())
+
+    revised_cube_months(revision_source, monkeypatch, "2015-03")
+    second = prepare_scene(db_path, registry, request_body())
+
+    assert second.scene_id != first.scene_id
+    assert revision_source.revision_calls == 1
+
+
+def test_rain_scene_id_follows_the_fallback_cube_while_chirps_is_down(
+    db_path,
+    monkeypatch,
+    revision_source,
+):
+    registry = make_registry(revision_source)
+    first = prepare_scene(db_path, registry, request_body())
+
+    monkeypatch.setattr("soe.scene_request.REVISION_FRESH_SECS", 0)
+    revision_source.down = True
+    unchanged = prepare_scene(db_path, registry, request_body())
+    revised_cube_months(revision_source, monkeypatch, "2015-03")
+    revised = prepare_scene(db_path, registry, request_body())
+
+    assert unchanged.scene_id == first.scene_id
+    assert revised.scene_id != first.scene_id
+
+
+def test_a_revision_stored_before_the_local_part_existed_is_not_reused(
+    db_path,
+    revision_source,
+):
+    db.set_revision(db_path, "chirps_monthly", "2015-01-01/2015-06-01", "old combined digest")
+
+    prepare_scene(db_path, make_registry(revision_source), request_body())
+
+    assert revision_source.revision_calls == 1
+    assert db.get_revision(db_path, "chirps_monthly:remote", "2015-01-01/2015-06-01")[0] == "first"
+
+
+def test_scene_id_changes_when_only_the_fallback_source_version_changes():
+    registry = make_registry(SyntheticSource())
+    rain = registry["chirps_monthly"]
+    newer_source = {**rain.fallback.source, "version": "ERA5 (newer release)"}
+    newer = replace(rain, fallback=rain.fallback._replace(source=newer_source))
+
+    def scene_id(dataset: SeriesDataset) -> str:
+        return compute_scene_id(
+            "g",
+            ["chirps_monthly"],
+            ("2015-01-01", "2015-02-01"),
+            [dataset],
+            {"chirps_monthly": ("remote", "local")},
+        )
+
+    assert scene_id(newer) != scene_id(rain)
+
+
+def test_request_keeps_the_local_revisions_its_id_was_made_from(db_path):
+    registry = make_registry(SyntheticSource())
+
+    prepared = prepare_scene(db_path, registry, request_body())
+
+    rain = registry["chirps_monthly"]
+    steps = rain.steps("2015-01-01", "2015-07-01")
+    assert json.loads(prepared.request_json)["local_revisions"] == {
+        "chirps_monthly": rain.local_revision(steps),
+    }

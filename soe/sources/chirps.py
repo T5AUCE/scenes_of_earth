@@ -10,12 +10,13 @@ import numpy as np
 import rasterio
 from rasterio.windows import Window
 
-from .datasets import SeriesDataset
+from .cubes import month_markers, preliminary_runs
+from .datasets import SeriesDataset, revision_digest
 from .grid import CELL_DEG, Bbox, CellWindow, Grid, block_mean, read_wrapped
+from .periods import MONTH_CHARS
 from .remote import GDAL_OPTS, SourceUnavailable
 
 FIRST_MONTH = "1981-01"
-MONTH_CHARS = 7  # of an ISO date: 'YYYY-MM'
 
 CHIRPS_GRID = Grid(-180, 60, CELL_DEG, 7200, 2400)
 
@@ -33,19 +34,32 @@ CHIRPS_URL = (
 
 
 class RainDataset(SeriesDataset):
-    """CHIRPS monthly rain."""
+    """Read CHIRPS monthly rainfall and fill its gaps with ERA5 precipitation."""
 
     def first(self) -> str:
-        """Start of the first available month, an ISO date."""
-        return f"{FIRST_MONTH}-01"
+        """Return the first month held by CHIRPS and the fallback cube as an ISO start date."""
+        return f"{max(FIRST_MONTH, next(iter(self.fallback_months())))}-01"
 
     def latest(self) -> str:
-        """Start of the latest available month, an ISO date."""
-        return f"{self.backend.latest_month()}-01"
+        """Return the last month held by CHIRPS and the fallback cube as an ISO start date."""
+        return f"{min(self.backend.latest_month(), list(self.fallback_months())[-1])}-01"
 
-    def current_revision(self, steps: list[str]) -> str | None:
-        """CHIRPS republishes a month as a whole, so the last month's marker stands for all."""
+    def remote_revision(self, steps: list[str]) -> str | None:
+        """CHIRPS republishes a month as a whole, so its last month's marker stands for all."""
         return self.backend.current_revision(steps[-1][:MONTH_CHARS])
+
+    def local_revision(self, steps: list[str]) -> str | None:
+        """Return a hash of the fallback cube markers for exactly the requested months."""
+        labels = [step[:MONTH_CHARS] for step in steps]
+        return revision_digest(*month_markers(self.fallback_months(), labels))
+
+    def notices(self, bbox: Bbox, steps: list[str]) -> list[str]:
+        """Return one notice for each run of requested months that are preliminary in the fallback
+        cube.
+        """
+        labels = [step[:MONTH_CHARS] for step in steps]
+        runs = preliminary_runs(labels, self.fallback_months())
+        return [_preliminary_notice(run[0], run[-1]) for run in runs]
 
     def stops_floor(self, stats: dict[str, float]) -> float:
         """Rainfall scales start at zero even when the sampled minimum is positive."""
@@ -140,6 +154,14 @@ class ChirpsReader:
 
         rain[rain < 0] = np.nan
         return rain
+
+
+def _preliminary_notice(first: str, last: str) -> str:
+    period = first if first == last else f"{first} to {last}"
+    return (
+        f"The ERA5 rain that fills gaps in Rainfall {period} is preliminary; final data "
+        "replaces it about two months later, and the scene then gets a new id."
+    )
 
 
 def _chirps_url(month: str) -> str:

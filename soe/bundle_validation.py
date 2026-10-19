@@ -3,7 +3,7 @@ import math
 import re
 from typing import Any
 
-from .sources import STOP_COUNT
+from .sources import SOURCE_ROLE, STOP_COUNT
 
 JsonObject = dict[str, Any]  # a decoded JSON object, such as scene.json or one of its blocks
 
@@ -106,7 +106,34 @@ def _layer_problems(layer: JsonObject) -> list[str]:
     if not layer["time_varying"] and time_axis is not None:
         problems.append(f"{layer_id}: static layer has a time axis")
 
-    return problems + _style_problems(layer_id, layer["style"])
+    return problems + _source_array_problems(layer) + _style_problems(layer_id, layer["style"])
+
+
+def _source_array_problems(layer: JsonObject) -> list[str]:
+    """Return problems with the optional provenance array, which only a layer with a fallback has."""
+    block = layer.get("arrays", {}).get(SOURCE_ROLE.name)
+    if block is None:
+        return []
+
+    layer_id = layer["id"]
+    problems = []
+    encoding = {
+        "path": f"{layer_id}/{SOURCE_ROLE.name}",
+        "dtype": SOURCE_ROLE.dtype,
+        "scale_factor": SOURCE_ROLE.scale,
+        "add_offset": SOURCE_ROLE.offset,
+        "fill": SOURCE_ROLE.fill,
+    }
+    for key, expected in encoding.items():
+        if block.get(key) != expected:
+            problems.append(f"{layer_id}: arrays.{SOURCE_ROLE.name}.{key} must be {expected!r}")
+
+    if not layer["time_varying"]:
+        problems.append(f"{layer_id}: a static layer cannot have a {SOURCE_ROLE.name} array")
+
+    if not layer.get("fallback_sources"):
+        problems.append(f"{layer_id}: {SOURCE_ROLE.name} array without fallback_sources")
+    return problems
 
 
 def _style_problems(layer_id: str, style: JsonObject) -> list[str]:

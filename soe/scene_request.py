@@ -1,8 +1,9 @@
-"""Scene preparation: validate a scene request and give it its content-addressed id.
+"""Validate scene requests and assign content-addressed scene IDs.
 
 A revision is a marker that changes whenever the provider republishes data of the requested
-periods (CHIRPS: the Last-Modified date of the last month's file). It is part of the scene id, so
-revised data gets a new scene.
+periods. For CHIRPS, the remote component is the Last-Modified date of the last requested month
+and is cached. The local component uses the on-disk monthly markers and is read fresh for each
+preparation. Both components contribute to scene identity so revised data gets a new scene.
 """
 import hashlib
 import json
@@ -72,6 +73,7 @@ def prepare_scene(db_path: Path | str, registry: Registry, body: bytes | str) ->
         "layers": layers,
         "start": start,
         "end": end,
+        "local_revisions": {layer_id: local for layer_id, (_, local) in revisions.items()},
         "title": title or (area.boundary["name"] if area.named else DRAWN_AREA_TITLE),
     }
     return PreparedScene(scene_id, json.dumps(request))
@@ -185,28 +187,34 @@ def _current_revisions(
     db_path: Path | str,
     datasets: list[Dataset],
     scene_plan: Plan,
-) -> dict[str, str | None]:
-    """Revision of the planned periods of each time-varying dataset."""
-    return {
-        dataset.id: _current_revision(db_path, dataset, scene_plan.layers[dataset.id].steps)
-        for dataset in datasets
-        if dataset.time_varying
-    }
+) -> dict[str, tuple[str | None, str | None]]:
+    """Return the (remote, local) revision of the planned periods of each time-varying dataset."""
+    revisions = {}
+    for dataset in datasets:
+        if dataset.time_varying:
+            steps = scene_plan.layers[dataset.id].steps
+            revisions[dataset.id] = (
+                _remote_revision(db_path, dataset, steps),
+                dataset.local_revision(steps),
+            )
+    return revisions
 
 
-def _current_revision(db_path: Path | str, dataset: Dataset, steps: list[str]) -> str | None:
-    """Stored revision while fresh; if the source is down, a stale stored one."""
-    # Offline answers must not reach the stored real ones; a local source is cheap to ask.
+def _remote_revision(db_path: Path | str, dataset: Dataset, steps: list[str]) -> str | None:
+    """Return the stored remote revision while it is fresh, or a stale one if the source is down."""
+    # Offline answers must not reach the stored real ones; a dataset without a remote part is cheap.
     if dataset.synthetic or not dataset.remote:
-        return dataset.current_revision(steps)
+        return dataset.remote_revision(steps)
 
+    # The suffix keeps this apart from the combined digests that older versions stored here.
+    cache_key = f"{dataset.id}:remote"
     period = f"{steps[0]}/{steps[-1]}"
-    stored_revision, age_secs = db.get_revision(db_path, dataset.id, period) or (None, None)
+    stored_revision, age_secs = db.get_revision(db_path, cache_key, period) or (None, None)
     if stored_revision is not None and age_secs < REVISION_FRESH_SECS:
         return stored_revision
 
     try:
-        revision = dataset.current_revision(steps)
+        revision = dataset.remote_revision(steps)
     except SourceUnavailable:
         if stored_revision is None:
             raise
@@ -215,7 +223,7 @@ def _current_revision(db_path: Path | str, dataset: Dataset, steps: list[str]) -
         return stored_revision
 
     if revision is not None:
-        db.set_revision(db_path, dataset.id, period, revision)
+        db.set_revision(db_path, cache_key, period, revision)
     return revision
 
 
@@ -224,16 +232,25 @@ def compute_scene_id(
     layers: list[str],
     period: tuple[str, str] | None,
     datasets: list[Dataset],
-    revisions: dict[str, str | None],
+    revisions: dict[str, tuple[str | None, str | None]],
 ) -> str:
-    """Content hash of the canonical request, dataset versions, revisions and generator.
+    """Return the scene ID by hashing the canonical request with source identities and generator
+    version.
+
+    The versions are those of each dataset's main source and its fallback source.
 
     The terrain product (GLO-30 or GLO-90) follows from the area's size, so the geometry covers it.
     `period` is the ISO date range [first day, day after the last), or None without series, so
     the id does not depend on how the request spelled its start and end.
     """
-    versions = {dataset.id: dataset.source.get("version") for dataset in datasets}
+    versions = {dataset.id: _source_versions(dataset) for dataset in datasets}
     synthetic = {dataset.id: dataset.synthetic for dataset in datasets}
     dated_period = [*period, REQUEST_STEP] if period else None
     content = [geometry_id, layers, dated_period, versions, revisions, synthetic, __version__]
     return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:ID_CHARS]
+
+
+def _source_versions(dataset: Dataset) -> list[str | None]:
+    """Return the main and fallback versions, using None for an unconfigured fallback."""
+    fallback_version = dataset.fallback.source.get("version") if dataset.fallback else None
+    return [dataset.source.get("version"), fallback_version]

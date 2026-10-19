@@ -42,6 +42,33 @@ SOURCES = {
             "in the layer resolution; preliminary (ERA5-Land-T) months flagged"
         ),
     },
+    "era5": {
+        "name": "ERA5 monthly averaged data on single levels from 1940 to present",
+        "version": "ERA5 (2023)",
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": (
+            "Temperature and rainfall gaps: contains modified Copernicus Climate Change Service "
+            "information 2026 (ERA5)"
+        ),
+        "disclaimer": (
+            "Neither the European Commission nor ECMWF is responsible for any use that may "
+            "be made of the Copernicus information or data it contains."
+        ),
+        "disclaimer_required": True,
+        "citation": (
+            "Hersbach, H. et al. (2023): ERA5 monthly averaged data on single levels from 1940 "
+            "to present. Copernicus Climate Change Service (C3S) Climate Data Store (CDS). "
+            "doi:10.24381/cds.f17050d7; Hersbach, H. et al. (2020) Q. J. R. Meteorol. Soc. 146, "
+            "1999-2049, doi:10.1002/qj.3803"
+        ),
+        "modified": (
+            "converted from K to °C or from m per day to mm per month; cropped to 60°S-60°N; "
+            "sampled at the centres of native layer cells where the main source has no value; "
+            "block-mean aggregation when stated in the layer resolution; preliminary (ERA5T) "
+            "months flagged"
+        ),
+    },
     "glo30": {
         "name": "Copernicus DEM GLO-30 Public",
         "version": "2021",

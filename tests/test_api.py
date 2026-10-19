@@ -17,12 +17,13 @@ from soe.bundle import SYNTHETIC_DATA_CREDIT, JsonObject
 from soe.scene_request import ID_CHARS
 from soe.sources import (
     CellWindow,
+    CubeSpec,
     RealSource,
     SourceUnavailable,
     SyntheticSource,
     make_registry,
 )
-from tests.helpers import FIJI, boundary_row
+from tests.helpers import FIJI, ReingestedSource, boundary_row, write_cube
 
 POLL_ATTEMPTS = 100
 POLL_INTERVAL_SECS = 0.1
@@ -300,6 +301,36 @@ def test_built_scene_is_served_again_when_the_source_goes_down(
         assert again.json()["id"] == first.json()["id"]
 
 
+def test_job_queued_before_a_cube_update_fails_with_a_request_again_message(tmp_path):
+    gate = threading.Event()
+
+    class Slow(ReingestedSource):
+        def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
+            gate.wait(10)
+            return super().read_rain(month, window)
+
+    source = Slow()
+    app = create_app(
+        tmp_path / "soe.db",
+        tmp_path / "scenes",
+        make_registry(source),
+        max_builds=1,
+    )
+    with TestClient(app) as client:
+        client.post("/api/scenes", json=body())
+        queued_id = client.post("/api/scenes", json=body(end="2015-07")).json()["id"]
+
+        source.reingest()
+        gate.set()
+        out = wait_for(client, queued_id)
+
+        assert out["status"] == "failed"
+        assert out["error"] == (
+            "The data changed while the scene was waiting; request the scene again."
+        )
+        assert not (tmp_path / "scenes" / queued_id).exists()
+
+
 def test_failed_job_has_generic_error_and_class(tmp_path):
     class Boom(SyntheticSource):
         def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
@@ -330,14 +361,14 @@ def test_layers(env):
     assert terrain["coverage"] == [-180, -60, 180, 60]
 
 
-def test_layers_list_omits_temperature_without_a_cube(tmp_path):
+def test_layers_list_omits_rain_and_temperature_without_their_cubes(tmp_path):
     source = RealSource(latest="2026-08", cubes_dir=tmp_path / "cubes")
     app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(source))
 
     with TestClient(app) as client:
         ids = [layer["id"] for layer in client.get("/api/layers").json()["layers"]]
 
-    assert ids == ["chirps_monthly", "copdem_terrain"]
+    assert ids == ["copdem_terrain"]
 
 
 def test_layers_list_survives_an_empty_cube_left_by_a_failed_ingest(tmp_path):
@@ -352,28 +383,55 @@ def test_layers_list_survives_an_empty_cube_left_by_a_failed_ingest(tmp_path):
     assert "era5land_temperature" not in [layer["id"] for layer in response.json()["layers"]]
 
 
-def test_layers_list_leaves_out_temperature_while_the_cube_is_updating(tmp_path):
-    cube_path = tmp_path / "cubes" / "era5land_temperature.zarr"
-    group = zarr.create_group(cube_path, attributes={"months": {"2016-01": "0001:a"}})
-    group.create_array("t2m", shape=(1, 1, 1), dtype="int16")
-    source = RealSource(latest="2026-08", cubes_dir=tmp_path / "cubes")
+def test_layers_list_omits_rain_without_its_fallback_cube(tmp_path):
+    cubes = tmp_path / "cubes"
+    write_cube(cubes, "era5land_temperature", 0)
+    write_cube(cubes, "era5_temperature", 0)
+    source = RealSource(latest="2026-08", cubes_dir=cubes)
+    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(source))
+
+    with TestClient(app) as client:
+        ids = [layer["id"] for layer in client.get("/api/layers").json()["layers"]]
+
+    assert ids == ["copdem_terrain", "era5land_temperature"]
+
+
+@pytest.mark.parametrize(
+    ("cube_name", "left_out"),
+    [
+        ("era5land_temperature", "era5land_temperature"),
+        ("era5_temperature", "era5land_temperature"),
+        ("era5_precipitation", "chirps_monthly"),
+    ],
+)
+def test_layers_list_leaves_out_a_layer_while_one_of_its_cubes_is_updating(
+    tmp_path,
+    cube_name,
+    left_out,
+):
+    cubes = tmp_path / "cubes"
+    for name in ("era5land_temperature", "era5_temperature", "era5_precipitation"):
+        write_cube(cubes, name, 0)
+
+    source = RealSource(latest="2026-08", cubes_dir=cubes)
     registry = make_registry(source)
-    group.attrs["pending"] = ["2016-01"]
+    zarr.open_group(cubes / f"{cube_name}.zarr", mode="a").attrs["pending"] = ["2016-01"]
 
     with TestClient(create_app(tmp_path / "soe.db", tmp_path / "scenes", registry)) as client:
         response = client.get("/api/layers")
 
-    assert "era5land_temperature" in registry
+    assert left_out in registry
     assert response.status_code == 200
-    assert [layer["id"] for layer in response.json()["layers"]] == [
-        "chirps_monthly",
-        "copdem_terrain",
-    ]
+    ids = [layer["id"] for layer in response.json()["layers"]]
+    assert left_out not in ids and len(ids) == len(registry) - 1
 
 
 def test_request_without_layers_builds_the_defaults_not_temperature(tmp_path):
     class LateCube(SyntheticSource):
-        def t2m_months(self) -> dict[str, str]:
+        def cube_months(self, spec: CubeSpec) -> dict[str, str]:
+            if spec.name == "era5_precipitation":
+                return super().cube_months(spec)
+
             return {"2016-01": "0001:a", "2016-02": "0001:b"}
 
     app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(LateCube()))
@@ -391,7 +449,7 @@ def test_request_without_layers_builds_the_defaults_not_temperature(tmp_path):
 
 def test_temperature_period_before_the_cube_start_is_refused_before_any_read(tmp_path):
     class LateCube(SyntheticSource):
-        def t2m_months(self) -> dict[str, str]:
+        def cube_months(self, spec: CubeSpec) -> dict[str, str]:
             return {"2016-01": "0001:a", "2016-02": "0001:b"}
 
     source = LateCube()

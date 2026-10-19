@@ -13,22 +13,25 @@ import rasterio
 import zarr
 from rasterio.transform import Affine
 
-from soe.era5land_temperature_ingest import write_months
 from soe.sources import (
     CHIRPS_GRID,
+    ERA5_GRID,
+    ERA5_LAND_TEMPERATURE_CUBE,
     ERA5_LAND_TEMPERATURE_GRID,
+    ERA5_TEMPERATURE_CUBE,
     SOURCES,
     Bbox,
+    CubeSpec,
     Dataset,
-    Era5LandTemperatureCube,
+    Era5LandTemperatureDataset,
     Grid,
+    MonthlyCube,
     RealSource,
     Role,
     SeriesDataset,
     SourceUnavailable,
     StaticDataset,
     SyntheticSource,
-    Era5LandTemperatureDataset,
     chirps,
     hillshade,
     make_registry,
@@ -37,6 +40,7 @@ from soe.sources import (
     terrain_tiles,
 )
 from soe.sources.chirps import previous_month
+from soe.sources.fallback import read_nearest
 from soe.sources.grid import block_mean
 from soe.sources.periods import add_duration
 from soe.sources.terrain import (
@@ -49,7 +53,7 @@ from soe.sources.terrain import (
     terrain_product,
     terrain_res,
 )
-from tests.helpers import NAIROBI, RAIN, TERRAIN
+from tests.helpers import NAIROBI, RAIN, TERRAIN, write_cube
 
 TILE_PX = 60  # the fake terrain tiles are small, 1 / 60 degree per pixel
 NARROW_TILE_PX = 40  # tiles from 50 degrees poleward have 2/3 of the pixels in x
@@ -141,19 +145,30 @@ def test_temperature_grid_reaches_60_south_within_its_rows():
     assert last_row == ERA5_LAND_TEMPERATURE_GRID.rows
 
 
-class FakeCube:
-    """A cube backend with fixed month markers."""
+class FakeCubes:
+    """Provide fixed month markers for each cube."""
 
-    def __init__(self, markers: dict[str, str]) -> None:
+    def __init__(self, markers: dict[str, dict[str, str]]) -> None:
         self.markers = markers
 
-    def t2m_months(self) -> dict[str, str]:
-        return self.markers
+    def cube_months(self, spec: CubeSpec) -> dict[str, str]:
+        return self.markers[spec.name]
 
 
-def temperature_over(markers: dict[str, str]) -> Era5LandTemperatureDataset:
+def temperature_over(
+    land: dict[str, str],
+    era5: dict[str, str] | None = None,
+) -> Era5LandTemperatureDataset:
+    """Return a temperature dataset using the supplied cube markers; default ERA5 markers to final.
+    """
+    era5 = era5 or {month: "0001:era5" for month in land}
+    cubes = FakeCubes({"era5land_temperature": land, "era5_temperature": era5})
     synthetic = make_registry(SyntheticSource())["era5land_temperature"]
-    return replace(synthetic, backend=FakeCube(markers))
+    return replace(synthetic, backend=cubes)
+
+
+def land_cube(cubes_dir: Path) -> MonthlyCube:
+    return MonthlyCube(ERA5_LAND_TEMPERATURE_CUBE, cubes_dir)
 
 
 def test_temperature_revision_changes_when_a_preliminary_month_turns_final():
@@ -161,14 +176,14 @@ def test_temperature_revision_changes_when_a_preliminary_month_turns_final():
     final = temperature_over({"2026-07": "0001:aaaa", "2026-08": "0001:cccc"})
     steps = ["2026-07-01", "2026-08-01"]
 
-    assert preliminary.current_revision(steps) != final.current_revision(steps)
+    assert preliminary.local_revision(steps) != final.local_revision(steps)
 
 
 def test_temperature_revision_ignores_months_outside_the_steps():
     before = temperature_over({"2026-07": "0001:aaaa", "2026-08": "0005:bbbb"})
     after = temperature_over({"2026-07": "0001:aaaa", "2026-08": "0001:cccc"})
 
-    assert before.current_revision(["2026-07-01"]) == after.current_revision(["2026-07-01"])
+    assert before.local_revision(["2026-07-01"]) == after.local_revision(["2026-07-01"])
 
 
 def test_preliminary_steps_get_one_notice_per_run():
@@ -195,6 +210,227 @@ def test_final_steps_get_no_notice():
     assert temperature.notices([0, 0, 1, 1], ["2026-01-01", "2026-02-01"]) == []
 
 
+def test_temperature_revision_changes_when_only_the_era5_marker_changes():
+    land = {"2026-07": "0001:aaaa", "2026-08": "0001:bbbb"}
+    before = temperature_over(land, {"2026-07": "0001:x", "2026-08": "0005:y"})
+    after = temperature_over(land, {"2026-07": "0001:x", "2026-08": "0001:z"})
+    steps = ["2026-07-01", "2026-08-01"]
+
+    assert before.local_revision(steps) != after.local_revision(steps)
+
+
+def test_temperature_months_are_those_both_cubes_hold():
+    land = {"2016-01": "0001:a", "2016-02": "0001:a", "2016-03": "0001:a"}
+    era5 = {"2016-02": "0001:b", "2016-03": "0001:b", "2016-04": "0001:b"}
+
+    temperature = temperature_over(land, era5)
+
+    assert (temperature.first(), temperature.latest()) == ("2016-02-01", "2016-03-01")
+
+
+def test_era5_preliminary_month_gets_the_preliminary_notice():
+    temperature = temperature_over(
+        {"2026-01": "0001:a", "2026-02": "0001:a"},
+        {"2026-01": "0001:b", "2026-02": "0005:b"},
+    )
+
+    notices = temperature.notices([0, 0, 1, 1], ["2026-01-01", "2026-02-01"])
+
+    assert len(notices) == 1 and notices[0].startswith("Temperature 2026-02 is preliminary")
+
+
+class FakeRainBackend(FakeCubes):
+    """Provide fixed CHIRPS revisions and fallback-cube month markers."""
+
+    def __init__(self, fallback: dict[str, str], chirps_revision: str = "chirps") -> None:
+        super().__init__({"era5_precipitation": fallback})
+        self.chirps_revision = chirps_revision
+
+    def latest_month(self) -> str:
+        return "2026-08"
+
+    def current_revision(self, month: str) -> str:
+        return self.chirps_revision
+
+
+def test_rain_remote_revision_follows_the_chirps_file_and_local_one_the_fallback_marker():
+    steps = ["2026-06-01", "2026-07-01"]
+    markers = {"2026-06": "0001:a", "2026-07": "0005:b"}
+    base = replace(RAIN, backend=FakeRainBackend(markers))
+    revised_chirps = replace(RAIN, backend=FakeRainBackend(markers, "chirps again"))
+    final_fallback = replace(
+        RAIN,
+        backend=FakeRainBackend({"2026-06": "0001:a", "2026-07": "0001:c"}),
+    )
+
+    assert base.remote_revision(steps) != revised_chirps.remote_revision(steps)
+    assert base.local_revision(steps) == revised_chirps.local_revision(steps)
+    assert base.remote_revision(steps) == final_fallback.remote_revision(steps)
+    assert base.local_revision(steps) != final_fallback.local_revision(steps)
+    assert base.local_revision(steps[:1]) == final_fallback.local_revision(steps[:1])
+
+
+def test_revision_of_a_month_the_cube_lost_is_unavailable():
+    rain = replace(RAIN, backend=FakeRainBackend({"2026-06": "0001:a"}))
+
+    with pytest.raises(SourceUnavailable):
+        rain.local_revision(["2026-06-01", "2026-07-01"])
+
+
+def test_rain_preliminary_fallback_months_get_one_notice_per_run():
+    markers = {"2026-04": "0001:a", "2026-05": "0005:a", "2026-06": "0005:a", "2026-07": "0001:a"}
+    rain = replace(RAIN, backend=FakeRainBackend(markers))
+    steps = ["2026-04-01", "2026-05-01", "2026-06-01", "2026-07-01"]
+
+    notices = rain.notices([0, 0, 1, 1], steps)
+
+    assert len(notices) == 1
+    assert "Rainfall 2026-05 to 2026-06" in notices[0] and "preliminary" in notices[0]
+
+
+def test_rain_final_fallback_months_get_no_notice():
+    rain = replace(RAIN, backend=FakeRainBackend({"2026-06": "0001:a", "2026-07": "0001:b"}))
+
+    assert rain.notices([0, 0, 1, 1], ["2026-06-01", "2026-07-01"]) == []
+
+
+def test_rain_months_are_those_chirps_and_the_fallback_cube_hold():
+    fallback = {"2016-03": "0001:a", "2026-05": "0001:a"}
+
+    rain = replace(RAIN, backend=FakeRainBackend(fallback))
+
+    assert (rain.first(), rain.latest()) == ("2016-03-01", "2026-05-01")
+
+
+def test_era5_grid_has_cell_centres_on_quarter_degrees():
+    longitudes = ERA5_GRID.west_deg + (np.arange(ERA5_GRID.columns) + 0.5) * ERA5_GRID.res
+    latitudes = ERA5_GRID.north_deg - (np.arange(ERA5_GRID.rows) + 0.5) * ERA5_GRID.res
+
+    assert np.allclose(longitudes * 4, np.round(longitudes * 4))
+    assert (longitudes[0], latitudes[0], latitudes[-1]) == pytest.approx((-180, 60, -60))
+    assert longitudes[-1] == pytest.approx(179.75)
+
+
+def cell_ids(window: tuple[int, int, int, int]) -> np.ndarray:
+    """Return coarse-cell identifiers computed as row * 10000 + column."""
+    col, row, width, height = window
+    rows, columns = np.meshgrid(
+        np.arange(row, row + height),
+        np.arange(col, col + width),
+        indexing="ij",
+    )
+    return (rows * 10000 + columns).astype("float32")
+
+
+@pytest.mark.parametrize(
+    "bbox",
+    [[179.65, 0.05, 179.95, 0.35], [-180.35, 0.05, -180.05, 0.35]],
+)
+def test_temperature_fill_is_seamless_across_180_degrees(tmp_path, bbox):
+    no_land_value = np.full(CUBE_SHAPE, np.nan, "float32")
+    columns = np.arange(ERA5_GRID.columns, dtype="float32") / 100
+    write_cube(tmp_path, "era5land_temperature", no_land_value)
+    write_cube(tmp_path, "era5_temperature", np.tile(columns, (ERA5_GRID.rows, 1)))
+    temperature = make_registry(RealSource(cubes_dir=tmp_path))["era5land_temperature"]
+
+    read = temperature.read_step_filled("2016-01-01", bbox)
+
+    assert read.filled.all()
+    assert read.values[0] == pytest.approx([14.39, 14.39, 0])
+
+
+def test_tenth_degree_cells_take_the_quarter_degree_box_holding_their_centre():
+    sampled = read_nearest(ERA5_LAND_TEMPERATURE_GRID, ERA5_GRID, (0, 0, 10, 10), cell_ids)
+
+    expected = np.array([0, 0, 1, 1, 2, 2, 2, 3, 3, 4])
+    assert np.array_equal(sampled, expected[:, None] * 10000 + expected[None, :])
+
+
+def test_centre_on_a_shared_edge_belongs_to_the_box_east_and_south_of_it():
+    sampled = read_nearest(CHIRPS_GRID, ERA5_GRID, (0, 0, 10, 10), cell_ids)
+
+    expected = np.array([0, 0, 1, 1, 1, 1, 1, 2, 2, 2])
+    assert np.array_equal(sampled, expected[:, None] * 10000 + expected[None, :])
+
+
+@pytest.mark.parametrize("first_column", [3598, -2])
+def test_sampling_wraps_across_180_and_across_minus_180(first_column):
+    sampled = read_nearest(ERA5_LAND_TEMPERATURE_GRID, ERA5_GRID, (first_column, 0, 4, 1), cell_ids)
+
+    assert sampled[0].tolist() == [1439, 0, 0, 0]
+
+
+def test_sampling_past_60_south_reads_nothing(tmp_path):
+    write_cube(tmp_path, "era5_temperature", 7)
+    cube = MonthlyCube(ERA5_TEMPERATURE_CUBE, tmp_path)
+
+    sampled = read_nearest(
+        ERA5_LAND_TEMPERATURE_GRID,
+        ERA5_GRID,
+        (0, 1198, 2, 6),
+        lambda window: cube.read("2016-01", window),
+    )
+
+    assert sampled[:4] == pytest.approx(7) and np.isnan(sampled[4:]).all()
+
+
+class GappySource(SyntheticSource):
+    """Return 10 mm rainfall with gaps in the leading rows and columns of each window."""
+
+    def __init__(self, gap: int) -> None:
+        super().__init__()
+        self.gap = gap
+
+    def read_rain(self, month: str, window: tuple[int, int, int, int]) -> np.ndarray:
+        raster = np.full((window[3], window[2]), 10, "float32")
+        raster[:self.gap, :self.gap] = np.nan
+        raster[0, self.gap] = np.nan
+        return raster
+
+
+class CompleteSource(SyntheticSource):
+    """Return 10 mm rainfall in every cell."""
+
+    def read_rain(self, month: str, window: tuple[int, int, int, int]) -> np.ndarray:
+        return np.full((window[3], window[2]), 10, "float32")
+
+
+@pytest.mark.parametrize("factor", [2, 4])
+def test_fallback_fills_only_blocks_that_have_no_main_value(factor):
+    rain = make_registry(GappySource(factor))["chirps_monthly"]
+
+    read = rain.read_step_filled("2015-01-01", [36.5, -1.5, 37.5, -0.5], factor)
+
+    assert read.filled.sum() == 1 and read.filled[0, 0]
+    assert read.values[0, 0] != 10 and read.values[0, 1] == 10
+
+
+def test_fallback_is_not_read_when_the_main_source_has_no_gap():
+    source = CompleteSource()
+    rain = make_registry(source)["chirps_monthly"]
+
+    read = rain.read_step_filled("2015-01-01", [36.5, -1.5, 37.5, -0.5])
+
+    assert not read.filled.any() and source.reads == 0
+
+
+def test_temperature_needs_both_cubes_to_be_listed(tmp_path):
+    write_cube(tmp_path, "era5land_temperature", 0)
+    assert "era5land_temperature" not in make_registry(RealSource(cubes_dir=tmp_path))
+
+    write_cube(tmp_path, "era5_temperature", 0)
+
+    assert "era5land_temperature" in make_registry(RealSource(cubes_dir=tmp_path))
+
+
+def test_rain_needs_its_fallback_cube_to_be_listed(tmp_path):
+    assert "chirps_monthly" not in make_registry(RealSource(cubes_dir=tmp_path))
+
+    write_cube(tmp_path, "era5_precipitation", 0)
+
+    assert "chirps_monthly" in make_registry(RealSource(cubes_dir=tmp_path))
+
+
 def test_every_source_with_a_disclaimer_requires_it():
     with_disclaimer = [source for source in SOURCES.values() if "disclaimer" in source]
 
@@ -203,19 +439,19 @@ def test_every_source_with_a_disclaimer_requires_it():
 
 
 def test_missing_cube_is_unavailable_and_not_listed(tmp_path):
-    cube = Era5LandTemperatureCube(tmp_path)
+    cube = land_cube(tmp_path)
 
-    assert not cube.has_t2m()
+    assert not cube.has_months()
     with pytest.raises(SourceUnavailable, match="not ingested"):
-        cube.t2m_months()
+        cube.months()
 
 
 def test_cube_read_decodes_celsius_and_fill(tmp_path):
     field = np.full(CUBE_SHAPE, -5.5, "float32")
     field[1, 2] = np.nan
-    write_months(tmp_path, [("2016-01", field, "0001")])
+    write_cube(tmp_path, "era5land_temperature", field)
 
-    window = Era5LandTemperatureCube(tmp_path).read_t2m("2016-01", (1, 0, 3, 2))
+    window = land_cube(tmp_path).read("2016-01", (1, 0, 3, 2))
 
     assert window.dtype == np.float32 and window.shape == (2, 3)
     assert window[0, 0] == pytest.approx(-5.5)
@@ -225,7 +461,8 @@ def test_cube_read_decodes_celsius_and_fill(tmp_path):
 def test_cube_read_wraps_at_180(tmp_path):
     columns = np.arange(ERA5_LAND_TEMPERATURE_GRID.columns, dtype="float32") / 100
     field = np.tile(columns, (ERA5_LAND_TEMPERATURE_GRID.rows, 1))
-    write_months(tmp_path, [("2016-01", field, "0001")])
+    write_cube(tmp_path, "era5land_temperature", field)
+    write_cube(tmp_path, "era5_temperature", 0)
     temperature = make_registry(RealSource(cubes_dir=tmp_path))["era5land_temperature"]
 
     values = temperature.read_step("2016-01-01", [179.85, 0.05, 180.15, 0.35])
@@ -236,8 +473,8 @@ def test_cube_read_wraps_at_180(tmp_path):
 
 @pytest.mark.parametrize("factor", [2, 4])
 def test_cube_read_past_60_south_is_padded_to_whole_blocks(tmp_path, factor):
-    field = np.full(CUBE_SHAPE, 5, "float32")
-    write_months(tmp_path, [("2016-01", field, "0001")])
+    write_cube(tmp_path, "era5land_temperature", 5)
+    write_cube(tmp_path, "era5_temperature", 0)
     temperature = make_registry(RealSource(cubes_dir=tmp_path))["era5land_temperature"]
     two_rows_past_the_last = (1800, 1808, 1190, 1202)
 
@@ -254,25 +491,24 @@ def test_cube_read_past_60_south_is_padded_to_whole_blocks(tmp_path, factor):
 def test_empty_or_unreadable_cube_is_unavailable(tmp_path):
     cube_path = tmp_path / "era5land_temperature.zarr"
     zarr.create_group(cube_path, attributes={"months": {}})
-    cube = Era5LandTemperatureCube(tmp_path)
+    cube = land_cube(tmp_path)
 
-    assert not cube.has_t2m()
+    assert not cube.has_months()
     with pytest.raises(SourceUnavailable, match="not ingested"):
-        cube.t2m_months()
+        cube.months()
 
     (cube_path / "zarr.json").write_text("{not json")
-    assert not Era5LandTemperatureCube(tmp_path).has_t2m()
+    assert not land_cube(tmp_path).has_months()
 
 
 def test_cube_months_are_reread_after_an_ingest(tmp_path):
-    field = np.full(CUBE_SHAPE, 10, "float32")
-    write_months(tmp_path, [("2016-01", field, "0001")])
-    cube = Era5LandTemperatureCube(tmp_path)
-    assert list(cube.t2m_months()) == ["2016-01"]
+    write_cube(tmp_path, "era5land_temperature", 10)
+    cube = land_cube(tmp_path)
+    assert list(cube.months()) == ["2016-01"]
 
-    write_months(tmp_path, [("2016-02", field, "0005")])
+    write_cube(tmp_path, "era5land_temperature", 10, "2016-02", "0005")
 
-    assert list(cube.t2m_months()) == ["2016-01", "2016-02"]
+    assert list(cube.months()) == ["2016-01", "2016-02"]
 
 
 def test_terrain_res_budget():

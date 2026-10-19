@@ -119,7 +119,7 @@ export interface LayerDoc {
   title: string;
   units: string;
   source: CreditDoc;
-  fallback_sources?: CreditDoc[]; // sources of tiles the main one lacks
+  fallback_sources?: CreditDoc[]; // sources of tiles or cells the main one lacks
   style: {
     kind: string;
     encodings: string[]; // display types the layer offers, best first
@@ -131,7 +131,7 @@ export interface LayerDoc {
   grid: GridDoc;
   mask: { path: string; cells_inside: number };
   time: TimeDoc | null;
-  arrays: Record<string, ArrayDoc>; // by role, e.g. value, elevation, hillshade
+  arrays: Record<string, ArrayDoc>; // by role, e.g. value, elevation, hillshade, source
 }
 
 /** area.geojson: one Feature holding the area's outline. */

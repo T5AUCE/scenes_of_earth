@@ -184,3 +184,39 @@ def test_period_without_an_endpoint_is_a_problem_not_an_error(tmp_path, missing)
         del doc["period"][key]
 
     assert any("period must have start before end" in problem for problem in validate(doc))
+
+
+def test_validate_accepts_the_provenance_array_of_a_filled_layer(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    rain = doc["layers"][1]
+
+    assert "source" in rain["arrays"] and rain["fallback_sources"]
+    assert validate(doc) == []
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [("dtype", "float64"), ("fill", 255), ("scale_factor", 0.1), ("add_offset", 1)],
+)
+def test_validate_rejects_a_provenance_array_with_the_wrong_encoding(tmp_path, key, value):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    doc["layers"][1]["arrays"]["source"][key] = value
+
+    assert any(f"arrays.source.{key}" in problem for problem in validate(doc))
+
+
+def test_validate_rejects_a_provenance_array_without_a_fallback_source(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    del doc["layers"][1]["fallback_sources"]
+
+    assert any("without fallback_sources" in problem for problem in validate(doc))
+
+
+def test_validate_rejects_a_provenance_array_in_a_static_layer(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    terrain = doc["layers"][0]
+    terrain["arrays"]["source"] = dict(doc["layers"][1]["arrays"]["source"])
+    terrain["arrays"]["source"]["path"] = f"{terrain['id']}/source"
+    terrain["fallback_sources"] = doc["layers"][1]["fallback_sources"]
+
+    assert any("static layer cannot have a source array" in problem for problem in validate(doc))

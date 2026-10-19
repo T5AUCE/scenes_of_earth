@@ -12,13 +12,14 @@ from rasterio.transform import Affine
 from shapely.geometry import Polygon, box
 
 from soe.areas import Area, AreaError
-from soe.build import build_scene, encode_values
-from soe.bundle import validate
+from soe.build import SourceChanged, build_scene, encode_values
+from soe.bundle import JsonObject, validate
 from soe.plan import plan
 from soe.sources import (
     SOURCES,
     Bbox,
     CellWindow,
+    CubeSpec,
     Role,
     SeriesDataset,
     StaticDataset,
@@ -37,6 +38,7 @@ from tests.helpers import (
     NAIROBI,
     RAIN,
     TERRAIN,
+    ReingestedSource,
     build_nairobi,
     plan_months,
 )
@@ -429,9 +431,11 @@ def test_rain_is_uint16_sharded_and_round_trips(tmp_path):
     raw = precip[...]
     decoded = np.where(raw == 65535, np.nan, raw * precip.attrs["scale_factor"])
     bbox = rain["grid"]["bbox"]
-    expected = np.stack([RAIN.read_step(step, bbox) for step in rain["time"]["values"]])
+    steps = rain["time"]["values"]
+    expected = np.stack([RAIN.read_step_filled(step, bbox).values for step in steps])
 
-    assert np.isnan(expected).any() and np.array_equal(np.isnan(decoded), np.isnan(expected))
+    assert np.isnan(RAIN.read_step(steps[0], bbox)).any()
+    assert not np.isnan(expected).any() and not (raw == 65535).any()
     assert np.nanmax(np.abs(decoded - expected)) <= 0.051
 
 
@@ -533,7 +537,7 @@ def test_cells_outside_the_area_hold_the_fill_value_in_every_layer(tmp_path):
         for role, array_doc in layer["arrays"].items()
     }
 
-    assert len(arrays) == 3
+    assert len(arrays) == 4
 
     for layer, array_doc in arrays.values():
         outside = root[layer["mask"]["path"]][...] == 0
@@ -588,7 +592,14 @@ def _rain_with_marked_boundary(missing_cell: bool = False) -> SeriesDataset:
                 raster[5, 5] = np.nan
             return raster
 
-    return MarkedRain(**vars(RAIN))
+    return MarkedRain(**{**vars(RAIN), "backend": EmptyFallbackSource()})
+
+
+class EmptyFallbackSource(SyntheticSource):
+    """Keep main-source gaps unfilled by returning no values from fallback cubes."""
+
+    def read_cube(self, spec: CubeSpec, month: str, window: CellWindow) -> np.ndarray:
+        return np.full((window[3], window[2]), np.nan, "float32")
 
 
 def test_area_statistics_follow_the_touched_cells(tmp_path):
@@ -662,7 +673,215 @@ def test_scene_with_preliminary_months_carries_the_notice(tmp_path):
 
     doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
 
-    assert doc["notices"]["limits"] == [
-        "Temperature 2026-07 to 2026-08 is preliminary ERA5-Land data; final data replaces it "
-        "about two months later, and the scene then gets a new id.",
+    assert doc["notices"]["limits"][0] == (
+        "Temperature 2026-07 to 2026-08 is preliminary ERA5-Land or ERA5 data; final data "
+        "replaces it about two months later, and the scene then gets a new id."
+    )
+
+
+def rain_with_gaps(
+    gaps_in: Callable[[str], list[tuple[int, int]]],
+    backend: SyntheticSource | None = None,
+) -> SeriesDataset:
+    """Return 10 mm rainfall except at the row-column pairs listed by `gaps_in(step)`."""
+
+    class GappyRain(type(RAIN)):
+        def read_step(self, step: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
+            res = self.grid.res * factor
+            raster = np.full(
+                (round((bbox[3] - bbox[1]) / res), round((bbox[2] - bbox[0]) / res)),
+                10,
+                "float32",
+            )
+            for row, column in gaps_in(step):
+                raster[row, column] = np.nan
+            return raster
+
+    return GappyRain(**{**vars(RAIN), "backend": backend or SyntheticSource()})
+
+
+def build_rain(
+    tmp_path: Path,
+    rain: SeriesDataset,
+    area: Area | None = None,
+) -> tuple[JsonObject, zarr.Group]:
+    """Build two months of `rain` over Nairobi; return scene.json and the opened Zarr store."""
+    area = area or Area(NAIROBI, BOUNDARY)
+    build_scene(HASH_A, area, "2015-01", "2015-02", [rain], "Test", tmp_path)
+    document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    return document, zarr.open_group(tmp_path / HASH_A / "data.zarr", mode="r")
+
+
+def test_gap_cells_take_the_fallback_value_and_finite_cells_keep_theirs(tmp_path):
+    rain = rain_with_gaps(lambda step: [(3, 4)])
+
+    document, root = build_rain(tmp_path, rain)
+
+    precip = root["chirps_monthly/precip"]
+    expected = rain.read_step_filled("2015-01-01", document["layers"][0]["grid"]["bbox"]).values
+    decoded = precip[0] * precip.attrs["scale_factor"]
+    assert np.allclose(decoded, expected, atol=0.051)
+    assert 40 <= expected[3, 4] <= 100
+    assert (np.delete(decoded.ravel(), 3 * 20 + 4) == 10).all()
+
+
+def test_source_array_codes_main_fallback_and_both(tmp_path):
+    def gaps_in(step: str) -> list[tuple[int, int]]:
+        return [(3, 4), (5, 6)] if step == "2015-01-01" else [(3, 4)]
+
+    document, root = build_rain(tmp_path, rain_with_gaps(gaps_in))
+    codes = root["chirps_monthly/source"][...]
+    block = document["layers"][0]["arrays"]["source"]
+
+    assert block["dtype"] == "uint8" and block["fill"] == 0
+    assert codes.dtype == "uint8"
+    assert root["chirps_monthly/source"].attrs["flag_values"] == [1, 2, 3]
+    assert (codes[3, 4], codes[5, 6], codes[0, 0]) == (2, 3, 1)
+
+
+def test_source_array_is_zero_outside_the_area(tmp_path):
+    triangle = Area(Polygon([(36.5, -1.5), (37.5, -1.5), (37.5, -0.5)]), BOUNDARY)
+
+    _, root = build_rain(tmp_path, rain_with_gaps(lambda step: [(0, 0), (19, 19)]), triangle)
+
+    outside = root["chirps_monthly/mask"][...] == 0
+    assert outside.any() and (root["chirps_monthly/source"][...][outside] == 0).all()
+
+
+def test_fallback_is_credited_and_noticed_with_its_cell_counts(tmp_path):
+    document, _ = build_rain(tmp_path, rain_with_gaps(lambda step: [(3, 4), (5, 6)]))
+    layer = document["layers"][0]
+
+    assert [source["name"] for source in layer["fallback_sources"]] == [SOURCES["era5"]["name"]]
+    assert document["credits"]["lines"].count(SOURCES["era5"]["attribution"]) == 1
+    assert document["notices"]["limits"][-1].startswith("Rainfall uses ERA5 model rain")
+    assert "in 2 of 400 cells" in document["notices"]["limits"][-1]
+    assert validate(document) == []
+
+
+def test_statistics_count_the_filled_cells(tmp_path):
+    every_cell = [(row, column) for row in range(20) for column in range(20)]
+
+    document, _ = build_rain(tmp_path, rain_with_gaps(lambda step: every_cell))
+
+    stats = document["layers"][0]["stats"]
+    assert 40 <= stats["min"] <= stats["max"] <= 100
+
+
+def test_scene_without_gaps_carries_no_trace_of_the_fallback(tmp_path):
+    document, root = build_rain(tmp_path, rain_with_gaps(lambda step: []))
+    layer = document["layers"][0]
+
+    assert "source" not in layer["arrays"] and "source" not in root["chirps_monthly"]
+    assert "fallback_sources" not in layer and document["notices"]["limits"] == []
+    assert SOURCES["era5"]["attribution"] not in document["credits"]["lines"]
+
+
+def test_cell_with_no_value_from_either_source_stays_empty_and_is_counted(tmp_path):
+    rain = rain_with_gaps(lambda step: [(3, 4)], EmptyFallbackSource())
+
+    document, root = build_rain(tmp_path, rain)
+
+    assert root["chirps_monthly/precip"][0][3, 4] == 65535
+    assert document["notices"]["limits"] == [
+        "Rainfall has no value from either source in 1 of 400 cells in some months.",
     ]
+    assert "source" not in root["chirps_monthly"]
+
+
+def test_temperature_gaps_take_era5_and_keep_land_values(tmp_path):
+    temperature = make_registry(SyntheticSource())["era5land_temperature"]
+    bbox = [36.45, -1.55, 37.55, -0.45]
+    land = temperature.read_step("2015-01-01", bbox)
+    filled = temperature.read_step_filled("2015-01-01", bbox)
+
+    build_scene(HASH_A, Area(NAIROBI, BOUNDARY), "2015-01", "2015-01", [temperature], "T", tmp_path)
+    root = zarr.open_group(tmp_path / HASH_A / "data.zarr", mode="r")
+    t2m = root["era5land_temperature/t2m"]
+    decoded = t2m[0] * t2m.attrs["scale_factor"]
+    codes = root["era5land_temperature/source"][...]
+
+    assert np.isnan(land).any() and filled.filled.any()
+    assert np.allclose(decoded[~np.isnan(land)], land[~np.isnan(land)], atol=0.051)
+    assert np.array_equal(codes == 2, np.isnan(land))
+
+
+def prepared_local_revisions(dataset: SeriesDataset) -> dict[str, str | None]:
+    return {dataset.id: dataset.local_revision(dataset.steps("2015-01-01", "2015-03-01"))}
+
+
+@pytest.mark.parametrize("layer_id", ["chirps_monthly", "era5land_temperature"])
+def test_build_refuses_a_scene_whose_source_changed_while_it_was_queued(tmp_path, layer_id):
+    source = ReingestedSource()
+    dataset = make_registry(source)[layer_id]
+    expected = prepared_local_revisions(dataset)
+
+    source.reingest()
+
+    with pytest.raises(SourceChanged):
+        build_scene(
+            HASH_A,
+            Area(NAIROBI, BOUNDARY),
+            "2015-01",
+            "2015-02",
+            [dataset],
+            "T",
+            tmp_path,
+            local_revisions=expected,
+        )
+
+    assert source.reads == 0
+    assert not (tmp_path / HASH_A).exists()
+
+
+@pytest.mark.parametrize("layer_id", ["chirps_monthly", "era5land_temperature"])
+def test_build_publishes_nothing_when_the_source_changes_between_months(tmp_path, layer_id):
+    source = ReingestedSource(reads_before_reingest=1)
+    dataset = make_registry(source)[layer_id]
+    expected = prepared_local_revisions(dataset)
+
+    with pytest.raises(SourceChanged):
+        build_scene(
+            HASH_A,
+            Area(NAIROBI, BOUNDARY),
+            "2015-01",
+            "2015-02",
+            [dataset],
+            "T",
+            tmp_path,
+            local_revisions=expected,
+        )
+
+    assert source.reads >= 1
+    assert not (tmp_path / HASH_A).exists()
+    assert not list((tmp_path / ".tmp").iterdir())
+
+
+def test_build_with_unchanged_local_revisions_publishes(tmp_path):
+    source = SyntheticSource()
+    rain = make_registry(source)["chirps_monthly"]
+
+    build_scene(
+        HASH_A,
+        Area(NAIROBI, BOUNDARY),
+        "2015-01",
+        "2015-02",
+        [rain],
+        "T",
+        tmp_path,
+        local_revisions=prepared_local_revisions(rain),
+    )
+
+    assert (tmp_path / HASH_A / "scene.json").exists()
+
+
+def test_scene_with_preliminary_rain_months_carries_the_notice(tmp_path):
+    rain = make_registry(SyntheticSource())["chirps_monthly"]
+    build_scene(HASH_A, Area(NAIROBI, BOUNDARY), "2026-06", "2026-08", [rain], "T", tmp_path)
+
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+
+    assert doc["notices"]["limits"][0] == (
+        "The ERA5 rain that fills gaps in Rainfall 2026-07 to 2026-08 is preliminary; final data "
+        "replaces it about two months later, and the scene then gets a new id."
+    )

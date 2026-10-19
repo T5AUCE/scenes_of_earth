@@ -20,9 +20,13 @@ from .areas import Area, AreaError
 from .bundle import JsonObject, make, validate
 from .plan import LayerPlan, Plan, plan as make_plan
 from .sources import (
+    FROM_FALLBACK,
+    FROM_MAIN,
+    SOURCE_ROLE,
     STOP_COUNT,
     TOP_PERCENTILE,
     Dataset,
+    FilledStep,
     Role,
     SeriesDataset,
     StaticDataset,
@@ -51,6 +55,10 @@ SERIES_STEP_COST = 0.2
 PERCENTILE_SAMPLES_PER_BATCH = 100_000
 
 
+class SourceChanged(Exception):
+    """Local source data was replaced after the scene's id was made, so the id would be wrong."""
+
+
 def build_scene(
     scene_id: str,
     area: Area,
@@ -60,10 +68,14 @@ def build_scene(
     title: str,
     scenes_dir: Path | str,
     progress: ProgressCallback = lambda fraction, stage: None,
+    local_revisions: dict[str, str | None] | None = None,
 ) -> int:
     """Build or reuse the scene's bundle and return its size in bytes.
 
     `start` and `end` are request periods ('YYYY-MM'), or None for scenes without series.
+    `local_revisions` are the local revisions that the scene id was made from. The build checks
+    them before reading and again before publishing, and raises SourceChanged without publishing
+    if any differs. Without them nothing is checked.
     """
     scenes_dir = Path(scenes_dir)
     final_dir = scenes_dir / scene_id
@@ -75,6 +87,7 @@ def build_scene(
         return size
 
     scene_plan = make_plan(area, datasets, start, end)
+    _check_local_revisions(datasets, scene_plan, local_revisions)
 
     with _temporary_scene_directory(scenes_dir, scene_id) as temp_dir:
         root = zarr.open_group(
@@ -109,12 +122,28 @@ def build_scene(
             scene_plan,
         )
 
+        _check_local_revisions(datasets, scene_plan, local_revisions)
         built_size = _directory_size(temp_dir)
         # If another build published this scene first, keep the existing bundle.
         bundle_size = _publish_scene(temp_dir, final_dir, built_size)
 
     progress(1.0, None)
     return bundle_size
+
+
+def _check_local_revisions(
+    datasets: list[Dataset],
+    scene_plan: Plan,
+    expected: dict[str, str | None] | None,
+) -> None:
+    if expected is None:
+        return
+
+    for dataset in datasets:
+        if dataset.time_varying:
+            current = dataset.local_revision(scene_plan.layers[dataset.id].steps)
+            if current != expected.get(dataset.id):
+                raise SourceChanged(f"{dataset.title} data changed after the scene was prepared")
 
 
 @contextmanager
@@ -319,18 +348,20 @@ def _write_time_series(
     _write_time_coordinate(layer_group, steps)
     series = _create_time_array(layer_group, dataset, spec, layer_plan)
     statistics = _StatisticsAccumulator()
+    provenance = _Provenance(area_mask)
     worker_count = _choose_worker_count(layer_plan)
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         for batch_start in range(0, step_count, BATCH_SIZE):
             batch_steps = steps[batch_start:batch_start + BATCH_SIZE]
-            raster_batch = _read_batch(
+            raster_batch, filled_batch = _read_batch(
                 executor,
                 dataset,
                 layer_plan,
                 batch_steps,
             )
             statistics.add(raster_batch, area_mask)
+            provenance.add(raster_batch, filled_batch)
             encoded_batch = encode_values(
                 np.where(area_mask, raster_batch, np.nan),
                 spec.dtype,
@@ -347,7 +378,81 @@ def _write_time_series(
     return {
         "stops": dataset.stops(value_stats, statistics.quantiles(STOP_COUNT)),
         "stats": value_stats,
+        **_write_provenance(layer_group, dataset, provenance),
     }
+
+
+def _write_provenance(
+    layer_group: zarr.Group,
+    dataset: SeriesDataset,
+    provenance: "_Provenance",
+) -> JsonObject:
+    """Write the `source` array when the fallback gave a value, and return the layer's notes."""
+    if dataset.fallback is None:
+        return {}
+
+    fallback_cells = provenance.fallback_cells
+    if fallback_cells:
+        _write_array(
+            layer_group,
+            SOURCE_ROLE.name,
+            provenance.codes(),
+            ["lat", "lon"],
+            {
+                **_attributes(SOURCE_ROLE),
+                "flag_values": [FROM_MAIN, FROM_FALLBACK, FROM_MAIN | FROM_FALLBACK],
+                "flag_meanings": "main fallback main_and_fallback",
+            },
+            SOURCE_ROLE.fill,
+        )
+
+    return {
+        "fallback_used": bool(fallback_cells),
+        "notices": provenance.notices(dataset),
+    }
+
+
+class _Provenance:
+    """Track which source contributes values to each cell inside the area."""
+
+    def __init__(self, area_mask: np.ndarray) -> None:
+        self._area_mask = area_mask
+        self._from_main = np.zeros(area_mask.shape, bool)
+        self._from_fallback = np.zeros(area_mask.shape, bool)
+        self._missing = np.zeros(area_mask.shape, bool)  # lacks a value in some step
+
+    @property
+    def fallback_cells(self) -> int:
+        """Return the number of cells inside the area that took a fallback value in some step."""
+        return int((self._from_fallback & self._area_mask).sum())
+
+    def add(self, raster_batch: np.ndarray, filled_batch: np.ndarray | None) -> None:
+        """Account for a batch of steps; `filled_batch` is None when there is no fallback."""
+        present = np.isfinite(raster_batch)
+        filled = np.zeros_like(present) if filled_batch is None else filled_batch
+        self._from_main |= (present & ~filled).any(axis=0)
+        self._from_fallback |= filled.any(axis=0)
+        self._missing |= (~present).any(axis=0)
+
+    def codes(self) -> np.ndarray:
+        """Return each cell's code, adding FROM_MAIN and FROM_FALLBACK when both gave values."""
+        codes = self._from_main * FROM_MAIN + self._from_fallback * FROM_FALLBACK
+        return np.where(self._area_mask, codes, 0).astype("uint8")
+
+    def notices(self, dataset: SeriesDataset) -> list[str]:
+        """Return notes on the cells that took fallback values and those that still lack a value."""
+        inside = int(self._area_mask.sum())
+        missing = int((self._missing & self._area_mask).sum())
+        notices = []
+        if self.fallback_cells:
+            notice = dataset.fallback.notice
+            notices.append(notice.format(filled=self.fallback_cells, inside=inside))
+        if missing:
+            notices.append(
+                f"{dataset.title} has no value from either source in {missing} of {inside} cells "
+                "in some months.",
+            )
+        return notices
 
 
 def _write_time_coordinate(layer_group: zarr.Group, steps: list[str]) -> None:
@@ -478,16 +583,22 @@ def _read_batch(
     dataset: SeriesDataset,
     layer_plan: LayerPlan,
     steps: list[str],
-) -> np.ndarray:
-    rasters = executor.map(
-        lambda step: dataset.read_step(
-            step,
-            layer_plan.bbox,
-            layer_plan.factor,
-        ),
-        steps,
+) -> FilledStep:
+    rasters = list(
+        executor.map(
+            lambda step: dataset.read_step_filled(
+                step,
+                layer_plan.bbox,
+                layer_plan.factor,
+            ),
+            steps,
+        )
     )
-    return np.stack(list(rasters))
+    values = np.stack([raster.values for raster in rasters])
+    if dataset.fallback is None:
+        return FilledStep(values, None)
+
+    return FilledStep(values, np.stack([raster.filled for raster in rasters]))
 
 
 def encode_values(

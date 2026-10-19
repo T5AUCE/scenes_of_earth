@@ -1,24 +1,31 @@
-"""Data sources: one module per source, the dataset contract and the registry.
+"""Expose the dataset contracts and registry alongside the source readers.
 
 Importers use these names, while the modules hold the code. Each of chirps.py,
-era5land_temperature.py and terrain.py reads one source, synthetic.py stands in for all of them
-offline, and registry.py lists the datasets.
+era5land_temperature.py and terrain.py reads one source. The era5.py module holds the general
+ERA5 cubes that fill the gaps of the first two. The synthetic.py module stands in for all of
+them offline. The registry.py module lists the datasets.
 """
 from .chirps import CHIRPS_GRID, RainDataset
+from .cubes import DEFAULT_CUBES_DIR, CubeSpec, CubeStore, MonthlyCube
 from .datasets import (
+    FROM_FALLBACK,
+    FROM_MAIN,
+    SOURCE_ROLE,
     STOP_COUNT,
     SUPPORTED_BOUNDS_DEG,
     TOP_PERCENTILE,
     Dataset,
+    Fallback,
+    FilledStep,
     Registry,
     Role,
     SeriesDataset,
     StaticDataset,
 )
+from .era5 import ERA5_GRID, ERA5_PRECIPITATION_CUBE, ERA5_TEMPERATURE_CUBE
 from .era5land_temperature import (
-    DEFAULT_CUBES_DIR,
+    ERA5_LAND_TEMPERATURE_CUBE,
     ERA5_LAND_TEMPERATURE_GRID,
-    Era5LandTemperatureCube,
     Era5LandTemperatureDataset,
 )
 from .grid import CELL_DEG, Bbox, CellSpan, CellWindow, Grid, read_wrapped
@@ -49,10 +56,17 @@ __all__ = [
     "CELL_DEG",
     "CHIRPS_GRID",
     "DEFAULT_CUBES_DIR",
+    "ERA5_GRID",
+    "ERA5_LAND_TEMPERATURE_CUBE",
     "ERA5_LAND_TEMPERATURE_GRID",
+    "ERA5_PRECIPITATION_CUBE",
+    "ERA5_TEMPERATURE_CUBE",
+    "FROM_FALLBACK",
+    "FROM_MAIN",
     "REGISTRY",
     "REQUEST_FORMATS",
     "REQUEST_STEP",
+    "SOURCE_ROLE",
     "SOURCES",
     "STOP_COUNT",
     "SUPPORTED_BOUNDS_DEG",
@@ -64,10 +78,14 @@ __all__ = [
     "Bbox",
     "CellSpan",
     "CellWindow",
+    "CubeSpec",
+    "CubeStore",
     "Dataset",
-    "Era5LandTemperatureCube",
     "Era5LandTemperatureDataset",
+    "Fallback",
+    "FilledStep",
     "Grid",
+    "MonthlyCube",
     "RainDataset",
     "RealSource",
     "Registry",

@@ -109,7 +109,7 @@ def test_plan_rejections(tmp_path):
         plan_months(Area(box(-60, -20, 40, 10)), [RAIN], 240)
 
     without_cube = make_registry(RealSource(cubes_dir=tmp_path))
-    assert without_cube.keys() == {"chirps_monthly", "copdem_terrain"}
+    assert without_cube.keys() == {"copdem_terrain"}
     assert len(terrain_tiles((36, -2, 38, 0), "glo90")) == 4
 
     with pytest.raises(AreaError, match="source tiles"):  # 8190 existing tiles > 2500
@@ -266,6 +266,20 @@ def test_output_budget_is_summed_across_layers():
     both = plan_months(area, [TERRAIN, RAIN], 140)  # terrain takes 12 MB of the 50
 
     assert both.layers["chirps_monthly"].factor == 2 and both.layers["copdem_terrain"].factor == 1
+
+
+@pytest.mark.parametrize(("budget_bytes", "factor"), [(2400, 1), (2399, 2)])
+def test_output_budget_reserves_the_provenance_array_of_a_layer_with_a_fallback(
+    monkeypatch,
+    budget_bytes,
+    factor,
+):
+    # The threshold includes two uint16 steps plus mask and provenance bytes per cell.
+    monkeypatch.setattr("soe.plan.MAX_OUTPUT_BYTES", budget_bytes)
+
+    layer = plan_months(Area(NAIROBI), [RAIN], 2).layers["chirps_monthly"]
+
+    assert layer.factor == factor
 
 
 def test_each_series_gets_its_own_factor():

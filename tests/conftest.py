@@ -8,6 +8,7 @@ from rasterio.transform import Affine
 from soe.sources import (
     Bbox,
     CellWindow,
+    CubeSpec,
     RealSource,
     SourceUnavailable,
     SyntheticSource,
@@ -33,6 +34,15 @@ class RevisionSource(RealSource):
 
     def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
         return self.data.read_rain(month, window)
+
+    def has_cube(self, spec: CubeSpec) -> bool:
+        return self.data.has_cube(spec)
+
+    def cube_months(self, spec: CubeSpec) -> dict[str, str]:
+        return self.data.cube_months(spec)
+
+    def read_cube(self, spec: CubeSpec, month: str, window: CellWindow) -> np.ndarray:
+        return self.data.read_cube(spec, month, window)
 
     def terrain(
         self,

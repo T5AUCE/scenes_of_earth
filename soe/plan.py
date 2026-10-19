@@ -11,6 +11,7 @@ from .areas import MAX_LONGITUDE_DEG, WORLD_WIDTH_DEG, Area, AreaError, unwrap
 from .sources import (
     CHIRPS_GRID,
     REQUEST_STEP,
+    SOURCE_ROLE,
     Bbox,
     CellSpan,
     Dataset,
@@ -204,6 +205,7 @@ def _check_source_size(windows: dict[str, CellSpan], steps: dict[str, list[str]]
 
 
 def _source_cells(windows: dict[str, CellSpan], steps: dict[str, list[str]]) -> int:
+    # The cap measures native layer-cell steps, so it excludes auxiliary fallback reads.
     return sum(
         (c1 - c0) * (r1 - r0) * len(steps[dataset_id])
         for dataset_id, (c0, c1, r0, r1) in windows.items()
@@ -267,9 +269,14 @@ def _layer_grid(
 
 
 def _layer_bytes(dataset: Dataset, grid_shape: tuple[int, int], step_count: int = 1) -> int:
-    """Raw bytes of a layer's arrays: every array per step, plus one mask byte per cell."""
+    """Return the raw byte cost of the per-step arrays and the reserved static arrays of a layer.
+
+    The static arrays are the mask and, for a layer with a fallback, the provenance array. The
+    provenance array is reserved even if no cell ends up using the fallback.
+    """
     bytes_per_step = sum(np.dtype(spec.dtype).itemsize for spec in dataset.roles.values())
-    return grid_shape[0] * grid_shape[1] * (step_count * bytes_per_step + 1)
+    static_bytes = 1 + (np.dtype(SOURCE_ROLE.dtype).itemsize if dataset.fallback else 0)
+    return grid_shape[0] * grid_shape[1] * (step_count * bytes_per_step + static_bytes)
 
 
 def _aggregation_factors(

@@ -1,4 +1,5 @@
 """The dataset contract: roles, static and series datasets, and the registry type."""
+import hashlib
 import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -8,8 +9,10 @@ from typing import ClassVar, NamedTuple
 import numpy as np
 from rasterio.transform import Affine
 
-from .grid import Bbox, Grid
-from .periods import add_duration
+from .cubes import CubeSpec
+from .fallback import read_nearest
+from .grid import Bbox, Grid, block_mean
+from .periods import MONTH_CHARS, add_duration
 
 Registry = dict[str, "Dataset"]  # dataset id -> dataset
 
@@ -18,6 +21,10 @@ SUPPORTED_BOUNDS_DEG = (-180, -60, 180, 60)  # W, S, E, N; supported v1 extent
 STOP_COUNT = 9  # colour stops of a series layer, one per palette colour
 STOP_DIGITS = 2  # significant digits of the stops span that a stop keeps
 TOP_PERCENTILE = 98  # the last stop; values above it share the top colour
+
+REVISION_HEX_CHARS = 12
+FROM_MAIN = 1  # bit of a cell's code in the `source` array; both bits set make 3
+FROM_FALLBACK = 2
 
 
 class Role(NamedTuple):
@@ -30,6 +37,29 @@ class Role(NamedTuple):
     fill: int | None = None  # stored value that means "no data"
     units: str = ""  # CF attributes of the array; omitted when empty
     long_name: str = ""
+
+
+class Fallback(NamedTuple):
+    """Describe a secondary source that fills missing values in a series layer."""
+
+    cube: CubeSpec
+    source: dict  # licence and attribution, as for the main source
+    notice: str  # with {filled} and {inside}, the cells filled and the cells inside the area
+
+
+class FilledStep(NamedTuple):
+    """Pair the values for one step with flags identifying fallback-filled cells."""
+
+    values: np.ndarray
+    filled: np.ndarray | None  # True where the fallback gave the value; None without a fallback
+
+
+SOURCE_ROLE = Role(
+    "source",
+    "uint8",
+    fill=0,
+    long_name="Source of the values: 1 main, 2 fallback, 3 both; 0 outside the area or none",
+)
 
 
 @dataclass
@@ -53,7 +83,8 @@ class Dataset(ABC):
     cell_method: str | None = None  # how a step summarises its period: sum, mean, point or max
     max_tiles: int | None = None  # request cap for tiled datasets
     synthetic: bool = False  # offline stand-in data, kept apart from real revisions
-    remote: bool = True  # revisions are asked from a remote server, so they are cached
+    remote: bool = True  # has a remote revision, which scene preparation caches
+    fallback: Fallback | None = None  # series layers only
 
     def __post_init__(self) -> None:
         """Runs after construction; subclasses check their invariants here."""
@@ -66,11 +97,20 @@ class Dataset(ABC):
         """Cell size of a static layer over bbox."""
         return self.resolution_deg
 
-    def current_revision(self, steps: list[str]) -> str | None:
-        """The provider's current revision marker of the period starts `steps`, or None.
+    def remote_revision(self, steps: list[str]) -> str | None:
+        """Return the revision marker that a remote server gives the period starts `steps`, or None.
 
-        A revision is a string that changes whenever the provider republishes data of any of
-        those periods. It is part of the scene id, so revised data gets a new scene.
+        It changes whenever the provider republishes data of any of those periods. Asking costs a
+        request, so scene preparation caches it for a while.
+        """
+        return None
+
+    def local_revision(self, steps: list[str]) -> str | None:
+        """Return the revision marker that local files give the period starts `steps`, or None.
+
+        It changes whenever one of those periods is replaced on disk. Asking is cheap, so
+        preparation always reads the revision fresh. A build compares it with the value used to
+        make its scene ID.
         """
         return None
 
@@ -166,6 +206,39 @@ class SeriesDataset(Dataset):
     @abstractmethod
     def read_step(self, step: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
         """The step that starts on the ISO date `step`, block-averaged by `factor`."""
+
+    def read_step_filled(self, step: str, bbox: Bbox, factor: int = 1) -> FilledStep:
+        """Read the step like read_step, filling gaps from the fallback where it has values."""
+        values = self.read_step(step, bbox, factor)
+        if self.fallback is None:
+            return FilledStep(values, None)
+
+        gaps = np.isnan(values)
+        if not gaps.any():
+            return FilledStep(values, gaps)
+
+        fallback_values = self._read_fallback(step, bbox, factor)
+        filled = gaps & np.isfinite(fallback_values)
+        return FilledStep(np.where(filled, fallback_values, values), filled)
+
+    def _read_fallback(self, step: str, bbox: Bbox, factor: int) -> np.ndarray:
+        month = step[:MONTH_CHARS]
+        sampled = read_nearest(
+            self.grid,
+            self.fallback.cube.grid,
+            self.grid.window(bbox),
+            lambda window: self.backend.read_cube(self.fallback.cube, month, window),
+        )
+        return block_mean(sampled, factor)
+
+    def fallback_months(self) -> dict[str, str]:
+        """Return the marker of each month of the fallback's cube, oldest first."""
+        return self.backend.cube_months(self.fallback.cube)
+
+
+def revision_digest(*markers: str) -> str:
+    """Return a short revision that changes whenever any of the markers does."""
+    return hashlib.sha256("|".join(markers).encode()).hexdigest()[:REVISION_HEX_CHARS]
 
 
 def _check_series_fill(dataset_id: str, spec: Role) -> None:

@@ -1,7 +1,6 @@
-"""Offline tests of the temperature ingest.
+"""Test cube ingestion offline using ERA5-Land temperature as the main fixture.
 
-They cover how GRIB messages are read and checked, how fields land on the cube grid, how the
-cube is updated and recovers from failures, and how months are requested from the CDS.
+Check GRIB decoding and grid placement. Verify update recovery and CDS request scheduling.
 """
 import hashlib
 import json
@@ -16,8 +15,9 @@ import rasterio.shutil
 import zarr
 from rasterio.transform import Affine, from_origin
 
-from soe import era5land_temperature_ingest
-from soe.era5land_temperature_ingest import (
+from soe import cube_ingest
+from soe.cube_ingest import (
+    INGEST_SPECS,
     MonthField,
     grib_expvers,
     ingest,
@@ -25,14 +25,27 @@ from soe.era5land_temperature_ingest import (
     read_months,
     write_months,
 )
-from soe.sources import ERA5_LAND_TEMPERATURE_GRID, Era5LandTemperatureCube, SourceUnavailable
-from soe.sources.era5land_temperature import CUBE_ARRAY, CUBE_NAME, month_index
+from soe.sources import (
+    ERA5_GRID,
+    ERA5_LAND_TEMPERATURE_CUBE,
+    ERA5_LAND_TEMPERATURE_GRID,
+    MonthlyCube,
+    SourceUnavailable,
+)
+from soe.sources.cubes import month_index
 
 GRIB_SECTION1_BYTES = 52  # long enough to hold the ECMWF experiment version
 EXPVER_IN_SECTION1_BYTES = 45
 UNPUBLISHED = "None of the data you have requested is available yet, please try again later."
 JAN_2016_SECS = 1451606400
 SHAPE = (ERA5_LAND_TEMPERATURE_GRID.rows, ERA5_LAND_TEMPERATURE_GRID.columns)
+LAND = INGEST_SPECS["era5land_temperature"]
+ERA5_TEMPERATURE = INGEST_SPECS["era5_temperature"]
+ERA5_PRECIPITATION = INGEST_SPECS["era5_precipitation"]
+ERA5_SHAPE = (ERA5_GRID.rows, ERA5_GRID.columns)
+FEB_2016_SECS = 1454284800
+CUBE_NAME = "era5land_temperature.zarr"
+CUBE_ARRAY = "t2m"
 
 
 def grib1_message(
@@ -120,6 +133,10 @@ def write_gdal_grib(path: Path, celsius: float) -> None:
 
 def celsius_field(value: float) -> np.ndarray:
     return np.full(SHAPE, value, "float32")
+
+
+def land_cube(cubes_dir: Path) -> MonthlyCube:
+    return MonthlyCube(ERA5_LAND_TEMPERATURE_CUBE, cubes_dir)
 
 
 def test_expver_is_read_from_each_grib1_message(tmp_path):
@@ -233,7 +250,7 @@ def test_grid_with_any_longitude_origin_lands_on_the_cube_grid(tmp_path, west_ed
     write_raster(path, west_edge, 0.1, width, SHAPE[0], np.tile(row, (SHAPE[0], 1)))
 
     with rasterio.open(path) as dataset:
-        [(month, celsius, expver)] = read_months(dataset, ["0001"])
+        [(month, celsius, expver)] = read_months(dataset, ["0001"], LAND)
 
     cube_centres = -180 + np.arange(width) * 0.1
     assert (month, expver) == ("2016-01", "0001")
@@ -245,7 +262,7 @@ def test_grid_with_another_resolution_is_refused(tmp_path):
     write_raster(path, -180, 0.25, 10, 10, np.zeros((10, 10)))
 
     with rasterio.open(path) as dataset, pytest.raises(ValueError, match="0.1 degree cells"):
-        list(read_months(dataset, ["0001"]))
+        list(read_months(dataset, ["0001"], LAND))
 
 
 def test_raster_that_misses_part_of_the_grid_is_refused(tmp_path):
@@ -253,7 +270,7 @@ def test_raster_that_misses_part_of_the_grid_is_refused(tmp_path):
     write_raster(path, -180.05, 0.1, 100, 100, np.zeros((100, 100)))
 
     with rasterio.open(path) as dataset, pytest.raises(ValueError, match="does not cover"):
-        list(read_months(dataset, ["0001"]))
+        list(read_months(dataset, ["0001"], LAND))
 
 
 def test_kelvin_becomes_celsius_and_ocean_becomes_fill(tmp_path):
@@ -263,7 +280,7 @@ def test_kelvin_becomes_celsius_and_ocean_becomes_fill(tmp_path):
     write_raster(path, -180.05, 0.1, SHAPE[1], SHAPE[0], kelvin)
 
     with rasterio.open(path) as dataset:
-        write_months(tmp_path / "cubes", read_months(dataset, ["0001"]))
+        write_months(tmp_path / "cubes", LAND, read_months(dataset, ["0001"], LAND))
 
     stored = zarr.open_group(tmp_path / "cubes" / CUBE_NAME, mode="r")[CUBE_ARRAY]
     january_2016 = 66 * 12
@@ -276,7 +293,7 @@ def test_gdal_grib_temperature_is_read_in_kelvin_and_converted_once(tmp_path):
     write_gdal_grib(path, celsius=27.0)
 
     with open_grib(path) as dataset:
-        [(month, celsius, _)] = read_months(dataset, ["0001"])
+        [(month, celsius, _)] = read_months(dataset, ["0001"], LAND)
 
     assert month == "2016-01"
     assert celsius[5, 5] == pytest.approx(27.0, abs=0.01)
@@ -287,7 +304,7 @@ def test_temperature_already_in_celsius_is_refused(tmp_path):
     write_raster(path, -180.05, 0.1, SHAPE[1], SHAPE[0], np.full(SHAPE, 27), unit="[C]")
 
     with rasterio.open(path) as dataset, pytest.raises(ValueError, match=r"\[K\]"):
-        list(read_months(dataset, ["0001"]))
+        list(read_months(dataset, ["0001"], LAND))
 
 
 def test_raster_shifted_one_row_north_is_refused(tmp_path):
@@ -296,7 +313,7 @@ def test_raster_shifted_one_row_north_is_refused(tmp_path):
     write_raster(path, -180.05, 0.1, SHAPE[1], SHAPE[0], np.zeros(SHAPE), north_edge=shifted_north)
 
     with rasterio.open(path) as dataset, pytest.raises(ValueError, match="60N to 60S"):
-        list(read_months(dataset, ["0001"]))
+        list(read_months(dataset, ["0001"], LAND))
 
 
 def test_rotated_raster_is_refused():
@@ -304,59 +321,59 @@ def test_rotated_raster_is_refused():
     dataset = SimpleNamespace(count=1, transform=rotated, width=SHAPE[1], height=SHAPE[0])
 
     with pytest.raises(ValueError, match="unrotated"):
-        list(read_months(dataset, ["0001"]))
+        list(read_months(dataset, ["0001"], LAND))
 
 
 def test_rewriting_an_unchanged_month_keeps_its_marker(tmp_path):
-    write_months(tmp_path, [("2016-01", celsius_field(20), "0001")])
-    marker = Era5LandTemperatureCube(tmp_path).t2m_months()["2016-01"]
+    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0001")])
+    marker = land_cube(tmp_path).months()["2016-01"]
 
-    write_months(tmp_path, [("2016-01", celsius_field(20), "0001")])
-    unchanged = Era5LandTemperatureCube(tmp_path).t2m_months()["2016-01"]
-    write_months(tmp_path, [("2016-01", celsius_field(21), "0001")])
-    changed = Era5LandTemperatureCube(tmp_path).t2m_months()["2016-01"]
+    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0001")])
+    unchanged = land_cube(tmp_path).months()["2016-01"]
+    write_months(tmp_path, LAND, [("2016-01", celsius_field(21), "0001")])
+    changed = land_cube(tmp_path).months()["2016-01"]
 
     assert unchanged == marker
     assert changed != marker and changed.startswith("0001:")
 
 
 def test_gap_between_months_is_refused(tmp_path):
-    write_months(tmp_path, [("2016-01", celsius_field(20), "0001")])
+    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0001")])
 
     with pytest.raises(ValueError, match="gap"):
-        write_months(tmp_path, [("2016-03", celsius_field(20), "0001")])
+        write_months(tmp_path, LAND, [("2016-03", celsius_field(20), "0001")])
 
-    assert list(Era5LandTemperatureCube(tmp_path).t2m_months()) == ["2016-01"]
+    assert list(land_cube(tmp_path).months()) == ["2016-01"]
 
 
 def test_failed_batch_changes_neither_data_nor_marker(tmp_path):
-    write_months(tmp_path, [("2016-01", celsius_field(20), "0005")])
-    before = Era5LandTemperatureCube(tmp_path).t2m_months()["2016-01"]
+    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0005")])
+    before = land_cube(tmp_path).months()["2016-01"]
 
     def failing_batch() -> Iterator[MonthField]:
         yield "2016-01", celsius_field(21), "0001"
         raise ValueError("second field is invalid")
 
     with pytest.raises(ValueError, match="second field"):
-        write_months(tmp_path, failing_batch())
+        write_months(tmp_path, LAND, failing_batch())
 
-    cube = Era5LandTemperatureCube(tmp_path)
-    assert cube.t2m_months()["2016-01"] == before
-    assert cube.read_t2m("2016-01", (0, 0, 1, 1))[0, 0] == pytest.approx(20)
+    cube = land_cube(tmp_path)
+    assert cube.months()["2016-01"] == before
+    assert cube.read("2016-01", (0, 0, 1, 1))[0, 0] == pytest.approx(20)
 
 
 def test_published_marker_matches_the_stored_bytes(tmp_path):
-    write_months(tmp_path, [("2016-01", celsius_field(20), "0001")])
+    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0001")])
     stored = zarr.open_group(tmp_path / CUBE_NAME, mode="r")[CUBE_ARRAY][month_index("2016-01")]
 
-    marker = Era5LandTemperatureCube(tmp_path).t2m_months()["2016-01"]
+    marker = land_cube(tmp_path).months()["2016-01"]
 
     assert marker == "0001:" + hashlib.sha256(stored.tobytes()).hexdigest()[:12]
 
 
 def test_field_of_the_wrong_shape_is_refused_before_anything_is_written(tmp_path):
-    write_months(tmp_path, [("2016-01", celsius_field(20), "0005")])
-    before = Era5LandTemperatureCube(tmp_path).t2m_months()
+    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0005")])
+    before = land_cube(tmp_path).months()
 
     for bad_shape in ((1200, 3600), (1201, 3599), (3600,)):
         later_bad = [
@@ -364,11 +381,11 @@ def test_field_of_the_wrong_shape_is_refused_before_anything_is_written(tmp_path
             ("2016-02", np.full(bad_shape, 21, "float32"), "0001"),
         ]
         with pytest.raises(ValueError, match="not the cube grid"):
-            write_months(tmp_path, later_bad)
+            write_months(tmp_path, LAND, later_bad)
 
-    cube = Era5LandTemperatureCube(tmp_path)
-    assert cube.t2m_months() == before
-    assert cube.read_t2m("2016-01", (0, 0, 1, 1))[0, 0] == pytest.approx(20)
+    cube = land_cube(tmp_path)
+    assert cube.months() == before
+    assert cube.read("2016-01", (0, 0, 1, 1))[0, 0] == pytest.approx(20)
 
 
 def two_months() -> list[MonthField]:
@@ -379,8 +396,8 @@ def test_failure_while_storing_data_leaves_the_cube_unavailable_until_rewritten(
     tmp_path,
     monkeypatch,
 ):
-    write_months(tmp_path, [("2016-01", celsius_field(20), "0005")])
-    store_month = era5land_temperature_ingest._store_month
+    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0005")])
+    store_month = cube_ingest._store_month
     stored = []
 
     def store_then_fail(array: zarr.Array, month: str, encoded: np.ndarray) -> None:
@@ -390,105 +407,105 @@ def test_failure_while_storing_data_leaves_the_cube_unavailable_until_rewritten(
         store_month(array, month, encoded)
         stored.append(month)
 
-    monkeypatch.setattr(era5land_temperature_ingest, "_store_month", store_then_fail)
+    monkeypatch.setattr(cube_ingest, "_store_month", store_then_fail)
     with pytest.raises(OSError, match="disk full"):
-        write_months(tmp_path, two_months())
+        write_months(tmp_path, LAND, two_months())
 
-    cube = Era5LandTemperatureCube(tmp_path)
-    assert not cube.has_t2m()
+    cube = land_cube(tmp_path)
+    assert not cube.has_months()
     with pytest.raises(SourceUnavailable, match="being updated"):
-        cube.read_t2m("2016-01", (0, 0, 1, 1))
+        cube.read("2016-01", (0, 0, 1, 1))
 
     monkeypatch.undo()
-    write_months(tmp_path, two_months())
+    write_months(tmp_path, LAND, two_months())
 
-    recovered = Era5LandTemperatureCube(tmp_path)
-    assert list(recovered.t2m_months()) == ["2016-01", "2016-02"]
-    assert recovered.read_t2m("2016-01", (0, 0, 1, 1))[0, 0] == pytest.approx(21)
+    recovered = land_cube(tmp_path)
+    assert list(recovered.months()) == ["2016-01", "2016-02"]
+    assert recovered.read("2016-01", (0, 0, 1, 1))[0, 0] == pytest.approx(21)
 
 
 def test_failure_while_publishing_markers_leaves_the_cube_unavailable_until_rewritten(
     tmp_path,
     monkeypatch,
 ):
-    write_months(tmp_path, [("2016-01", celsius_field(20), "0005")])
+    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0005")])
 
     def fail_to_publish(group: zarr.Group, markers: dict[str, str], pending: list[str]) -> None:
         raise OSError("metadata not written")
 
-    monkeypatch.setattr(era5land_temperature_ingest, "_publish", fail_to_publish)
+    monkeypatch.setattr(cube_ingest, "_publish", fail_to_publish)
     with pytest.raises(OSError, match="metadata"):
-        write_months(tmp_path, two_months())
+        write_months(tmp_path, LAND, two_months())
 
-    assert not Era5LandTemperatureCube(tmp_path).has_t2m()
+    assert not land_cube(tmp_path).has_months()
 
     monkeypatch.undo()
-    write_months(tmp_path, [two_months()[1]])
-    assert not Era5LandTemperatureCube(tmp_path).has_t2m()
+    write_months(tmp_path, LAND, [two_months()[1]])
+    assert not land_cube(tmp_path).has_months()
 
-    write_months(tmp_path, two_months())
-    recovered = Era5LandTemperatureCube(tmp_path)
-    assert recovered.t2m_months()["2016-01"].startswith("0001:")
-    assert recovered.read_t2m("2016-02", (0, 0, 1, 1))[0, 0] == pytest.approx(22)
+    write_months(tmp_path, LAND, two_months())
+    recovered = land_cube(tmp_path)
+    assert recovered.months()["2016-01"].startswith("0001:")
+    assert recovered.read("2016-02", (0, 0, 1, 1))[0, 0] == pytest.approx(22)
 
 
 def test_failure_before_the_update_starts_changes_nothing(tmp_path, monkeypatch):
-    write_months(tmp_path, [("2016-01", celsius_field(20), "0005")])
-    before = Era5LandTemperatureCube(tmp_path).t2m_months()
+    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0005")])
+    before = land_cube(tmp_path).months()
 
     def fail_to_begin(group: zarr.Group, pending: list[str]) -> None:
         raise OSError("metadata not written")
 
-    monkeypatch.setattr(era5land_temperature_ingest, "_begin_update", fail_to_begin)
+    monkeypatch.setattr(cube_ingest, "_begin_update", fail_to_begin)
     with pytest.raises(OSError):
-        write_months(tmp_path, two_months())
+        write_months(tmp_path, LAND, two_months())
 
-    cube = Era5LandTemperatureCube(tmp_path)
-    assert cube.t2m_months() == before
-    assert cube.read_t2m("2016-01", (0, 0, 1, 1))[0, 0] == pytest.approx(20)
+    cube = land_cube(tmp_path)
+    assert cube.months() == before
+    assert cube.read("2016-01", (0, 0, 1, 1))[0, 0] == pytest.approx(20)
 
 
 def test_read_that_overlaps_an_update_is_refused(tmp_path, monkeypatch):
-    write_months(tmp_path, [("2016-01", celsius_field(20), "0005")])
-    cube = Era5LandTemperatureCube(tmp_path)
-    cube.t2m_months()
+    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0005")])
+    cube = land_cube(tmp_path)
+    cube.months()
     open_group = zarr.open_group
 
     def open_then_update(*args: object, **kwargs: object) -> zarr.Group:
         monkeypatch.undo()
         group = open_group(*args, **kwargs)
-        write_months(tmp_path, [("2016-01", celsius_field(21), "0001")])
+        write_months(tmp_path, LAND, [("2016-01", celsius_field(21), "0001")])
         return group
 
     monkeypatch.setattr(zarr, "open_group", open_then_update)
 
     with pytest.raises(SourceUnavailable, match="being updated"):
-        cube.read_t2m("2016-01", (0, 0, 1, 1))
+        cube.read("2016-01", (0, 0, 1, 1))
 
 
 def update_between_stamp_and_validation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     publish: bool,
-) -> Era5LandTemperatureCube:
+) -> MonthlyCube:
     """A primed cube whose reader is updated right after it samples the cube's change stamp."""
-    write_months(tmp_path, [("2016-01", celsius_field(20), "0005")])
-    cube = Era5LandTemperatureCube(tmp_path)
-    cube.t2m_months()
-    months_at = Era5LandTemperatureCube._months_at
+    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0005")])
+    cube = land_cube(tmp_path)
+    cube.months()
+    months_at = MonthlyCube._months_at
 
-    def update_then_validate(self: Era5LandTemperatureCube, stamp: int) -> dict[str, str]:
+    def update_then_validate(self: MonthlyCube, stamp: int) -> dict[str, str]:
         monkeypatch.undo()
         if not publish:
-            monkeypatch.setattr(era5land_temperature_ingest, "_publish", raise_os_error)
+            monkeypatch.setattr(cube_ingest, "_publish", raise_os_error)
         try:
-            write_months(tmp_path, [("2016-01", celsius_field(21), "0001")])
+            write_months(tmp_path, LAND, [("2016-01", celsius_field(21), "0001")])
         except OSError:
             pass
 
         return months_at(self, stamp)
 
-    monkeypatch.setattr(Era5LandTemperatureCube, "_months_at", update_then_validate)
+    monkeypatch.setattr(MonthlyCube, "_months_at", update_then_validate)
     return cube
 
 
@@ -500,35 +517,35 @@ def test_read_is_refused_when_an_unfinished_update_starts_after_the_stamp(tmp_pa
     cube = update_between_stamp_and_validation(tmp_path, monkeypatch, publish=False)
 
     with pytest.raises(SourceUnavailable, match="being updated"):
-        cube.read_t2m("2016-01", (0, 0, 1, 1))
+        cube.read("2016-01", (0, 0, 1, 1))
 
     monkeypatch.undo()
-    assert not Era5LandTemperatureCube(tmp_path).has_t2m()
+    assert not land_cube(tmp_path).has_months()
 
 
 def test_read_is_refused_when_a_whole_update_happens_after_the_stamp(tmp_path, monkeypatch):
     cube = update_between_stamp_and_validation(tmp_path, monkeypatch, publish=True)
 
     with pytest.raises(SourceUnavailable, match="being updated"):
-        cube.read_t2m("2016-01", (0, 0, 1, 1))
+        cube.read("2016-01", (0, 0, 1, 1))
 
     monkeypatch.undo()
-    assert Era5LandTemperatureCube(tmp_path).read_t2m("2016-01", (0, 0, 1, 1))[0, 0] == (
+    assert land_cube(tmp_path).read("2016-01", (0, 0, 1, 1))[0, 0] == (
         pytest.approx(21)
     )
 
 
 def test_ingest_refetches_months_left_pending_by_a_failed_update(tmp_path, fake_grib):
-    write_months(tmp_path, [("2016-12", celsius_field(20), "0001")])
+    write_months(tmp_path, LAND, [("2016-12", celsius_field(20), "0001")])
     group = zarr.open_group(tmp_path / CUBE_NAME, mode="a")
     group.attrs["pending"] = ["2016-12"]
     client = FakeClient()
 
-    ingest(tmp_path, "2016-12", client)
+    ingest(tmp_path, LAND, "2016-12", client)
 
     requested = [(request["year"], request["month"]) for _, request in client.requests]
     assert (["2016"], ["12"]) in requested
-    assert Era5LandTemperatureCube(tmp_path).has_t2m()
+    assert land_cube(tmp_path).has_months()
 
 
 def test_failed_first_batch_leaves_no_cube(tmp_path):
@@ -537,7 +554,7 @@ def test_failed_first_batch_leaves_no_cube(tmp_path):
         yield
 
     with pytest.raises(ValueError, match="first field"):
-        write_months(tmp_path, failing_batch())
+        write_months(tmp_path, LAND, failing_batch())
 
     assert not (tmp_path / CUBE_NAME).exists()
 
@@ -573,26 +590,26 @@ class GribClient:
 def fake_grib(monkeypatch):
     """Reads the fake client's files; months of the year 2017 onward are preliminary."""
 
-    def read_fake(path: Path) -> Iterator[MonthField]:
+    def read_fake(path: Path, spec: cube_ingest.IngestSpec) -> Iterator[MonthField]:
         for month in json.loads(Path(path).read_text()):
             yield month, celsius_field(20), "0005" if month >= "2017" else "0001"
 
-    monkeypatch.setattr(era5land_temperature_ingest, "read_grib_months", read_fake)
-    monkeypatch.setattr(era5land_temperature_ingest, "_newest_month", lambda: "2017-02")
+    monkeypatch.setattr(cube_ingest, "read_grib_months", read_fake)
+    monkeypatch.setattr(cube_ingest, "_newest_month", lambda: "2017-02")
 
 
 def test_ingest_requests_one_year_per_call_and_refetches_preliminary_months(tmp_path, fake_grib):
     client = FakeClient()
-    ingest(tmp_path, "2016-11", client)
+    ingest(tmp_path, LAND, "2016-11", client)
     first_run = len(client.requests)
 
     client.requests.clear()
-    ingest(tmp_path, "2016-11", client)
+    ingest(tmp_path, LAND, "2016-11", client)
 
     months = [(request["year"], request["month"]) for _, request in client.requests]
     assert first_run == 3
     assert months == [(["2017"], ["01"]), (["2017"], ["02"])]
-    assert list(Era5LandTemperatureCube(tmp_path).t2m_months()) == [
+    assert list(land_cube(tmp_path).months()) == [
         "2016-11",
         "2016-12",
         "2017-01",
@@ -604,16 +621,16 @@ def test_ingest_requests_one_year_per_call_and_refetches_preliminary_months(tmp_
 def test_unpublished_last_month_is_skipped_not_failed(tmp_path, fake_grib):
     client = FakeClient(refuse_month="2017-02")
 
-    ingest(tmp_path, "2016-12", client)
+    ingest(tmp_path, LAND, "2016-12", client)
 
-    assert list(Era5LandTemperatureCube(tmp_path).t2m_months()) == ["2016-12", "2017-01"]
+    assert list(land_cube(tmp_path).months()) == ["2016-12", "2017-01"]
 
 
 def test_refused_request_for_an_older_month_fails(tmp_path, fake_grib):
     client = FakeClient(refuse_month="2016-12")
 
     with pytest.raises(Exception, match="available yet"):
-        ingest(tmp_path, "2016-12", client)
+        ingest(tmp_path, LAND, "2016-12", client)
 
 
 @pytest.mark.parametrize(
@@ -628,14 +645,224 @@ def test_other_failures_of_the_newest_month_are_not_taken_for_unpublished(
     client = FakeClient(refuse_month="2017-02", error=error)
 
     with pytest.raises(Exception, match="credentials|Unauthorized"):
-        ingest(tmp_path, "2017-01", client)
+        ingest(tmp_path, LAND, "2017-01", client)
 
 
 def test_invalid_download_of_the_newest_month_fails_and_leaves_no_cube(tmp_path, monkeypatch):
-    monkeypatch.setattr(era5land_temperature_ingest, "_newest_month", lambda: "2017-01")
+    monkeypatch.setattr(cube_ingest, "_newest_month", lambda: "2017-01")
     client = GribClient(grib1_message("0001", edition=2))
 
     with pytest.raises(ValueError, match="only GRIB edition 1"):
-        ingest(tmp_path, "2017-01", client)
+        ingest(tmp_path, LAND, "2017-01", client)
 
     assert not (tmp_path / CUBE_NAME).exists()
+
+
+@pytest.mark.parametrize("width", [1440, 1441])
+def test_era5_raster_lands_on_the_quarter_degree_grid_with_or_without_the_repeated_edge(
+    tmp_path,
+    width,
+):
+    path = tmp_path / "field.tif"
+    centres = -180 + np.arange(width) * 0.25
+    row = (centres % 360 + 273.15).astype("float32")
+    write_raster(
+        path,
+        -180.125,
+        0.25,
+        width,
+        ERA5_GRID.rows,
+        np.tile(row, (ERA5_GRID.rows, 1)),
+        north_edge=ERA5_GRID.north_deg,
+    )
+
+    with rasterio.open(path) as dataset:
+        [(month, values, _)] = read_months(dataset, ["0001"], ERA5_TEMPERATURE)
+
+    assert month == "2016-01" and values.shape == ERA5_SHAPE
+    assert np.allclose(values[0], (-180 + np.arange(1440) * 0.25) % 360, atol=1e-3)
+
+
+def test_era5_month_with_a_missing_cell_is_refused_and_leaves_no_cube(tmp_path):
+    field = np.full(ERA5_SHAPE, 20, "float32")
+    field[7, 7] = np.nan
+
+    with pytest.raises(ValueError, match="no value in some cells"):
+        write_months(tmp_path, ERA5_TEMPERATURE, [("2016-01", field, "0001")])
+
+    assert not (tmp_path / "era5_temperature.zarr").exists()
+
+
+def test_era5land_month_with_missing_cells_is_still_accepted(tmp_path):
+    field = celsius_field(20)
+    field[7, 7] = np.nan
+
+    write_months(tmp_path, LAND, [("2016-01", field, "0001")])
+
+    assert np.isnan(land_cube(tmp_path).read("2016-01", (7, 7, 1, 1))[0, 0])
+
+
+@pytest.mark.parametrize(("seconds", "days"), [(JAN_2016_SECS, 31), (FEB_2016_SECS, 29)])
+def test_precipitation_in_metres_per_day_becomes_mm_for_the_whole_month(tmp_path, seconds, days):
+    path = tmp_path / "field.tif"
+    write_raster(
+        path,
+        -180.125,
+        0.25,
+        1440,
+        ERA5_GRID.rows,
+        np.full(ERA5_SHAPE, 0.002),
+        [seconds],
+        ERA5_GRID.north_deg,
+        unit="[m]",
+    )
+
+    with rasterio.open(path) as dataset:
+        [(_, values, _)] = read_months(dataset, ["0001"], ERA5_PRECIPITATION)
+
+    assert values[5, 5] == pytest.approx(2 * days, rel=1e-5)
+
+
+def test_precipitation_packing_noise_below_zero_becomes_zero(tmp_path):
+    path = tmp_path / "field.tif"
+    write_raster(
+        path,
+        -180.125,
+        0.25,
+        1440,
+        ERA5_GRID.rows,
+        np.full(ERA5_SHAPE, -1e-9),
+        None,
+        ERA5_GRID.north_deg,
+        unit="[m]",
+    )
+
+    with rasterio.open(path) as dataset:
+        [(_, values, _)] = read_months(dataset, ["0001"], ERA5_PRECIPITATION)
+
+    assert (values == 0).all()
+
+
+def test_precipitation_cube_stores_tenths_of_a_millimetre(tmp_path):
+    field = np.full(ERA5_SHAPE, 58.04, "float32")
+
+    write_months(tmp_path, ERA5_PRECIPITATION, [("2016-01", field, "0001")])
+
+    stored = zarr.open_group(tmp_path / "era5_precipitation.zarr", mode="r")["tp"]
+    assert stored.dtype == "uint16" and stored[66 * 12, 3, 3] == 580
+
+
+def test_month_that_the_cube_encoding_would_clip_is_refused(tmp_path):
+    field = np.full(ERA5_SHAPE, 7000, "float32")
+
+    with pytest.raises(ValueError, match="values outside 0 to 6553.4 mm/month"):
+        write_months(tmp_path, ERA5_PRECIPITATION, [("2016-01", field, "0001")])
+
+    assert not (tmp_path / "era5_precipitation.zarr").exists()
+
+
+def test_precipitation_file_in_kelvin_is_refused(tmp_path):
+    path = tmp_path / "field.tif"
+    write_raster(path, -180.125, 0.25, 1440, ERA5_GRID.rows, np.zeros(ERA5_SHAPE), None, 60.125)
+
+    with rasterio.open(path) as dataset, pytest.raises(ValueError, match=r"expected \[m\]"):
+        list(read_months(dataset, ["0001"], ERA5_PRECIPITATION))
+
+
+@pytest.mark.parametrize(
+    ("name", "dataset", "variable"),
+    [
+        ("era5land_temperature", "reanalysis-era5-land-monthly-means", "2m_temperature"),
+        ("era5_temperature", "reanalysis-era5-single-levels-monthly-means", "2m_temperature"),
+        (
+            "era5_precipitation",
+            "reanalysis-era5-single-levels-monthly-means",
+            "total_precipitation",
+        ),
+    ],
+)
+def test_ingest_asks_the_cds_for_the_dataset_and_variable_of_the_cube(
+    tmp_path,
+    monkeypatch,
+    name,
+    dataset,
+    variable,
+):
+    monkeypatch.setattr(cube_ingest, "read_grib_months", lambda path, spec: iter(()))
+    monkeypatch.setattr(cube_ingest, "_newest_month", lambda: "2016-02")
+    client = FakeClient()
+
+    ingest(tmp_path, INGEST_SPECS[name], "2016-01", client)
+
+    assert {asked for asked, _ in client.requests} == {dataset}
+    assert all(request["variable"] == [variable] for _, request in client.requests)
+    assert all(request["area"] == [60, -180, -60, 180] for _, request in client.requests)
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+def test_precipitation_with_a_non_finite_cell_is_refused_when_read(tmp_path, bad):
+    path = tmp_path / "field.tif"
+    field = np.full(ERA5_SHAPE, 0.002)
+    field[7, 7] = bad
+    write_raster(
+        path,
+        -180.125,
+        0.25,
+        1440,
+        ERA5_GRID.rows,
+        field,
+        None,
+        ERA5_GRID.north_deg,
+        unit="[m]",
+    )
+
+    with rasterio.open(path) as dataset, pytest.raises(ValueError, match="no value in some cells"):
+        list(read_months(dataset, ["0001"], ERA5_PRECIPITATION))
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+def test_precipitation_with_a_non_finite_cell_is_refused_when_written(tmp_path, bad):
+    field = np.full(ERA5_SHAPE, 20, "float32")
+    field[7, 7] = bad
+
+    with pytest.raises(ValueError, match="no value in some cells"):
+        write_months(tmp_path, ERA5_PRECIPITATION, [("2016-01", field, "0001")])
+
+    assert not (tmp_path / "era5_precipitation.zarr").exists()
+
+
+def test_earlier_months_extend_a_cube_backwards_and_leave_later_ones_alone(tmp_path):
+    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0001")])
+    later = land_cube(tmp_path).read("2016-01", (7, 7, 1, 1))
+    shape_before = zarr.open_group(tmp_path / CUBE_NAME, mode="r")[CUBE_ARRAY].shape
+
+    earlier = [("2015-11", celsius_field(5), "0001"), ("2015-12", celsius_field(6), "0001")]
+    write_months(tmp_path, LAND, earlier)
+
+    cube = land_cube(tmp_path)
+    assert list(cube.months()) == ["2015-11", "2015-12", "2016-01"]
+    assert cube.read("2015-11", (7, 7, 1, 1))[0, 0] == pytest.approx(5)
+    assert cube.read("2016-01", (7, 7, 1, 1)) == pytest.approx(later)
+    assert zarr.open_group(tmp_path / CUBE_NAME, mode="r")[CUBE_ARRAY].shape == shape_before
+
+
+def test_months_before_the_first_stored_one_must_still_be_consecutive(tmp_path):
+    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0001")])
+
+    with pytest.raises(ValueError, match="gap"):
+        write_months(tmp_path, LAND, [("2015-11", celsius_field(20), "0001")])
+
+    assert list(land_cube(tmp_path).months()) == ["2016-01"]
+
+
+def test_ingest_from_an_earlier_month_adds_the_earlier_years_newest_year_first(tmp_path, fake_grib):
+    client = FakeClient()
+    ingest(tmp_path, LAND, "2016-11", client)
+    client.requests.clear()
+
+    ingest(tmp_path, LAND, "2014-11", client)
+
+    requested = [(request["year"][0], request["month"][0]) for _, request in client.requests]
+    assert requested[:3] == [("2016", "01"), ("2015", "01"), ("2014", "11")]
+    months = list(land_cube(tmp_path).months())
+    assert (months[0], months[-1], len(months)) == ("2014-11", "2017-02", 28)

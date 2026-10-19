@@ -37,10 +37,11 @@ stays cheap and simple. Each feature is checked for extensibility before users g
    past 180°E draw in the next world copy. Monthly series also get yearly totals or means.
 3. **Temperature:** ERA5-Land monthly 2 m air temperature (0.1°), the first layer that shares the
    scrubber with rain. The reader, cube writer, CDS ingest and frontend are in. Next come the
-   first real ingest (`python -m soe.cli ingest-era5land-temperature --from 2016-01`, which needs
-   a CDS key) and the checks on Kenya and Fiji. The layer is opt-in until isolines and the
-   bivariate display land. The backfill on the VPS at deploy starts at 2016-01 and is followed by
-   a monthly refresh; older history is deferred.
+   first real ingests (`python -m soe.cli ingest-cube era5land_temperature --from 1981-01`, which
+   needs a CDS key, plus the ERA5 cubes that fill the cells ERA5-Land and CHIRPS leave empty; see
+   the README) and the checks on Kenya and Fiji. The layer is opt-in until isolines and the
+   bivariate display land. The backfill on the VPS at deploy starts at 1981-01, matching CHIRPS, and is followed by
+   a monthly refresh.
 4. **Land cover (M5):** ESA WorldCover (10 m) as a static categorical layer, resampled by the most
    common class in each cell, with fixed class colours and a legend.
 5. **Scene view B:** app UI moves to React (MapLibre stays outside React's control). A panel at

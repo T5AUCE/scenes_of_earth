@@ -61,23 +61,42 @@ python -m soe.cli import-boundaries --cgaz <folder> --ucdb <GHS_UCDB file or zip
 
 The import is large (several hundred MB of input). CGAZ draws disputed borders to US State Department definitions.
 
-## Temperature cube (once, then monthly)
+## Cubes (once, then monthly)
 
-Builds read ERA5-Land monthly 2 m temperature from a Zarr cube on local disk (`SOE_CUBES_DIR/era5land_temperature.zarr`), so a
-build makes no network calls for it. The cube is filled from the Copernicus Climate Data Store (CDS), one request per
-year. Needs a CDS account, the key in `~/.cdsapirc`
-(https://cds.climate.copernicus.eu/how-to-api), and the licence accepted on the dataset page
-(https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land-monthly-means).
+Builds read three monthly Zarr cubes from local disk (`SOE_CUBES_DIR`). Reading the cubes makes no network calls, while Rainfall still reads CHIRPS over HTTP:
+
+| Cube | Folder | Used for |
+|---|---|---|
+| ERA5-Land 2 m temperature | `era5land_temperature.zarr` | Temperature (main source) |
+| ERA5 2 m temperature | `era5_temperature.zarr` | Temperature cells where ERA5-Land has no land value |
+| ERA5 total precipitation | `era5_precipitation.zarr` | Rainfall cells where CHIRPS has no value |
+
+Rainfall and Temperature are listed only when their cubes exist, so no layer lacks the data that fills its gaps. The fill
+is automatic. ERA5-Land and CHIRPS values are never changed. ERA5 is sampled at the centre of each native layer cell,
+and a scene that is averaged over blocks of cells averages these samples the same way as the main source. Only an output
+cell with no main-source value takes the ERA5 value (about 28 km, over land and sea). A filled bundle carries a `source`
+array (1 main source, 2 fallback, 3 both, 0 outside the area or no value), lists ERA5 under `fallback_sources`, and states
+the number of filled cells in its notices. Nothing is marked on the map.
+
+The cubes are filled from the Copernicus Climate Data Store (CDS), one request per year. Needs a CDS account, the key in
+`~/.cdsapirc` (https://cds.climate.copernicus.eu/how-to-api), and the licences accepted on the dataset pages
+(https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land-monthly-means and
+https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels-monthly-means).
 
 ```
-python -m soe.cli ingest-era5land-temperature --from 2016-01
+python -m soe.cli ingest-cube era5land_temperature --from 1981-01
+python -m soe.cli ingest-cube era5_temperature --from 1981-01
+python -m soe.cli ingest-cube era5_precipitation --from 1981-01
 ```
 
-The first run starts at `--from`; later runs continue after the last stored month and fetch again every month still
-marked preliminary (final data replaces it about two months later, and the scene then gets a new id). The newest month
-may be skipped when the CDS has not published it yet. Restart the server after the first ingest, so the layer is listed.
-Builds that need temperature get 503 while an ingest is publishing (seconds per month); if an ingest fails in that step,
-the layer stays unavailable until the next run, which refetches the affected months. Run it monthly, around the 8th.
+All three cubes start at CHIRPS' first month (1981-01), so both layers offer 1981-01 onward. Each layer offers only the months
+that all of its cubes hold. The first run of a cube starts at `--from`; later runs continue after the last stored month and fetch
+again every month still marked preliminary (final data replaces it about two months later, and the scene then gets a new
+id). The newest month may be skipped when the CDS has not published it yet. Restart the server after the first ingests, so
+the layers are listed. Builds that need a cube get 503 while an ingest is publishing (seconds per month); if an ingest fails
+in that step, the layer stays unavailable until the next run, which refetches the affected months. Run all three monthly,
+around the 8th. A `--from` before a cube's first stored month adds the earlier months, newest year first, so a cube
+that started later can be extended backwards without a rebuild. An ERA5 month with a missing cell, or values that its cube cannot hold, is refused and nothing is stored.
 
 ## Terrain tile index
 
@@ -133,7 +152,7 @@ python -m soe.cli terrain-index
 | `SOE_MAX_QUEUE` | `20` | Queued plus running jobs before new ones get 503 |
 | `SOE_SYNTHETIC` | `0` | `1` uses fake offline data |
 | `SOE_LATEST` | probed | Fix the latest CHIRPS month (`YYYY-MM`) and skip the probe |
-| `SOE_CUBES_DIR` | `./data/cubes` | Where the temperature cube is read from and written to |
+| `SOE_CUBES_DIR` | `./data/cubes` | Where the ERA5-Land and ERA5 cubes are read from and written to |
 
 ## Tests
 
@@ -158,6 +177,14 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
   from 1950 to present. Copernicus Climate Change Service (C3S) Climate Data Store (CDS), doi:10.24381/cds.68d2bb30;
   Muñoz-Sabater, J. et al. (2021) Earth Syst. Sci. Data 13, 4349-4383, doi:10.5194/essd-13-4349-2021. Converted from K to
   °C and cropped to 60S-60N; preliminary (ERA5-Land-T) months carry a notice. The same text is in `soe/sources/licences.py`.
+- **Gap fill for temperature and rain: ERA5 monthly averaged data on single levels from 1940 to present** (ECMWF,
+  Copernicus Climate Change Service), CC BY 4.0. Required attribution: "contains modified Copernicus Climate Change
+  Service information 2026 (ERA5)". The disclaimer is the one given for ERA5-Land. Citation: Hersbach, H. et al. (2023):
+  ERA5 monthly averaged data on single levels from 1940 to present. Copernicus Climate Change Service (C3S) Climate Data
+  Store (CDS), doi:10.24381/cds.f17050d7; Hersbach, H. et al. (2020) Q. J. R. Meteorol. Soc. 146, 1999-2049,
+  doi:10.1002/qj.3803. Converted from K to °C or from m per day to mm per month, cropped to 60S-60N and sampled at the
+  centre of each native layer cell where the main source has no value; preliminary (ERA5T) months carry a notice. The credit
+  appears in a bundle only when it holds filled cells. The same text is in `soe/sources/licences.py`.
 - **Terrain: Copernicus DEM GLO-30 Public and GLO-90** (Copernicus WorldDEM-30 / -90 licences, free and open; GLO-90 is
   the fallback where GLO-30 has no tile). Hillshade and resampled elevation are adapted data, so the notice is
   required: "produced using Copernicus WorldDEM™-90 © DLR e.V.

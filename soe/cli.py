@@ -1,7 +1,7 @@
 """Run the offline data jobs from the command line.
 
-The module imports country and city boundaries into SQLite, rebuilds the Copernicus terrain
-tile indexes and ingests ERA5-Land monthly temperature into the local cube. Run
+The module imports country and city boundaries into SQLite. It rebuilds the Copernicus terrain
+tile indexes. It also ingests ERA5-Land and ERA5 monthly cubes into local folders. Run
 `python -m soe.cli --help` to see the commands and their options.
 """
 import argparse
@@ -16,7 +16,7 @@ import numpy as np
 
 from . import db
 from .boundary_import import import_cgaz, import_ucdb
-from .era5land_temperature_ingest import ingest
+from .cube_ingest import INGEST_SPECS, ingest
 from .sources import (
     DEFAULT_CUBES_DIR,
     REQUEST_STEP,
@@ -35,7 +35,7 @@ DOWNLOAD_TIMEOUT_SECS = 60
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Run the `terrain-index`, `ingest-era5land-temperature` or `import-boundaries` command."""
+    """Run the `terrain-index`, `ingest-cube` or `import-boundaries` command."""
     parser = _build_parser()
     args = parser.parse_args(argv)
 
@@ -44,12 +44,12 @@ def main(argv: list[str] | None = None) -> None:
             print(f"{product} tiles:", build_tile_index(product, terrain_product.index))
         return
 
-    if args.command == "ingest-era5land-temperature":
+    if args.command == "ingest-cube":
         if not is_request_label(args.start, REQUEST_STEP):
             parser.error("--from must be YYYY-MM")
 
         logging.basicConfig(level=logging.INFO)
-        ingest(args.cubes, args.start)
+        ingest(args.cubes, INGEST_SPECS[args.cube], args.start)
         return
 
     if not (args.cgaz or args.ucdb):
@@ -78,15 +78,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="rebuild the GLO-30 and GLO-90 tile bitmaps in soe/data (downloads 2 MB)",
     )
     ingest_parser = subparsers.add_parser(
-        "ingest-era5land-temperature",
-        help="download ERA5-Land monthly temperature from the CDS into the local cube",
+        "ingest-cube",
+        help="download a monthly ERA5-Land or ERA5 variable from the CDS into its local cube",
     )
+    ingest_parser.add_argument("cube", choices=INGEST_SPECS, help="the cube to fill or update")
     ingest_parser.add_argument(
         "--from",
         dest="start",
         required=True,
         metavar="YYYY-MM",
-        help="first month of a new cube; later runs continue after the last stored month",
+        help="first month of a new cube, or an earlier month to extend it; later runs continue on",
     )
     ingest_parser.add_argument(
         "--cubes",
