@@ -15,7 +15,6 @@ const LOW_DETAIL_EXAGGERATION = 0.4;
 const HIGH_DETAIL_EXAGGERATION = 0.7;
 
 const WORLD_SPAN_DEG = 360;
-const BACKDROP_EXTRA_ZOOM = 1;
 
 const LIGHT_DIRECTIONS_DEG = [315, 255, 15];
 // MapLibre's multidirectional shader is transparent on flat ground only at sin(altitude) = 0.5.
@@ -54,7 +53,7 @@ function exaggeration(base: number, strength: number) {
   return Math.min(Math.max(base * strength, 0), MAX_EXAGGERATION);
 }
 
-/** Pick the finest zoom of the always-loaded relief backdrop, a little finer than the fitted view. */
+/** Pick the finest zoom of the relief backdrop, coarse enough that zooming out finds it loaded. */
 export function backdropMaxZoom(
   longitudeSpanDeg: number,
   viewWidthPx: number,
@@ -63,6 +62,6 @@ export function backdropMaxZoom(
 ) {
   const worldWidthPx = (viewWidthPx * WORLD_SPAN_DEG) / longitudeSpanDeg;
   const fittedZoom = Math.log2(worldWidthPx / tileSizePx);
-  const zoom = Math.max(0, Math.ceil(fittedZoom) + BACKDROP_EXTRA_ZOOM);
+  const zoom = Math.max(0, Math.ceil(fittedZoom));
   return Math.min(zoom, sourceMaxZoom);
 }

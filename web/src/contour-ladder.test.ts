@@ -227,7 +227,10 @@ test("contour styles validate in MapLibre and cap refinement at z12", (context) 
     layers: [...map.layers.values()],
   });
   assert.deepEqual(errors.map((error) => error.message), []);
-  for (const layer of map.layers.values().filter((layer) => layer.type === "line")) {
+  const tierLines = map.layers.values().filter(
+    (layer) => layer.type === "line" && layer.id !== "terrain-contours-backdrop",
+  );
+  for (const layer of tierLines) {
     assert.ok(!JSON.stringify(layer).includes('"level"'));
     const opacity = layer.paint["line-opacity"];
     assert.equal(opacity[3], layer.minzoom);
@@ -277,7 +280,7 @@ test("the configured contour buffer stays inside the plugin's materialized paddi
   overlay.destroy();
 });
 
-test("the relief backdrop is coarser than the main source and flat once the main source loads", (context) => {
+test("the relief backdrop is coarser and goes flat once the main source loads", (context) => {
   mockPage(context);
   const map = new TestMap();
   const view = createTerrainView(layerContext(map));
@@ -287,10 +290,10 @@ test("the relief backdrop is coarser than the main source and flat once the main
   assert.ok(backdrop.maxzoom < map.sources.get("terrain-relief").maxzoom);
   assert.ok(view.parts[0].layerIds.includes("terrain-relief-backdrop"));
 
-  map.emit("zoom");
+  map.emit("zoomend");
   const shaded = lastPaint();
   map.mainSourceLoaded = true;
-  map.emit("zoom");
+  map.emit("zoomend");
 
   assert.notEqual(lastPaint(), shaded);
   assert.ok(lastPaint().includes("0"));
@@ -402,6 +405,7 @@ class TestMap {
 
   getCanvas() { return { clientWidth: 1000 }; }
   isSourceLoaded() { return this.mainSourceLoaded; }
+  isZooming() { return false; }
   setPaintProperty(id: string, _property: string, value: unknown) { this.paints.push([id, value]); }
   setLayerZoomRange(id: string, minzoom: number, maxzoom: number) {
     Object.assign(this.layers.get(id), { minzoom, maxzoom });

@@ -52,15 +52,18 @@ export function createTerrainView(context: LayerContext): LayerView {
   // Both layers shading at once would darken twice, so the backdrop goes flat once the main loads.
   let strengthValue = RELIEF_STRENGTH.initial;
   const paintBackdrop = () => {
-    const visibleStrength = map.isSourceLoaded(id) ? 0 : strengthValue;
+    const isMainReady = map.isSourceLoaded(id) && !map.isZooming();
+    const visibleStrength = isMainReady ? 0 : strengthValue;
     const exaggeration = reliefPaint(visibleStrength)["hillshade-exaggeration"];
     map.setPaintProperty(backdropId, "hillshade-exaggeration", exaggeration);
   };
   const onMainSourceData = (event: object) => {
     if ((event as { sourceId?: string }).sourceId === id) paintBackdrop();
   };
+  map.on("dataloading", onMainSourceData);
   map.on("sourcedata", onMainSourceData);
-  map.on("zoom", paintBackdrop);
+  map.on("zoomstart", paintBackdrop);
+  map.on("zoomend", paintBackdrop);
 
   const reportTilesUnavailable = (event: object) => {
     const sourceId = (event as { sourceId?: string }).sourceId;
@@ -99,8 +102,10 @@ export function createTerrainView(context: LayerContext): LayerView {
     legend: () => null,
     destroy: () => {
       map.off("error", reportTilesUnavailable);
+      map.off("dataloading", onMainSourceData);
       map.off("sourcedata", onMainSourceData);
-      map.off("zoom", paintBackdrop);
+      map.off("zoomstart", paintBackdrop);
+      map.off("zoomend", paintBackdrop);
       contourOverlay.destroy();
       removeLayerAndSource(map, id);
       removeLayerAndSource(map, backdropId);
