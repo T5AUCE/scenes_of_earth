@@ -9,9 +9,6 @@ export const COLOR_CHANNELS = 3;
 export const RGBA_CHANNELS = 4;
 
 const OPAQUE = 255;
-const WHITE = 255;
-const BLACK = 0;
-const FLAT_GROUND_HILLSHADE = 180;
 
 // ColorBrewer Blues, 9 classes.
 const INK_BLUE = [
@@ -137,31 +134,4 @@ function overlappingValue(values: Float32Array, table: SampleTable, pixel: numbe
     }
   }
   return nearestValue;
-}
-
-/**
- * Neutral is transparent so flat ground shows the basemap; slopes darken or lighten from it.
- * NaN cells (no data) stay transparent.
- */
-export function paintHillshade(
-  shade: ArrayLike<number>,
-  table: SampleTable,
-  neutral = FLAT_GROUND_HILLSHADE,
-) {
-  const rgba = new Uint8ClampedArray(table.src.length * RGBA_CHANNELS);
-  for (let pixel = 0; pixel < table.src.length; pixel++) {
-    const cell = table.src[pixel];
-    const value = shade[cell];
-    if (Number.isNaN(value)) continue;
-
-    const isLighter = value > neutral;
-    const strength = isLighter
-      ? (value - neutral) / (OPAQUE - neutral)
-      : (neutral - value) / neutral;
-    const start = pixel * RGBA_CHANNELS;
-
-    rgba[start] = rgba[start + 1] = rgba[start + 2] = isLighter ? WHITE : BLACK;
-    rgba[start + COLOR_CHANNELS] = Math.round(strength * OPAQUE);
-  }
-  return rgba;
 }

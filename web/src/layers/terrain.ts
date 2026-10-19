@@ -1,51 +1,77 @@
-import { arrayDoc, decode, readArray, readMask } from "../data";
-import { addImageLayer, maxTextureSize, removeLayerAndSource, setImage } from "../map";
-import { paintHillshade } from "../render/colormap";
-import { sampleTable } from "../render/mercator";
-import type { LayerContext, LayerView } from "../types";
+import { readMask } from "../data";
+import { removeLayerAndSource } from "../map";
+import type { Bbox, LayerContext, LayerControl, LayerView } from "../types";
 import { ContourOverlay } from "./contour-overlay";
+import { RELIEF_STRENGTH, reliefPaint } from "./relief";
 
-const HILLSHADE_OPACITY = 0.7;
+// The hosted endpoint stays here until the bundle contract can name the tiles.
+const TERRAIN_TILES_URL = "https://tiles.mapterhorn.com/{z}/{x}/{y}.webp";
+const TILES_ATTRIBUTION = "<a href='https://mapterhorn.com/attribution'>© Mapterhorn</a>";
+const TILE_SIZE_PX = 512;
+const TILES_MAX_ZOOM = 11;
+const ANTIMERIDIAN_DEG = 180;
 
-/** Hillshade image and contour lines for one terrain layer. */
+/** Terrain shading from Mapterhorn tiles and contour lines for one terrain layer. */
 export function createTerrainView(context: LayerContext): LayerView {
-  const { map, store, layer, shift, beforeId } = context;
-  const id = `${layer.id}-hillshade`;
-  let alive = true;
+  const { map, store, layer, beforeId, report } = context;
+  const id = `${layer.id}-relief`;
 
-  addImageLayer(map, id, layer.grid.bbox, shift, beforeId, {
-    "raster-opacity": HILLSHADE_OPACITY,
-    "raster-resampling": "linear",
+  map.addSource(id, {
+    type: "raster-dem",
+    tiles: [TERRAIN_TILES_URL],
+    encoding: "terrarium",
+    tileSize: TILE_SIZE_PX,
+    maxzoom: TILES_MAX_ZOOM,
+    attribution: TILES_ATTRIBUTION,
+    ...tileBounds(layer.grid.bbox),
   });
+  map.addLayer(
+    { id, type: "hillshade", source: id, paint: reliefPaint(RELIEF_STRENGTH.initial) },
+    beforeId,
+  );
+
+  const reportTilesUnavailable = (event: object) => {
+    if ((event as { sourceId?: string }).sourceId !== id) return;
+
+    map.off("error", reportTilesUnavailable);
+    report(new Error("Terrain shading tiles could not be loaded"));
+  };
+  map.on("error", reportTilesUnavailable);
+
+  const strength: LayerControl = {
+    label: "Relief strength",
+    min: RELIEF_STRENGTH.min,
+    max: RELIEF_STRENGTH.max,
+    step: RELIEF_STRENGTH.step,
+    value: RELIEF_STRENGTH.initial,
+    set: (value) => {
+      map.setPaintProperty(id, "hillshade-exaggeration", reliefPaint(value)["hillshade-exaggeration"]);
+    },
+  };
 
   const maskRead = store.then((openedStore) => readMask(openedStore, layer));
   const contourOverlay = new ContourOverlay(context, maskRead);
 
-  const drawHillshade = async () => {
-    const openedStore = await store;
-    const shadeDoc = arrayDoc(layer, "hillshade");
-    const raw = await readArray(openedStore, shadeDoc.path, [null, null]);
-    if (!alive) return;
-
-    const table = sampleTable(layer.grid, maxTextureSize(map));
-    const rgba = paintHillshade(decode(raw, shadeDoc), table);
-    setImage(map, id, new ImageData(rgba, table.width, table.height));
-  };
-
   return {
     parts: [
-      { id, label: layer.title, layerIds: [id] },
+      { id, label: "Relief", layerIds: [id] },
       contourOverlay.part,
     ],
     options: [],
+    controls: [strength],
     time: null,
-    ready: drawHillshade(),
     setTime: () => {},
     legend: () => contourOverlay.legend,
     destroy: () => {
-      alive = false;
+      map.off("error", reportTilesUnavailable);
       contourOverlay.destroy();
       removeLayerAndSource(map, id);
     },
   };
+}
+
+// Source bounds use the -180 to 180 frame, so an area east of 180 must load tiles without them.
+function tileBounds(bbox: Bbox) {
+  const [, , east] = bbox;
+  return east <= ANTIMERIDIAN_DEG ? { bounds: bbox } : {};
 }

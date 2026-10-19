@@ -184,10 +184,21 @@ export interface LayerContext {
   report(error: unknown): void;
 }
 
-/** A drawn layer: its toggles, options, time axis, legend and teardown. */
+/** A slider in a layer's display menu; its value lasts for the visit only. */
+export interface LayerControl {
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  set(value: number): void;
+}
+
+/** Own a drawn layer's controls and time axis along with its legend and teardown. */
 export interface LayerView {
   parts: Part[];
   options: { label: string; set(on: boolean): void }[];
+  controls?: LayerControl[];
   time: TimeDoc | null;
   ready?: Promise<void>; // rejects when the layer's data cannot be read
   setTime(time: string): void;

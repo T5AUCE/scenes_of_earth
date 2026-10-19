@@ -3,6 +3,7 @@ import type { GeoJSONSource, Map as MapLibreMap } from "maplibre-gl";
 import { loadAreaFeature } from "./api";
 import { openStore, type Store } from "./data";
 import { makeHtmlElement } from "./html";
+import { layerMenu } from "./layers/layer-menu";
 import { LAYER_KINDS } from "./layers/registry";
 import { firstSymbolId, removeLayerAndSource } from "./map";
 import { shiftLongitudes, worldShift } from "./render/mercator";
@@ -174,6 +175,8 @@ function layerCard(map: MapLibreMap, view: LayerView) {
     card.append(checkbox(option.label, false, option.set));
     makeHtmlElement("div", OPTION_NOTE, card).className = "option-note";
   }
+
+  if (view.controls) card.append(layerMenu(view.controls));
 
   const legend = view.legend();
   if (legend) card.append(legend);

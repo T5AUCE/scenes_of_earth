@@ -204,6 +204,20 @@ body.scene-mode #panel {
   color: #666;
 }
 
+#scene-column .card .layer-menu {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+#scene-column .card .layer-menu summary {
+  cursor: pointer;
+  color: #444;
+}
+
+#scene-column .card .layer-menu input[type="range"] {
+  width: 100%;
+}
+
 #scene-column .notice {
   padding: 6px 8px;
   margin-bottom: 8px;

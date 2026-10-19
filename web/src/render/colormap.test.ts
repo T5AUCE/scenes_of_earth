@@ -8,7 +8,6 @@ import {
   legendTicks,
   lut,
   paintColormap,
-  paintHillshade,
   RGBA_CHANNELS,
   stopPosition,
 } from "./colormap.ts";
@@ -107,16 +106,6 @@ test("a field boundary east of 180 keeps its source column when filling a footpr
   assert.equal(alphaOf(rgba)[pixel], 255);
 });
 
-test("hillshade ignores footprint fallback even when an overlapping source cell is finite", () => {
-  const grid = { bbox: [180, -3, 186, 3] as Bbox, nx: 6, ny: 6 };
-  const samples = sampleTable(grid, 2, { preserveCoverage: true });
-  const shade = new Float32Array(36).fill(NaN);
-  shade[0] = 0;
-  const rgba = paintHillshade(shade, samples);
-
-  assert.deepEqual(alphaOf(rgba), [0, 0, 0, 0]);
-});
-
 test("climate palette runs from slate blue to terracotta", () => {
   const colors = lut("climate");
   const [firstRed, , firstBlue] = colors.slice(0, COLOR_CHANNELS);
@@ -169,24 +158,6 @@ test("uint16 rain decodes with the scale factor and the fill becomes NaN", () =>
 
   assert.ok(Math.abs(values[1] - 123.4) < 0.01);
   assert.ok(Number.isNaN(values[2]));
-});
-
-test("flat hillshade is transparent, shadows black and highlights white", () => {
-  const rgba = paintHillshade(Float32Array.of(180, 0, 255, 90), table([0, 1, 2, 3]));
-
-  assert.equal(rgba[3], 0);
-  assert.deepEqual([...rgba.slice(4, 8)], [0, 0, 0, 255]);
-  assert.deepEqual([...rgba.slice(8, 12)], [255, 255, 255, 255]);
-  assert.deepEqual([...rgba.slice(12, 16)], [0, 0, 0, 128]);
-});
-
-test("masked hillshade cells are transparent", () => {
-  const doc = { scale_factor: 1, add_offset: 0, fill: 255 };
-  const shade = decode(Uint8Array.of(0, 255, 254), doc);
-
-  const rgba = paintHillshade(shade, table([0, 1, 2]));
-
-  assert.deepEqual(alphaOf(rgba), [255, 0, 252]);
 });
 
 function pixelAt(samples: SampleTable, bbox: Bbox, longitude: number, latitude: number) {

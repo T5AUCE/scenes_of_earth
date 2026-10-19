@@ -2,6 +2,8 @@ import type {
   ExpressionSpecification,
   GeoJSONSource,
   Map as MapLibreMap,
+  MapEventType,
+  MapSourceDataEvent,
 } from "maplibre-gl";
 
 import { loadAreaFeature } from "./api";
@@ -161,25 +163,31 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     panel: ReturnType<typeof createScenePanel>,
     clock: SceneClock,
   ): ActiveScene {
+    const dataLayers = new SceneDataLayers(map, mounted.layerIds);
+    const maskLoad = new AbortController();
     // Once landed, nothing depends on zoom, so the elastic zoom-out dip stays clean.
     let isLanded = false;
     const fadeZoom = () => (isLanded ? undefined : flight.zoom);
 
     const flight = flyIn(map, scene, roots, () => {
       isLanded = true;
-      hideDataBelow(mounted.layerIds, undefined);
+      dataLayers.update(undefined);
       refreshMaskAndLabels(undefined);
     });
 
-    hideDataBelow(mounted.layerIds, fadeZoom());
+    dataLayers.update(fadeZoom());
 
-    let isOpen = true;
-    showAreaMask(scene, fadeZoom, () => isOpen)
-      .catch((error) => mounted.addNote(error.message));
+    showAreaMask(scene, fadeZoom, maskLoad.signal)
+      .then((isReady) => {
+        if (isReady && !maskLoad.signal.aborted) dataLayers.show();
+      })
+      .catch((error) => {
+        if (!maskLoad.signal.aborted) mounted.addNote(error.message);
+      });
 
     const stopWatchingResize = watchResize(() => {
       flight.refit();
-      hideDataBelow(mounted.layerIds, fadeZoom());
+      dataLayers.update(fadeZoom());
       refreshMaskAndLabels(fadeZoom());
     });
 
@@ -188,7 +196,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       panel,
       clock,
       close() {
-        isOpen = false;
+        maskLoad.abort();
         stopWatchingResize();
         flight.stopClamp();
         labelArea = null;
@@ -221,11 +229,6 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     if (entry === "keep" && history.state?.panel) history.replaceState(null, "", url);
   }
 
-  // Data and labels wait for the complete mask, so unmasked data never shows.
-  function hideDataBelow(layerIds: string[], fittedZoom: number | undefined) {
-    for (const id of layerIds) map.setLayerZoomRange(id, dataMinZoom(fittedZoom), MAX_ZOOM);
-  }
-
   function refreshMaskAndLabels(fittedZoom: number | undefined) {
     if (map.getLayer(MASK_ID)) {
       map.setPaintProperty(MASK_ID, "fill-opacity", maskOpacity(fittedZoom));
@@ -240,18 +243,49 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   async function showAreaMask(
     scene: Scene,
     fadeZoom: () => number | undefined,
-    isOpen: () => boolean,
+    signal: AbortSignal,
   ) {
     const feature = await loadAreaFeature(scene.area.geometry_href).catch((error) => {
       throw new Error(`Area outline: ${error.message}`);
     });
-    if (!isOpen()) return;
+    if (signal.aborted) return false;
 
-    const zoom = fadeZoom();
-    addMask(map, feature, scene.area.bbox, zoom);
+    const isReady = await loadMask(map, feature, scene.area.bbox, fadeZoom(), signal);
+    if (!isReady || signal.aborted) return false;
 
     labelArea = tileAreaGeometry(feature.geometry);
-    restoreLabels = moveLabelsIntoArea(map, labelArea, dataMinZoom(zoom));
+    restoreLabels = moveLabelsIntoArea(map, labelArea, dataMinZoom(fadeZoom()));
+    return true;
+  }
+}
+
+// Zoom gating cannot override a user's layout visibility or a layer's own scale limits.
+class SceneDataLayers {
+  private readonly map: MapLibreMap;
+  private readonly ranges;
+  private isReady = false;
+  private fittedZoom: number | undefined;
+
+  constructor(map: MapLibreMap, layerIds: string[]) {
+    this.map = map;
+    this.ranges = layerIds.map((id) => {
+      const layer = map.getLayer(id);
+      return { id, minzoom: layer?.minzoom ?? 0, maxzoom: layer?.maxzoom ?? MAX_ZOOM };
+    });
+    this.update(undefined);
+  }
+
+  update(fittedZoom: number | undefined) {
+    this.fittedZoom = fittedZoom;
+    for (const { id, minzoom, maxzoom } of this.ranges) {
+      const minimum = this.isReady ? Math.max(minzoom, dataMinZoom(fittedZoom)) : maxzoom;
+      this.map.setLayerZoomRange(id, Math.min(minimum, maxzoom), maxzoom);
+    }
+  }
+
+  show() {
+    this.isReady = true;
+    this.update(this.fittedZoom);
   }
 }
 
@@ -299,6 +333,58 @@ function makeColumn(scene: Scene, column: HTMLElement, leave: () => void) {
   const cards = makeHtmlElement("div", "", column);
   cards.className = "cards";
   return cards;
+}
+
+function loadMask(
+  map: MapLibreMap,
+  feature: AreaFeature,
+  bbox: Bbox,
+  fittedZoom: number | undefined,
+  signal: AbortSignal,
+): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    map.on("sourcedata", onData);
+    map.on("error", onError);
+    signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      addMask(map, feature, bbox, fittedZoom);
+      checkReady();
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
+
+    function onData(event: MapSourceDataEvent) {
+      if (event.sourceId !== MASK_ID || !event.isSourceLoaded) return;
+
+      checkReady();
+    }
+
+    function onError(event: MapEventType["error"] & { sourceId?: string }) {
+      if (event.sourceId !== MASK_ID) return;
+
+      cleanup();
+      reject(new Error(`Area mask: ${event.error.message}`));
+    }
+
+    function onAbort() {
+      cleanup();
+      resolve(false);
+    }
+
+    function checkReady() {
+      if (!map.getLayer(MASK_ID) || !map.isSourceLoaded(MASK_ID)) return;
+
+      cleanup();
+      resolve(true);
+    }
+
+    function cleanup() {
+      map.off("sourcedata", onData);
+      map.off("error", onError);
+      signal.removeEventListener("abort", onAbort);
+    }
+  });
 }
 
 // Everything outside the area is blanked, which also crops the cell edges of the layers below.

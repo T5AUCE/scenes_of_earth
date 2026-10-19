@@ -26,8 +26,9 @@ const SMOOTHING_LINES = [
     + "the colours of neighbouring cells (linear interpolation), so edges look softer. It blends "
     + "colours, not values, and it never adds data.",
   "Cells without data are see-through, so smoothing fades the colour out at the edge of such a "
-    + "cell and at the border of the area instead of inventing values there. The terrain shading "
-    + "is always smoothed this way.",
+    + "cell and at the border of the area instead of inventing values there.",
+  "Terrain shading is drawn by your graphics card from Mapterhorn elevation tiles, so it gains "
+    + "detail as you zoom in. It is a picture only; the values in the files do not come from it.",
   "Contour lines are drawn from elevation averaged into blocks of at most 1024 cells per side "
     + "and then smoothly interpolated, so they are close to the real relief but not exact at "
     + "very fine scale; zooming in recomputes them in finer blocks.",
