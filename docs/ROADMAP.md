@@ -8,8 +8,8 @@ stays cheap and simple. Each feature is checked for extensibility before users g
 - Hosting budget: up to $10 a month for now; it scales with users and funding.
 - Fast load times come first, while staying cheap. Bundles may be evicted and rebuilt on request.
 - v1 covers 60°S to 60°N (no high latitudes). Elevation is land only (no seafloor).
-- Countries that cross the antimeridian must work. Large countries get coarser terrain, never
-  none.
+- Countries that cross the antimeridian must work. Terrain display is full detail everywhere,
+  from shared tiles.
 
 ## Hosting (release)
 
@@ -23,9 +23,10 @@ stays cheap and simple. Each feature is checked for extensibility before users g
   the source servers.
 - Estimated cost: $8–21 a month at 1k–10k scenes, mostly the build machine.
 - Before deploy: R2 upload, a "Cache Everything" rule (Zarr chunks have no file extension),
-  CORS on the bucket, lifecycle eviction, uint16 rain encoding, terrain cache eviction.
-- After deploy: time a real build on the VPS (Kenya: about 40 s of terrain from the
-  devcontainer), then pre-warm the terrain cache for every country and region in the boundary
+  CORS on the bucket, lifecycle eviction, uint16 rain encoding, summary cache eviction. Copy the
+  Mapterhorn tiles (z0–11, 60°S–60°N) to R2, set `SOE_TERRAIN_TILES`, and settle their terms first.
+- After deploy: time a real build on the VPS (Kenya: about 40 s of terrain statistics from the
+  devcontainer), then pre-warm the summary cache for every country and region in the boundary
   list, so only drawn shapes pay the first full terrain read.
 
 ## Next
@@ -42,8 +43,10 @@ stays cheap and simple. Each feature is checked for extensibility before users g
    the README) and the checks on Kenya and Fiji. The layer is opt-in until isolines and the
    bivariate display land. The backfill on the VPS at deploy starts at 1981-01, matching CHIRPS, and is followed by
    a monthly refresh.
-4. **Land cover (M5):** ESA WorldCover (10 m) as a static categorical layer, resampled by the most
-   common class in each cell, with fixed class colours and a legend.
+4. **M5: relief tiles → contours → land cover.** Relief shading and contours now share Mapterhorn
+   tiles with a stable nested ladder and scene format 0.5. The three-view contour trial remains.
+   Next is ESA WorldCover (10 m) as a static categorical layer, resampled by the most common
+   class in each cell, with fixed class colours and a legend.
 5. **Scene view B:** app UI moves to React (MapLibre stays outside React's control). A panel at
    the bottom right, under the legend, expands to full screen with Charts and About tabs. Charts:
    area-mean rain and temperature, climatology, hypsometry; per-step area means in `scene.json`.
@@ -75,7 +78,8 @@ A toolbar with three tools; Esc returns to Pointer.
 
 ### Data
 
-- GLO-30 terrain under 90 m cells, GLO-90 otherwise. Height tint maybe later.
+- Terrain from Mapterhorn tiles (GLO-30 plus national DEMs), with GLO-30 and GLO-90 statistics
+  in the bundle. Height tint maybe later.
 - After temperature: ERA5-Land monthly 10 m wind (direction, speed and steadiness) as arrows;
   daily wind with the other daily layers.
 - After temperature and land cover: TerraClimate drought and water deficit, and its +2 °C / +4 °C

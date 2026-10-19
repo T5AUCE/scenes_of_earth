@@ -1,6 +1,7 @@
 import type {
   ExpressionSpecification,
   GeoJSONSource,
+  LayerSpecification,
   Map as MapLibreMap,
   MapEventType,
   MapSourceDataEvent,
@@ -8,7 +9,8 @@ import type {
 
 import { loadAreaFeature } from "./api";
 import { makeHtmlElement } from "./html";
-import { polygonParts, tileAreaGeometry, type TileArea } from "./label-filter";
+import * as labelFilters from "./label-filter";
+import type { TileArea } from "./label-filter";
 import {
   MAX_ZOOM,
   moveLabelsIntoArea,
@@ -70,6 +72,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   let worldCamera: Camera | null = null;
   let restoreLabels = () => {};
   let labelArea: TileArea | null = null;
+  let sceneLayerIds: string[] = [];
 
   return { enter, exit, sceneId: () => current?.id ?? null, showFullscreen };
 
@@ -89,6 +92,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     });
 
     restoreTime(mounted.timeline, linkedTime);
+    sceneLayerIds = mounted.layerIds;
     const panel = mountPanel(scene, mounted.timeline, clock);
 
     recordEntry(scene.id, clock.label, entry);
@@ -205,6 +209,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
         removeLayerAndSource(map, MASK_ID);
         panel.destroy();
         mounted.unmount();
+        sceneLayerIds = [];
         roots.column.replaceChildren();
         roots.column.hidden = true;
         document.body.classList.remove("scene-mode");
@@ -237,7 +242,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     if (!labelArea) return;
 
     restoreLabels();
-    restoreLabels = moveLabelsIntoArea(map, labelArea, dataMinZoom(fittedZoom));
+    restoreLabels = movePlaceLabels(map, labelArea, dataMinZoom(fittedZoom), sceneLayerIds);
   }
 
   async function showAreaMask(
@@ -253,14 +258,51 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     const isReady = await loadMask(map, feature, scene.area.bbox, fadeZoom(), signal);
     if (!isReady || signal.aborted) return false;
 
-    labelArea = tileAreaGeometry(feature.geometry);
-    restoreLabels = moveLabelsIntoArea(map, labelArea, dataMinZoom(fadeZoom()));
+    labelArea = labelFilters.tileAreaGeometry(feature.geometry);
+    restoreLabels = movePlaceLabels(map, labelArea, dataMinZoom(fadeZoom()), sceneLayerIds);
     return true;
   }
 }
 
-// Zoom gating cannot override a user's layout visibility or a layer's own scale limits.
-class SceneDataLayers {
+/** Move only basemap labels above the mask so scene labels keep their native visibility. */
+export function movePlaceLabels(
+  map: MapLibreMap,
+  area: TileArea,
+  fromZoom: number,
+  sceneLayerIds: string[],
+) {
+  const hasSceneSymbols = sceneLayerIds.some((id) => map.getLayer(id)?.type === "symbol");
+  if (!hasSceneSymbols) return moveLabelsIntoArea(map, area, fromZoom);
+
+  const labels = map.getStyle().layers
+    .filter((layer) => layer.type === "symbol")
+    .filter((layer) => !sceneLayerIds.includes(layer.id));
+  const originals = labels.map((layer) => {
+    const minzoom = layer.minzoom ?? 0;
+    const maxzoom = layer.maxzoom ?? MAX_ZOOM;
+    const switchZoom = Math.min(Math.max(minzoom, fromZoom), maxzoom);
+    map.setLayerZoomRange(layer.id, minzoom, switchZoom);
+    const copyId = `${layer.id}-soe-scene-label`;
+    map.addLayer({
+      ...layer,
+      id: copyId,
+      filter: labelFilters.areaFilter(layer.filter, area, Boolean(layer.layout?.["icon-image"])),
+      minzoom: switchZoom,
+      maxzoom,
+    } as LayerSpecification);
+    return { id: layer.id, copyId, minzoom, maxzoom };
+  });
+
+  return () => {
+    for (const { id, copyId, minzoom, maxzoom } of originals) {
+      map.removeLayer(copyId);
+      map.setLayerZoomRange(id, minzoom, maxzoom);
+    }
+  };
+}
+
+/** Gate scene data until the mask is ready without changing visibility or native zoom bounds. */
+export class SceneDataLayers {
   private readonly map: MapLibreMap;
   private readonly ranges;
   private isReady = false;
@@ -415,7 +457,7 @@ function addMask(map: MapLibreMap, feature: AreaFeature, bbox: Bbox, fittedZoom?
 
 function outlines(geometry: AreaFeature["geometry"]) {
   const coordinates = geometry.coordinates as number[][][] | number[][][][];
-  const parts = polygonParts(geometry.type, coordinates);
+  const parts = labelFilters.polygonParts(geometry.type, coordinates);
   return {
     exteriors: parts.map((part) => part[0]),
     interiors: parts.flatMap((part) => part.slice(1)),

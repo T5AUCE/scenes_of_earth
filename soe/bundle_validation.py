@@ -11,6 +11,19 @@ MIN_STOPS = 2
 STYLE_KINDS = ("field", "categorical", "terrain")
 COLOUR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
 
+TILE_URL_PARTS = ("{z}", "{x}", "{y}")
+TILE_ENCODINGS = ("terrarium",)
+TERRAIN_STATS = (
+    "min",
+    "max",
+    "mean",
+    "p2",
+    "p98",
+    "slope_p50_deg",
+    "slope_p90_deg",
+    "cell_m",
+)
+
 
 def validate(doc: JsonObject) -> list[str]:
     """Return a list of problems (empty when the bundle is fine)."""
@@ -84,10 +97,14 @@ def _layer_problems(layer: JsonObject) -> list[str]:
     layer_id = layer["id"]
     problems = [
         f"{layer_id}: missing {key}"
-        for key in ("grid", "mask", "arrays")
+        for key in ("grid", "mask")
         if not layer.get(key)
     ]
-    
+    if not isinstance(layer.get("arrays"), dict):
+        problems.append(f"{layer_id}: arrays must be an object")
+    elif not layer["arrays"] and not layer.get("tiles"):
+        problems.append(f"{layer_id}: missing arrays")
+
     if layer.get("mask") and layer["mask"]["cells_inside"] < 1:
         problems.append(f"{layer_id}: mask has no cells")
 
@@ -106,12 +123,22 @@ def _layer_problems(layer: JsonObject) -> list[str]:
     if not layer["time_varying"] and time_axis is not None:
         problems.append(f"{layer_id}: static layer has a time axis")
 
-    return problems + _source_array_problems(layer) + _style_problems(layer_id, layer["style"])
+    return (
+        problems
+        + _source_array_problems(layer)
+        + _style_problems(layer_id, layer["style"])
+        + _terrain_problems(layer)
+        + _tiles_problems(layer_id, layer.get("tiles"))
+    )
 
 
 def _source_array_problems(layer: JsonObject) -> list[str]:
     """Return problems with the optional provenance array of a layer with a fallback."""
-    block = layer.get("arrays", {}).get(SOURCE_ROLE.name)
+    arrays = layer.get("arrays")
+    if not isinstance(arrays, dict):
+        return []
+
+    block = arrays.get(SOURCE_ROLE.name)
     if block is None:
         return []
 
@@ -156,6 +183,53 @@ def _style_problems(layer_id: str, style: JsonObject) -> list[str]:
 
     if kind == "categorical":
         problems += _classes_problems(layer_id, style.get("classes"))
+    return problems
+
+
+def _terrain_problems(layer: JsonObject) -> list[str]:
+    """Check the metadata the viewer needs to draw terrain without bundled arrays."""
+    if layer["style"].get("kind") != "terrain":
+        return []
+
+    layer_id = layer["id"]
+    problems = []
+    if not layer.get("tiles"):
+        problems.append(f"{layer_id}: a terrain layer needs tiles")
+
+    stats = layer.get("stats") or {}
+    if not isinstance(stats, dict):
+        return [*problems, f"{layer_id}: stats must be an object"]
+
+    missing = [key for key in TERRAIN_STATS if not _is_finite_number(stats.get(key))]
+    if missing:
+        problems.append(f"{layer_id}: stats need numbers for " + ", ".join(missing))
+    return problems
+
+
+def _tiles_problems(layer_id: str, tiles: object) -> list[str]:
+    if tiles is None:
+        return []
+
+    if not isinstance(tiles, dict):
+        return [f"{layer_id}: tiles must be an object"]
+
+    problems = []
+    url = tiles.get("url")
+    if not isinstance(url, str) or not all(part in url for part in TILE_URL_PARTS):
+        problems.append(f"{layer_id}: tiles.url must contain " + ", ".join(TILE_URL_PARTS))
+
+    if tiles.get("encoding") not in TILE_ENCODINGS:
+        problems.append(f"{layer_id}: tiles.encoding must be one of: " + ", ".join(TILE_ENCODINGS))
+
+    for key in ("tile_size", "maxzoom"):
+        if not _is_int(tiles.get(key)):
+            problems.append(f"{layer_id}: tiles.{key} must be an integer")
+        elif tiles[key] < (1 if key == "tile_size" else 0):
+            problems.append(f"{layer_id}: tiles.{key} is out of range")
+
+    source = tiles.get("source")
+    if not isinstance(source, dict) or not source.get("licence") or not source.get("attribution"):
+        problems.append(f"{layer_id}: tiles.source needs a licence and an attribution")
     return problems
 
 
@@ -213,9 +287,21 @@ def _is_colour(value: object) -> bool:
 
 
 def _layer_sources(layer_blocks: list[JsonObject]) -> list[JsonObject]:
-    """Every layer's main source, each followed by its fallback sources."""
+    """Return each layer's main source with its fallback and tile sources."""
     return [
         source
         for layer in layer_blocks
-        for source in [layer["source"], *layer.get("fallback_sources", [])]
+        for source in [
+            layer["source"],
+            *layer.get("fallback_sources", []),
+            *_tile_sources(layer),
+        ]
     ]
+
+
+def _tile_sources(layer: JsonObject) -> list[JsonObject]:
+    tiles = layer.get("tiles")
+    if isinstance(tiles, dict) and isinstance(tiles.get("source"), dict):
+        return [tiles["source"]]
+
+    return []

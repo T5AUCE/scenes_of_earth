@@ -74,7 +74,7 @@ class Dataset(ABC):
     units: str
     resolution_deg: float  # native cell size
     source: dict  # licence, licence_url, attribution, citation, modified, version, ...
-    roles: dict[str, Role]  # by role, e.g. value, elevation, hillshade
+    roles: dict[str, Role]  # by role, e.g. value; a layer drawn from tiles has none
     style: dict  # viewer defaults
     backend: object
     grid: Grid  # the layer's window is cut on this grid
@@ -85,6 +85,7 @@ class Dataset(ABC):
     synthetic: bool = False  # offline stand-in data, kept apart from real revisions
     remote: bool = True  # has a remote revision, which scene preparation caches
     fallback: Fallback | None = None  # series layers only
+    tiles: dict | None = None  # where the viewer gets display tiles: url, encoding, source, ...
 
     def __post_init__(self) -> None:
         """Runs after construction; subclasses check their invariants here."""
@@ -151,6 +152,15 @@ class StaticDataset(Dataset):
     """A layer without a time axis, read as one 2D grid."""
 
     time_varying = False
+
+    def summary(
+        self,
+        arrays: dict[str, np.ndarray],
+        mask: np.ndarray,
+        transform: Affine,
+    ) -> dict[str, float]:
+        """Return in-area summary statistics, or none for datasets that do not publish them."""
+        return {}
 
     def block_count(self, bbox: Bbox) -> int:
         """Number of parts a read of bbox reports through on_block; the weight of its progress."""

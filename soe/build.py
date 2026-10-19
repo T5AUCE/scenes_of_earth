@@ -281,7 +281,7 @@ def _write_static_layer(
     cache_dir: Path,
     progress: LayerProgress,
 ) -> JsonObject:
-    """Write every role of a static dataset."""
+    """Write every role of a static dataset and return its statistics, if it has any."""
     block_count = dataset.block_count(layer_plan.bbox)
     blocks_read = 0
 
@@ -293,7 +293,7 @@ def _write_static_layer(
     if not is_cached(dataset, layer_plan.bbox, layer_plan.res, cache_dir):
         progress(0, f"{dataset.title} 0/{block_count}")
 
-    arrays, _ = read_cached(
+    arrays, transform = read_cached(
         dataset,
         layer_plan.bbox,
         layer_plan.res,
@@ -312,7 +312,8 @@ def _write_static_layer(
             spec.fill,
         )
 
-    return {}
+    stats = dataset.summary(arrays, layer_plan.mask, transform)
+    return {"stats": stats} if stats else {}
 
 
 def _fill_outside(data: np.ndarray, area_mask: np.ndarray, spec: Role) -> np.ndarray:

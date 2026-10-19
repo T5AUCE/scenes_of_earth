@@ -8,7 +8,7 @@ import type {
   SceneStatus,
 } from "./types";
 
-const SCENE_VERSION = "0.4";
+const SCENE_VERSION = "0.5";
 const SCENE_ID_CHARS = 20; // Must match ID_CHARS in soe/scene_request.py.
 const SCENE_ID_PATTERN = new RegExp(`^[0-9a-f]{${SCENE_ID_CHARS}}$`);
 
@@ -83,7 +83,15 @@ export async function loadScene(bundleUrl: string): Promise<Scene> {
 
   scene.area.geometry_href = new URL(scene.area.geometry_href, base).href;
   scene.data.href = new URL(scene.data.href, base).href;
+  for (const layer of scene.layers) {
+    if (layer.tiles) layer.tiles.url = resolveTileUrl(layer.tiles.url, base);
+  }
   return scene;
+}
+
+// URL resolution escapes braces, but the protocol needs the original template placeholders.
+function resolveTileUrl(template: string, base: URL) {
+  return new URL(template, base).href.replace(/%7B([zxy])%7D/gi, "{$1}");
 }
 
 // Relative URLs only. Bundle files must be read via the scene's bundle_url, not a hard-coded path.

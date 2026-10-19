@@ -1,4 +1,4 @@
-"""Test offline hillshade, build progress and synthetic end-to-end builds."""
+"""Test offline terrain statistics, build progress and synthetic end-to-end builds."""
 import json
 import shutil
 from collections.abc import Callable
@@ -24,7 +24,6 @@ from soe.sources import (
     SeriesDataset,
     StaticDataset,
     SyntheticSource,
-    hillshade,
     make_registry,
     terrain_res,
 )
@@ -88,7 +87,7 @@ def test_terrain_cache_hit_builds_identical_arrays(tmp_path):
             return super().terrain(bounds, res, on_block)
 
     source = CountingSource()
-    terrain = make_registry(source)["copdem_terrain"]
+    terrain = make_registry(source)["terrain"]
     area = Area(NAIROBI, BOUNDARY)
     build_scene(HASH_A, area, "2015-01", "2015-02", [terrain], "Test", tmp_path / "cold")
     shutil.copytree(tmp_path / "cold" / ".cache", tmp_path / "warm" / ".cache")
@@ -98,7 +97,7 @@ def test_terrain_cache_hit_builds_identical_arrays(tmp_path):
     cold, warm = array_bytes(tmp_path / "cold" / HASH_A), array_bytes(tmp_path / "warm" / HASH_A)
 
     assert source.reads == 1
-    assert "copdem_terrain/elevation" in cold and cold == warm
+    assert "terrain/mask" in cold and cold == warm
 
 
 def test_progress_never_decreases_and_ends_at_one(tmp_path):
@@ -158,21 +157,10 @@ def test_build_stores_terrain_in_the_cache_folder(tmp_path):
     assert not (tmp_path / ".cache" / "scene.json").exists()
 
 
-def test_hillshade_flat_and_slope():
-    flat = hillshade(np.zeros((8, 8)), 0.01, 10.0)
-    assert (flat == round(255 * np.sin(np.radians(45)))).all()
-
-    # It rises eastwards, so it faces the north-west sun.
-    west_facing = np.tile(np.arange(8) * 50.0, (8, 1))
-    east_facing = west_facing[:, ::-1]
-
-    assert hillshade(west_facing, 0.01, 10.0)[4, 4] > hillshade(east_facing, 0.01, 10.0)[4, 4]
-
-
 def test_scene_over_a_glo30_gap_credits_the_glo90_fallback(tmp_path):
     area = Area(box(42.8, 40.0, 43.2, 40.3), BOUNDARY)
     registry = make_registry(SyntheticSource())
-    build_scene(HASH_A, area, "2015-01", "2015-02", [registry["copdem_terrain"]], "Test", tmp_path)
+    build_scene(HASH_A, area, "2015-01", "2015-02", [registry["terrain"]], "Test", tmp_path)
 
     doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
     terrain = doc["layers"][0]
@@ -183,7 +171,6 @@ def test_scene_over_a_glo30_gap_credits_the_glo90_fallback(tmp_path):
     assert SOURCES["glo30"]["attribution"] in doc["credits"]["lines"]
     assert SOURCES["glo90"]["attribution"] in doc["credits"]["lines"]
     assert SOURCES["glo90"]["disclaimer"] in doc["credits"]["disclaimers"]
-    assert any("GLO-90" in note for note in doc["notices"]["limits"])
 
     doc["credits"]["lines"].remove(SOURCES["glo90"]["attribution"])
 
@@ -192,7 +179,7 @@ def test_scene_over_a_glo30_gap_credits_the_glo90_fallback(tmp_path):
 
 def test_synthetic_build_across_180(tmp_path):
     registry = make_registry(SyntheticSource())
-    layers = [registry["copdem_terrain"], registry["chirps_monthly"]]
+    layers = [registry["terrain"], registry["chirps_monthly"]]
     build_scene(
         HASH_B,
         Area(FIJI, BOUNDARY),
@@ -211,21 +198,15 @@ def test_synthetic_build_across_180(tmp_path):
 
     root = zarr.open_group(out / "data.zarr", mode="r")
 
-    for name in ("chirps_monthly", "copdem_terrain"):
+    for name in ("chirps_monthly", "terrain"):
         longitude = root[name]["lon"][:]
 
         assert np.all(np.diff(longitude) > 0) and longitude[-1] > 180
 
-    terrain = root["copdem_terrain"]
     bbox = doc["area"]["bbox"]
     west, east = bbox[0], bbox[2]
 
-    assert terrain["elevation"].shape[1] == round((east - west) / terrain_res(bbox))
-
-    shade = terrain["hillshade"][:]
-    middle = shade.shape[1] // 2
-
-    assert not np.all(shade[:, middle] == shade[0, middle])  # no flat seam column
+    assert root["terrain/mask"].shape[1] == round((east - west) / terrain_res(bbox))
 
 
 def test_synthetic_build_validates_and_opens(tmp_path):
@@ -233,7 +214,7 @@ def test_synthetic_build_validates_and_opens(tmp_path):
     registry = make_registry(source)
     area = Area(NAIROBI, BOUNDARY)
     seen = []
-    layers = [registry["copdem_terrain"], registry["chirps_monthly"]]
+    layers = [registry["terrain"], registry["chirps_monthly"]]
     size = build_scene(
         HASH_A,
         area,
@@ -271,8 +252,7 @@ def test_synthetic_build_validates_and_opens(tmp_path):
     mask = root["chirps_monthly/mask"][...]
 
     assert (precip[0][mask == 1] != 65535).any()
-    assert root["copdem_terrain/hillshade"].dtype == "uint8"
-    assert root["copdem_terrain/elevation"].dtype == "int16"
+    assert set(dict(root["terrain"].members())) == {"lat", "lon", "mask"}
 
     latitude = root["chirps_monthly/lat"][...]
 
@@ -352,7 +332,7 @@ def test_layer_outside_its_coverage_is_refused_before_read(tmp_path):
     source = SyntheticSource()
     registry = make_registry(source)
     north = box(36, 40, 38, 45)
-    narrow = replace(registry["copdem_terrain"], coverage=(-180, -30, 180, 30))
+    narrow = replace(registry["terrain"], coverage=(-180, -30, 180, 30))
 
     with pytest.raises(AreaError, match="outside Terrain coverage"):
         build_scene(
@@ -370,9 +350,9 @@ def test_layer_outside_its_coverage_is_refused_before_read(tmp_path):
     # Half of this area is inside the terrain coverage.
     scene_plan = plan_months(Area(box(36, 28, 38, 33)), [narrow, registry["chirps_monthly"]])
 
-    assert any("clipped" in note for note in scene_plan.layers["copdem_terrain"].notices)
+    assert any("clipped" in note for note in scene_plan.layers["terrain"].notices)
     assert scene_plan.layers["chirps_monthly"].notices == []
-    assert scene_plan.clipped and scene_plan.layers["copdem_terrain"].bbox[3] <= 30
+    assert scene_plan.clipped and scene_plan.layers["terrain"].bbox[3] <= 30
 
 
 def test_negative_values_survive_int16_encoding():
@@ -441,14 +421,13 @@ def test_rain_is_uint16_sharded_and_round_trips(tmp_path):
 
 def test_static_layer_has_no_time_and_one_chunk(tmp_path):
     doc, root = build_nairobi(tmp_path)
-    terrain = next(layer for layer in doc["layers"] if layer["id"] == "copdem_terrain")
+    terrain = next(layer for layer in doc["layers"] if layer["id"] == "terrain")
 
     assert terrain["time"] is None and terrain["grid"]["res"] == pytest.approx(0.05 / 102, abs=1e-8)
     assert "aggregation" not in terrain["grid"]
-    assert set(terrain["arrays"]) == {"elevation", "hillshade"}
-    assert "time" not in dict(root["copdem_terrain"].members())
-    assert root["copdem_terrain/elevation"].chunks == (2040, 2040)
-    assert root["copdem_terrain/hillshade"].shards is None
+    assert terrain["arrays"] == {} and terrain["tiles"]["url"]
+    assert "time" not in dict(root["terrain"].members())
+    assert root["terrain/mask"].shards is None
 
 
 def test_store_has_consolidated_metadata(tmp_path):
@@ -456,7 +435,7 @@ def test_store_has_consolidated_metadata(tmp_path):
 
     root_json = json.loads((tmp_path / HASH_A / "data.zarr" / "zarr.json").read_text())
     meta = root_json["consolidated_metadata"]["metadata"]
-    expected = {"chirps_monthly/precip", "chirps_monthly/mask", "copdem_terrain/elevation"}
+    expected = {"chirps_monthly/precip", "chirps_monthly/mask", "terrain/mask"}
 
     assert expected <= meta.keys()
 
@@ -500,6 +479,12 @@ def land_cover_dataset(classes: Role) -> StaticDataset:
             "id": "landcover",
             "resolution_deg": 0.01,
             "roles": {"classes": classes},
+            "style": {
+                "kind": "categorical",
+                "encodings": ["fill"],
+                "classes": [{"value": 40, "label": "Test class", "color": "#006400"}],
+            },
+            "tiles": None,
         },
     )
 
@@ -537,7 +522,9 @@ def test_cells_outside_the_area_hold_the_fill_value_in_every_layer(tmp_path):
         for role, array_doc in layer["arrays"].items()
     }
 
-    assert len(arrays) == 4
+    assert set(arrays) == {("chirps_monthly", "value"), ("chirps_monthly", "source")}
+    terrain = next(layer for layer in doc["layers"] if layer["id"] == "terrain")
+    assert terrain["arrays"] == {}
 
     for layer, array_doc in arrays.values():
         outside = root[layer["mask"]["path"]][...] == 0
@@ -614,19 +601,39 @@ def test_area_statistics_follow_the_touched_cells(tmp_path):
     assert doc["layers"][0]["stats"]["mean"] == pytest.approx(expected_mean, abs=0.01)
 
 
-def test_hillshade_at_the_area_edge_is_computed_before_masking(tmp_path):
+def test_terrain_layer_writes_a_mask_and_no_elevation_arrays(tmp_path):
+    doc, root = build_nairobi(tmp_path)
+    terrain = next(layer for layer in doc["layers"] if layer["id"] == "terrain")
+    stats = terrain["stats"]
+
+    assert "elevation" not in dict(root["terrain"].members())
+    assert "hillshade" not in dict(root["terrain"].members())
+    assert set(stats) == {
+        "min",
+        "max",
+        "mean",
+        "p2",
+        "p98",
+        "slope_p50_deg",
+        "slope_p90_deg",
+        "cell_m",
+    }
+    assert stats["min"] <= stats["p2"] <= stats["p98"] <= stats["max"]
+    assert 0 <= stats["slope_p50_deg"] <= stats["slope_p90_deg"] < 90
+
+
+def test_terrain_statistics_cover_only_the_cells_inside_the_area(tmp_path):
     doc, root = build_triangle(tmp_path)
-    terrain = next(layer for layer in doc["layers"] if layer["id"] == "copdem_terrain")
-    inside = root[terrain["mask"]["path"]][...] == 1
+    terrain = next(layer for layer in doc["layers"] if layer["id"] == "terrain")
     layer_plan = plan(Area(TRIANGLE, BOUNDARY), [TERRAIN, RAIN], "2015-01", "2015-03").layers[
-        "copdem_terrain"
+        "terrain"
     ]
-    unmasked, _ = TERRAIN.read(tuple(layer_plan.bbox), layer_plan.res)
+    arrays, transform = TERRAIN.read(tuple(layer_plan.bbox), layer_plan.res)
+    inside = root[terrain["mask"]["path"]][...] == 1
 
-    stored = root["copdem_terrain/hillshade"][...]
-
-    assert (stored[inside] == unmasked["hillshade"][inside]).all()
-    assert stored[inside].max() <= 254
+    assert not inside.all()
+    assert terrain["stats"]["max"] == arrays["elevation"][inside].max()
+    assert terrain["stats"] == TERRAIN.summary(arrays, inside, transform)
 
 
 def test_layer_notices_see_the_planned_steps():

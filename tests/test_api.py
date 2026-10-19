@@ -81,7 +81,10 @@ def test_post_poll_and_serve(env):
 
     scene = client.get(done["bundle_url"]).json()
     assert scene["credits"]["lines"] and scene["id"] == scene_id
-    assert [layer["id"] for layer in scene["layers"]] == ["copdem_terrain", "chirps_monthly"]
+    assert [layer["id"] for layer in scene["layers"]] == ["terrain", "chirps_monthly"]
+    terrain = scene["layers"][0]
+    assert scene["version"] == "0.5" and terrain["arrays"] == {} and terrain["stats"]["p98"] > 0
+    assert terrain["tiles"]["source"]["attribution"] in scene["credits"]["lines"]
     assert client.get(f"/scenes/{scene_id}/scene.json").json()["id"] == scene_id
 
     assert client.get(f"/scenes/{scene_id}/data.zarr/zarr.json").status_code == 200
@@ -120,7 +123,7 @@ def body(**overrides: object) -> JsonObject:
         "area": {"type": "polygon", "geometry": SQUARE},
         "start": "2015-01",
         "end": "2015-06",
-        "layers": ["copdem_terrain", "chirps_monthly"],
+        "layers": ["terrain", "chirps_monthly"],
         **overrides,
     }
 
@@ -186,7 +189,7 @@ def test_rejections_happen_before_any_read(env):
         },
         {
             "area": {"type": "polygon", "geometry": mapping(box(-100, -50, 70, 60))},
-            "layers": ["copdem_terrain"],
+            "layers": ["terrain"],
         },
     ]
 
@@ -349,9 +352,9 @@ def test_layers(env):
     client, _, _ = env
     out = client.get("/api/layers").json()
     by_id = {layer["id"]: layer for layer in out["layers"]}
-    rain, terrain = by_id["chirps_monthly"], by_id["copdem_terrain"]
+    rain, terrain = by_id["chirps_monthly"], by_id["terrain"]
 
-    assert out["default"] == ["chirps_monthly", "copdem_terrain"]
+    assert out["default"] == ["chirps_monthly", "terrain"]
     assert out["request_step"] == "P1M"
     assert (rain["kind"], rain["time_varying"]) == ("field", True)
     assert rain["time"] == {"step": "P1M", "first": "1981-01", "last": "2026-08"}
@@ -368,7 +371,7 @@ def test_layers_list_omits_rain_and_temperature_without_their_cubes(tmp_path):
     with TestClient(app) as client:
         ids = [layer["id"] for layer in client.get("/api/layers").json()["layers"]]
 
-    assert ids == ["copdem_terrain"]
+    assert ids == ["terrain"]
 
 
 def test_layers_list_survives_an_empty_cube_left_by_a_failed_ingest(tmp_path):
@@ -393,7 +396,7 @@ def test_layers_list_omits_rain_without_its_fallback_cube(tmp_path):
     with TestClient(app) as client:
         ids = [layer["id"] for layer in client.get("/api/layers").json()["layers"]]
 
-    assert ids == ["copdem_terrain", "era5land_temperature"]
+    assert ids == ["terrain", "era5land_temperature"]
 
 
 @pytest.mark.parametrize(
@@ -444,7 +447,7 @@ def test_request_without_layers_builds_the_defaults_not_temperature(tmp_path):
         layers = client.get(done["bundle_url"]).json()["layers"]
 
     assert response.status_code == 202
-    assert sorted(layer["id"] for layer in layers) == ["chirps_monthly", "copdem_terrain"]
+    assert sorted(layer["id"] for layer in layers) == ["chirps_monthly", "terrain"]
 
 
 def test_temperature_period_before_the_cube_start_is_refused_before_any_read(tmp_path):
@@ -559,7 +562,7 @@ def test_terrain_only_ignores_months(env):
     ids = {
         client.post(
             "/api/scenes",
-            json=body(layers=["copdem_terrain"], start=start, end=end),
+            json=body(layers=["terrain"], start=start, end=end),
         ).json()["id"]
         for start, end in periods
     }

@@ -33,7 +33,7 @@ test("the search URL encodes the query and the level alike", () => {
   assert.equal(searchUrl("a", "x&y=1"), "/api/areas/search?q=a&level=x%26y%3D1");
 });
 
-test("loadScene accepts format 0.4 and rejects format 0.3", async (context) => {
+test("loadScene accepts format 0.5 and rejects format 0.4", async (context) => {
   const locationDescriptor = Object.getOwnPropertyDescriptor(globalThis, "location");
   Object.defineProperty(globalThis, "location", {
     configurable: true,
@@ -47,17 +47,24 @@ test("loadScene accepts format 0.4 and rejects format 0.3", async (context) => {
     }
   });
   const scene = {
-    version: "0.4",
+    version: "0.5",
     area: { geometry_href: "area.geojson" },
     data: { href: "data.zarr" },
+    layers: [
+      { tiles: { url: "../../terrain/v1/{z}/{x}/{y}.webp" } },
+      { tiles: { url: "https://tiles.mapterhorn.com/{z}/{x}/{y}.webp" } },
+      {},
+    ],
   };
   context.mock.method(globalThis, "fetch", async () => Response.json(scene));
 
   const loaded = await loadScene("/scenes/example/scene.json");
-  assert.equal(loaded.version, "0.4");
+  assert.equal(loaded.version, "0.5");
   assert.equal(loaded.area.geometry_href, "https://example.test/scenes/example/area.geojson");
   assert.equal(loaded.data.href, "https://example.test/scenes/example/data.zarr");
+  assert.equal(loaded.layers[0].tiles?.url, "https://example.test/terrain/v1/{z}/{x}/{y}.webp");
+  assert.equal(loaded.layers[1].tiles?.url, "https://tiles.mapterhorn.com/{z}/{x}/{y}.webp");
 
-  scene.version = "0.3";
-  await assert.rejects(loadScene("/scenes/example/scene.json"), /format 0\.3/);
+  scene.version = "0.4";
+  await assert.rejects(loadScene("/scenes/example/scene.json"), /format 0\.4/);
 });

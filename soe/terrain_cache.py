@@ -30,7 +30,7 @@ def read_cached(
     path = _cache_path(dataset, bbox, res, cache_dir)
     if path.is_file():
         with np.load(path) as stored:
-            arrays = {role: stored[role] for role in dataset.roles}
+            arrays = {name: stored[name] for name in stored.files if name != "transform"}
             return arrays, Affine(*stored["transform"].tolist())
 
     arrays, transform = dataset.read(bbox, res, on_block)

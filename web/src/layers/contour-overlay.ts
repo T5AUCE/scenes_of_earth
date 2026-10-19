@@ -1,270 +1,242 @@
-import type { GeoJSONSource, Map as MapLibreMap } from "maplibre-gl";
+import mlcontour from "maplibre-contour";
+import * as maplibregl from "maplibre-gl";
+import type {
+  ExpressionSpecification,
+  FilterSpecification,
+  Map as MapLibreMap,
+} from "maplibre-gl";
 
 import {
-  COARSE_JOB,
-  covers,
-  factorFor,
-  overlaps,
-  viewInGridWorld,
-  viewWindow,
-  wholeGrid,
-  windowBounds,
-  type GridWindow,
-} from "../contours";
-import type { ContourRequest, ContourResult } from "../contours.worker";
-import { arrayDoc, decode, readArray } from "../data";
+  CONTOUR_OVERZOOM,
+  contourLadder,
+  FADE_SPAN_ZOOM,
+  finestIntervalAt,
+  INTERVAL_CHAIN_M,
+  type ContourLadder,
+  type LadderTier,
+} from "../contour-ladder";
 import { makeHtmlElement } from "../html";
 import { contourLegendText } from "../legend";
-import { removeLayerAndSource } from "../map";
-import type { Bbox, LayerContext, LayerDoc, Part } from "../types";
-
-type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
+import type { LayerContext, Part, TerrainStats, TerrainTiles } from "../types";
 
 const CONTOUR_COLOR = "#5b4636";
 const CONTOUR_OPACITY = 0.55;
 const MINOR_LINE_WIDTH_PX = 0.5;
-const MAJOR_LINE_WIDTH_PX = 1.1;
+const BOLD_LINE_WIDTH_PX = 1.1;
 
-const DETAIL_DEBOUNCE_MS = 200;
-const DETAIL_MARGIN = 0.5;
-const REDRAW_SIZE_RATIO = 2;
-const OUTGROWN_VIEW_RATIO = 1.5; // View size over detail window size past which detail is dropped.
+const LABEL_SIZE_PX = 10;
+const LABEL_SPACING_PX = 350;
+const LABEL_HALO_WIDTH_PX = 1;
+const PAGE_BACKGROUND_PROPERTY = "--page-background";
 
-interface DetailWindow {
-  job: number;
-  factor: number;
-  bounds: Bbox;
-  sourceWindow: GridWindow;
+// Version 0.1.1 materializes only one pixel of padding before tracing contours.
+const CONTOUR_BUFFER_PX = 1;
+const DEM_CACHE_TILES = 50;
+const MAX_CONTOUR_ZOOM = 12;
+
+type DemSource = InstanceType<typeof mlcontour.DemSource>;
+
+// The plugin has no manager disposal API, so visits reuse page-lifetime workers and caches.
+const demSources = new Map<string, DemSource>();
+
+/** Reuse a DEM cache and its protocols for relief and contours across scene visits. */
+export function sharedDemSource(tiles: TerrainTiles): DemSource {
+  const key = JSON.stringify([tiles.url, tiles.encoding, tiles.maxzoom]);
+  const existing = demSources.get(key);
+  if (existing) return existing;
+
+  const source = new mlcontour.DemSource({
+    url: tiles.url,
+    encoding: tiles.encoding,
+    maxzoom: tiles.maxzoom,
+    worker: true,
+    cacheSize: DEM_CACHE_TILES,
+  });
+  source.setupMaplibre(maplibregl);
+  demSources.set(key, source);
+  return source;
 }
 
-/** Own terrain contours and their worker so computation does not block map interactions. */
+/** Own stable, elevation-filtered contour tiers and labels for one scene. */
 export class ContourOverlay {
   readonly legend = makeHtmlElement("div");
   readonly part: Part;
   private readonly map: MapLibreMap;
-  private readonly layer: LayerDoc;
-  private readonly coarseId: string;
-  private readonly detailId: string;
-  private readonly grid: ReturnType<typeof shiftedGrid>;
-  private readonly coarseFactor: number;
-  private readonly report: (error: unknown) => void;
-  private alive = true;
+  private readonly sourceId: string;
+  private readonly ladder: ContourLadder;
   private isOn = true;
-  private worker: Worker | null = null;
-  private debounce: ReturnType<typeof setTimeout> | undefined;
-  private inFlight: DetailWindow | null = null;
-  private isRequestPending = false;
-  private shown: DetailWindow | null = null;
-  private coarseInterval = 0;
-  private detailInterval = 0;
-  private lastJob = COARSE_JOB;
 
   constructor(
-    { map, store, layer, shift, beforeId, report }: LayerContext,
-    maskRead: Promise<ArrayLike<number>>,
+    context: LayerContext,
+    dem: DemSource,
+    tiles: TerrainTiles,
+    stats: TerrainStats,
   ) {
+    const { map, layer, beforeId } = context;
     this.map = map;
-    this.layer = layer;
-    this.report = report;
-    this.coarseId = `${layer.id}-contours`;
-    this.detailId = `${layer.id}-contours-detail`;
-    this.grid = shiftedGrid(layer, shift);
-    this.coarseFactor = factorFor(this.grid.nx, this.grid.ny);
-    this.legend.hidden = true;
-
+    this.sourceId = `${layer.id}-contours`;
+    const [, south, , north] = layer.grid.bbox;
+    const maxzoom = Math.min(MAX_CONTOUR_ZOOM, tiles.maxzoom + CONTOUR_OVERZOOM);
+    this.ladder = contourLadder(stats, (south + north) / 2, { maxZoom: maxzoom });
     this.part = {
-      id: this.coarseId,
+      id: this.sourceId,
       label: "Contours",
-      layerIds: [this.coarseId, this.detailId],
+      layerIds: [],
       note: this.legend,
       onToggle: (visible) => {
         this.isOn = visible;
-        this.updateVisibility();
+        this.updateLegend();
       },
     };
 
-    addContourLayer(map, this.coarseId, beforeId);
-    addContourLayer(map, this.detailId, beforeId);
-    setVisible(map, this.detailId, false);
-
-    this.start(store, maskRead).catch((error) => this.alive && report(error));
+    map.addSource(this.sourceId, {
+      type: "vector",
+      tiles: [
+        dem.contourProtocolUrl({
+          thresholds: this.ladder.thresholds,
+          overzoom: CONTOUR_OVERZOOM,
+          buffer: CONTOUR_BUFFER_PX,
+        }),
+      ],
+      maxzoom,
+      ...terrainTileBounds(layer.grid.bbox),
+    });
+    for (const [index, tier] of this.ladder.tiers.entries()) {
+      this.addLine(tier, this.ladder.tiers[index - 1], beforeId);
+    }
+    this.addLabels(beforeId);
+    map.on("zoomend", this.updateLegend);
+    this.updateLegend();
   }
+
+  private addLine(tier: LadderTier, coarser: LadderTier | undefined, beforeId?: string) {
+    const id = `${this.sourceId}-${tier.interval}`;
+    const filter: FilterSpecification = coarser
+      ? ["all", multipleOf(tier.interval), ["!", multipleOf(coarser.interval)]]
+      : multipleOf(tier.interval);
+    this.map.addLayer(
+      {
+        id,
+        type: "line",
+        source: this.sourceId,
+        "source-layer": "contours",
+        minzoom: tier.entryZoom,
+        filter,
+        paint: {
+          "line-color": CONTOUR_COLOR,
+          "line-width": tier.interval >= this.ladder.boldInterval
+            ? BOLD_LINE_WIDTH_PX
+            : MINOR_LINE_WIDTH_PX,
+          "line-opacity": tierFade(tier.entryZoom, CONTOUR_OPACITY),
+        },
+      },
+      beforeId,
+    );
+    this.part.layerIds.push(id);
+  }
+
+  private addLabels(beforeId?: string) {
+    const tiers = labelledTiers(this.ladder);
+    if (tiers.length === 0) return;
+
+    const id = `${this.sourceId}-labels`;
+    const font = this.map.getStyle().layers.find((layer) => layer.type === "symbol")
+      ?.layout?.["text-font"];
+    const finest = tiers.at(-1)!;
+    this.map.addLayer(
+      {
+        id,
+        type: "symbol",
+        source: this.sourceId,
+        "source-layer": "contours",
+        minzoom: tiers[0].entryZoom,
+        filter: multipleOf(finest.interval),
+        layout: {
+          "symbol-placement": "line",
+          "symbol-spacing": LABEL_SPACING_PX,
+          "symbol-sort-key": labelPriority(),
+          "text-size": LABEL_SIZE_PX,
+          "text-field": labelField(tiers),
+          ...(font ? { "text-font": font } : {}),
+        },
+        paint: {
+          "text-color": CONTOUR_COLOR,
+          "text-halo-color": getComputedStyle(document.documentElement)
+            .getPropertyValue(PAGE_BACKGROUND_PROPERTY).trim(),
+          "text-halo-width": LABEL_HALO_WIDTH_PX,
+          "text-opacity": labelFade(tiers),
+        },
+      },
+      beforeId,
+    );
+    this.part.layerIds.push(id);
+  }
+
+  private readonly updateLegend = () => {
+    const interval = finestIntervalAt(this.ladder, this.map.getZoom());
+    this.legend.textContent = interval
+      ? contourLegendText(interval, this.ladder.boldInterval)
+      : "";
+    this.legend.hidden = !this.isOn || !interval;
+  };
 
   destroy() {
-    this.alive = false;
-    clearTimeout(this.debounce);
-    this.map.off("move", this.updateVisibility);
-    this.map.off("moveend", this.scheduleDetail);
-    this.worker?.terminate();
-    removeLayerAndSource(this.map, this.detailId);
-    removeLayerAndSource(this.map, this.coarseId);
+    this.map.off("zoomend", this.updateLegend);
+    for (const id of this.part.layerIds) this.map.removeLayer(id);
+    this.map.removeSource(this.sourceId);
   }
+}
 
-  private async start(store: LayerContext["store"], maskRead: Promise<ArrayLike<number>>) {
-    const elevationDoc = arrayDoc(this.layer, "elevation");
-    const openedStore = await store;
-    const [mask, raw] = await Promise.all([
-      maskRead,
-      readArray(openedStore, elevationDoc.path, [null, null]),
-    ]);
-    if (!this.alive) return;
+function labelledTiers(ladder: ContourLadder): ContourLadder["labelTiers"] {
+  const bold = ladder.tiers.filter((tier) => tier.interval >= ladder.boldInterval);
+  const sparse = ladder.labelTiers.filter((tier) => tier.interval < ladder.boldInterval);
+  return [...bold, ...sparse];
+}
 
-    const worker = new Worker(new URL("../contours.worker.ts", import.meta.url), {
-      type: "module",
+function labelPriority(): ExpressionSpecification {
+  const conditions = [...INTERVAL_CHAIN_M].reverse()
+    .flatMap((interval) => [multipleOf(interval), -interval]);
+  return ["case", ...conditions, 0] as ExpressionSpecification;
+}
+
+function labelField(tiers: ContourLadder["labelTiers"]): ExpressionSpecification {
+  const field: ExpressionSpecification = ["step", ["zoom"], ""];
+  const intervalsByZoom = new Map(tiers.map((tier) => [tier.entryZoom, tier.interval]));
+  for (const [zoom, interval] of intervalsByZoom) {
+    const label: ExpressionSpecification = ["concat", ["get", "ele"], " m"];
+    field.push(zoom, ["case", multipleOf(interval), label, ""]);
+  }
+  return field;
+}
+
+function multipleOf(interval: number): ExpressionSpecification {
+  return ["==", ["%", ["get", "ele"], interval], 0];
+}
+
+function tierFade(entryZoom: number, opacity: number): ExpressionSpecification {
+  return ["interpolate", ["linear"], ["zoom"], entryZoom, 0, entryZoom + FADE_SPAN_ZOOM, opacity];
+}
+
+function labelFade(tiers: ContourLadder["labelTiers"]): ExpressionSpecification {
+  const opacity: ExpressionSpecification = ["interpolate", ["linear"], ["zoom"]];
+  const fadeStops = tiers.flatMap((tier) => [
+    tier.entryZoom,
+    tier.entryZoom + FADE_SPAN_ZOOM,
+  ]);
+  const stops = [...new Set(fadeStops)].sort((first, second) => first - second);
+  for (const zoom of stops) {
+    const conditions = tiers.flatMap((tier) => {
+      const alpha = Math.max(0, Math.min(1, (zoom - tier.entryZoom) / FADE_SPAN_ZOOM));
+      return [multipleOf(tier.interval), alpha];
     });
-    worker.onmessage = (event: MessageEvent<ContourResult>) => this.receive(event.data);
-    worker.onerror = (event) => this.fail(event);
-    this.worker = worker;
-
-    // The worker keeps the elevation, so later windows need no new read.
-    post(worker, { kind: "start", elevation: decode(raw, elevationDoc), mask, grid: this.grid });
+    const value = ["case", ...conditions, 0] as ExpressionSpecification;
+    opacity.push(zoom, value);
   }
-
-  private receive({ job, interval, collection }: ContourResult) {
-    if (!this.alive) return;
-
-    if (job === COARSE_JOB) {
-      this.showCoarse(interval, collection);
-    } else if (job === this.inFlight?.job) {
-      setCollection(this.map, this.detailId, collection);
-      this.detailInterval = interval;
-      this.shown = this.inFlight;
-      this.inFlight = null;
-    }
-
-    this.updateVisibility();
-
-    if (this.isRequestPending && !this.inFlight) {
-      this.isRequestPending = false;
-      this.requestDetail();
-    }
-  }
-
-  private showCoarse(interval: number, collection: ContourResult["collection"]) {
-    setCollection(this.map, this.coarseId, collection);
-    this.coarseInterval = interval;
-    this.map.on("move", this.updateVisibility);
-    this.map.on("moveend", this.scheduleDetail);
-    this.scheduleDetail();
-  }
-
-  private fail(event: ErrorEvent) {
-    this.worker?.terminate();
-    this.worker = null;
-    this.inFlight = null;
-    this.isRequestPending = false;
-    this.report(new Error(event.message || "Contour worker failed"));
-  }
-
-  private readonly scheduleDetail = () => {
-    clearTimeout(this.debounce);
-    this.debounce = setTimeout(() => this.requestDetail(), DETAIL_DEBOUNCE_MS);
-  };
-
-  // At most one window is computed at a time; the latest view is requested when it finishes.
-  private requestDetail() {
-    if (!this.alive || !this.worker) return;
-
-    const target = viewWindow(this.grid, this.viewport(), DETAIL_MARGIN);
-    if (!target || !this.isFinerThanShown(target)) return;
-
-    if (this.inFlight) {
-      this.isRequestPending = true;
-      return;
-    }
-
-    const job = ++this.lastJob;
-    const { sourceWindow, factor } = target;
-    this.inFlight = { job, factor, bounds: windowBounds(this.grid, sourceWindow), sourceWindow };
-    post(this.worker, { kind: "detail", job, sourceWindow });
-  }
-
-  // A window much smaller than the one shown is worth redrawing, as its interval can be finer.
-  private isFinerThanShown({ sourceWindow, factor }: NonNullable<ReturnType<typeof viewWindow>>) {
-    const showsDetail = this.showsDetail();
-    const current = this.shown && showsDetail
-      ? this.shown
-      : { factor: this.coarseFactor, sourceWindow: wholeGrid(this.grid) };
-
-    return (
-      (showsDetail && !this.coversView())
-      || factor < current.factor
-      || sourceWindow.width * REDRAW_SIZE_RATIO <= current.sourceWindow.width
-      || sourceWindow.height * REDRAW_SIZE_RATIO <= current.sourceWindow.height
-    );
-  }
-
-  private readonly updateVisibility = () => {
-    const detailVisible = this.isOn && this.showsDetail();
-    const interval = detailVisible ? this.detailInterval : this.coarseInterval;
-    this.legend.textContent = interval ? contourLegendText(interval, this.layer.units) : "";
-    this.legend.hidden = !this.isOn || !this.legend.textContent;
-
-    setVisible(this.map, this.coarseId, this.isOn && !detailVisible);
-    setVisible(this.map, this.detailId, detailVisible);
-  };
-
-  // Detail stays while it overlaps the view, so a short gap at the edge beats flickering coarse.
-  private showsDetail() {
-    if (!this.shown) return false;
-
-    const view = this.viewport();
-    const [west, south, east, north] = this.shown.bounds;
-    const isOutgrown =
-      view[2] - view[0] > (east - west) * OUTGROWN_VIEW_RATIO
-      || view[3] - view[1] > (north - south) * OUTGROWN_VIEW_RATIO;
-
-    return overlaps(this.shown.bounds, view) && !isOutgrown;
-  }
-
-  private coversView() {
-    return this.shown !== null && covers(this.shown.bounds, this.viewport(), this.grid.bbox);
-  }
-
-  private viewport(): Bbox {
-    const bounds = this.map.getBounds();
-    const view: Bbox = [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()];
-    return viewInGridWorld(view, this.grid.bbox);
-  }
+  return opacity;
 }
 
-function addContourLayer(map: MapLibreMap, id: string, beforeId: string | undefined) {
-  map.addSource(id, {
-    type: "geojson",
-    data: { type: "FeatureCollection", features: [] },
-  });
-
-  map.addLayer(
-    {
-      id,
-      type: "line",
-      source: id,
-      paint: {
-        "line-color": CONTOUR_COLOR,
-        "line-opacity": CONTOUR_OPACITY,
-        "line-width": ["case", ["get", "major"], MAJOR_LINE_WIDTH_PX, MINOR_LINE_WIDTH_PX],
-      },
-    },
-    beforeId,
-  );
-}
-
-function setCollection(map: MapLibreMap, id: string, collection: ContourResult["collection"]) {
-  (map.getSource(id) as GeoJSONSource).setData(collection as unknown as GeoJsonData);
-}
-
-function setVisible(map: MapLibreMap, id: string, visible: boolean) {
-  map.setLayoutProperty(id, "visibility", visible ? "visible" : "none");
-}
-
-function post(worker: Worker, request: ContourRequest) {
-  const transfer = request.kind === "start" ? [request.elevation.buffer] : [];
-  worker.postMessage(request, transfer);
-}
-
-// Lines are drawn in the same world copy as the hillshade image.
-function shiftedGrid({ grid }: LayerDoc, shift: number) {
-  const [west, south, east, north] = grid.bbox;
-  const bbox: Bbox = [west + shift, south, east + shift, north];
-  return { ...grid, bbox };
+/** MapLibre source bounds cannot express an unwrapped antimeridian bbox. */
+export function terrainTileBounds(bbox: LayerContext["layer"]["grid"]["bbox"]) {
+  const [west, , east] = bbox;
+  return west >= -180 && east <= 180 ? { bounds: bbox } : {};
 }

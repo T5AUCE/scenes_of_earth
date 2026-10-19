@@ -1,3 +1,4 @@
+import type {} from "geojson";
 import type { Map as MapLibreMap } from "maplibre-gl";
 
 import type { Store } from "./data";
@@ -113,6 +114,27 @@ export interface BoundaryDoc {
   modified?: string;
 }
 
+/** Shared elevation tiles used for both relief and contours. */
+export interface TerrainTiles {
+  url: string;
+  encoding: "terrarium";
+  tile_size: number;
+  maxzoom: number;
+  source: CreditDoc;
+}
+
+/** In-mask Copernicus summaries that seed a scene's stable contour ladder. */
+export interface TerrainStats {
+  min: number;
+  max: number;
+  mean: number;
+  p2: number;
+  p98: number;
+  slope_p50_deg: number;
+  slope_p90_deg: number;
+  cell_m: number;
+}
+
 /** One built layer's sources, display choices, grid and stored arrays. */
 export interface LayerDoc {
   id: string;
@@ -131,7 +153,9 @@ export interface LayerDoc {
   grid: GridDoc;
   mask: { path: string; cells_inside: number };
   time: TimeDoc | null;
-  arrays: Record<string, ArrayDoc>; // by role, e.g. value, elevation, hillshade, source
+  arrays: Record<string, ArrayDoc>; // by role, e.g. value or source; empty for tiled terrain
+  tiles?: TerrainTiles;
+  stats?: TerrainStats | Record<string, number | number[]>;
 }
 
 /** The area.geojson file, which is one Feature holding the area's outline. */

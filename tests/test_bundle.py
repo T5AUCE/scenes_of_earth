@@ -98,7 +98,7 @@ def test_scene_json_states_the_requested_period(tmp_path):
     doc, store = build_nairobi(tmp_path, ("2015-01", "2016-02"))
     rain = doc["layers"][1]
 
-    assert doc["version"] == "0.4"
+    assert doc["version"] == "0.5"
     assert doc["period"] == {"start": "2015-01-01", "end": "2016-03-01", "step": "P1M"}
     assert rain["time"]["method"] == "sum"
     assert store["chirps_monthly/precip"].attrs["cell_methods"] == "time: sum"
@@ -220,3 +220,99 @@ def test_validate_rejects_a_provenance_array_in_a_static_layer(tmp_path):
     terrain["fallback_sources"] = doc["layers"][1]["fallback_sources"]
 
     assert any("static layer cannot have a source array" in problem for problem in validate(doc))
+
+
+def test_terrain_layer_without_tiles_is_invalid(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    terrain = doc["layers"][0]
+
+    assert validate(doc) == []
+
+    del terrain["tiles"]
+
+    assert any("needs tiles" in problem for problem in validate(doc))
+
+
+def test_terrain_layer_needs_the_statistics_that_seed_the_contours(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    del doc["layers"][0]["stats"]["slope_p90_deg"]
+
+    assert any("slope_p90_deg" in problem for problem in validate(doc))
+
+
+def test_tile_source_without_an_attribution_is_invalid(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    doc["layers"][0]["tiles"]["source"]["attribution"] = ""
+
+    problems = validate(doc)
+
+    assert any("tiles.source needs a licence and an attribution" in problem for problem in problems)
+    assert any("missing attribution" in problem for problem in problems)
+
+
+def test_tiles_need_a_url_template_and_integer_sizes(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    tiles = doc["layers"][0]["tiles"]
+    tiles.update(url="https://example.org/dem.webp", tile_size="512", encoding="mapbox")
+
+    problems = validate(doc)
+
+    assert any("tiles.url" in problem for problem in problems)
+    assert any("tiles.tile_size" in problem for problem in problems)
+    assert any("tiles.encoding" in problem for problem in problems)
+
+
+def test_layer_without_arrays_and_without_tiles_is_invalid(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    terrain = doc["layers"][0]
+
+    assert terrain["arrays"] == {}
+
+    del terrain["tiles"]
+    terrain["style"]["kind"] = "categorical"
+    terrain["style"]["classes"] = [{"value": 10, "label": "Tree cover", "color": "#006400"}]
+
+    assert any("missing arrays" in problem for problem in validate(doc))
+
+
+def test_the_tile_source_attribution_is_in_the_credits(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    attribution = SOURCES["mapterhorn"]["attribution"]
+
+    assert attribution in doc["credits"]["lines"]
+
+    doc["credits"]["lines"].remove(attribution)
+
+    assert any("attribution not in credits.lines" in problem for problem in validate(doc))
+
+
+def test_tiled_layers_still_require_an_arrays_object(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    del doc["layers"][0]["arrays"]
+
+    assert any("arrays must be an object" in problem for problem in validate(doc))
+
+
+def test_terrain_statistics_must_be_an_object(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    doc["layers"][0]["stats"] = [1, 2]
+
+    assert any("stats must be an object" in problem for problem in validate(doc))
+
+
+@pytest.mark.parametrize("value", [None, float("nan"), float("inf"), True])
+def test_terrain_statistics_reject_nonfinite_or_nonnumeric_values(tmp_path, value):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    doc["layers"][0]["stats"]["slope_p90_deg"] = value
+
+    assert any("slope_p90_deg" in problem for problem in validate(doc))
+
+
+def test_tiles_need_positive_size_and_nonnegative_zoom(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    doc["layers"][0]["tiles"].update(tile_size=0, maxzoom=-1)
+
+    problems = validate(doc)
+
+    assert any("tiles.tile_size is out of range" in problem for problem in problems)
+    assert any("tiles.maxzoom is out of range" in problem for problem in problems)

@@ -1,4 +1,3 @@
-"""The datasets the backend can build, and the readers they read through."""
 from pathlib import Path
 
 from .chirps import CHIRPS_GRID, ChirpsReader, RainDataset
@@ -18,13 +17,7 @@ from .era5land_temperature import (
 from .grid import CELL_DEG
 from .licences import SOURCES
 from .synthetic import SyntheticSource
-from .terrain import (
-    ELEVATION_FILL,
-    GLO30_RES_DEG,
-    HILLSHADE_FILL,
-    CopernicusDemReader,
-    TerrainDataset,
-)
+from .terrain import GLO30_RES_DEG, CopernicusDemReader, TerrainDataset, terrain_tiles_block
 
 
 CUBE_SPECS = (ERA5_LAND_TEMPERATURE_CUBE, ERA5_TEMPERATURE_CUBE, ERA5_PRECIPITATION_CUBE)
@@ -53,7 +46,7 @@ def make_registry(backend: RealSource | SyntheticSource) -> Registry:
     registry = {}
     if backend.has_cube(ERA5_PRECIPITATION_CUBE):
         registry["chirps_monthly"] = _chirps_monthly(backend)
-    registry["copdem_terrain"] = _copdem_terrain(backend)
+    registry["terrain"] = _terrain(backend)
     if backend.has_cube(ERA5_LAND_TEMPERATURE_CUBE) and backend.has_cube(ERA5_TEMPERATURE_CUBE):
         registry["era5land_temperature"] = _era5land_temperature(backend)
     return registry
@@ -90,42 +83,24 @@ def _chirps_monthly(backend: RealSource | SyntheticSource) -> RainDataset:
     )
 
 
-def _copdem_terrain(backend: RealSource | SyntheticSource) -> TerrainDataset:
-    light = {"azimuth": 315, "altitude": 45}
+def _terrain(backend: RealSource | SyntheticSource) -> TerrainDataset:
     return TerrainDataset(
-        id="copdem_terrain",
+        id="terrain",
         title="Terrain",
         units="m",
         resolution_deg=GLO30_RES_DEG,
         source=SOURCES["glo30"],
-        roles={
-            "elevation": Role(
-                "elevation",
-                "int16",
-                fill=ELEVATION_FILL,
-                units="m",
-                long_name="Elevation (resampled)",
-            ),
-            "hillshade": Role(
-                "hillshade",
-                "uint8",
-                fill=HILLSHADE_FILL,
-                long_name=(
-                    f"Hillshade, azimuth {light['azimuth']}, "
-                    f"altitude {light['altitude']} (0-254)"
-                ),
-            ),
-        },
+        roles={},
         style={
             "kind": "terrain",
             "encodings": ["shade"],
             "parts": ["contours"],
-            "hillshade": light,
         },
         backend=backend,
         grid=CHIRPS_GRID,
         max_tiles=2500,
         synthetic=backend.synthetic,
+        tiles=terrain_tiles_block(),
     )
 
 

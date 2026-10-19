@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 import rasterio
 import zarr
-from rasterio.transform import Affine
+from rasterio.transform import Affine, from_origin
 
 from soe.sources import (
     CHIRPS_GRID,
@@ -33,7 +33,6 @@ from soe.sources import (
     StaticDataset,
     SyntheticSource,
     chirps,
-    hillshade,
     make_registry,
     read_wrapped,
     terrain,
@@ -44,11 +43,13 @@ from soe.sources.fallback import read_nearest
 from soe.sources.grid import block_mean
 from soe.sources.periods import add_duration
 from soe.sources.terrain import (
+    LATITUDE_DEGREE_M,
     TerrainProduct,
     _tile_index,
     _tile_name,
     _warp_block,
     placed_terrain_tiles,
+    slope_degrees,
     terrain_by_blocks,
     terrain_product,
     terrain_res,
@@ -591,20 +592,10 @@ def test_terrain_sources_name_the_products_a_read_uses():
     assert TERRAIN.sources_for(wide) == [SOURCES["glo90"]]
 
 
-def test_terrain_notices_name_the_source_cell_size_and_the_fallback():
-    kenya = [36.5, -1.5, 37.5, -0.5]
-    gap_edge = [42.8, 40.0, 43.2, 40.3]
-
-    assert TERRAIN.notices(kenya, []) == ["Terrain resampled to 55 m cells (source 30 m)."]
-    assert not any("GLO-90" in note for note in TERRAIN.notices(kenya, []))
-    assert any("90 m Copernicus GLO-90" in note for note in TERRAIN.notices(gap_edge, []))
-
-
 def test_box_ending_on_a_tile_edge_gets_no_fallback_credit():
     edge = [42.8, 40.0, 43.0, 40.2]
 
     assert TERRAIN.sources_for(edge) == [SOURCES["glo30"]]
-    assert not any("GLO-90" in note for note in TERRAIN.notices(edge, []))
 
 
 def test_terrain_blocks_equal_one_read():
@@ -709,15 +700,50 @@ def test_static_dataset_without_read_cannot_be_created():
         NoRead(**vars_of(TERRAIN))
 
 
-def test_terrain_read_returns_elevation_and_the_hillshade_derived_from_it():
-    arrays, transform = TERRAIN.read(NAIROBI.bounds, 0.01)
+def test_terrain_read_returns_elevation_only():
+    arrays, _ = TERRAIN.read(NAIROBI.bounds, 0.01)
 
-    assert arrays.keys() == TERRAIN.roles.keys()
-    assert arrays["elevation"].dtype == np.int16 and arrays["hillshade"].dtype == np.uint8
-    assert np.array_equal(
-        arrays["hillshade"],
-        hillshade(arrays["elevation"], 0.01, transform.f, 315, 45),
-    )
+    assert arrays.keys() == {"elevation"}
+    assert arrays["elevation"].dtype == np.int16
+
+
+def test_slope_of_a_plane_with_a_ten_percent_grade():
+    res_deg = 0.01
+    rise_per_row_m = 0.1 * res_deg * LATITUDE_DEGREE_M
+    plane = np.tile(np.arange(8)[:, None] * rise_per_row_m, (1, 8))
+
+    slope = slope_degrees(plane, res_deg, 0.0)
+
+    assert slope[4, 4] == pytest.approx(5.71, abs=0.05)
+
+
+def test_slope_of_flat_ground_is_zero():
+    assert (slope_degrees(np.full((6, 6), 120), 0.01, 10.0) == 0).all()
+
+
+def test_terrain_elevation_statistics_exclude_values_outside_the_mask():
+    elevation = np.arange(25, dtype="int16").reshape(5, 5)
+    mask = np.zeros((5, 5), dtype="uint8")
+    mask[1:-1, 1:-1] = 1
+    elevation[mask == 0] = 10_000
+
+    summary = TERRAIN.summary({"elevation": elevation}, mask, from_origin(0, 5, 1, 1))
+
+    assert summary["min"] == 6 and summary["max"] == 18
+    assert summary["mean"] == 12
+    assert summary["p2"] == 6.16 and summary["p98"] == 17.84
+    assert summary["cell_m"] == pytest.approx(111_320 * np.cos(np.radians(2.5)), abs=0.01)
+
+
+def test_terrain_layer_names_its_tiles_from_the_environment(monkeypatch):
+    default = make_registry(SyntheticSource())["terrain"].tiles
+
+    monkeypatch.setenv("SOE_TERRAIN_TILES", "https://example.org/{z}/{x}/{y}.webp")
+    changed = make_registry(SyntheticSource())["terrain"].tiles
+
+    assert default["url"] == "https://tiles.mapterhorn.com/{z}/{x}/{y}.webp"
+    assert changed["url"] == "https://example.org/{z}/{x}/{y}.webp"
+    assert changed["source"] == SOURCES["mapterhorn"]
 
 
 def test_every_terrain_source_has_a_disclaimer():
@@ -749,7 +775,6 @@ def fake_terrain(tmp_path, monkeypatch):
         "30",
         1 / TILE_PX,
         TILE_PX,
-        90,
     )
     monkeypatch.setitem(terrain.TERRAIN_PRODUCTS, "glo90", product)
     index = np.zeros(terrain.TILE_GRID_SHAPE, bool)
@@ -914,7 +939,7 @@ def test_stops_blend_an_even_stretch_with_the_quantiles():
 
 
 def test_stops_keep_whole_degrees_on_a_narrow_field_far_from_zero():
-    terrain = make_registry(SyntheticSource())["copdem_terrain"]
+    terrain = make_registry(SyntheticSource())["terrain"]
     stats = {"min": 288.0, "max": 301.0, "mean": 295.0, "p98": 300.0}
 
     stops = terrain.stops(stats, np.linspace(288, 300, 9).tolist())
@@ -923,7 +948,7 @@ def test_stops_keep_whole_degrees_on_a_narrow_field_far_from_zero():
 
 
 def test_stops_of_a_wide_field_far_from_zero_are_not_coarser_than_its_span():
-    terrain = make_registry(SyntheticSource())["copdem_terrain"]
+    terrain = make_registry(SyntheticSource())["terrain"]
     stats = {"min": 1234.0, "max": 1262.0, "mean": 1250.0, "p98": 1260.0}
 
     stops = terrain.stops(stats, np.linspace(1234, 1260, 9).tolist())
@@ -932,7 +957,7 @@ def test_stops_of_a_wide_field_far_from_zero_are_not_coarser_than_its_span():
 
 
 def test_stops_round_to_the_span_and_drop_repeats():
-    terrain = make_registry(SyntheticSource())["copdem_terrain"]
+    terrain = make_registry(SyntheticSource())["terrain"]
     stats = {"min": 0.0, "max": 120.0, "mean": 5.0, "p98": 100.0}
     quantiles = [0, 0, 0, 0, 0, 0, 0, 0, 100]
 
@@ -940,7 +965,7 @@ def test_stops_round_to_the_span_and_drop_repeats():
 
 
 def test_stops_of_a_constant_field_are_the_same_value_twice():
-    terrain = make_registry(SyntheticSource())["copdem_terrain"]
+    terrain = make_registry(SyntheticSource())["terrain"]
     stats = {"min": 5.0, "max": 5.0, "mean": 5.0, "p98": 5.0}
 
     assert terrain.stops(stats, [5.0] * 9) == [5, 5]

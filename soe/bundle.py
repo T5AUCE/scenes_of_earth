@@ -15,7 +15,7 @@ from .bundle_validation import (
 from .plan import LayerPlan, Plan
 from .sources import REQUEST_STEP, SOURCE_ROLE, SOURCES, STOP_COUNT, Dataset
 
-VERSION = "0.4"
+VERSION = "0.5"
 
 BOUNDARY_SOURCE_FIELDS = ("licence_url", "attribution", "citation", "modified")
 SYNTHETIC_DATA_CREDIT = "Data: synthetically generated, not real measurements"
@@ -139,7 +139,11 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
             "path": f"{dataset.id}/time",
             "values": layer_plan.steps,
         }
+
+    if "stats" in result:
         layer["stats"] = result["stats"]
+    if dataset.tiles:
+        layer["tiles"] = dict(dataset.tiles)
     return layer
 
 
@@ -181,6 +185,7 @@ def credits(
         "endorsement": "Scenes of Earth is not endorsed by the data providers.",
         "terms_passthrough": (
             "Reuse of this bundle's data is subject to each source's licence "
-            "listed in layers[].source and area.boundary."
+            "listed in layers[].source, layers[].fallback_sources, layers[].tiles.source "
+            "and area.boundary."
         ),
     }

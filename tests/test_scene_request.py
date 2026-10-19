@@ -30,7 +30,7 @@ from tests.helpers import RAIN, write_cube
 
 SQUARE = mapping(box(36.5, -1.5, 37.5, -0.5))
 PINNED_REVISION = "Tue, 01 Sep 2015 00:00:00 GMT"
-PINNED_SCENE_ID = "2c3c308689dfad4c5e1a"  # Computed for soe 0.6.0 (scene format 0.4).
+PINNED_SCENE_ID = "f73266de4e8ed36ce12a"  # Computed for soe 0.7.0 (scene format 0.5).
 
 
 def request_body(**overrides: object) -> str:
@@ -40,7 +40,7 @@ def request_body(**overrides: object) -> str:
             "area": {"type": "polygon", "geometry": SQUARE},
             "start": "2015-01",
             "end": "2015-06",
-            "layers": ["copdem_terrain", "chirps_monthly"],
+            "layers": ["terrain", "chirps_monthly"],
             **overrides,
         },
     )
@@ -128,24 +128,36 @@ def test_scene_id_is_unchanged_for_known_inputs(tmp_path):
 
     scene_id = compute_scene_id(
         "poly:abc",
-        ["chirps_monthly", "copdem_terrain"],
+        ["chirps_monthly", "terrain"],
         ("2015-01-01", "2015-07-01"),
-        [registry["chirps_monthly"], registry["copdem_terrain"]],
+        [registry["chirps_monthly"], registry["terrain"]],
         {"chirps_monthly": (PINNED_REVISION, "local")},
     )
 
     assert scene_id == PINNED_SCENE_ID
 
 
+def test_changing_the_terrain_tiles_url_renames_the_scene(monkeypatch):
+    def scene_id() -> str:
+        terrain = make_registry(SyntheticSource())["terrain"]
+        return compute_scene_id("g", ["terrain"], None, [terrain], revisions={})
+
+    hosted = scene_id()
+
+    monkeypatch.setenv("SOE_TERRAIN_TILES", "../../terrain/v1/{z}/{x}/{y}.webp")
+
+    assert scene_id() != hosted
+
+
 def test_synthetic_and_real_terrain_scenes_get_different_ids():
-    terrain = ["copdem_terrain"]
+    terrain = ["terrain"]
 
     def scene_id(registry: Registry) -> str:
         return compute_scene_id(
             "g",
             terrain,
             None,
-            [registry["copdem_terrain"]],
+            [registry["terrain"]],
             revisions={},
         )
 
@@ -180,7 +192,7 @@ def test_period_outside_a_dataset_is_refused_before_any_read(db_path):
 
 
 def test_same_period_gives_the_same_scene_id():
-    terrain = make_registry(SyntheticSource())["copdem_terrain"]
+    terrain = make_registry(SyntheticSource())["terrain"]
     months = request_range("2015-01", "2015-12", "P1M")
     year = request_range("2015", "2015", "P1Y")
 
@@ -263,7 +275,7 @@ def test_request_without_layers_gets_the_default_layers(db_path):
 
     prepared = prepare_scene(db_path, registry, json.dumps(request))
 
-    assert json.loads(prepared.request_json)["layers"] == ["chirps_monthly", "copdem_terrain"]
+    assert json.loads(prepared.request_json)["layers"] == ["chirps_monthly", "terrain"]
 
 
 def revised_cube_months(

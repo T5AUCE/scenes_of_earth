@@ -29,7 +29,7 @@ from .sources import (
     request_label,
 )
 
-DEFAULT_LAYERS = ["chirps_monthly", "copdem_terrain"]  # what a request without layers builds
+DEFAULT_LAYERS = ["chirps_monthly", "terrain"]  # what a request without layers builds
 ID_CHARS = 20  # hex characters of the sha256 kept as the id (80 bits; short Windows paths)
 
 DRAWN_AREA_TITLE = "Drawn area"
@@ -240,13 +240,24 @@ def compute_scene_id(
     The versions are those of each dataset's main source and its fallback source.
 
     The terrain product (GLO-30 or GLO-90) follows from the area's size, so the geometry covers it.
+    A layer drawn from tiles hashes the tile URL, so switching to another copy renames its scenes.
     `period` is the ISO date range [first day, day after the last), or None without series, so
     the id does not depend on how the request spelled its start and end.
     """
     versions = {dataset.id: _source_versions(dataset) for dataset in datasets}
     synthetic = {dataset.id: dataset.synthetic for dataset in datasets}
     dated_period = [*period, REQUEST_STEP] if period else None
-    content = [geometry_id, layers, dated_period, versions, revisions, synthetic, __version__]
+    tile_urls = {dataset.id: dataset.tiles["url"] for dataset in datasets if dataset.tiles}
+    content = [
+        geometry_id,
+        layers,
+        dated_period,
+        versions,
+        revisions,
+        synthetic,
+        tile_urls,
+        __version__,
+    ]
     return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:ID_CHARS]
 
 

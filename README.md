@@ -2,7 +2,7 @@
 
 A small FastAPI + SQLite service that turns an area (a country, state, county or large city, or a drawn polygon) and a
 month range into a static scene bundle: `scene.json`, `area.geojson` and a Zarr v3 store (`data.zarr`, gzip) with monthly
-rain and a hillshaded terrain. The browser reads the finished bundle directly. Bundles live at
+rain and the statistics of the terrain. The browser reads the finished bundle directly. Bundles live at
 `data/scenes/{id}/`, where `{id}` is a content hash, so a finished bundle never changes and is served as immutable.
 
 Planned features and hosting: [docs/ROADMAP.md](docs/ROADMAP.md).
@@ -29,15 +29,15 @@ For the frontend (`npm run dev`, port 5173), set the Vite dev server to proxy `/
 
 Frontend (`web/`): `npm install`, then `npm run dev` (port 5173), `npm run build` (typecheck plus bundle) and `npm test`
 (Node's built-in runner, no framework). A built scene opens by id with `http://localhost:5173/?scene=<id>`, which is also
-how to share it. The page draws terrain hillshade, contour lines (computed in a browser worker, interval chosen
-automatically) and the rain series from the bundle's Zarr store, each toggleable, with a time slider and a blocky or smooth rain look.
+how to share it. The page draws terrain shading and contour lines from shared elevation tiles (the intervals
+come from the elevation statistics in the bundle) and the rain series from the bundle's Zarr store, each toggleable, with a time slider and a blocky or smooth rain look.
 
 API: `GET /api/health`, `GET /api/layers` (per layer: id, title, kind, units, coverage, time step with the first and last request period,
 `request_step`, and the default set),
 `GET /api/areas/search?q=&level=&limit=`, `GET /api/areas/{id}`, `POST /api/scenes`,
 `GET /api/scenes/{id}`, and the static files under `/scenes/{id}/`. `POST /api/scenes` takes
 `{"area": {"type": "boundary", "id": ...} | {"type": "polygon", "geometry": GeoJSON}, "start": "YYYY-MM",
-"end": "YYYY-MM", "layers": ["chirps_monthly", "copdem_terrain"], "title": ...}` and returns 202 (queued or running),
+"end": "YYYY-MM", "layers": ["chirps_monthly", "terrain"], "title": ...}` and returns 202 (queued or running),
 200 (already built), 422 (refused, with a reason), 413, or 503 (queue full or data server unreachable; `Retry-After`).
 
 With `SOE_SYNTHETIC=1`, five sample areas (Kenya, Fiji, Nairobi, Cusco, Burkina Faso) are
@@ -112,19 +112,20 @@ python -m soe.cli terrain-index
 
 - `area.bbox` is `[W, S, E, N]` with W < E always. A shape across the antimeridian is unwrapped into one frame, so E may be
   above 180 (up to 360) and `lon` arrays rise past 180, as MapLibre's `LngLatBounds` does. `area.geojson` is in the same frame.
-- `scene.json` is version 0.4. The top-level `period` (`start`, `end` exclusive, `step`; ISO dates) is the requested range,
+- `scene.json` is version 0.5. The top-level `period` (`start`, `end` exclusive, `step`; ISO dates) is the requested range,
   or `null` for a scene without series. Each layer has its own `grid` (crs, bbox, res, nx, ny; `aggregation` for series), `mask`,
   `coverage`, `time` (`step` as an ISO 8601 duration, `end` = the day after the last step's period, `method` = how a step summarises
   its period (`sum`, `mean`, `point`, `max`), `count`, explicit `values`, or `null` for static layers) and
-  `arrays` keyed by role (`value`, `elevation`, `hillshade`) with `dtype`, `scale_factor`, `add_offset` and `fill`.
+  `arrays` keyed by role (`value`, ...) with `dtype`, `scale_factor`, `add_offset` and `fill`. A static layer drawn from tiles has
+  `arrays` `{}` and instead a `tiles` block (`url`, `encoding`, `tile_size`, `maxzoom`, `source`) plus `stats`.
   Each layer's `style` has `kind` (`field` for a continuous grid, `categorical` with `style.classes` `[{value, label, color}]`, `terrain`), `encodings` (the display types it offers, best
   first; a viewer skips names it does not know) and optional `parts` (extra display types drawn alongside, e.g. terrain's
   `contours`). A series layer also has `palette` (default colours) and `style.stops`: 2-9 increasing values fitted to the
   area over all steps (half an even stretch, half quantiles, rounded to two significant digits of the span so a 288-300
   field keeps whole degrees; rain starts at 0; a constant field has equal ends), evenly spaced along the palette.
   Stored value = (real value - add_offset) / scale_factor; every array also carries `scale_factor`, `add_offset` and, when
-  set, the Zarr `fill_value`. Cells outside the area's `mask` hold the fill value in every array of every layer (terrain's
-  hillshade is computed first, so its edge is not darkened); the viewer reads them as no data.
+  set, the Zarr `fill_value`. Cells outside the area's `mask` hold the fill value in every array of every layer; the viewer
+  reads them as no data.
 - Rain is stored as uint16 at 0.1 mm (fill 65535, values above 6553.4 mm are clipped). Series are chunked one step per
   chunk and sharded 12 steps per shard; static arrays are one chunk each. The root `zarr.json` has consolidated metadata.
 - Budgets: the raw size of all layers' arrays together is capped at 50 MB, and the source cells x steps read for all
@@ -134,12 +135,24 @@ python -m soe.cli terrain-index
   centres lie on 0.1 degree multiples (half a cell off the rain grid). It is listed only when the cube below exists.
 - Rain and terrain are anchored to the 60S-60N grid of 0.05 degree cells that starts at 180W. `area.geojson` is the area
   clipped to the coverage of all selected layers, so one layer's mask can reach slightly beyond the outline.
-- Terrain cells are 0.05/k degrees (k up to 180, about 4.2 Mpx at most). Cells finer than 90 m are read from GLO-30 (with
-  average resampling), others from GLO-90; tiles GLO-30 lacks come from GLO-90 as `layers[].fallback_sources`. Coarser
-  cells than the source give the notice "Terrain resampled to N m cells (source 30 m)." Terrain is refused above 2500
-  existing source tiles.
+- The terrain layer holds no elevation array. The viewer draws shading and contours from the elevation tiles named by
+  `layers[].tiles` (Terrarium encoding, 512 px, Mapterhorn by default), and the build keeps only `stats` (`min`, `max`, `mean`,
+  `p2`, `p98`, `slope_p50_deg`, `slope_p90_deg`, `cell_m`), taken inside the mask, which choose the contour intervals. The tile
+  URL is part of the scene id, so pointing `SOE_TERRAIN_TILES` at another copy renames the scenes. With `SOE_SYNTHETIC=1` the
+  statistics are fake while the tiles are still the real hosted ones.
+- The statistics are read on cells of 0.05/k degrees (k up to 180, about 4.2 Mpx at most). Cells finer than 90 m are read
+  from GLO-30 (with average resampling), others from GLO-90; tiles GLO-30 lacks come from GLO-90 as
+  `layers[].fallback_sources`. Terrain is refused above 2500 existing source tiles.
 - Terrain reads are cached in `SCENES_DIR/.cache/` (keyed by dataset, source versions, bbox, res and soe version), so
-  rebuilding an area with other layers or dates does not read the tiles again. Deleting the folder is always safe.
+  rebuilding an area with other layers or dates does not read the tiles again. Deleting the folder is always safe, and it
+  is the way to clear files that older versions left behind.
+- Format 0.5 renames `copdem_terrain` to `terrain`. Generator 0.7.0 changes every scene id, so build a new scene rather
+  than replacing an old bundle in place. The viewer rejects format 0.4 with a prompt to pick the area again.
+- Contours use `maplibre-contour` (BSD-3-Clause) with a scene-seeded nested 10–2000 m ladder. New tiers fade in over
+  0.75 zoom levels and are traced one zoom early. Geometry stops refining at z12; bold heights never change on zoom.
+  Labels are bold-only until the Kenya/Fiji/flat-area trial establishes whether the sparse-label fallback is needed.
+  The plugin's shared worker and 50-tile caches are reused for each distinct tile source for the life of the page,
+  because version 0.1.1 has no manager-disposal API.
 
 ## Environment variables
 
@@ -153,6 +166,7 @@ python -m soe.cli terrain-index
 | `SOE_SYNTHETIC` | `0` | `1` uses fake offline data |
 | `SOE_LATEST` | probed | Fix the latest CHIRPS month (`YYYY-MM`) and skip the probe |
 | `SOE_CUBES_DIR` | `./data/cubes` | Where the ERA5-Land and ERA5 cubes are read from and written to |
+| `SOE_TERRAIN_TILES` | `https://tiles.mapterhorn.com/{z}/{x}/{y}.webp` | Elevation tile URL template, absolute or relative to `bundle_url` |
 
 ## Tests
 
@@ -187,13 +201,17 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
   months only where ERA5 filled an in-area cell. Temperature flags requested months that are preliminary in either cube.
   The credit appears in a bundle only when it holds filled cells. The same text is in `soe/sources/licences.py`.
 - **Terrain: Copernicus DEM GLO-30 Public and GLO-90** (Copernicus WorldDEM-30 / -90 licences, free and open; GLO-90 is
-  the fallback where GLO-30 has no tile). Hillshade and resampled elevation are adapted data, so the notice is
+  the fallback where GLO-30 has no tile). The elevation statistics in a bundle are adapted data, so the notice is
   required: "produced using Copernicus WorldDEM™-90 © DLR e.V.
   2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all
   rights reserved" (with "-30" for GLO-30). Art. 6(c) disclaimer: "The organisations in charge of the Copernicus
   programme by law or by delegation do not incur any liability for any use of the Copernicus WorldDEM™-90" (likewise
   "-30"). Citation: doi:10.5270/ESA-c5d3d65.
   Subsequent users of a bundle receive the same obligations. The same text is in `soe/sources/licences.py`.
+- **Terrain shading and contours: Mapterhorn terrain tiles** (https://mapterhorn.com/attribution), a mosaic of open
+  elevation sources under their own licences (CC BY 4.0, public domain, Etalab 2.0, DL-DE BY 2.0 and others). Credit:
+  "© Mapterhorn". The viewer fetches the tiles from the hosted endpoint, whose terms are not yet published, so a copy on
+  our own storage waits for their answer. The same text is in `soe/sources/licences.py`.
 - **Boundaries: geoBoundaries CGAZ**, CC BY 4.0. Runfola, D. et al. (2020) geoBoundaries: A global database of political
   administrative boundaries. PLoS ONE 15(4): e0231866. https://www.geoboundaries.org. Simplified to 0.01 degrees and
   clipped to 60S-60N. CC BY 4.0 for CGAZ itself is the repository-wide licence for geoBoundaries derivatives, not a

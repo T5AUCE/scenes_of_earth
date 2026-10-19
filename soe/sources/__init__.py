@@ -47,7 +47,7 @@ from .terrain import (
     TILE_GRID_SHAPE,
     TILE_ROW_OFFSET_DEG,
     TerrainDataset,
-    hillshade,
+    slope_degrees,
     terrain_res,
     terrain_tiles,
 )
@@ -96,12 +96,12 @@ __all__ = [
     "SyntheticSource",
     "TerrainDataset",
     "add_duration",
-    "hillshade",
     "is_request_label",
     "make_registry",
     "read_wrapped",
     "request_label",
     "request_range",
+    "slope_degrees",
     "terrain_res",
     "terrain_tiles",
 ]

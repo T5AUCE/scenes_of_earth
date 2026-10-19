@@ -90,7 +90,7 @@ SOURCES = {
         "disclaimer_required": True,
         "citation": "doi:10.5270/ESA-c5d3d65",
         "modified": (
-            "elevation area-averaged onto the scene grid; hillshade (Horn, az 315°, alt 45°)"
+            "area-averaged elevation percentiles and slope statistics at the stated cell size"
         ),
     },
     "glo90": {
@@ -114,8 +114,21 @@ SOURCES = {
         "disclaimer_required": True,
         "citation": "doi:10.5270/ESA-c5d3d65",
         "modified": (
-            "elevation area-averaged onto the scene grid; hillshade (Horn, az 315°, alt 45°)"
+            "area-averaged elevation percentiles and slope statistics at the stated cell size; "
+            "also fills source-tile gaps in GLO-30"
         ),
+    },
+    "mapterhorn": {
+        "name": "Mapterhorn terrain tiles",
+        "licence": (
+            "open data, per-source licences (CC BY 4.0, public domain, Etalab 2.0, "
+            "DL-DE BY 2.0 and others)"
+        ),
+        "licence_url": "https://mapterhorn.com/attribution",
+        "attribution": (
+            "Terrain shading and contours: © Mapterhorn (https://mapterhorn.com/attribution)"
+        ),
+        "modified": "shading and contours drawn in the viewer from the elevation tiles",
     },
     "geoBoundaries CGAZ": {
         "name": "geoBoundaries CGAZ",

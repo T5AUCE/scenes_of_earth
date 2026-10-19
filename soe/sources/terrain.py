@@ -1,5 +1,6 @@
-"""Copernicus GLO-30/90 terrain: tiles, block reads, hillshade and the dataset."""
+"""Read Copernicus elevation for area statistics and describe the viewer's terrain tiles."""
 import math
+import os
 import time
 import warnings
 from collections.abc import Callable
@@ -27,10 +28,8 @@ warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
 
 GLO30_RES_DEG = 1 / 3600
 GLO90_RES_DEG = 1 / 1200
-NATIVE_RES_TOLERANCE = 1e-9  # relative; coarser than this counts as resampled
+NATIVE_RES_TOLERANCE = 1e-9  # relative tolerance when choosing the source product
 
-HILLSHADE_FILL = 255  # stored for cells without data, so real shades stop one below it
-HILLSHADE_MAX = HILLSHADE_FILL - 1
 ELEVATION_FILL = -32768  # the int16 minimum, below any real ground
 
 LONGITUDE_DEGREE_AT_EQUATOR_M = 111_320
@@ -56,6 +55,17 @@ CANVAS_MARGIN_DEG = 1  # the mosaic canvas reaches this far beyond the block, fo
 BLOCK_READ_ATTEMPTS = 3
 BLOCK_RETRY_DELAY_SECS = 1
 
+TERRAIN_TILES_ENV = "SOE_TERRAIN_TILES"
+TERRAIN_TILES_URL = "https://tiles.mapterhorn.com/{z}/{x}/{y}.webp"
+TERRAIN_TILE_SIZE_PX = 512
+TERRAIN_TILE_MAX_ZOOM = 11
+
+ELEVATION_LOW_PERCENTILE = 2
+ELEVATION_HIGH_PERCENTILE = 98
+MEDIAN_PERCENTILE = 50
+STEEP_PERCENTILE = 90
+STATS_DECIMALS = 2
+
 GLO30_URL = "https://copernicus-dem-30m.s3.amazonaws.com/{n}/{n}.tif"
 GLO90_URL = "https://copernicus-dem-90m.s3.amazonaws.com/{n}/{n}.tif"
 
@@ -69,13 +79,12 @@ class TerrainProduct:
     tile_code: str  # the number in the tile name that tells the products apart
     res_deg: float  # native cell size
     tile_px: int  # tile height in pixels, and width below NARROW_TILE_FROM_LAT_DEG
-    cell_m: int  # native cell size in metres, for notices
 
 
 # Finest first: this is also the order of a mixed scene's sources.
 TERRAIN_PRODUCTS = {
-    "glo30": TerrainProduct(GLO30_URL, GLO30_TILE_INDEX, "10", GLO30_RES_DEG, 3600, 30),
-    "glo90": TerrainProduct(GLO90_URL, GLO90_TILE_INDEX, "30", GLO90_RES_DEG, 1200, 90),
+    "glo30": TerrainProduct(GLO30_URL, GLO30_TILE_INDEX, "10", GLO30_RES_DEG, 3600),
+    "glo90": TerrainProduct(GLO90_URL, GLO90_TILE_INDEX, "30", GLO90_RES_DEG, 1200),
 }
 
 
@@ -172,26 +181,20 @@ def with_margin(bounds: Bbox, res: float) -> Bbox:
     return (west - res, south - res, east + res, north + res)
 
 
-def hillshade(
-    elevation: np.ndarray,
-    resolution_degrees: float,
-    latitude_top: float,
-    azimuth: float = 315,
-    altitude: float = 45,
-) -> np.ndarray:
-    """Return uint8 hillshade (0-HILLSHADE_MAX) for a north-up grid with cells in degrees."""
+def slope_degrees(elevation: np.ndarray, res_deg: float, lat_top: float) -> np.ndarray:
+    """Return Horn slopes for a north-up elevation grid with degree-sized cells."""
     elevation = np.pad(elevation.astype("float64"), 1, mode="edge")
 
     height = elevation.shape[0] - 2
-    latitude = latitude_top - (np.arange(height) + 0.5) * resolution_degrees
+    latitude = lat_top - (np.arange(height) + 0.5) * res_deg
 
     # Gradients need cell sizes in metres to match elevation units.
     cell_width = (
-        resolution_degrees
+        res_deg
         * LONGITUDE_DEGREE_AT_EQUATOR_M
         * np.cos(np.radians(latitude))
     )[:, None].clip(min=1)
-    cell_height = resolution_degrees * LATITUDE_DEGREE_M
+    cell_height = res_deg * LATITUDE_DEGREE_M
 
     northwest = elevation[:-2, :-2]
     north = elevation[:-2, 1:-1]
@@ -212,20 +215,21 @@ def hillshade(
         - (southwest + 2 * south + southeast)
     ) / (8 * cell_height)
 
-    azimuth_radians = np.radians(azimuth)
-    altitude_radians = np.radians(altitude)
+    return np.degrees(np.arctan(np.hypot(gradient_east, gradient_north)))
 
-    light_east = np.sin(azimuth_radians) * np.cos(altitude_radians)
-    light_north = np.cos(azimuth_radians) * np.cos(altitude_radians)
-    light_up = np.sin(altitude_radians)
 
-    illumination = (
-        -gradient_east * light_east
-        - gradient_north * light_north
-        + light_up
-    ) / np.sqrt(gradient_east**2 + gradient_north**2 + 1)
+def terrain_tiles_block() -> dict:
+    """Return the terrain display source's tile metadata.
 
-    return np.rint(illumination.clip(0, 1) * 255).clip(max=HILLSHADE_MAX).astype("uint8")
+    The URL comes from SOE_TERRAIN_TILES and defaults to the hosted Mapterhorn tiles.
+    """
+    return {
+        "url": os.environ.get(TERRAIN_TILES_ENV, TERRAIN_TILES_URL),
+        "encoding": "terrarium",
+        "tile_size": TERRAIN_TILE_SIZE_PX,
+        "maxzoom": TERRAIN_TILE_MAX_ZOOM,
+        "source": SOURCES["mapterhorn"],
+    }
 
 
 def terrain_by_blocks(
@@ -416,7 +420,10 @@ def _average_onto_grid(mosaic: str, bounds: Bbox, res: float) -> np.ndarray:
 
 
 class TerrainDataset(StaticDataset):
-    """Copernicus GLO-30 or GLO-90 elevation, read at a resolution that depends on the area size."""
+    """Read Copernicus GLO-30 or GLO-90 statistics at a resolution set by the area size.
+
+    The bundle keeps only the statistics because the viewer draws terrain from the tiles in `tiles`.
+    """
 
     def tile_count(self, bbox: Bbox) -> int:
         return len(self._tiles(bbox))
@@ -429,25 +436,6 @@ class TerrainDataset(StaticDataset):
         products = [product for product in TERRAIN_PRODUCTS if product in used]
         return [SOURCES[product] for product in products or [terrain_product(terrain_res(bbox))]]
 
-    def notices(self, bbox: Bbox, steps: list[str]) -> list[str]:
-        res = terrain_res(bbox)
-        product = terrain_product(res)
-        native = TERRAIN_PRODUCTS[product]
-        notices = []
-        if res > native.res_deg * (1 + NATIVE_RES_TOLERANCE):
-            cell_size_m = round(res * LONGITUDE_DEGREE_AT_EQUATOR_M)
-            notices.append(
-                f"Terrain resampled to {cell_size_m} m cells (source {native.cell_m} m)."
-            )
-
-        has_fallback = any(tile_product != product for tile_product, _ in self._tiles(bbox))
-        if has_fallback:
-            fallback = TERRAIN_PRODUCTS["glo90"]
-            notices.append(
-                f"Terrain uses {fallback.cell_m} m Copernicus GLO-90 where GLO-30 is not public."
-            )
-        return notices
-
     def block_count(self, bbox: Bbox) -> int:
         return terrain_block_count(tuple(bbox))
 
@@ -457,21 +445,40 @@ class TerrainDataset(StaticDataset):
         res: float,
         on_block: Callable[[], None] | None = None,
     ) -> tuple[dict[str, np.ndarray], Affine]:
-        """Elevation (int16) and its hillshade (uint8) over bbox at cell size `res`."""
+        """Return int16 elevation over bbox at cell size `res`."""
         if on_block is None:
             elevation, transform = self.backend.terrain(tuple(bbox), res)
         else:
             elevation, transform = self.backend.terrain(tuple(bbox), res, on_block)
+        return {"elevation": elevation}, transform
 
-        light = self.style["hillshade"]
-        shade = hillshade(
-            elevation,
-            abs(transform.a),
-            transform.f,
-            light["azimuth"],
-            light["altitude"],
-        )
-        return {"elevation": elevation, "hillshade": shade}, transform
+    def summary(
+        self,
+        arrays: dict[str, np.ndarray],
+        mask: np.ndarray,
+        transform: Affine,
+    ) -> dict[str, float]:
+        """Return in-mask elevation and slope statistics that seed the contour ladder."""
+        inside = mask.astype(bool)
+        res_deg = abs(transform.a)
+        heights = arrays["elevation"][inside]
+        slopes = slope_degrees(arrays["elevation"], res_deg, transform.f)[inside]
+
+        low, high = np.percentile(heights, [ELEVATION_LOW_PERCENTILE, ELEVATION_HIGH_PERCENTILE])
+        median_slope, steep_slope = np.percentile(slopes, [MEDIAN_PERCENTILE, STEEP_PERCENTILE])
+        centre_latitude = transform.f + arrays["elevation"].shape[0] * transform.e / 2
+        cell_m = res_deg * LONGITUDE_DEGREE_AT_EQUATOR_M * math.cos(math.radians(centre_latitude))
+        stats = {
+            "min": heights.min(),
+            "max": heights.max(),
+            "mean": heights.mean(),
+            "p2": low,
+            "p98": high,
+            "slope_p50_deg": median_slope,
+            "slope_p90_deg": steep_slope,
+            "cell_m": cell_m,
+        }
+        return {key: round(float(value), STATS_DECIMALS) for key, value in stats.items()}
 
     def _tiles(self, bbox: Bbox) -> list[tuple[str, str]]:
         return terrain_tiles(bbox, terrain_product(terrain_res(bbox)))

@@ -1,11 +1,10 @@
-import { MAJOR_EVERY } from "./contours";
 import { COLOR_CHANNELS, LAST_ENTRY, legendTicks, RGBA_CHANNELS } from "./render/colormap";
 
 const GRADIENT_STOP_ENTRIES = [0, 64, 128, 192, 255];
 
 /** The legend line for contours. */
-export function contourLegendText(interval: number, units: string) {
-  return `Contours every ${interval} ${units} (bold every ${interval * MAJOR_EVERY})`;
+export function contourLegendText(interval: number, boldInterval: number, units = "m") {
+  return `Contours every ${interval} ${units} (bold every ${boldInterval} ${units})`;
 }
 
 /** A colour bar with stop labels under their colours and a separate units caption. */
