@@ -312,6 +312,32 @@ test("a class entering the stencil changes no blend at any rounding", () => {
   }
 });
 
+test("outline ink is continuous where a class enters the stencil", () => {
+  const field = [
+    [GRASS, GRASS, GRASS, GRASS, GRASS],
+    [GRASS, GRASS, GRASS, GRASS, COVER],
+    [TREE, TREE, TREE, TREE, TREE],
+    [TREE, TREE, TREE, TREE, TREE],
+  ];
+
+  for (const softnessCells of [0, 1]) {
+    for (const rounding of [0.25, 1]) {
+      const ink = (firstColumn: number, fractionX: number) => sampleClassField(
+        {
+          ids: field.map((row) => row.slice(firstColumn, firstColumn + 4)),
+          fraction: [fractionX, 0.5],
+          positionDx: [2, 0],
+          positionDy: [0, 2],
+        },
+        { smooth: true, rounding, softnessCells },
+      ).outline;
+
+      const message = `${softnessCells} ${rounding}`;
+      assert.ok(Math.abs(ink(0, 1 - 1e-9) - ink(1, 1e-9)) < 1e-6, message);
+    }
+  }
+});
+
 test("an unsupported outer class leaves a two-class blend unchanged", () => {
   const edges = { smooth: true, rounding: 0, softnessCells: 1 };
   const blend = (outer: number) => sampleClassField(
@@ -359,7 +385,7 @@ test("outline ink marks real edges and never a pure interior", () => {
 });
 
 test("outline ink skips a tie hidden under a dominant third class", () => {
-  const ids = edgeNeighbourhood([TREE, COVER], [GRASS, GRASS]);
+  const ids = edgeNeighbourhood([TREE, GRASS], [COVER, GRASS]);
   const ink = (fractionX: number, fractionY: number) => sampleClassField(
     {
       ids,
@@ -370,10 +396,70 @@ test("outline ink skips a tie hidden under a dominant third class", () => {
     { smooth: true, rounding: 0, softnessCells: 0 },
   ).outline;
 
-  assert.ok(ink(0.5, 0.25) > 0.99);
+  assert.ok(ink(0.5, 0.25) > 0.8);
   assert.ok(ink(0.3, 0.7 / 1.7) > 0.9);
   assert.ok(ink(0.5, 0.75) < 1e-3);
   assert.ok(ink(0.3, 0.9) < 1e-3);
+});
+
+test("outline ink stops at a junction instead of following a losing pair's tie", () => {
+  const ids = edgeNeighbourhood([TREE, COVER], [GRASS, COVER]);
+  const ink = (fractionY: number, softnessCells: number) => sampleClassField(
+    {
+      ids,
+      fraction: [0.5, fractionY],
+      positionDx: [0.01, 0],
+      positionDy: [0, 0.01],
+    },
+    { smooth: true, rounding: 0, softnessCells },
+  ).outline;
+
+  for (const softnessCells of [0, 1]) {
+    assert.ok(ink(0.2, softnessCells) > 0.5, `${softnessCells}`);
+    assert.ok(ink(0.8, softnessCells) < 1e-3, `${softnessCells}`);
+    assert.ok(ink(0.95, softnessCells) < 1e-3, `${softnessCells}`);
+  }
+});
+
+test("outline ink is continuous where the runner-up swaps places", () => {
+  const ids = edgeNeighbourhood([TREE, COVER], [GRASS, COVER]);
+  const swapY = 0.495 / 1.495;
+  const ink = (fractionY: number, positionDx: [number, number], positionDy: [number, number]) =>
+    sampleClassField(
+      { ids, fraction: [0.495, fractionY], positionDx, positionDy },
+      { smooth: true, rounding: 0, softnessCells: 1 },
+    ).outline;
+  const scales: [[number, number], [number, number]][] = [
+    [[0.01, 0], [0, 0.01]],
+    [[0.04, 0], [0, 0.005]],
+  ];
+
+  for (const [positionDx, positionDy] of scales) {
+    const before = ink(swapY - 1e-9, positionDx, positionDy);
+    const after = ink(swapY + 1e-9, positionDx, positionDy);
+
+    assert.ok(Math.abs(before - after) < 1e-6, `${positionDx} ${before} ${after}`);
+  }
+});
+
+test("outline ink is continuous where the top two classes swap places", () => {
+  const ids = edgeNeighbourhood([TREE, COVER], [GRASS, COVER]);
+  const swapX = 0.48752205697000256;
+  const swapY = 0.3388333333333333;
+
+  for (const softnessCells of [0, 1]) {
+    const ink = (offset: number) => sampleClassField(
+      {
+        ids,
+        fraction: [swapX, swapY + offset],
+        positionDx: [0.04, 0],
+        positionDy: [0, 0.005],
+      },
+      { smooth: true, rounding: 0, softnessCells },
+    ).outline;
+
+    assert.ok(Math.abs(ink(-1e-9) - ink(1e-9)) < 1e-6, `${softnessCells}`);
+  }
 });
 
 test("Smooth off paints the nearest cell instead of the kernel winner", () => {

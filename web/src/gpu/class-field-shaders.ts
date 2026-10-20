@@ -218,6 +218,7 @@ void main() {
   color /= totalInfluence;
 
   if (uOutline) {
+    // A pair is weighted by how far both classes lead the rest so the ink is continuous.
     float ink = 0.0;
     for (int index = 0; index < classCount; index++) {
       if (classIds[index] == 0u) continue;
@@ -226,17 +227,32 @@ void main() {
         if (classIds[other] == 0u) continue;
 
         vec2 cellGradient = classGradients[index] - classGradients[other];
-        vec2 screenGradient = screenGradientOf(cellGradient, positionDx, positionDy);
         float gapPx = abs(classWeights[index] - classWeights[other])
-          / max(length(screenGradient), MIN_GRADIENT);
+          / max(length(screenGradientOf(cellGradient, positionDx, positionDy)), MIN_GRADIENT);
         float presence = clamp(
           2.0 * min(influences[index], influences[other]) / totalInfluence,
           0.0,
           1.0
         );
-        ink = max(ink, (1.0 - smoothstep(0.0, OUTLINE_WIDTH_PX, gapPx)) * presence);
+        float leading = 1.0;
+        for (int rival = 0; rival < classCount; rival++) {
+          if (rival == index || rival == other || classIds[rival] == 0u) continue;
+
+          vec2 indexGradient = classGradients[index] - classGradients[rival];
+          vec2 otherGradient = classGradients[other] - classGradients[rival];
+          float leadPx = min(
+            (classWeights[index] - classWeights[rival])
+              / max(length(screenGradientOf(indexGradient, positionDx, positionDy)), MIN_GRADIENT),
+            (classWeights[other] - classWeights[rival])
+              / max(length(screenGradientOf(otherGradient, positionDx, positionDy)), MIN_GRADIENT)
+          );
+          float dominance = smoothstep(0.0, 1.0, 0.5 + leadPx / (2.0 * OUTLINE_WIDTH_PX));
+          leading *= 1.0 - classSupport(classWeights[rival]) * (1.0 - dominance);
+        }
+        ink += (1.0 - smoothstep(0.0, OUTLINE_WIDTH_PX, gapPx)) * presence * leading;
       }
     }
+    ink = min(ink, 1.0);
     color = mix(color, INK, ink * OUTLINE_STRENGTH);
   }
   fragColor = vec4(color * uOpacity, uOpacity);
@@ -444,7 +460,7 @@ function pairGradients(current: ClassSum, other: ClassSum, fragment: ClassFieldF
   return { gap: current.weight - other.weight, cellGradient, screenGradient };
 }
 
-// Only pairs that both show in the final mix can ink, so losing classes never outline an interior.
+// Each pair is weighted by how far both its classes lead the rest so the ink is continuous.
 function outlineInk(
   classes: ClassSum[],
   shares: number[],
@@ -453,15 +469,28 @@ function outlineInk(
   let ink = 0;
   for (let index = 0; index < classes.length; index++) {
     for (let other = index + 1; other < classes.length; other++) {
-      const { gap, screenGradient } = pairGradients(classes[index], classes[other], fragment);
-      const gapPx = Math.abs(gap)
-        / Math.max(Math.hypot(screenGradient[0], screenGradient[1]), MIN_MIRROR_GRADIENT);
+      const gapPx = Math.abs(distancePx(classes[index], classes[other], fragment));
       const presence = Math.min(1, 2 * Math.min(shares[index], shares[other]));
-      const nearness = 1 - smoothstep(gapPx / OUTLINE_WIDTH_PX);
-      ink = Math.max(ink, nearness * presence);
+      let leading = 1;
+      classes.forEach((rival, rivalIndex) => {
+        if (rivalIndex === index || rivalIndex === other) return;
+
+        const leadPx = Math.min(
+          distancePx(classes[index], rival, fragment),
+          distancePx(classes[other], rival, fragment),
+        );
+        const dominance = smoothstep(0.5 + leadPx / (2 * OUTLINE_WIDTH_PX));
+        leading *= 1 - classSupport(rival.weight) * (1 - dominance);
+      });
+      ink += (1 - smoothstep(gapPx / OUTLINE_WIDTH_PX)) * presence * leading;
     }
   }
-  return ink;
+  return Math.min(ink, 1);
+}
+
+function distancePx(current: ClassSum, other: ClassSum, fragment: ClassFieldFragment): number {
+  const { gap, screenGradient } = pairGradients(current, other, fragment);
+  return gap / Math.max(Math.hypot(screenGradient[0], screenGradient[1]), MIN_MIRROR_GRADIENT);
 }
 
 function smoothstep(fraction: number): number {
