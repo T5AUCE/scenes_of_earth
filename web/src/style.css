@@ -326,6 +326,10 @@ body.scene-mode #panel {
   margin-left: auto;
 }
 
+#scene-column .layer-menu .option-note {
+  margin: 6px 0 0;
+}
+
 #scene-column .notice {
   padding: 6px 8px;
   margin-bottom: 8px;
@@ -522,4 +526,19 @@ body.scene-mode #panel {
   margin-right: 6px;
   border: 1px solid #999;
   vertical-align: -2px;
+}
+
+.layer-menu .reset-warning {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(230, 160, 0, 0.15);
+  box-shadow: inset 0 0 0 1px rgba(230, 160, 0, 0.6);
+}
+
+.layer-menu .reset-warning div {
+  flex: 1 0 100%;
 }

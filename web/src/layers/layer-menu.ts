@@ -109,11 +109,21 @@ function menuSections(
   const reset = makeHtmlElement("button", "Reset layer");
   reset.type = "button";
   reset.className = "menu-reset";
-  reset.onclick = () => {
+  const resetLayer = () => {
     menu.setPalette(menu.defaultPalette);
     menu.range?.set(null);
     onChange("palette");
     refill();
+  };
+  reset.onclick = () => {
+    const isDefault = menu.palette === menu.defaultPalette && !menu.range?.value;
+    if (isDefault) return resetLayer();
+
+    askBeforeReset(
+      reset,
+      "This layer's colours and range return to their defaults.",
+      resetLayer,
+    );
   };
 
   return [
@@ -279,16 +289,19 @@ function rangeSection(range: RangeMenu | undefined, onChange: (changed: MenuChan
 
     range.set(next);
     show(next);
+    fitted.disabled = false;
     onChange("range");
   };
   low.onchange = apply;
   high.onchange = apply;
 
-  const fitted = makeHtmlElement("button", "Fitted to this area");
+  const fitted = makeHtmlElement("button", "Reset to area's range");
   fitted.type = "button";
+  fitted.disabled = !range.value;
   fitted.onclick = () => {
     range.set(null);
     show(range.fitted);
+    fitted.disabled = true;
     onChange("range");
   };
 
@@ -298,13 +311,41 @@ function rangeSection(range: RangeMenu | undefined, onChange: (changed: MenuChan
   return [section];
 }
 
-function numberInput(label: string, { decimals, bounds }: RangeMenu) {
+/** Shows a warning after the trigger until the user resets or cancels. */
+function askBeforeReset(trigger: HTMLButtonElement, message: string, reset: () => void) {
+  const popover = trigger.closest(".layer-menu");
+  popover?.querySelector(".reset-warning")?.remove();
+
+  const panel = makeHtmlElement("div");
+  panel.className = "reset-warning";
+  panel.role = "alertdialog";
+  panel.ariaLabel = "Confirm reset";
+  makeHtmlElement("div", message, panel);
+
+  const confirm = makeHtmlElement("button", "Reset", panel);
+  confirm.type = "button";
+  const cancel = makeHtmlElement("button", "Cancel", panel);
+  cancel.type = "button";
+
+  const close = () => {
+    panel.remove();
+    if (trigger.isConnected && !trigger.disabled) trigger.focus();
+  };
+  confirm.onclick = () => {
+    reset();
+    close();
+  };
+  cancel.onclick = close;
+
+  trigger.after(panel);
+  cancel.focus();
+}
+
+function numberInput(label: string, { decimals }: RangeMenu) {
   const input = document.createElement("input");
   input.type = "number";
   input.ariaLabel = label;
   input.step = String(10 ** -decimals);
-  input.min = String(bounds[0]);
-  input.max = String(bounds[1]);
   return input;
 }
 
@@ -315,13 +356,11 @@ function labelled(text: string, input: HTMLInputElement) {
 }
 
 function typedRange(low: HTMLInputElement, high: HTMLInputElement, range: RangeMenu) {
-  const [minimum, maximum] = range.bounds;
-  const clamp = (text: string) => Math.min(Math.max(Number(text), minimum), maximum);
-  const rounded = (value: number) => Number(value.toFixed(range.decimals));
+  const rounded = (text: string) => Number(Number(text).toFixed(range.decimals));
   if (!low.value || !high.value) return null;
 
-  const next: [number, number] = [rounded(clamp(low.value)), rounded(clamp(high.value))];
-  return next[0] < next[1] ? next : null;
+  const next: [number, number] = [rounded(low.value), rounded(high.value)];
+  return Number.isFinite(next[0]) && Number.isFinite(next[1]) && next[0] < next[1] ? next : null;
 }
 
 // The menu sits beside the column so it never covers the layers it edits.

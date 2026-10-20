@@ -130,14 +130,17 @@ test("the last entry for a layer wins and ranges are rounded to the data's preci
   assert.deepEqual(display.layers.chirps_monthly, { palette: "cividis", range: [0, 250.3] });
 });
 
-test("only non-default values are written", () => {
+test("every layer with a menu names its palette but ranges and off parts only when set", () => {
   const { display } = resolveDisplay(LAYERS, {
     pal: "chirps_monthly:ink-blue,esa_worldcover:painted",
     range: "",
     off: "",
   }, {});
 
-  assert.equal(formatDisplayParams(display, LAYERS), "");
+  assert.equal(
+    formatDisplayParams(display, LAYERS),
+    "&pal=chirps_monthly:ink-blue,esa_worldcover:painted,terrain:brown",
+  );
 });
 
 test("palettes, ranges and off parts round trip through the link text", () => {

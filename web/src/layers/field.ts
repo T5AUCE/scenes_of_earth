@@ -74,7 +74,7 @@ export function createSeriesView(
   const drawLatestStep = latestOnly(drawStep);
 
   const showLegend = () => {
-    const isBottomOpen = range !== null && stats !== null && range[0] > stats.min;
+    const isBottomOpen = range !== null;
     legendBox.replaceChildren(gradientLegend(colors, stops, layer.units, isBottomOpen));
   };
 

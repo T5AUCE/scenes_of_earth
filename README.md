@@ -45,6 +45,23 @@ loaded from `soe/data/sample_areas.geojson`, so search works without the boundar
 geoBoundaries gbOpen outlines simplified to about 0.01 degrees; each feature carries its own licence and source. They
 reload on every synthetic start, unless real boundaries are imported.
 
+## Share links
+
+A scene link is `?scene=<id>` plus optional parameters. The app writes them as you change the scene, and
+the parameters below describe what a link can carry.
+
+- `t` is the time step, as a year (`2019`), month (`2019-03`) or day (`2019-03-05`).
+- `pal` lists `layer:palette` pairs. The app names the palette of every layer that has an Edit menu, so
+  the receiver sees the sender's colours. A palette is a built-in name, or `custom-` followed by two to
+  five six-digit hex colours separated by hyphens (`custom-1a2b3c-88cc44`). For the terrain layer it is
+  the contour colour (`brown`, `grey` or `black`).
+- `range` lists `layer:low:high` display ranges for field layers. Values may lie outside the values in
+  the area, and are rounded to the precision of the data.
+- `off` lists the layers or parts that start switched off, such as `terrain.contours`.
+
+Entries the scene cannot use are ignored and a note says so. Settings from a link apply to that visit
+only, while the palettes you pick in the menu are also remembered in this browser.
+
 ## Import boundaries (once)
 
 Download and unzip into a folder, then:

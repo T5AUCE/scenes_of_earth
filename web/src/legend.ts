@@ -11,7 +11,7 @@ export function contourLegendText(interval: number, boldInterval: number, units 
 
 /**
  * A colour bar with stop labels under their colours and a separate units caption. The top label
- * is open ended, and so is the bottom one when the scale starts above the lowest value.
+ * is open ended, and so is the bottom one when the scale is a custom range.
  */
 export function gradientLegend(
   colors: Uint8ClampedArray,

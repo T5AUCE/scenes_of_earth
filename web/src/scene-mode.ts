@@ -363,7 +363,11 @@ function createSceneClock(sceneId: string) {
 
     // Scrubbing replaces the entry, so Back is never flooded with months.
     syncUrl() {
-      history.replaceState(history.state, "", sceneUrl(sceneId, label, display));
+      try {
+        history.replaceState(history.state, "", sceneUrl(sceneId, label, display));
+      } catch {
+        // Rapid replaceState calls can throw a SecurityError, and the next change retries.
+      }
     },
 
     markEntered() {

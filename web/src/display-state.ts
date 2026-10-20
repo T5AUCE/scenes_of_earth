@@ -110,12 +110,16 @@ export function resolveDisplay(
   return { display, dropped };
 }
 
-/** The link parameters for everything that differs from the defaults, each starting with `&`. */
+/**
+ * The link parameters, each starting with `&`. Every layer with a menu names its palette so that
+ * the receiver sees the sender's colours whatever palettes their browser remembers. Ranges and
+ * off parts appear only when they differ from the defaults.
+ */
 export function formatDisplayParams(display: SceneDisplay, layers: LayerDoc[]) {
   const parameters = {
-    pal: layers.flatMap(({ id }) => {
-      const palette = display.layers[id]?.palette;
-      return palette ? [`${id}:${palette}`] : [];
+    pal: layers.flatMap((layer) => {
+      const palette = display.layers[layer.id]?.palette ?? defaultPalette(layer);
+      return hasMenu(layer) && palette ? [`${layer.id}:${palette}`] : [];
     }),
     range: layers.flatMap(({ id }) => {
       const range = display.layers[id]?.range;
@@ -177,6 +181,10 @@ export function storePalette(layerId: string, name: string | null) {
   } catch {
     // The choice still applies to this visit. A blocked store is not worth reporting.
   }
+}
+
+function hasMenu(layer: LayerDoc) {
+  return ["field", "categorical", "terrain"].includes(layer.style.kind);
 }
 
 function tokenFields(list: string) {
