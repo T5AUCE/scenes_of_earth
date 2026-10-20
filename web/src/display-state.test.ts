@@ -231,14 +231,14 @@ test("edge settings default to quarter rounding with no softness or outline", ()
 
   assert.deepEqual(loadStoredEdges("esa_worldcover"), {
     rounding: 0.25,
-    softnessPx: 0,
+    softnessCells: 0,
     outline: false,
   });
 });
 
 test("edges persist by dataset independently of palettes and share links", () => {
   useStorage();
-  const edges = { rounding: 0.6, softnessPx: 1.5, outline: true };
+  const edges = { rounding: 0.6, softnessCells: 1, outline: true };
   storePalette("esa_worldcover", "esa");
   storeEdges("esa_worldcover", edges);
   const { display } = resolveDisplay(LAYERS, NO_TOKENS, loadStoredPalettes());
@@ -252,16 +252,45 @@ test("edges persist by dataset independently of palettes and share links", () =>
   assert.deepEqual(loadStoredEdges("esa_worldcover"), DEFAULT_EDGES);
 });
 
+test("legacy pixel softness resets to zero but keeps the other edge choices", () => {
+  const items = useStorage();
+  const load = (value: object) => {
+    items.set("soe.edges.v1", JSON.stringify({ esa_worldcover: value }));
+    return loadStoredEdges("esa_worldcover");
+  };
+
+  assert.deepEqual(load({ rounding: 0.4, softnessPx: 0.5, outline: true }), {
+    rounding: 0.4,
+    softnessCells: 0,
+    outline: true,
+  });
+  assert.deepEqual(load({ rounding: 0.25, softnessPx: 1.5, outline: false }), {
+    rounding: 0.25,
+    softnessCells: 0,
+    outline: false,
+  });
+  assert.deepEqual(load({ rounding: 0.25, softnessCells: 0.75, softnessPx: 1.5, outline: false }), {
+    rounding: 0.25,
+    softnessCells: 0.75,
+    outline: false,
+  });
+  assert.deepEqual(load({ rounding: 0.25, softnessPx: 1.6, outline: false }), DEFAULT_EDGES);
+});
+
 test("invalid or blocked edge storage uses defaults without preventing changes", () => {
   const items = useStorage();
   for (const value of [
     null,
     [],
-    { rounding: 0.65, softnessPx: 0, outline: false },
+    { rounding: 0.65, softnessCells: 0, outline: false },
+    { rounding: 0.25, softnessCells: -1, outline: false },
+    { rounding: 0.25, softnessCells: 1.5, outline: false },
+    { rounding: "0.25", softnessCells: 0, outline: false },
+    { rounding: 0.25, softnessCells: "0", outline: false },
+    { rounding: 0.25, softnessCells: 0, outline: "false" },
     { rounding: 0.25, softnessPx: -1, outline: false },
-    { rounding: 0.25, softnessPx: 2, outline: false },
-    { rounding: "0.25", softnessPx: 0, outline: false },
-    { rounding: 0.25, softnessPx: 0, outline: "false" },
+    { rounding: 0.25, softnessPx: 1.6, outline: false },
+    { rounding: 0.25, softnessPx: "0", outline: false },
   ]) {
     items.set("soe.edges.v1", JSON.stringify({ esa_worldcover: value }));
     assert.deepEqual(loadStoredEdges("esa_worldcover"), DEFAULT_EDGES);

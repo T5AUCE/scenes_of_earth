@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { backdropMaxZoom, RELIEF_STRENGTH, reliefPaint } from "./relief.ts";
+import { RELIEF_STRENGTH, reliefPaint } from "./relief.ts";
 
 const COLOR_PROPERTIES = [
   "hillshade-shadow-color",
@@ -67,13 +67,3 @@ function exaggerations(strength: number) {
   const expression = reliefPaint(strength)["hillshade-exaggeration"] as unknown[];
   return expression.slice(3).filter((_, index) => index % 2 === 1) as number[];
 }
-
-test("the contour backdrop is the fitted zoom rounded up", () => {
-  // 1000 px across 10 degrees of 512 px tiles fits at zoom 6.1.
-  assert.equal(backdropMaxZoom(10, 1000, 512, 11), 7);
-});
-
-test("the contour backdrop never exceeds the tile maxzoom or goes below zero", () => {
-  assert.equal(backdropMaxZoom(0.1, 1000, 512, 11), 11);
-  assert.equal(backdropMaxZoom(360, 100, 512, 11), 0);
-});

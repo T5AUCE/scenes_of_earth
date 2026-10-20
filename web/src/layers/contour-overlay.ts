@@ -20,7 +20,6 @@ import { makeHtmlElement } from "../html";
 import { contourLegendText } from "../legend";
 import { contourColor, DEFAULT_CONTOUR_COLOR } from "../render/palettes";
 import type { LayerContext, Part, TerrainStats, TerrainTiles } from "../types";
-import { backdropMaxZoom } from "./relief";
 
 const CONTOUR_OPACITY = 0.55;
 const MINOR_LINE_WIDTH_PX = 0.5;
@@ -66,9 +65,6 @@ export class ContourOverlay {
   readonly part: Part;
   private readonly map: MapLibreMap;
   private readonly sourceId: string;
-  private readonly backdropId: string;
-  private readonly bbox: LayerContext["layer"]["grid"]["bbox"];
-  private backdropFade?: ExpressionSpecification;
   private readonly ladder: ContourLadder;
   private isOn = true;
   private color: string;
@@ -84,8 +80,6 @@ export class ContourOverlay {
     this.map = map;
     this.color = contourColor(display?.palette ?? DEFAULT_CONTOUR_COLOR)!;
     this.sourceId = `${layer.id}-contours`;
-    this.backdropId = `${this.sourceId}-backdrop`;
-    this.bbox = layer.grid.bbox;
     const [, south, , north] = layer.grid.bbox;
     const maxzoom = Math.min(MAX_CONTOUR_ZOOM, tiles.maxzoom + CONTOUR_OVERZOOM);
     this.ladder = contourLadder(stats, (south + north) / 2, { maxZoom: maxzoom });
@@ -115,7 +109,6 @@ export class ContourOverlay {
     for (const [index, tier] of this.ladder.tiers.entries()) {
       this.addLine(tier, this.ladder.tiers[index - 1], beforeId);
     }
-    this.addBackdrop(dem, tiles, beforeId);
     this.addLabels(beforeId);
     map.on("zoomend", this.updateLegend);
     this.updateLegend();
@@ -146,63 +139,6 @@ export class ContourOverlay {
     );
     this.part.layerIds.push(id);
   }
-
-  /** Keep coarse bold lines available while main tiles load so zooming out is not blank. */
-  private addBackdrop(dem: DemSource, tiles: TerrainTiles, beforeId?: string) {
-    const bold = this.ladder.tiers.filter((tier) => tier.interval >= this.ladder.boldInterval);
-    if (bold.length === 0) return;
-
-    const [west, , east] = this.bbox;
-    const maxzoom = backdropMaxZoom(
-      east - west,
-      this.map.getCanvas().clientWidth,
-      tiles.tile_size,
-      tiles.maxzoom,
-    );
-    this.map.addSource(this.backdropId, {
-      type: "vector",
-      tiles: [
-        dem.contourProtocolUrl({
-          thresholds: { 0: this.ladder.boldInterval },
-          overzoom: CONTOUR_OVERZOOM,
-          buffer: CONTOUR_BUFFER_PX,
-        }),
-      ],
-      maxzoom,
-      ...terrainTileBounds(this.bbox),
-    });
-    this.backdropFade = tierFades(bold, CONTOUR_OPACITY);
-    this.map.addLayer(
-      {
-        id: this.backdropId,
-        type: "line",
-        source: this.backdropId,
-        "source-layer": "contours",
-        minzoom: bold[0].entryZoom,
-        filter: multipleOf(this.ladder.boldInterval),
-        paint: {
-          "line-color": this.color,
-          "line-width": BOLD_LINE_WIDTH_PX,
-          "line-opacity": 0,
-          "line-opacity-transition": { duration: 0 },
-        },
-      },
-      beforeId,
-    );
-    this.part.layerIds.push(this.backdropId);
-    this.map.on("sourcedata", this.updateBackdrop);
-    this.map.on("dataloading", this.updateBackdrop);
-    this.map.on("zoomstart", this.updateBackdrop);
-    this.map.on("zoomend", this.updateBackdrop);
-  }
-
-  private readonly updateBackdrop = () => {
-    if (!this.map.getLayer(this.backdropId)) return;
-
-    const isMainReady = this.map.isSourceLoaded(this.sourceId);
-    const opacity = isMainReady ? 0 : this.backdropFade!;
-    this.map.setPaintProperty(this.backdropId, "line-opacity", opacity);
-  };
 
   private addLabels(beforeId?: string) {
     const tiers = labelledTiers(this.ladder);
@@ -264,13 +200,8 @@ export class ContourOverlay {
 
   destroy() {
     this.map.off("zoomend", this.updateLegend);
-    this.map.off("sourcedata", this.updateBackdrop);
-    this.map.off("dataloading", this.updateBackdrop);
-    this.map.off("zoomstart", this.updateBackdrop);
-    this.map.off("zoomend", this.updateBackdrop);
     for (const id of this.part.layerIds) this.map.removeLayer(id);
     this.map.removeSource(this.sourceId);
-    if (this.map.getSource(this.backdropId)) this.map.removeSource(this.backdropId);
   }
 }
 

@@ -251,7 +251,7 @@ export interface LayerControl {
 /** The browser's edge choices for a categorical dataset, independent of shared links. */
 export interface EdgeSettings {
   rounding: number;
-  softnessPx: number;
+  softnessCells: number;
   outline: boolean;
 }
 

@@ -18,12 +18,12 @@ import {
 
 /** How the edges between classes are drawn. */
 export interface ClassEdges {
-  /** Use the kernel's strongest class rather than the nearest cell. */
+  /** Blend competing classes from the kernel instead of painting the nearest cell. */
   smooth: boolean;
   /** Blend bilinear weights towards a cubic B-spline, capped at 0.6 by the viewer. */
   rounding: number;
-  /** The width of the colour blend between two classes; 0 keeps one colour per pixel. */
-  softnessPx: number;
+  /** The width of the colour blend between two classes in grid cells; 0 keeps a one-pixel edge. */
+  softnessCells: number;
   /** Draw a faint ink line between two classes. */
   outline: boolean;
 }
@@ -73,15 +73,15 @@ const UNIFORM_NAMES = [
   "uWindowRow",
   "uSmooth",
   "uRounding",
-  "uSoftnessPx",
+  "uSoftnessCells",
   "uOutline",
   "uOpacity",
 ];
 const CORNERS = Float32Array.of(0, 0, 1, 0, 0, 1, 1, 1);
 
 /**
- * A MapLibre custom layer that draws one-based class ids with the strongest-class kernel of the
- * fragment shader. The setters take effect on the next frame.
+ * A MapLibre custom layer that draws one-based class ids with the class kernel of the fragment
+ * shader. The setters take effect on the next frame.
  */
 export function createClassFieldLayer(options: ClassFieldOptions) {
   const layer = new ClassFieldLayer(options);
@@ -273,7 +273,7 @@ class ClassFieldLayer implements CustomLayerInterface {
 
   private draw(gl: WebGL2RenderingContext, gpu: Gpu, mainMatrix: ArrayLike<number>) {
     const uniform = (name: string) => gpu.uniforms.get(name)!;
-    const { smooth, rounding, softnessPx, outline } = this.edges;
+    const { smooth, rounding, softnessCells, outline } = this.edges;
 
     gl.useProgram(gpu.program);
     gl.bindVertexArray(gpu.vertexArray);
@@ -286,7 +286,7 @@ class ClassFieldLayer implements CustomLayerInterface {
     gl.uniform1i(uniform("uRowCount"), gpu.rowCount);
     gl.uniform1i(uniform("uSmooth"), smooth ? 1 : 0);
     gl.uniform1f(uniform("uRounding"), rounding);
-    gl.uniform1f(uniform("uSoftnessPx"), softnessPx);
+    gl.uniform1f(uniform("uSoftnessCells"), softnessCells);
     gl.uniform1i(uniform("uOutline"), outline ? 1 : 0);
     gl.uniform1f(uniform("uOpacity"), this.options.opacity);
 

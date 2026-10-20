@@ -296,7 +296,7 @@ async function checkDisplay(page, renderer) {
   let edgesRepaint = null;
   if (hasEdges) {
     await rounding.fill("0.6");
-    await menu.getByRole("slider", { name: "Edge softness", exact: true }).fill("1.5");
+    await menu.getByRole("slider", { name: "Edge softness", exact: true }).fill("1");
     await menu.getByRole("checkbox", { name: "Faint outline" }).check();
     edgesRepaint = await page.evaluate(frameHash) !== shown;
     await rounding.fill("0.25");

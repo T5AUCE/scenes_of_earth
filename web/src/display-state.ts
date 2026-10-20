@@ -20,45 +20,76 @@ export const DROPPED_NOTE = "Some display settings in this link don't apply to t
 /** The tokens of a link without display settings. */
 export const NO_TOKENS: DisplayTokens = { pal: "", range: "", off: "" };
 
-/** Default class edges keep one colour per pixel and preserve isolated cells. */
+/** Default class edges keep a one-pixel anti-aliased border and preserve isolated cells. */
 export const DEFAULT_EDGES: Readonly<EdgeSettings> = {
   rounding: 0.25,
-  softnessPx: 0,
+  softnessCells: 0,
   outline: false,
 };
 
 /** The strongest rounding that retains small class patches. */
 export const MAX_ROUNDING = 0.6;
-/** The widest optional blend between class colours, in screen pixels. */
-export const MAX_SOFTNESS_PX = 1.5;
+/** The widest optional blend between class colours, in grid cells. */
+export const MAX_SOFTNESS_CELLS = 1;
+const MAX_LEGACY_SOFTNESS_PX = 1.5; // old storage measured softness in screen pixels
+
+interface StoredEdges {
+  rounding?: unknown;
+  softnessCells?: unknown;
+  softnessPx?: unknown; // legacy field, in screen pixels
+  outline?: unknown;
+}
 
 /** Read valid edge choices for one dataset without changing its shared-link display. */
 export function loadStoredEdges(datasetId: string): EdgeSettings {
   const value = storedEdges()[datasetId];
-  if (
-    value
-    && typeof value.rounding === "number"
-    && Number.isFinite(value.rounding)
-    && value.rounding >= 0
-    && value.rounding <= MAX_ROUNDING
-    && typeof value.softnessPx === "number"
-    && Number.isFinite(value.softnessPx)
-    && value.softnessPx >= 0
-    && value.softnessPx <= MAX_SOFTNESS_PX
-    && typeof value.outline === "boolean"
-  ) {
-    return { rounding: value.rounding, softnessPx: value.softnessPx, outline: value.outline };
+  if (!value || !isStoredRounding(value.rounding) || typeof value.outline !== "boolean") {
+    return { ...DEFAULT_EDGES };
   }
-  return { ...DEFAULT_EDGES };
+
+  const softnessCells = storedSoftness(value);
+  if (softnessCells === null) return { ...DEFAULT_EDGES };
+
+  return { rounding: value.rounding, softnessCells, outline: value.outline };
 }
 
-function storedEdges(): Record<string, EdgeSettings> {
+function storedEdges(): Record<string, StoredEdges> {
   try {
     const parsed = JSON.parse(localStorage.getItem(EDGES_STORAGE_KEY) ?? "{}");
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
   }
+}
+
+function isStoredRounding(value: unknown): value is number {
+  return typeof value === "number"
+    && Number.isFinite(value)
+    && value >= 0
+    && value <= MAX_ROUNDING;
+}
+
+function storedSoftness(value: StoredEdges) {
+  if (value.softnessCells !== undefined) {
+    return isSoftness(value.softnessCells) ? value.softnessCells : null;
+  }
+
+  // Screen pixels and cells differ too much at zoom, so reset only the softness choice.
+  return isLegacySoftness(value.softnessPx) ? 0 : null;
+}
+
+function isLegacySoftness(value: unknown): value is number {
+  return typeof value === "number"
+    && Number.isFinite(value)
+    && value >= 0
+    && value <= MAX_LEGACY_SOFTNESS_PX;
+}
+
+function isSoftness(value: unknown): value is number {
+  return typeof value === "number"
+    && Number.isFinite(value)
+    && value >= 0
+    && value <= MAX_SOFTNESS_CELLS;
 }
 
 /** Remember edge choices per dataset, leaving palette storage and share links untouched. */

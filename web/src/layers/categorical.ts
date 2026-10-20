@@ -4,7 +4,7 @@ import {
   defaultPalette,
   loadStoredEdges,
   MAX_ROUNDING,
-  MAX_SOFTNESS_PX,
+  MAX_SOFTNESS_CELLS,
   storeEdges,
 } from "../display-state";
 import { createClassFieldLayer } from "../gpu/class-field-layer";
@@ -17,7 +17,7 @@ import { createImagePainter } from "./categorical-image";
 
 const CATEGORICAL_OPACITY = 0.8;
 const ROUNDING_STEP = 0.05;
-const SOFTNESS_STEP_PX = 0.25;
+const SOFTNESS_STEP_CELLS = 0.05;
 const SMOOTH_NOTE = "Edges are drawn smoothly from per-cell classes. No data is added.";
 const IMAGE_EDGES_NOTE = "Edge options need WebGL drawing.";
 
@@ -113,14 +113,14 @@ class CategoricalView implements LayerView {
         },
         {
           label: "Edge softness",
-          unit: "px",
+          unit: "cells",
           min: 0,
-          max: MAX_SOFTNESS_PX,
-          step: SOFTNESS_STEP_PX,
+          max: MAX_SOFTNESS_CELLS,
+          step: SOFTNESS_STEP_CELLS,
           get value() {
-            return view.edges.softnessPx;
+            return view.edges.softnessCells;
           },
-          set: (softnessPx) => this.setEdges({ ...this.edges, softnessPx }),
+          set: (softnessCells) => this.setEdges({ ...this.edges, softnessCells }),
         },
       ],
       outline: {
@@ -131,7 +131,7 @@ class CategoricalView implements LayerView {
       },
       get isDefault() {
         return view.edges.rounding === DEFAULT_EDGES.rounding
-          && view.edges.softnessPx === DEFAULT_EDGES.softnessPx
+          && view.edges.softnessCells === DEFAULT_EDGES.softnessCells
           && view.edges.outline === DEFAULT_EDGES.outline;
       },
       reset: () => this.setEdges({ ...DEFAULT_EDGES }),

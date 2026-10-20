@@ -28,9 +28,10 @@ const SMOOTHING_LINES = [
   "Field cells without data are see-through, so smoothing fades the colour out at their edges "
     + "and at the border of the area instead of inventing values there.",
   "Land-cover Smooth draws edges smoothly from per-cell classes while keeping class colours "
-    + "separate. Rounding can shrink small patches, but it adds no data. Edge softness optionally "
-    + "blends colours at their borders. Without WebGL drawing, an image provides smooth edges "
-    + "at a fixed resolution instead.",
+    + "separate. Rounding can shrink small patches, but it adds no data. Edge softness blends "
+    + "colours at their borders over a distance measured in grid cells, so the blend widens on "
+    + "screen as you zoom in; 0 leaves a one-pixel anti-aliased border. Without WebGL drawing, "
+    + "an image provides smooth edges at a fixed resolution instead.",
   "Terrain shading is drawn by your graphics card from Mapterhorn elevation tiles, so it gains "
     + "detail as you zoom in. It is a picture only; the values in the files do not come from it.",
   "Contour lines are drawn from elevation averaged into blocks of at most 1024 cells per side "

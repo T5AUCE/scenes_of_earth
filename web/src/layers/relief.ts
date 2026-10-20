@@ -14,8 +14,6 @@ const HIGH_DETAIL_ZOOM = 12;
 const LOW_DETAIL_EXAGGERATION = 0.4;
 const HIGH_DETAIL_EXAGGERATION = 0.7;
 
-const WORLD_SPAN_DEG = 360;
-
 const LIGHT_DIRECTIONS_DEG = [315, 255, 15];
 // MapLibre's multidirectional shader is transparent on flat ground only at sin(altitude) = 0.5.
 const LIGHT_ALTITUDES_DEG = [30, 30, 30];
@@ -51,17 +49,4 @@ export function reliefPaint(strength: number): HillshadePaint {
 
 function exaggeration(base: number, strength: number) {
   return Math.min(Math.max(base * strength, 0), MAX_EXAGGERATION);
-}
-
-/** Cap the contour backdrop near the fitted zoom so it stays available when zooming out. */
-export function backdropMaxZoom(
-  longitudeSpanDeg: number,
-  viewWidthPx: number,
-  tileSizePx: number,
-  sourceMaxZoom: number,
-) {
-  const worldWidthPx = (viewWidthPx * WORLD_SPAN_DEG) / longitudeSpanDeg;
-  const fittedZoom = Math.log2(worldWidthPx / tileSizePx);
-  const zoom = Math.max(0, Math.ceil(fittedZoom));
-  return Math.min(zoom, sourceMaxZoom);
 }
