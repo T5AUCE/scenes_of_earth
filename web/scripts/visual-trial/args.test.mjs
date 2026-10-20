@@ -32,10 +32,19 @@ test("checkPlaces fills defaults and rejects bad spots", () => {
 
   assert.deepEqual(spot.zooms, ["fitted"]);
   assert.deepEqual(spot.layers, ["terrain"]);
+  assert.equal(spot.colour, null);
   assert.throws(() => checkPlaces({ spots: [{ name: "A", area: "x", centre: [1] }] }), /centre/);
   assert.throws(
     () => checkPlaces({ spots: [{ name: "A", area: "x", centre: [1, 2], zooms: ["a"] }] }),
     /zooms/,
+  );
+  assert.throws(
+    () => checkPlaces({ spots: [{ name: "A", area: "x", centre: [1, 2], colour: 5 }] }),
+    /colour/,
+  );
+  assert.throws(
+    () => checkPlaces({ spots: [{ name: "A", area: "x", centre: [1, 2], colour: "" }] }),
+    /colour/,
   );
 });
 
@@ -52,4 +61,17 @@ test("the landcover preset checks paired renderers at high zoom and across 180",
   assert.deepEqual(spots.find((spot) => spot.name === "Nairobi").zooms, ["fitted", 12, 15, 18]);
   assert.ok(spots.some((spot) => spot.centre[0] >= 180 && spot.zooms.includes(12)));
   assert.ok(spots.some((spot) => spot.name.includes("coast")));
+});
+
+test("the colour preset covers both places with every colour pick", () => {
+  const spots = loadPlaces("colour");
+
+  assert.ok(spots.every((spot) => spot.layers.length === 4 && spot.colour));
+  assert.deepEqual([...new Set(spots.map((spot) => spot.area))], ["sample:kenya", "sample:fiji"]);
+  assert.deepEqual([...new Set(spots.map((spot) => spot.colour))], [
+    "era5land_temperature",
+    "chirps_monthly",
+    "esa_worldcover",
+    "blend",
+  ]);
 });

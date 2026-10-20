@@ -7,8 +7,11 @@ export interface SampleTable {
   src: Int32Array; // per output pixel: source cell index
   footprint?: {
     sourceWidth: number;
+    // Source row and column edges and centres per output row and column, in cell units.
     rowEdges: Float64Array;
     rowCenters: Float64Array;
+    columnEdges: Float64Array;
+    columnCenters: Float64Array;
   };
 }
 
@@ -62,23 +65,26 @@ export function sampleTable(
     }
   }
   const table: SampleTable = { width, height, src };
-  if (preserveCoverage) {
-    table.footprint = pixelFootprints(grid, height, yTop, pixelHeight);
-  }
+  if (preserveCoverage) table.footprint = pixelFootprints(grid.bbox, grid, width, height);
   return table;
 }
 
 /**
- * The cell of `otherGrid` under each pixel of a table made for another grid, or -1 where the
- * pixel centre lies outside it. This lets two layers on different grids share one image.
+ * The cells of `otherGrid` under each pixel of a table made for another grid, with -1 where the
+ * pixel centre lies outside it. This lets two layers on different grids share one image, and the
+ * footprints let each layer keep the pixels that only part of a cell reaches.
  */
-export function crossSampleTable(table: SampleTable, tableGrid: Grid, otherGrid: Grid) {
+export function crossSampleTable(
+  table: SampleTable,
+  tableGrid: Grid,
+  otherGrid: Grid,
+): SampleTable {
   const [west, south, east, north] = tableGrid.bbox;
   const [otherWest, otherSouth, otherEast, otherNorth] = otherGrid.bbox;
   const yTop = mercY(north);
   const pixelHeight = (yTop - mercY(south)) / table.height;
 
-  const cells = new Int32Array(table.width * table.height);
+  const src = new Int32Array(table.width * table.height);
   for (let pixelRow = 0; pixelRow < table.height; pixelRow++) {
     const lat = latFromMercY(yTop - (pixelRow + 0.5) * pixelHeight);
     const row = Math.floor(((otherNorth - lat) / (otherNorth - otherSouth)) * otherGrid.ny);
@@ -88,31 +94,49 @@ export function crossSampleTable(table: SampleTable, tableGrid: Grid, otherGrid:
       const lon = west + ((pixelColumn + 0.5) / table.width) * (east - west);
       const column = Math.floor(((lon - otherWest) / (otherEast - otherWest)) * otherGrid.nx);
       const isInside = isRowInside && column >= 0 && column < otherGrid.nx;
-      cells[pixelRow * table.width + pixelColumn] = isInside ? row * otherGrid.nx + column : -1;
+      src[pixelRow * table.width + pixelColumn] = isInside ? row * otherGrid.nx + column : -1;
     }
   }
-  return cells;
+  const footprint = pixelFootprints(tableGrid.bbox, otherGrid, table.width, table.height);
+  return { width: table.width, height: table.height, src, footprint };
 }
 
-function pixelFootprints(grid: Grid, height: number, yTop: number, pixelHeight: number) {
-  const [, south, , north] = grid.bbox;
-  const rowDegrees = (north - south) / grid.ny;
-  const rowEdges = new Float64Array(height + 1);
-  const rowCenters = new Float64Array(height);
-  for (let row = 0; row <= height; row++) {
-    const latitude = latFromMercY(yTop - row * pixelHeight);
-    const edge = (north - latitude) / rowDegrees;
+// The source cells each pixel of an image over imageBbox overlaps, which may be outside the grid.
+function pixelFootprints(imageBbox: Bbox, grid: Grid, width: number, height: number) {
+  const [west, south, east, north] = imageBbox;
+  const [gridWest, gridSouth, gridEast, gridNorth] = grid.bbox;
+  const yTop = mercY(north);
+  const pixelHeight = (yTop - mercY(south)) / height;
+  const rowDegrees = (gridNorth - gridSouth) / grid.ny;
+  const columnDegrees = (gridEast - gridWest) / grid.nx;
+
+  const rows = edgesAndCenters(height, grid.ny, (row) => {
+    return (gridNorth - latFromMercY(yTop - row * pixelHeight)) / rowDegrees;
+  });
+  const columns = edgesAndCenters(width, grid.nx, (column) => {
+    return (west + (column / width) * (east - west) - gridWest) / columnDegrees;
+  });
+  return {
+    sourceWidth: grid.nx,
+    rowEdges: rows.edges,
+    rowCenters: rows.centers,
+    columnEdges: columns.edges,
+    columnCenters: columns.centers,
+  };
+}
+
+function edgesAndCenters(count: number, limit: number, position: (index: number) => number) {
+  const edges = new Float64Array(count + 1);
+  const centers = new Float64Array(count);
+  for (let index = 0; index <= count; index++) {
+    const edge = position(index);
     const rounded = Math.round(edge);
     // Exact cell edges must not acquire neighbours through projection rounding.
-    rowEdges[row] = Math.abs(edge - rounded) < CELL_EDGE_TOLERANCE_CELLS ? rounded : edge;
-    if (row < height) {
-      const centerLatitude = latFromMercY(yTop - (row + 0.5) * pixelHeight);
-      rowCenters[row] = (north - centerLatitude) / rowDegrees;
-    }
+    const snapped = Math.abs(edge - rounded) < CELL_EDGE_TOLERANCE_CELLS ? rounded : edge;
+    edges[index] = Math.min(limit, Math.max(0, snapped));
+    if (index < count) centers[index] = position(index + 0.5);
   }
-  rowEdges[0] = 0;
-  rowEdges[height] = grid.ny;
-  return { sourceWidth: grid.nx, rowEdges, rowCenters };
+  return { edges, centers };
 }
 
 // The shortest row in Mercator y sets the output resolution, so no grid row is skipped.

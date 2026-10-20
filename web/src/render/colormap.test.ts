@@ -8,14 +8,19 @@ import {
   evenStops,
   legendTicks,
   lut,
+  lut2d,
+  LUT2D_SIZE,
+  paintBivariate,
   paintClasses,
   paintColormap,
   RGBA_CHANNELS,
   stopPosition,
+  stopsForRange,
 } from "./colormap.ts";
-import { mercY, sampleTable } from "./mercator.ts";
+import { crossSampleTable, mercY, sampleTable } from "./mercator.ts";
 import type { SampleTable } from "./mercator.ts";
 import {
+  BIVARIATE_GREEN,
   CLASS_PALETTES,
   classColors,
   customPalette,
@@ -226,4 +231,95 @@ test("a custom gradient blends through its own colours", () => {
 
   assert.deepEqual([...table.slice(0, RGBA_CHANNELS)], [0, 0, 0, 255]);
   assert.deepEqual([...table.slice(-RGBA_CHANNELS)], [255, 255, 255, 255]);
+});
+
+const LAST_LUT2D = LUT2D_SIZE - 1;
+
+const colorAt = (colors: Uint8ClampedArray, row: number, column: number) => {
+  const start = (row * LUT2D_SIZE + column) * RGBA_CHANNELS;
+  return [...colors.subarray(start, start + COLOR_CHANNELS)];
+};
+
+const luminance = ([red, green, blue]: number[]) => 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+
+test("the bivariate table's corners match the palette grid", () => {
+  const colors = lut2d(BIVARIATE_GREEN);
+  const last = BIVARIATE_GREEN.length - 1;
+
+  assert.deepEqual(colorAt(colors, 0, 0), BIVARIATE_GREEN[0][0]);
+  assert.deepEqual(colorAt(colors, 0, LAST_LUT2D), BIVARIATE_GREEN[0][last]);
+  assert.deepEqual(colorAt(colors, LAST_LUT2D, 0), BIVARIATE_GREEN[last][0]);
+  assert.deepEqual(colorAt(colors, LAST_LUT2D, LAST_LUT2D), BIVARIATE_GREEN[last][last]);
+});
+
+test("the bivariate table gets darker with every wetter row", () => {
+  const colors = lut2d(BIVARIATE_GREEN);
+
+  for (let column = 0; column < LUT2D_SIZE; column++) {
+    for (let row = 1; row < LUT2D_SIZE; row++) {
+      const drier = luminance(colorAt(colors, row - 1, column));
+      const wetter = luminance(colorAt(colors, row, column));
+      assert.ok(wetter <= drier + 1, `column ${column} row ${row}`);
+    }
+  }
+});
+
+test("a pixel missing either bivariate input stays transparent", () => {
+  const colors = lut2d(BIVARIATE_GREEN);
+  const stops = [0, 10];
+  const rain = { values: Float32Array.of(10, NaN, 10), table: table([0, 1, 0]), stops };
+  const temperature = { values: Float32Array.of(10, 10), table: table([0, 1, -1]), stops };
+
+  const rgba = paintBivariate(rain, temperature, colors);
+
+  assert.deepEqual(
+    [...rgba.subarray(0, RGBA_CHANNELS)],
+    [...colorAt(colors, LAST_LUT2D, LAST_LUT2D), 255],
+  );
+  assert.deepEqual([...rgba.subarray(RGBA_CHANNELS)], new Array(2 * RGBA_CHANNELS).fill(0));
+});
+
+test("the blend keeps the Fiji coast pixel whose nearest rainfall cell is empty", () => {
+  const rainGrid = { bbox: [177, -19.2, 181.65, -12.45] as Bbox, nx: 93, ny: 135 };
+  const temperatureGrid = { bbox: [176.95, -19.25, 181.65, -12.45] as Bbox, nx: 47, ny: 68 };
+  const rainTable = sampleTable(rainGrid, undefined, { preserveCoverage: true });
+  const temperatureTable = crossSampleTable(rainTable, rainGrid, temperatureGrid);
+  const pixel = pixelAt(rainTable, rainGrid.bbox, 179.225, -16.691719876);
+  const rainValues = new Float32Array(rainGrid.nx * rainGrid.ny).fill(NaN);
+  rainValues[84 * rainGrid.nx + 44] = 384.7;
+  const temperatureValues = new Float32Array(temperatureGrid.nx * temperatureGrid.ny).fill(26);
+
+  const rgba = paintBivariate(
+    { values: rainValues, table: rainTable, stops: [0, 384.7] },
+    { values: temperatureValues, table: temperatureTable, stops: [20, 30] },
+    lut2d(BIVARIATE_GREEN),
+  );
+
+  assert.ok(Number.isNaN(rainValues[rainTable.src[pixel]]));
+  assert.equal(alphaOf(rgba)[pixel], 255);
+});
+
+test("the blend fills a coarse-grid coast pixel from the finite cell its footprint reaches", () => {
+  const rainGrid = { bbox: [0, 0, 4, 4] as Bbox, nx: 8, ny: 8 };
+  const temperatureGrid = { bbox: [0.3, 0, 4, 4] as Bbox, nx: 4, ny: 4 };
+  const rainTable = sampleTable(rainGrid, undefined, { preserveCoverage: true });
+  const temperatureTable = crossSampleTable(rainTable, rainGrid, temperatureGrid);
+  const rain = { values: new Float32Array(64).fill(5), table: rainTable, stops: [0, 10] };
+  const temperature = {
+    values: new Float32Array(16).fill(15),
+    table: temperatureTable,
+    stops: [10, 20],
+  };
+
+  const rgba = paintBivariate(rain, temperature, lut2d(BIVARIATE_GREEN));
+
+  assert.equal(temperatureTable.src[0], -1);
+  assert.equal(alphaOf(rgba)[0], 255);
+});
+
+test("a custom range spreads the stops evenly and no range keeps the fitted ones", () => {
+  const fitted = [0, 10, 30];
+
+  assert.deepEqual(stopsForRange(fitted, [0, 20]), [0, 10, 20]);
+  assert.equal(stopsForRange(fitted, null), fitted);
 });

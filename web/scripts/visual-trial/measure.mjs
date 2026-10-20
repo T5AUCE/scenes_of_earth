@@ -14,6 +14,13 @@ export function frameStats(deltas) {
   return { frame_ms_p50: percentile(0.5), frame_ms_p95: percentile(0.95) };
 }
 
+/** Summarize the marks-layer pan deltas under the colour trial's field names. */
+export function marksFrameStats(deltas) {
+  const { frame_ms_p50, frame_ms_p95 } = frameStats(deltas);
+
+  return { marks_frame_ms_p50: frame_ms_p50, marks_frame_ms_p95: frame_ms_p95 };
+}
+
 /** Matches contour overlay layer ids so unrelated map features are not counted. */
 export const CONTOUR_LINE_PATTERN = /-contours-\d+$/;
 export const CONTOUR_LABEL_PATTERN = /-contours-labels$/;
@@ -114,7 +121,10 @@ export function viewRecord({ spot, scene, zoom, sample, failures, messages, time
     legend: sample?.legend ?? null,
     legend_classes: sample?.classLabels ?? [],
     landcover_renderer: sample?.landcoverRenderer ?? null,
+    colour_owner: sample?.colourOwner ?? null,
+    draws: sample?.draws ?? {},
     ...frameStats(sample?.frameDeltas ?? []),
+    ...marksFrameStats(sample?.marksFrameDeltas ?? []),
     gl_errors: sample?.glErrors ?? [],
     context_restored: sample?.contextRestored ?? null,
     display_checks: sample?.displayChecks ?? null,

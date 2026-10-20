@@ -58,6 +58,10 @@ the parameters below describe what a link can carry.
 - `range` lists `layer:low:high` display ranges for field layers. Values may lie outside the values in
   the area, and are rounded to the precision of the data.
 - `off` lists the layers or parts that start switched off, such as `terrain.contours`.
+- `colour` names the layer that holds the map's colours, or `blend` for the combined rainfall and
+  temperature layer. Every other visible layer then draws dots, isotherms or outlines instead. The
+  app writes the effective owner, so the receiver sees the sender's choice even when this browser
+  remembers a different pick.
 
 Entries the scene cannot use are ignored and a note says so. Settings from a link apply to that visit
 only, while the palettes you pick in the menu are also remembered in this browser.

@@ -52,6 +52,13 @@ export function isothermLegend(interval: number) {
   return element;
 }
 
+/** The legend line for cells inside the area that have no data, which the marks layer hatches. */
+export function hatchLegend() {
+  const element = document.createElement("div");
+  element.textContent = "Hatched: no data";
+  return element;
+}
+
 /**
  * Five boxes drawn with the map's own dot count, each with the value its density stands for.
  * blockCells above 1 adds the zoomed-out note that one dot site covers several cells.
@@ -83,7 +90,7 @@ export function dotLegend(stops: number[], units: string, resDeg: number, blockC
   return element;
 }
 
-/** One axis of the two-way legend: its name, units, fitted or custom stops and open ends. */
+/** One axis of the two-way legend with its name, units, stops and whether its low end is open. */
 export interface BivariateLegendAxis {
   title: string;
   units: string;
@@ -103,8 +110,8 @@ export function bivariateLegend(
 ) {
   const element = document.createElement("div");
   element.className = "legend-bivariate";
-  const rainTitle = axisTitle(`↑ ${rain.title}`, rain.units);
-  const temperatureTitle = axisTitle(`${temperature.title} →`, temperature.units);
+  const rainTitle = axisTitle(`↑ ${rain.title} (${rain.units})`);
+  const temperatureTitle = axisTitle(`${temperature.title} (${temperature.units}) →`);
 
   const plot = document.createElement("div");
   plot.className = "legend-bivariate-plot";
@@ -120,12 +127,42 @@ export function bivariateLegend(
   const reading = document.createElement("div");
   reading.textContent = BIVARIATE_READING;
   element.append(rainTitle, plot, temperatureTitle, scale, reading);
+
+  element.setAttribute("role", "img");
+  element.setAttribute("aria-label", bivariateDescription(rain, temperature, isFitted));
   return element;
 }
 
-function axisTitle(text: string, units: string) {
+function bivariateDescription(
+  rain: BivariateLegendAxis,
+  temperature: BivariateLegendAxis,
+  isFitted: boolean,
+) {
+  const scale = isFitted ? "The scale is fitted to this area." : "The scale is a custom range.";
+
+  return [
+    "Colour key for the blend of rainfall and temperature.",
+    axisDescription(temperature, "from left to right"),
+    axisDescription(rain, "from bottom to top"),
+    BIVARIATE_READING,
+    scale,
+  ].join(" ");
+}
+
+function axisDescription(axis: BivariateLegendAxis, direction: string) {
+  const last = axis.stops.length - 1;
+  const first = axis.stops[0];
+  const end = axis.stops[last];
+  const middle = axis.stops[Math.round(last / 2)];
+  const start = axis.isBottomOpen ? `${first} or less` : String(first);
+
+  return `${axis.title} grows ${direction} from ${start} to ${end} or more ${axis.units}, `
+    + `with ${middle} in the middle.`;
+}
+
+function axisTitle(text: string) {
   const title = document.createElement("div");
-  title.textContent = `${text} (${units})`;
+  title.textContent = text;
   return title;
 }
 

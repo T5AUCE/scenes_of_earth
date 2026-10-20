@@ -1,12 +1,18 @@
-import { arrayDoc, cacheByIndex, decode, readArray, type Store } from "../data";
+import { arrayDoc, cacheByIndex, decode, readArray, readMask, type Store } from "../data";
 import { defaultPalette as layerDefaultPalette, rangeDecimals } from "../display-state";
 import { makeHtmlElement } from "../html";
 import { createFieldMarksLayer } from "../gpu/field-marks-layer";
 import { keepThroughContextLoss } from "../gpu/tiled-layer";
-import { DOT_INK_RGB, dotLegend, gradientLegend, isothermLegend } from "../legend";
+import {
+  DOT_INK_RGB,
+  dotLegend,
+  gradientLegend,
+  hatchLegend,
+  isothermLegend,
+} from "../legend";
 import { addImageLayer, maxTextureSize, removeLayerAndSource, setImage } from "../map";
 import { lut, paintColormap, stopsForRange } from "../render/colormap";
-import { positionBytes } from "../render/lattice";
+import { hasHatchedCells, positionBytes } from "../render/lattice";
 import { sampleTable } from "../render/mercator";
 import { FIELD_PALETTES, fieldGradient, rgbCss } from "../render/palettes";
 import { latestOnly, stepAt } from "../timeline";
@@ -62,6 +68,7 @@ class FieldView implements LayerView {
   private readonly marks: ReturnType<typeof createFieldMarksLayer> | null;
   private readonly stopKeepingMarks: (() => void) | null;
   private readonly isolines: IsolineOverlay | null;
+  private readonly mask: Promise<ArrayLike<number> | null> | null;
   private readonly readStep;
   private readonly drawLatestStep;
   private palette: string;
@@ -69,6 +76,7 @@ class FieldView implements LayerView {
   private colors;
   private stops: number[];
   private draw: Draw | null = null;
+  private hasHatched = false;
   private alive = true;
   // A slow read of an older step must not overwrite the one being displayed.
   private shownStep = -1;
@@ -99,6 +107,11 @@ class FieldView implements LayerView {
     this.marks = fallback === "dots" ? this.addMarks() : null;
     this.stopKeepingMarks = this.marks
       ? keepThroughContextLoss(map, this.marks.layer, slots.marks)
+      : null;
+    // The area mask is static, so the marks layer reads it once for the whole time series. A
+    // failed read only costs the no-data hatch, so the dots still draw.
+    this.mask = this.marks
+      ? store.then((opened) => readMask(opened, layer)).catch(() => null)
       : null;
     this.isolines = fallback === "isolines" ? createIsolineOverlay(context) : null;
     this.isolines?.setVisible(false);
@@ -200,17 +213,25 @@ class FieldView implements LayerView {
   }
 
   private showLegend() {
+    const element = this.legendOf();
+    if (this.hasHatched) element.append(hatchLegend());
+
+    this.legendBox.replaceChildren(element);
+  }
+
+  private legendOf() {
     const { layer } = this.context;
-    if (this.draw === "dots") {
-      this.legendBox.replaceChildren(dotLegend(this.stops, layer.units, layer.grid.res));
-    } else if (this.draw === "isolines") {
-      this.legendBox.replaceChildren(isothermLegend(this.isolines!.interval));
-    } else {
-      const isBottomOpen = this.range !== null;
-      this.legendBox.replaceChildren(
-        gradientLegend(this.colors, this.stops, layer.units, isBottomOpen),
-      );
-    }
+    if (this.draw === "dots") return dotLegend(this.stops, layer.units, layer.grid.res);
+    if (this.draw === "isolines") return isothermLegend(this.isolines!.interval);
+
+    return gradientLegend(this.colors, this.stops, layer.units, this.range !== null);
+  }
+
+  private setHatched(hasHatched: boolean) {
+    if (hasHatched === this.hasHatched) return;
+
+    this.hasHatched = hasHatched;
+    this.showLegend();
   }
 
   setTime(time: string) {
@@ -230,15 +251,17 @@ class FieldView implements LayerView {
   private hideStep() {
     this.context.map.setPaintProperty(this.id, "raster-opacity", 0);
     this.marks?.setDots(false);
+    this.marks?.setHatch(false);
     this.isolines?.setVisible(false);
+    this.setHatched(false);
   }
 
   private async drawStep(step: number) {
     try {
-      const values = await this.readStep(step);
+      const [values, mask] = await Promise.all([this.readStep(step), this.mask]);
       if (!this.alive || step !== this.shownStep) return;
 
-      this.drawValues(values, step);
+      this.drawValues(values, step, mask);
 
       const nextStep = step + 1;
       if (nextStep < this.time.values.length) this.readStep(nextStep).catch(() => {});
@@ -252,19 +275,34 @@ class FieldView implements LayerView {
     }
   }
 
-  private drawValues(values: Float32Array, step: number) {
+  private drawValues(
+    values: Float32Array,
+    step: number,
+    mask: ArrayLike<number> | null,
+  ) {
     const { map } = this.context;
+    this.updateMarks(values, mask);
+
     if (this.draw === "colour") {
       const rgba = paintColormap(values, this.table, this.colors, this.stops);
       setImage(map, this.id, new ImageData(rgba, this.table.width, this.table.height));
       map.setPaintProperty(this.id, "raster-opacity", SERIES_OPACITY);
-    } else if (this.draw === "dots") {
-      this.marks!.setPositions(positionBytes(values, this.stops));
-      this.marks!.setDots(true);
     } else if (this.draw === "isolines") {
       this.isolines!.setValues(values, step);
       this.isolines!.setVisible(true);
     }
+  }
+
+  private updateMarks(values: Float32Array, mask: ArrayLike<number> | null) {
+    if (!this.marks) return;
+
+    const positions = positionBytes(values, this.stops);
+    const hasHatch = mask !== null && this.draw !== null && hasHatchedCells(positions, mask);
+    this.marks.setMask(mask ?? new Uint8Array(positions.length).fill(1));
+    this.marks.setPositions(positions);
+    this.marks.setDots(this.draw === "dots");
+    this.marks.setHatch(hasHatch);
+    this.setHatched(hasHatch);
   }
 
   legend() {

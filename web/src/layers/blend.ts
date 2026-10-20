@@ -7,15 +7,17 @@ import {
   paintBivariate,
   stopsForRange,
 } from "../render/colormap";
-import { crossSampleTable, sampleTable } from "../render/mercator";
+import { crossSampleTable, type SampleTable, sampleTable } from "../render/mercator";
 import { BIVARIATE_GREEN } from "../render/palettes";
 import { formatTime, latestOnly, stepAt } from "../timeline";
 import type { LayerContext, LayerDoc, LayerView, TimeDoc } from "../types";
-import { BLEND, type Draw, missingStepNote } from "./allocate";
+import { BLEND, type Draw, differingPeriodNote, missingStepNote } from "./allocate";
 import { fieldReader } from "./field";
 
 const BLEND_OPACITY = 0.8;
-const BLEND_TITLE = "Rainfall + temperature (blended)";
+const SMOOTH_NOTE = "Smoothed for display; values are per cell.";
+/** The title of the blended layer, as its card and the colour picker name it. */
+export const BLEND_TITLE = "Rainfall + temperature (blended)";
 const BLEND_COLORS = lut2d(BIVARIATE_GREEN);
 
 /** What the blend needs from the scene beyond its two layers. */
@@ -39,18 +41,27 @@ export function createBlendView(
   return new Blend(pair, context);
 }
 
-/** A layer of the blend with the step axis and cell under each pixel of the shared image. */
+/** A layer of the blend with the step axis and cells under each pixel of the shared image. */
 interface Half {
   layer: LayerDoc;
   time: TimeDoc;
   fitted: number[];
-  cells: Int32Array;
+  table: SampleTable;
   read(step: number): Promise<Float32Array>;
 }
 
 class Blend implements BlendView {
   readonly parts;
-  readonly options = [];
+  readonly options = [
+    {
+      label: "Smooth",
+      note: SMOOTH_NOTE,
+      initial: true,
+      set: (on: boolean) => {
+        this.context.map.setPaintProperty(this.id, "raster-resampling", on ? "linear" : "nearest");
+      },
+    },
+  ];
   readonly time = null;
 
   private readonly context: BlendContext;
@@ -71,7 +82,7 @@ class Blend implements BlendView {
     this.context = context;
     const { map, store, shift, slots } = context;
     const finer = rain.grid.res <= temperature.grid.res ? rain : temperature;
-    const table = sampleTable(finer.grid, maxTextureSize(map));
+    const table = sampleTable(finer.grid, maxTextureSize(map), { preserveCoverage: true });
     this.width = table.width;
     this.height = table.height;
 
@@ -80,14 +91,11 @@ class Blend implements BlendView {
         throw new Error(`Layer "${layer.id}" needs stops and a time axis for the blend`);
       }
 
-      const cells = layer === finer
-        ? table.src
-        : crossSampleTable(table, finer.grid, layer.grid);
       return {
         layer,
         time: layer.time,
         fitted: layer.style.stops,
-        cells,
+        table: layer === finer ? table : crossSampleTable(table, finer.grid, layer.grid),
         read: fieldReader(layer, store),
       };
     };
@@ -95,7 +103,7 @@ class Blend implements BlendView {
 
     addImageLayer(map, this.id, finer.grid.bbox, shift, slots.fill, {
       "raster-opacity": 0,
-      "raster-resampling": "nearest",
+      "raster-resampling": "linear",
     });
 
     this.noteBox.className = "option-note";
@@ -146,6 +154,8 @@ class Blend implements BlendView {
   }
 
   private async drawTime(time: string) {
+    if (!this.isCurrent(time)) return;
+
     const steps = this.halves.map(({ time: axis }) => stepAt(axis.values, axis.end, time));
     const label = formatTime(time, this.halves.map(({ time: axis }) => axis.step));
     const note = missingStepNote(
@@ -161,7 +171,10 @@ class Blend implements BlendView {
     try {
       const [rain, temperature] = this.halves;
       const values = await Promise.all([rain.read(steps[0]), temperature.read(steps[1])]);
-      if (this.isCurrent(time)) this.paint(values);
+      if (!this.isCurrent(time)) return;
+
+      this.paint(values);
+      this.showPeriodNote(steps);
     } catch (error) {
       // An error for a step the user has already left is no longer relevant.
       if (!this.isCurrent(time)) return;
@@ -171,6 +184,18 @@ class Blend implements BlendView {
     }
   }
 
+  private showPeriodNote(steps: number[]) {
+    const periods = this.halves.map(({ layer, time: axis }, index) => ({
+      title: layer.title,
+      period: formatTime(axis.values[steps[index]], [axis.step]),
+    }));
+    const note = differingPeriodNote(periods);
+    if (!note) return;
+
+    this.noteBox.textContent = note;
+    this.noteBox.hidden = false;
+  }
+
   private isCurrent(time: string) {
     return this.alive && this.isShown && time === this.shownTime;
   }
@@ -178,7 +203,7 @@ class Blend implements BlendView {
   private paint(values: Float32Array[]) {
     const [rain, temperature] = this.halves.map((half, index): BivariateAxis => ({
       values: values[index],
-      cells: half.cells,
+      table: half.table,
       stops: this.stopsOf(half),
     }));
     const rgba = paintBivariate(rain, temperature, BLEND_COLORS);

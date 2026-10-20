@@ -3,18 +3,20 @@ import { CLASS_FIELD_VERTEX } from "./class-field-shaders";
 /**
  * Draw the dots of a field with GLSL ES 3.00, with the vertex shader of the class fields.
  *
- * `uIds` holds a position byte per cell, or per block of cells below level 0, where 0 to 254
- * is a place on the colour stops and 255 is no data. `uIdsSize` is its size and `uWindow` the
- * grid column and row of its first texel, while `uGridSize` is the whole grid's size in texels
- * and `uExtentCells` the size in cells of the grid before it was padded to whole blocks.
- * `uRows` holds `uRowCount` fractional grid rows at even Mercator heights.
+ * `uIds` holds a position byte per cell, or per block of cells below level 0, where 0 to 253
+ * is a place on the colour stops, 254 hatches an in-area cell with no value and 255 draws
+ * nothing. `uIdsSize` is its size and `uWindow` the grid column and row of its first texel,
+ * while `uGridSize` is the whole grid's size in texels and `uExtentCells` the size in cells of
+ * the grid before it was padded to whole blocks. `uRows` holds `uRowCount` fractional grid rows
+ * at even Mercator heights.
  *
  * Each texel is one cell of the dot level, or a block of `uBlockCells` cells below level 0.
  * `uSlots` is the number of dot sites along a cell side and `uLevelBits` its base-2 logarithm.
  * `uRadiusPx` is the dot radius. While `uFading`, the level above fades into this one by
  * `uFade`. Its sites are `uParentSlots` along a texel, and a dot lit there grows from
  * `uParentRadiusPx`. Below level 1 the parent's own bytes come from `uParentIds`, which has the
- * size of `uIds`.
+ * size of `uIds`. `uDots` draws the dots and `uHatch` the no-data hatch, whose screen-space
+ * lines are measured through `uPixelRatio`.
  */
 export const FIELD_MARKS_VERTEX = CLASS_FIELD_VERTEX;
 
@@ -43,10 +45,13 @@ uniform bool uFading;
 uniform float uFade;
 uniform vec3 uInk;
 uniform bool uHalo;
+uniform bool uDots;
+uniform bool uHatch;
+uniform float uPixelRatio;
 out vec4 fragColor;
 
-const uint NO_DATA = 255u;
-const float MAX_POSITION = 254.0;
+const uint HATCH = 254u;
+const float MAX_POSITION = 253.0;
 const float SLOT_OFFSET_CELLS = 15.0 / 32.0;
 const int MAX_LEVEL_BITS = 4;
 const int THRESHOLD_BITS = 3;
@@ -55,6 +60,8 @@ const float HALO_ALPHA = 0.7;
 const float HALO_WIDTH_PX = 0.6;
 const float EDGE_PX = 0.5;
 const float MIN_ALPHA = 0.004;
+const float HATCH_SPACING_PX = 6.0;
+const float HATCH_LINE_PX = 0.6;
 
 struct Mark {
   float dotAlpha;
@@ -89,7 +96,7 @@ float cellThreshold(ivec2 cell) {
 
 // Matches isDotLit in render/lattice.ts.
 bool isDotLit(uint stored, ivec2 cell, ivec2 slot, int bits) {
-  if (stored == NO_DATA) return false;
+  if (stored >= HATCH) return false;
 
   float slotCount = float(1 << (2 * bits));
   float count = clamp(
@@ -129,6 +136,20 @@ bool isLitAtParentLevel(vec2 site, vec2 parentSlot) {
   return isDotLit(stored, ivec2(owner), ivec2(parentSlot), uLevelBits - 1);
 }
 
+bool isHatchedAt(vec2 position) {
+  vec2 owner = floor(position);
+  if (!isInGrid(owner)) return false;
+
+  return texelFetch(uIds, texelOf(owner), 0).r == HATCH;
+}
+
+float hatchCoverage() {
+  vec2 screenPx = gl_FragCoord.xy / uPixelRatio;
+  float phase = fract((screenPx.x + screenPx.y) / HATCH_SPACING_PX);
+  float distancePx = min(phase, 1.0 - phase) * HATCH_SPACING_PX;
+  return 1.0 - smoothstep(HATCH_LINE_PX / 2.0, HATCH_LINE_PX / 2.0 + EDGE_PX, distancePx);
+}
+
 float coverage(float distancePx, float radiusPx) {
   return 1.0 - smoothstep(radiusPx - EDGE_PX, radiusPx + EDGE_PX, distancePx);
 }
@@ -166,12 +187,12 @@ void main() {
   bool isSibling = uFading && any(notEqual(mod(slot, 2.0), vec2(0.0)));
 
   Mark mark = Mark(0.0, 0.0);
-  if (!uFading || isSibling) {
+  if (uDots && (!uFading || isSibling)) {
     float weight = isLitAtLevel(site, slot) ? (uFading ? uFade : 1.0) : 0.0;
     mark = markAt(length(pixelsPerGrid * (position - site)), uRadiusPx, weight);
   }
 
-  if (uFading) {
+  if (uDots && uFading) {
     // The parent dots are judged on their own lattice because they outgrow the nearest fine site.
     vec2 parentSlot = floor((position - offset) * uParentSlots + 0.5);
     vec2 parentSite = parentSlot / uParentSlots + offset;
@@ -183,11 +204,14 @@ void main() {
   }
 
   float alpha = mark.dotAlpha + mark.haloAlpha * (1.0 - mark.dotAlpha);
+  vec3 color = uInk * mark.dotAlpha + HALO * mark.haloAlpha * (1.0 - mark.dotAlpha);
+  if (uHatch && isHatchedAt(position)) {
+    float hatchAlpha = hatchCoverage();
+    color = uInk * hatchAlpha + color * (1.0 - hatchAlpha);
+    alpha = hatchAlpha + alpha * (1.0 - hatchAlpha);
+  }
   if (alpha < MIN_ALPHA) discard;
 
-  fragColor = vec4(
-    uInk * mark.dotAlpha + HALO * mark.haloAlpha * (1.0 - mark.dotAlpha),
-    alpha
-  );
+  fragColor = vec4(color, alpha);
 }
 `;

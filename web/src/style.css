@@ -598,6 +598,61 @@ body.scene-mode #panel {
   font-size: 11px;
 }
 
+.legend-bivariate {
+  font-size: 11px;
+  color: #444;
+}
+
+.legend-bivariate-plot {
+  display: grid;
+  grid-template-columns: 3.2em 112px;
+  grid-template-rows: 112px 1.4em;
+  gap: 2px 4px;
+  margin: 2px 0;
+}
+
+.legend-bivariate-plot canvas {
+  width: 112px;
+  height: 112px;
+  box-shadow: 0 0 0 1px #999;
+}
+
+.legend-bivariate-rows,
+.legend-bivariate-columns {
+  position: relative;
+}
+
+.legend-bivariate-rows > span,
+.legend-bivariate-columns > span {
+  position: absolute;
+  white-space: nowrap;
+}
+
+.legend-bivariate-rows > span {
+  right: 0;
+  transform: translateY(-50%);
+}
+
+.legend-bivariate-rows > span:first-child {
+  transform: translateY(-100%);
+}
+
+.legend-bivariate-rows > span:last-child {
+  transform: none;
+}
+
+.legend-bivariate-columns > span {
+  transform: translateX(-50%);
+}
+
+.legend-bivariate-columns > span:first-child {
+  transform: none;
+}
+
+.legend-bivariate-columns > span:last-child {
+  transform: translateX(-100%);
+}
+
 .legend-dot-row {
   display: grid;
   grid-template-columns: repeat(5, 34px);

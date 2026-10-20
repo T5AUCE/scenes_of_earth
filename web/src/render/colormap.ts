@@ -32,7 +32,7 @@ export function lut(stops: number[][]) {
   return table;
 }
 
-/** The stops of a layer's scale: the fitted ones, or an even spread over a custom range. */
+/** The fitted stops of a layer's scale, or an even spread over its custom range. */
 export function stopsForRange(fitted: number[], range: [number, number] | null) {
   return range ? evenStops(...range, fitted.length) : fitted;
 }
@@ -133,22 +133,25 @@ function linearToSrgb(channel: number) {
   return clamped <= 0.0031308 ? 12.92 * clamped : 1.055 * clamped ** (1 / 2.4) - 0.055;
 }
 
-/** One input of the blended layer: its values, the cell each pixel reads and its scale. */
+/** One input of the blended layer with its values, the cells each pixel reads and its scale. */
 export interface BivariateAxis {
   values: Float32Array;
-  /** The cell of `values` under each output pixel, or -1 where the layer has none. */
-  cells: Int32Array;
+  /** The cells of `values` under each output pixel, with -1 where the layer has none. */
+  table: SampleTable;
   stops: number[];
 }
 
-/** Colour each pixel by both inputs through a lut2d table; a missing value in either hides it. */
+/**
+ * Colour each pixel by both inputs through a lut2d table. An input whose nearest cell is empty
+ * takes the nearest finite cell its footprint overlaps, and a pixel still missing one stays clear.
+ */
 export function paintBivariate(
   rows: BivariateAxis,
   columns: BivariateAxis,
   colors: Uint8ClampedArray,
 ) {
-  const rgba = new Uint8ClampedArray(rows.cells.length * RGBA_CHANNELS);
-  for (let pixel = 0; pixel < rows.cells.length; pixel++) {
+  const rgba = new Uint8ClampedArray(rows.table.src.length * RGBA_CHANNELS);
+  for (let pixel = 0; pixel < rows.table.src.length; pixel++) {
     const rowValue = valueAt(rows, pixel);
     const columnValue = valueAt(columns, pixel);
     if (Number.isNaN(rowValue) || Number.isNaN(columnValue)) continue;
@@ -161,8 +164,10 @@ export function paintBivariate(
   return rgba;
 }
 
-function valueAt({ values, cells }: BivariateAxis, pixel: number) {
-  return cells[pixel] < 0 ? NaN : values[cells[pixel]];
+function valueAt({ values, table }: BivariateAxis, pixel: number) {
+  const cell = table.src[pixel];
+  const nearest = cell < 0 ? NaN : values[cell];
+  return Number.isNaN(nearest) ? overlappingValue(values, table, pixel) : nearest;
 }
 
 /** Paint one-based class IDs with colorsById[id - 1] and leave zero transparent. */
@@ -242,12 +247,12 @@ export function paintColormap(
 function overlappingValue(values: Float32Array, table: SampleTable, pixel: number) {
   if (!table.footprint) return NaN;
 
-  const { sourceWidth, rowEdges, rowCenters } = table.footprint;
+  const { sourceWidth, rowEdges, rowCenters, columnEdges, columnCenters } = table.footprint;
   const pixelRow = Math.floor(pixel / table.width);
   const pixelColumn = pixel % table.width;
-  const columnStart = (pixelColumn * sourceWidth) / table.width;
-  const columnEnd = ((pixelColumn + 1) * sourceWidth) / table.width;
-  const centerColumn = (columnStart + columnEnd) / 2;
+  const columnStart = columnEdges[pixelColumn];
+  const columnEnd = columnEdges[pixelColumn + 1];
+  const centerColumn = columnCenters[pixelColumn];
   const centerRow = rowCenters[pixelRow];
   let nearestDistance = Infinity;
   let nearestValue = NaN;

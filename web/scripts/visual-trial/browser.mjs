@@ -145,7 +145,7 @@ async function trialPage(context, appUrl, spot, sceneId, options) {
   const page = await context.newPage();
   const watcher = watchPage(page);
   try {
-    await openScene(page, appUrl, sceneId, spot.enable);
+    await openScene(page, appUrl, sceneId, spot.enable, spot.colour);
     const records = [];
     for (const [index, zoom] of spot.zooms.entries()) {
       records.push(await trialView(page, watcher, spot, sceneId, zoom, {
@@ -204,8 +204,9 @@ function watchPage(page) {
   return watcher;
 }
 
-async function openScene(page, appUrl, sceneId, enable) {
-  await page.goto(`${appUrl}/?scene=${sceneId}`);
+async function openScene(page, appUrl, sceneId, enable, colour) {
+  const pick = colour ? `&colour=${encodeURIComponent(colour)}` : "";
+  await page.goto(`${appUrl}/?scene=${sceneId}${pick}`);
   await page.waitForFunction(
     (layerId) => window.__map?.getLayer(layerId),
     OUTLINE_LAYER_ID,
@@ -233,6 +234,10 @@ async function trialView(page, watcher, spot, sceneId, zoom, options) {
         };
       });
       sample = { ...sample, ...diagnostics, frameDeltas, displayChecks, contextRestored };
+    }
+    if (spot.colour && sample) {
+      const marksFrameDeltas = await page.evaluate(panFrames, [PAN_DURATION_MS, PAN_DISTANCE_PX]);
+      sample = { ...sample, marksFrameDeltas };
     }
   } catch (error) {
     watcher.messages.push(`view failed: ${error.message.split("\n")[0]}`);
@@ -510,5 +515,12 @@ function takeSample([linePattern, labelPattern]) {
         .filter((label) => label.checkVisibility({ visibilityProperty: true }))
         .map((label) => label.innerText.trim()),
     ),
+    colourOwner: document.querySelector(".colour-picker select")?.value || null,
+    draws: Object.fromEntries(cards
+      .filter((card) => card.getAttribute("aria-label"))
+      .map((card) => [
+        card.getAttribute("aria-label"),
+        card.querySelector(".colour-chip")?.innerText.trim() ?? "",
+      ])),
   };
 }

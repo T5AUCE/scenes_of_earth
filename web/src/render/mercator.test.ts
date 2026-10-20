@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { imageCorners, mercY, sampleTable, shiftLongitudes, worldShift } from "./mercator.ts";
+import {
+  crossSampleTable,
+  imageCorners,
+  mercY,
+  sampleTable,
+  shiftLongitudes,
+  worldShift,
+} from "./mercator.ts";
 
 const FLOAT_TOLERANCE = 1e-12;
 
@@ -118,4 +125,38 @@ test("shifting longitudes keeps latitudes and nesting", () => {
   const polygon = [[[179, 1], [181, 1], [181, 2], [179, 1]]];
 
   assert.deepEqual(shiftLongitudes(polygon, -360), [[[-181, 1], [-179, 1], [-179, 2], [-181, 1]]]);
+});
+
+test("a cross table maps fine pixels to the coarse cells under them", () => {
+  const fine = gridOf([0, 0, 4, 4], 8, 8);
+  const coarse = gridOf([0, 0, 4, 4], 4, 4);
+  const table = sampleTable(fine);
+
+  const cells = crossSampleTable(table, fine, coarse).src;
+
+  assert.deepEqual([...cells.subarray(0, 8)], [0, 0, 1, 1, 2, 2, 3, 3]);
+  assert.equal(cells[cells.length - 1], 15);
+});
+
+test("a cross table marks pixels outside the other grid", () => {
+  const fine = gridOf([0, 0, 4, 4], 8, 8);
+  const smaller = gridOf([1, 2, 4, 4], 3, 2);
+  const table = sampleTable(fine);
+
+  const cells = crossSampleTable(table, fine, smaller).src;
+
+  assert.deepEqual([...cells.subarray(0, 8)], [-1, -1, 0, 0, 1, 1, 2, 2]);
+  assert.equal(cells[cells.length - 1], -1);
+});
+
+test("a cross table footprint reaches the other grid from a pixel whose centre is outside", () => {
+  const fine = gridOf([0, 0, 4, 4], 8, 8);
+  const shifted = gridOf([0.3, 0, 4, 4], 4, 4);
+  const table = sampleTable(fine);
+
+  const cross = crossSampleTable(table, fine, shifted);
+
+  assert.equal(cross.src[0], -1);
+  assert.equal(cross.footprint!.columnEdges[0], 0);
+  assert.ok(Math.abs(cross.footprint!.columnEdges[1] - 0.2 / 0.925) < 1e-9);
 });

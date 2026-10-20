@@ -5,6 +5,7 @@ import {
   cellSizePx,
   DOT_RADIUS_RATIO,
   levelFor,
+  markBytes,
 } from "../render/lattice";
 import { FIELD_MARKS_FRAGMENT, FIELD_MARKS_VERTEX } from "./field-marks-shaders";
 import {
@@ -48,30 +49,38 @@ const UNIFORM_NAMES = [
   "uFade",
   "uInk",
   "uHalo",
+  "uDots",
+  "uHatch",
+  "uPixelRatio",
 ];
 const COLOR_MAX = 255;
 
 /**
  * A MapLibre custom layer that draws a field as a lattice of dots, with the dot count of each
- * cell set by the field's position on its colour stops. The setters take effect on the next
- * frame.
+ * cell set by the field's position on its colour stops, and hatches in-area cells that have no
+ * value. The setters take effect on the next frame.
  */
 export function createFieldMarksLayer(options: FieldMarksOptions) {
   const layer = new FieldMarksLayer(options);
   return {
     layer: layer as CustomLayerInterface,
+    setMask: (mask: ArrayLike<number>) => layer.setMask(mask),
     setPositions: (positions: Uint8Array) => layer.setPositions(positions),
     setHalo: (isOn: boolean) => layer.setHalo(isOn),
     setDots: (isOn: boolean) => layer.setDots(isOn),
+    setHatch: (isOn: boolean) => layer.setHatch(isOn),
   };
 }
 
 class FieldMarksLayer extends TiledGpuLayer {
   private positions: Uint8Array | null = null;
+  private mask: ArrayLike<number> | null = null;
+  private markCells: Uint8Array | null = null;
   // Keyed by cells per block, which levels from 0 up share.
   private readonly pyramid = new Map<number, BlockData>();
   private isHalo = false;
-  private isOn = true;
+  private isDots = true;
+  private isHatch = true;
   private uploaded: BlockFactors | null = null;
   private frame = { level: 0, fade: 0, cellPx: 1 };
   private readonly marksOptions: FieldMarksOptions;
@@ -86,11 +95,16 @@ class FieldMarksLayer extends TiledGpuLayer {
     this.marksOptions = options;
   }
 
+  setMask(mask: ArrayLike<number>) {
+    if (this.mask === mask) return;
+
+    this.mask = mask;
+    this.resetData();
+  }
+
   setPositions(positions: Uint8Array) {
     this.positions = positions;
-    this.pyramid.clear();
-    this.uploaded = null;
-    this.map?.triggerRepaint();
+    this.resetData();
   }
 
   setHalo(isOn: boolean) {
@@ -99,12 +113,26 @@ class FieldMarksLayer extends TiledGpuLayer {
   }
 
   setDots(isOn: boolean) {
-    this.isOn = isOn;
+    this.isDots = isOn;
+    this.map?.triggerRepaint();
+  }
+
+  setHatch(isOn: boolean) {
+    this.isHatch = isOn;
+    this.map?.triggerRepaint();
+  }
+
+  private resetData() {
+    this.markCells = null;
+    this.pyramid.clear();
+    this.uploaded = null;
     this.map?.triggerRepaint();
   }
 
   protected hasData() {
-    return this.isOn && this.positions !== null;
+    return this.positions !== null
+      && this.mask !== null
+      && (this.isDots || this.isHatch);
   }
 
   protected extendGpu(base: TiledGpu) {
@@ -154,7 +182,7 @@ class FieldMarksLayer extends TiledGpuLayer {
     if (cached) return cached;
 
     const { grid } = this.options;
-    const { means, width, height } = blockMeans(this.positions!, grid.nx, grid.ny, factor);
+    const { means, width, height } = blockMeans(this.markedCells(), grid.nx, grid.ny, factor);
     const [west, south, east, north] = grid.bbox;
     const data = {
       grid: {
@@ -172,6 +200,12 @@ class FieldMarksLayer extends TiledGpuLayer {
     };
     this.pyramid.set(factor, data);
     return data;
+  }
+
+  private markedCells() {
+    if (!this.markCells) this.markCells = markBytes(this.positions!, this.mask!);
+
+    return this.markCells;
   }
 
   /** The blocks of twice the factor, repeated over the blocks they contain. */
@@ -213,6 +247,9 @@ class FieldMarksLayer extends TiledGpuLayer {
     gl.uniform1f(uniform("uFade"), fade);
     gl.uniform3f(uniform("uInk"), red / COLOR_MAX, green / COLOR_MAX, blue / COLOR_MAX);
     gl.uniform1i(uniform("uHalo"), this.isHalo ? 1 : 0);
+    gl.uniform1i(uniform("uDots"), this.isDots ? 1 : 0);
+    gl.uniform1i(uniform("uHatch"), this.isHatch ? 1 : 0);
+    gl.uniform1f(uniform("uPixelRatio"), pixelRatio);
 
     this.drawTiles(gl, gpu, mainMatrix, ({ window }) => {
       gl.uniform2i(uniform("uIdsSize"), window.width, window.height);

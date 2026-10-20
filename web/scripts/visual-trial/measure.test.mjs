@@ -157,13 +157,15 @@ test("categorical records include only the class labels shown in each view", asy
   ];
   const card = {
     innerText: "Land cover\nTree cover\nGrassland",
+    getAttribute: (name) => (name === "aria-label" ? "Land cover" : null),
+    querySelector: () => null,
     querySelectorAll: (selector) => {
       assert.equal(selector, ".legend-swatch + span");
       return labels;
     },
   };
   const sandbox = {
-    document: { querySelectorAll: () => [card] },
+    document: { querySelectorAll: () => [card], querySelector: () => null },
     window: {
       __trialMaskReady: true,
       __trialLayersReady: true,
@@ -199,6 +201,47 @@ test("categorical records include only the class labels shown in each view", asy
   assert.deepEqual(records[0].legend_classes, ["Tree cover", "Grassland"]);
   assert.equal(records[0].legend, null);
   assert.equal(records[0].timed_out, false);
+});
+
+test("a colour spot sets the pick through the scene link", async () => {
+  const sample = {
+    sceneReady: true,
+    tilesLoaded: true,
+    zoom: 6,
+    labelCount: 0,
+    lineCount: 0,
+    labelLines: [],
+    centre: [0, 0],
+    cardText: "",
+    classLabels: [],
+    colourOwner: "era5land_temperature",
+    draws: { Temperature: "Colour", Rainfall: "As dots" },
+  };
+  let url = null;
+  const page = {
+    on: () => {},
+    goto: async (value) => { url = value; },
+    waitForFunction: async () => {},
+    evaluate: async (callback) => {
+      if (callback.name === "waitForIdle") return true;
+      if (callback.name === "takeSample") return sample;
+      if (callback.name === "panFrames") return [6, 8, 10];
+      return [];
+    },
+    close: async () => {},
+  };
+  const records = await trialSpot(
+    { newPage: async () => page },
+    "https://example.test",
+    { name: "Kenya-temperature", enable: [], colour: "era5land_temperature", zooms: ["fitted"] },
+    "8db2b3434ee7cf729daf",
+    { screens: false },
+  );
+
+  assert.equal(url, "https://example.test/?scene=8db2b3434ee7cf729daf&colour=era5land_temperature");
+  assert.equal(records[0].colour_owner, "era5land_temperature");
+  assert.deepEqual(records[0].draws, { Temperature: "Colour", Rainfall: "As dots" });
+  assert.equal(records[0].marks_frame_ms_p95, 10);
 });
 
 test("slug keeps file names simple", () => {
@@ -257,6 +300,32 @@ test("viewRecord reports a view without a sample as not loaded", () => {
   assert.equal(record.tiles_loaded, false);
   assert.equal(record.timed_out, true);
   assert.deepEqual(record.legend_classes, []);
+});
+
+test("colour views record the owner, the draws and the marks frame time", () => {
+  const record = viewRecord({
+    spot: "Kenya-temperature",
+    scene: "8db2b3434ee7cf729daf",
+    zoom: "fitted",
+    sample: {
+      zoom: 6,
+      centre: [640, 400],
+      labelCount: 0,
+      labelLines: [],
+      lineCount: 0,
+      tilesLoaded: true,
+      colourOwner: "era5land_temperature",
+      draws: { Rainfall: "As dots" },
+      marksFrameDeltas: [6, 8, 10],
+    },
+    failures: [],
+    messages: [],
+    timedOut: false,
+  });
+
+  assert.equal(record.colour_owner, "era5land_temperature");
+  assert.deepEqual(record.draws, { Rainfall: "As dots" });
+  assert.deepEqual([record.marks_frame_ms_p50, record.marks_frame_ms_p95], [8, 10]);
 });
 
 test("mutable cache entries require revalidation across runs even before max-age", () => {
@@ -380,6 +449,7 @@ async function createCacheHarness(context, responses) {
         fetches.push(options);
         const response = responses.shift();
         assert.ok(response, "unexpected upstream request");
+        if (response.error) throw new Error(response.error);
         return {
           status: () => response.status,
           headers: () => response.headers ?? {},
@@ -390,6 +460,26 @@ async function createCacheHarness(context, responses) {
     }),
   };
 }
+
+test("a network failure while revalidating serves the stale cached response", async (context) => {
+  const cache = await createCacheHarness(context, [
+    { status: 200, headers: { "cache-control": "no-cache", etag: '"version-1"' }, body: "stale" },
+    { error: "getaddrinfo ENOTFOUND tiles.openfreemap.org" },
+  ]);
+  const first = await cache.request();
+  const second = await cache.request();
+
+  assert.equal(first.body.toString(), "stale");
+  assert.equal(second.status, 200);
+  assert.equal(second.body.toString(), "stale");
+  assert.equal(cache.fetches.length, 2);
+});
+
+test("a network failure without a cached response still fails the request", async (context) => {
+  const cache = await createCacheHarness(context, [{ error: "getaddrinfo ENOTFOUND" }]);
+
+  await assert.rejects(cache.request(), /ENOTFOUND/);
+});
 
 test("missing resources are fetched again instead of caching negatives", async (context) => {
   const cache = await createCacheHarness(context, [

@@ -6,6 +6,7 @@ Measures the map of built scenes in headless Chromium, so a browser check takes 
 cd web
 npm run trial -- contours --start
 SOE_TRIAL_EXISTING_ONLY=1 npm run trial -- landcover --start --screens
+npm run trial -- colour --start --screens
 npm run trial -- places.json --app http://127.0.0.1:5173 --screens --out /tmp/x
 ```
 
@@ -38,7 +39,8 @@ The setup resolves the cache root to an absolute path. Browser download staging 
       "centre": [36.82, -1.29],
       "zooms": ["fitted", 9, 12],
       "layers": ["terrain"],
-      "enable": ["Smooth"]
+      "enable": ["Smooth"],
+      "colour": "era5land_temperature"
     }
   ]
 }
@@ -47,6 +49,12 @@ The setup resolves the cache root to an absolute path. Browser download staging 
 `area` is a boundary id or a name the area search accepts. `layers` are the backend layers to
 build (default `["terrain"]`; `start` and `end` may be added for time-varying layers). `enable`
 lists checkbox labels in the scene panel to switch on. Presets live in `places/`.
+
+`colour` names the layer that holds the map's colour, as the link's `colour=` parameter, so the
+trial never has to click the picker. A layer id holds that layer's colours, while `blend` picks the
+combined rainfall and temperature layer. The `colour` preset opens Kenya and Fiji with all four
+layers and one spot per pick: temperature, rainfall, land cover and the blend. If both halves of the
+blend are present, the blend pick also switches them off in the link.
 
 `landcover: true` runs each spot twice in isolated browser contexts, first with the GPU enabled
 and then with `soe.debug.gpu=off`. Screenshots have `-gpu` and `-image` suffixes. The GPU also
@@ -82,10 +90,16 @@ their remaining budget expires, and `Retry-After` waits cannot extend the deadli
 - `legend_classes` lists the visible categorical legend labels in panel order for each view.
   It is empty when no class labels are shown or the view has no sample.
 - `landcover_renderer` is the actual `gpu` or `image` renderer for landcover trials.
+- `colour_owner` is the layer that held the map's colour in that view, or `blend`, and is null when
+  the view had no colour picker.
+- `draws` maps each layer card title to its chip text, such as `Colour`, `As dots`, `As isotherms`,
+  `As outlines` or a hidden reason, so one line shows how the whole scene was drawn.
 - `frame_ms_p50` and `frame_ms_p95` summarize rAF deltas during a scripted two-second pan and
   include browser scheduling and the rest of the map, not just GPU draw time. They are null for
   other trials. A 60 Hz browser normally has a 16.7 ms floor, so these values cannot establish
   an 8 ms GPU draw budget. The current headless browser also uses SwiftShader, not hardware GL.
+- `marks_frame_ms_p50` and `marks_frame_ms_p95` summarize the same pan for colour spots, where the
+  dots layer is usually the heaviest draw, and carry the same caveats as `frame_ms_*`.
 - `gl_errors` lists nonzero errors observed through WebGL2 `getError`, including upload checks.
 - `display_checks` reports visibility and palette repaint checks from frame readbacks. It also
   reports whether Edges are available and repaint, or whether the image fallback has its single
@@ -101,7 +115,9 @@ Contour layer ids are matched by the patterns at the top of `measure.mjs`.
 - Successful public responses from tiles.mapterhorn.com and tiles.openfreemap.org are stored in
   `web/.trial-cache/http`. Fresh entries can be reused within a run. Mutable entries are
   revalidated on later runs with ETag or Last-Modified when available. Only explicitly immutable
-  entries can skip revalidation across runs, and their freshness lifetime still applies.
+  entries can skip revalidation across runs, and their freshness lifetime still applies. When the
+  network is down, a revalidation that cannot reach the host serves the stale cached response
+  instead of ending the trial.
 - Missing resources and responses marked `no-store` or `private` are not cached. Entries with no
   freshness lifetime are revalidated before reuse. Old two-file entries and corrupt entries are
   treated as misses. Each new entry is atomically published with its body and integrity digest.

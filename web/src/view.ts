@@ -18,7 +18,15 @@ import {
   storePick,
 } from "./display-state";
 import { makeHtmlElement } from "./html";
-import { allocate, type Draw, type Hidden, layerDraws } from "./layers/allocate";
+import {
+  allocate,
+  BLEND,
+  blendPair,
+  type Draw,
+  type Hidden,
+  layerDraws,
+} from "./layers/allocate";
+import { BLEND_TITLE, type BlendView, createBlendView } from "./layers/blend";
 import { layerMenu, partControls, type MenuChange } from "./layers/layer-menu";
 import { LAYER_KINDS } from "./layers/registry";
 import { firstSymbolId, removeLayerAndSource, showScaleBar } from "./map";
@@ -75,6 +83,7 @@ export function mountScene(
   const box = makeHtmlElement("div", "", cards);
   const mounted: MountedLayer[] = [];
   const views: LayerView[] = [];
+  let blend: BlendView | null = null;
   let timeline: ReturnType<typeof createSceneTimeline> = null;
   let isMounted = true;
 
@@ -90,6 +99,7 @@ export function mountScene(
     removeScaleBar();
     timeline?.destroy();
     views.forEach((view) => view.destroy());
+    blend?.destroy();
     Object.values(SLOTS).forEach((id) => removeLayerAndSource(map, id));
     removeLayerAndSource(map, OUTLINE_ID);
     timeline?.element.remove();
@@ -117,11 +127,13 @@ export function mountScene(
     mounted.push(...mountLayerViews(map, scene.layers, store, shift, addNote, display));
     views.push(...mounted.map(({ view }) => view));
 
-    mountCards(map, mounted, display, box, changed);
+    blend = mountBlend(map, mounted, store, shift, addNote);
+
+    mountCards(map, mounted, display, box, changed, blend);
     box.append(outlineCard(map));
     changed();
 
-    timeline = createSceneTimeline(views, scene.period, onTime);
+    timeline = createSceneTimeline(blend ? [...views, blend] : views, scene.period, onTime);
     if (timeline) timeBar.append(timeline.element);
   } catch (error) {
     unmount();
@@ -129,6 +141,7 @@ export function mountScene(
   }
 
   const layerIds = views.flatMap((view) => view.parts.flatMap((part) => part.layerIds));
+  if (blend) layerIds.push(...blend.parts[0].layerIds);
 
   return { unmount, addNote, timeline, layerIds };
 }
@@ -231,6 +244,36 @@ function mountLayerViews(
   return mounted;
 }
 
+// The blend reads the two layers' own steps and ranges, so it follows their menus.
+function mountBlend(
+  map: MapLibreMap,
+  mounted: MountedLayer[],
+  store: Promise<Store>,
+  shift: number,
+  addNote: (text: string) => void,
+) {
+  const docs = mounted.map(({ layer }) => layer);
+  const pair = blendPair(docs);
+  if (!pair) return null;
+
+  const [rain, temperature] = pair.map((id) => docs.find((layer) => layer.id === id)!);
+  const rangeOf = (id: string) => {
+    const mountedLayer = mounted.find(({ layer }) => layer.id === id);
+    return mountedLayer?.view.menu?.range?.value ?? null;
+  };
+  const report = (error: unknown) => addNote(`${BLEND_TITLE}: ${(error as Error).message}`);
+
+  try {
+    return createBlendView(
+      [rain, temperature],
+      { map, store, shift, slots: SLOTS, report, rangeOf },
+    );
+  } catch (error) {
+    report(error);
+    return null;
+  }
+}
+
 // The user's pick decides who holds colour. Every other visible layer then draws its fallback.
 function mountCards(
   map: MapLibreMap,
@@ -238,17 +281,24 @@ function mountCards(
   display: SceneDisplay,
   box: HTMLElement,
   changed: () => void,
+  blend: BlendView | null,
 ) {
   const docs = mounted.map(({ layer }) => layer);
   const units = docs.flatMap(layerUnits);
   const colourDocs = docs.filter((layer) => layerDraws(layer).colour);
   const hasChoice = colourDocs.length >= 2;
-  const picker = colourPicker(colourDocs, (unit) => act({ kind: "pick", unit }));
-  const cards = mounted.map((layer) => layerCard(layer, display, hasChoice, act, changed));
+  const picker = colourPicker(colourDocs, blend !== null, (unit) => act({ kind: "pick", unit }));
+  const menuChanged = () => {
+    blend?.restyle();
+    changed();
+  };
+  const cards = mounted.map((layer) => layerCard(layer, display, hasChoice, act, menuChanged));
+  const blendCard = blend && blendCardFor(blend, (on) => act({ kind: "toggle", unit: BLEND, on }));
   const shown = new Map<LayerView, Draw | null>();
   let isUnderColour: boolean | null = null;
 
   box.append(picker.row, ...cards.map(({ element }) => element));
+  if (blendCard) cards[lastFieldIndex(mounted)].element.after(blendCard.element);
   mounted.forEach(({ view }) => view.blocked?.changes.addEventListener("change", refresh));
   refresh();
 
@@ -268,6 +318,10 @@ function mountCards(
     picker.show(owner, hasChoice);
     cards.forEach((card) => card.show(draws, on));
     mounted.forEach(({ view }) => drawView(map, view, on, draws, shown));
+    if (blend && blendCard) {
+      blendCard.show(owner === BLEND);
+      drawBlend(blend, draws, shown);
+    }
 
     const isUnder = owner !== null;
     if (isUnder === isUnderColour) return;
@@ -307,11 +361,17 @@ function drawView(
   }
 }
 
+function drawBlend(blend: BlendView, draws: Draws, shown: Map<LayerView, Draw | null>) {
+  const draw = drawOf(draws.get(BLEND));
+  if (shown.get(blend) !== draw) blend.show(draw);
+  shown.set(blend, draw);
+}
+
 function drawOf(draw: Draw | Hidden | undefined) {
   return typeof draw === "string" ? draw : null;
 }
 
-function colourPicker(layers: LayerDoc[], onPick: (unit: string) => void) {
+function colourPicker(layers: LayerDoc[], hasBlend: boolean, onPick: (unit: string) => void) {
   const row = makeHtmlElement("label");
   row.className = "colour-picker";
   makeHtmlElement("span", "Colour", row);
@@ -319,6 +379,10 @@ function colourPicker(layers: LayerDoc[], onPick: (unit: string) => void) {
   for (const { id, title } of layers) {
     const option = makeHtmlElement("option", title, select) as HTMLOptionElement;
     option.value = id;
+  }
+  if (hasBlend) {
+    const option = makeHtmlElement("option", BLEND_TITLE, select) as HTMLOptionElement;
+    option.value = BLEND;
   }
   select.onchange = () => onPick(select.value);
   row.append(select);
@@ -413,6 +477,32 @@ function layerCard(
   };
 }
 
+function lastFieldIndex(mounted: MountedLayer[]) {
+  return mounted.map(({ layer }) => layer.style.kind).lastIndexOf("field");
+}
+
+function blendCardFor(blend: BlendView, onToggle: (on: boolean) => void) {
+  const card = makeHtmlElement("section");
+  card.className = "card";
+  card.setAttribute("aria-label", BLEND_TITLE);
+  const [part] = blend.parts;
+  const row = makeHtmlElement("div", "", card);
+  row.className = "check-row";
+  const label = checkbox(part.label, false, onToggle);
+  const check = label.querySelector("input")!;
+  row.append(label);
+  addOptions(blend, row, card);
+  card.append(part.note!, blend.legend()!);
+
+  return {
+    element: card,
+    show(isOwner: boolean) {
+      check.checked = isOwner;
+      blend.legend()!.hidden = !isOwner;
+    },
+  };
+}
+
 function chipText(draw: Draw | Hidden | undefined) {
   if (draw === undefined) return "";
 
@@ -430,17 +520,7 @@ function addFirstPartExtras(
   display: SceneDisplay,
   changed: () => void,
 ) {
-  if (view.options.length > 0) {
-    if (!view.time) row.classList.add("inline-options");
-    const options = makeHtmlElement("span", "", row);
-    options.className = "option-checks";
-    for (const { label, initial, set } of view.options) {
-      options.append(checkbox(label, initial ?? false, set));
-    }
-    for (const { note } of view.options) {
-      if (note) makeHtmlElement("div", note, card).className = "option-note";
-    }
-  }
+  addOptions(view, row, card);
 
   if (view.menu) {
     const { button, popover } = layerMenu(
@@ -449,6 +529,20 @@ function addFirstPartExtras(
     );
     row.append(button);
     card.append(popover);
+  }
+}
+
+function addOptions(view: LayerView, row: HTMLElement, card: HTMLElement) {
+  if (view.options.length === 0) return;
+
+  if (!view.time) row.classList.add("inline-options");
+  const options = makeHtmlElement("span", "", row);
+  options.className = "option-checks";
+  for (const { label, initial, set } of view.options) {
+    options.append(checkbox(label, initial ?? false, set));
+  }
+  for (const { note } of view.options) {
+    if (note) makeHtmlElement("div", note, card).className = "option-note";
   }
 }
 

@@ -12,6 +12,7 @@ const hooks = registerHooks({
 });
 const {
   DOT_RADIUS_RATIO,
+  HATCH_BYTE,
   MAX_LEVEL,
   MIN_LEVEL,
   NO_DATA_BYTE,
@@ -21,8 +22,11 @@ const {
   cellThreshold,
   crossfadeDot,
   dotCount,
+  hasHatchedCells,
   isDotLit,
+  isHatched,
   levelFor,
+  markBytes,
   positionBytes,
   slotPosition,
 } = await import("./lattice.ts").finally(() => hooks.deregister());
@@ -128,7 +132,28 @@ test("block_means_ignore_no_data", () => {
 
 test("positionBytes stores NaN as no data and clamps outside the stops", () => {
   const bytes = positionBytes([NaN, -5, 0, 2, 4, 99], [0, 2, 4]);
-  assert.deepEqual(Array.from(bytes), [NO_DATA_BYTE, 0, 0, 127, 254, 254]);
+  assert.deepEqual(Array.from(bytes), [NO_DATA_BYTE, 0, 0, 127, 253, 253]);
+});
+
+test("hatch_marks_only_in_area_no_data_cells", () => {
+  const mask = Uint8Array.of(1, 1, 0, 0, 1, 1);
+  const positions = Uint8Array.of(0, NO_DATA_BYTE, NO_DATA_BYTE, 40, 253, NO_DATA_BYTE);
+
+  assert.deepEqual(
+    Array.from(markBytes(positions, mask)),
+    [0, HATCH_BYTE, NO_DATA_BYTE, NO_DATA_BYTE, 253, HATCH_BYTE],
+  );
+  assert.deepEqual(
+    [isHatched(true, NO_DATA_BYTE), isHatched(false, NO_DATA_BYTE), isHatched(true, 0)],
+    [true, false, false],
+  );
+  assert.equal(hasHatchedCells(positions, mask), true);
+  assert.equal(hasHatchedCells(Uint8Array.of(0, NO_DATA_BYTE), Uint8Array.of(1, 0)), false);
+
+  const hatchedCells = Uint8Array.of(HATCH_BYTE, HATCH_BYTE, HATCH_BYTE, HATCH_BYTE);
+  const mixedCells = Uint8Array.of(HATCH_BYTE, HATCH_BYTE, HATCH_BYTE, NO_DATA_BYTE);
+  assert.equal(blockMeans(hatchedCells, 2, 2, 2).means[0], HATCH_BYTE);
+  assert.equal(blockMeans(mixedCells, 2, 2, 2).means[0], NO_DATA_BYTE);
 });
 
 test("full_density_inks_eighteen_percent", () => {
@@ -150,8 +175,8 @@ test("a dot that only the next level lights fades in from nothing", () => {
   const wasLit = isDotLit(64, 0, threshold, 0, 0);
   const willBeLit = isDotLit(64, 1, threshold, 0, 0);
 
-  assert.equal(dotCount(64 / 254, 0, threshold), 0);
-  assert.equal(dotCount(64 / 254, 1, threshold), 1);
+  assert.equal(dotCount(64 / 253, 0, threshold), 0);
+  assert.equal(dotCount(64 / 253, 1, threshold), 1);
   assert.deepEqual([wasLit, willBeLit], [false, true]);
   assert.equal(crossfadeDot(wasLit, willBeLit, 0, radiiPx).opacity, 0);
   assert.ok(Math.abs(crossfadeDot(wasLit, willBeLit, 0.25, radiiPx).opacity - 0.25) < 1e-9);
@@ -162,12 +187,12 @@ test("a dot that only the next level lights fades in from nothing", () => {
 test("a block dot that the finer level leaves unlit fades out", () => {
   const radiiPx = { parent: 4, next: 2 };
   const none = NO_DATA_BYTE;
-  const { means } = blockMeans(Uint8Array.of(0, 254, 254, 254), 2, 2, 2);
+  const { means } = blockMeans(Uint8Array.of(0, 253, 253, 253), 2, 2, 2);
   const threshold = cellThreshold(0, 0);
   const wasLit = isDotLit(means[0], -1, threshold, 0, 0);
   const willBeLit = isDotLit(0, 0, threshold, 0, 0);
 
-  assert.equal(means[0], 191);
+  assert.equal(means[0], 190);
   assert.deepEqual([wasLit, willBeLit], [true, false]);
   assert.ok(Math.abs(crossfadeDot(wasLit, willBeLit, 0.2, radiiPx).opacity - 0.8) < 1e-9);
   assert.equal(crossfadeDot(wasLit, willBeLit, 0.5, radiiPx).radiusPx, 3);
@@ -188,7 +213,7 @@ test("dots lit at both levels keep full opacity while they change size", () => {
 
 test("every dot lit at a level stays lit at the next level", () => {
   for (let level = 0; level < MAX_LEVEL; level++) {
-    for (const byte of [0, 20, 100, 127, 200, 254]) {
+    for (const byte of [0, 20, 100, 127, 200, 253]) {
       for (const threshold of [0.008, 0.3, 0.99]) {
         const slots = 2 ** level;
         for (let row = 0; row < slots; row++) {

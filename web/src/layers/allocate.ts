@@ -100,6 +100,17 @@ export function missingStepNote(
 }
 
 /**
+ * The note for a scrubber step where the halves of the blend show different periods, such as a
+ * daily and a monthly layer, or null when they show the same one.
+ */
+export function differingPeriodNote(halves: readonly { title: string; period: string }[]) {
+  if (new Set(halves.map(({ period }) => period)).size === 1) return null;
+
+  const shown = halves.map(({ title, period }) => `${title.toLowerCase()} for ${period}`);
+  return `The blend pairs ${shown.join(" with ")}.`;
+}
+
+/**
  * Give colour to the picked unit when it is a candidate, else to the best-ranked candidate.
  * Every other visible unit takes its fallback's first free channel or is hidden with a reason.
  * A unit named in `blocked` cannot draw its fallback and is hidden with the given reason.

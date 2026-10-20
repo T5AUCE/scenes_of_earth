@@ -21,6 +21,22 @@ const NO_FALLBACK_NOTE =
   "If the basemap cannot load, no other basemap is substituted; the data layers still draw.";
 const CLIPPED_NOTICE = "The area reaches beyond the data coverage and was clipped to it.";
 
+const DISPLAY_LINES = [
+  "One layer holds the map's colour at a time. The Colour row at the top of the layer cards names "
+    + "it, while the other visible layers show the same data in a quieter way.",
+  "Rainfall without colour becomes dots. A cell with more rain gets more dots, and their spacing "
+    + "stays even on screen, so wet and dry places stay visible without a colour scale.",
+  "Temperature without colour becomes isotherms, the thin dashed lines that join places at the "
+    + "same temperature. The legend names their interval and marks every fifth line more boldly.",
+  "Land cover without colour keeps only the borders between classes, so the relief and any dots or "
+    + "isotherms underneath stay readable.",
+  "The blend draws rainfall and temperature at once, with rainfall setting how strong the green is "
+    + "and temperature setting how warm it looks, so a wet warm place reads differently from a wet "
+    + "cool one.",
+  "A diagonal hatch marks cells inside the area that hold no value for the layer being shown, so a "
+    + "gap is never taken for a low value.",
+];
+
 const SMOOTHING_LINES = [
   "Field layers show one colour block per cell by default. Smooth lets your graphics card blend "
     + "the colours of neighbouring cells (linear interpolation), so edges look softer. It blends "
@@ -97,6 +113,7 @@ export function renderAbout(scene: Scene) {
   }
 
   appendNotices(root, scene);
+  appendDisplay(root);
   appendSmoothing(root);
 
   makeHtmlElement("h4", "Versions", root);
@@ -115,6 +132,12 @@ function appendNotices(root: HTMLElement, scene: Scene) {
   if (scene.area.clipped_to_coverage) makeHtmlElement("li", CLIPPED_NOTICE, list);
 
   for (const limit of scene.notices.limits) makeHtmlElement("li", limit, list);
+}
+
+function appendDisplay(root: HTMLElement) {
+  makeHtmlElement("h4", "What the map draws", root);
+
+  for (const line of DISPLAY_LINES) makeHtmlElement("p", line, root);
 }
 
 function appendSmoothing(root: HTMLElement) {

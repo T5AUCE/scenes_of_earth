@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { afterEach, beforeEach, test } from "node:test";
 
-import { lut } from "./render/colormap.ts";
-import { classColors, fieldGradient } from "./render/palettes.ts";
+import { lut, lut2d } from "./render/colormap.ts";
+import { BIVARIATE_GREEN, classColors, fieldGradient } from "./render/palettes.ts";
 
 const resolvedParents = ["./legend.ts", "./render/lattice.ts"].map(
   (path) => new URL(path, import.meta.url).href,
@@ -17,7 +17,14 @@ const hooks = registerHooks({
     return next(new URL(`${specifier}.ts`, context.parentURL).href, context);
   },
 });
-const { classLegend, contourLegendText, dotLegend, gradientLegend, isothermLegend } =
+const {
+  bivariateLegend,
+  classLegend,
+  contourLegendText,
+  dotLegend,
+  gradientLegend,
+  isothermLegend,
+} =
   await import("./legend.ts").finally(() => hooks.deregister());
 
 const KENYA_RAINFALL_STOPS = [0, 10, 30, 40, 60, 80, 100, 130, 200];
@@ -55,6 +62,68 @@ test("the isotherm legend names its interval and bold step", () => {
   assert.equal(sample.className, "legend-isotherm");
   assert.equal(sample.style.borderTop, "2px dashed #313f4d");
   assert.equal(label.textContent, "Isotherms every 2 °C (bold every 10 °C)");
+});
+
+test("the bivariate legend puts its ticks at the fitted stops", () => {
+  const rain = {
+    title: "Rainfall",
+    units: "mm/month",
+    stops: KENYA_RAINFALL_STOPS,
+    isBottomOpen: false,
+  };
+  const temperature = {
+    title: "Temperature",
+    units: "°C",
+    stops: [5, 8, 11, 14, 17, 20, 23, 26, 29],
+    isBottomOpen: false,
+  };
+
+  const legend = bivariateLegend(
+    lut2d(BIVARIATE_GREEN),
+    rain,
+    temperature,
+    true,
+  ) as unknown as TestElement;
+  const [rainTitle, plot, temperatureTitle, scale] = legend.children;
+  const [rows, , , columns] = plot.children;
+
+  assert.equal(rainTitle.textContent, "↑ Rainfall (mm/month)");
+  assert.equal(temperatureTitle.textContent, "Temperature (°C) →");
+  assert.equal(scale.textContent, "Fitted to this area");
+  assert.deepEqual(rows.children.map((label) => label.textContent), ["0", "60", "≥ 200"]);
+  assert.deepEqual(rows.children.map((label) => label.style.top), ["100%", "50%", "0%"]);
+  assert.deepEqual(columns.children.map((label) => label.textContent), ["5", "17", "≥ 29"]);
+  assert.deepEqual(columns.children.map((label) => label.style.left), ["0%", "50%", "100%"]);
+});
+
+test("the bivariate legend names both axes, their ends and its scale for assistive tools", () => {
+  const rain = { title: "Rainfall", units: "mm/month", stops: [0, 100, 200], isBottomOpen: false };
+  const temperature = {
+    title: "Temperature",
+    units: "°C",
+    stops: [8, 20, 31],
+    isBottomOpen: true,
+  };
+
+  const legend = bivariateLegend(
+    lut2d(BIVARIATE_GREEN),
+    rain,
+    temperature,
+    false,
+  ) as unknown as TestElement;
+  const description = legend.attributes["aria-label"];
+
+  assert.equal(legend.attributes.role, "img");
+  assert.match(
+    description,
+    /Temperature grows from left to right from 8 or less to 31 or more °C, with 20 in the/,
+  );
+  assert.match(
+    description,
+    /Rainfall grows from bottom to top from 0 to 200 or more mm\/month, with 100 in the middle\./,
+  );
+  assert.match(description, /Darker is wetter\./);
+  assert.match(description, /The scale is a custom range\./);
 });
 
 test("the dot legend labels five stops over boxes with growing dot counts", () => {
@@ -218,6 +287,9 @@ class TestElement {
   readonly style: Record<string, string> = {};
   readonly tagName: string;
   className = "";
+  width = 0;
+  height = 0;
+  readonly attributes: Record<string, string> = {};
   private text = "";
 
   constructor(tagName: string) {
@@ -235,5 +307,20 @@ class TestElement {
 
   append(...children: TestElement[]) {
     this.children.push(...children);
+  }
+
+  setAttribute(name: string, value: string) {
+    this.attributes[name] = value;
+  }
+
+  getContext() {
+    return {
+      fillStyle: "",
+      createImageData: (width: number, height: number) => ({
+        data: new Uint8ClampedArray(width * height * 4),
+      }),
+      putImageData() {},
+      fillRect() {},
+    };
   }
 }

@@ -31,23 +31,37 @@ export async function installCache(context, dir) {
       return route.fulfill(makeFulfillment(stored));
     }
 
-    const headers = { ...request.headers(), ...makeValidatorHeaders(stored) };
-    const response = await route.fetch({ headers });
-    const revalidated = response.status() === 304 && stored;
-    const entry = {
-      status: revalidated ? stored.status : response.status(),
-      headers: {
-        ...(revalidated ? stored.headers : {}),
-        ...pickHeaders(response.headers()),
-        "access-control-allow-origin": "*",
-      },
-      storedAtMs: Date.now(),
-      body: revalidated ? stored.body : await response.body(),
-    };
+    const entry = await revalidate(route, request, stored);
     if (canStore(entry)) writeEntry(file, entry);
 
     return route.fulfill(makeFulfillment(entry));
   });
+}
+
+// A stale cached response still answers a run when the upstream host cannot be reached.
+async function revalidate(route, request, stored) {
+  const headers = { ...request.headers(), ...makeValidatorHeaders(stored) };
+  let response;
+  try {
+    response = await route.fetch({ headers });
+  } catch (error) {
+    if (!stored) throw error;
+
+    return stored;
+  }
+
+  const revalidated = response.status() === 304 && stored;
+
+  return {
+    status: revalidated ? stored.status : response.status(),
+    headers: {
+      ...(revalidated ? stored.headers : {}),
+      ...pickHeaders(response.headers()),
+      "access-control-allow-origin": "*",
+    },
+    storedAtMs: Date.now(),
+    body: revalidated ? stored.body : await response.body(),
+  };
 }
 
 function makeValidatorHeaders(entry) {

@@ -1,0 +1,84 @@
+{
+  "spots": [
+    {
+      "name": "Kenya-temperature",
+      "area": "sample:kenya",
+      "centre": [37.0, 0.5],
+      "zooms": ["fitted"],
+      "layers": ["terrain", "chirps_monthly", "era5land_temperature", "esa_worldcover"],
+      "start": "2026-04",
+      "end": "2026-09",
+      "colour": "era5land_temperature"
+    },
+    {
+      "name": "Kenya-rainfall",
+      "area": "sample:kenya",
+      "centre": [37.0, 0.5],
+      "zooms": ["fitted"],
+      "layers": ["terrain", "chirps_monthly", "era5land_temperature", "esa_worldcover"],
+      "start": "2026-04",
+      "end": "2026-09",
+      "colour": "chirps_monthly"
+    },
+    {
+      "name": "Kenya-landcover",
+      "area": "sample:kenya",
+      "centre": [37.0, 0.5],
+      "zooms": ["fitted"],
+      "layers": ["terrain", "chirps_monthly", "era5land_temperature", "esa_worldcover"],
+      "start": "2026-04",
+      "end": "2026-09",
+      "colour": "esa_worldcover"
+    },
+    {
+      "name": "Kenya-blend",
+      "area": "sample:kenya",
+      "centre": [37.0, 0.5],
+      "zooms": ["fitted"],
+      "layers": ["terrain", "chirps_monthly", "era5land_temperature", "esa_worldcover"],
+      "start": "2026-04",
+      "end": "2026-09",
+      "colour": "blend"
+    },
+    {
+      "name": "Fiji-temperature",
+      "area": "sample:fiji",
+      "centre": [177.55, -18.0],
+      "zooms": ["fitted"],
+      "layers": ["terrain", "chirps_monthly", "era5land_temperature", "esa_worldcover"],
+      "start": "2026-04",
+      "end": "2026-09",
+      "colour": "era5land_temperature"
+    },
+    {
+      "name": "Fiji-rainfall",
+      "area": "sample:fiji",
+      "centre": [177.55, -18.0],
+      "zooms": ["fitted"],
+      "layers": ["terrain", "chirps_monthly", "era5land_temperature", "esa_worldcover"],
+      "start": "2026-04",
+      "end": "2026-09",
+      "colour": "chirps_monthly"
+    },
+    {
+      "name": "Fiji-landcover",
+      "area": "sample:fiji",
+      "centre": [177.55, -18.0],
+      "zooms": ["fitted"],
+      "layers": ["terrain", "chirps_monthly", "era5land_temperature", "esa_worldcover"],
+      "start": "2026-04",
+      "end": "2026-09",
+      "colour": "esa_worldcover"
+    },
+    {
+      "name": "Fiji-blend",
+      "area": "sample:fiji",
+      "centre": [177.55, -18.0],
+      "zooms": ["fitted"],
+      "layers": ["terrain", "chirps_monthly", "era5land_temperature", "esa_worldcover"],
+      "start": "2026-04",
+      "end": "2026-09",
+      "colour": "blend"
+    }
+  ]
+}

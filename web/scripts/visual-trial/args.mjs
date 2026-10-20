@@ -78,6 +78,9 @@ export function checkPlaces(data, file = "places") {
     if (!zooms.every((zoom) => zoom === "fitted" || Number.isFinite(zoom))) {
       throw new Error(`${where} "zooms" must hold "fitted" or numbers`);
     }
+    if (spot.colour !== undefined && (typeof spot.colour !== "string" || !spot.colour)) {
+      throw new Error(`${where} "colour" must be a non-empty string`);
+    }
 
     return {
       name: spot.name,
@@ -86,6 +89,7 @@ export function checkPlaces(data, file = "places") {
       zooms,
       layers: spot.layers ?? ["terrain"],
       enable: spot.enable ?? [],
+      colour: spot.colour ?? null,
       landcover: spot.landcover === true,
       start: spot.start,
       end: spot.end,
