@@ -1,6 +1,8 @@
 import type { SampleTable } from "./mercator";
 
 const LUT_ENTRIES = 256;
+/** Entries per side of the blended layer's colour table. */
+export const LUT2D_SIZE = 64;
 const LEGEND_TICK_COUNT = 5;
 const STOP_DIGITS = 6;
 /** Index of the last colormap entry. */
@@ -30,6 +32,11 @@ export function lut(stops: number[][]) {
   return table;
 }
 
+/** The stops of a layer's scale: the fitted ones, or an even spread over a custom range. */
+export function stopsForRange(fitted: number[], range: [number, number] | null) {
+  return range ? evenStops(...range, fitted.length) : fitted;
+}
+
 /** Colour nearest values by class; NaN and values without a colour stay transparent. */
 export function paintClasses(
   values: Float32Array,
@@ -45,6 +52,117 @@ export function paintClasses(
     rgba[pixel * RGBA_CHANNELS + COLOR_CHANNELS] = OPAQUE;
   }
   return rgba;
+}
+
+/**
+ * A square table of opaque RGBA entries, row-major with the first axis as rows. It interpolates
+ * the colour grid bilinearly in OKLab, so the steps between its colours look even.
+ */
+export function lut2d(grid: number[][][]) {
+  const table = new Uint8ClampedArray(LUT2D_SIZE * LUT2D_SIZE * RGBA_CHANNELS);
+  const labs = grid.map((row) => row.map(rgbToOklab));
+  const cellCount = grid.length - 1;
+
+  for (let row = 0; row < LUT2D_SIZE; row++) {
+    const rowCell = cellOf((row / (LUT2D_SIZE - 1)) * cellCount, cellCount);
+    for (let column = 0; column < LUT2D_SIZE; column++) {
+      const columnCell = cellOf((column / (LUT2D_SIZE - 1)) * cellCount, cellCount);
+      const lab = Array.from({ length: COLOR_CHANNELS }, (_, axis) =>
+        bilinear(labs, rowCell, columnCell, axis),
+      );
+      const start = (row * LUT2D_SIZE + column) * RGBA_CHANNELS;
+      table.set(oklabToRgb(lab), start);
+      table[start + COLOR_CHANNELS] = OPAQUE;
+    }
+  }
+  return table;
+}
+
+function cellOf(position: number, cellCount: number) {
+  const low = Math.min(Math.floor(position), cellCount - 1);
+  return { low, fraction: position - low };
+}
+
+function bilinear(
+  labs: number[][][],
+  row: { low: number; fraction: number },
+  column: { low: number; fraction: number },
+  axis: number,
+) {
+  const along = (rowIndex: number) => {
+    const first = labs[rowIndex][column.low][axis];
+    const second = labs[rowIndex][column.low + 1][axis];
+    return first + (second - first) * column.fraction;
+  };
+  const low = along(row.low);
+  return low + (along(row.low + 1) - low) * row.fraction;
+}
+
+// Björn Ottosson's OKLab, with sRGB channels from 0 to 255.
+function rgbToOklab([red, green, blue]: number[]) {
+  const [r, g, b] = [red, green, blue].map((channel) => srgbToLinear(channel / OPAQUE));
+  const long = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const medium = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const short = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+
+  return [
+    0.2104542553 * long + 0.793617785 * medium - 0.0040720468 * short,
+    1.9779984951 * long - 2.428592205 * medium + 0.4505937099 * short,
+    0.0259040371 * long + 0.7827717662 * medium - 0.808675766 * short,
+  ];
+}
+
+function oklabToRgb([lightness, a, b]: number[]) {
+  const long = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const medium = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const short = (lightness - 0.0894841775 * a - 1.291485548 * b) ** 3;
+
+  return [
+    4.0767416621 * long - 3.3077115913 * medium + 0.2309699292 * short,
+    -1.2684380046 * long + 2.6097574011 * medium - 0.3413193965 * short,
+    -0.0041960863 * long - 0.7034186147 * medium + 1.707614701 * short,
+  ].map((channel) => linearToSrgb(channel) * OPAQUE);
+}
+
+function srgbToLinear(channel: number) {
+  return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+}
+
+function linearToSrgb(channel: number) {
+  const clamped = Math.max(0, channel);
+  return clamped <= 0.0031308 ? 12.92 * clamped : 1.055 * clamped ** (1 / 2.4) - 0.055;
+}
+
+/** One input of the blended layer: its values, the cell each pixel reads and its scale. */
+export interface BivariateAxis {
+  values: Float32Array;
+  /** The cell of `values` under each output pixel, or -1 where the layer has none. */
+  cells: Int32Array;
+  stops: number[];
+}
+
+/** Colour each pixel by both inputs through a lut2d table; a missing value in either hides it. */
+export function paintBivariate(
+  rows: BivariateAxis,
+  columns: BivariateAxis,
+  colors: Uint8ClampedArray,
+) {
+  const rgba = new Uint8ClampedArray(rows.cells.length * RGBA_CHANNELS);
+  for (let pixel = 0; pixel < rows.cells.length; pixel++) {
+    const rowValue = valueAt(rows, pixel);
+    const columnValue = valueAt(columns, pixel);
+    if (Number.isNaN(rowValue) || Number.isNaN(columnValue)) continue;
+
+    const row = Math.round(stopPosition(rowValue, rows.stops) * (LUT2D_SIZE - 1));
+    const column = Math.round(stopPosition(columnValue, columns.stops) * (LUT2D_SIZE - 1));
+    const colorStart = (row * LUT2D_SIZE + column) * RGBA_CHANNELS;
+    rgba.set(colors.subarray(colorStart, colorStart + RGBA_CHANNELS), pixel * RGBA_CHANNELS);
+  }
+  return rgba;
+}
+
+function valueAt({ values, cells }: BivariateAxis, pixel: number) {
+  return cells[pixel] < 0 ? NaN : values[cells[pixel]];
 }
 
 /** Paint one-based class IDs with colorsById[id - 1] and leave zero transparent. */

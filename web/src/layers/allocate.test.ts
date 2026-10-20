@@ -38,6 +38,16 @@ test("an off pick passes colour to the auto rank meanwhile", () => {
   assert.equal(allocation.draws.has("rain"), false);
 });
 
+test("a blocked fallback is hidden with its reason while colour stays available", () => {
+  const blocked = new Map([["land", "Outlines need WebGL drawing"]]);
+
+  const outlined = allocate([LAND, TEMP], on("land", "temp"), null, blocked);
+  assert.deepEqual(outlined.draws.get("land"), { hidden: "Outlines need WebGL drawing" });
+
+  const coloured = allocate([LAND, TEMP], on("land", "temp"), "land", blocked);
+  assert.equal(coloured.draws.get("land"), "colour");
+});
+
 test("a categorical layer without a fallback uses edges", () => {
   assert.equal(layerDraws(LAND).fallback, "edges");
 

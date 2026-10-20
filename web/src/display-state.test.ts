@@ -27,6 +27,7 @@ const {
   recordMenuChange,
   resolveDisplay,
   setLayerDisplay,
+  shouldStorePick,
   storePalette,
   storeEdges,
   storePick,
@@ -161,6 +162,22 @@ test("turning a half on ends the blend and leaves the other half off", () => {
 
   assert.equal(next.pick, "era5land_temperature");
   assert.deepEqual([...next.off], ["chirps_monthly"]);
+});
+
+test("an explicit pick is remembered even when a link had already picked it", () => {
+  const linked = resolveDisplay(COLOUR_LAYERS, { ...NO_TOKENS, colour: "chirps_monthly" }, {});
+  const state = { pick: linked.display.colour, off: linked.display.off };
+  const off = applyColourAction(
+    state,
+    { kind: "toggle", unit: "chirps_monthly", on: false },
+    COLOUR_LAYERS,
+  );
+  const action = { kind: "pick", unit: "chirps_monthly" } as const;
+  const picked = applyColourAction(off, action, COLOUR_LAYERS);
+
+  assert.equal(shouldStorePick(off.pick, action, picked.pick), true);
+  const toggle = { kind: "toggle", unit: "chirps_monthly", on: true } as const;
+  assert.equal(shouldStorePick(off.pick, toggle, off.pick), false);
 });
 
 test("the effective owner is written to the link", () => {

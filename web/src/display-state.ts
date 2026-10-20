@@ -307,6 +307,19 @@ export function applyColourAction(
     : toggleColour(state.pick, off, action, pair);
 }
 
+/**
+ * Whether the browser should remember the pick after an action. A successful explicit pick counts
+ * even when it equals the pick a link set, because only the viewer's own choices are remembered.
+ */
+export function shouldStorePick(
+  current: string | null,
+  action: ColourAction,
+  next: string | null,
+): boolean {
+  const isExplicitPick = action.kind === "pick" && next === action.unit;
+  return isExplicitPick || next !== current;
+}
+
 function pickColour(
   current: string | null,
   off: Set<string>,

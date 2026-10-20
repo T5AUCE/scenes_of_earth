@@ -14,6 +14,7 @@ import {
   resolveDisplay,
   recordMenuChange,
   type SceneDisplay,
+  shouldStorePick,
   storePick,
 } from "./display-state";
 import { makeHtmlElement } from "./html";
@@ -248,11 +249,12 @@ function mountCards(
   let isUnderColour: boolean | null = null;
 
   box.append(picker.row, ...cards.map(({ element }) => element));
+  mounted.forEach(({ view }) => view.blocked?.changes.addEventListener("change", refresh));
   refresh();
 
   function act(action: ColourAction) {
     const next = applyColourAction({ pick: display.colour, off: display.off }, action, docs);
-    if (next.pick !== display.colour) storePick(next.pick);
+    if (shouldStorePick(display.colour, action, next.pick)) storePick(next.pick);
     display.colour = next.pick;
     display.off = new Set(next.off);
     refresh();
@@ -261,7 +263,7 @@ function mountCards(
 
   function refresh() {
     const on = new Set(units.filter((unit) => !display.off.has(unit)));
-    const { owner, draws } = allocate(docs, on, display.colour);
+    const { owner, draws } = allocate(docs, on, display.colour, blockedFallbacks(mounted));
 
     picker.show(owner, hasChoice);
     cards.forEach((card) => card.show(draws, on));
@@ -273,6 +275,11 @@ function mountCards(
     isUnderColour = isUnder;
     mounted.forEach(({ view }) => view.setColourUnder?.(isUnder));
   }
+}
+
+function blockedFallbacks(mounted: MountedLayer[]) {
+  const reasons = mounted.map(({ layer, view }) => [layer.id, view.blocked?.reason] as const);
+  return new Map(reasons.filter((entry): entry is [string, string] => Boolean(entry[1])));
 }
 
 type Draws = Map<string, Draw | Hidden>;
@@ -339,6 +346,7 @@ function layerCard(
 ): LayerCard {
   const card = makeHtmlElement("section");
   card.className = "card";
+  card.setAttribute("aria-label", layer.title);
   const checks = new Map<string, HTMLInputElement>();
   const slidersByPart = new Map<string, HTMLElement>();
   const reasons = new Map<string, HTMLElement>();
@@ -347,7 +355,12 @@ function layerCard(
   const pickButton = makeHtmlElement("button", "Show in colour");
   pickButton.type = "button";
   pickButton.className = "colour-pick";
-  pickButton.onclick = () => act({ kind: "pick", unit: view.parts[0].id });
+  pickButton.setAttribute("aria-label", `Show ${layer.title} in colour`);
+  pickButton.onclick = () => {
+    // The button hides itself when the pick lands, so focus moves to a control that stays.
+    checks.get(view.parts[0].id)!.focus();
+    act({ kind: "pick", unit: view.parts[0].id });
+  };
 
   view.parts.forEach((part, index) => {
     const sliders = part.controls ? partControls(part.controls) : null;

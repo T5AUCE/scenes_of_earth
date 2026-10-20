@@ -8,6 +8,7 @@ import {
   storeEdges,
 } from "../display-state";
 import { createClassFieldLayer, type ClassFieldMode } from "../gpu/class-field-layer";
+import { layerPosition, type LayerPosition } from "../gpu/tiled-layer";
 import { classLegend } from "../legend";
 import { removeLayerAndSource } from "../map";
 import { CLASS_PALETTE_OPTIONS, classColors, classPalette } from "../render/palettes";
@@ -25,13 +26,6 @@ const IMAGE_EDGES_NOTE = "Edge options need WebGL drawing.";
 const IMAGE_OUTLINES_NOTE = "Outlines need WebGL drawing";
 const EDGES_LEGEND = "Class borders only. Show in colour to see the classes.";
 
-interface DrawPosition {
-  beforeId: string | undefined;
-  visibility: "visible" | "none";
-  minzoom: number;
-  maxzoom: number;
-}
-
 /** Draw static classes with GPU edges, retaining the image painter as an automatic fallback. */
 export function createCategoricalView(context: LayerContext): LayerView {
   return new CategoricalView(context);
@@ -43,6 +37,7 @@ class CategoricalView implements LayerView {
   readonly options;
   readonly menu: LayerMenu;
   readonly ready: Promise<void>;
+  readonly blocked: NonNullable<LayerView["blocked"]>;
 
   private readonly id: string;
   private readonly classes;
@@ -59,10 +54,9 @@ class CategoricalView implements LayerView {
   private smooth = true;
   private edges: EdgeSettings;
   private mode: ClassFieldMode = "fill";
-  private isOutlinesReported = false;
   private alive = true;
   private readonly context: LayerContext;
-  private restorePosition: DrawPosition | null = null;
+  private restorePosition: LayerPosition | null = null;
   private restoreSlot: ClassFieldMode | null = null;
 
   constructor(context: LayerContext) {
@@ -87,6 +81,7 @@ class CategoricalView implements LayerView {
     });
     this.edgeMenu = this.createEdgesMenu();
     this.menu = this.createMenu();
+    this.blocked = this.createBlocked();
     this.parts = [{ id: layer.id, label: layer.title, layerIds: [this.id] }];
     this.options = [
       {
@@ -185,6 +180,16 @@ class CategoricalView implements LayerView {
     };
   }
 
+  private createBlocked(): NonNullable<LayerView["blocked"]> {
+    const view = this;
+    return {
+      changes: new EventTarget(),
+      get reason() {
+        return view.image && !view.image.canDrawEdges ? IMAGE_OUTLINES_NOTE : null;
+      },
+    };
+  }
+
   private mount() {
     const { map, slots } = this.context;
     if (gpuDisabled() || map.getProjection()?.type === "globe") {
@@ -232,22 +237,11 @@ class CategoricalView implements LayerView {
     map.triggerRepaint();
   };
 
-  private drawPosition(): DrawPosition {
-    const { map, slots } = this.context;
-    const layers = map.getLayersOrder();
-    const index = layers.indexOf(this.id);
-    const layer = map.getLayer(this.id);
-    const hidden = layer && map.getLayoutProperty(this.id, "visibility") === "none";
-
-    return {
-      beforeId: index < 0 ? slots.fill : layers[index + 1],
-      visibility: hidden ? "none" : "visible",
-      minzoom: layer?.minzoom ?? 0,
-      maxzoom: layer?.maxzoom ?? map.getMaxZoom(),
-    };
+  private drawPosition(): LayerPosition {
+    return layerPosition(this.context.map, this.id, this.context.slots.fill);
   }
 
-  private applyPosition({ visibility, minzoom, maxzoom }: DrawPosition) {
+  private applyPosition({ visibility, minzoom, maxzoom }: LayerPosition) {
     const { map } = this.context;
     map.setLayoutProperty(this.id, "visibility", visibility);
     map.setLayerZoomRange(this.id, minzoom, maxzoom);
@@ -269,23 +263,14 @@ class CategoricalView implements LayerView {
         opacity: CATEGORICAL_OPACITY,
       });
       this.applyPosition(position);
-      if (this.mode === "edges") {
-        this.reportOutlines();
-        this.setVisible(false);
-      }
+      this.mode = "fill";
       document.body.dataset.landcoverRenderer = "image";
       this.repaint();
       this.menuUpdates.dispatchEvent(new Event("change"));
+      this.blocked.changes.dispatchEvent(new Event("change"));
     } catch (error) {
       report(error);
     }
-  }
-
-  private reportOutlines() {
-    if (this.isOutlinesReported) return;
-
-    this.isOutlinesReported = true;
-    this.context.report(new Error(IMAGE_OUTLINES_NOTE));
   }
 
   private setVisible(visible: boolean) {
@@ -333,11 +318,6 @@ class CategoricalView implements LayerView {
 
   show(draw: Draw | null) {
     if (draw !== "colour" && draw !== "edges") {
-      this.setVisible(false);
-      return;
-    }
-    if (draw === "edges" && this.image && !this.image.canDrawEdges) {
-      this.reportOutlines();
       this.setVisible(false);
       return;
     }

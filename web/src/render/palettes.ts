@@ -58,6 +58,19 @@ const BATLOW = [
   [250, 204, 250],
 ];
 
+// Rain rows run from dry to wet and temperature columns from cool to warm, copied from the
+// colour study's green path (OKLCH hue 255 to 165 to 45, lightness falling with rain).
+const BIVARIATE_GREEN_HEX = [
+  ["#b4d0f5", "#a6dfe9", "#b5e6cf", "#e4e2b4", "#ffdccd"],
+  ["#98bbe9", "#81ccd9", "#95d4b7", "#d0cd93", "#fac0a6"],
+  ["#7ca7dd", "#5ab9c9", "#73c2a0", "#bdb871", "#eca788"],
+  ["#6092d1", "#23a7ba", "#4eaf89", "#aaa34d", "#de8e6a"],
+  ["#447dc4", "#0791a3", "#189d73", "#978f20", "#cf764c"],
+];
+
+/** The rain by temperature colour grid of the blended layer, as RGB triples. */
+export const BIVARIATE_GREEN = BIVARIATE_GREEN_HEX.map((row) => row.map(hexToRgb));
+
 // Cividis (Nuñez et al. 2018, CC0, matplotlib 3.11) sampled at nine even positions.
 const CIVIDIS = [
   [0, 34, 78],

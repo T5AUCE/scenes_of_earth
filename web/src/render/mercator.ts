@@ -68,6 +68,32 @@ export function sampleTable(
   return table;
 }
 
+/**
+ * The cell of `otherGrid` under each pixel of a table made for another grid, or -1 where the
+ * pixel centre lies outside it. This lets two layers on different grids share one image.
+ */
+export function crossSampleTable(table: SampleTable, tableGrid: Grid, otherGrid: Grid) {
+  const [west, south, east, north] = tableGrid.bbox;
+  const [otherWest, otherSouth, otherEast, otherNorth] = otherGrid.bbox;
+  const yTop = mercY(north);
+  const pixelHeight = (yTop - mercY(south)) / table.height;
+
+  const cells = new Int32Array(table.width * table.height);
+  for (let pixelRow = 0; pixelRow < table.height; pixelRow++) {
+    const lat = latFromMercY(yTop - (pixelRow + 0.5) * pixelHeight);
+    const row = Math.floor(((otherNorth - lat) / (otherNorth - otherSouth)) * otherGrid.ny);
+    const isRowInside = row >= 0 && row < otherGrid.ny;
+
+    for (let pixelColumn = 0; pixelColumn < table.width; pixelColumn++) {
+      const lon = west + ((pixelColumn + 0.5) / table.width) * (east - west);
+      const column = Math.floor(((lon - otherWest) / (otherEast - otherWest)) * otherGrid.nx);
+      const isInside = isRowInside && column >= 0 && column < otherGrid.nx;
+      cells[pixelRow * table.width + pixelColumn] = isInside ? row * otherGrid.nx + column : -1;
+    }
+  }
+  return cells;
+}
+
 function pixelFootprints(grid: Grid, height: number, yTop: number, pixelHeight: number) {
   const [, south, , north] = grid.bbox;
   const rowDegrees = (north - south) / grid.ny;

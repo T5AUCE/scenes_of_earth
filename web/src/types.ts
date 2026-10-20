@@ -336,6 +336,8 @@ export interface LayerView {
    * it lets its parts' checkboxes switch their map layers.
    */
   show?(draw: Draw | null): void;
+  /** Why the layer cannot draw its fallback right now, with an event for when that changes. */
+  blocked?: { readonly reason: string | null; readonly changes: EventTarget };
   /** Soften the shade while a layer holds colour, so the colour stays readable under it. */
   setColourUnder?(isUnder: boolean): void;
   legend(): HTMLElement | null;

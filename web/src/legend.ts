@@ -1,4 +1,10 @@
-import { COLOR_CHANNELS, LAST_ENTRY, legendTicks, RGBA_CHANNELS } from "./render/colormap";
+import {
+  COLOR_CHANNELS,
+  LAST_ENTRY,
+  legendTicks,
+  LUT2D_SIZE,
+  RGBA_CHANNELS,
+} from "./render/colormap";
 import { BOLD_ISOTHERM_MULTIPLE, ISOTHERM_COLOR } from "./render/isolines";
 import { bayerRank, dotCount, DOT_RADIUS_RATIO } from "./render/lattice";
 import type { ClassDoc } from "./types";
@@ -14,6 +20,10 @@ export const DOT_INK_RGB: [number, number, number] = [26, 54, 88];
 const DOT_BOX_PX = 28;
 const DOT_LEGEND_LEVEL = 2;
 const DOT_LEGEND_THRESHOLD = 0.5;
+const BIVARIATE_SIZE_PX = 112;
+const BIVARIATE_GRID_ALPHA = 0.35;
+const BIVARIATE_READING = "Darker is wetter. Blue is cool, green mild and terracotta hot.";
+
 const KM_PER_DEGREE = 111.2;
 const KM_DECIMALS = 1;
 
@@ -71,6 +81,96 @@ export function dotLegend(stops: number[], units: string, resDeg: number, blockC
     element.append(block);
   }
   return element;
+}
+
+/** One axis of the two-way legend: its name, units, fitted or custom stops and open ends. */
+export interface BivariateLegendAxis {
+  title: string;
+  units: string;
+  stops: number[];
+  isBottomOpen: boolean;
+}
+
+/**
+ * A square of the blend's colours with rain rising and temperature growing warmer to the right.
+ * Faint lines mark the nine stops of each axis, and labels name the first, middle and last.
+ */
+export function bivariateLegend(
+  colors: Uint8ClampedArray,
+  rain: BivariateLegendAxis,
+  temperature: BivariateLegendAxis,
+  isFitted: boolean,
+) {
+  const element = document.createElement("div");
+  element.className = "legend-bivariate";
+  const rainTitle = axisTitle(`↑ ${rain.title}`, rain.units);
+  const temperatureTitle = axisTitle(`${temperature.title} →`, temperature.units);
+
+  const plot = document.createElement("div");
+  plot.className = "legend-bivariate-plot";
+  plot.append(
+    axisLabels(rain, "legend-bivariate-rows"),
+    bivariateSquare(colors, rain.stops.length, temperature.stops.length),
+    document.createElement("span"),
+    axisLabels(temperature, "legend-bivariate-columns"),
+  );
+
+  const scale = document.createElement("div");
+  scale.textContent = isFitted ? "Fitted to this area" : "Custom range";
+  const reading = document.createElement("div");
+  reading.textContent = BIVARIATE_READING;
+  element.append(rainTitle, plot, temperatureTitle, scale, reading);
+  return element;
+}
+
+function axisTitle(text: string, units: string) {
+  const title = document.createElement("div");
+  title.textContent = `${text} (${units})`;
+  return title;
+}
+
+function bivariateSquare(colors: Uint8ClampedArray, rowStops: number, columnStops: number) {
+  const canvas = document.createElement("canvas");
+  canvas.width = BIVARIATE_SIZE_PX;
+  canvas.height = BIVARIATE_SIZE_PX;
+  const context = canvas.getContext("2d")!;
+  const image = context.createImageData(BIVARIATE_SIZE_PX, BIVARIATE_SIZE_PX);
+  const lastPixel = BIVARIATE_SIZE_PX - 1;
+
+  for (let y = 0; y < BIVARIATE_SIZE_PX; y++) {
+    const row = Math.round((1 - y / lastPixel) * (LUT2D_SIZE - 1));
+    for (let x = 0; x < BIVARIATE_SIZE_PX; x++) {
+      const column = Math.round((x / lastPixel) * (LUT2D_SIZE - 1));
+      const start = (row * LUT2D_SIZE + column) * RGBA_CHANNELS;
+      const pixel = (y * BIVARIATE_SIZE_PX + x) * RGBA_CHANNELS;
+      image.data.set(colors.subarray(start, start + RGBA_CHANNELS), pixel);
+    }
+  }
+  context.putImageData(image, 0, 0);
+
+  context.fillStyle = `rgba(255, 255, 255, ${BIVARIATE_GRID_ALPHA})`;
+  for (let stop = 0; stop < rowStops; stop++) {
+    context.fillRect(0, Math.round((stop / (rowStops - 1)) * lastPixel), BIVARIATE_SIZE_PX, 1);
+  }
+  for (let stop = 0; stop < columnStops; stop++) {
+    context.fillRect(Math.round((stop / (columnStops - 1)) * lastPixel), 0, 1, BIVARIATE_SIZE_PX);
+  }
+  return canvas;
+}
+
+function axisLabels(axis: BivariateLegendAxis, className: string) {
+  const labels = document.createElement("div");
+  labels.className = className;
+  const last = axis.stops.length - 1;
+  for (const index of [0, Math.round(last / 2), last]) {
+    const position = index / last;
+    const label = document.createElement("span");
+    label.textContent = openLabel(position, axis.stops[index], axis.isBottomOpen);
+    if (className === "legend-bivariate-rows") label.style.top = `${(1 - position) * 100}%`;
+    else label.style.left = `${position * 100}%`;
+    labels.append(label);
+  }
+  return labels;
 }
 
 function dotBox(position: number) {

@@ -60,6 +60,14 @@ export interface TiledGpu {
   tiles: GpuTile[];
 }
 
+/** Where a custom layer sits in the style, so it can be put back after a context loss. */
+export interface LayerPosition {
+  beforeId: string | undefined;
+  visibility: "visible" | "none";
+  minzoom: number;
+  maxzoom: number;
+}
+
 const MAX_ROW_SAMPLES = 4096;
 // Neighbouring copies cover a camera that wraps past the scene.
 const WORLD_COPIES = [-1, 0, 1];
@@ -325,4 +333,72 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
       }
     }
   }
+}
+
+/** Read where a layer sits now, with `fallbackBeforeId` for a layer that is last in the style. */
+export function layerPosition(
+  map: MapLibreMap,
+  id: string,
+  fallbackBeforeId: string | undefined,
+): LayerPosition {
+  const layers = map.getLayersOrder();
+  const index = layers.indexOf(id);
+  const layer = map.getLayer(id);
+  const isHidden = layer && map.getLayoutProperty(id, "visibility") === "none";
+
+  return {
+    beforeId: index < 0 ? fallbackBeforeId : layers[index + 1],
+    visibility: isHidden ? "none" : "visible",
+    minzoom: layer?.minzoom ?? 0,
+    maxzoom: layer?.maxzoom ?? map.getMaxZoom(),
+  };
+}
+
+/**
+ * Put a custom layer back where it was after a WebGL context loss, because MapLibre leaves custom
+ * layers out of the style it rebuilds. The returned function stops the watching.
+ */
+export function keepThroughContextLoss(
+  map: MapLibreMap,
+  layer: CustomLayerInterface,
+  fallbackBeforeId: string | undefined,
+): () => void {
+  const canvas = map.getCanvas();
+  let lost: LayerPosition | null = null;
+
+  const onLost = () => {
+    if (!map.getLayer(layer.id)) return;
+
+    lost = layerPosition(map, layer.id, fallbackBeforeId);
+    map.removeLayer(layer.id);
+  };
+
+  const restore = () => {
+    if (!lost) return;
+
+    const { beforeId, visibility, minzoom, maxzoom } = lost;
+    lost = null;
+    map.addLayer(layer, beforeId);
+    map.setLayoutProperty(layer.id, "visibility", visibility);
+    map.setLayerZoomRange(layer.id, minzoom, maxzoom);
+    map.triggerRepaint();
+  };
+
+  const onRestored = () => {
+    if (!lost) return;
+
+    if (map.isStyleLoaded()) restore();
+    else map.once("style.load", restore);
+  };
+
+  // Capture removes the layer before MapLibre serializes and destroys the lost style.
+  canvas.addEventListener("webglcontextlost", onLost, true);
+  canvas.addEventListener("webglcontextrestored", onRestored);
+
+  return () => {
+    canvas.removeEventListener("webglcontextlost", onLost, true);
+    canvas.removeEventListener("webglcontextrestored", onRestored);
+    map.off("style.load", restore);
+    lost = null;
+  };
 }

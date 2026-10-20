@@ -86,13 +86,29 @@ export function blendPair(layers: readonly LayerDoc[]): BlendPair | null {
 }
 
 /**
+ * The note for a scrubber step where a half of the blend has no data, or null when both halves
+ * have a step. `time` is the step as the scrubber labels it.
+ */
+export function missingStepNote(
+  halves: readonly { title: string; step: number }[],
+  time: string,
+) {
+  const missing = halves.filter(({ step }) => step < 0).map(({ title }) => title.toLowerCase());
+  if (missing.length === 0) return null;
+
+  return `No ${missing.join(" or ")} for ${time}; the blend shows steps where both exist.`;
+}
+
+/**
  * Give colour to the picked unit when it is a candidate, else to the best-ranked candidate.
  * Every other visible unit takes its fallback's first free channel or is hidden with a reason.
+ * A unit named in `blocked` cannot draw its fallback and is hidden with the given reason.
  */
 export function allocate(
   layers: readonly LayerDoc[],
   on: ReadonlySet<string>,
   pick: string | null,
+  blocked: ReadonlyMap<string, string> = new Map(),
 ): ColourAllocation {
   const pair = blendPair(layers);
   const mains = layers.map(layerUnit);
@@ -108,7 +124,7 @@ export function allocate(
 
   for (const unit of visible) {
     if (unit.id === owner) draws.set(unit.id, claim(unit, "colour", claimed));
-    else drawFallbackOrFixed(unit, draws, claimed);
+    else drawFallbackOrFixed(unit, draws, claimed, blocked);
   }
   if (owner === BLEND) draws.set(BLEND, claim(blendUnit(), "colour", claimed));
   else if (blendOn) draws.set(BLEND, { hidden: ONLY_IN_COLOUR });
@@ -183,6 +199,7 @@ function drawFallbackOrFixed(
   unit: Unit,
   draws: Map<string, Draw | Hidden>,
   claimed: Map<Claim, string>,
+  blocked: ReadonlyMap<string, string>,
 ) {
   const fixed = FIXED_DRAWS.find((draw) => unit.encodings.includes(draw));
   if (fixed) {
@@ -195,7 +212,9 @@ function drawFallbackOrFixed(
     return;
   }
 
-  draws.set(unit.id, claim(unit, unit.fallback, claimed));
+  const reason = blocked.get(unit.id);
+  if (reason) draws.set(unit.id, { hidden: reason });
+  else draws.set(unit.id, claim(unit, unit.fallback, claimed));
 }
 
 function claim(unit: Unit, draw: Draw, claimed: Map<Claim, string>): Draw | Hidden {
