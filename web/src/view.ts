@@ -2,13 +2,22 @@ import type { GeoJSONSource, Map as MapLibreMap } from "maplibre-gl";
 
 import { loadAreaFeature } from "./api";
 import { openStore, type Store } from "./data";
+import {
+  DROPPED_NOTE,
+  formatDisplayParams,
+  loadStoredPalettes,
+  NO_TOKENS,
+  resolveDisplay,
+  recordMenuChange,
+  type SceneDisplay,
+} from "./display-state";
 import { makeHtmlElement } from "./html";
-import { partControls } from "./layers/layer-menu";
+import { layerMenu, partControls, type MenuChange } from "./layers/layer-menu";
 import { LAYER_KINDS } from "./layers/registry";
 import { firstSymbolId, removeLayerAndSource } from "./map";
 import { shiftLongitudes, worldShift } from "./render/mercator";
 import { createTimeline, formatTime, scrubberTimes } from "./timeline";
-import type { LayerDoc, LayerView, Scene } from "./types";
+import type { DisplayTokens, LayerDoc, LayerView, Part, Scene } from "./types";
 
 type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
 
@@ -23,13 +32,17 @@ export interface SceneSlots {
   cards: HTMLElement;
   timeBar: HTMLElement;
   onTime(time: string, label: string): void;
+  /** The display settings of the link the scene was opened from, if any. */
+  display?: DisplayTokens;
+  /** Receives the link parameters for the scene's display choices whenever they change. */
+  onDisplay(params: string): void;
 }
 
 /** Draws a scene's layers, outline, cards and timeline; a failure partway removes all of it. */
 export function mountScene(
   map: MapLibreMap,
   scene: Scene,
-  { cards, timeBar, onTime }: SceneSlots,
+  { cards, timeBar, onTime, display: linked = NO_TOKENS, onDisplay }: SceneSlots,
 ) {
   const box = makeHtmlElement("div", "", cards);
   const views: LayerView[] = [];
@@ -50,16 +63,21 @@ export function mountScene(
     box.remove();
   };
 
+  const { display, dropped } = resolveDisplay(scene.layers, linked, loadStoredPalettes());
+  if (dropped) addNote(DROPPED_NOTE);
+  const changed = () => onDisplay(formatDisplayParams(display, scene.layers));
+
   try {
     const store = openStore(scene.data.href);
     store.catch((error) => addNote(`Cannot open the data: ${error.message}`));
 
     const shift = worldShift(scene.area.bbox);
     addOutline(map, scene, shift, addNote, () => isMounted);
-    views.push(...mountLayerViews(map, scene.layers, store, shift, addNote));
+    views.push(...mountLayerViews(map, scene.layers, store, shift, addNote, display));
 
-    for (const view of views) box.append(layerCard(map, view));
+    for (const view of views) box.append(layerCard(map, view, display, changed));
     box.append(outlineCard(map));
+    changed();
 
     timeline = createSceneTimeline(views, scene.period, onTime);
     if (timeline) timeBar.append(timeline.element);
@@ -126,6 +144,7 @@ function mountLayerViews(
   store: Promise<Store>,
   shift: number,
   addNote: (text: string) => void,
+  display: SceneDisplay,
 ) {
   const layersWithKind = layers.map((layer) => ({
     layer,
@@ -145,7 +164,15 @@ function mountLayerViews(
     const report = (error: unknown) => addNote(`${layer.title}: ${(error as Error).message}`);
 
     try {
-      const view = kind!.create({ map, store, layer, shift, beforeId: OUTLINE_ID, report });
+      const view = kind!.create({
+        map,
+        store,
+        layer,
+        shift,
+        beforeId: OUTLINE_ID,
+        display: display.layers[layer.id],
+        report,
+      });
       view.ready?.catch(report);
       views.push(view);
     } catch (error) {
@@ -155,7 +182,12 @@ function mountLayerViews(
   return views;
 }
 
-function layerCard(map: MapLibreMap, view: LayerView) {
+function layerCard(
+  map: MapLibreMap,
+  view: LayerView,
+  display: SceneDisplay,
+  changed: () => void,
+) {
   const card = makeHtmlElement("section");
   card.className = "card";
 
@@ -163,24 +195,8 @@ function layerCard(map: MapLibreMap, view: LayerView) {
     const sliders = part.controls ? partControls(part.controls) : null;
     const row = makeHtmlElement("div", "", card);
     row.className = "check-row";
-    row.append(
-      checkbox(part.label, true, (on) => {
-        setVisible(map, part.layerIds, on);
-        part.onToggle?.(on);
-        if (sliders) sliders.hidden = !on;
-      }),
-    );
-    if (index === 0 && view.options.length > 0) {
-      if (!view.time) row.classList.add("inline-options");
-      const options = makeHtmlElement("span", "", row);
-      options.className = "option-checks";
-      for (const { label, initial, set } of view.options) {
-        options.append(checkbox(label, initial ?? false, set));
-      }
-      for (const { note } of view.options) {
-        if (note) makeHtmlElement("div", note, card).className = "option-note";
-      }
-    }
+    row.append(partCheckbox(map, part, display, sliders, changed));
+    if (index === 0) addFirstPartExtras(view, row, card, display, changed);
     if (sliders) card.append(sliders);
     if (part.note) {
       part.note.classList.add("option-note");
@@ -192,6 +208,68 @@ function layerCard(map: MapLibreMap, view: LayerView) {
   if (legend) card.append(legend);
 
   return card;
+}
+
+function partCheckbox(
+  map: MapLibreMap,
+  part: Part,
+  display: SceneDisplay,
+  sliders: HTMLElement | null,
+  changed: () => void,
+) {
+  const apply = (on: boolean) => {
+    setVisible(map, part.layerIds, on);
+    part.onToggle?.(on);
+    if (sliders) sliders.hidden = !on;
+    if (on) display.off.delete(part.id);
+    else display.off.add(part.id);
+  };
+  const isOn = !display.off.has(part.id);
+  if (!isOn) apply(false);
+
+  return checkbox(part.label, isOn, (on) => {
+    apply(on);
+    changed();
+  });
+}
+
+function addFirstPartExtras(
+  view: LayerView,
+  row: HTMLElement,
+  card: HTMLElement,
+  display: SceneDisplay,
+  changed: () => void,
+) {
+  if (view.options.length > 0) {
+    if (!view.time) row.classList.add("inline-options");
+    const options = makeHtmlElement("span", "", row);
+    options.className = "option-checks";
+    for (const { label, initial, set } of view.options) {
+      options.append(checkbox(label, initial ?? false, set));
+    }
+    for (const { note } of view.options) {
+      if (note) makeHtmlElement("div", note, card).className = "option-note";
+    }
+  }
+
+  if (view.menu) {
+    const { button, popover } = layerMenu(
+      view.menu,
+      (change) => menuChanged(view, display, change, changed),
+    );
+    row.append(button);
+    card.append(popover);
+  }
+}
+
+function menuChanged(
+  view: LayerView,
+  display: SceneDisplay,
+  change: MenuChange,
+  changed: () => void,
+) {
+  recordMenuChange(display, view.parts[0].id, view.menu!, change);
+  changed();
 }
 
 function outlineCard(map: MapLibreMap) {

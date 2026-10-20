@@ -4,9 +4,8 @@ import { test } from "node:test";
 import { decode } from "../data.ts";
 import type { Bbox } from "../types.ts";
 import {
-  CLASS_PALETTES,
-  classColors,
   COLOR_CHANNELS,
+  evenStops,
   legendTicks,
   lut,
   paintClasses,
@@ -16,13 +15,22 @@ import {
 } from "./colormap.ts";
 import { mercY, sampleTable } from "./mercator.ts";
 import type { SampleTable } from "./mercator.ts";
+import {
+  CLASS_PALETTES,
+  classColors,
+  customPalette,
+  FIELD_PALETTES,
+  fieldGradient,
+} from "./palettes.ts";
 
+const gradient = (name: string) => fieldGradient(name)!;
 const table = (src: number[]) => ({ width: src.length, height: 1, src: Int32Array.from(src) });
 const alphaOf = (rgba: Uint8ClampedArray) =>
   [...rgba].filter((_, index) => index % RGBA_CHANNELS === COLOR_CHANNELS);
 
 test("NaN cells are transparent", () => {
-  const rgba = paintColormap(Float32Array.of(5, NaN), table([0, 1]), lut("ink-blue"), [0, 10]);
+  const colors = lut(gradient("ink-blue"));
+  const rgba = paintColormap(Float32Array.of(5, NaN), table([0, 1]), colors, [0, 10]);
 
   assert.deepEqual(alphaOf(rgba), [255, 0]);
 });
@@ -33,7 +41,7 @@ test("Fiji rainfall covers the point whose nearest sample falls south of its fin
   const pixel = pixelAt(samples, grid.bbox, 179.225, -16.691719876);
   const values = new Float32Array(grid.nx * grid.ny).fill(NaN);
   values[84 * grid.nx + 44] = 384.7;
-  const colors = lut("ink-blue");
+  const colors = lut(gradient("ink-blue"));
   const rgba = paintColormap(values, samples, colors, [0, values[84 * grid.nx + 44]]);
 
   assert.equal(samples.src[pixel], 85 * grid.nx + 44);
@@ -49,7 +57,7 @@ test("Fiji temperature covers the point sampling north of its finite cell", () =
   const pixel = pixelAt(samples, grid.bbox, 179.902406751, -18.5745);
   const values = new Float32Array(grid.nx * grid.ny).fill(NaN);
   values[61 * grid.nx + 29] = 26.8;
-  const colors = lut("climate");
+  const colors = lut(gradient("climate"));
   const rgba = paintColormap(values, samples, colors, [0, values[61 * grid.nx + 29]]);
 
   assert.equal(samples.src[pixel], 60 * grid.nx + 29);
@@ -64,7 +72,7 @@ test("a finite nearest sample keeps its colour even when other cells overlap", (
   const samples = sampleTable(grid, 2, { preserveCoverage: true });
   const values = new Float32Array(36).fill(10);
   values[samples.src[0]] = 0;
-  const colors = lut("climate");
+  const colors = lut(gradient("climate"));
   const rgba = paintColormap(values, samples, colors, [0, 10]);
 
   assert.deepEqual(rgba.slice(0, RGBA_CHANNELS), colors.slice(0, RGBA_CHANNELS));
@@ -77,7 +85,7 @@ test("capped pixels use the nearest finite overlap without interpolating", () =>
   values[0] = 0;
   values[4 * grid.nx + 3] = 10;
   values[2 * grid.nx + 3] = Infinity;
-  const colors = lut("climate");
+  const colors = lut(gradient("climate"));
   const rgba = paintColormap(values, samples, colors, [0, 10]);
 
   assert.ok(Number.isNaN(values[samples.src[0]]));
@@ -91,7 +99,7 @@ test("an empty footprint stays transparent beside finite cells touching only its
   const values = new Float32Array(36).fill(NaN);
   values[3] = 10;
   values[3 * grid.nx] = 10;
-  const rgba = paintColormap(values, samples, lut("climate"), [0, 10]);
+  const rgba = paintColormap(values, samples, lut(gradient("climate")), [0, 10]);
 
   assert.deepEqual(rgba.slice(0, RGBA_CHANNELS), new Uint8ClampedArray(RGBA_CHANNELS));
   assert.deepEqual(alphaOf(rgba), [0, 255, 255, 0]);
@@ -103,14 +111,14 @@ test("a field boundary east of 180 keeps its source column when filling a footpr
   const pixel = pixelAt(samples, grid.bbox, 180.725, -17.01);
   const values = new Float32Array(grid.nx * grid.ny).fill(NaN);
   values[91 * grid.nx + 74] = 10;
-  const rgba = paintColormap(values, samples, lut("ink-blue"), [0, 10]);
+  const rgba = paintColormap(values, samples, lut(gradient("ink-blue")), [0, 10]);
 
   assert.equal(samples.src[pixel], 90 * grid.nx + 74);
   assert.equal(alphaOf(rgba)[pixel], 255);
 });
 
 test("climate palette runs from slate blue to terracotta", () => {
-  const colors = lut("climate");
+  const colors = lut(gradient("climate"));
   const [firstRed, , firstBlue] = colors.slice(0, COLOR_CHANNELS);
   const [lastRed, , lastBlue] = colors.slice(-RGBA_CHANNELS);
 
@@ -119,7 +127,7 @@ test("climate palette runs from slate blue to terracotta", () => {
 });
 
 test("values outside the stops take the end colours", () => {
-  const colors = lut("ink-blue");
+  const colors = lut(gradient("ink-blue"));
   const rgba = paintColormap(Float32Array.of(-5, 0, 10, 99), table([0, 1, 2, 3]), colors, [0, 10]);
 
   assert.deepEqual([...rgba.slice(0, 4)], [...rgba.slice(4, 8)]);
@@ -198,4 +206,24 @@ test("paintClasses colours known classes and leaves fill and unknown values tran
   const rgba = paintClasses(Float32Array.of(10, NaN, 99), table([0, 1, 2]), colors);
 
   assert.deepEqual([...rgba], [1, 2, 3, 255, 0, 0, 0, 0, 0, 0, 0, 0]);
+});
+
+test("even stops span a custom range in equal steps", () => {
+  assert.deepEqual(evenStops(0, 8, 9), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(evenStops(-1, 1, 5), [-1, -0.5, 0, 0.5, 1]);
+  assert.deepEqual(evenStops(0.1, 0.4, 4), [0.1, 0.2, 0.3, 0.4]);
+});
+
+test("every field palette has nine stops that blend into a full table", () => {
+  for (const { name } of FIELD_PALETTES) {
+    assert.equal(gradient(name).length, 9, name);
+    assert.equal(lut(gradient(name)).length, 256 * RGBA_CHANNELS, name);
+  }
+});
+
+test("a custom gradient blends through its own colours", () => {
+  const table = lut(fieldGradient(customPalette(["#000000", "#ffffff"]))!);
+
+  assert.deepEqual([...table.slice(0, RGBA_CHANNELS)], [0, 0, 0, 255]);
+  assert.deepEqual([...table.slice(-RGBA_CHANNELS)], [255, 255, 255, 255]);
 });

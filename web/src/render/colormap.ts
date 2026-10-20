@@ -1,8 +1,8 @@
-import type { ClassDoc } from "../types";
 import type { SampleTable } from "./mercator";
 
 const LUT_ENTRIES = 256;
 const LEGEND_TICK_COUNT = 5;
+const STOP_DIGITS = 6;
 /** Index of the last colormap entry. */
 export const LAST_ENTRY = LUT_ENTRIES - 1;
 
@@ -11,72 +11,8 @@ export const RGBA_CHANNELS = 4;
 
 const OPAQUE = 255;
 
-// ColorBrewer Blues, 9 classes.
-const INK_BLUE = [
-  [247, 251, 255],
-  [222, 235, 247],
-  [198, 219, 239],
-  [158, 202, 225],
-  [107, 174, 214],
-  [66, 146, 198],
-  [33, 113, 181],
-  [8, 81, 156],
-  [8, 48, 107],
-];
-
-// The ramp follows the bivariate palette's wet row (OKLCH hue 255 to 165 to 45 at chroma 0.125) so
-// temperature looks the same on its own as it does when paired with rain.
-const CLIMATE = [
-  [0x44, 0x7d, 0xc4],
-  [0x00, 0x89, 0xba],
-  [0x07, 0x91, 0xa3],
-  [0x02, 0x98, 0x8f],
-  [0x18, 0x9d, 0x73],
-  [0x67, 0x99, 0x48],
-  [0x97, 0x8f, 0x20],
-  [0xba, 0x81, 0x22],
-  [0xcf, 0x76, 0x4c],
-];
-
-const PALETTES: Record<string, number[][]> = { "ink-blue": INK_BLUE, climate: CLIMATE };
-
-/**
- * Softened colours of land cover classes, by palette name. Classes or palettes that are missing
- * here use the layer's own colours.
- */
-export const CLASS_PALETTES: Record<string, Record<number, string>> = {
-  painted: {
-    10: "#456d3b",
-    20: "#cd9242",
-    30: "#dfd77e",
-    40: "#d099d0",
-    50: "#c55d4c",
-    60: "#c3baaf",
-    70: "#eaf2f4",
-    80: "#447ab0",
-    90: "#49a0a1",
-    95: "#75c399",
-    100: "#f6e7c2",
-  },
-};
-
-/** The RGB of each class value from the named palette, else from the class's own colour. */
-export function classColors(classes: ClassDoc[], palette?: string) {
-  const named = palette ? CLASS_PALETTES[palette] : undefined;
-  return new Map(
-    classes.map(({ value, color }) => [value, hexToRgb(named?.[value] ?? color)]),
-  );
-}
-
-function hexToRgb(hex: string) {
-  return [1, 3, 5].map((start) => parseInt(hex.slice(start, start + 2), 16));
-}
-
-/** A lookup table of 256 opaque RGBA entries for a named palette. */
-export function lut(name: string) {
-  const stops = PALETTES[name];
-  if (!stops) throw new Error(`Unknown palette "${name}"`);
-
+/** A lookup table of 256 opaque RGBA entries blended through the gradient's RGB stops. */
+export function lut(stops: number[][]) {
   const table = new Uint8ClampedArray(LUT_ENTRIES * RGBA_CHANNELS);
   for (let entry = 0; entry < LUT_ENTRIES; entry++) {
     const position = (entry / LAST_ENTRY) * (stops.length - 1);
@@ -143,6 +79,13 @@ export function stopPosition(value: number, stops: number[]) {
 
   const lower = upper - 1;
   return (lower + (value - stops[lower]) / (stops[upper] - stops[lower])) / last;
+}
+
+/** `count` evenly spaced values from low to high, rounded so legend labels stay short. */
+export function evenStops(low: number, high: number, count: number) {
+  return Array.from({ length: count }, (_, index) =>
+    Number((low + ((high - low) * index) / (count - 1)).toPrecision(STOP_DIGITS)),
+  );
 }
 
 /** Up to LEGEND_TICK_COUNT stops to label, each with its position on the palette from 0 to 1. */

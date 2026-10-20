@@ -21,7 +21,7 @@ import { shiftLongitudes, worldShift } from "./render/mercator";
 import { flightDuration, flyIn, watchResize } from "./scene-camera";
 import { createScenePanel, PANEL_TABS, type PanelTab } from "./scene-panel";
 import { sceneUrl, timeForPrefix } from "./scene-url";
-import type { AreaFeature, Bbox, Scene } from "./types";
+import type { AreaFeature, Bbox, DisplayTokens, Scene } from "./types";
 import { mountScene, OUTLINE_ID } from "./view";
 
 type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
@@ -44,10 +44,14 @@ const MAX_LATITUDE_DEG = 85;
  */
 export type SceneEntry = "push" | "replace" | "keep";
 
-/** How a scene is entered: the time to show (a year, month or day) and its history entry. */
+/**
+ * How a scene is entered: the time to show (a year, month or day), its history entry and the
+ * display settings of the link, if any.
+ */
 export interface EnterOptions {
   time: string | null;
   entry: SceneEntry;
+  display?: DisplayTokens;
 }
 
 /** The page elements a scene uses: the column, the time bar and the full-view dialog. */
@@ -76,7 +80,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
   return { enter, exit, sceneId: () => current?.id ?? null, showFullscreen };
 
-  function enter(scene: Scene, { time: linkedTime, entry }: EnterOptions) {
+  function enter(scene: Scene, { time: linkedTime, entry, display }: EnterOptions) {
     leaveCurrentScene();
 
     const cards = openColumn(scene, entry);
@@ -85,6 +89,8 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     const mounted = mountScene(map, scene, {
       cards,
       timeBar: roots.timeBar,
+      display,
+      onDisplay: (params) => clock.setDisplay(params),
       onTime: (_time, label) => {
         clock.update(label);
         current?.panel.setTimeLabel(label);
@@ -95,7 +101,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     sceneLayerIds = mounted.layerIds;
     const panel = mountPanel(scene, mounted.timeline, clock);
 
-    recordEntry(scene.id, clock.label, entry);
+    recordEntry(scene.id, clock, entry);
     clock.markEntered();
 
     current = startScene(scene, mounted, panel, clock);
@@ -145,7 +151,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   function mountPanel(scene: Scene, timeline: SceneTimeline, clock: SceneClock) {
     const panel = createScenePanel(scene, roots.dialog, {
       requestOpen(tab: PanelTab) {
-        history.pushState({ panel: tab }, "", sceneUrl(scene.id, clock.label));
+        history.pushState({ panel: tab }, "", sceneUrl(scene.id, clock.label, clock.display));
         panel.openFull(tab);
       },
       requestClose() {
@@ -225,8 +231,8 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     exit();
   }
 
-  function recordEntry(id: string, label: string | null, entry: SceneEntry) {
-    const url = sceneUrl(id, label);
+  function recordEntry(id: string, clock: SceneClock, entry: SceneEntry) {
+    const url = sceneUrl(id, clock.label, clock.display);
     if (entry === "push") history.pushState(null, "", url);
     if (entry === "replace") history.replaceState(null, "", url);
 
@@ -333,6 +339,7 @@ export class SceneDataLayers {
 
 function createSceneClock(sceneId: string) {
   let label: string | null = null;
+  let display = "";
   let isEntered = false;
 
   return {
@@ -340,14 +347,23 @@ function createSceneClock(sceneId: string) {
       return label;
     },
 
+    get display() {
+      return display;
+    },
+
     update(newLabel: string) {
       label = newLabel;
       if (isEntered) this.syncUrl();
     },
 
+    setDisplay(params: string) {
+      display = params;
+      if (isEntered) this.syncUrl();
+    },
+
     // Scrubbing replaces the entry, so Back is never flooded with months.
     syncUrl() {
-      history.replaceState(history.state, "", sceneUrl(sceneId, label));
+      history.replaceState(history.state, "", sceneUrl(sceneId, label, display));
     },
 
     markEntered() {

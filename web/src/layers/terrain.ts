@@ -1,5 +1,12 @@
 import { removeLayerAndSource } from "../map";
-import type { LayerContext, LayerControl, LayerView, TerrainStats } from "../types";
+import { CONTOUR_COLORS, contourColor, DEFAULT_CONTOUR_COLOR } from "../render/palettes";
+import type {
+  LayerContext,
+  LayerControl,
+  LayerMenu,
+  LayerView,
+  TerrainStats,
+} from "../types";
 import { ContourOverlay, sharedDemSource, terrainTileBounds } from "./contour-overlay";
 import { RELIEF_STRENGTH, reliefPaint } from "./relief";
 
@@ -50,12 +57,30 @@ export function createTerrainView(context: LayerContext): LayerView {
 
   const contourOverlay = new ContourOverlay(context, dem, tiles, stats as TerrainStats);
 
+  let palette = context.display?.palette ?? DEFAULT_CONTOUR_COLOR;
+  const menu: LayerMenu = {
+    title: layer.title,
+    heading: "Contour colour",
+    blocks: true,
+    palettes: CONTOUR_COLORS.map(({ name, label, color }) => ({ name, label, colors: [color] })),
+    defaultPalette: DEFAULT_CONTOUR_COLOR,
+    custom: false,
+    get palette() {
+      return palette;
+    },
+    setPalette(name) {
+      palette = name;
+      contourOverlay.setColor(contourColor(name)!);
+    },
+  };
+
   return {
     parts: [
-      { id, label: "Relief", layerIds: [id], controls: [strength] },
+      { id: layer.id, label: "Relief", layerIds: [id], controls: [strength] },
       contourOverlay.part,
     ],
     options: [],
+    menu,
     time: null,
     setTime: () => {},
     legend: () => null,

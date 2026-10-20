@@ -26,6 +26,7 @@ test("a scene link reads the time and ignores a malformed one", () => {
     id,
     time: "2026-03",
     panel: null,
+    display: { pal: "", range: "", off: "" },
   });
 
   const timeOf = (label: string) =>
@@ -57,4 +58,37 @@ test("a year link selects the first step in that year", () => {
   const steps = ["2019-12-01", "2020-01-01", "2020-02-01"];
 
   assert.equal(timeForPrefix(steps, "2020"), "2020-01-01");
+});
+
+test("display params round trip through the address", () => {
+  const params = "&pal=chirps_monthly:batlow&range=chirps_monthly:0:250&off=terrain.contours";
+  const url = sceneUrl(id, "2019-03", params);
+  const route = routeFor(url, null) as { display: unknown };
+
+  assert.equal(url, `?scene=${id}&t=2019-03${params}`);
+  assert.deepEqual(route.display, {
+    pal: "chirps_monthly:batlow",
+    range: "chirps_monthly:0:250",
+    off: "terrain.contours",
+  });
+});
+
+test("colons and commas are not percent encoded", () => {
+  const url = sceneUrl(id, null, "&pal=a:b,c:custom-1a2b3c-88cc44&off=terrain.contours");
+
+  assert.ok(!url.includes("%"));
+});
+
+test("repeated display parameters are joined in order", () => {
+  const route = routeFor(`?scene=${id}&pal=a:x&pal=b:y&off=u`, null) as {
+    display: { pal: string; off: string };
+  };
+
+  assert.equal(route.display.pal, "a:x,b:y");
+  assert.equal(route.display.off, "u");
+});
+
+test("a link without display params is unchanged", () => {
+  assert.equal(sceneUrl(id, "2019-03"), `?scene=${id}&t=2019-03`);
+  assert.equal(sceneUrl(id, null, ""), `?scene=${id}`);
 });

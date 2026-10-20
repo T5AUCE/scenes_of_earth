@@ -18,10 +18,10 @@ import {
 } from "../contour-ladder";
 import { makeHtmlElement } from "../html";
 import { contourLegendText } from "../legend";
+import { contourColor, DEFAULT_CONTOUR_COLOR } from "../render/palettes";
 import type { LayerContext, Part, TerrainStats, TerrainTiles } from "../types";
 import { backdropMaxZoom } from "./relief";
 
-const CONTOUR_COLOR = "#5b4636";
 const CONTOUR_OPACITY = 0.55;
 const MINOR_LINE_WIDTH_PX = 0.5;
 const BOLD_LINE_WIDTH_PX = 1.1;
@@ -71,6 +71,8 @@ export class ContourOverlay {
   private backdropFade?: ExpressionSpecification;
   private readonly ladder: ContourLadder;
   private isOn = true;
+  private color: string;
+  private labelId?: string;
 
   constructor(
     context: LayerContext,
@@ -78,8 +80,9 @@ export class ContourOverlay {
     tiles: TerrainTiles,
     stats: TerrainStats,
   ) {
-    const { map, layer, beforeId } = context;
+    const { map, layer, beforeId, display } = context;
     this.map = map;
+    this.color = contourColor(display?.palette ?? DEFAULT_CONTOUR_COLOR)!;
     this.sourceId = `${layer.id}-contours`;
     this.backdropId = `${this.sourceId}-backdrop`;
     this.bbox = layer.grid.bbox;
@@ -87,7 +90,7 @@ export class ContourOverlay {
     const maxzoom = Math.min(MAX_CONTOUR_ZOOM, tiles.maxzoom + CONTOUR_OVERZOOM);
     this.ladder = contourLadder(stats, (south + north) / 2, { maxZoom: maxzoom });
     this.part = {
-      id: this.sourceId,
+      id: `${layer.id}.contours`,
       label: "Contours",
       layerIds: [],
       note: this.legend,
@@ -132,7 +135,7 @@ export class ContourOverlay {
         minzoom: tier.entryZoom,
         filter,
         paint: {
-          "line-color": CONTOUR_COLOR,
+          "line-color": this.color,
           "line-width": tier.interval >= this.ladder.boldInterval
             ? BOLD_LINE_WIDTH_PX
             : MINOR_LINE_WIDTH_PX,
@@ -178,7 +181,7 @@ export class ContourOverlay {
         minzoom: bold[0].entryZoom,
         filter: multipleOf(this.ladder.boldInterval),
         paint: {
-          "line-color": CONTOUR_COLOR,
+          "line-color": this.color,
           "line-width": BOLD_LINE_WIDTH_PX,
           "line-opacity": 0,
           "line-opacity-transition": { duration: 0 },
@@ -206,6 +209,7 @@ export class ContourOverlay {
     if (tiers.length === 0) return;
 
     const id = `${this.sourceId}-labels`;
+    this.labelId = id;
     const font = this.map.getStyle().layers.find(
       (layer): layer is SymbolLayerSpecification =>
         layer.type === "symbol" && layer.layout?.["text-font"] !== undefined,
@@ -229,7 +233,7 @@ export class ContourOverlay {
           ...(font ? { "text-font": font } : {}),
         },
         paint: {
-          "text-color": CONTOUR_COLOR,
+          "text-color": this.color,
           "text-halo-color": getComputedStyle(document.documentElement)
             .getPropertyValue(PAGE_BACKGROUND_PROPERTY).trim(),
           "text-halo-width": LABEL_HALO_WIDTH_PX,
@@ -239,6 +243,15 @@ export class ContourOverlay {
       beforeId,
     );
     this.part.layerIds.push(id);
+  }
+
+  /** Recolour the lines and their labels. */
+  setColor(color: string) {
+    this.color = color;
+    for (const id of this.part.layerIds) {
+      const property = id === this.labelId ? "text-color" : "line-color";
+      this.map.setPaintProperty(id, property, color);
+    }
   }
 
   private readonly updateLegend = () => {

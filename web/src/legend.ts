@@ -9,16 +9,20 @@ export function contourLegendText(interval: number, boldInterval: number, units 
   return `Contours every ${interval} ${units} (${emphasis})`;
 }
 
-/** A colour bar with stop labels under their colours and a separate units caption. */
+/**
+ * A colour bar with stop labels under their colours and a separate units caption. The top label
+ * is open ended, and so is the bottom one when the scale starts above the lowest value.
+ */
 export function gradientLegend(
   colors: Uint8ClampedArray,
   stops: number[],
   units: string,
+  isBottomOpen = false,
 ) {
   const element = document.createElement("div");
   const unitsCaption = document.createElement("div");
   unitsCaption.textContent = units;
-  element.append(unitsCaption, gradientBar(colors), stopLabels(stops));
+  element.append(unitsCaption, gradientBar(colors), stopLabels(stops, isBottomOpen));
   return element;
 }
 
@@ -37,7 +41,7 @@ function gradientBar(colors: Uint8ClampedArray) {
   return bar;
 }
 
-function stopLabels(stops: number[]) {
+function stopLabels(stops: number[], isBottomOpen: boolean) {
   const labels = document.createElement("div");
   labels.className = "legend-labels";
   labels.style.position = "relative";
@@ -48,11 +52,17 @@ function stopLabels(stops: number[]) {
     label.style.left = `${position * 100}%`;
     label.style.transform = `translateX(${-position * 100}%)`;
     label.style.whiteSpace = "nowrap";
-    // The top of the scale is the 98th percentile.
-    label.textContent = position === 1 ? `≥ ${value}` : String(value);
+    // The top of a fitted scale is the 98th percentile.
+    label.textContent = openLabel(position, value, isBottomOpen);
     labels.append(label);
   }
   return labels;
+}
+
+function openLabel(position: number, value: number, isBottomOpen: boolean) {
+  if (position === 1) return `≥ ${value}`;
+
+  return position === 0 && isBottomOpen ? `≤ ${value}` : String(value);
 }
 
 /** Render a swatch and name for each class present in the area. */

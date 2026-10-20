@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { afterEach, beforeEach, test } from "node:test";
 
-import { classColors, lut } from "./render/colormap.ts";
+import { lut } from "./render/colormap.ts";
+import { classColors, fieldGradient } from "./render/palettes.ts";
 
 const legendUrl = new URL("./legend.ts", import.meta.url).href;
 const hooks = registerHooks({
@@ -128,6 +129,16 @@ test("a constant two-stop field keeps both endpoints without units in either tic
   );
 });
 
+test("a custom range labels both open ends", () => {
+  const stops = [5, 8, 11, 14, 17, 20, 23, 26, 29];
+  const labelsOf = (isBottomOpen: boolean) =>
+    renderLegend(stops, "°C", "climate", isBottomOpen).children[2].children
+      .map((label) => label.textContent);
+
+  assert.deepEqual(labelsOf(true), ["≤ 5", "11", "17", "23", "≥ 29"]);
+  assert.deepEqual(labelsOf(false), ["5", "11", "17", "23", "≥ 29"]);
+});
+
 test("the class legend lists only the classes present, in class order", () => {
   const classes = [
     { value: 10, label: "Tree cover", color: "#006400" },
@@ -161,8 +172,14 @@ test("class legend swatches follow the active colours", () => {
   assert.equal(swatchOf("painted"), "rgb(69, 109, 59)");
 });
 
-function renderLegend(stops: number[], units: string, palette = "ink-blue") {
-  return gradientLegend(lut(palette), stops, units) as unknown as TestElement;
+function renderLegend(
+  stops: number[],
+  units: string,
+  palette = "ink-blue",
+  isBottomOpen = false,
+) {
+  const colors = lut(fieldGradient(palette)!);
+  return gradientLegend(colors, stops, units, isBottomOpen) as unknown as TestElement;
 }
 
 class TestElement {

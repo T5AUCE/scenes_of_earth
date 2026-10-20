@@ -249,6 +249,83 @@ body.scene-mode #panel {
   width: 100%;
 }
 
+#scene-column .card .edit-button {
+  margin-left: auto;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.layer-menu {
+  inset: auto;
+  margin: 0;
+  width: 260px;
+  max-height: calc(100dvh - 16px);
+  overflow: auto;
+  padding: 8px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--panel-background);
+  box-shadow: var(--panel-outline), 0 4px 16px rgba(0, 0, 0, 0.2);
+  font: 13px sans-serif;
+}
+
+.layer-menu .menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.layer-menu fieldset {
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+}
+
+.layer-menu legend {
+  padding: 0;
+  margin-bottom: 4px;
+  font-weight: bold;
+}
+
+#scene-column .layer-menu label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.layer-menu .swatch {
+  display: inline-flex;
+  flex: 0 0 90px;
+  height: 14px;
+  border: 1px solid #999;
+}
+
+.layer-menu .swatch-blocks span {
+  flex: 1;
+}
+
+.layer-menu .custom-colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 4px 22px;
+}
+
+.layer-menu .custom-colors[hidden] {
+  display: none;
+}
+
+.layer-menu input[type="number"] {
+  width: 70px;
+}
+
+.layer-menu .menu-reset {
+  display: block;
+  margin-left: auto;
+}
+
 #scene-column .notice {
   padding: 6px 8px;
   margin-bottom: 8px;
@@ -420,12 +497,21 @@ body.scene-mode #panel {
     right: 8px;
     bottom: 56px;
     width: auto;
-    max-height: 45vh;
+    max-height: 45dvh;
   }
 
   #time-bar {
     right: 8px;
     bottom: 8px;
+  }
+
+  .layer-menu {
+    left: 8px;
+    right: 8px !important;
+    top: auto !important;
+    bottom: calc(45dvh + 64px);
+    width: auto;
+    max-height: calc(55dvh - 72px);
   }
 }
 

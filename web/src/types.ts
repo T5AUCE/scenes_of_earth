@@ -198,6 +198,7 @@ export interface Scene {
 
 /** A toggleable piece of a layer: map layers shown or hidden together. */
 export interface Part {
+  /** The layer's id for its first part and `<layer id>.<part>` for the others, as links name it. */
   id: string;
   label: string;
   layerIds: string[];
@@ -208,6 +209,19 @@ export interface Part {
   note?: HTMLElement;
 }
 
+/** The raw `pal`, `range` and `off` values of a link, each a comma-joined list. */
+export interface DisplayTokens {
+  pal: string;
+  range: string;
+  off: string;
+}
+
+/** A layer's display choices that differ from the bundle; a missing field means its default. */
+export interface LayerDisplay {
+  palette?: string;
+  range?: [number, number];
+}
+
 /** What a layer renderer gets to draw one layer. */
 export interface LayerContext {
   map: MapLibreMap;
@@ -215,6 +229,8 @@ export interface LayerContext {
   layer: LayerDoc;
   shift: number; // longitude offset of the scene's world copy, the same for all its layers
   beforeId: string | undefined;
+  /** The viewer's choices for this layer; absent means the bundle's defaults. */
+  display?: LayerDisplay;
   /** Report failures after mounting, such as a step that cannot be read. */
   report(error: unknown): void;
 }
@@ -231,11 +247,49 @@ export interface LayerControl {
   set(value: number): void;
 }
 
+/** One palette in a layer menu, with the CSS colours of its swatch. */
+export interface PaletteChoice {
+  name: string;
+  label: string;
+  colors: string[];
+}
+
+/** A display range a layer's menu can change. */
+export interface RangeMenu {
+  /** The range the bundle fits to the area, with uneven spacing. */
+  fitted: [number, number];
+  /** The lowest and highest value in the area, which limit what can be typed. */
+  bounds: [number, number];
+  /** The number of decimals a link keeps. */
+  decimals: number;
+  units: string;
+  /** The custom range, or null while the fitted one applies. */
+  readonly value: [number, number] | null;
+  set(range: [number, number] | null): void;
+}
+
+/** What a layer's Edit menu offers; changes apply to the map immediately. */
+export interface LayerMenu {
+  title: string;
+  /** The heading above the palettes, such as Colours. */
+  heading: string;
+  /** Draw each swatch as separate blocks instead of one gradient. */
+  blocks: boolean;
+  palettes: PaletteChoice[];
+  defaultPalette: string;
+  /** Offer a custom gradient of 2 to 5 colours. */
+  custom: boolean;
+  readonly palette: string;
+  setPalette(name: string): void;
+  range?: RangeMenu;
+}
+
 /** Own a drawn layer's controls and time axis along with its legend and teardown. */
 export interface LayerView {
   parts: Part[];
   options: { label: string; set(on: boolean): void; note?: string; initial?: boolean }[];
   time: TimeDoc | null;
+  menu?: LayerMenu;
   ready?: Promise<void>; // rejects when the layer's data cannot be read
   setTime(time: string): void;
   legend(): HTMLElement | null;
