@@ -75,7 +75,7 @@ export function createCategoricalView(
     parts: [{ id, label: layer.title, layerIds: [id] }],
     options: [
       {
-        label: "Smooth edges",
+        label: "Smooth",
         note: SMOOTH_NOTE,
         initial: true,
         set: (on) => {

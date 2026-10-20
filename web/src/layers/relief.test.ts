@@ -68,12 +68,12 @@ function exaggerations(strength: number) {
   return expression.slice(3).filter((_, index) => index % 2 === 1) as number[];
 }
 
-test("the backdrop is the fitted zoom rounded up", () => {
+test("the contour backdrop is the fitted zoom rounded up", () => {
   // 1000 px across 10 degrees of 512 px tiles fits at zoom 6.1.
   assert.equal(backdropMaxZoom(10, 1000, 512, 11), 7);
 });
 
-test("the backdrop never exceeds the tile maxzoom or goes below zero", () => {
+test("the contour backdrop never exceeds the tile maxzoom or goes below zero", () => {
   assert.equal(backdropMaxZoom(0.1, 1000, 512, 11), 11);
   assert.equal(backdropMaxZoom(360, 100, 512, 11), 0);
 });

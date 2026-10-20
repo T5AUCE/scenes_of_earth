@@ -6,23 +6,22 @@ interface Grid {
   ny: number;
 }
 
-/** A picture of class indexes, where 0 is transparent. */
+/** Store class indexes as a raster with zero representing transparency. */
 export interface ClassRaster {
   width: number;
   height: number;
   ids: Uint8Array;
 }
 
-/** Most output pixels per grid cell along each axis. */
 const MAX_SMOOTH_SCALE = 4;
-// About 14 ns per pixel on a desktop core, which keeps the first smoothed paint near 100 ms.
-const MAX_SMOOTH_PIXELS = 8_000_000;
+// At about 14 ns per pixel on a desktop core, this keeps the first paint near 100 ms.
+const MAX_SMOOTH_PIXELS_PX = 8_000_000;
 const CORNER_COUNT = 4;
 const OPAQUE = 255;
 // Weights of different classes that differ by less than this are treated as a tie.
 const TIE_TOLERANCE = 1e-6;
 
-/** The index from 1 of each cell's class in classValues, or 0 for fill, no data or unknown. */
+/** Map cell values to one-based class IDs and reserve zero for missing or unknown values. */
 export function cellClassIds(values: Float32Array, classValues: number[]) {
   const indexByValue = new Uint8Array(Math.max(...classValues) + 1);
   classValues.forEach((value, index) => {
@@ -36,9 +35,9 @@ export function cellClassIds(values: Float32Array, classValues: number[]) {
 }
 
 /**
- * Rounds the borders between classes without mixing colours. Each class is a 0/1 field over the
- * cells, sampled bilinearly at every output pixel, and the pixel takes the class with the highest
- * value. Cells without a class never compete, so the painted area keeps its nearest-cell outline.
+ * Round class borders without mixing colours. Bilinearly sample each class's presence and select
+ * the class with the highest weight. Cells without a class never compete, so the painted area
+ * keeps its nearest-cell outline.
  * Ties go to the class of the nearest cell. Rows are even in Web Mercator y, as in sampleTable.
  * Large areas get fewer pixels per cell so that the paint stays quick.
  */
@@ -48,10 +47,18 @@ export function smoothClassIds(
   baseSize: { width: number; height: number },
   maxTextureSize: number,
 ): ClassRaster {
-  const affordableScale = Math.sqrt(MAX_SMOOTH_PIXELS / (baseSize.width * baseSize.height));
-  const scale = Math.max(1, Math.min(MAX_SMOOTH_SCALE, affordableScale));
-  const width = Math.min(maxTextureSize, Math.round(baseSize.width * scale));
-  const height = Math.min(maxTextureSize, Math.round(baseSize.height * scale));
+  const affordableScale = Math.sqrt(MAX_SMOOTH_PIXELS_PX / (baseSize.width * baseSize.height));
+  const scale = Math.min(MAX_SMOOTH_SCALE, affordableScale);
+  const width = Math.min(
+    maxTextureSize,
+    MAX_SMOOTH_PIXELS_PX,
+    Math.max(1, Math.floor(baseSize.width * scale)),
+  );
+  const height = Math.min(
+    maxTextureSize,
+    Math.floor(MAX_SMOOTH_PIXELS_PX / width),
+    Math.max(1, Math.floor(baseSize.height * scale)),
+  );
   const columns = columnSamples(grid.nx, width);
   const rows = rowSamples(grid, height);
 
@@ -113,7 +120,7 @@ function classWeight(corner: Uint8Array, weight: Float64Array, id: number) {
   return total;
 }
 
-/** The two cells either side of each output pixel centre, and the share of the second. */
+/** Store the cells bracketing each pixel centre together with the second cell's weight. */
 interface AxisSamples {
   first: Int32Array;
   second: Int32Array;

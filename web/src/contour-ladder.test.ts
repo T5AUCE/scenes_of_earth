@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { test, type TestContext } from "node:test";
 
-import { validateStyleMin } from "@maplibre/maplibre-gl-style-spec";
+import { createExpression, validateStyleMin } from "@maplibre/maplibre-gl-style-spec";
 import mlcontour from "maplibre-contour";
 import type { Map as MapLibreMap } from "maplibre-gl";
 
@@ -14,6 +14,7 @@ import {
   labelIntervalsAt,
   metresPerPixel,
 } from "./contour-ladder.ts";
+import { RELIEF_STRENGTH, reliefPaint } from "./layers/relief.ts";
 import type { LayerContext, TerrainStats, TerrainTiles } from "./types.ts";
 
 const FIJI = makeStats(1, 820, 6, 14);
@@ -214,6 +215,7 @@ test("contour styles validate in MapLibre and cap refinement at z12", (context) 
   const map = new TestMap();
   const dem = sharedDemSource(TILES);
   const overlay = new ContourOverlay(layerContext(map), dem, TILES, FIJI);
+  map.emit("dataloading", { sourceId: "terrain-contours" });
   const source = map.sources.get("terrain-contours")!;
   assert.equal(source.maxzoom, 12);
   assert.equal((dem as unknown as TestDemSource).contourOptions["overzoom"], 1);
@@ -280,25 +282,125 @@ test("the configured contour buffer stays inside the plugin's materialized paddi
   overlay.destroy();
 });
 
-test("the relief backdrop is coarser and goes flat once the main source loads", (context) => {
+test("relief stays single-layered through zoom and source loading events", (context) => {
   mockPage(context);
   const map = new TestMap();
   const view = createTerrainView(layerContext(map));
-  const backdrop = map.sources.get("terrain-relief-backdrop")!;
-  const lastPaint = () => JSON.stringify(map.paints.at(-1)![1]);
+  const reliefId = "terrain-relief";
+  const initialPaint = reliefPaint(RELIEF_STRENGTH.initial);
+  const hillshades = [...map.layers.values()].filter((layer) => layer.type === "hillshade");
 
-  assert.ok(backdrop.maxzoom < map.sources.get("terrain-relief").maxzoom);
-  assert.ok(view.parts[0].layerIds.includes("terrain-relief-backdrop"));
+  assert.deepEqual(view.parts[0].layerIds, [reliefId]);
+  assert.ok(!map.sources.has(`${reliefId}-backdrop`));
+  assert.deepEqual(hillshades.map((layer) => layer.id), [reliefId]);
+  for (const loaded of [true, false, true]) {
+    map.mainSourceLoaded = loaded;
+    map.zooming = true;
+    map.emit("zoomstart");
+    map.emit("dataloading", { sourceId: reliefId });
+    map.emit("sourcedata", { sourceId: reliefId });
+    map.zooming = false;
+    map.emit("zoomend");
 
-  map.emit("zoomend");
-  const shaded = lastPaint();
-  map.mainSourceLoaded = true;
-  map.emit("zoomend");
-
-  assert.notEqual(lastPaint(), shaded);
-  assert.ok(lastPaint().includes("0"));
+    assert.deepEqual(map.layers.get(reliefId).paint, initialPaint);
+    assert.ok(map.paints.every(([id]) => id !== reliefId && id !== `${reliefId}-backdrop`));
+  }
   view.destroy();
-  assert.ok(!map.sources.has("terrain-relief-backdrop"));
+  assert.equal(map.sources.size, 0);
+  assert.ok([...map.listeners.values()].every((listeners) => listeners.size === 0));
+});
+
+test("relief strength updates only the main hillshade and zero stays flat through zoom", (context) => {
+  mockPage(context);
+  const map = new TestMap();
+  const view = createTerrainView(layerContext(map));
+  const strength = view.parts[0].controls![0];
+
+  for (const value of [RELIEF_STRENGTH.max, RELIEF_STRENGTH.min]) {
+    map.paints.length = 0;
+    strength.set(value);
+
+    const expectedPaint = [
+      "terrain-relief",
+      reliefPaint(value)["hillshade-exaggeration"],
+    ];
+    assert.deepEqual(map.paints, [expectedPaint]);
+  }
+  map.zooming = true;
+  map.emit("zoomstart");
+  map.zooming = false;
+  map.emit("zoomend");
+
+  assert.deepEqual(map.layers.get("terrain-relief").paint, reliefPaint(0));
+  view.destroy();
+});
+
+test("the contour backdrop appears immediately only while main tiles are pending", (context) => {
+  mockPage(context);
+  const map = new TestMap();
+  const view = createTerrainView(layerContext(map));
+  const backdrop = map.layers.get("terrain-contours-backdrop")!;
+  const boldInterval = contourLadder(FIJI, 0).boldInterval;
+
+  assert.ok(map.sources.get(backdrop.id).maxzoom < map.sources.get("terrain-contours").maxzoom);
+  assert.deepEqual(backdrop.filter, ["==", ["%", ["get", "ele"], boldInterval], 0]);
+  assert.equal(backdrop.paint["line-opacity"], 0);
+  assert.deepEqual(backdrop.paint["line-opacity-transition"], { duration: 0 });
+  map.mainSourceLoaded = true;
+  map.zooming = true;
+  map.emit("zoomstart");
+
+  assert.equal(backdrop.paint["line-opacity"], 0);
+  map.mainSourceLoaded = false;
+  map.emit("dataloading", { sourceId: "terrain-contours" });
+
+  assert.ok(Array.isArray(backdrop.paint["line-opacity"]));
+  assert.equal(backdrop.paint["line-width"], 1.1);
+  map.mainSourceLoaded = true;
+  map.emit("sourcedata", { sourceId: "terrain-contours" });
+
+  assert.equal(backdrop.paint["line-opacity"], 0);
+  map.zooming = false;
+  map.emit("zoomend");
+
+  assert.equal(backdrop.paint["line-opacity"], 0);
+  map.mainSourceLoaded = false;
+  map.emit("dataloading", { sourceId: "terrain-contours" });
+
+  assert.ok(Array.isArray(backdrop.paint["line-opacity"]));
+  view.destroy();
+  assert.ok([...map.listeners.values()].every((listeners) => listeners.size === 0));
+});
+
+test("coarser backdrop heights fade at their own entry zoom before the bold tier", (context) => {
+  mockPage(context);
+  const map = new TestMap();
+  const view = createTerrainView(layerContext(map));
+  const backdrop = map.layers.get("terrain-contours-backdrop")!;
+  const ladder = contourLadder(FIJI, 0);
+  const bold = ladder.tiers.filter((tier) => tier.interval >= ladder.boldInterval);
+  map.zoom = 8;
+  map.emit("dataloading", { sourceId: "terrain-contours" });
+  const expression = createExpression(backdrop.paint["line-opacity"], "line-opacity");
+
+  assert.equal(backdrop.minzoom, bold[0].entryZoom);
+  assert.ok(map.zoom < bold.at(-1)!.entryZoom);
+  assert.ok(expression.result === "success");
+  assert.equal(expression.value.evaluate({ zoom: 8 }, { type: 2, properties: { ele: 500 } }), 0.55);
+  assert.equal(expression.value.evaluate({ zoom: 8 }, { type: 2, properties: { ele: 100 } }), 0);
+  for (const tier of bold) {
+    const feature = { type: 2 as const, properties: { ele: tier.interval } };
+    assert.equal(expression.value.evaluate({ zoom: tier.entryZoom }, feature), 0);
+    assert.equal(
+      expression.value.evaluate({ zoom: tier.entryZoom + FADE_SPAN_ZOOM / 2 }, feature),
+      0.55 / 2,
+    );
+    assert.equal(
+      expression.value.evaluate({ zoom: tier.entryZoom + FADE_SPAN_ZOOM }, feature),
+      0.55,
+    );
+  }
+  view.destroy();
 });
 
 test("shared relief and contour layers keep their mask-gated zoom bounds", (context) => {
@@ -389,7 +491,7 @@ class TestMap {
     source: "basemap",
     layout: { "text-font": ["Noto Sans Regular"] },
   }]]);
-  readonly listeners = new Map<string, Set<() => void>>();
+  readonly listeners = new Map<string, Set<(event: object) => void>>();
   zoom = 6;
 
   getStyle() { return { layers: [...this.layers.values()] }; }
@@ -401,19 +503,25 @@ class TestMap {
   removeLayer(id: string) { this.layers.delete(id); }
   removeSource(id: string) { this.sources.delete(id); }
   mainSourceLoaded = false;
+  zooming = false;
   readonly paints: [string, unknown][] = [];
 
   getCanvas() { return { clientWidth: 1000 }; }
   isSourceLoaded() { return this.mainSourceLoaded; }
-  isZooming() { return false; }
-  setPaintProperty(id: string, _property: string, value: unknown) { this.paints.push([id, value]); }
+  isZooming() { return this.zooming; }
+  setPaintProperty(id: string, property: string, value: unknown) {
+    this.paints.push([id, value]);
+    this.layers.get(id).paint[property] = value;
+  }
   setLayerZoomRange(id: string, minzoom: number, maxzoom: number) {
     Object.assign(this.layers.get(id), { minzoom, maxzoom });
   }
-  on(event: string, listener: () => void) {
+  on(event: string, listener: (event: object) => void) {
     if (!this.listeners.has(event)) this.listeners.set(event, new Set());
     this.listeners.get(event)!.add(listener);
   }
-  off(event: string, listener: () => void) { this.listeners.get(event)?.delete(listener); }
-  emit(event: string) { this.listeners.get(event)?.forEach((listener) => listener()); }
+  off(event: string, listener: (event: object) => void) { this.listeners.get(event)?.delete(listener); }
+  emit(event: string, data: object = {}) {
+    this.listeners.get(event)?.forEach((listener) => listener(data));
+  }
 }

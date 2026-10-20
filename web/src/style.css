@@ -209,6 +209,26 @@ body.scene-mode #panel {
   gap: 0 14px;
 }
 
+#scene-column .card .check-row.inline-options {
+  gap: 0 4px;
+}
+
+#scene-column .card .inline-options .option-checks {
+  display: contents;
+  font-size: 12px;
+}
+
+#scene-column .card .inline-options label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+#scene-column .card .inline-options input[type="checkbox"] {
+  margin: 0;
+}
+
 #scene-column .card .option-note {
   margin: 0 0 4px 20px;
   font-size: 11px;

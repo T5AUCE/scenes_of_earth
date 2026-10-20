@@ -68,6 +68,10 @@ export function classColors(classes: ClassDoc[], palette?: string) {
   );
 }
 
+function hexToRgb(hex: string) {
+  return [1, 3, 5].map((start) => parseInt(hex.slice(start, start + 2), 16));
+}
+
 /** A lookup table of 256 opaque RGBA entries for a named palette. */
 export function lut(name: string) {
   const stops = PALETTES[name];
@@ -107,7 +111,7 @@ export function paintClasses(
   return rgba;
 }
 
-/** RGBA of a class raster, where colorsById[id - 1] is the colour of class index id. */
+/** Paint one-based class IDs with colorsById[id - 1] and leave zero transparent. */
 export function paintClassIds(ids: Uint8Array, colorsById: number[][]) {
   const rgba = new Uint8ClampedArray(ids.length * RGBA_CHANNELS);
   const palette = Uint8ClampedArray.of(
@@ -126,10 +130,6 @@ export function paintClassIds(ids: Uint8Array, colorsById: number[][]) {
     rgba[start + 3] = palette[entry + 3];
   }
   return rgba;
-}
-
-function hexToRgb(hex: string) {
-  return [1, 3, 5].map((start) => parseInt(hex.slice(start, start + 2), 16));
 }
 
 /** Where a value falls on the palette from 0 to 1, with the stops evenly spaced along it. */

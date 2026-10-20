@@ -53,7 +53,7 @@ function exaggeration(base: number, strength: number) {
   return Math.min(Math.max(base * strength, 0), MAX_EXAGGERATION);
 }
 
-/** Pick the finest zoom of the relief backdrop, coarse enough that zooming out finds it loaded. */
+/** Cap the contour backdrop near the fitted zoom so it stays available when zooming out. */
 export function backdropMaxZoom(
   longitudeSpanDeg: number,
   viewWidthPx: number,

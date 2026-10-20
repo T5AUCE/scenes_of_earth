@@ -159,7 +159,6 @@ function layerCard(map: MapLibreMap, view: LayerView) {
   const card = makeHtmlElement("section");
   card.className = "card";
 
-  // Options such as Smooth share the first part's line to save vertical space, and stay together.
   view.parts.forEach((part, index) => {
     const sliders = part.controls ? partControls(part.controls) : null;
     const row = makeHtmlElement("div", "", card);
@@ -172,6 +171,7 @@ function layerCard(map: MapLibreMap, view: LayerView) {
       }),
     );
     if (index === 0 && view.options.length > 0) {
+      if (!view.time) row.classList.add("inline-options");
       const options = makeHtmlElement("span", "", row);
       options.className = "option-checks";
       for (const { label, initial, set } of view.options) {

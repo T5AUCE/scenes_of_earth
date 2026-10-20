@@ -7,6 +7,7 @@ import { cellClassIds, smoothClassIds } from "./smooth-classes.ts";
 import type { ClassRaster } from "./smooth-classes.ts";
 
 const MAX_TEXTURE_SIZE_PX = 4096;
+const MAX_SMOOTH_PIXELS_PX = 8_000_000;
 
 // A grid near the equator, where Mercator rows are almost even.
 const gridOf = (nx: number, ny: number) => ({ bbox: [0, 0, nx, ny] as Bbox, nx, ny });
@@ -49,6 +50,35 @@ test("a tie takes the class of the nearest cell", () => {
 
   assert.equal(raster.width, 3);
   assert.deepEqual([at(raster, 0, 0), at(raster, 0, 1), at(raster, 0, 2)], [1, 2, 2]);
+});
+
+test("smoothing downsamples an oversized base to stay within its pixel budget", () => {
+  const baseSize = { width: 4096, height: 4096 };
+  const raster = smoothClassIds(Uint8Array.of(1), gridOf(1, 1), baseSize, MAX_TEXTURE_SIZE_PX);
+
+  assert.ok(raster.width > 0 && raster.width < baseSize.width);
+  assert.ok(raster.height > 0 && raster.height < baseSize.height);
+  assert.ok(raster.width * raster.height <= MAX_SMOOTH_PIXELS_PX);
+  assert.equal(raster.ids.length, raster.width * raster.height);
+});
+
+test("rounding output dimensions cannot exceed the smoothing pixel budget", () => {
+  const baseSize = { width: 1000, height: 1001 };
+  const raster = smoothClassIds(Uint8Array.of(1), gridOf(1, 1), baseSize, MAX_TEXTURE_SIZE_PX);
+
+  assert.ok(raster.width > baseSize.width);
+  assert.ok(raster.height > baseSize.height);
+  assert.ok(raster.width * raster.height <= MAX_SMOOTH_PIXELS_PX);
+  assert.equal(raster.ids.length, raster.width * raster.height);
+});
+
+test("smoothing respects the texture limit along both axes", () => {
+  const maxTextureSize = 7;
+  const raster = smooth([1, 1, 1, 1, 1, 1], 2, 3, maxTextureSize);
+
+  assert.equal(raster.width, maxTextureSize);
+  assert.equal(raster.height, maxTextureSize);
+  assert.ok(raster.ids.every((id) => id === 1));
 });
 
 test("paintClassIds colours each index and leaves 0 transparent", () => {

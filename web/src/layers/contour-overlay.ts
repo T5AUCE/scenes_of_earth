@@ -144,10 +144,10 @@ export class ContourOverlay {
     this.part.layerIds.push(id);
   }
 
-  /** Coarse bold lines that show only while the main tiles load, so zooming out is not blank. */
+  /** Keep coarse bold lines available while main tiles load so zooming out is not blank. */
   private addBackdrop(dem: DemSource, tiles: TerrainTiles, beforeId?: string) {
-    const bold = this.ladder.tiers.find((tier) => tier.interval === this.ladder.boldInterval);
-    if (!bold) return;
+    const bold = this.ladder.tiers.filter((tier) => tier.interval >= this.ladder.boldInterval);
+    if (bold.length === 0) return;
 
     const [west, , east] = this.bbox;
     const maxzoom = backdropMaxZoom(
@@ -168,19 +168,20 @@ export class ContourOverlay {
       maxzoom,
       ...terrainTileBounds(this.bbox),
     });
-    this.backdropFade = tierFade(bold.entryZoom, CONTOUR_OPACITY);
+    this.backdropFade = tierFades(bold, CONTOUR_OPACITY);
     this.map.addLayer(
       {
         id: this.backdropId,
         type: "line",
         source: this.backdropId,
         "source-layer": "contours",
-        minzoom: bold.entryZoom,
-        filter: multipleOf(bold.interval),
+        minzoom: bold[0].entryZoom,
+        filter: multipleOf(this.ladder.boldInterval),
         paint: {
           "line-color": CONTOUR_COLOR,
           "line-width": BOLD_LINE_WIDTH_PX,
           "line-opacity": 0,
+          "line-opacity-transition": { duration: 0 },
         },
       },
       beforeId,
@@ -195,7 +196,7 @@ export class ContourOverlay {
   private readonly updateBackdrop = () => {
     if (!this.map.getLayer(this.backdropId)) return;
 
-    const isMainReady = this.map.isSourceLoaded(this.sourceId) && !this.map.isZooming();
+    const isMainReady = this.map.isSourceLoaded(this.sourceId);
     const opacity = isMainReady ? 0 : this.backdropFade!;
     this.map.setPaintProperty(this.backdropId, "line-opacity", opacity);
   };
@@ -232,7 +233,7 @@ export class ContourOverlay {
           "text-halo-color": getComputedStyle(document.documentElement)
             .getPropertyValue(PAGE_BACKGROUND_PROPERTY).trim(),
           "text-halo-width": LABEL_HALO_WIDTH_PX,
-          "text-opacity": labelFade(tiers),
+          "text-opacity": tierFades(tiers, 1),
         },
       },
       beforeId,
@@ -290,7 +291,10 @@ function tierFade(entryZoom: number, opacity: number): ExpressionSpecification {
   return ["interpolate", ["linear"], ["zoom"], entryZoom, 0, entryZoom + FADE_SPAN_ZOOM, opacity];
 }
 
-function labelFade(tiers: ContourLadder["labelTiers"]): ExpressionSpecification {
+function tierFades(
+  tiers: ContourLadder["labelTiers"],
+  maxOpacity: number,
+): ExpressionSpecification {
   const opacity: ExpressionSpecification = ["interpolate", ["linear"], ["zoom"]];
   const fadeStops = tiers.flatMap((tier) => [
     tier.entryZoom,
@@ -300,7 +304,7 @@ function labelFade(tiers: ContourLadder["labelTiers"]): ExpressionSpecification 
   for (const zoom of stops) {
     const conditions = tiers.flatMap((tier) => {
       const alpha = Math.max(0, Math.min(1, (zoom - tier.entryZoom) / FADE_SPAN_ZOOM));
-      return [multipleOf(tier.interval), alpha];
+      return [multipleOf(tier.interval), alpha * maxOpacity];
     });
     const value = ["case", ...conditions, 0] as ExpressionSpecification;
     opacity.push(zoom, value);
