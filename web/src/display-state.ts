@@ -4,9 +4,10 @@ import {
   DEFAULT_CONTOUR_COLOR,
   fieldGradient,
 } from "./render/palettes";
-import type { DisplayTokens, LayerDisplay, LayerDoc } from "./types";
+import type { DisplayTokens, EdgeSettings, LayerDisplay, LayerDoc } from "./types";
 
 const STORAGE_KEY = "soe.display.v1";
+const EDGES_STORAGE_KEY = "soe.edges.v1";
 const PALETTE_FIELDS = 2;
 const RANGE_FIELDS = 3;
 const SIGNIFICANT_DIGITS = 3;
@@ -18,6 +19,58 @@ export const DROPPED_NOTE = "Some display settings in this link don't apply to t
 
 /** The tokens of a link without display settings. */
 export const NO_TOKENS: DisplayTokens = { pal: "", range: "", off: "" };
+
+/** Default class edges keep one colour per pixel and preserve isolated cells. */
+export const DEFAULT_EDGES: Readonly<EdgeSettings> = {
+  rounding: 0.25,
+  softnessPx: 0,
+  outline: false,
+};
+
+/** The strongest rounding that retains small class patches. */
+export const MAX_ROUNDING = 0.6;
+/** The widest optional blend between class colours, in screen pixels. */
+export const MAX_SOFTNESS_PX = 1.5;
+
+/** Read valid edge choices for one dataset without changing its shared-link display. */
+export function loadStoredEdges(datasetId: string): EdgeSettings {
+  const value = storedEdges()[datasetId];
+  if (
+    value
+    && typeof value.rounding === "number"
+    && Number.isFinite(value.rounding)
+    && value.rounding >= 0
+    && value.rounding <= MAX_ROUNDING
+    && typeof value.softnessPx === "number"
+    && Number.isFinite(value.softnessPx)
+    && value.softnessPx >= 0
+    && value.softnessPx <= MAX_SOFTNESS_PX
+    && typeof value.outline === "boolean"
+  ) {
+    return { rounding: value.rounding, softnessPx: value.softnessPx, outline: value.outline };
+  }
+  return { ...DEFAULT_EDGES };
+}
+
+function storedEdges(): Record<string, EdgeSettings> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(EDGES_STORAGE_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Remember edge choices per dataset, leaving palette storage and share links untouched. */
+export function storeEdges(datasetId: string, edges: EdgeSettings) {
+  try {
+    const stored = storedEdges();
+    stored[datasetId] = edges;
+    localStorage.setItem(EDGES_STORAGE_KEY, JSON.stringify(stored));
+  } catch {
+    // Blocked storage must not prevent this visit's display changes.
+  }
+}
 
 /** The display choices of one scene that differ from the bundle's defaults. */
 export interface SceneDisplay {

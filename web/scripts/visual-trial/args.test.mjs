@@ -44,3 +44,12 @@ test("the contours preset loads", () => {
 
   assert.ok(spots.length >= 3);
 });
+
+test("the landcover preset checks paired renderers at high zoom and across 180", () => {
+  const spots = loadPlaces("landcover");
+
+  assert.ok(spots.every((spot) => spot.landcover && spot.layers.includes("esa_worldcover")));
+  assert.deepEqual(spots.find((spot) => spot.name === "Nairobi").zooms, ["fitted", 12, 15, 18]);
+  assert.ok(spots.some((spot) => spot.centre[0] >= 180 && spot.zooms.includes(12)));
+  assert.ok(spots.some((spot) => spot.name.includes("coast")));
+});

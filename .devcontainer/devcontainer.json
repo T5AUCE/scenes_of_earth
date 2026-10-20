@@ -19,7 +19,7 @@
 
 	"postCreateCommand": "sudo chown vscode:vscode ~/.local ~/.local/share && sudo chown -R vscode:vscode ~/.local/share/opencode ~/.config/opencode && pip install -e '.[import,dev]' && npm config set prefix ~/.npm-global && npm install -g @anthropic-ai/claude-code opencode-ai@1.19.3 && { [ ! -f .secrets/cdsapirc ] || ln -sfn \"$PWD/.secrets/cdsapirc\" ~/.cdsapirc; } && (cd web && npm ci && bash scripts/visual-trial/setup.sh)",
 
-	// Unconfined seccomp/AppArmor lets bwrap create user namespaces (gpt-agent.sh read-only sandbox).
+	// Unconfined seccomp/AppArmor lets opencode-agent.sh use bwrap's read-only sandbox.
 	"runArgs": ["--security-opt", "seccomp=unconfined", "--security-opt", "apparmor=unconfined"],
 	// Volumes keep Claude Code and opencode logins (and opencode sessions) across rebuilds.
 	"mounts": [

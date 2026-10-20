@@ -4,14 +4,16 @@
       "name": "Kenya",
       "area": "sample:kenya",
       "centre": [37.0, 0.5],
-      "zooms": ["fitted", 7],
+      "zooms": ["fitted"],
+      "landcover": true,
       "layers": ["terrain", "esa_worldcover"]
     },
     {
       "name": "Nairobi",
       "area": "sample:nairobi",
       "centre": [36.82, -1.29],
-      "zooms": ["fitted", 10, 12],
+      "zooms": ["fitted", 12, 15, 18],
+      "landcover": true,
       "layers": ["terrain", "esa_worldcover"]
     },
     {
@@ -19,13 +21,23 @@
       "area": "sample:fiji",
       "centre": [177.55, -18.0],
       "zooms": ["fitted", 9],
+      "landcover": true,
       "layers": ["terrain", "esa_worldcover"]
     },
     {
       "name": "Fiji-east-of-180",
       "area": "sample:fiji",
-      "centre": [180.1, -16.85],
-      "zooms": [9],
+      "centre": [180.0, -16.85],
+      "zooms": ["fitted", 12],
+      "landcover": true,
+      "layers": ["terrain", "esa_worldcover"]
+    },
+    {
+      "name": "Kenya-coast",
+      "area": "sample:kenya",
+      "centre": [39.67, -4.05],
+      "zooms": [12],
+      "landcover": true,
       "layers": ["terrain", "esa_worldcover"]
     }
   ]

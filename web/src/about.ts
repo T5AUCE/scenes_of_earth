@@ -22,11 +22,15 @@ const NO_FALLBACK_NOTE =
 const CLIPPED_NOTICE = "The area reaches beyond the data coverage and was clipped to it.";
 
 const SMOOTHING_LINES = [
-  "Each data cell is one colour block by default. The Smooth option lets your graphics card blend "
+  "Field layers show one colour block per cell by default. Smooth lets your graphics card blend "
     + "the colours of neighbouring cells (linear interpolation), so edges look softer. It blends "
     + "colours, not values, and it never adds data.",
-  "Cells without data are see-through, so smoothing fades the colour out at the edge of such a "
-    + "cell and at the border of the area instead of inventing values there.",
+  "Field cells without data are see-through, so smoothing fades the colour out at their edges "
+    + "and at the border of the area instead of inventing values there.",
+  "Land-cover Smooth draws edges smoothly from per-cell classes while keeping class colours "
+    + "separate. Rounding can shrink small patches, but it adds no data. Edge softness optionally "
+    + "blends colours at their borders. Without WebGL drawing, an image provides smooth edges "
+    + "at a fixed resolution instead.",
   "Terrain shading is drawn by your graphics card from Mapterhorn elevation tiles, so it gains "
     + "detail as you zoom in. It is a picture only; the values in the files do not come from it.",
   "Contour lines are drawn from elevation averaged into blocks of at most 1024 cells per side "

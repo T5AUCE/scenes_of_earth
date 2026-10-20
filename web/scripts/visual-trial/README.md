@@ -5,6 +5,7 @@ Measures the map of built scenes in headless Chromium, so a browser check takes 
 ```
 cd web
 npm run trial -- contours --start
+SOE_TRIAL_EXISTING_ONLY=1 npm run trial -- landcover --start --screens
 npm run trial -- places.json --app http://127.0.0.1:5173 --screens --out /tmp/x
 ```
 
@@ -47,8 +48,20 @@ The setup resolves the cache root to an absolute path. Browser download staging 
 build (default `["terrain"]`; `start` and `end` may be added for time-varying layers). `enable`
 lists checkbox labels in the scene panel to switch on. Presets live in `places/`.
 
+`landcover: true` runs each spot twice in isolated browser contexts, first with the GPU enabled
+and then with `soe.debug.gpu=off`. Screenshots have `-gpu` and `-image` suffixes. The GPU also
+gets a `-gpu-rounding-0` screenshot for comparing its bilinear edges with the image fallback.
+The landcover preset covers Nairobi through z18, Taveuni at 180° and the Kenya coast.
+
 Scenes come from `POST /api/scenes`, so a bundle that matches the request is reused and nothing is
 ever deleted.
+
+Set `SOE_TRIAL_EXISTING_ONLY=1` to use local bundles without any scene POST or build. The tool
+chooses a bundle containing the requested layers for each area and requested period, preferring
+the fewest extra layers and then the newest creation time.
+It reads `SOE_SCENES_DIR` or the repository's `data/scenes` directory. A missing match stops the
+trial rather than building or downloading data. This mode is intended for `--start` against
+those same local bundles, not a remote app with a different bundle collection.
 
 Scene POST retries and build polling share a ten-minute deadline. Requests are aborted when
 their remaining budget expires, and `Retry-After` waits cannot extend the deadline.
@@ -68,6 +81,18 @@ their remaining budget expires, and `Retry-After` waits cannot extend the deadli
 - `legend` contains the contour legend line when one is present.
 - `legend_classes` lists the visible categorical legend labels in panel order for each view.
   It is empty when no class labels are shown or the view has no sample.
+- `landcover_renderer` is the actual `gpu` or `image` renderer for landcover trials.
+- `frame_ms_p50` and `frame_ms_p95` summarize rAF deltas during a scripted two-second pan and
+  include browser scheduling and the rest of the map, not just GPU draw time. They are null for
+  other trials. A 60 Hz browser normally has a 16.7 ms floor, so these values cannot establish
+  an 8 ms GPU draw budget. The current headless browser also uses SwiftShader, not hardware GL.
+- `gl_errors` lists nonzero errors observed through WebGL2 `getError`, including upload checks.
+- `display_checks` reports visibility and palette repaint checks from frame readbacks. It also
+  reports whether Edges are available and repaint, or whether the image fallback has its single
+  explanatory line and no Edges sliders. Readbacks are visual smoke checks, not pixel oracles.
+- `context_restored` checks one `WEBGL_lose_context` loss/restore cycle at the first GPU view of
+  each spot. It is true when the renderer stays GPU and the frame readback is unchanged, false
+  on a mismatch, `"unsupported"` if the extension is missing, or null when not exercised.
 
 Contour layer ids are matched by the patterns at the top of `measure.mjs`.
 

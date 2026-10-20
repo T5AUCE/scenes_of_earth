@@ -1,119 +1,314 @@
 import { arrayDoc, decode, readArray } from "../data";
-import { defaultPalette as layerDefaultPalette } from "../display-state";
+import {
+  DEFAULT_EDGES,
+  defaultPalette,
+  loadStoredEdges,
+  MAX_ROUNDING,
+  MAX_SOFTNESS_PX,
+  storeEdges,
+} from "../display-state";
+import { createClassFieldLayer } from "../gpu/class-field-layer";
 import { classLegend } from "../legend";
-import { addImageLayer, maxTextureSize, removeLayerAndSource, setImage } from "../map";
-import { paintClasses, paintClassIds } from "../render/colormap";
-import { sampleTable } from "../render/mercator";
+import { removeLayerAndSource } from "../map";
 import { CLASS_PALETTE_OPTIONS, classColors, classPalette } from "../render/palettes";
-import { cellClassIds, smoothClassIds } from "../render/smooth-classes";
-import type { ClassRaster } from "../render/smooth-classes";
-import type { LayerContext, LayerMenu, LayerView } from "../types";
+import { cellClassIds } from "../render/smooth-classes";
+import type { EdgeSettings, EdgesMenu, LayerContext, LayerMenu, LayerView } from "../types";
+import { createImagePainter } from "./categorical-image";
 
 const CATEGORICAL_OPACITY = 0.8;
-const SMOOTH_NOTE = "Edges smoothed for display; classes are per cell.";
+const ROUNDING_STEP = 0.05;
+const SOFTNESS_STEP_PX = 0.25;
+const SMOOTH_NOTE = "Edges are drawn smoothly from per-cell classes. No data is added.";
+const IMAGE_EDGES_NOTE = "Edge options need WebGL drawing.";
 
-/** Render a static class layer, with a legend of the classes present in the area. */
-export function createCategoricalView(
-  { map, store, layer, shift, beforeId, display }: LayerContext,
-): LayerView {
-  const id = `${layer.id}-classes`;
-  const { classes } = layer.style;
-  if (!classes) throw new Error(`Layer "${layer.id}" needs classes`);
+interface DrawPosition {
+  beforeId: string | undefined;
+  visibility: "visible" | "none";
+  minzoom: number;
+  maxzoom: number;
+}
 
-  const valueArray = arrayDoc(layer, "value");
-  const defaultPalette = layerDefaultPalette(layer);
-  const legendBox = document.createElement("div");
-  const classValues = classes.map(({ value }) => value);
-  let palette = display?.palette ?? defaultPalette;
-  let colors = classColors(classes, palette);
-  let smooth = true;
-  let values: Float32Array | null = null;
-  let smoothRaster: ClassRaster | null = null;
-  let alive = true;
+/** Draw static classes with GPU edges, retaining the image painter as an automatic fallback. */
+export function createCategoricalView(context: LayerContext): LayerView {
+  return new CategoricalView(context);
+}
 
-  addImageLayer(map, id, layer.grid.bbox, shift, beforeId, {
-    "raster-opacity": CATEGORICAL_OPACITY,
-    "raster-resampling": "nearest",
-  });
+class CategoricalView implements LayerView {
+  readonly time = null;
+  readonly parts;
+  readonly options;
+  readonly menu: LayerMenu;
+  readonly ready: Promise<void>;
 
-  const textureSize = maxTextureSize(map);
-  const table = sampleTable(layer.grid, textureSize);
+  private readonly id: string;
+  private readonly classes;
+  private readonly classValues;
+  private readonly legendBox = document.createElement("div");
+  private readonly menuUpdates = new EventTarget();
+  private readonly gpu;
+  private readonly edgeMenu: EdgesMenu;
+  private image: ReturnType<typeof createImagePainter> | null = null;
+  private ids: Uint8Array | null = null;
+  private present = new Set<number>();
+  private palette: string;
+  private colors;
+  private smooth = true;
+  private edges: EdgeSettings;
+  private alive = true;
+  private readonly context: LayerContext;
+  private restorePosition: DrawPosition | null = null;
 
-  // The smoothed raster is built once because only the colours change between repaints.
-  const smoothedRaster = (cellValues: Float32Array) => {
-    smoothRaster ??= smoothClassIds(
-      cellClassIds(cellValues, classValues),
-      layer.grid,
-      table,
-      textureSize,
-    );
-    return smoothRaster;
-  };
+  constructor(context: LayerContext) {
+    this.context = context;
+    const { layer } = context;
+    this.id = `${layer.id}-classes`;
+    const classes = layer.style.classes;
+    if (!classes) throw new Error(`Layer "${layer.id}" needs classes`);
 
-  const repaint = () => {
-    if (!values) return;
-
-    if (smooth) {
-      const { ids, width, height } = smoothedRaster(values);
-      const rgba = paintClassIds(ids, classValues.map((value) => colors.get(value) ?? [0, 0, 0]));
-      setImage(map, id, new ImageData(rgba, width, height));
-    } else {
-      const rgba = paintClasses(values, table, colors);
-      setImage(map, id, new ImageData(rgba, table.width, table.height));
-    }
-    legendBox.replaceChildren(classLegend(classes, new Set(values), colors));
-  };
-
-  const menu: LayerMenu = {
-    title: layer.title,
-    heading: "Colours",
-    blocks: true,
-    palettes: CLASS_PALETTE_OPTIONS.map(({ name, label }) => ({
-      name,
-      label,
-      colors: classes.map(({ value, color }) => classPalette(name)?.[value] ?? color),
-    })),
-    defaultPalette,
-    custom: false,
-    get palette() {
-      return palette;
-    },
-    setPalette(name) {
-      palette = name;
-      colors = classColors(classes, palette);
-      repaint();
-    },
-  };
-
-  const ready = (async () => {
-    const raw = await readArray(await store, valueArray.path, [null, null]);
-    if (!alive) return;
-
-    values = decode(raw, valueArray);
-    repaint();
-  })();
-
-  return {
-    parts: [{ id: layer.id, label: layer.title, layerIds: [id] }],
-    options: [
+    this.classes = classes;
+    this.classValues = this.classes.map(({ value }) => value);
+    this.palette = context.display?.palette ?? defaultPalette(layer);
+    this.colors = classColors(this.classes, this.palette);
+    this.edges = loadStoredEdges(layer.id);
+    this.gpu = createClassFieldLayer({
+      id: this.id,
+      grid: layer.grid,
+      shift: context.shift,
+      opacity: CATEGORICAL_OPACITY,
+      edges: { smooth: this.smooth, ...this.edges },
+      onFail: () => this.useImage(),
+    });
+    this.edgeMenu = this.createEdgesMenu();
+    this.menu = this.createMenu();
+    this.parts = [{ id: layer.id, label: layer.title, layerIds: [this.id] }];
+    this.options = [
       {
         label: "Smooth",
         note: SMOOTH_NOTE,
         initial: true,
-        set: (on) => {
-          smooth = on;
-          repaint();
+        set: (on: boolean) => {
+          this.smooth = on;
+          if (this.image) this.repaint();
+          else this.gpu.setEdges({ smooth: on, ...this.edges });
         },
       },
-    ],
-    menu,
-    time: null,
-    ready,
-    setTime: () => {},
-    legend: () => legendBox,
-    destroy() {
-      alive = false;
-      removeLayerAndSource(map, id);
-    },
+    ];
+    this.mount();
+    this.ready = this.load();
+  }
+
+  private createEdgesMenu(): EdgesMenu {
+    const view = this;
+    return {
+      controls: [
+        {
+          label: "Rounding",
+          min: 0,
+          max: MAX_ROUNDING,
+          step: ROUNDING_STEP,
+          get value() {
+            return view.edges.rounding;
+          },
+          set: (rounding) => this.setEdges({ ...this.edges, rounding }),
+        },
+        {
+          label: "Edge softness",
+          unit: "px",
+          min: 0,
+          max: MAX_SOFTNESS_PX,
+          step: SOFTNESS_STEP_PX,
+          get value() {
+            return view.edges.softnessPx;
+          },
+          set: (softnessPx) => this.setEdges({ ...this.edges, softnessPx }),
+        },
+      ],
+      outline: {
+        get value() {
+          return view.edges.outline;
+        },
+        set: (outline) => this.setEdges({ ...this.edges, outline }),
+      },
+      get isDefault() {
+        return view.edges.rounding === DEFAULT_EDGES.rounding
+          && view.edges.softnessPx === DEFAULT_EDGES.softnessPx
+          && view.edges.outline === DEFAULT_EDGES.outline;
+      },
+      reset: () => this.setEdges({ ...DEFAULT_EDGES }),
+    };
+  }
+
+  private setEdges(edges: EdgeSettings) {
+    this.edges = edges;
+    storeEdges(this.context.layer.id, edges);
+    this.gpu.setEdges({ smooth: this.smooth, ...edges });
+  }
+
+  private createMenu(): LayerMenu {
+    const view = this;
+    return {
+      title: this.context.layer.title,
+      heading: "Colours",
+      blocks: true,
+      palettes: CLASS_PALETTE_OPTIONS.map(({ name, label }) => ({
+        name,
+        label,
+        colors: this.classes.map(({ value, color }) => classPalette(name)?.[value] ?? color),
+      })),
+      defaultPalette: defaultPalette(this.context.layer),
+      custom: false,
+      updates: this.menuUpdates,
+      get palette() {
+        return view.palette;
+      },
+      setPalette: (name) => {
+        this.palette = name;
+        this.colors = classColors(this.classes, name);
+        this.repaint();
+      },
+      get edges() {
+        return view.image ? undefined : view.edgeMenu;
+      },
+      get edgesNote() {
+        return view.image ? IMAGE_EDGES_NOTE : undefined;
+      },
+    };
+  }
+
+  private mount() {
+    const { map, beforeId } = this.context;
+    if (gpuDisabled() || map.getProjection()?.type === "globe") {
+      this.useImage();
+      return;
+    }
+
+    const canvas = map.getCanvas();
+    // Capture removes the custom layer before MapLibre serializes and destroys the lost style.
+    canvas.addEventListener("webglcontextlost", this.onContextLost, true);
+    canvas.addEventListener("webglcontextrestored", this.onContextRestored);
+    map.addLayer(this.gpu.layer, beforeId);
+    document.body.dataset.landcoverRenderer = "gpu";
+    this.repaint();
+  }
+
+  private readonly onContextLost = () => {
+    const { map } = this.context;
+    if (this.image || !map.getLayer(this.id)) return;
+
+    this.restorePosition = this.drawPosition();
+    map.removeLayer(this.id);
   };
+
+  private readonly onContextRestored = () => {
+    if (!this.restorePosition || !this.alive) return;
+
+    const { map } = this.context;
+    if (map.isStyleLoaded()) this.restoreLayer();
+    else map.once("style.load", this.restoreLayer);
+  };
+
+  private readonly restoreLayer = () => {
+    if (!this.alive || !this.restorePosition) return;
+
+    const { map } = this.context;
+    const position = this.restorePosition;
+    this.restorePosition = null;
+    map.addLayer(this.gpu.layer, position.beforeId);
+    this.applyPosition(position);
+    map.triggerRepaint();
+  };
+
+  private drawPosition(): DrawPosition {
+    const { map, beforeId } = this.context;
+    const layers = map.getLayersOrder();
+    const index = layers.indexOf(this.id);
+    const layer = map.getLayer(this.id);
+    const hidden = layer && map.getLayoutProperty(this.id, "visibility") === "none";
+
+    return {
+      beforeId: index < 0 ? beforeId : layers[index + 1],
+      visibility: hidden ? "none" : "visible",
+      minzoom: layer?.minzoom ?? 0,
+      maxzoom: layer?.maxzoom ?? map.getMaxZoom(),
+    };
+  }
+
+  private applyPosition({ visibility, minzoom, maxzoom }: DrawPosition) {
+    const { map } = this.context;
+    map.setLayoutProperty(this.id, "visibility", visibility);
+    map.setLayerZoomRange(this.id, minzoom, maxzoom);
+  }
+
+  private useImage() {
+    if (!this.alive || this.image) return;
+
+    const { map, layer, shift, report } = this.context;
+    const position = this.drawPosition();
+    removeLayerAndSource(map, this.id);
+    try {
+      this.image = createImagePainter({
+        map,
+        id: this.id,
+        grid: layer.grid,
+        shift,
+        beforeId: position.beforeId,
+        opacity: CATEGORICAL_OPACITY,
+      });
+      this.applyPosition(position);
+      document.body.dataset.landcoverRenderer = "image";
+      this.repaint();
+      this.menuUpdates.dispatchEvent(new Event("change"));
+    } catch (error) {
+      report(error);
+    }
+  }
+
+  private repaint() {
+    const colors = this.classValues.map((value) => this.colors.get(value) ?? [0, 0, 0]);
+    if (this.image) {
+      if (this.ids) this.image.paint(this.ids, colors, this.smooth);
+    } else {
+      this.gpu.setColors(colors);
+      this.gpu.setEdges({ smooth: this.smooth, ...this.edges });
+    }
+    this.legendBox.replaceChildren(classLegend(this.classes, this.present, this.colors));
+  }
+
+  private async load() {
+    const { layer, store } = this.context;
+    const valueArray = arrayDoc(layer, "value");
+    const raw = await readArray(await store, valueArray.path, [null, null]);
+    if (!this.alive) return;
+
+    const values = decode(raw, valueArray);
+    this.ids = cellClassIds(values, this.classValues);
+    this.present = new Set(values);
+    if (!this.image) this.gpu.setIds(this.ids);
+    this.repaint();
+  }
+
+  setTime() {}
+
+  legend() {
+    return this.legendBox;
+  }
+
+  destroy() {
+    this.alive = false;
+    const { map } = this.context;
+    const canvas = map.getCanvas();
+    canvas.removeEventListener("webglcontextlost", this.onContextLost, true);
+    canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
+    map.off("style.load", this.restoreLayer);
+    removeLayerAndSource(map, this.id);
+    delete document.body.dataset.landcoverRenderer;
+  }
+}
+
+function gpuDisabled() {
+  try {
+    return localStorage.getItem("soe.debug.gpu") === "off";
+  } catch {
+    return false;
+  }
 }

@@ -2,6 +2,18 @@
 
 const MAX_LISTED_MESSAGES = 5;
 
+/** Summarize positive rAF deltas in milliseconds using nearest-rank percentiles. */
+export function frameStats(deltas) {
+  const sorted = deltas.filter((delta) => Number.isFinite(delta) && delta > 0)
+    .sort((first, second) => first - second);
+  const percentile = (fraction) => {
+    if (!sorted.length) return null;
+
+    return Number(sorted[Math.ceil(sorted.length * fraction) - 1].toFixed(2));
+  };
+  return { frame_ms_p50: percentile(0.5), frame_ms_p95: percentile(0.95) };
+}
+
 /** Matches contour overlay layer ids so unrelated map features are not counted. */
 export const CONTOUR_LINE_PATTERN = /-contours-\d+$/;
 export const CONTOUR_LABEL_PATTERN = /-contours-labels$/;
@@ -101,6 +113,11 @@ export function viewRecord({ spot, scene, zoom, sample, failures, messages, time
     error_samples: unique.slice(0, MAX_LISTED_MESSAGES),
     legend: sample?.legend ?? null,
     legend_classes: sample?.classLabels ?? [],
+    landcover_renderer: sample?.landcoverRenderer ?? null,
+    ...frameStats(sample?.frameDeltas ?? []),
+    gl_errors: sample?.glErrors ?? [],
+    context_restored: sample?.contextRestored ?? null,
+    display_checks: sample?.displayChecks ?? null,
     timed_out: timedOut,
   };
 }

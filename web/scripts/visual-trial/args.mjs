@@ -86,6 +86,7 @@ export function checkPlaces(data, file = "places") {
       zooms,
       layers: spot.layers ?? ["terrain"],
       enable: spot.enable ?? [],
+      landcover: spot.landcover === true,
       start: spot.start,
       end: spot.end,
     };

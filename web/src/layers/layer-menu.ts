@@ -63,6 +63,9 @@ export function layerMenu(menu: LayerMenu, onChange: (changed: MenuChange) => vo
   const fill = () => {
     popover.replaceChildren(...menuSections(menu, group, onChange, fill, popover));
   };
+  menu.updates?.addEventListener("change", () => {
+    if (popover.matches(":popover-open")) fill();
+  });
   const place = () => placeBesideColumn(popover, button);
   // The custom colour editor changes the menu's height while it is open.
   const resizeObserver = new ResizeObserver(place);
@@ -112,16 +115,19 @@ function menuSections(
   const resetLayer = () => {
     menu.setPalette(menu.defaultPalette);
     menu.range?.set(null);
+    menu.edges?.reset();
     onChange("palette");
     refill();
   };
   reset.onclick = () => {
-    const isDefault = menu.palette === menu.defaultPalette && !menu.range?.value;
+    const isDefault = menu.palette === menu.defaultPalette
+      && !menu.range?.value
+      && (menu.edges?.isDefault ?? true);
     if (isDefault) return resetLayer();
 
     askBeforeReset(
       reset,
-      "This layer's colours and range return to their defaults.",
+      "This layer's display settings will return to their defaults.",
       resetLayer,
     );
   };
@@ -129,9 +135,49 @@ function menuSections(
   return [
     head,
     paletteSection(menu, group, onChange),
+    ...edgesSection(menu),
     ...rangeSection(menu.range, onChange),
     reset,
   ];
+}
+
+function edgesSection(menu: LayerMenu) {
+  if (menu.edgesNote) {
+    const note = makeHtmlElement("div", menu.edgesNote);
+    note.className = "option-note";
+    return [note];
+  }
+  const edges = menu.edges;
+  if (!edges) return [];
+
+  const section = makeHtmlElement("fieldset");
+  makeHtmlElement("legend", "Edges", section);
+  for (const control of edges.controls) section.append(edgeSlider(control));
+  const outline = document.createElement("input");
+  outline.type = "checkbox";
+  outline.checked = edges.outline.value;
+  outline.onchange = () => edges.outline.set(outline.checked);
+  section.append(labelled("Faint outline", outline));
+  return [section];
+}
+
+function edgeSlider(control: LayerControl) {
+  const row = makeHtmlElement("label");
+  row.className = "edge-control";
+  makeHtmlElement("span", control.label, row);
+  const value = makeHtmlElement("output", "", row);
+  const show = (number: number) => {
+    value.value = `${number}${control.unit ? ` ${control.unit}` : ""}`;
+  };
+  const input = slider(control);
+  input.oninput = () => {
+    const number = Number(input.value);
+    control.set(number);
+    show(number);
+  };
+  show(control.value);
+  row.append(input);
+  return row;
 }
 
 function paletteSection(
@@ -274,7 +320,7 @@ function rangeSection(range: RangeMenu | undefined, onChange: (changed: MenuChan
   if (!range) return [];
 
   const section = makeHtmlElement("fieldset");
-  makeHtmlElement("legend", `Display range (${range.units})`, section);
+  const legend = makeHtmlElement("legend", `Display range (${range.units})`, section);
   const low = numberInput("Low", range);
   const high = numberInput("High", range);
   const show = ([first, second]: [number, number]) => {
@@ -295,8 +341,10 @@ function rangeSection(range: RangeMenu | undefined, onChange: (changed: MenuChan
   low.onchange = apply;
   high.onchange = apply;
 
-  const fitted = makeHtmlElement("button", "Reset to area's range");
+  const fitted = makeHtmlElement("button", "Reset", legend);
   fitted.type = "button";
+  fitted.className = "range-reset";
+  fitted.ariaLabel = "Reset to this area's range";
   fitted.disabled = !range.value;
   fitted.onclick = () => {
     range.set(null);
@@ -307,7 +355,7 @@ function rangeSection(range: RangeMenu | undefined, onChange: (changed: MenuChan
 
   const note = makeHtmlElement("div", "Values outside the range take the end colour.");
   note.className = "option-note";
-  section.append(labelled("Low", low), labelled("High", high), fitted, note);
+  section.append(labelled("Low", low), labelled("High", high), note);
   return [section];
 }
 

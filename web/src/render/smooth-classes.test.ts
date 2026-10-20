@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import type { Bbox } from "../types.ts";
 import { paintClassIds } from "./colormap.ts";
-import { cellClassIds, smoothClassIds } from "./smooth-classes.ts";
+import { cellClassIds, classAt, smoothClassIds } from "./smooth-classes.ts";
 import type { ClassRaster } from "./smooth-classes.ts";
 
 const MAX_TEXTURE_SIZE_PX = 4096;
@@ -85,4 +85,71 @@ test("paintClassIds colours each index and leaves 0 transparent", () => {
   const rgba = paintClassIds(Uint8Array.of(2, 0, 1), [[1, 2, 3], [4, 5, 6]]);
 
   assert.deepEqual([...rgba], [4, 5, 6, 255, 0, 0, 0, 0, 1, 2, 3, 255]);
+});
+
+const MAX_ROUNDING = 0.6;
+const classOf = (
+  cells: number[],
+  nx: number,
+  ny: number,
+  column: number,
+  row: number,
+  rounding = 0,
+) => classAt(Uint8Array.from(cells), nx, ny, column, row, rounding);
+
+test("classAt at zero rounding matches smoothClassIds", () => {
+  const [nx, ny] = [7, 6];
+  let seed = 12345;
+  const cells = Array.from({ length: nx * ny }, () => {
+    seed = (seed * 1103515245 + 12345) % 2 ** 31;
+    return Math.floor((seed / 2 ** 31) * 4);
+  });
+  // A tiny grid keeps Mercator rows even, so pixel rows map to plain cell rows.
+  const grid = { bbox: [0, 0, nx * 1e-4, ny * 1e-4] as Bbox, nx, ny };
+  const raster = smoothClassIds(Uint8Array.from(cells), grid, { width: nx, height: ny }, 4096);
+
+  for (let row = 0; row < raster.height; row++) {
+    for (let column = 0; column < raster.width; column++) {
+      const expected = at(raster, row, column);
+      const actual = classOf(
+        cells,
+        nx,
+        ny,
+        ((column + 0.5) * nx) / raster.width,
+        ((row + 0.5) * ny) / raster.height,
+      );
+      assert.equal(actual, expected, `pixel ${column},${row}`);
+    }
+  }
+});
+
+test("an isolated cell survives at max rounding", () => {
+  const cells = Array.from({ length: 25 }, () => 1);
+  cells[12] = 2;
+
+  assert.equal(classOf(cells, 5, 5, 2.5, 2.5, MAX_ROUNDING), 2);
+});
+
+test("a one cell line survives full rounding", () => {
+  const cells = Array.from({ length: 49 }, (_, cell) => (cell % 7 === 3 ? 2 : 1));
+
+  assert.equal(classOf(cells, 7, 7, 3.5, 3.5, 1), 2);
+  assert.equal(classOf(cells, 7, 7, 3.5, 0.5, 1), 2);
+});
+
+test("a pixel nearest to an empty cell is transparent", () => {
+  assert.equal(classOf([1, 0], 2, 1, 1.4, 0.5), 0);
+  assert.equal(classOf([1, 0], 2, 1, 1.4, 0.5, MAX_ROUNDING), 0);
+});
+
+test("empty cells never win a border", () => {
+  const cells = [1, 0, 0, 0];
+
+  assert.equal(classOf(cells, 2, 2, 0.9, 0.9), 1);
+  assert.equal(classOf(cells, 2, 2, 0.9, 0.9, MAX_ROUNDING), 1);
+});
+
+test("ties go to the nearest cell", () => {
+  assert.equal(classOf([1, 2], 2, 1, 1, 0.5), 2);
+  assert.equal(classOf([1, 2], 2, 1, 0.99, 0.5), 1);
 });

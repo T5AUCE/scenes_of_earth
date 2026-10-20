@@ -235,9 +235,10 @@ export interface LayerContext {
   report(error: unknown): void;
 }
 
-/** A slider under a part's checkbox; its value lasts for the visit only. */
+/** A slider in a layer card or its menu. */
 export interface LayerControl {
   label: string;
+  unit?: string;
   /** A short instruction shown above the slider. */
   hint?: string;
   min: number;
@@ -245,6 +246,21 @@ export interface LayerControl {
   step: number;
   value: number;
   set(value: number): void;
+}
+
+/** The browser's edge choices for a categorical dataset, independent of shared links. */
+export interface EdgeSettings {
+  rounding: number;
+  softnessPx: number;
+  outline: boolean;
+}
+
+/** Controls available only while categorical classes are drawn with WebGL. */
+export interface EdgesMenu {
+  controls: LayerControl[];
+  outline: { readonly value: boolean; set(on: boolean): void };
+  readonly isDefault: boolean;
+  reset(): void;
 }
 
 /** One palette in a layer menu, with the CSS colours of its swatch. */
@@ -282,6 +298,11 @@ export interface LayerMenu {
   readonly palette: string;
   setPalette(name: string): void;
   range?: RangeMenu;
+  readonly edges?: EdgesMenu;
+  /** Explain why optional controls are unavailable, without showing disabled sliders. */
+  readonly edgesNote?: string;
+  /** Notify an open menu when renderer-dependent controls change. */
+  updates?: EventTarget;
 }
 
 /** Own a drawn layer's controls and time axis along with its legend and teardown. */

@@ -15,14 +15,17 @@ const hooks = registerHooks({
   },
 });
 const {
+  DEFAULT_EDGES,
   formatDisplayParams,
   loadStoredPalettes,
+  loadStoredEdges,
   NO_TOKENS,
   rangeDecimals,
   recordMenuChange,
   resolveDisplay,
   setLayerDisplay,
   storePalette,
+  storeEdges,
 } = await import("./display-state.ts").finally(() => hooks.deregister());
 
 const LAYERS = [
@@ -222,3 +225,53 @@ function useStorage(overrides: object = {}) {
   });
   return items;
 }
+
+test("edge settings default to quarter rounding with no softness or outline", () => {
+  useStorage();
+
+  assert.deepEqual(loadStoredEdges("esa_worldcover"), {
+    rounding: 0.25,
+    softnessPx: 0,
+    outline: false,
+  });
+});
+
+test("edges persist by dataset independently of palettes and share links", () => {
+  useStorage();
+  const edges = { rounding: 0.6, softnessPx: 1.5, outline: true };
+  storePalette("esa_worldcover", "esa");
+  storeEdges("esa_worldcover", edges);
+  const { display } = resolveDisplay(LAYERS, NO_TOKENS, loadStoredPalettes());
+
+  assert.deepEqual(loadStoredEdges("esa_worldcover"), edges);
+  assert.deepEqual(loadStoredEdges("other"), DEFAULT_EDGES);
+  assert.deepEqual(loadStoredPalettes(), { esa_worldcover: "esa" });
+  assert.equal(formatDisplayParams(display, LAYERS).includes("rounding"), false);
+  assert.equal(formatDisplayParams(display, LAYERS).includes("edges"), false);
+  storeEdges("esa_worldcover", { ...DEFAULT_EDGES });
+  assert.deepEqual(loadStoredEdges("esa_worldcover"), DEFAULT_EDGES);
+});
+
+test("invalid or blocked edge storage uses defaults without preventing changes", () => {
+  const items = useStorage();
+  for (const value of [
+    null,
+    [],
+    { rounding: 0.65, softnessPx: 0, outline: false },
+    { rounding: 0.25, softnessPx: -1, outline: false },
+    { rounding: 0.25, softnessPx: 2, outline: false },
+    { rounding: "0.25", softnessPx: 0, outline: false },
+    { rounding: 0.25, softnessPx: 0, outline: "false" },
+  ]) {
+    items.set("soe.edges.v1", JSON.stringify({ esa_worldcover: value }));
+    assert.deepEqual(loadStoredEdges("esa_worldcover"), DEFAULT_EDGES);
+  }
+  items.set("soe.edges.v1", "broken JSON");
+  assert.deepEqual(loadStoredEdges("esa_worldcover"), DEFAULT_EDGES);
+  useStorage({
+    getItem: () => { throw new Error("blocked"); },
+    setItem: () => { throw new Error("blocked"); },
+  });
+  assert.deepEqual(loadStoredEdges("esa_worldcover"), DEFAULT_EDGES);
+  assert.doesNotThrow(() => storeEdges("esa_worldcover", { ...DEFAULT_EDGES }));
+});

@@ -1,9 +1,14 @@
 /** Resolves areas and gets finished scene bundles through the app's API, building if needed. */
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { pickArea } from "./measure.mjs";
 
 const BUILD_TIMEOUT_MS = 10 * 60 * 1000;
 const BUILD_POLL_MS = 1000;
 const RETRY_AFTER_FALLBACK_SECS = 5;
+const LOCAL_SCENES_DIR = fileURLToPath(new URL("../../../data/scenes/", import.meta.url));
 
 /**
  * Returns the scene id of each spot. Spots with the same request share one build, and a bundle
@@ -15,10 +20,38 @@ export async function ensureScenes(appUrl, spots) {
     const key = requestKey(spot);
     if (sceneIds.has(key)) continue;
 
-    sceneIds.set(key, await buildScene(appUrl, await sceneBody(appUrl, spot)));
+    const existing = process.env.SOE_TRIAL_EXISTING_ONLY === "1";
+    const id = existing
+      ? existingScene(spot)
+      : await buildScene(appUrl, await sceneBody(appUrl, spot));
+    sceneIds.set(key, id);
   }
 
   return spots.map((spot) => sceneIds.get(requestKey(spot)));
+}
+
+function existingScene(spot) {
+  const directory = process.env.SOE_SCENES_DIR ?? LOCAL_SCENES_DIR;
+  const matches = [];
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !/^[a-f0-9]{20}$/.test(entry.name)) continue;
+
+    const file = path.join(directory, entry.name, "scene.json");
+    if (!fs.existsSync(file)) continue;
+
+    const scene = JSON.parse(fs.readFileSync(file, "utf8"));
+    const boundary = scene.area.boundary;
+    const sameArea = boundary?.id === spot.area || boundary?.name === spot.area;
+    const hasLayers = spot.layers.every((id) => scene.layers.some((layer) => layer.id === id));
+    const samePeriod = (!spot.start || scene.period?.start.startsWith(spot.start))
+      && (!spot.end || scene.period?.end.startsWith(spot.end));
+    if (sameArea && hasLayers && samePeriod) matches.push(scene);
+  }
+  matches.sort((first, second) => first.layers.length - second.layers.length
+    || second.created.localeCompare(first.created));
+  if (!matches.length) throw new Error(`no local built scene for ${spot.area}`);
+
+  return matches[0].id;
 }
 
 async function sceneBody(appUrl, spot) {

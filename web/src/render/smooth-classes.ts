@@ -17,7 +17,7 @@ const MAX_SMOOTH_SCALE = 4;
 // At about 14 ns per pixel on a desktop core, this keeps the first paint near 100 ms.
 const MAX_SMOOTH_PIXELS_PX = 8_000_000;
 const CORNER_COUNT = 4;
-const OPAQUE = 255;
+const KERNEL_SIZE = 4;
 // Weights of different classes that differ by less than this are treated as a tie.
 const TIE_TOLERANCE = 1e-6;
 
@@ -93,6 +93,71 @@ export function smoothClassIds(
     }
   }
   return { width, height, ids };
+}
+
+/**
+ * Find the displayed GPU class at a point in cell units from the grid's north-west corner.
+ * Cell i spans i to i + 1. Bilinear weights blend towards a cubic B-spline by `rounding`
+ * over the surrounding 4 x 4 cells, matching the fragment shader. Outside samples repeat edge cells.
+ */
+export function classAt(
+  cellIds: Uint8Array,
+  nx: number,
+  ny: number,
+  column: number,
+  row: number,
+  rounding: number,
+) {
+  const [cellColumn, cellRow] = [column - 0.5, row - 0.5];
+  const [baseColumn, baseRow] = [Math.floor(cellColumn), Math.floor(cellRow)];
+  const [columnFraction, rowFraction] = [cellColumn - baseColumn, cellRow - baseRow];
+  const idAt = (columnIndex: number, rowIndex: number) => {
+    const clampedColumn = Math.min(nx - 1, Math.max(0, columnIndex));
+    const clampedRow = Math.min(ny - 1, Math.max(0, rowIndex));
+    return cellIds[clampedRow * nx + clampedColumn];
+  };
+
+  const nearest = idAt(
+    baseColumn + (columnFraction >= 0.5 ? 1 : 0),
+    baseRow + (rowFraction >= 0.5 ? 1 : 0),
+  );
+  if (nearest === 0) return 0;
+
+  const columnWeights = kernelWeights(columnFraction, rounding);
+  const rowWeights = kernelWeights(rowFraction, rounding);
+  const weightByClass = new Map<number, number>();
+  for (let offsetRow = 0; offsetRow < KERNEL_SIZE; offsetRow++) {
+    for (let offsetColumn = 0; offsetColumn < KERNEL_SIZE; offsetColumn++) {
+      const id = idAt(baseColumn + offsetColumn - 1, baseRow + offsetRow - 1);
+      const weight = columnWeights[offsetColumn] * rowWeights[offsetRow];
+      weightByClass.set(id, (weightByClass.get(id) ?? 0) + weight);
+    }
+  }
+
+  let best = nearest;
+  let bestWeight = weightByClass.get(nearest)!;
+  for (const [id, weight] of weightByClass) {
+    if (id === 0 || id === best) continue;
+
+    if (weight > bestWeight + TIE_TOLERANCE) {
+      best = id;
+      bestWeight = weight;
+    }
+  }
+  return best;
+}
+
+function kernelWeights(fraction: number, rounding: number) {
+  const cube = fraction ** 3;
+  const square = fraction ** 2;
+  const bilinear = [0, 1 - fraction, fraction, 0];
+  const bSpline = [
+    (1 - fraction) ** 3 / 6,
+    (3 * cube - 6 * square + 4) / 6,
+    (-3 * cube + 3 * square + 3 * fraction + 1) / 6,
+    cube / 6,
+  ];
+  return bilinear.map((weight, index) => weight + rounding * (bSpline[index] - weight));
 }
 
 function strongestClass(corner: Uint8Array, weight: Float64Array, nearest: number) {

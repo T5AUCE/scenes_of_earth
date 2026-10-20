@@ -12,6 +12,7 @@ import { installCache, isFresh, readEntry, writeEntry } from "./cache.mjs";
 import {
   classifyFailure,
   contourLegend,
+  frameStats,
   isSettled,
   nearestPx,
   pickArea,
@@ -30,6 +31,17 @@ test("nearestPx measures to the closest point of a segment, not only its ends", 
 
   assert.equal(nearestPx([line], [50, 0]), 10);
   assert.equal(nearestPx([line], [130, 10]), 30);
+});
+
+test("frame_stats_report_median_and_p95", () => {
+  const deltas = Array.from({ length: 100 }, (_, index) => 100 - index);
+
+  assert.deepEqual(frameStats(deltas), { frame_ms_p50: 50, frame_ms_p95: 95 });
+  assert.deepEqual(frameStats([NaN, 0, -1, Infinity]), {
+    frame_ms_p50: null,
+    frame_ms_p95: null,
+  });
+  assert.deepEqual(frameStats([8.126]), { frame_ms_p50: 8.13, frame_ms_p95: 8.13 });
 });
 
 test("nearestPx picks the closest of several lines and tolerates single points", () => {
