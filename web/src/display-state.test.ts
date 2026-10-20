@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { afterEach, test } from "node:test";
 
+import { BLEND } from "./layers/allocate.ts";
 import type { DisplayTokens, LayerDoc } from "./types.ts";
 
 const stateUrl = new URL("./display-state.ts", import.meta.url).href;
@@ -15,10 +16,12 @@ const hooks = registerHooks({
   },
 });
 const {
+  applyColourAction,
   DEFAULT_EDGES,
   formatDisplayParams,
   loadStoredPalettes,
   loadStoredEdges,
+  loadStoredPick,
   NO_TOKENS,
   rangeDecimals,
   recordMenuChange,
@@ -26,25 +29,37 @@ const {
   setLayerDisplay,
   storePalette,
   storeEdges,
+  storePick,
 } = await import("./display-state.ts").finally(() => hooks.deregister());
 
 const LAYERS = [
   {
     id: "chirps_monthly",
-    style: { kind: "field", palette: "ink-blue" },
+    style: {
+      kind: "field",
+      encodings: ["ramp", "dots", "isolines", "chroma"],
+      palette: "ink-blue",
+    },
     arrays: { value: { scale_factor: 0.1 } },
   },
   {
     id: "esa_worldcover",
-    style: { kind: "categorical", palette: "painted" },
+    style: { kind: "categorical", encodings: ["fill"], palette: "painted" },
     arrays: {},
   },
   {
     id: "terrain",
-    style: { kind: "terrain", parts: ["contours"] },
+    style: { kind: "terrain", encodings: ["shade"], parts: ["contours"] },
     arrays: {},
   },
 ] as unknown as LayerDoc[];
+
+const TEMPERATURE = {
+  id: "era5land_temperature",
+  style: { kind: "field", encodings: ["ramp", "isolines", "warmth"], palette: "climate" },
+  arrays: { value: { scale_factor: 0.1 } },
+} as unknown as LayerDoc;
+const COLOUR_LAYERS = [...LAYERS, TEMPERATURE];
 const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 
 afterEach(() => {
@@ -68,9 +83,139 @@ test("opening a link saves nothing", () => {
   const writes: string[] = [];
   useStorage({ setItem: (key: string) => writes.push(key) });
 
-  resolveDisplay(LAYERS, { pal: "chirps_monthly:batlow", range: "", off: "terrain" }, {});
+  const tokens = { pal: "chirps_monthly:batlow", range: "", off: "terrain", colour: "" };
+  resolveDisplay(LAYERS, tokens, {});
 
   assert.deepEqual(writes, []);
+});
+
+test("link colour beats the stored pick, which beats auto", () => {
+  const linked = resolveDisplay(
+    COLOUR_LAYERS,
+    { ...NO_TOKENS, colour: "chirps_monthly" },
+    {},
+    "era5land_temperature",
+  );
+  assert.equal(linked.display.colour, "chirps_monthly");
+
+  const remembered = resolveDisplay(COLOUR_LAYERS, NO_TOKENS, {}, "era5land_temperature");
+  assert.equal(remembered.display.colour, "era5land_temperature");
+
+  const auto = resolveDisplay(COLOUR_LAYERS, NO_TOKENS, {});
+  assert.equal(auto.display.colour, null);
+  assert.ok(
+    formatDisplayParams(auto.display, COLOUR_LAYERS).includes("&colour=era5land_temperature"),
+  );
+});
+
+test("a stored pick absent from the scene is ignored", () => {
+  const missing = resolveDisplay(COLOUR_LAYERS, NO_TOKENS, {}, "nowhere");
+  const noPair = resolveDisplay(LAYERS, NO_TOKENS, {}, BLEND);
+
+  assert.equal(missing.display.colour, null);
+  assert.equal(noPair.display.colour, null);
+});
+
+test("an old link that switches both blend halves off ignores a stored blend", () => {
+  const pair = [LAYERS[0], TEMPERATURE];
+  const { display } = resolveDisplay(
+    pair,
+    { ...NO_TOKENS, off: "chirps_monthly,era5land_temperature" },
+    {},
+    BLEND,
+  );
+
+  assert.equal(display.colour, null);
+  assert.deepEqual([...display.off], ["chirps_monthly", "era5land_temperature"]);
+  assert.equal(formatDisplayParams(display, pair).includes("colour="), false);
+});
+
+test("picking blend turns both halves off", () => {
+  const next = applyColourAction(
+    { pick: null, off: new Set() },
+    { kind: "pick", unit: BLEND },
+    COLOUR_LAYERS,
+  );
+
+  assert.equal(next.pick, BLEND);
+  assert.deepEqual([...next.off], ["chirps_monthly", "era5land_temperature"]);
+});
+
+test("switching blend off restores both halves", () => {
+  const next = applyColourAction(
+    { pick: BLEND, off: new Set(["chirps_monthly", "era5land_temperature"]) },
+    { kind: "toggle", unit: BLEND, on: false },
+    COLOUR_LAYERS,
+  );
+
+  assert.equal(next.pick, null);
+  assert.deepEqual([...next.off], []);
+});
+
+test("turning a half on ends the blend and leaves the other half off", () => {
+  const next = applyColourAction(
+    { pick: BLEND, off: new Set(["chirps_monthly", "era5land_temperature"]) },
+    { kind: "toggle", unit: "era5land_temperature", on: true },
+    COLOUR_LAYERS,
+  );
+
+  assert.equal(next.pick, "era5land_temperature");
+  assert.deepEqual([...next.off], ["chirps_monthly"]);
+});
+
+test("the effective owner is written to the link", () => {
+  const auto = resolveDisplay(COLOUR_LAYERS, NO_TOKENS, {});
+  const state = { pick: auto.display.colour, off: auto.display.off };
+  const picked = applyColourAction(state, { kind: "pick", unit: "chirps_monthly" }, COLOUR_LAYERS);
+  const display = { ...auto.display, colour: picked.pick, off: new Set(picked.off) };
+
+  assert.ok(formatDisplayParams(display, COLOUR_LAYERS).endsWith("&colour=chirps_monthly"));
+
+  const single = resolveDisplay([TEMPERATURE], NO_TOKENS, {});
+  assert.equal(formatDisplayParams(single.display, [TEMPERATURE]).includes("colour="), false);
+});
+
+test("a blend link drops the halves from off and restores them on open", () => {
+  const { display } = resolveDisplay(COLOUR_LAYERS, { ...NO_TOKENS, colour: BLEND }, {});
+  const text = formatDisplayParams(display, COLOUR_LAYERS);
+
+  assert.equal(display.colour, BLEND);
+  assert.deepEqual([...display.off], ["chirps_monthly", "era5land_temperature"]);
+  assert.ok(text.endsWith("&colour=blend"));
+  assert.equal(text.includes("off="), false);
+
+  const pair = [LAYERS[0], TEMPERATURE];
+  const pairOnly = resolveDisplay(pair, { ...NO_TOKENS, colour: BLEND }, {});
+  assert.ok(formatDisplayParams(pairOnly.display, pair).endsWith("&colour=blend"));
+});
+
+test("a blend link without a pair is dropped with the note", () => {
+  const { display, dropped } = resolveDisplay(LAYERS, { ...NO_TOKENS, colour: BLEND }, {});
+
+  assert.equal(dropped, true);
+  assert.equal(display.colour, null);
+});
+
+test("opening a colour link saves no pick", () => {
+  const writes: string[] = [];
+  useStorage({
+    setItem: (key: string) => writes.push(key),
+    removeItem: (key: string) => writes.push(key),
+  });
+
+  resolveDisplay(COLOUR_LAYERS, { ...NO_TOKENS, colour: "chirps_monthly" }, {}, "nowhere");
+
+  assert.deepEqual(writes, []);
+});
+
+test("the colour pick is remembered by unit", () => {
+  useStorage();
+
+  storePick("era5land_temperature");
+  assert.equal(loadStoredPick(), "era5land_temperature");
+
+  storePick(null);
+  assert.equal(loadStoredPick(), null);
 });
 
 test("storage errors fall back to the defaults", () => {
@@ -103,6 +248,7 @@ test("unknown layers, palettes and reversed ranges are dropped", () => {
     pal: "nowhere:batlow,chirps_monthly:nope,chirps_monthly:custom-12345g-000000,terrain:batlow,x",
     range: "chirps_monthly:10:5,chirps_monthly:a:b,chirps_monthly::9,esa_worldcover:0:9,t:1:2",
     off: "chirps_monthly,terrain.nothing",
+    colour: "",
   };
   const { display, dropped } = resolveDisplay(LAYERS, tokens, {});
 
@@ -127,6 +273,7 @@ test("the last entry for a layer wins and ranges are rounded to the data's preci
     pal: "chirps_monthly:batlow,chirps_monthly:cividis",
     range: "chirps_monthly:0.04:250.26",
     off: "",
+    colour: "",
   };
   const { display } = resolveDisplay(LAYERS, tokens, {});
 
@@ -138,11 +285,13 @@ test("every layer with a menu names its palette but ranges and off parts only wh
     pal: "chirps_monthly:ink-blue,esa_worldcover:painted",
     range: "",
     off: "",
+    colour: "",
   }, {});
 
   assert.equal(
     formatDisplayParams(display, LAYERS),
-    "&pal=chirps_monthly:ink-blue,esa_worldcover:painted,terrain:brown",
+    "&pal=chirps_monthly:ink-blue,esa_worldcover:painted,terrain:brown"
+      + "&colour=chirps_monthly",
   );
 });
 
@@ -151,6 +300,7 @@ test("palettes, ranges and off parts round trip through the link text", () => {
     pal: "chirps_monthly:custom-1a2b3c-88cc44,esa_worldcover:esa,terrain:grey",
     range: "chirps_monthly:0:250",
     off: "terrain.contours,esa_worldcover",
+    colour: "",
   };
   const { display } = resolveDisplay(LAYERS, tokens, {});
   const text = formatDisplayParams(display, LAYERS);
@@ -158,7 +308,8 @@ test("palettes, ranges and off parts round trip through the link text", () => {
   assert.equal(
     text,
     "&pal=chirps_monthly:custom-1a2b3c-88cc44,esa_worldcover:esa,terrain:grey"
-      + "&range=chirps_monthly:0:250&off=esa_worldcover,terrain.contours",
+      + "&range=chirps_monthly:0:250&off=esa_worldcover,terrain.contours"
+      + "&colour=chirps_monthly",
   );
 });
 
@@ -184,6 +335,23 @@ test("editing only the range of a link-opened scene writes no storage", () => {
 
   assert.equal(items.size, 0);
   assert.deepEqual(display.layers.chirps_monthly, { palette: "cividis", range: [0, 90] });
+});
+
+test("a menu range change keeps the colour pick", () => {
+  useStorage();
+  const tokens = { ...NO_TOKENS, colour: "chirps_monthly" };
+  const { display } = resolveDisplay(COLOUR_LAYERS, tokens, {});
+  const menu = {
+    palette: "ink-blue",
+    defaultPalette: "ink-blue",
+    range: { value: [0, 90] as [number, number] },
+  };
+
+  recordMenuChange(display, "chirps_monthly", menu, "range");
+
+  assert.equal(display.colour, "chirps_monthly");
+  assert.deepEqual(display.layers.chirps_monthly, { range: [0, 90] });
+  assert.ok(formatDisplayParams(display, COLOUR_LAYERS).endsWith("&colour=chirps_monthly"));
 });
 
 test("choosing a palette remembers it and choosing the default forgets it", () => {
@@ -220,6 +388,7 @@ function useStorage(overrides: object = {}) {
     localStorage: {
       getItem: (key: string) => items.get(key) ?? null,
       setItem: (key: string, value: string) => items.set(key, value),
+      removeItem: (key: string) => items.delete(key),
       ...overrides,
     },
   });

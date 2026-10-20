@@ -10,8 +10,9 @@
  * the grid row of the texture's first row. `uPalette` is a 256 x 1 colour table by class id.
  * `uSmooth` blends competing classes from the kernel instead of painting the nearest cell.
  * `uRounding` blends bilinear weights towards a cubic B-spline. `uSoftnessCells` is the width of
- * the colour blend between competing classes in grid cells. `uOutline` switches the faint ink
- * line between them and `uOpacity` scales the result.
+ * the colour blend between competing classes in grid cells. `uOutline` enables the border while
+ * `uOutlineStrength` controls its ink weight. `uFillOpacity` controls the class fill while
+ * `uOpacity` scales the complete result.
  */
 export const CLASS_FIELD_VERTEX = `#version 300 es
 in vec2 aCorner;
@@ -42,13 +43,14 @@ uniform bool uSmooth;
 uniform float uRounding;
 uniform float uSoftnessCells;
 uniform bool uOutline;
+uniform float uOutlineStrength;
+uniform float uFillOpacity;
 uniform float uOpacity;
 out vec4 fragColor;
 
 const float MIN_GRADIENT = 1e-6;
 const float MIN_EDGE_WIDTH_PX = 1.0;
 const vec3 INK = vec3(59.0, 48.0, 38.0) / 255.0;
-const float OUTLINE_STRENGTH = 0.25;
 const float OUTLINE_WIDTH_PX = 0.75;
 const int KERNEL_SIZE = 4;
 const float FULL_SUPPORT_WEIGHT = 0.1;
@@ -162,7 +164,8 @@ void main() {
   uint nearest = cellId(base + ivec2(step(0.5, fraction)));
   if (nearest == 0u) discard;
   if (!uSmooth) {
-    fragColor = vec4(classColor(nearest) * uOpacity, uOpacity);
+    float fill = uFillOpacity * uOpacity;
+    fragColor = vec4(classColor(nearest) * fill, fill);
     return;
   }
 
@@ -217,9 +220,9 @@ void main() {
   totalInfluence = max(totalInfluence, MIN_GRADIENT);
   color /= totalInfluence;
 
+  float ink = 0.0;
   if (uOutline) {
     // A pair is weighted by how far both classes lead the rest so the ink is continuous.
-    float ink = 0.0;
     for (int index = 0; index < classCount; index++) {
       if (classIds[index] == 0u) continue;
 
@@ -253,9 +256,12 @@ void main() {
       }
     }
     ink = min(ink, 1.0);
-    color = mix(color, INK, ink * OUTLINE_STRENGTH);
   }
-  fragColor = vec4(color * uOpacity, uOpacity);
+  // Premultiplied output keeps the border's ink alpha independent of the fill.
+  float inkAlpha = ink * uOutlineStrength;
+  color = mix(color * uFillOpacity, INK, inkAlpha);
+  float alpha = max(uFillOpacity, inkAlpha);
+  fragColor = vec4(color * uOpacity, alpha * uOpacity);
 }
 `;
 
@@ -264,6 +270,10 @@ const MIN_MIRROR_GRADIENT = 1e-6;
 const MIN_EDGE_WIDTH_PX = 1;
 const FULL_SUPPORT_WEIGHT = 0.1;
 const OUTLINE_WIDTH_PX = 0.75;
+/** The faint outline drawn while a categorical layer holds colour. */
+export const FILL_OUTLINE_STRENGTH = 0.25;
+/** The stronger outline that becomes the layer's only ink when it draws borders alone. */
+export const EDGES_OUTLINE_STRENGTH = 0.6;
 
 /** The distances and coverage that the fragment shader derives from one class gap. */
 export interface EdgeCoverage {
@@ -324,6 +334,37 @@ export interface ClassFieldResult {
   weights: { id: number; weight: number }[];
   /** Outline ink in [0, 1] before the outline strength scales it. */
   outline: number;
+}
+
+/** How the class fill and the outline ink are weighted in the shader's final write. */
+export interface ClassFieldAppearance {
+  /** Opacity of the class fill; zero draws borders only. */
+  fillOpacity: number;
+  /** Ink weight of the outline; edges mode uses a stronger value than fill mode. */
+  outlineStrength: number;
+  /** Whether the outline is drawn at all. */
+  outline: boolean;
+}
+
+/** The premultiplied fill and ink alphas before the layer's `uOpacity` scales them. */
+export interface ClassFieldAlpha {
+  fill: number;
+  ink: number;
+  alpha: number;
+}
+
+/**
+ * Apply the fragment shader's fill and outline weights to a sampled fragment so behaviour can be
+ * checked in Node.
+ */
+export function classFieldAlpha(
+  result: ClassFieldResult,
+  appearance: ClassFieldAppearance,
+): ClassFieldAlpha {
+  if (result.discarded) return { fill: 0, ink: 0, alpha: 0 };
+
+  const ink = appearance.outline ? result.outline * appearance.outlineStrength : 0;
+  return { fill: appearance.fillOpacity, ink, alpha: Math.max(appearance.fillOpacity, ink) };
 }
 
 /**

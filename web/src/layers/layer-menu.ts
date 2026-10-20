@@ -11,6 +11,9 @@ import type { LayerControl, LayerMenu, RangeMenu } from "../types";
 
 const MENU_GAP_PX = 8;
 
+/** The note a menu shows while its layer draws a fallback, since the palette is not visible. */
+export const FALLBACK_PALETTE_NOTE = "Colours apply while this layer holds colour.";
+
 /** What a menu change touched, so the caller can remember a palette but not a range. */
 export type MenuChange = "palette" | "range";
 
@@ -187,6 +190,7 @@ function paletteSection(
 ) {
   const section = makeHtmlElement("fieldset");
   makeHtmlElement("legend", menu.heading, section);
+  if (menu.paletteNote) makeHtmlElement("div", menu.paletteNote, section).className = "option-note";
 
   for (const { name, label, colors } of menu.palettes) {
     const suffix = name === menu.defaultPalette ? " (default)" : "";

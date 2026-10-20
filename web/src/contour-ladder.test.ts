@@ -389,6 +389,7 @@ function layerContext(map: TestMap): LayerContext {
       stats: FIJI,
     } as LayerContext["layer"],
     shift: 0,
+    slots: { fill: "places", shade: "places", marks: "places", lines: "places" },
     beforeId: "places",
     report: (error) => { throw error; },
   };

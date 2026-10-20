@@ -7,19 +7,23 @@ import {
   MAX_SOFTNESS_CELLS,
   storeEdges,
 } from "../display-state";
-import { createClassFieldLayer } from "../gpu/class-field-layer";
+import { createClassFieldLayer, type ClassFieldMode } from "../gpu/class-field-layer";
 import { classLegend } from "../legend";
 import { removeLayerAndSource } from "../map";
 import { CLASS_PALETTE_OPTIONS, classColors, classPalette } from "../render/palettes";
 import { cellClassIds } from "../render/smooth-classes";
 import type { EdgeSettings, EdgesMenu, LayerContext, LayerMenu, LayerView } from "../types";
+import type { Draw } from "./allocate";
 import { createImagePainter } from "./categorical-image";
+import { FALLBACK_PALETTE_NOTE } from "./layer-menu";
 
 const CATEGORICAL_OPACITY = 0.8;
 const ROUNDING_STEP = 0.05;
 const SOFTNESS_STEP_CELLS = 0.05;
 const SMOOTH_NOTE = "Edges are drawn smoothly from per-cell classes. No data is added.";
 const IMAGE_EDGES_NOTE = "Edge options need WebGL drawing.";
+const IMAGE_OUTLINES_NOTE = "Outlines need WebGL drawing";
+const EDGES_LEGEND = "Class borders only. Show in colour to see the classes.";
 
 interface DrawPosition {
   beforeId: string | undefined;
@@ -54,9 +58,12 @@ class CategoricalView implements LayerView {
   private colors;
   private smooth = true;
   private edges: EdgeSettings;
+  private mode: ClassFieldMode = "fill";
+  private isOutlinesReported = false;
   private alive = true;
   private readonly context: LayerContext;
   private restorePosition: DrawPosition | null = null;
+  private restoreSlot: ClassFieldMode | null = null;
 
   constructor(context: LayerContext) {
     this.context = context;
@@ -172,11 +179,14 @@ class CategoricalView implements LayerView {
       get edgesNote() {
         return view.image ? IMAGE_EDGES_NOTE : undefined;
       },
+      get paletteNote() {
+        return view.mode === "edges" ? FALLBACK_PALETTE_NOTE : undefined;
+      },
     };
   }
 
   private mount() {
-    const { map, beforeId } = this.context;
+    const { map, slots } = this.context;
     if (gpuDisabled() || map.getProjection()?.type === "globe") {
       this.useImage();
       return;
@@ -186,7 +196,7 @@ class CategoricalView implements LayerView {
     // Capture removes the custom layer before MapLibre serializes and destroys the lost style.
     canvas.addEventListener("webglcontextlost", this.onContextLost, true);
     canvas.addEventListener("webglcontextrestored", this.onContextRestored);
-    map.addLayer(this.gpu.layer, beforeId);
+    map.addLayer(this.gpu.layer, slots.fill);
     document.body.dataset.landcoverRenderer = "gpu";
     this.repaint();
   }
@@ -196,6 +206,7 @@ class CategoricalView implements LayerView {
     if (this.image || !map.getLayer(this.id)) return;
 
     this.restorePosition = this.drawPosition();
+    this.restoreSlot = null;
     map.removeLayer(this.id);
   };
 
@@ -212,21 +223,24 @@ class CategoricalView implements LayerView {
 
     const { map } = this.context;
     const position = this.restorePosition;
+    const slot = this.restoreSlot;
     this.restorePosition = null;
+    this.restoreSlot = null;
     map.addLayer(this.gpu.layer, position.beforeId);
     this.applyPosition(position);
+    if (slot) this.moveToSlot(slot);
     map.triggerRepaint();
   };
 
   private drawPosition(): DrawPosition {
-    const { map, beforeId } = this.context;
+    const { map, slots } = this.context;
     const layers = map.getLayersOrder();
     const index = layers.indexOf(this.id);
     const layer = map.getLayer(this.id);
     const hidden = layer && map.getLayoutProperty(this.id, "visibility") === "none";
 
     return {
-      beforeId: index < 0 ? beforeId : layers[index + 1],
+      beforeId: index < 0 ? slots.fill : layers[index + 1],
       visibility: hidden ? "none" : "visible",
       minzoom: layer?.minzoom ?? 0,
       maxzoom: layer?.maxzoom ?? map.getMaxZoom(),
@@ -255,12 +269,36 @@ class CategoricalView implements LayerView {
         opacity: CATEGORICAL_OPACITY,
       });
       this.applyPosition(position);
+      if (this.mode === "edges") {
+        this.reportOutlines();
+        this.setVisible(false);
+      }
       document.body.dataset.landcoverRenderer = "image";
       this.repaint();
       this.menuUpdates.dispatchEvent(new Event("change"));
     } catch (error) {
       report(error);
     }
+  }
+
+  private reportOutlines() {
+    if (this.isOutlinesReported) return;
+
+    this.isOutlinesReported = true;
+    this.context.report(new Error(IMAGE_OUTLINES_NOTE));
+  }
+
+  private setVisible(visible: boolean) {
+    const visibility = visible ? "visible" : "none";
+    if (this.restorePosition) {
+      this.restorePosition = { ...this.restorePosition, visibility };
+      if (!visible) this.restoreSlot = null;
+      return;
+    }
+
+    const { map } = this.context;
+    if (!map.getLayer(this.id)) return;
+    map.setLayoutProperty(this.id, "visibility", visibility);
   }
 
   private repaint() {
@@ -271,7 +309,11 @@ class CategoricalView implements LayerView {
       this.gpu.setColors(colors);
       this.gpu.setEdges({ smooth: this.smooth, ...this.edges });
     }
-    this.legendBox.replaceChildren(classLegend(this.classes, this.present, this.colors));
+    this.legendBox.replaceChildren(
+      this.mode === "edges"
+        ? edgesLegend()
+        : classLegend(this.classes, this.present, this.colors),
+    );
   }
 
   private async load() {
@@ -288,6 +330,38 @@ class CategoricalView implements LayerView {
   }
 
   setTime() {}
+
+  show(draw: Draw | null) {
+    if (draw !== "colour" && draw !== "edges") {
+      this.setVisible(false);
+      return;
+    }
+    if (draw === "edges" && this.image && !this.image.canDrawEdges) {
+      this.reportOutlines();
+      this.setVisible(false);
+      return;
+    }
+
+    this.mode = draw === "colour" ? "fill" : "edges";
+    if (!this.image) this.gpu.setMode(this.mode);
+    this.moveToSlot(this.mode);
+    this.setVisible(true);
+    this.repaint();
+    this.menuUpdates.dispatchEvent(new Event("change"));
+  }
+
+  private moveToSlot(mode: ClassFieldMode) {
+    if (this.restorePosition) {
+      this.restoreSlot = mode;
+      return;
+    }
+
+    const { map } = this.context;
+    if (!map.getLayer(this.id)) return;
+
+    const { slots } = this.context;
+    map.moveLayer(this.id, mode === "fill" ? slots.fill : slots.lines);
+  }
 
   legend() {
     return this.legendBox;
@@ -311,4 +385,10 @@ function gpuDisabled() {
   } catch {
     return false;
   }
+}
+
+function edgesLegend() {
+  const element = document.createElement("div");
+  element.textContent = EDGES_LEGEND;
+  return element;
 }

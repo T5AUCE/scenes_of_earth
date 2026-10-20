@@ -46,7 +46,12 @@ export function routeFor(search: string, state: { panel?: string } | null): Rout
 // Repeated parameters join into one list, so the last entry for a layer wins.
 function displayTokens(parameters: URLSearchParams): DisplayTokens {
   const joined = (key: string) => parameters.getAll(key).join(",");
-  return { pal: joined("pal"), range: joined("range"), off: joined("off") };
+  return {
+    pal: joined("pal"),
+    range: joined("range"),
+    off: joined("off"),
+    colour: joined("colour"),
+  };
 }
 
 /** A year, month or day in the link selects the first step that starts in it. */

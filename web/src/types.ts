@@ -2,6 +2,7 @@ import type {} from "geojson";
 import type { Map as MapLibreMap } from "maplibre-gl";
 
 import type { Store } from "./data";
+import type { Draw } from "./layers/allocate";
 import type { Coordinates } from "./render/mercator";
 
 export interface Health {
@@ -214,6 +215,7 @@ export interface DisplayTokens {
   pal: string;
   range: string;
   off: string;
+  colour: string; // the picked owner, a layer id or blend
 }
 
 /** A layer's display choices that differ from the bundle; a missing field means its default. */
@@ -222,12 +224,26 @@ export interface LayerDisplay {
   range?: [number, number];
 }
 
+/** Ids of the hidden map layers that fix where each kind of drawing sits, from bottom to top. */
+export interface DrawSlots {
+  /** Colour fills go below this anchor, so the shade covers them. */
+  fill: string;
+  /** The relief shade goes below this anchor. */
+  shade: string;
+  /** Dots go below this anchor, above the shade. */
+  marks: string;
+  /** Lines and outlines go below this anchor, above the dots. */
+  lines: string;
+}
+
 /** What a layer renderer gets to draw one layer. */
 export interface LayerContext {
   map: MapLibreMap;
   store: Promise<Store>;
   layer: LayerDoc;
   shift: number; // longitude offset of the scene's world copy, the same for all its layers
+  slots: DrawSlots;
+  /** The anchor of the lines slot, for line layers that need no other slot. */
   beforeId: string | undefined;
   /** The viewer's choices for this layer; absent means the bundle's defaults. */
   display?: LayerDisplay;
@@ -301,6 +317,8 @@ export interface LayerMenu {
   readonly edges?: EdgesMenu;
   /** Explain why optional controls are unavailable, without showing disabled sliders. */
   readonly edgesNote?: string;
+  /** Says that the palette applies only while the layer holds colour, empty while it does. */
+  readonly paletteNote?: string;
   /** Notify an open menu when renderer-dependent controls change. */
   updates?: EventTarget;
 }
@@ -313,6 +331,13 @@ export interface LayerView {
   menu?: LayerMenu;
   ready?: Promise<void>; // rejects when the layer's data cannot be read
   setTime(time: string): void;
+  /**
+   * Draw the layer's first part as the allocation says, or stop drawing for null. A view without
+   * it lets its parts' checkboxes switch their map layers.
+   */
+  show?(draw: Draw | null): void;
+  /** Soften the shade while a layer holds colour, so the colour stays readable under it. */
+  setColourUnder?(isUnder: boolean): void;
   legend(): HTMLElement | null;
   destroy(): void;
 }

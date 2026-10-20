@@ -5,6 +5,7 @@ import {
   type LayerSpecification,
   MercatorCoordinate,
   type PaddingOptions,
+  ScaleControl,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
@@ -57,6 +58,13 @@ export function createMap(container: string): MapLibreMap {
   // Bottom right belongs to the scene column.
   map.addControl(new AttributionControl({ compact: false }), "bottom-left");
   return map;
+}
+
+/** Adds a metric scale bar, which tells how far apart dots sit, and returns how to remove it. */
+export function showScaleBar(map: MapLibreMap) {
+  const control = new ScaleControl({ unit: "metric" });
+  map.addControl(control, "bottom-left");
+  return () => map.removeControl(control);
 }
 
 /** Moves the camera to fit the bbox, leaving room for the side panel. */

@@ -5,8 +5,12 @@ import { test } from "node:test";
 import type { CustomRenderMethodInput, Map as MapLibreMap } from "maplibre-gl";
 
 import {
+  classFieldAlpha,
+  EDGES_OUTLINE_STRENGTH,
   edgeCoverage,
+  FILL_OUTLINE_STRENGTH,
   sampleClassField,
+  type ClassFieldAppearance,
   type ClassFieldResult,
 } from "./class-field-shaders.ts";
 import type { LayerContext } from "../types.ts";
@@ -580,6 +584,135 @@ test("categorical context restoration preserves position and visibility", async 
   }
 });
 
+test("categorical restoration applies a hide requested while the layer is removed", async () => {
+  const harness = createViewHarness(true);
+  try {
+    const view = createCategoricalView(harness.context);
+    await view.ready;
+    const map = harness.map;
+    map.setLayerZoomRange("cover-classes", 7, 22);
+    harness.capture.get("webglcontextlost")!();
+    view.show(null);
+    harness.capture.get("webglcontextrestored")!();
+
+    assert.equal(map.getLayer("cover-classes")?.minzoom, 7);
+    assert.equal(map.getLayer("cover-classes")?.maxzoom, 22);
+    assert.equal(map.getLayoutProperty("cover-classes", "visibility"), "none");
+    view.destroy();
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("categorical restoration uses the slot requested while the layer is removed", async () => {
+  const harness = createViewHarness(true, { fill: "fill-anchor", lines: "line-anchor" });
+  try {
+    const view = createCategoricalView(harness.context);
+    await view.ready;
+    const map = harness.map;
+    harness.capture.get("webglcontextlost")!();
+    view.show("edges");
+    harness.capture.get("webglcontextrestored")!();
+
+    assert.deepEqual(map.getLayersOrder(), [
+      "fill-anchor",
+      "cover-classes",
+      "line-anchor",
+      "outline",
+    ]);
+    assert.equal(map.getLayoutProperty("cover-classes", "visibility"), "visible");
+    view.destroy();
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("edges mode draws no fill", () => {
+  const interior = sampleClassField(
+    {
+      ids: [
+        [COVER, GRASS, GRASS, COVER],
+        [GRASS, TREE, TREE, GRASS],
+        [GRASS, TREE, TREE, GRASS],
+        [COVER, GRASS, GRASS, COVER],
+      ],
+      fraction: [0.5, 0.5],
+      positionDx: [0.01, 0],
+      positionDy: [0, 0.01],
+    },
+    { smooth: true, rounding: 0, softnessCells: 0 },
+  );
+  const fillMode = classFieldAlpha(interior, fillAppearance());
+  const edgesMode = classFieldAlpha(interior, edgesAppearance());
+
+  assert.equal(edgesMode.fill, 0);
+  assert.equal(edgesMode.ink, 0);
+  assert.equal(edgesMode.alpha, 0);
+  assert.equal(fillMode.fill, 1);
+  assert.equal(fillMode.alpha, 1);
+});
+
+test("no-data fragments draw no fill or ink in either appearance", () => {
+  const noData = sampleClassField(
+    {
+      ids: [
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+      ],
+      fraction: [0.5, 0.5],
+      positionDx: [0.01, 0],
+      positionDy: [0, 0.01],
+    },
+    { smooth: true, rounding: 0, softnessCells: 0 },
+  );
+
+  assert.equal(noData.discarded, true);
+  assert.deepEqual(
+    classFieldAlpha(noData, fillAppearance()),
+    { fill: 0, ink: 0, alpha: 0 },
+  );
+  assert.deepEqual(
+    classFieldAlpha(noData, edgesAppearance()),
+    { fill: 0, ink: 0, alpha: 0 },
+  );
+});
+
+test("edges mode ink is stronger than the faint outline", () => {
+  const result = sampleClassField(
+    {
+      ids: edgeNeighbourhood([TREE, TREE], [GRASS, GRASS]),
+      fraction: [0.5, 0.5],
+      positionDx: [0.01, 0],
+      positionDy: [0, 0.01],
+    },
+    { smooth: true, rounding: 0, softnessCells: 0 },
+  );
+  const fillMode = classFieldAlpha(result, fillAppearance());
+  const edgesMode = classFieldAlpha(result, edgesAppearance());
+
+  assert.ok(result.outline > 0.99);
+  assert.ok(edgesMode.ink > 2 * fillMode.ink);
+  assert.ok(Math.abs(fillMode.ink - result.outline * FILL_OUTLINE_STRENGTH) < 1e-12);
+  assert.ok(Math.abs(edgesMode.ink - result.outline * EDGES_OUTLINE_STRENGTH) < 1e-12);
+});
+
+test("edges mode sets its fill opacity and stronger outline on the GPU", () => {
+  const harness = createHarness();
+  harness.field.setIds(new Uint8Array(12).fill(1));
+  harness.field.layer.onAdd!(harness.map, harness.gl);
+  harness.field.layer.render(harness.gl, harness.input);
+  assert.equal(harness.uniforms.get("uFillOpacity"), 1);
+  assert.equal(harness.uniforms.get("uOutlineStrength"), FILL_OUTLINE_STRENGTH);
+
+  harness.field.setMode("edges");
+  harness.field.layer.render(harness.gl, harness.input);
+  assert.equal(harness.uniforms.get("uFillOpacity"), 0);
+  assert.equal(harness.uniforms.get("uOutline"), 1);
+  assert.equal(harness.uniforms.get("uOutlineStrength"), EDGES_OUTLINE_STRENGTH);
+});
+
 function edgeNeighbourhood(
   left: readonly [number, number],
   right: readonly [number, number],
@@ -596,11 +729,19 @@ function weightOf(result: ClassFieldResult, id: number): number {
   return result.weights.find((entry) => entry.id === id)?.weight ?? 0;
 }
 
+function fillAppearance(): ClassFieldAppearance {
+  return { fillOpacity: 1, outlineStrength: FILL_OUTLINE_STRENGTH, outline: true };
+}
+
+function edgesAppearance(): ClassFieldAppearance {
+  return { fillOpacity: 0, outlineStrength: EDGES_OUTLINE_STRENGTH, outline: true };
+}
+
 function strongest(result: ClassFieldResult): number {
   return result.weights.reduce((best, entry) => (entry.weight > best.weight ? entry : best)).id;
 }
 
-function createViewHarness(compile: boolean) {
+function createViewHarness(compile: boolean, slots?: { fill?: string; lines?: string }) {
   const gpu = createHarness({ compile });
   const globals = ["document", "localStorage", "ImageData"] as const;
   const original = globals.map((name) => Object.getOwnPropertyDescriptor(globalThis, name));
@@ -613,9 +754,13 @@ function createViewHarness(compile: boolean) {
     },
   });
   const capture = new Map<string, () => void>();
-  const layers: { id: string; type: string; minzoom?: number; maxzoom?: number }[] = [
-    { id: "outline", type: "line" },
-  ];
+  const layers: { id: string; type: string; minzoom?: number; maxzoom?: number }[] = slots
+    ? [
+        { id: slots.fill ?? "fill-anchor", type: "line" },
+        { id: slots.lines ?? "line-anchor", type: "line" },
+        { id: "outline", type: "line" },
+      ]
+    : [{ id: "outline", type: "line" }];
   const visibility = new Map<string, string>();
   const custom = new Map<string, typeof gpu.field.layer>();
   const map = {
@@ -636,6 +781,11 @@ function createViewHarness(compile: boolean) {
     getMaxZoom: () => 22,
     setLayerZoomRange: (id: string, minzoom: number, maxzoom: number) => {
       Object.assign(map.getLayer(id)!, { minzoom, maxzoom });
+    },
+    moveLayer: (id: string, beforeId: string) => {
+      const [layer] = layers.splice(layers.findIndex((entry) => entry.id === id), 1);
+      const index = layers.findIndex((entry) => entry.id === beforeId);
+      layers.splice(index, 0, layer);
     },
     addLayer: (layer: { id: string; type: string }, beforeId?: string) => {
       const index = beforeId ? layers.findIndex(({ id }) => id === beforeId) : layers.length;
@@ -674,6 +824,7 @@ function createViewHarness(compile: boolean) {
       arrays: { value: { path: "value" } },
       grid: { bbox: [36, -2, 37, -1], nx: 2, ny: 2 },
     },
+    slots: { fill: "outline", shade: "outline", marks: "outline", lines: "outline", ...slots },
     shift: 0,
     beforeId: "outline",
     report: (error: unknown) => { throw error; },

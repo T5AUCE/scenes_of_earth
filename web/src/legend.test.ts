@@ -5,17 +5,19 @@ import { afterEach, beforeEach, test } from "node:test";
 import { lut } from "./render/colormap.ts";
 import { classColors, fieldGradient } from "./render/palettes.ts";
 
-const legendUrl = new URL("./legend.ts", import.meta.url).href;
+const resolvedParents = ["./legend.ts", "./render/lattice.ts"].map(
+  (path) => new URL(path, import.meta.url).href,
+);
 const hooks = registerHooks({
   resolve(specifier, context, next) {
-    if (context.parentURL !== legendUrl || !specifier.startsWith("./")) {
+    if (!resolvedParents.includes(context.parentURL ?? "") || !specifier.startsWith("./")) {
       return next(specifier, context);
     }
 
     return next(new URL(`${specifier}.ts`, context.parentURL).href, context);
   },
 });
-const { classLegend, contourLegendText, gradientLegend } =
+const { classLegend, contourLegendText, dotLegend, gradientLegend, isothermLegend } =
   await import("./legend.ts").finally(() => hooks.deregister());
 
 const KENYA_RAINFALL_STOPS = [0, 10, 30, 40, 60, 80, 100, 130, 200];
@@ -44,6 +46,35 @@ test("the fitted Fiji contour legend describes only visible bold lines", () => {
 test("the contour legend keeps the bold step when finer minor lines are visible", () => {
   assert.equal(contourLegendText(50, 100), "Contours every 50 m (bold every 100 m)");
   assert.equal(contourLegendText(50, 100, "ft"), "Contours every 50 ft (bold every 100 ft)");
+});
+
+test("the isotherm legend names its interval and bold step", () => {
+  const legend = isothermLegend(2) as unknown as TestElement;
+  const [sample, label] = legend.children;
+
+  assert.equal(sample.className, "legend-isotherm");
+  assert.equal(sample.style.borderTop, "2px dashed #313f4d");
+  assert.equal(label.textContent, "Isotherms every 2 °C (bold every 10 °C)");
+});
+
+test("the dot legend labels five stops over boxes with growing dot counts", () => {
+  const legend = dotLegend(KENYA_RAINFALL_STOPS, "mm/month", 0.05) as unknown as TestElement;
+  const [caption, boxes, labels, note] = legend.children;
+
+  assert.equal(caption.textContent, "mm/month");
+  assert.deepEqual(
+    labels.children.map((label) => label.textContent),
+    ["0", "30", "60", "100", "≥ 200"],
+  );
+  assert.deepEqual(boxes.children.map((box) => box.children.length), [0, 4, 8, 12, 16]);
+  assert.ok(note.textContent.includes("0.05° grid (≈ 5.6 km)"));
+  assert.equal(legend.children.length, 4);
+});
+
+test("the dot legend adds the block note only when zoomed out", () => {
+  const legend = dotLegend(KENYA_RAINFALL_STOPS, "mm/month", 0.05, 2) as unknown as TestElement;
+
+  assert.equal(legend.children[4].textContent, "Here: 1 dot site per 2×2 cells");
 });
 
 test("Kenya rainfall keeps numeric ticks and shows its units once outside them", () => {

@@ -10,9 +10,12 @@ import type {
 import { ContourOverlay, sharedDemSource, terrainTileBounds } from "./contour-overlay";
 import { RELIEF_STRENGTH, reliefPaint } from "./relief";
 
+// Shade over a colour fill is eased so the colour stays readable.
+const COLOUR_UNDER_FACTOR = 0.75;
+
 /** Terrain shading from Mapterhorn tiles and contour lines for one terrain layer. */
 export function createTerrainView(context: LayerContext): LayerView {
-  const { map, layer, beforeId, report } = context;
+  const { map, layer, slots, report } = context;
   const { tiles, stats } = layer;
   if (!tiles || !stats) throw new Error("Terrain needs tile metadata and summary statistics");
 
@@ -30,7 +33,7 @@ export function createTerrainView(context: LayerContext): LayerView {
   });
   map.addLayer(
     { id, type: "hillshade", source: id, paint: reliefPaint(RELIEF_STRENGTH.initial) },
-    beforeId,
+    slots.shade,
   );
 
   const reportTilesUnavailable = (event: object) => {
@@ -42,6 +45,14 @@ export function createTerrainView(context: LayerContext): LayerView {
   };
   map.on("error", reportTilesUnavailable);
 
+  let strengthValue = RELIEF_STRENGTH.initial;
+  let isUnderColour = false;
+  const applyStrength = () => {
+    const effective = strengthValue * (isUnderColour ? COLOUR_UNDER_FACTOR : 1);
+    const exaggeration = reliefPaint(effective)["hillshade-exaggeration"];
+    map.setPaintProperty(id, "hillshade-exaggeration", exaggeration);
+  };
+
   const strength: LayerControl = {
     label: "Relief strength",
     hint: "Change intensity using slider",
@@ -50,8 +61,8 @@ export function createTerrainView(context: LayerContext): LayerView {
     step: RELIEF_STRENGTH.step,
     value: RELIEF_STRENGTH.initial,
     set: (value) => {
-      const exaggeration = reliefPaint(value)["hillshade-exaggeration"];
-      map.setPaintProperty(id, "hillshade-exaggeration", exaggeration);
+      strengthValue = value;
+      applyStrength();
     },
   };
 
@@ -83,6 +94,10 @@ export function createTerrainView(context: LayerContext): LayerView {
     menu,
     time: null,
     setTime: () => {},
+    setColourUnder: (isUnder) => {
+      isUnderColour = isUnder;
+      applyStrength();
+    },
     legend: () => null,
     destroy: () => {
       map.off("error", reportTilesUnavailable);

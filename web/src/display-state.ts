@@ -4,10 +4,12 @@ import {
   DEFAULT_CONTOUR_COLOR,
   fieldGradient,
 } from "./render/palettes";
+import { allocate, BLEND, blendPair, layerDraws, type BlendPair } from "./layers/allocate";
 import type { DisplayTokens, EdgeSettings, LayerDisplay, LayerDoc } from "./types";
 
 const STORAGE_KEY = "soe.display.v1";
 const EDGES_STORAGE_KEY = "soe.edges.v1";
+const COLOUR_STORAGE_KEY = "soe.colour.v1";
 const PALETTE_FIELDS = 2;
 const RANGE_FIELDS = 3;
 const SIGNIFICANT_DIGITS = 3;
@@ -18,7 +20,7 @@ const LOG_ROUNDING_TOLERANCE = 1e-9;
 export const DROPPED_NOTE = "Some display settings in this link don't apply to this scene.";
 
 /** The tokens of a link without display settings. */
-export const NO_TOKENS: DisplayTokens = { pal: "", range: "", off: "" };
+export const NO_TOKENS: DisplayTokens = { pal: "", range: "", off: "", colour: "" };
 
 /** Default class edges keep a one-pixel anti-aliased border and preserve isolated cells. */
 export const DEFAULT_EDGES: Readonly<EdgeSettings> = {
@@ -108,7 +110,20 @@ export interface SceneDisplay {
   layers: Record<string, LayerDisplay>;
   /** Parts switched off, named by their link unit. */
   off: Set<string>;
+  /** The sticky colour pick, or null while the auto rank chooses the owner. */
+  colour: string | null;
 }
+
+/** A scene's sticky colour pick and off parts, which together decide who owns colour. */
+export interface ColourState {
+  pick: string | null;
+  off: ReadonlySet<string>;
+}
+
+/** A request to change the colour pick or switch a unit on or off. */
+export type ColourAction =
+  | { kind: "pick"; unit: string }
+  | { kind: "toggle"; unit: string; on: boolean };
 
 /** A scene's display state and whether part of the link had to be dropped. */
 export interface ResolvedDisplay {
@@ -148,15 +163,16 @@ export function layerUnits(layer: LayerDoc) {
 }
 
 /**
- * Combine the link, the palettes this browser remembers and the bundle's defaults, in that order
- * of precedence. Tokens that name nothing in the scene are dropped and never throw.
+ * Combine the link, the palettes and colour pick this browser remembers, and the bundle's
+ * defaults, in that order of precedence. Tokens that name nothing in the scene are dropped.
  */
 export function resolveDisplay(
   layers: LayerDoc[],
   tokens: DisplayTokens,
   stored: Record<string, string>,
+  storedPick: string | null = null,
 ): ResolvedDisplay {
-  const display: SceneDisplay = { layers: {}, off: new Set() };
+  const display: SceneDisplay = { layers: {}, off: new Set(), colour: null };
   const byId = new Map(layers.map((layer) => [layer.id, layer]));
   let dropped = false;
 
@@ -191,7 +207,49 @@ export function resolveDisplay(
     else dropped = true;
   }
 
+  const linkPick = lastToken(tokens.colour);
+  const linkedColour = linkPick !== null && isColourUnit(layers, linkPick) ? linkPick : null;
+  if (linkPick !== null && linkedColour === null) dropped = true;
+
+  const remembered = storedPick !== null && isAvailablePick(layers, storedPick, display.off)
+    ? storedPick
+    : null;
+  const pick = linkedColour ?? remembered;
+  if (pick !== null) {
+    display.colour = pick;
+    if (pick === BLEND) addBlendHalves(display.off, blendPair(layers));
+    else if (pick === linkedColour) display.off.delete(pick);
+  }
+
   return { display, dropped };
+}
+
+function lastToken(value: string) {
+  return value.split(",").filter(Boolean).at(-1) ?? null;
+}
+
+function isColourUnit(layers: readonly LayerDoc[], unit: string) {
+  if (unit === BLEND) return blendPair(layers) !== null;
+
+  const layer = layers.find(({ id }) => id === unit);
+  return layer !== undefined && layerDraws(layer).colour;
+}
+
+/** A remembered pick applies only while the link leaves its units visible. */
+function isAvailablePick(
+  layers: readonly LayerDoc[],
+  pick: string,
+  off: ReadonlySet<string>,
+) {
+  if (!isColourUnit(layers, pick)) return false;
+  if (pick !== BLEND) return !off.has(pick);
+
+  const pair = blendPair(layers);
+  return pair !== null && !off.has(pair[0]) && !off.has(pair[1]);
+}
+
+function addBlendHalves(off: Set<string>, pair: BlendPair | null) {
+  if (pair) off.add(pair[0]).add(pair[1]);
 }
 
 /**
@@ -200,6 +258,13 @@ export function resolveDisplay(
  * off parts appear only when they differ from the defaults.
  */
 export function formatDisplayParams(display: SceneDisplay, layers: LayerDoc[]) {
+  const units = layers.flatMap(layerUnits);
+  const on = new Set(units.filter((unit) => !display.off.has(unit)));
+  const owner = allocate(layers, on, display.colour).owner;
+  const pair = blendPair(layers);
+  const off = units.filter((unit) => display.off.has(unit)
+    && !(owner === BLEND && pair?.includes(unit)));
+
   const parameters = {
     pal: layers.flatMap((layer) => {
       const palette = display.layers[layer.id]?.palette ?? defaultPalette(layer);
@@ -209,13 +274,108 @@ export function formatDisplayParams(display: SceneDisplay, layers: LayerDoc[]) {
       const range = display.layers[id]?.range;
       return range ? [`${id}:${range[0]}:${range[1]}`] : [];
     }),
-    off: layers.flatMap(layerUnits).filter((unit) => display.off.has(unit)),
+    off,
+    colour: owner && colourCandidateCount(layers) >= 2 ? [owner] : [],
   };
 
   return Object.entries(parameters)
     .filter(([, entries]) => entries.length > 0)
     .map(([key, entries]) => `&${key}=${entries.join(",")}`)
     .join("");
+}
+
+// Count off layers too, because a receiver may have a different one on and lose the sender's owner.
+function colourCandidateCount(layers: readonly LayerDoc[]) {
+  const layersWithColour = layers.filter((layer) => layerDraws(layer).colour).length;
+  return layersWithColour + (blendPair(layers) === null ? 0 : 1);
+}
+
+/**
+ * Apply a pick or toggle without changing the scene order. Picking colour switches the unit on,
+ * while the pick stays sticky after the owner is switched off.
+ */
+export function applyColourAction(
+  state: ColourState,
+  action: ColourAction,
+  layers: readonly LayerDoc[],
+): ColourState {
+  const pair = blendPair(layers);
+  const off = new Set(state.off);
+
+  return action.kind === "pick"
+    ? pickColour(state.pick, off, action.unit, pair)
+    : toggleColour(state.pick, off, action, pair);
+}
+
+function pickColour(
+  current: string | null,
+  off: Set<string>,
+  unit: string,
+  pair: BlendPair | null,
+): ColourState {
+  if (unit === BLEND) {
+    if (!pair) return { pick: current, off };
+
+    addBlendHalves(off, pair);
+    return { pick: BLEND, off };
+  }
+
+  off.delete(unit);
+  if (current === BLEND) restoreBlendHalves(off, pair);
+
+  return { pick: unit, off };
+}
+
+function toggleColour(
+  current: string | null,
+  off: Set<string>,
+  action: { unit: string; on: boolean },
+  pair: BlendPair | null,
+): ColourState {
+  if (action.unit === BLEND) {
+    if (action.on) return pickColour(current, off, BLEND, pair);
+
+    restoreBlendHalves(off, pair);
+    return { pick: null, off };
+  }
+
+  const isHalf = pair?.includes(action.unit) ?? false;
+  if (current === BLEND && isHalf && action.on) {
+    off.delete(action.unit);
+    return { pick: action.unit, off };
+  }
+
+  if (action.on) off.delete(action.unit);
+  else off.add(action.unit);
+  return { pick: current, off };
+}
+
+function restoreBlendHalves(off: Set<string>, pair: BlendPair | null) {
+  if (!pair) return;
+
+  off.delete(pair[0]);
+  off.delete(pair[1]);
+}
+
+/** The colour pick this browser remembers, or null when it has none. */
+export function loadStoredPick(): string | null {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(COLOUR_STORAGE_KEY) ?? "null");
+    const pick = parsed && typeof parsed === "object" ? parsed.pick : null;
+    return typeof pick === "string" && pick ? pick : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Remember the viewer's colour pick, or forget it when pick is null. */
+export function storePick(pick: string | null) {
+  try {
+    if (pick === null) localStorage.removeItem(COLOUR_STORAGE_KEY);
+    else localStorage.setItem(COLOUR_STORAGE_KEY, JSON.stringify({ pick }));
+  } catch {
+    // The pick still applies to this visit. A blocked store is not worth reporting.
+  }
 }
 
 /** Replace what a layer overrides; a layer that overrides nothing is removed. */
