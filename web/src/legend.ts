@@ -11,7 +11,17 @@ import {
   ISOTHERM_CASING_RATIO,
   ISOTHERM_DASH_PATTERN,
 } from "./render/isolines";
-import { DOT_RADIUS_RATIO } from "./render/lattice";
+import {
+  DOT_RADIUS_RATIO,
+  FINEST_SLOTS,
+  HALO_WIDTH_PX,
+  MIN_SPACING_PX,
+  POSITION_JITTER_RATIO,
+  areaNoise,
+  dotAppearance,
+  dotRadiusPx,
+  siteNoise,
+} from "./render/lattice";
 import { type InkPaint, rgbCss } from "./render/palettes";
 import type { ClassDoc } from "./types";
 
@@ -22,8 +32,15 @@ const ISOTHERM_SAMPLE_LINE_PX = 2;
 const ISOTHERM_SAMPLE_CASING_PX = ISOTHERM_SAMPLE_LINE_PX * ISOTHERM_CASING_RATIO;
 const ISOTHERM_SAMPLE_GAP_PX = 6;
 
-const DOT_BOX_PX = 28;
-const HALO_WIDTH_PX = 1;
+const DOT_SWATCH_PX = 32;
+const DOT_SWATCH_DOTS_PER_SIDE = 4;
+// The swatch is the zoomed-in map lattice squeezed into its width, so its ink density matches.
+export const DOT_SWATCH_SCALE = DOT_SWATCH_PX / (DOT_SWATCH_DOTS_PER_SIDE * MIN_SPACING_PX);
+const DOT_SWATCH_SPACING_PX = MIN_SPACING_PX * DOT_SWATCH_SCALE;
+const DOT_SWATCH_LEVEL = Math.log2(DOT_SWATCH_DOTS_PER_SIDE);
+const DOT_SWATCH_MAX_RADIUS_PX = DOT_RADIUS_RATIO * DOT_SWATCH_SPACING_PX;
+// Matches HALO_ALPHA in gpu/field-marks-shaders.ts.
+const DOT_SWATCH_HALO_ALPHA = 0.7;
 
 const BIVARIATE_SIZE_PX = 112;
 const BIVARIATE_GRID_ALPHA = 0.35;
@@ -83,8 +100,8 @@ export function hatchLegend() {
 }
 
 /**
- * Boxes holding one dot each, sized like the map's dot at the value labelled below. The lowest
- * value is left out because its dot has no area.
+ * Swatches holding a patch of the map's dot lattice at the value labelled below. The lowest value
+ * is left out because its dots have no area.
  * The dots take the current ink and blockCells above 1 adds the zoomed-out note that one dot site
  * covers several cells.
  */
@@ -107,7 +124,7 @@ export function dotLegend(
   boxes.style.gridTemplateColumns = columns;
   labels.style.gridTemplateColumns = columns;
   for (const { position, value } of ticks) {
-    boxes.append(dotBox(position, ink));
+    boxes.append(dotSwatch(position, ink));
     const label = document.createElement("span");
     label.textContent = openLabel(position, value, false);
     labels.append(label);
@@ -125,24 +142,89 @@ export function dotLegend(
   return element;
 }
 
-function dotBox(position: number, ink: InkPaint) {
-  const diameterPx = 2 * DOT_RADIUS_RATIO * DOT_BOX_PX * Math.sqrt(position);
-  const box = document.createElement("span");
-  box.className = "legend-dot-box";
-  const dot = document.createElement("span");
-  dot.className = "legend-dot";
-  dot.style.width = `${diameterPx}px`;
-  dot.style.height = `${diameterPx}px`;
-  dot.style.background = rgbCss(ink.ink);
-  dot.style.boxShadow = haloShadow(ink);
-  dot.style.left = `${(DOT_BOX_PX - diameterPx) / 2}px`;
-  dot.style.top = `${(DOT_BOX_PX - diameterPx) / 2}px`;
-  box.append(dot);
-  return box;
+/** A dot of a legend swatch in css px, with its sub-pixel fade applied to radius and opacity. */
+export interface DotSwatchDot {
+  x: number;
+  y: number;
+  radiusPx: number;
+  opacity: number;
 }
 
-function haloShadow({ halo }: InkPaint) {
-  return `0 0 0 ${HALO_WIDTH_PX}px ${rgbCss(halo)}`;
+function dotSwatch(position: number, ink: InkPaint) {
+  const swatch = document.createElement("canvas");
+  swatch.className = "legend-dot-box";
+  swatch.style.width = `${DOT_SWATCH_PX}px`;
+  swatch.style.height = `${DOT_SWATCH_PX}px`;
+  const ratio = pixelRatio();
+  swatch.width = DOT_SWATCH_PX * ratio;
+  swatch.height = DOT_SWATCH_PX * ratio;
+  const context = swatch.getContext("2d")!;
+  context.scale(ratio, ratio);
+  // The map shader adds its halo in device px, so the scaled halo narrows again on high-DPI.
+  const haloWidthPx = (HALO_WIDTH_PX * DOT_SWATCH_SCALE) / ratio;
+  drawSwatchDots(context, position, ink, haloWidthPx);
+  return swatch;
+}
+
+function pixelRatio() {
+  return typeof window === "undefined" ? 1 : window.devicePixelRatio;
+}
+
+function drawSwatchDots(
+  context: CanvasRenderingContext2D,
+  position: number,
+  ink: InkPaint,
+  haloWidthPx: number,
+) {
+  for (const { x, y, radiusPx, opacity } of dotSwatchDots(position)) {
+    const haloOpacity = DOT_SWATCH_HALO_ALPHA * opacity;
+    fillCircle(context, x, y, radiusPx + haloWidthPx, ink.halo, haloOpacity);
+    fillCircle(context, x, y, radiusPx, ink.ink, opacity);
+  }
+}
+
+/**
+ * The map's dot lattice scaled into a legend swatch. Each dot keeps its site's position and area
+ * jitter while its area follows the value and fades below the minimum radius.
+ */
+export function dotSwatchDots(position: number): DotSwatchDot[] {
+  const slots = 2 ** DOT_SWATCH_LEVEL;
+  const finestStep = FINEST_SLOTS / slots;
+  const jitterPx = POSITION_JITTER_RATIO * DOT_SWATCH_SPACING_PX;
+  const dots: DotSwatchDot[] = [];
+  for (let row = 0; row < DOT_SWATCH_DOTS_PER_SIDE; row++) {
+    for (let column = 0; column < DOT_SWATCH_DOTS_PER_SIDE; column++) {
+      const jitter = siteNoise(column * finestStep, row * finestStep);
+      const radiusPx = dotRadiusPx(
+        position,
+        DOT_SWATCH_MAX_RADIUS_PX,
+        areaNoise(column, row, DOT_SWATCH_LEVEL),
+      );
+      const appearance = dotAppearance(radiusPx);
+      dots.push({
+        x: (column + 0.5) * DOT_SWATCH_SPACING_PX + jitter.x * jitterPx,
+        y: (row + 0.5) * DOT_SWATCH_SPACING_PX + jitter.y * jitterPx,
+        radiusPx: appearance.radiusPx,
+        opacity: appearance.opacity,
+      });
+    }
+  }
+  return dots;
+}
+
+function fillCircle(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  radiusPx: number,
+  color: number[],
+  opacity: number,
+) {
+  context.globalAlpha = opacity;
+  context.fillStyle = rgbCss(color);
+  context.beginPath();
+  context.arc(x, y, radiusPx, 0, Math.PI * 2);
+  context.fill();
 }
 
 /** A labelled bivariate scale with an optional open lower end. */

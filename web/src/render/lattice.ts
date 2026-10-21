@@ -9,7 +9,7 @@ export const MAX_LEVEL = 6;
 export const DOT_RADIUS_RATIO = 0.10;
 
 /** Dot spacing to aim for in css px when zoomed in; zoomed out it eases down to the next one. */
-const MIN_SPACING_PX = 50;
+export const MIN_SPACING_PX = 50;
 
 /** Dot spacing to aim for in css px when zoomed out, where denser dots read better. */
 const ZOOMED_OUT_SPACING_PX = 22;

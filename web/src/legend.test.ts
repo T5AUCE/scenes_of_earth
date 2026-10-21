@@ -22,14 +22,21 @@ const hooks = registerHooks({
     return next(new URL(`${specifier}.ts`, context.parentURL).href, context);
   },
 });
+const [legendModule, latticeModule] = await Promise.all([
+  import("./legend.ts"),
+  import("./render/lattice.ts"),
+]).finally(() => hooks.deregister());
 const {
+  DOT_SWATCH_SCALE,
   bivariateLegend,
   classLegend,
   contourLegendText,
   dotLegend,
+  dotSwatchDots,
   gradientLegend,
   isothermLegend,
-} = await import("./legend.ts").finally(() => hooks.deregister());
+} = legendModule;
+const { HALO_WIDTH_PX } = latticeModule;
 
 const KENYA_RAINFALL_STOPS = [0, 10, 30, 40, 60, 80, 100, 130, 200];
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
@@ -173,7 +180,7 @@ test("the bivariate legend names both axes, their ends and its scale for assisti
   assert.match(description, /The scale is a custom range\./);
 });
 
-test("the dot legend labels four stops over boxes with growing dot sizes", () => {
+test("the dot legend labels four stops over a swatch for each", () => {
   const legend = dotLegend(
     KENYA_RAINFALL_STOPS,
     "mm/month",
@@ -187,25 +194,70 @@ test("the dot legend labels four stops over boxes with growing dot sizes", () =>
     labels.children.map((label) => label.textContent),
     ["30", "60", "100", "≥ 200"],
   );
-  const areas = boxes.children.map((box) => Number.parseFloat(box.children[0].style.width) ** 2);
-  areas.forEach((area, index) => assert.ok(Math.abs(area / areas[0] - (index + 1)) < 1e-6));
+  assert.equal(boxes.children.length, 4);
+  assert.ok(boxes.children.every((swatch) => swatch.tagName === "canvas"));
+  assert.ok(
+    boxes.children.every((swatch) => swatch.width === 32 && swatch.height === 32),
+  );
+  assert.ok(boxes.children.every((swatch) => swatch.style.width === "32px"));
   assert.equal(boxes.style.gridTemplateColumns, "repeat(4, 34px)");
   assert.equal(labels.style.gridTemplateColumns, "repeat(4, 34px)");
   assert.ok(note.textContent.includes("0.05° grid (≈ 5.6 km)"));
   assert.equal(legend.children.length, 4);
 });
 
-test("the dot legend draws its dots in the current ink with the matching halo", () => {
+test("a higher value inks more of the dot swatch", () => {
+  const inkOf = (position: number) =>
+    dotSwatchDots(position).reduce(
+      (ink, dot) => ink + Math.PI * dot.radiusPx ** 2 * dot.opacity,
+      0,
+    );
+
+  assert.equal(dotSwatchDots(0.15).length, 16);
+  assert.ok(inkOf(0.3) > inkOf(0.15));
+  assert.ok(inkOf(1) > inkOf(0.3));
+});
+
+test("the dot swatches draw the current ink over its halo", () => {
   const legend = dotLegend(
     KENYA_RAINFALL_STOPS,
     "mm/month",
     0.05,
     inkPaint("white"),
   ) as unknown as TestElement;
-  const dot = legend.children[1].children[0].children[0];
+  const swatch = legend.children[1].children[0];
+  const colors = new Set(swatch.fills.map((fill) => fill.color));
 
-  assert.equal(dot.style.background, "rgb(255, 255, 255)");
-  assert.equal(dot.style.boxShadow, "0 0 0 1px rgb(31, 31, 31)");
+  assert.ok(colors.has("rgb(255, 255, 255)"));
+  assert.ok(colors.has("rgb(31, 31, 31)"));
+});
+
+test("the dot swatch halo scales with the lattice and device pixel ratio", () => {
+  const swatchAt = (ratio: number) => {
+    Object.assign(globalThis, { window: { devicePixelRatio: ratio } });
+    const legend = dotLegend(
+      KENYA_RAINFALL_STOPS,
+      "mm/month",
+      0.05,
+      inkPaint("navy"),
+    ) as unknown as TestElement;
+    return legend.children[1].children[0];
+  };
+
+  try {
+    const normal = swatchAt(1);
+    const normalGap = normal.arcs[0] - normal.arcs[1];
+    assert.ok(Math.abs(normalGap - HALO_WIDTH_PX * DOT_SWATCH_SCALE) < 1e-9);
+
+    const retina = swatchAt(2);
+    const retinaGap = retina.arcs[0] - retina.arcs[1];
+    assert.ok(Math.abs(retinaGap - (HALO_WIDTH_PX * DOT_SWATCH_SCALE) / 2) < 1e-9);
+    assert.equal(retina.width, 64);
+    assert.equal(retina.height, 64);
+    assert.equal(retina.scales[0], 2);
+  } finally {
+    Reflect.deleteProperty(globalThis, "window");
+  }
 });
 
 test("the dot legend adds the block note only when zoomed out", () => {
@@ -365,6 +417,9 @@ class TestElement {
   height = 0;
   image: { data: Uint8ClampedArray; width: number; height: number } | null = null;
   readonly attributes: Record<string, string> = {};
+  readonly fills: { color: string }[] = [];
+  readonly arcs: number[] = [];
+  readonly scales: number[] = [];
   private text = "";
 
   constructor(tagName: string) {
@@ -389,8 +444,9 @@ class TestElement {
   }
 
   getContext() {
-    return {
+    const context = {
       fillStyle: "",
+      globalAlpha: 1,
       createImageData: (width: number, height: number) => ({
         data: new Uint8ClampedArray(width * height * 4),
         width,
@@ -400,6 +456,17 @@ class TestElement {
         this.image = image;
       },
       fillRect() {},
+      scale: (ratio: number) => {
+        this.scales.push(ratio);
+      },
+      beginPath() {},
+      arc: (_x: number, _y: number, radiusPx: number) => {
+        this.arcs.push(radiusPx);
+      },
+      fill: () => {
+        this.fills.push({ color: context.fillStyle });
+      },
     };
+    return context;
   }
 }
