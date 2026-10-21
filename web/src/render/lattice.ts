@@ -5,14 +5,24 @@ import { stopPosition } from "./colormap";
 export const MIN_LEVEL = -6;
 export const MAX_LEVEL = 6;
 
-/** Dot radius at the top of the colour scale as a share of the dot spacing, inking 32 % of it. */
-export const DOT_RADIUS_RATIO = 0.08;
+/** Dot radius at the top of the colour scale as a share of the zoomed-in dot spacing. */
+export const DOT_RADIUS_RATIO = 0.10;
 
-/** Dot spacing to aim for in css px. */
-const MIN_SPACING_PX = 40;
+/** Dot spacing to aim for in css px when zoomed in; zoomed out it eases down to the next one. */
+const MIN_SPACING_PX = 50;
+
+/** Dot spacing to aim for in css px when zoomed out, where denser dots read better. */
+const ZOOMED_OUT_SPACING_PX = 22;
+
+/** The zoomed-out spacing applies up to the first zoom and the zoomed-in one from the second. */
+const ZOOMED_OUT_ZOOM = 6;
+const ZOOMED_IN_ZOOM = 10;
+
+/** The full-value dot radius in css px at the aimed spacing, the same at every zoom. */
+const DOT_RADIUS_PX = DOT_RADIUS_RATIO * MIN_SPACING_PX;
 
 /** The largest dot radius in css px, reached once the level stops rising. */
-export const MAX_DOT_RADIUS_PX = DOT_RADIUS_RATIO * 3 * MIN_SPACING_PX;
+export const MAX_DOT_RADIUS_PX = 3 * DOT_RADIUS_PX;
 
 /** Dots that would be smaller than this radius in css px fade out by area instead. */
 export const MIN_DOT_RADIUS_PX = 0.5;
@@ -63,9 +73,16 @@ export function cellSizePx(
   return (worldPx / 360) * Math.sqrt(cellDegrees.width * cellDegrees.height * stretch);
 }
 
-/** Choose the level with 5 to 10 px dot spacing and its progress towards the next level. */
-export function levelFor(cellPx: number) {
-  const exact = Math.log2(cellPx / MIN_SPACING_PX);
+/** The dot spacing to aim for at a zoom, easing geometrically between the two set spacings. */
+export function aimedSpacingPx(zoom: number) {
+  const span = ZOOMED_IN_ZOOM - ZOOMED_OUT_ZOOM;
+  const progress = Math.min(1, Math.max(0, (zoom - ZOOMED_OUT_ZOOM) / span));
+  return ZOOMED_OUT_SPACING_PX * (MIN_SPACING_PX / ZOOMED_OUT_SPACING_PX) ** progress;
+}
+
+/** Choose the level whose dot spacing is one to two aimed spacings and its progress to the next. */
+export function levelFor(cellPx: number, aimedPx = MIN_SPACING_PX) {
+  const exact = Math.log2(cellPx / aimedPx);
   const level = Math.min(MAX_LEVEL, Math.max(MIN_LEVEL, Math.floor(exact)));
   if (level === MAX_LEVEL) return { level, fade: 0 };
 
@@ -83,8 +100,8 @@ export function slotPosition(slot: number, level: number) {
 }
 
 /** The largest dot radius in css px for dots this far apart, which the zoom cap limits. */
-export function maxDotRadiusPx(spacingPx: number) {
-  return Math.min(DOT_RADIUS_RATIO * spacingPx, MAX_DOT_RADIUS_PX);
+export function maxDotRadiusPx(spacingPx: number, aimedPx = MIN_SPACING_PX) {
+  return Math.min(DOT_RADIUS_PX * (spacingPx / aimedPx), MAX_DOT_RADIUS_PX);
 }
 
 /**

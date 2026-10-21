@@ -3,6 +3,7 @@ import type { CustomLayerInterface } from "maplibre-gl";
 
 import type { InkPaint } from "../render/palettes";
 import {
+  aimedSpacingPx,
   blockMeans,
   cellSizePx,
   levelFor,
@@ -84,7 +85,7 @@ class FieldMarksLayer extends TiledGpuLayer {
   private isDots = true;
   private isHatch = true;
   private uploaded: BlockFactors | null = null;
-  private frame = { level: 0, fade: 0, cellPx: 1 };
+  private frame = { level: 0, fade: 0, cellPx: 1, aimedPx: 1 };
   private ink: InkPaint;
 
   constructor(options: FieldMarksOptions) {
@@ -156,8 +157,9 @@ class FieldMarksLayer extends TiledGpuLayer {
 
   protected uploadStaleData(gl: WebGL2RenderingContext, gpu: TiledGpu) {
     const cellPx = this.cellPx();
-    const { level, fade } = levelFor(cellPx);
-    this.frame = { level, fade, cellPx };
+    const aimedPx = aimedSpacingPx(this.map!.getZoom());
+    const { level, fade } = levelFor(cellPx, aimedPx);
+    this.frame = { level, fade, cellPx, aimedPx };
     const factors = blockFactors(level, fade);
     if (
       this.uploaded?.factor === factors.factor
@@ -230,10 +232,11 @@ class FieldMarksLayer extends TiledGpuLayer {
 
   protected draw(gl: WebGL2RenderingContext, gpu: TiledGpu, mainMatrix: ArrayLike<number>) {
     const uniform = (name: string) => this.uniform(gpu, name);
-    const { level, fade, cellPx } = this.frame;
+    const { level, fade, cellPx, aimedPx } = this.frame;
     const drawnLevel = fade > 0 ? level + 1 : level;
     const pixelRatio = this.map!.getPixelRatio();
-    const radiusPx = (dotLevel: number) => maxDotRadiusPx(cellPx / 2 ** dotLevel) * pixelRatio;
+    const radiusPx = (dotLevel: number) =>
+      maxDotRadiusPx(cellPx / 2 ** dotLevel, aimedPx) * pixelRatio;
     const { grid } = this.blockData(blockFactors(level, fade).factor);
     const original = this.options.grid;
 

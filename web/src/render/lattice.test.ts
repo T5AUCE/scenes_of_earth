@@ -24,6 +24,7 @@ const {
   NO_DATA_BYTE,
   POSITION_JITTER_RATIO,
   SIZE_JITTER_RATIO,
+  aimedSpacingPx,
   areaNoise,
   blockMeans,
   containedRadiusPx,
@@ -48,24 +49,34 @@ test("sites_nest_across_levels", () => {
   }
 });
 
-test("level_keeps_spacing_between_10_and_20_px", () => {
-  for (let cellPx = 0.4; cellPx < 200; cellPx *= 1.07) {
+test("level_keeps_spacing_between_40_and_80_px", () => {
+  for (let cellPx = 0.4; cellPx < 800; cellPx *= 1.07) {
     const { level, fade } = levelFor(cellPx);
     const spacingPx = cellPx / 2 ** level;
     assert.ok(fade >= 0 && fade <= 1);
     if (level > MIN_LEVEL && level < MAX_LEVEL) {
-      assert.ok(spacingPx >= 10 && spacingPx < 20, `${cellPx} ${level}`);
+      assert.ok(spacingPx >= 40 && spacingPx < 80, `${cellPx} ${level}`);
     }
   }
-  assert.equal(levelFor(14).fade, 0);
-  assert.ok(levelFor(10 * 2 ** 0.9).fade > 0.3);
-  assert.equal(levelFor(10 * 2 ** (MAX_LEVEL + 0.9)).fade, 0);
+  assert.equal(levelFor(56).fade, 0);
+  assert.ok(levelFor(40 * 2 ** 0.9).fade > 0.3);
+  assert.equal(levelFor(40 * 2 ** (MAX_LEVEL + 0.9)).fade, 0);
+});
+
+test("dots sit closer together when zoomed out and keep their size", () => {
+  assert.equal(aimedSpacingPx(4), 10);
+  assert.equal(aimedSpacingPx(6), 10);
+  assert.equal(aimedSpacingPx(10), 40);
+  assert.equal(aimedSpacingPx(14), 40);
+  assert.ok(Math.abs(aimedSpacingPx(8) - 20) < 1e-9);
+  assert.equal(maxDotRadiusPx(10, 10), maxDotRadiusPx(40, 40));
+  assert.equal(levelFor(40, 10).level, levelFor(160, 40).level);
 });
 
 test("the dot level stops rising at its maximum", () => {
-  assert.equal(levelFor(10 * 2 ** 6.9).level, MAX_LEVEL);
-  assert.equal(levelFor(10 * 2 ** 10).level, MAX_LEVEL);
-  assert.equal(levelFor(10 * 2 ** 10).fade, 0);
+  assert.equal(levelFor(40 * 2 ** 6.9).level, MAX_LEVEL);
+  assert.equal(levelFor(40 * 2 ** 10).level, MAX_LEVEL);
+  assert.equal(levelFor(40 * 2 ** 10).fade, 0);
 });
 
 test("block_means_ignore_no_data", () => {
@@ -135,18 +146,18 @@ test("the dot radius stops growing once the level reaches its maximum", () => {
     return maxDotRadiusPx(cellPx / 2 ** levelFor(cellPx).level);
   };
 
-  assert.ok(radiusPx(13) < MAX_DOT_RADIUS_PX);
-  assert.equal(radiusPx(15), MAX_DOT_RADIUS_PX);
+  assert.ok(radiusPx(15) < MAX_DOT_RADIUS_PX);
+  assert.equal(radiusPx(17), MAX_DOT_RADIUS_PX);
 });
 
-test("the zoom cap on the largest dot radius is 6.4 css px", () => {
-  assert.ok(Math.abs(MAX_DOT_RADIUS_PX - 6.4) < 1e-9);
-  assert.equal(maxDotRadiusPx(100), MAX_DOT_RADIUS_PX);
-  assert.equal(maxDotRadiusPx(10), DOT_RADIUS_RATIO * 10);
+test("the zoom cap on the largest dot radius is 9.6 css px", () => {
+  assert.ok(Math.abs(MAX_DOT_RADIUS_PX - 9.6) < 1e-9);
+  assert.equal(maxDotRadiusPx(200), MAX_DOT_RADIUS_PX);
+  assert.equal(maxDotRadiusPx(40), DOT_RADIUS_RATIO * 40);
 });
 
-test("full value inks 32 percent of a site", () => {
-  assert.ok(Math.abs(Math.PI * DOT_RADIUS_RATIO ** 2 - 0.32) < 0.005);
+test("full value inks 2 percent of a site", () => {
+  assert.ok(Math.abs(Math.PI * DOT_RADIUS_RATIO ** 2 - 0.02) < 0.001);
 });
 
 test("dot area is proportional to the value", () => {
@@ -207,8 +218,8 @@ test("a cell with a single dot site has no size jitter", () => {
   assert.notEqual(areaNoise(5, 9, 1), 0);
 });
 
-test("size jitter changes a radius by at most 10 percent", () => {
-  assert.ok(Math.abs(AREA_JITTER_RATIO - 0.19) < 1e-9);
+test("size jitter changes a radius by at most 20 percent", () => {
+  assert.ok(Math.abs(AREA_JITTER_RATIO - 0.36) < 1e-9);
   for (let column = 0; column < 128; column++) {
     for (let row = 0; row < 64; row++) {
       const area = areaNoise(column, row, 3);
