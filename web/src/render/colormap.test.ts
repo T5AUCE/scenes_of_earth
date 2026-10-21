@@ -6,25 +6,29 @@ import type { Bbox } from "../types.ts";
 import {
   COLOR_CHANNELS,
   evenStops,
+  inSrgbGamut,
   legendTicks,
   lut,
   lut2d,
   LUT2D_SIZE,
+  oklchToRgb,
   paintBivariate,
   paintClasses,
   paintColormap,
   RGBA_CHANNELS,
+  rgbToOklch,
   stopPosition,
   stopsForRange,
 } from "./colormap.ts";
 import { crossSampleTable, mercY, sampleTable, type SampleTable } from "./mercator.ts";
 import {
-  BIVARIATE_GREEN,
   CLASS_PALETTES,
   classColors,
   customPalette,
   FIELD_PALETTES,
   fieldGradient,
+  oklchGrid,
+  RAIN_TEMPERATURE_GRID,
 } from "./palettes.ts";
 
 const gradient = (name: string) => fieldGradient(name)!;
@@ -230,32 +234,94 @@ const colorAt = (colors: Uint8ClampedArray, row: number, column: number) => {
   return [...colors.subarray(start, start + COLOR_CHANNELS)];
 };
 
-const luminance = ([red, green, blue]: number[]) => 0.2126 * red + 0.7152 * green + 0.0722 * blue;
-
 test("the bivariate table's corners match the palette grid", () => {
-  const colors = lut2d(BIVARIATE_GREEN);
-  const last = BIVARIATE_GREEN.length - 1;
+  const colors = lut2d(RAIN_TEMPERATURE_GRID);
+  const last = RAIN_TEMPERATURE_GRID.length - 1;
 
-  assert.deepEqual(colorAt(colors, 0, 0), BIVARIATE_GREEN[0][0]);
-  assert.deepEqual(colorAt(colors, 0, LAST_LUT2D), BIVARIATE_GREEN[0][last]);
-  assert.deepEqual(colorAt(colors, LAST_LUT2D, 0), BIVARIATE_GREEN[last][0]);
-  assert.deepEqual(colorAt(colors, LAST_LUT2D, LAST_LUT2D), BIVARIATE_GREEN[last][last]);
+  assert.deepEqual(colorAt(colors, 0, 0), RAIN_TEMPERATURE_GRID[0][0]);
+  assert.deepEqual(colorAt(colors, 0, LAST_LUT2D), RAIN_TEMPERATURE_GRID[0][last]);
+  assert.deepEqual(colorAt(colors, LAST_LUT2D, 0), RAIN_TEMPERATURE_GRID[last][0]);
+  assert.deepEqual(colorAt(colors, LAST_LUT2D, LAST_LUT2D), RAIN_TEMPERATURE_GRID[last][last]);
 });
 
-test("the bivariate table gets darker with every wetter row", () => {
-  const colors = lut2d(BIVARIATE_GREEN);
+test("the bivariate table's lightness falls with every wetter row", () => {
+  const colors = lut2d(RAIN_TEMPERATURE_GRID);
 
   for (let column = 0; column < LUT2D_SIZE; column++) {
     for (let row = 1; row < LUT2D_SIZE; row++) {
-      const drier = luminance(colorAt(colors, row - 1, column));
-      const wetter = luminance(colorAt(colors, row, column));
-      assert.ok(wetter <= drier + 1, `column ${column} row ${row}`);
+      const drier = rgbToOklch(colorAt(colors, row - 1, column)).lightness;
+      const wetter = rgbToOklch(colorAt(colors, row, column)).lightness;
+      assert.ok(wetter < drier, `column ${column} row ${row}`);
     }
   }
 });
 
+test("the blend grid keeps the approved dry and wet lightness endpoints", () => {
+  const last = RAIN_TEMPERATURE_GRID.length - 1;
+  const lightness = (row: number, column: number) =>
+    rgbToOklch(RAIN_TEMPERATURE_GRID[row][column]).lightness;
+  const chroma = (row: number, column: number) =>
+    rgbToOklch(RAIN_TEMPERATURE_GRID[row][column]).chroma;
+
+  assert.ok(Math.abs(lightness(0, 0) - 0.9) < 0.002);
+  assert.ok(Math.abs(lightness(0, last) - 0.93) < 0.002);
+  assert.ok(Math.abs(lightness(last, 0) - 0.5) < 0.002);
+  assert.ok(Math.abs(lightness(last, last) - 0.53) < 0.002);
+  assert.ok(Math.abs(chroma(0, 0) - 0.045) < 0.002);
+  assert.ok(Math.abs(chroma(last, 0) - 0.12) < 0.002);
+  assert.ok(Math.abs(chroma(last, last) - 0.12) < 0.002);
+});
+
+test("every blend grid colour lies inside the sRGB gamut", () => {
+  for (const row of RAIN_TEMPERATURE_GRID) {
+    for (const color of row) {
+      assert.equal(color.length, COLOR_CHANNELS);
+      assert.ok(color.every((channel) => channel >= 0 && channel <= 255));
+    }
+  }
+});
+
+test("an out-of-gamut grid request keeps its lightness and hue as chroma falls", () => {
+  const lightness = 0.7;
+  const hue = 30;
+  const requestedChroma = 0.4;
+  const grid = oklchGrid({
+    dry: { lightness, chroma: requestedChroma },
+    wet: { lightness, chroma: requestedChroma },
+    hues: [hue],
+    warmLift: 0,
+  });
+
+  assert.ok(!inSrgbGamut(lightness, requestedChroma, hue));
+
+  for (const [color] of grid) {
+    const measured = rgbToOklch(color);
+    assert.ok(Math.abs(measured.lightness - lightness) < 0.005);
+    assert.ok(Math.abs(measured.hue - hue) < 1);
+    assert.ok(measured.chroma > 0.1 && measured.chroma < requestedChroma);
+  }
+});
+
+test("the sRGB gamut check rejects colours with negative or overflowing channels", () => {
+  assert.ok(inSrgbGamut(0.6, 0.1, 250));
+
+  const outside = oklchToRgb(0.7, 0.4, 30);
+  assert.ok(Math.min(...outside) < 0);
+  assert.ok(Math.max(...outside) > 255);
+  assert.ok(!inSrgbGamut(0.7, 0.4, 30));
+});
+
+test("the rain ramp darkens and gains chroma at every stop", () => {
+  const stops = gradient("ink-blue").map(rgbToOklch);
+
+  for (let index = 1; index < stops.length; index++) {
+    assert.ok(stops[index].lightness < stops[index - 1].lightness, `stop ${index}`);
+    assert.ok(stops[index].chroma > stops[index - 1].chroma, `stop ${index}`);
+  }
+});
+
 test("a pixel missing either bivariate input stays transparent", () => {
-  const colors = lut2d(BIVARIATE_GREEN);
+  const colors = lut2d(RAIN_TEMPERATURE_GRID);
   const stops = [0, 10];
   const rain = { values: Float32Array.of(10, NaN, 10), table: table([0, 1, 0]), stops };
   const temperature = { values: Float32Array.of(10, 10), table: table([0, 1, -1]), stops };
@@ -282,7 +348,7 @@ test("the blend keeps the Fiji coast pixel whose nearest rainfall cell is empty"
   const rgba = paintBivariate(
     { values: rainValues, table: rainTable, stops: [0, 384.7] },
     { values: temperatureValues, table: temperatureTable, stops: [20, 30] },
-    lut2d(BIVARIATE_GREEN),
+    lut2d(RAIN_TEMPERATURE_GRID),
   );
 
   assert.ok(Number.isNaN(rainValues[rainTable.src[pixel]]));
@@ -301,7 +367,7 @@ test("the blend fills a coarse-grid coast pixel from the finite cell its footpri
     stops: [10, 20],
   };
 
-  const rgba = paintBivariate(rain, temperature, lut2d(BIVARIATE_GREEN));
+  const rgba = paintBivariate(rain, temperature, lut2d(RAIN_TEMPERATURE_GRID));
 
   assert.equal(temperatureTable.src[0], -1);
   assert.equal(alphaOf(rgba)[0], 255);

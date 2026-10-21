@@ -8,17 +8,27 @@ import {
   MIN_CUSTOM_COLORS,
   rgbToHex,
 } from "../render/palettes";
-import type { LayerControl, LayerMenu, RangeMenu } from "../types";
+import type { InkMenu, LayerControl, LayerMenu, PaletteChoice, RangeMenu } from "../types";
 
 const MENU_GAP_PX = 8;
 
 /** The note a menu shows while its layer draws a fallback, since the palette is not visible. */
 export const FALLBACK_PALETTE_NOTE = "Colours apply while this layer holds colour.";
+/** The note shown when Presets is open while the map still uses a custom palette. */
+export const CUSTOM_PALETTE_NOTE = "The map currently shows custom colours.";
+/** The note shown when Presets is open while the map still uses a custom ink. */
+export const CUSTOM_INK_NOTE = "The map currently shows a custom ink.";
 
-/** What a menu change touched, so the caller can remember a palette but not a range. */
-export type MenuChange = "palette" | "range";
+/** What a menu change touched, so the caller can remember a palette or ink but not a range. */
+export type MenuChange = "palette" | "range" | "ink";
+
+interface MenuModes {
+  customPalette: boolean;
+  customInk: boolean;
+}
 
 let menuCount = 0;
+const menuModes = new WeakMap<LayerMenu, MenuModes>();
 
 /** Builds the sliders shown directly under a part's checkbox, labelled for screen readers only. */
 export function partControls(controls: LayerControl[]) {
@@ -98,7 +108,8 @@ export function layerMenu(menu: LayerMenu, onChange: (changed: MenuChange) => vo
   return { button, popover };
 }
 
-function menuSections(
+/** The menu's head, one colour section chosen by how the layer is drawn, and its other controls. */
+export function menuSections(
   menu: LayerMenu,
   group: string,
   onChange: (changed: MenuChange) => void,
@@ -116,7 +127,7 @@ function menuSections(
 
   return [
     head,
-    paletteSection(menu, group, onChange),
+    menu.ink?.inUse ? inkSection(menu, group, onChange) : paletteSection(menu, group, onChange),
     ...edgesSection(menu),
     ...rangeSection(menu.range, onChange),
     reset,
@@ -128,16 +139,22 @@ function resetButton(menu: LayerMenu, onChange: (changed: MenuChange) => void, r
   reset.type = "button";
   reset.className = "menu-reset";
   const resetLayer = () => {
+    const modes = modesOf(menu);
+    modes.customPalette = false;
+    modes.customInk = false;
     menu.setPalette(menu.defaultPalette);
     menu.range?.set(null);
     menu.edges?.reset();
+    if (menu.ink) menu.ink.set(menu.ink.defaultInk);
     onChange("palette");
+    if (menu.ink) onChange("ink");
     refill();
   };
   reset.onclick = () => {
     const isDefault = menu.palette === menu.defaultPalette
       && !menu.range?.value
-      && (menu.edges?.isDefault ?? true);
+      && (menu.edges?.isDefault ?? true)
+      && (menu.ink === undefined || menu.ink.value === menu.ink.defaultInk);
     if (isDefault) return resetLayer();
 
     askBeforeReset(
@@ -198,21 +215,169 @@ function paletteSection(
   makeHtmlElement("legend", menu.heading, section);
   if (menu.paletteNote) makeHtmlElement("div", menu.paletteNote, section).className = "option-note";
 
-  for (const { name, label, colors } of menu.palettes) {
-    const suffix = name === menu.defaultPalette ? " (default)" : "";
-    const choice = paletteRadio(group, name, label + suffix, menu.palette === name);
-    choice.input.onchange = () => {
-      menu.setPalette(name);
-      onChange("palette");
-      editor?.refresh();
-    };
-    choice.input.after(swatch(colors, menu.blocks));
-    section.append(choice.row);
+  if (!menu.custom) {
+    section.append(...palettePresets(menu, group, onChange));
+    return section;
   }
 
-  const editor = menu.custom ? customEditor(menu, group, onChange) : null;
-  if (editor) section.append(editor.row, editor.box);
+  const modes = modesOf(menu);
+  const body = makeHtmlElement("div");
+  const note = optionNote("");
+  const updateNote = () => {
+    note.textContent = !modes.customPalette && customColors(menu.palette) !== null
+      ? CUSTOM_PALETTE_NOTE
+      : "";
+    note.hidden = !note.textContent;
+  };
+  const show = (isCustom: boolean) => {
+    const choices = isCustom
+      ? [customColorsBox(menu, onChange)]
+      : palettePresets(menu, group, onChange, updateNote);
+    body.replaceChildren(...choices, note);
+    updateNote();
+  };
+  const choose = (isCustom: boolean) => {
+    modes.customPalette = isCustom;
+    // Starting from the gradient on screen keeps the first custom colours familiar.
+    if (isCustom && customColors(menu.palette) === null) {
+      menu.setPalette(customPalette(seedColors(menu.palette)));
+      onChange("palette");
+    }
+    show(isCustom);
+  };
+  show(modes.customPalette);
+  section.append(modeSwitch(group, modes.customPalette, choose), body);
   return section;
+}
+
+function palettePresets(
+  menu: LayerMenu,
+  group: string,
+  onChange: (changed: MenuChange) => void,
+  onPicked?: () => void,
+) {
+  return presetRows(
+    group,
+    menu.palettes,
+    { current: menu.palette, fallback: menu.defaultPalette, blocks: menu.blocks },
+    (name) => {
+      menu.setPalette(name);
+      onChange("palette");
+      onPicked?.();
+    },
+  );
+}
+
+function inkSection(menu: LayerMenu, group: string, onChange: (changed: MenuChange) => void) {
+  const ink = menu.ink!;
+  const section = makeHtmlElement("fieldset");
+  makeHtmlElement("legend", ink.heading, section);
+
+  const modes = modesOf(menu);
+  const body = makeHtmlElement("div");
+  const note = optionNote("");
+  const updateNote = () => {
+    note.textContent = !modes.customInk && isCustomInk(ink) ? CUSTOM_INK_NOTE : "";
+    note.hidden = !note.textContent;
+  };
+  const show = (isCustom: boolean) => {
+    const choices = isCustom
+      ? [inkInput(ink, onChange)]
+      : inkPresets(ink, group, onChange, updateNote);
+    body.replaceChildren(...choices, note);
+    updateNote();
+  };
+  const choose = (isCustom: boolean) => {
+    modes.customInk = isCustom;
+    if (isCustom && !isCustomInk(ink)) {
+      ink.set(ink.presets.find(({ name }) => name === ink.value)!.colors[0]);
+      onChange("ink");
+    }
+    show(isCustom);
+  };
+  show(modes.customInk);
+  section.append(modeSwitch(group, modes.customInk, choose), body);
+  return section;
+}
+
+function inkPresets(
+  ink: InkMenu,
+  group: string,
+  onChange: (changed: MenuChange) => void,
+  onPicked?: () => void,
+) {
+  return presetRows(
+    group,
+    ink.presets,
+    { current: ink.value, fallback: ink.defaultInk, blocks: true },
+    (name) => {
+      ink.set(name);
+      onChange("ink");
+      onPicked?.();
+    },
+  );
+}
+
+function inkInput(ink: InkMenu, onChange: (changed: MenuChange) => void) {
+  const input = document.createElement("input");
+  input.type = "color";
+  input.value = ink.value;
+  input.ariaLabel = "Ink colour";
+  // The picker fires input continuously while dragging, which would repaint and save each time.
+  input.onchange = () => {
+    ink.set(input.value);
+    onChange("ink");
+  };
+  return input;
+}
+
+function isCustomInk(ink: InkMenu) {
+  return ink.value.startsWith("#");
+}
+
+function modesOf(menu: LayerMenu): MenuModes {
+  const existing = menuModes.get(menu);
+  if (existing) return existing;
+
+  const modes = {
+    customPalette: customColors(menu.palette) !== null,
+    customInk: menu.ink !== undefined && isCustomInk(menu.ink),
+  };
+  menuModes.set(menu, modes);
+  return modes;
+}
+
+function optionNote(text: string) {
+  const note = makeHtmlElement("div", text);
+  note.className = "option-note";
+  return note;
+}
+
+/** The Presets and Custom switch above a menu section's choices. */
+function modeSwitch(group: string, isCustom: boolean, onMode: (isCustom: boolean) => void) {
+  const row = makeHtmlElement("div");
+  row.className = "mode-switch";
+  for (const [label, mode] of [["Presets", false], ["Custom", true]] as const) {
+    const choice = paletteRadio(`${group}-mode`, label, label, mode === isCustom);
+    choice.input.onchange = () => onMode(mode);
+    row.append(choice.row);
+  }
+  return row;
+}
+
+function presetRows(
+  group: string,
+  choices: PaletteChoice[],
+  { current, fallback, blocks }: { current: string; fallback: string; blocks: boolean },
+  pick: (name: string) => void,
+) {
+  return choices.map(({ name, label, colors }) => {
+    const suffix = name === fallback ? " (default)" : "";
+    const choice = paletteRadio(group, name, label + suffix, current === name);
+    choice.input.onchange = () => pick(name);
+    choice.input.after(swatch(colors, blocks));
+    return choice.row;
+  });
 }
 
 function paletteRadio(group: string, name: string, label: string, isChecked: boolean) {
@@ -241,15 +406,9 @@ function swatch(colors: string[], blocks: boolean) {
   return element;
 }
 
-function customEditor(
-  menu: LayerMenu,
-  group: string,
-  onChange: (changed: MenuChange) => void,
-) {
-  const colors = customColors(menu.palette) ?? seedColors(menu.palette);
-  const choice = paletteRadio(group, "custom", "Custom", customColors(menu.palette) !== null);
+function customColorsBox(menu: LayerMenu, onChange: (changed: MenuChange) => void) {
+  const colors = customColors(menu.palette)!;
   const preview = swatch(colors, false);
-  choice.input.after(preview);
   const box = makeHtmlElement("div");
   box.className = "custom-colors";
 
@@ -258,21 +417,10 @@ function customEditor(
     preview.style.background = gradientCss(colors);
     onChange("palette");
   };
-  const refresh = () => {
-    box.hidden = !choice.input.checked;
-    box.replaceChildren(...colorInputs(colors, apply, refresh));
-  };
-  choice.input.onchange = () => {
-    // Starting from the gradient on screen keeps the first custom colours familiar.
-    if (customColors(menu.palette) === null) {
-      colors.splice(0, colors.length, ...seedColors(menu.palette));
-    }
-    apply();
-    refresh();
-  };
+  const refresh = () => box.replaceChildren(preview, ...colorInputs(colors, apply, refresh));
   refresh();
 
-  return { row: choice.row, box, refresh };
+  return box;
 }
 
 function seedColors(palette: string) {

@@ -2,8 +2,13 @@ import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { afterEach, beforeEach, test } from "node:test";
 
-import { lut, lut2d } from "./render/colormap.ts";
-import { BIVARIATE_GREEN, classColors, fieldGradient } from "./render/palettes.ts";
+import { LUT2D_SIZE, lut, lut2d } from "./render/colormap.ts";
+import {
+  RAIN_TEMPERATURE_GRID,
+  classColors,
+  fieldGradient,
+  inkPaint,
+} from "./render/palettes.ts";
 
 const resolvedParents = ["./legend.ts", "./render/lattice.ts"].map(
   (path) => new URL(path, import.meta.url).href,
@@ -54,12 +59,25 @@ test("the contour legend keeps the bold step when finer minor lines are visible"
   assert.equal(contourLegendText(50, 100, "ft"), "Contours every 50 ft (bold every 100 ft)");
 });
 
-test("the isotherm legend names its interval and bold step", () => {
-  const legend = isothermLegend(2) as unknown as TestElement;
+test("the isotherm legend shows the dashed ink over its dashed casing", () => {
+  const legend = isothermLegend(2, inkPaint("charcoal")) as unknown as TestElement;
   const [sample, label] = legend.children;
+  const [line] = sample.children;
 
   assert.equal(sample.className, "legend-isotherm");
-  assert.equal(sample.style.borderTop, "2px dashed #313f4d");
+  assert.equal(
+    sample.style.background,
+    "repeating-linear-gradient(to right, rgb(246, 239, 227) 0 6px, "
+      + "transparent 6px 10px)",
+  );
+  assert.equal(sample.style.height, "5px");
+  assert.equal(
+    line.style.background,
+    "repeating-linear-gradient(to right, rgb(49, 63, 77) 0 6px, "
+      + "transparent 6px 10px)",
+  );
+  assert.equal(line.style.height, "2px");
+  assert.equal(line.style.top, "1.5px");
   assert.equal(label.textContent, "Isotherms every 2 °C (bold every 10 °C)");
 });
 
@@ -78,21 +96,51 @@ test("the bivariate legend puts its ticks at the fitted stops", () => {
   };
 
   const legend = bivariateLegend(
-    lut2d(BIVARIATE_GREEN),
+    lut2d(RAIN_TEMPERATURE_GRID),
     rain,
     temperature,
     true,
   ) as unknown as TestElement;
-  const [rainTitle, plot, temperatureTitle, scale] = legend.children;
-  const [rows, , , columns] = plot.children;
+  const [plot] = legend.children;
+  const [temperatureTitle, rows, , columns, rainTitle] = plot.children;
 
-  assert.equal(rainTitle.textContent, "↑ Rainfall (mm/month)");
-  assert.equal(temperatureTitle.textContent, "Temperature (°C) →");
-  assert.equal(scale.textContent, "Fitted to this area");
-  assert.deepEqual(rows.children.map((label) => label.textContent), ["0", "60", "≥ 200"]);
+  assert.equal(legend.children.length, 1);
+  assert.equal(temperatureTitle.textContent, "Temperature (°C)");
+  assert.equal(temperatureTitle.className, "legend-bivariate-title-y");
+  assert.equal(rainTitle.textContent, "Rainfall (mm/month)");
+  assert.equal(rainTitle.className, "legend-bivariate-title-x");
+  assert.deepEqual(rows.children.map((label) => label.textContent), ["5", "17", "≥ 29"]);
   assert.deepEqual(rows.children.map((label) => label.style.top), ["100%", "50%", "0%"]);
-  assert.deepEqual(columns.children.map((label) => label.textContent), ["5", "17", "≥ 29"]);
+  assert.deepEqual(columns.children.map((label) => label.textContent), ["0", "60", "≥ 200"]);
   assert.deepEqual(columns.children.map((label) => label.style.left), ["0%", "50%", "100%"]);
+});
+
+test("the bivariate swatch puts rain across and temperature up", () => {
+  const rain = { title: "Rainfall", units: "mm/month", stops: [0, 100, 200], isBottomOpen: false };
+  const temperature = {
+    title: "Temperature",
+    units: "°C",
+    stops: [8, 20, 31],
+    isBottomOpen: false,
+  };
+  const colors = lut2d(RAIN_TEMPERATURE_GRID);
+  const legend = bivariateLegend(colors, rain, temperature, true) as unknown as TestElement;
+  const canvas = legend.children[0].children[2];
+  const image = canvas.image!;
+  const pixel = (x: number, y: number) =>
+    Array.from(image.data.subarray((y * image.width + x) * 4, (y * image.width + x) * 4 + 4));
+  const entry = (rainRow: number, temperatureColumn: number) =>
+    Array.from(
+      colors.subarray(
+        (rainRow * LUT2D_SIZE + temperatureColumn) * 4,
+        (rainRow * LUT2D_SIZE + temperatureColumn) * 4 + 4,
+      ),
+    );
+  const last = image.width - 1;
+
+  assert.deepEqual(pixel(0, last), entry(0, 0));
+  assert.deepEqual(pixel(0, 0), entry(0, LUT2D_SIZE - 1));
+  assert.deepEqual(pixel(last, last), entry(LUT2D_SIZE - 1, 0));
 });
 
 test("the bivariate legend names both axes, their ends and its scale for assistive tools", () => {
@@ -105,7 +153,7 @@ test("the bivariate legend names both axes, their ends and its scale for assisti
   };
 
   const legend = bivariateLegend(
-    lut2d(BIVARIATE_GREEN),
+    lut2d(RAIN_TEMPERATURE_GRID),
     rain,
     temperature,
     false,
@@ -115,32 +163,59 @@ test("the bivariate legend names both axes, their ends and its scale for assisti
   assert.equal(legend.attributes.role, "img");
   assert.match(
     description,
-    /Temperature grows from left to right from 8 or less to 31 or more °C, with 20 in the/,
+    /Temperature grows from bottom to top from 8 or less to 31 or more °C, with 20 in the/,
   );
   assert.match(
     description,
-    /Rainfall grows from bottom to top from 0 to 200 or more mm\/month, with 100 in the middle\./,
+    /Rainfall grows from left to right from 0 to 200 or more mm\/month, with 100 in the middle\./,
   );
-  assert.match(description, /Darker is wetter\./);
+  assert.doesNotMatch(description, /Darker is wetter\./);
   assert.match(description, /The scale is a custom range\./);
 });
 
-test("the dot legend labels five stops over boxes with growing dot counts", () => {
-  const legend = dotLegend(KENYA_RAINFALL_STOPS, "mm/month", 0.05) as unknown as TestElement;
+test("the dot legend labels four stops over boxes with growing dot sizes", () => {
+  const legend = dotLegend(
+    KENYA_RAINFALL_STOPS,
+    "mm/month",
+    0.05,
+    inkPaint("navy"),
+  ) as unknown as TestElement;
   const [caption, boxes, labels, note] = legend.children;
 
   assert.equal(caption.textContent, "mm/month");
   assert.deepEqual(
     labels.children.map((label) => label.textContent),
-    ["0", "30", "60", "100", "≥ 200"],
+    ["30", "60", "100", "≥ 200"],
   );
-  assert.deepEqual(boxes.children.map((box) => box.children.length), [0, 4, 8, 12, 16]);
+  const areas = boxes.children.map((box) => Number.parseFloat(box.children[0].style.width) ** 2);
+  areas.forEach((area, index) => assert.ok(Math.abs(area / areas[0] - (index + 1)) < 1e-6));
+  assert.equal(boxes.style.gridTemplateColumns, "repeat(4, 34px)");
+  assert.equal(labels.style.gridTemplateColumns, "repeat(4, 34px)");
   assert.ok(note.textContent.includes("0.05° grid (≈ 5.6 km)"));
   assert.equal(legend.children.length, 4);
 });
 
+test("the dot legend draws its dots in the current ink with the matching halo", () => {
+  const legend = dotLegend(
+    KENYA_RAINFALL_STOPS,
+    "mm/month",
+    0.05,
+    inkPaint("white"),
+  ) as unknown as TestElement;
+  const dot = legend.children[1].children[0].children[0];
+
+  assert.equal(dot.style.background, "rgb(255, 255, 255)");
+  assert.equal(dot.style.boxShadow, "0 0 0 1px rgb(31, 31, 31)");
+});
+
 test("the dot legend adds the block note only when zoomed out", () => {
-  const legend = dotLegend(KENYA_RAINFALL_STOPS, "mm/month", 0.05, 2) as unknown as TestElement;
+  const legend = dotLegend(
+    KENYA_RAINFALL_STOPS,
+    "mm/month",
+    0.05,
+    inkPaint("navy"),
+    2,
+  ) as unknown as TestElement;
 
   assert.equal(legend.children[4].textContent, "Here: 1 dot site per 2×2 cells");
 });
@@ -187,14 +262,14 @@ test("Kenya rainfall keeps each tick at its original palette position", () => {
   assert.ok(labels.children.every((label) => label.style.whiteSpace === "nowrap"));
 });
 
-test("the rainfall gradient keeps its original palette colours and stop positions", () => {
+test("the rainfall gradient uses the OKLCH ramp at its stop positions", () => {
   const legend = renderLegend(KENYA_RAINFALL_STOPS, "mm/month");
   const bar = legend.children[1];
 
   assert.equal(
     bar.style.background,
-    "linear-gradient(to right, rgb(247, 251, 255) 0%, rgb(198, 219, 239) 25%, "
-      + "rgb(106, 174, 214) 50%, rgb(32, 112, 180) 75%, rgb(8, 48, 107) 100%)",
+    "linear-gradient(to right, rgb(231, 244, 255) 0%, rgb(170, 196, 223) 25%, "
+      + "rgb(114, 149, 192) 50%, rgb(62, 101, 160) 75%, rgb(18, 55, 128) 100%)",
   );
 });
 
@@ -288,6 +363,7 @@ class TestElement {
   className = "";
   width = 0;
   height = 0;
+  image: { data: Uint8ClampedArray; width: number; height: number } | null = null;
   readonly attributes: Record<string, string> = {};
   private text = "";
 
@@ -317,8 +393,12 @@ class TestElement {
       fillStyle: "",
       createImageData: (width: number, height: number) => ({
         data: new Uint8ClampedArray(width * height * 4),
+        width,
+        height,
       }),
-      putImageData() {},
+      putImageData: (image: { data: Uint8ClampedArray; width: number; height: number }) => {
+        this.image = image;
+      },
       fillRect() {},
     };
   }

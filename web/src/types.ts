@@ -217,11 +217,14 @@ export interface DisplayTokens {
   range: string;
   off: string;
   colour: string; // the picked owner, a layer id or blend
+  ink: string; // `layer:preset` or `layer:rrggbb` entries
 }
 
 /** A layer's display choices that differ from the bundle; a missing field means its default. */
 export interface LayerDisplay {
   palette?: string;
+  /** A dot or isotherm ink, by preset name or as #rrggbb. */
+  ink?: string;
   range?: [number, number];
 }
 
@@ -248,8 +251,11 @@ export interface LayerContext {
   beforeId: string | undefined;
   /** The viewer's choices for this layer; absent means the bundle's defaults. */
   display?: LayerDisplay;
-  /** Report failures after mounting, such as a step that cannot be read. */
-  report(error: unknown): void;
+  /**
+   * Report failures after mounting, such as a step that cannot be read.
+   * Returns a function that withdraws the note when the failure clears.
+   */
+  report(error: unknown): () => void;
 }
 
 /** A slider in a layer card or its menu. */
@@ -287,6 +293,19 @@ export interface PaletteChoice {
   colors: string[];
 }
 
+/** The ink of a layer's dots or isotherms, which its menu can change. */
+export interface InkMenu {
+  /** The heading above the choices, such as Dot ink. */
+  heading: string;
+  presets: PaletteChoice[];
+  defaultInk: string;
+  /** Whether the layer is drawn as dots or isotherms right now. */
+  readonly inUse: boolean;
+  /** A preset name or a custom #rrggbb. */
+  readonly value: string;
+  set(ink: string): void;
+}
+
 /** A display range a layer's menu can change. */
 export interface RangeMenu {
   /** The range the bundle fits to the area, with uneven spacing. */
@@ -315,6 +334,8 @@ export interface LayerMenu {
   readonly palette: string;
   setPalette(name: string): void;
   range?: RangeMenu;
+  /** Present for a layer with dots or isotherms, which replace the palettes while drawn. */
+  ink?: InkMenu;
   readonly edges?: EdgesMenu;
   /** Explain why optional controls are unavailable, without showing disabled sliders. */
   readonly edgesNote?: string;

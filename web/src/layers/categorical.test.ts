@@ -116,19 +116,19 @@ test("categorical restoration applies a hide requested while the layer is remove
   }
 });
 
-test("categorical restoration uses the slot requested while the layer is removed", async () => {
+test("categorical restoration keeps the fill slot while removed", async () => {
   const harness = createViewHarness(true, { fill: "fill-anchor", lines: "line-anchor" });
   try {
     const view = createCategoricalView(harness.context);
     await view.ready;
     const map = harness.map;
     harness.capture.get("webglcontextlost")!();
-    view.show("edges");
+    view.show("colour");
     harness.capture.get("webglcontextrestored")!();
 
     assert.deepEqual(map.getLayersOrder(), [
-      "fill-anchor",
       "cover-classes",
+      "fill-anchor",
       "line-anchor",
       "outline",
     ]);

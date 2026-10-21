@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { createHarness } from "./class-field-harness.test.ts";
-import { EDGES_OUTLINE_STRENGTH, FILL_OUTLINE_STRENGTH } from "./class-field-shaders.ts";
+import { FILL_OUTLINE_STRENGTH } from "./class-field-shaders.ts";
 
 test("class fields retain ids across context loss and release resources on removal", () => {
   const harness = createHarness();
@@ -50,6 +50,7 @@ test("palette and edge setters repaint without reuploading class ids", () => {
   assert.equal(harness.uniforms.get("uRounding"), 0.6);
   assert.equal(harness.uniforms.get("uSoftnessCells"), 1);
   assert.equal(harness.uniforms.get("uOutline"), 1);
+  assert.equal(harness.uniforms.get("uOutlineStrength"), FILL_OUTLINE_STRENGTH);
   assert.equal(harness.repaints(), 2);
 });
 
@@ -122,17 +123,17 @@ test("globe drawing requests fallback instead of drawing Mercator quads", async 
   assert.match(harness.failures[0].message, /Mercator/);
 });
 
-test("edges mode sets its fill opacity and stronger outline on the GPU", () => {
+test("the outline option draws faint ink over the opaque class fill", () => {
   const harness = createHarness();
   harness.field.setIds(new Uint8Array(12).fill(1));
   harness.field.layer.onAdd!(harness.map, harness.gl);
   harness.field.layer.render(harness.gl, harness.input);
-  assert.equal(harness.uniforms.get("uFillOpacity"), 1);
+
+  assert.equal(harness.uniforms.get("uOutline"), 0);
   assert.equal(harness.uniforms.get("uOutlineStrength"), FILL_OUTLINE_STRENGTH);
 
-  harness.field.setMode("edges");
+  harness.field.setEdges({ smooth: true, rounding: 0.25, softnessCells: 0, outline: true });
   harness.field.layer.render(harness.gl, harness.input);
-  assert.equal(harness.uniforms.get("uFillOpacity"), 0);
   assert.equal(harness.uniforms.get("uOutline"), 1);
-  assert.equal(harness.uniforms.get("uOutlineStrength"), EDGES_OUTLINE_STRENGTH);
+  assert.equal(harness.uniforms.get("uOutlineStrength"), FILL_OUTLINE_STRENGTH);
 });

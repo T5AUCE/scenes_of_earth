@@ -332,11 +332,17 @@ body.scene-mode #panel {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin: 0 0 4px 22px;
+  margin: 0 0 4px;
 }
 
-.layer-menu .custom-colors[hidden] {
-  display: none;
+#scene-column .layer-menu .mode-switch {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+#scene-column .layer-menu .mode-switch label {
+  margin-bottom: 0;
 }
 
 .layer-menu input[type="number"] {
@@ -585,19 +591,6 @@ body.scene-mode #panel {
   min-width: 0;
 }
 
-#scene-column .card .colour-chip {
-  align-self: center;
-  padding: 0 6px;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.08);
-  font-size: 11px;
-}
-
-#scene-column .card .colour-pick {
-  padding: 0 6px;
-  font-size: 11px;
-}
-
 .legend-bivariate {
   font-size: 11px;
   color: #444;
@@ -605,16 +598,46 @@ body.scene-mode #panel {
 
 .legend-bivariate-plot {
   display: grid;
-  grid-template-columns: 3.2em 112px;
-  grid-template-rows: 112px 1.4em;
+  grid-template-columns: auto 3.2em 112px;
+  grid-template-rows: 112px 1.4em 1.4em;
+  justify-content: center;
+  align-items: center;
   gap: 2px 4px;
   margin: 2px 0;
 }
 
+.legend-bivariate-title-y {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: center;
+  white-space: nowrap;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+}
+
+.legend-bivariate-title-x {
+  grid-column: 3;
+  grid-row: 3;
+  text-align: center;
+}
+
 .legend-bivariate-plot canvas {
+  grid-column: 3;
+  grid-row: 1;
   width: 112px;
   height: 112px;
   box-shadow: 0 0 0 1px #999;
+}
+
+.legend-bivariate-rows {
+  grid-column: 2;
+  grid-row: 1;
+  height: 100%;
+}
+
+.legend-bivariate-columns {
+  grid-column: 3;
+  grid-row: 2;
 }
 
 .legend-bivariate-rows,
@@ -675,7 +698,6 @@ body.scene-mode #panel {
 .legend-dot {
   position: absolute;
   border-radius: 50%;
-  background: #1a3658;
 }
 
 /* The time bar covers the bottom left, so the scale rides above it. */

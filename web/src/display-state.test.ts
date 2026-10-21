@@ -3,6 +3,7 @@ import { registerHooks } from "node:module";
 import { afterEach, test } from "node:test";
 
 import { BLEND } from "./layers/allocate.ts";
+import { inkPaint } from "./render/palettes.ts";
 import type { DisplayTokens, LayerDoc } from "./types.ts";
 
 const stateUrl = new URL("./display-state.ts", import.meta.url).href;
@@ -19,6 +20,7 @@ const {
   applyColourAction,
   DEFAULT_EDGES,
   formatDisplayParams,
+  loadStoredInks,
   loadStoredPalettes,
   loadStoredEdges,
   loadStoredPick,
@@ -28,6 +30,7 @@ const {
   resolveDisplay,
   setLayerDisplay,
   shouldStorePick,
+  storeInk,
   storePalette,
   storeEdges,
   storePick,
@@ -84,7 +87,7 @@ test("opening a link saves nothing", () => {
   const writes: string[] = [];
   useStorage({ setItem: (key: string) => writes.push(key) });
 
-  const tokens = { pal: "chirps_monthly:batlow", range: "", off: "terrain", colour: "" };
+  const tokens = { pal: "chirps_monthly:batlow", range: "", off: "terrain", colour: "", ink: "" };
   resolveDisplay(LAYERS, tokens, {});
 
   assert.deepEqual(writes, []);
@@ -266,6 +269,7 @@ test("unknown layers, palettes and reversed ranges are dropped", () => {
     range: "chirps_monthly:10:5,chirps_monthly:a:b,chirps_monthly::9,esa_worldcover:0:9,t:1:2",
     off: "chirps_monthly,terrain.nothing",
     colour: "",
+    ink: "",
   };
   const { display, dropped } = resolveDisplay(LAYERS, tokens, {});
 
@@ -291,6 +295,7 @@ test("the last entry for a layer wins and ranges are rounded to the data's preci
     range: "chirps_monthly:0.04:250.26",
     off: "",
     colour: "",
+    ink: "",
   };
   const { display } = resolveDisplay(LAYERS, tokens, {});
 
@@ -305,6 +310,7 @@ test("every layer with a menu names its palette but ranges and off parts only wh
       range: "",
       off: "",
       colour: "",
+      ink: "",
     },
     {},
   );
@@ -322,6 +328,7 @@ test("palettes, ranges and off parts round trip through the link text", () => {
     range: "chirps_monthly:0:250",
     off: "terrain.contours,esa_worldcover",
     colour: "",
+    ink: "",
   };
   const { display } = resolveDisplay(LAYERS, tokens, {});
   const text = formatDisplayParams(display, LAYERS);
@@ -484,6 +491,147 @@ test("invalid or blocked edge storage uses defaults without preventing changes",
   });
   assert.deepEqual(loadStoredEdges("esa_worldcover"), DEFAULT_EDGES);
   assert.doesNotThrow(() => storeEdges("esa_worldcover", { ...DEFAULT_EDGES }));
+});
+
+test("inks round trip through the link text and only non-default inks are written", () => {
+  const tokens = {
+    ...NO_TOKENS,
+    ink: "chirps_monthly:deep-red,era5land_temperature:1a2b3c",
+  };
+  const { display, dropped } = resolveDisplay(COLOUR_LAYERS, tokens, {}, null, {});
+
+  assert.equal(dropped, false);
+  assert.deepEqual(display.layers.chirps_monthly, { ink: "deep-red" });
+  assert.deepEqual(display.layers.era5land_temperature, { ink: "#1a2b3c" });
+  assert.match(
+    formatDisplayParams(display, COLOUR_LAYERS),
+    /&ink=chirps_monthly:deep-red,era5land_temperature:1a2b3c/,
+  );
+
+  const defaults = resolveDisplay(
+    COLOUR_LAYERS,
+    { ...NO_TOKENS, ink: "chirps_monthly:navy,era5land_temperature:charcoal" },
+    {},
+    null,
+    {},
+  );
+  assert.ok(!formatDisplayParams(defaults.display, COLOUR_LAYERS).includes("&ink="));
+});
+
+test("unknown or invalid inks are ignored", () => {
+  const tokens = {
+    ...NO_TOKENS,
+    ink: "chirps_monthly:pink,chirps_monthly:12345,chirps_monthly:#1a2b3c,"
+      + "chirps_monthly:1A2B3C,nowhere:navy,terrain:navy,esa_worldcover:black,x",
+  };
+  const { display, dropped } = resolveDisplay(LAYERS, tokens, {}, null, {});
+
+  assert.equal(dropped, true);
+  assert.deepEqual(display.layers, {});
+});
+
+test("a linked ink beats a remembered one and a remembered one beats the default", () => {
+  const stored = { chirps_monthly: "brown", era5land_temperature: "#102030", terrain: "black" };
+  const remembered = resolveDisplay(COLOUR_LAYERS, NO_TOKENS, {}, null, stored);
+  const linked = resolveDisplay(
+    COLOUR_LAYERS,
+    { ...NO_TOKENS, ink: "chirps_monthly:white" },
+    {},
+    null,
+    stored,
+  );
+
+  assert.deepEqual(remembered.display.layers.chirps_monthly, { ink: "brown" });
+  assert.deepEqual(remembered.display.layers.era5land_temperature, { ink: "#102030" });
+  assert.equal(remembered.display.layers.terrain, undefined);
+  assert.deepEqual(linked.display.layers.chirps_monthly, { ink: "white" });
+});
+
+test("a remembered ink that is no longer valid is ignored", () => {
+  const { display } = resolveDisplay(LAYERS, NO_TOKENS, {}, null, { chirps_monthly: "pink" });
+
+  assert.deepEqual(display.layers, {});
+});
+
+test("stored ink values that are not strings are ignored", () => {
+  const items = useStorage();
+  items.set("soe.ink.v1", JSON.stringify({
+    chirps_monthly: ["#ffffff"],
+    era5land_temperature: { toString: null },
+    terrain: 7,
+    esa_worldcover: null,
+  }));
+
+  const stored = loadStoredInks();
+  const { display, dropped } = resolveDisplay(COLOUR_LAYERS, NO_TOKENS, {}, null, stored);
+  const text = formatDisplayParams(display, COLOUR_LAYERS);
+
+  assert.deepEqual(stored, {});
+  assert.equal(dropped, false);
+  assert.deepEqual(display.layers, {});
+  assert.ok(!text.includes("&ink="));
+});
+
+test("the resolver reads no ambient ink storage unless the caller loads it", () => {
+  const items = useStorage();
+  items.set("soe.ink.v1", JSON.stringify({ chirps_monthly: "white" }));
+
+  const implicit = resolveDisplay(LAYERS, NO_TOKENS, {});
+  const explicit = resolveDisplay(LAYERS, NO_TOKENS, {}, null, {});
+  const applied = resolveDisplay(LAYERS, NO_TOKENS, {}, null, loadStoredInks());
+
+  assert.deepEqual(implicit.display.layers, {});
+  assert.deepEqual(explicit.display.layers, {});
+  assert.deepEqual(applied.display.layers.chirps_monthly, { ink: "white" });
+});
+
+test("an ink choice keeps the range and is remembered by layer", () => {
+  useStorage();
+  const tokens = { ...NO_TOKENS, range: "chirps_monthly:0:250" };
+  const { display } = resolveDisplay(LAYERS, tokens, {}, null, {});
+  const menu = {
+    palette: "ink-blue",
+    defaultPalette: "ink-blue",
+    range: { value: [0, 250] as [number, number] },
+    ink: { value: "#102030", defaultInk: "navy" },
+  };
+
+  recordMenuChange(display, "chirps_monthly", menu, "ink");
+
+  assert.deepEqual(display.layers.chirps_monthly, { range: [0, 250], ink: "#102030" });
+  assert.deepEqual(loadStoredInks(), { chirps_monthly: "#102030" });
+
+  const reset = { ...menu, ink: { ...menu.ink, value: "navy" } };
+  recordMenuChange(display, "chirps_monthly", reset, "ink");
+
+  assert.deepEqual(loadStoredInks(), {});
+  assert.deepEqual(display.layers.chirps_monthly, { range: [0, 250] });
+});
+
+test("stored inks are written by layer and storage errors fall back to none", () => {
+  useStorage();
+  storeInk("chirps_monthly", "white");
+  assert.deepEqual(loadStoredInks(), { chirps_monthly: "white" });
+
+  useStorage({
+    getItem: () => {
+      throw new Error("blocked");
+    },
+  });
+  assert.deepEqual(loadStoredInks(), {});
+});
+
+test("a dark ink gets a light halo and a light ink a dark one", () => {
+  const light = [246, 239, 227];
+  const dark = [31, 31, 31];
+
+  for (const ink of ["navy", "charcoal", "black", "brown", "deep-red", "#102030"]) {
+    assert.deepEqual(inkPaint(ink).halo, light, ink);
+  }
+  for (const ink of ["white", "#f0f0f0", "#ffe08a"]) {
+    assert.deepEqual(inkPaint(ink).halo, dark, ink);
+  }
+  assert.deepEqual(inkPaint("navy").ink, [26, 54, 88]);
 });
 
 function useStorage(overrides: object = {}) {

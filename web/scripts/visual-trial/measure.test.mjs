@@ -215,7 +215,6 @@ test("a colour spot sets the pick through the scene link", async () => {
     cardText: "",
     classLabels: [],
     colourOwner: "era5land_temperature",
-    draws: { Temperature: "Colour", Rainfall: "As dots" },
   };
   let url = null;
   const page = {
@@ -242,7 +241,6 @@ test("a colour spot sets the pick through the scene link", async () => {
 
   assert.equal(url, "https://example.test/?scene=8db2b3434ee7cf729daf&colour=era5land_temperature");
   assert.equal(records[0].colour_owner, "era5land_temperature");
-  assert.deepEqual(records[0].draws, { Temperature: "Colour", Rainfall: "As dots" });
   assert.equal(records[0].marks_frame_ms_p95, 10);
 });
 
@@ -304,7 +302,7 @@ test("viewRecord reports a view without a sample as not loaded", () => {
   assert.deepEqual(record.legend_classes, []);
 });
 
-test("colour views record the owner, the draws and the marks frame time", () => {
+test("colour views record the owner and the marks frame time", () => {
   const record = viewRecord({
     spot: "Kenya-temperature",
     scene: "8db2b3434ee7cf729daf",
@@ -317,7 +315,6 @@ test("colour views record the owner, the draws and the marks frame time", () => 
       lineCount: 0,
       tilesLoaded: true,
       colourOwner: "era5land_temperature",
-      draws: { Rainfall: "As dots" },
       marksFrameDeltas: [6, 8, 10],
     },
     failures: [],
@@ -326,7 +323,6 @@ test("colour views record the owner, the draws and the marks frame time", () => 
   });
 
   assert.equal(record.colour_owner, "era5land_temperature");
-  assert.deepEqual(record.draws, { Rainfall: "As dots" });
   assert.deepEqual([record.marks_frame_ms_p50, record.marks_frame_ms_p95], [8, 10]);
 });
 

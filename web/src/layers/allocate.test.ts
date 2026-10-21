@@ -17,11 +17,11 @@ test("auto gives colour to the isoline layer before the dot layer", () => {
   assert.equal(allocation.draws.get("rain"), "dots");
 });
 
-test("a data layer owns colour over land cover", () => {
+test("land cover is hidden when a data layer owns colour", () => {
   const allocation = allocate([LAND, TEMP], on("land", "temp"), null);
 
   assert.equal(allocation.owner, "temp");
-  assert.equal(allocation.draws.get("land"), "edges");
+  assert.deepEqual(allocation.draws.get("land"), { hidden: "Shown only in colour" });
 });
 
 test("a pick beats the auto rank", () => {
@@ -39,19 +39,20 @@ test("an off pick passes colour to the auto rank meanwhile", () => {
 });
 
 test("a blocked fallback is hidden with its reason while colour stays available", () => {
-  const blocked = new Map([["land", "Outlines need WebGL drawing"]]);
+  const blocked = new Map([["rain", "Dots need more zoom"]]);
 
-  const outlined = allocate([LAND, TEMP], on("land", "temp"), null, blocked);
-  assert.deepEqual(outlined.draws.get("land"), { hidden: "Outlines need WebGL drawing" });
+  const dotted = allocate([RAIN, TEMP], on("rain", "temp"), "temp", blocked);
+  assert.deepEqual(dotted.draws.get("rain"), { hidden: "Dots need more zoom" });
 
-  const coloured = allocate([LAND, TEMP], on("land", "temp"), "land", blocked);
-  assert.equal(coloured.draws.get("land"), "colour");
+  const coloured = allocate([RAIN, TEMP], on("rain", "temp"), "rain", blocked);
+  assert.equal(coloured.draws.get("rain"), "colour");
 });
 
-test("a categorical layer without a fallback uses edges", () => {
-  assert.equal(layerDraws(LAND).fallback, "edges");
+test("a categorical layer without a fallback draws only in colour", () => {
+  assert.equal(layerDraws(LAND).fallback, null);
 
   const allocation = allocate([LAND, TEMP], on("land", "temp"), "land");
+  assert.equal(allocation.draws.get("land"), "colour");
   assert.equal(allocation.draws.get("temp"), "isolines");
   assert.equal(layerDraws(TEMP).fallback, "isolines");
 });
@@ -71,7 +72,7 @@ test("a field outranks a categorical layer that offers dots", () => {
   assert.equal(allocation.draws.get("land"), "dots");
 });
 
-test("land-cover outlines use no line slot", () => {
+test("hidden land cover leaves the line slots free", () => {
   const isotherm = layer("isotherm", ["ramp", "isolines"]);
   const units = [LAND, RAIN, isotherm, TERRAIN];
   const allocation = allocate(
@@ -80,17 +81,17 @@ test("land-cover outlines use no line slot", () => {
     "rain",
   );
 
-  assert.equal(allocation.draws.get("land"), "edges");
+  assert.deepEqual(allocation.draws.get("land"), { hidden: "Shown only in colour" });
   assert.equal(allocation.draws.get("isotherm"), "isolines");
   assert.equal(allocation.draws.get("terrain.contours"), "contours");
 });
 
-test("contours keep the solid slot with land-cover outlines", () => {
+test("contours keep the solid slot while land cover is hidden", () => {
   const units = [LAND, TEMP, TERRAIN];
   const allocation = allocate(units, on("land", "temp", "terrain.contours"), "temp");
 
   assert.equal(allocation.draws.get("temp"), "colour");
-  assert.equal(allocation.draws.get("land"), "edges");
+  assert.deepEqual(allocation.draws.get("land"), { hidden: "Shown only in colour" });
   assert.equal(allocation.draws.get("terrain.contours"), "contours");
 });
 

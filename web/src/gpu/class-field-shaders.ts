@@ -1,5 +1,6 @@
 /**
- * Draw categorical fills and borders with GLSL ES 3.00 and mirror their decisions for tests.
+ * Draw categorical fills and their optional outline with GLSL ES 3.00 and mirror their decisions
+ * for tests.
  *
  * The vertex uniform `uMatrix` takes a quad corner in [0, 1]² to clip space. `uTile` holds its
  * first column and column count relative to the texture, followed by its vertical start and
@@ -11,8 +12,7 @@
  * `uSmooth` blends competing classes from the kernel instead of painting the nearest cell.
  * `uRounding` blends bilinear weights towards a cubic B-spline. `uSoftnessCells` is the width of
  * the colour blend between competing classes in grid cells. `uOutline` enables the border while
- * `uOutlineStrength` controls its ink weight. `uFillOpacity` controls the class fill while
- * `uOpacity` scales the complete result.
+ * `uOutlineStrength` controls its ink weight, and `uOpacity` scales the complete result.
  */
 export const CLASS_FIELD_VERTEX = `#version 300 es
 in vec2 aCorner;
@@ -44,7 +44,6 @@ uniform float uRounding;
 uniform float uSoftnessCells;
 uniform bool uOutline;
 uniform float uOutlineStrength;
-uniform float uFillOpacity;
 uniform float uOpacity;
 out vec4 fragColor;
 
@@ -164,8 +163,7 @@ void main() {
   uint nearest = cellId(base + ivec2(step(0.5, fraction)));
   if (nearest == 0u) discard;
   if (!uSmooth) {
-    float fill = uFillOpacity * uOpacity;
-    fragColor = vec4(classColor(nearest) * fill, fill);
+    fragColor = vec4(classColor(nearest) * uOpacity, uOpacity);
     return;
   }
 
@@ -257,11 +255,9 @@ void main() {
     }
     ink = min(ink, 1.0);
   }
-  // Premultiplied output keeps the border's ink alpha independent of the fill.
   float inkAlpha = ink * uOutlineStrength;
-  color = mix(color * uFillOpacity, INK, inkAlpha);
-  float alpha = max(uFillOpacity, inkAlpha);
-  fragColor = vec4(color * uOpacity, alpha * uOpacity);
+  color = mix(color, INK, inkAlpha);
+  fragColor = vec4(color * uOpacity, uOpacity);
 }
 `;
 
@@ -272,8 +268,6 @@ const FULL_SUPPORT_WEIGHT = 0.1;
 const OUTLINE_WIDTH_PX = 0.75;
 /** The faint outline drawn while a categorical layer holds colour. */
 export const FILL_OUTLINE_STRENGTH = 0.25;
-/** The stronger outline that becomes the layer's only ink when it draws borders alone. */
-export const EDGES_OUTLINE_STRENGTH = 0.6;
 
 /** The distances and coverage that the fragment shader derives from one class gap. */
 export interface EdgeCoverage {
@@ -336,35 +330,32 @@ export interface ClassFieldResult {
   outline: number;
 }
 
-/** How the class fill and the outline ink are weighted in the shader's final write. */
+/** How the outline ink is weighted in the shader's final write. */
 export interface ClassFieldAppearance {
-  /** Opacity of the class fill; zero draws borders only. */
-  fillOpacity: number;
-  /** Ink weight of the outline; edges mode uses a stronger value than fill mode. */
+  /** Ink weight of the faint outline. */
   outlineStrength: number;
   /** Whether the outline is drawn at all. */
   outline: boolean;
 }
 
-/** The premultiplied fill and ink alphas before the layer's `uOpacity` scales them. */
+/** The premultiplied ink and alpha the shader writes before the layer's `uOpacity` scales them. */
 export interface ClassFieldAlpha {
-  fill: number;
   ink: number;
   alpha: number;
 }
 
 /**
- * Apply the fragment shader's fill and outline weights to a sampled fragment so behaviour can be
- * checked in Node.
+ * Apply the fragment shader's outline weight to a sampled fragment so behaviour can be checked
+ * in Node. A drawn class fill is always opaque.
  */
 export function classFieldAlpha(
   result: ClassFieldResult,
   appearance: ClassFieldAppearance,
 ): ClassFieldAlpha {
-  if (result.discarded) return { fill: 0, ink: 0, alpha: 0 };
+  if (result.discarded) return { ink: 0, alpha: 0 };
 
   const ink = appearance.outline ? result.outline * appearance.outlineStrength : 0;
-  return { fill: appearance.fillOpacity, ink, alpha: Math.max(appearance.fillOpacity, ink) };
+  return { ink, alpha: 1 };
 }
 
 /**

@@ -13,6 +13,7 @@ export const COLOR_CHANNELS = 3;
 export const RGBA_CHANNELS = 4;
 
 const OPAQUE = 255;
+const GAMUT_EPSILON = 1e-6;
 
 /** A lookup table of 256 opaque RGBA entries blended through the gradient's RGB stops. */
 export function lut(stops: number[][]) {
@@ -125,13 +126,35 @@ function oklabToRgb([lightness, a, b]: number[]) {
   ].map((channel) => linearToSrgb(channel) * OPAQUE);
 }
 
+/** Convert OKLCH to sRGB channels from 0 to 255, left unclamped so callers can detect the gamut. */
+export function oklchToRgb(lightness: number, chroma: number, hue: number) {
+  const angle = (hue * Math.PI) / 180;
+  return oklabToRgb([lightness, chroma * Math.cos(angle), chroma * Math.sin(angle)]);
+}
+
+/** Convert sRGB channels from 0 to 255 to OKLCH, with hue in degrees. */
+export function rgbToOklch(rgb: number[]) {
+  const [lightness, a, b] = rgbToOklab(rgb);
+  return {
+    lightness,
+    chroma: Math.hypot(a, b),
+    hue: ((Math.atan2(b, a) * 180) / Math.PI + 360) % 360,
+  };
+}
+
+/** Whether an OKLCH colour maps inside the sRGB gamut. */
+export function inSrgbGamut(lightness: number, chroma: number, hue: number) {
+  return oklchToRgb(lightness, chroma, hue).every(
+    (channel) => channel >= -GAMUT_EPSILON && channel <= OPAQUE + GAMUT_EPSILON,
+  );
+}
+
 function srgbToLinear(channel: number) {
   return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
 }
 
 function linearToSrgb(channel: number) {
-  const clamped = Math.max(0, channel);
-  return clamped <= 0.0031308 ? 12.92 * clamped : 1.055 * clamped ** (1 / 2.4) - 0.055;
+  return channel <= 0.0031308 ? 12.92 * channel : 1.055 * channel ** (1 / 2.4) - 0.055;
 }
 
 /** A scaled input grid with sample locations for the blended layer. */

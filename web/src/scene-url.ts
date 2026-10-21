@@ -50,6 +50,7 @@ function displayTokens(parameters: URLSearchParams): DisplayTokens {
     range: joined("range"),
     off: joined("off"),
     colour: joined("colour"),
+    ink: joined("ink"),
   };
 }
 

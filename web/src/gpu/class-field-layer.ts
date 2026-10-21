@@ -1,10 +1,9 @@
-/** Draw tiled categorical class fills or borders through the shared GPU lifecycle. */
+/** Draw tiled categorical class fills with their optional outline through the GPU lifecycle. */
 import type { CustomLayerInterface } from "maplibre-gl";
 
 import {
   CLASS_FIELD_FRAGMENT,
   CLASS_FIELD_VERTEX,
-  EDGES_OUTLINE_STRENGTH,
   FILL_OUTLINE_STRENGTH,
 } from "./class-field-shaders";
 import { deleteResources, uploadTexture } from "./gl";
@@ -26,9 +25,6 @@ export interface ClassEdges {
   outline: boolean;
 }
 
-/** Whether class colours fill the cells or only their borders are drawn. */
-export type ClassFieldMode = "fill" | "edges";
-
 /** What createClassFieldLayer needs to place and report on a layer. */
 export interface ClassFieldOptions extends TiledLayerOptions {
   opacity: number;
@@ -41,8 +37,6 @@ interface Gpu extends TiledGpu {
 
 const PALETTE_SIZE = 256;
 const CHANNELS = 4;
-const FILL_OPACITY = 1;
-const EDGES_FILL_OPACITY = 0;
 const UNIFORM_NAMES = [
   "uIds",
   "uPalette",
@@ -53,7 +47,6 @@ const UNIFORM_NAMES = [
   "uSoftnessCells",
   "uOutline",
   "uOutlineStrength",
-  "uFillOpacity",
   "uOpacity",
 ];
 
@@ -68,7 +61,6 @@ export function createClassFieldLayer(options: ClassFieldOptions) {
     setIds: (ids: Uint8Array) => layer.setIds(ids),
     setColors: (colors: number[][]) => layer.setColors(colors),
     setEdges: (edges: ClassEdges) => layer.setEdges(edges),
-    setMode: (mode: ClassFieldMode) => layer.setMode(mode),
   };
 }
 
@@ -76,7 +68,6 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
   private ids: Uint8Array | null = null;
   private paletteBytes = new Uint8Array(PALETTE_SIZE * CHANNELS);
   private edges: ClassEdges;
-  private mode: ClassFieldMode = "fill";
   private isIdsStale = false;
   private isPaletteStale = true;
   private readonly fieldOptions: ClassFieldOptions;
@@ -109,11 +100,6 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
 
   setEdges(edges: ClassEdges) {
     this.edges = edges;
-    this.map?.triggerRepaint();
-  }
-
-  setMode(mode: ClassFieldMode) {
-    this.mode = mode;
     this.map?.triggerRepaint();
   }
 
@@ -150,21 +136,15 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
   protected draw(gl: WebGL2RenderingContext, gpu: Gpu, mainMatrix: ArrayLike<number>) {
     const uniform = (name: string) => this.uniform(gpu, name);
     const { rounding, softnessCells, outline } = this.edges;
-    const isEdges = this.mode === "edges";
 
     this.beginDraw(gl, gpu);
     gl.uniform1i(uniform("uIds"), 0);
     gl.uniform1i(uniform("uPalette"), 2);
-    // Borders come from the class kernel, so edges mode keeps it on even when Smooth is off.
-    gl.uniform1i(uniform("uSmooth"), isEdges || this.edges.smooth ? 1 : 0);
+    gl.uniform1i(uniform("uSmooth"), this.edges.smooth ? 1 : 0);
     gl.uniform1f(uniform("uRounding"), rounding);
     gl.uniform1f(uniform("uSoftnessCells"), softnessCells);
-    gl.uniform1i(uniform("uOutline"), isEdges || outline ? 1 : 0);
-    gl.uniform1f(
-      uniform("uOutlineStrength"),
-      isEdges ? EDGES_OUTLINE_STRENGTH : FILL_OUTLINE_STRENGTH,
-    );
-    gl.uniform1f(uniform("uFillOpacity"), isEdges ? EDGES_FILL_OPACITY : FILL_OPACITY);
+    gl.uniform1i(uniform("uOutline"), outline ? 1 : 0);
+    gl.uniform1f(uniform("uOutlineStrength"), FILL_OUTLINE_STRENGTH);
     gl.uniform1f(uniform("uOpacity"), this.fieldOptions.opacity);
 
     gl.activeTexture(gl.TEXTURE2);

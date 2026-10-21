@@ -3,7 +3,12 @@ import {
   CLASS_PALETTE_OPTIONS,
   CONTOUR_COLORS,
   DEFAULT_CONTOUR_COLOR,
+  DEFAULT_DOT_INK,
+  DEFAULT_ISOTHERM_INK,
   fieldGradient,
+  inkColor,
+  inkFromLink,
+  inkToLink,
 } from "./render/palettes";
 import { allocate, BLEND, blendPair, layerDraws, type BlendPair } from "./layers/allocate";
 import type { DisplayTokens, EdgeSettings, LayerDisplay, LayerDoc } from "./types";
@@ -11,8 +16,10 @@ import type { DisplayTokens, EdgeSettings, LayerDisplay, LayerDoc } from "./type
 const STORAGE_KEY = "soe.display.v1";
 const EDGES_STORAGE_KEY = "soe.edges.v1";
 const COLOUR_STORAGE_KEY = "soe.colour.v1";
+const INK_STORAGE_KEY = "soe.ink.v1";
 
 const PALETTE_FIELDS = 2;
+const INK_FIELDS = 2;
 const RANGE_FIELDS = 3;
 const SIGNIFICANT_DIGITS = 3;
 // log10 of an exact power of ten can land a hair above the integer and add a spurious decimal.
@@ -22,7 +29,13 @@ const LOG_ROUNDING_TOLERANCE = 1e-9;
 export const DROPPED_NOTE = "Some display settings in this link don't apply to this scene.";
 
 /** The tokens of a link without display settings. */
-export const NO_TOKENS: DisplayTokens = { pal: "", range: "", off: "", colour: "" };
+export const NO_TOKENS: DisplayTokens = {
+  pal: "",
+  range: "",
+  off: "",
+  colour: "",
+  ink: "",
+};
 
 /** Default class edges keep a one-pixel anti-aliased border and preserve isolated cells. */
 export const DEFAULT_EDGES: Readonly<EdgeSettings> = {
@@ -142,6 +155,14 @@ export function defaultPalette(layer: LayerDoc) {
   return layer.style.palette ?? "";
 }
 
+/** The ink a layer's dots or isotherms take until the viewer chooses another, if it has any. */
+export function defaultInk(layer: LayerDoc) {
+  const { fallback } = layerDraws(layer);
+  if (fallback === "dots") return DEFAULT_DOT_INK;
+
+  return fallback === "isolines" ? DEFAULT_ISOTHERM_INK : undefined;
+}
+
 /**
  * The decimals a custom range keeps. They match the precision of scaled integer values and
  * otherwise give the area's value span about three significant figures.
@@ -173,6 +194,7 @@ export function resolveDisplay(
   tokens: DisplayTokens,
   stored: Record<string, string>,
   storedPick: string | null = null,
+  storedInks: Record<string, string> = {},
 ): ResolvedDisplay {
   const display: SceneDisplay = { layers: {}, off: new Set(), colour: null };
   const byId = new Map(layers.map((layer) => [layer.id, layer]));
@@ -193,6 +215,23 @@ export function resolveDisplay(
     const chosen = linked.get(layer.id) ?? (isPaletteOf(layer, remembered) ? remembered : null);
     if (chosen && chosen !== defaultPalette(layer)) {
       setLayerDisplay(display, layer.id, { palette: chosen });
+    }
+  }
+
+  const linkedInks = new Map<string, string>();
+  for (const fields of tokenFields(tokens.ink)) {
+    const [id, value] = fields;
+    const ink = fields.length === INK_FIELDS ? inkFromLink(value) : undefined;
+    if (ink && hasInk(byId.get(id))) linkedInks.set(id, ink);
+    else dropped = true;
+  }
+
+  for (const layer of layers) {
+    const remembered = storedInks[layer.id];
+    const chosen = linkedInks.get(layer.id)
+      ?? (hasInk(layer) && inkColor(remembered ?? "") ? remembered : null);
+    if (chosen && chosen !== defaultInk(layer)) {
+      setLayerDisplay(display, layer.id, { ...display.layers[layer.id], ink: chosen });
     }
   }
 
@@ -226,6 +265,10 @@ export function resolveDisplay(
   return { display, dropped };
 }
 
+function hasInk(layer: LayerDoc | undefined) {
+  return layer !== undefined && defaultInk(layer) !== undefined;
+}
+
 function lastToken(value: string) {
   return value.split(",").filter(Boolean).at(-1) ?? null;
 }
@@ -256,8 +299,8 @@ function addBlendHalves(off: Set<string>, pair: BlendPair | null) {
 
 /**
  * The link parameters, each starting with `&`. Every layer with a menu names its palette so that
- * the receiver sees the sender's colours whatever palettes their browser remembers. Ranges and
- * off parts appear only when they differ from the defaults.
+ * the receiver sees the sender's colours whatever palettes their browser remembers. Ranges, inks
+ * and off parts appear only when they differ from the defaults.
  */
 export function formatDisplayParams(display: SceneDisplay, layers: LayerDoc[]) {
   const units = layers.flatMap(layerUnits);
@@ -279,6 +322,10 @@ export function formatDisplayParams(display: SceneDisplay, layers: LayerDoc[]) {
     }),
     off,
     colour: owner && colourCandidateCount(layers) >= 2 ? [owner] : [],
+    ink: layers.flatMap(({ id }) => {
+      const ink = display.layers[id]?.ink;
+      return ink ? [`${id}:${inkToLink(ink)}`] : [];
+    }),
   };
 
   return Object.entries(parameters)
@@ -396,48 +443,87 @@ export function storePick(pick: string | null) {
 
 /** Replace a layer's overrides or remove its entry when no overrides remain. */
 export function setLayerDisplay(display: SceneDisplay, layerId: string, layer: LayerDisplay) {
-  const { palette, range } = layer;
-  if (!palette && !range) {
+  const { palette, range, ink } = layer;
+  if (!palette && !range && !ink) {
     delete display.layers[layerId];
     return;
   }
 
-  display.layers[layerId] = { ...(palette && { palette }), ...(range && { range }) };
+  display.layers[layerId] = {
+    ...(palette && { palette }),
+    ...(range && { range }),
+    ...(ink && { ink }),
+  };
 }
 
 /**
- * Record a menu change in the scene's display. Only a palette choice is remembered by this
+ * Record a menu change in the scene's display. Palette and ink choices are remembered by this
  * browser, because a range belongs to the link and the visit.
  */
 export function recordMenuChange(
   display: SceneDisplay,
   layerId: string,
-  menu: { palette: string; defaultPalette: string; range?: { value: [number, number] | null } },
-  changed: "palette" | "range",
+  menu: {
+    palette: string;
+    defaultPalette: string;
+    range?: { value: [number, number] | null };
+    ink?: { value: string; defaultInk: string };
+  },
+  changed: "palette" | "range" | "ink",
 ) {
   const palette = menu.palette === menu.defaultPalette ? undefined : menu.palette;
-  setLayerDisplay(display, layerId, { palette, range: menu.range?.value ?? undefined });
+  const ink = menu.ink && menu.ink.value !== menu.ink.defaultInk ? menu.ink.value : undefined;
+  setLayerDisplay(display, layerId, { palette, range: menu.range?.value ?? undefined, ink });
   if (changed === "palette") storePalette(layerId, palette ?? null);
+  if (changed === "ink") storeInk(layerId, ink ?? null);
 }
 
 /** The palette names this browser remembers by layer id; empty when storage is unavailable. */
 export function loadStoredPalettes(): Record<string, string> {
+  return loadStoredNames(STORAGE_KEY);
+}
+
+/** Remember a layer's palette in this browser, or forget it when name is null. */
+export function storePalette(layerId: string, name: string | null) {
+  storeName(STORAGE_KEY, layerId, name);
+}
+
+/** The inks this browser remembers by layer id; empty when storage is unavailable. */
+export function loadStoredInks(): Record<string, string> {
+  return loadStoredNames(INK_STORAGE_KEY);
+}
+
+/** Remember a layer's ink in this browser, or forget it when ink is null. */
+export function storeInk(layerId: string, ink: string | null) {
+  storeName(INK_STORAGE_KEY, layerId, ink);
+}
+
+function loadStoredNames(key: string): Record<string, string> {
   try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}");
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? "{}");
+    if (!isRecord(parsed)) return {};
+
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, string] =>
+        typeof entry[1] === "string",
+      ),
+    );
   } catch {
     return {};
   }
 }
 
-/** Remember a layer's palette in this browser, or forget it when name is null. */
-export function storePalette(layerId: string, name: string | null) {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function storeName(key: string, layerId: string, name: string | null) {
   try {
-    const stored = loadStoredPalettes();
+    const stored = loadStoredNames(key);
     if (name) stored[layerId] = name;
     else delete stored[layerId];
 
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+    localStorage.setItem(key, JSON.stringify(stored));
   } catch {
     // The choice still applies to this visit. A blocked store is not worth reporting.
   }

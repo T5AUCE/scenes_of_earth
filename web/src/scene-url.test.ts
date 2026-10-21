@@ -26,7 +26,7 @@ test("a scene link reads the time and ignores a malformed one", () => {
     id,
     time: "2026-03",
     panel: null,
-    display: { pal: "", range: "", off: "", colour: "" },
+    display: { pal: "", range: "", off: "", colour: "", ink: "" },
   });
 
   const timeOf = (label: string) =>
@@ -71,6 +71,7 @@ test("display params round trip through the address", () => {
     range: "chirps_monthly:0:250",
     off: "terrain.contours",
     colour: "",
+    ink: "",
   });
 });
 
@@ -83,6 +84,16 @@ test("the colour param round trips through the address", () => {
   assert.equal(url, `?scene=${id}&colour=blend`);
   assert.equal(route.display.colour, "blend");
   assert.equal(plain.display.colour, "");
+});
+
+test("the ink param round trips through the address", () => {
+  const url = sceneUrl(id, null, "&ink=chirps_monthly:deep-red,era5land_temperature:1a2b3c");
+  const route = routeFor(url, null) as { display: { ink: string } };
+  const repeated = routeFor(`?scene=${id}&ink=a:white&ink=b:black`, null) as typeof route;
+
+  assert.equal(route.display.ink, "chirps_monthly:deep-red,era5land_temperature:1a2b3c");
+  assert.equal(repeated.display.ink, "a:white,b:black");
+  assert.ok(!url.includes("%"));
 });
 
 test("colons and commas are not percent encoded", () => {

@@ -9,7 +9,7 @@ import {
   stopsForRange,
 } from "../render/colormap";
 import { crossSampleTable, type SampleTable, sampleTable } from "../render/mercator";
-import { BIVARIATE_GREEN } from "../render/palettes";
+import { RAIN_TEMPERATURE_GRID } from "../render/palettes";
 import { formatTime, latestOnly, stepAt } from "../timeline";
 import type { LayerContext, LayerDoc, LayerView, TimeDoc } from "../types";
 import { BLEND, type Draw, differingPeriodNote, missingStepNote } from "./allocate";
@@ -20,7 +20,7 @@ const SMOOTH_NOTE = "Smoothed for display; values are per cell.";
 
 /** The title of the blended layer, as its card and the colour picker name it. */
 export const BLEND_TITLE = "Rainfall + temperature (blended)";
-const BLEND_COLORS = lut2d(BIVARIATE_GREEN);
+const BLEND_COLORS = lut2d(RAIN_TEMPERATURE_GRID);
 
 /** What the blend needs from the scene beyond its two layers. */
 export interface BlendContext

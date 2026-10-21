@@ -92,8 +92,6 @@ their remaining budget expires, and `Retry-After` waits cannot extend the deadli
 - `landcover_renderer` is the actual `gpu` or `image` renderer for landcover trials.
 - `colour_owner` is the layer that held the map's colour in that view, or `blend`, and is null when
   the view had no colour picker.
-- `draws` maps each layer card title to its chip text, such as `Colour`, `As dots`, `As isotherms`,
-  `As outlines` or a hidden reason, so one line shows how the whole scene was drawn.
 - `frame_ms_p50` and `frame_ms_p95` summarise rAF deltas during a scripted two-second pan and
   include browser scheduling and the rest of the map, not just GPU draw time. They are null for
   other trials. A 60 Hz browser normally has a 16.7 ms floor, so these values cannot establish

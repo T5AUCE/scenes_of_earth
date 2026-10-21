@@ -44,9 +44,6 @@ export function createImagePainter(
   };
 
   return {
-    /** The painter draws class fills only, so it cannot draw class borders. */
-    canDrawEdges: false,
-
     /** Paint the one-based class ids with colors[id - 1]. */
     paint(ids: Uint8Array, colors: number[][], smooth: boolean) {
       if (smooth) {

@@ -1,9 +1,8 @@
 /**
  * Build the scene's control cards and coordinate which unit owns the colour.
  * Each card lets the viewer toggle a layer's parts and change its options, while
- * the colour picker, chips and "Show in colour" buttons share one set of actions
- * so the cards, the blend and the map stay in step. Scene mounting and teardown
- * remain in the view module.
+ * the colour picker follows the same colour actions so the cards, the blend and the map stay
+ * in step. Scene mounting and teardown remain in the view module.
  */
 import type { Map as MapLibreMap } from "maplibre-gl";
 
@@ -27,13 +26,6 @@ import {
 import { BLEND_TITLE, type BlendView } from "./layers/blend";
 import { layerMenu, partControls, type MenuChange } from "./layers/layer-menu";
 import type { LayerDoc, LayerView, Part } from "./types";
-
-const CHIP_TEXT: Partial<Record<Draw, string>> = {
-  colour: "Colour",
-  dots: "As dots",
-  isolines: "As isotherms",
-  edges: "As outlines",
-};
 
 /** A layer's view with the layer it draws. */
 export interface MountedLayer {
@@ -66,7 +58,7 @@ export function mountCards(
     blend?.restyle();
     changed();
   };
-  const cards = mounted.map((layer) => layerCard(layer, display, hasChoice, act, menuChanged));
+  const cards = mounted.map((layer) => layerCard(layer, display, act, menuChanged));
   const blendCard = blend && blendCardFor(blend, (on) => act({ kind: "toggle", unit: BLEND, on }));
   const shown = new Map<LayerView, Draw | null>();
   let isUnderColour: boolean | null = null;
@@ -109,7 +101,7 @@ export function mountCards(
 function colourPicker(layers: LayerDoc[], hasBlend: boolean, onPick: (unit: string) => void) {
   const row = makeHtmlElement("label");
   row.className = "colour-picker";
-  makeHtmlElement("span", "Colour", row);
+  makeHtmlElement("span", "Colour layer", row);
   const select = document.createElement("select");
   for (const { id, title } of layers) {
     const option = makeHtmlElement("option", title, select) as HTMLOptionElement;
@@ -134,7 +126,6 @@ function colourPicker(layers: LayerDoc[], hasBlend: boolean, onPick: (unit: stri
 function layerCard(
   { layer, view }: MountedLayer,
   display: SceneDisplay,
-  hasChoice: boolean,
   act: (action: ColourAction) => void,
   changed: () => void,
 ): LayerCard {
@@ -144,9 +135,6 @@ function layerCard(
   const checks = new Map<string, HTMLInputElement>();
   const slidersByPart = new Map<string, HTMLElement>();
   const reasons = new Map<string, HTMLElement>();
-  const chip = makeHtmlElement("span");
-  chip.className = "colour-chip";
-  const pickButton = colourPickButton(layer.title, view, checks, act);
   view.parts.forEach(addPart);
   const legend = view.legend();
   if (legend) card.append(legend);
@@ -162,12 +150,6 @@ function layerCard(
         const reason = reasons.get(part.id);
         if (reason) reason.textContent = isOn ? hiddenReason(draws.get(part.id)) : "";
       }
-
-      const main = view.parts[0].id;
-      const draw = draws.get(main);
-      chip.textContent = on.has(main) ? chipText(draw) : "";
-      chip.hidden = !chip.textContent;
-      pickButton.hidden = chip.hidden || draw === "colour";
     },
   };
 
@@ -180,13 +162,11 @@ function layerCard(
     });
     checks.set(part.id, label.querySelector("input")!);
     row.append(label);
+    const reason = makeHtmlElement("div", "", card);
+    reason.className = "option-note";
+    reasons.set(part.id, reason);
     if (index === 0) {
-      if (hasChoice && layerDraws(layer).colour) row.append(chip, pickButton);
       addFirstPartExtras(view, row, card, display, changed);
-    } else {
-      const reason = makeHtmlElement("div", "", card);
-      reason.className = "option-note";
-      reasons.set(part.id, reason);
     }
     if (sliders) {
       slidersByPart.set(part.id, sliders);
@@ -197,24 +177,6 @@ function layerCard(
       card.append(part.note);
     }
   }
-}
-
-function colourPickButton(
-  title: string,
-  view: LayerView,
-  checks: Map<string, HTMLInputElement>,
-  act: (action: ColourAction) => void,
-) {
-  const button = makeHtmlElement("button", "Show in colour");
-  button.type = "button";
-  button.className = "colour-pick";
-  button.setAttribute("aria-label", `Show ${title} in colour`);
-  button.onclick = () => {
-    // The button hides after the pick, so focus moves to a control that stays visible.
-    checks.get(view.parts[0].id)!.focus();
-    act({ kind: "pick", unit: view.parts[0].id });
-  };
-  return button;
 }
 
 function lastFieldIndex(mounted: MountedLayer[]) {
@@ -241,12 +203,6 @@ function blendCardFor(blend: BlendView, onToggle: (on: boolean) => void) {
       blend.legend()!.hidden = !isOwner;
     },
   };
-}
-
-function chipText(draw: Draw | Hidden | undefined) {
-  if (draw === undefined) return "";
-
-  return typeof draw === "string" ? CHIP_TEXT[draw] ?? "" : draw.hidden;
 }
 
 function hiddenReason(draw: Draw | Hidden | undefined) {

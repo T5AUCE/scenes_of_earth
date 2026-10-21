@@ -8,7 +8,7 @@ import {
   MAX_SOFTNESS_CELLS,
   storeEdges,
 } from "../display-state";
-import { createClassFieldLayer, type ClassFieldMode } from "../gpu/class-field-layer";
+import { createClassFieldLayer } from "../gpu/class-field-layer";
 import { layerPosition, type LayerPosition } from "../gpu/tiled-layer";
 import { classLegend } from "../legend";
 import { removeLayerAndSource } from "../map";
@@ -17,15 +17,12 @@ import { cellClassIds } from "../render/smooth-classes";
 import type { EdgeSettings, EdgesMenu, LayerContext, LayerMenu, LayerView } from "../types";
 import type { Draw } from "./allocate";
 import { createImagePainter } from "./categorical-image";
-import { FALLBACK_PALETTE_NOTE } from "./layer-menu";
 
 const CATEGORICAL_OPACITY = 0.8;
 const ROUNDING_STEP = 0.05;
 const SOFTNESS_STEP_CELLS = 0.05;
 const SMOOTH_NOTE = "Edges are drawn smoothly from per-cell classes. No data is added.";
 const IMAGE_EDGES_NOTE = "Edge options need WebGL drawing.";
-const IMAGE_OUTLINES_NOTE = "Outlines need WebGL drawing";
-const EDGES_LEGEND = "Class borders only. Show in colour to see the classes.";
 
 /** Draw static classes with GPU edges, retaining the image painter as an automatic fallback. */
 export function createCategoricalView(context: LayerContext): LayerView {
@@ -38,7 +35,6 @@ class CategoricalView implements LayerView {
   readonly options;
   readonly menu: LayerMenu;
   readonly ready: Promise<void>;
-  readonly blocked: NonNullable<LayerView["blocked"]>;
 
   private readonly id: string;
   private readonly classes;
@@ -54,11 +50,9 @@ class CategoricalView implements LayerView {
   private colors;
   private smooth = true;
   private edges: EdgeSettings;
-  private mode: ClassFieldMode = "fill";
   private alive = true;
   private readonly context: LayerContext;
   private restorePosition: LayerPosition | null = null;
-  private restoreSlot: ClassFieldMode | null = null;
 
   constructor(context: LayerContext) {
     this.context = context;
@@ -82,7 +76,6 @@ class CategoricalView implements LayerView {
     });
     this.edgeMenu = this.createEdgesMenu();
     this.menu = this.createMenu();
-    this.blocked = this.createBlocked();
     this.parts = [{ id: layer.id, label: layer.title, layerIds: [this.id] }];
     this.options = [
       {
@@ -177,20 +170,6 @@ class CategoricalView implements LayerView {
       get edgesNote() {
         return view.image ? IMAGE_EDGES_NOTE : undefined;
       },
-      get paletteNote() {
-        return view.mode === "edges" ? FALLBACK_PALETTE_NOTE : undefined;
-      },
-    };
-  }
-
-  private createBlocked(): NonNullable<LayerView["blocked"]> {
-    const view = this;
-
-    return {
-      changes: new EventTarget(),
-      get reason() {
-        return view.image && !view.image.canDrawEdges ? IMAGE_OUTLINES_NOTE : null;
-      },
     };
   }
 
@@ -215,7 +194,6 @@ class CategoricalView implements LayerView {
     if (this.image || !map.getLayer(this.id)) return;
 
     this.restorePosition = this.drawPosition();
-    this.restoreSlot = null;
     map.removeLayer(this.id);
   };
 
@@ -232,12 +210,9 @@ class CategoricalView implements LayerView {
 
     const { map } = this.context;
     const position = this.restorePosition;
-    const slot = this.restoreSlot;
     this.restorePosition = null;
-    this.restoreSlot = null;
     map.addLayer(this.gpu.layer, position.beforeId);
     this.applyPosition(position);
-    if (slot) this.moveToSlot(slot);
     map.triggerRepaint();
   };
 
@@ -267,11 +242,9 @@ class CategoricalView implements LayerView {
         opacity: CATEGORICAL_OPACITY,
       });
       this.applyPosition(position);
-      this.mode = "fill";
       document.body.dataset.landcoverRenderer = "image";
       this.repaint();
       this.menuUpdates.dispatchEvent(new Event("change"));
-      this.blocked.changes.dispatchEvent(new Event("change"));
     } catch (error) {
       report(error);
     }
@@ -281,7 +254,6 @@ class CategoricalView implements LayerView {
     const visibility = visible ? "visible" : "none";
     if (this.restorePosition) {
       this.restorePosition = { ...this.restorePosition, visibility };
-      if (!visible) this.restoreSlot = null;
       return;
     }
 
@@ -299,11 +271,7 @@ class CategoricalView implements LayerView {
       this.gpu.setColors(colors);
       this.gpu.setEdges({ smooth: this.smooth, ...this.edges });
     }
-    this.legendBox.replaceChildren(
-      this.mode === "edges"
-        ? edgesLegend()
-        : classLegend(this.classes, this.present, this.colors),
-    );
+    this.legendBox.replaceChildren(classLegend(this.classes, this.present, this.colors));
   }
 
   private async load() {
@@ -322,30 +290,14 @@ class CategoricalView implements LayerView {
   setTime() {}
 
   show(draw: Draw | null) {
-    if (draw !== "colour" && draw !== "edges") {
+    if (draw !== "colour") {
       this.setVisible(false);
       return;
     }
 
-    this.mode = draw === "colour" ? "fill" : "edges";
-    if (!this.image) this.gpu.setMode(this.mode);
-    this.moveToSlot(this.mode);
     this.setVisible(true);
     this.repaint();
     this.menuUpdates.dispatchEvent(new Event("change"));
-  }
-
-  private moveToSlot(mode: ClassFieldMode) {
-    if (this.restorePosition) {
-      this.restoreSlot = mode;
-      return;
-    }
-
-    const { map } = this.context;
-    if (!map.getLayer(this.id)) return;
-
-    const { slots } = this.context;
-    map.moveLayer(this.id, mode === "fill" ? slots.fill : slots.lines);
   }
 
   legend() {
@@ -370,10 +322,4 @@ function gpuDisabled() {
   } catch {
     return false;
   }
-}
-
-function edgesLegend() {
-  const element = document.createElement("div");
-  element.textContent = EDGES_LEGEND;
-  return element;
 }

@@ -2,11 +2,33 @@
 import { stopPosition } from "./colormap";
 
 /** The finest and coarsest dot levels; a level L puts 2^L dot sites along each cell side. */
-export const MIN_LEVEL = -4;
-export const MAX_LEVEL = 4;
+export const MIN_LEVEL = -6;
+export const MAX_LEVEL = 6;
 
-/** Dot radius as a share of the dot spacing, which inks 18 % of the area at full density. */
-export const DOT_RADIUS_RATIO = 0.24;
+/** Dot radius at the top of the colour scale as a share of the dot spacing, inking 32 % of it. */
+export const DOT_RADIUS_RATIO = 0.08;
+
+/** Dot spacing to aim for in css px. */
+const MIN_SPACING_PX = 40;
+
+/** The largest dot radius in css px, reached once the level stops rising. */
+export const MAX_DOT_RADIUS_PX = DOT_RADIUS_RATIO * 3 * MIN_SPACING_PX;
+
+/** Dots that would be smaller than this radius in css px fade out by area instead. */
+export const MIN_DOT_RADIUS_PX = 0.5;
+
+/** How far a dot may sit from its site along each axis, as a share of the dot spacing. */
+export const POSITION_JITTER_RATIO = 0.08;
+/** How far a dot's radius may fall below the one its value calls for, as a share of it. */
+export const SIZE_JITTER_RATIO = 0.2;
+// The area varies symmetrically around the value's area so a cell's total ink keeps its value.
+export const AREA_JITTER_RATIO = 1 - (1 - SIZE_JITTER_RATIO) ** 2;
+/** The largest factor by which size jitter scales a radius. */
+export const MAX_RADIUS_SCALE = Math.sqrt(1 + AREA_JITTER_RATIO);
+/** The width in css px over which a dot's edge fades, which must also fit inside its sub-cell. */
+export const EDGE_PX = 0.5;
+/** The width in css px of the halo around a dot when it is drawn. */
+export const HALO_WIDTH_PX = 0.6;
 
 /** The byte that marks a cell with no value; positions use 0 to 253. */
 export const NO_DATA_BYTE = 255;
@@ -17,12 +39,15 @@ const MAX_POSITION_BYTE = 253;
 // MapLibre draws the world 512 px wide at zoom 0.
 const WORLD_PX_AT_ZOOM_0 = 512;
 const DEGREES_PER_RADIAN = 180 / Math.PI;
-const MIN_SPACING_PX = 5;
 const FADE_START = 0.75;
-// This offset nests sites across levels and centres the finest sites in their sub-cells.
+// The offset keeps every level's sites nested in the next level's and the lattice phase stable.
 const SLOT_OFFSET_CELLS = 15 / 32;
-const THRESHOLD_BITS = 3;
-const THRESHOLD_SIZE = 2 ** THRESHOLD_BITS;
+
+/** Site indexes are counted on the finest level so a site keeps its jitter at every zoom. */
+export const FINEST_SLOTS = 2 ** MAX_LEVEL;
+export const HASH_SALT = 0x9e3779b9;
+const NOISE_BITS = 16;
+const NOISE_HALF_RANGE = (2 ** NOISE_BITS - 1) / 2;
 
 /**
  * The on-screen size of a cell as the geometric mean of its sides, which Mercator stretches
@@ -57,47 +82,95 @@ export function slotPosition(slot: number, level: number) {
   return slot / 2 ** level + SLOT_OFFSET_CELLS;
 }
 
-/**
- * Rank a slot among the 4^bits slots of a cell, where the first ranks are spread as widely as
- * possible. The slot at (2i, 2j) of the next level keeps the rank of (i, j).
- */
-export function bayerRank(column: number, row: number, bits: number) {
-  let rank = 0;
-  for (let bit = 0; bit < bits; bit++) {
-    const across = (column >> bit) & 1;
-    const down = (row >> bit) & 1;
-    rank += (2 * (across ^ down) + down) * 4 ** (bits - 1 - bit);
-  }
-  return rank;
-}
-
-/** A per-cell offset in (0, 1) that decides which cells round their dot count up. */
-export function cellThreshold(column: number, row: number) {
-  const rank = bayerRank(column % THRESHOLD_SIZE, row % THRESHOLD_SIZE, THRESHOLD_BITS);
-  return (rank + 0.5) / THRESHOLD_SIZE ** 2;
+/** The largest dot radius in css px for dots this far apart, which the zoom cap limits. */
+export function maxDotRadiusPx(spacingPx: number) {
+  return Math.min(DOT_RADIUS_RATIO * spacingPx, MAX_DOT_RADIUS_PX);
 }
 
 /**
- * How many of a cell's dots to draw, which are the ones that rank below it. Below level 0 a
- * cell stands for a block of cells, so it has one dot site and a count of 0 or 1.
+ * Shrink the largest dot radius so the most jittered, largest dot with its fading edge and halo
+ * stays within its sub-cell, whichever axis of the stretched Mercator spacing is shorter.
  */
-export function dotCount(position: number, level: number, threshold: number) {
-  const slots = 4 ** Math.max(level, 0);
-  return Math.min(slots, Math.max(0, Math.floor(position * slots + 1 - threshold)));
-}
-
-/** Whether the dot at a slot of a cell is drawn, which a cell with no data never does. */
-export function isDotLit(
-  positionByte: number,
-  level: number,
-  threshold: number,
-  column: number,
-  row: number,
+export function containedRadiusPx(
+  spacingXPx: number,
+  spacingYPx: number,
+  maxRadiusPx: number,
+  haloWidthPx: number,
 ) {
-  if (positionByte >= HATCH_BYTE) return false;
+  const reachPx = EDGE_PX + haloWidthPx;
+  const marginPx = Math.min(spacingXPx, spacingYPx) * (0.5 - POSITION_JITTER_RATIO) - reachPx;
+  return Math.min(maxRadiusPx, Math.max(marginPx, 0) / MAX_RADIUS_SCALE);
+}
 
-  const count = dotCount(positionByte / MAX_POSITION_BYTE, level, threshold);
-  return bayerRank(column, row, Math.max(level, 0)) < count;
+/** The radius of a dot whose area is proportional to its position, then jittered by area. */
+export function dotRadiusPx(position: number, maxRadiusPx: number, areaNoise: number) {
+  return maxRadiusPx * Math.sqrt(position * (1 + AREA_JITTER_RATIO * areaNoise));
+}
+
+/** The radius to draw and the opacity of a dot, which fades by area below the minimum radius. */
+export function dotAppearance(radiusPx: number) {
+  return {
+    radiusPx: Math.max(radiusPx, MIN_DOT_RADIUS_PX),
+    opacity: Math.min(1, (radiusPx / MIN_DOT_RADIUS_PX) ** 2),
+  };
+}
+
+/**
+ * Two pseudo-random numbers from -1 to 1 for the site at an index on the finest level, which
+ * shift the dot along both axes.
+ */
+export function siteNoise(finestColumn: number, finestRow: number) {
+  const hash = siteHash(finestColumn, finestRow);
+  return {
+    x: noiseFrom(hash & 0xffff),
+    y: noiseFrom(hash >>> NOISE_BITS),
+  };
+}
+
+/**
+ * A pseudo-random number from -1 to 1 that changes the area of the dot at a slot of a level.
+ * Each site gets the opposite of the number of its point-reflected partner in the same cell, so
+ * a cell's dots keep its ink. A cell with a single site gets none.
+ */
+export function areaNoise(column: number, row: number, level: number) {
+  const slots = 2 ** Math.max(level, 0);
+  if (slots === 1) return 0;
+
+  const [partnerColumn, partnerRow] = [column, row].map((slot) => {
+    const first = firstSlotOfCell(slot, slots);
+    return first + (slots - 1 - (slot - first));
+  });
+  const isLower = column < partnerColumn || (column === partnerColumn && row < partnerRow);
+  const [lowerColumn, lowerRow] = isLower ? [column, row] : [partnerColumn, partnerRow];
+  const finestStep = 2 ** (MAX_LEVEL - Math.max(level, 0));
+  const hash = siteHash(lowerColumn * finestStep, lowerRow * finestStep);
+  const noise = noiseFrom(hash32(hash ^ HASH_SALT) & 0xffff);
+  return isLower ? noise : -noise;
+}
+
+// Offset sites belong to the cell they sit in, not to a block of raw slot indices.
+function firstSlotOfCell(slot: number, slots: number) {
+  const cell = Math.floor(slot / slots + SLOT_OFFSET_CELLS);
+  return cell * slots + Math.ceil(-SLOT_OFFSET_CELLS * slots);
+}
+
+function siteHash(finestColumn: number, finestRow: number) {
+  return hash32((finestColumn ^ hash32(finestRow + HASH_SALT)) >>> 0);
+}
+
+function noiseFrom(bits: number) {
+  return bits / NOISE_HALF_RANGE - 1;
+}
+
+// Matches hash32 in gpu/field-marks-shaders.ts.
+function hash32(value: number) {
+  let hash = value >>> 0;
+  hash ^= hash >>> 16;
+  hash = Math.imul(hash, 0x7feb352d);
+  hash ^= hash >>> 15;
+  hash = Math.imul(hash, 0x846ca68b);
+  hash ^= hash >>> 16;
+  return hash >>> 0;
 }
 
 /** Whether a cell gets the no-data hatch, which needs it inside the area without a value. */
@@ -122,24 +195,6 @@ function markByte(positionByte: number, inArea: boolean) {
   if (isHatched(inArea, positionByte)) return HATCH_BYTE;
 
   return inArea ? positionByte : NO_DATA_BYTE;
-}
-
-/**
- * How a dot looks while its level fades into the next one. A dot of the level above grows to the
- * new radius. A dot lit in only one level fades out or in while an unlit dot stays invisible.
- */
-export function crossfadeDot(
-  wasLit: boolean,
-  willBeLit: boolean,
-  fade: number,
-  radiiPx: { parent: number; next: number },
-) {
-  const before = wasLit ? 1 : 0;
-  const after = willBeLit ? 1 : 0;
-  return {
-    opacity: before + (after - before) * fade,
-    radiusPx: wasLit ? radiiPx.parent + (radiiPx.next - radiiPx.parent) * fade : radiiPx.next,
-  };
 }
 
 /**

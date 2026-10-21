@@ -11,85 +11,61 @@ const hooks = registerHooks({
   },
 });
 const {
+  AREA_JITTER_RATIO,
   DOT_RADIUS_RATIO,
+  EDGE_PX,
+  HALO_WIDTH_PX,
   HATCH_BYTE,
+  MAX_DOT_RADIUS_PX,
   MAX_LEVEL,
+  MAX_RADIUS_SCALE,
+  MIN_DOT_RADIUS_PX,
   MIN_LEVEL,
   NO_DATA_BYTE,
-  bayerRank,
+  POSITION_JITTER_RATIO,
+  SIZE_JITTER_RATIO,
+  areaNoise,
   blockMeans,
+  containedRadiusPx,
   cellSizePx,
-  cellThreshold,
-  crossfadeDot,
-  dotCount,
+  dotAppearance,
+  dotRadiusPx,
   hasHatchedCells,
-  isDotLit,
   isHatched,
   levelFor,
   markBytes,
+  maxDotRadiusPx,
   positionBytes,
+  siteNoise,
   slotPosition,
 } = await import("./lattice.ts").finally(() => hooks.deregister());
 
-test("dots_nest_across_levels", () => {
-  for (const position of [0.05, 0.2, 0.5, 0.8, 1]) {
-    for (let level = 0; level < MAX_LEVEL; level++) {
-      const coarse = litSlots(position, level, 0.3);
-      const fine = litSlots(position, level + 1, 0.3);
-      for (const slot of coarse) {
-        const [column, row] = slot.split(",").map(Number);
-        assert.ok(fine.has(`${2 * column},${2 * row}`), `${position} ${level} ${slot}`);
-        assert.equal(slotPosition(2 * column, level + 1), slotPosition(column, level));
-      }
+test("sites_nest_across_levels", () => {
+  for (let level = 0; level < MAX_LEVEL; level++) {
+    for (const slot of [0, 1, 3, 5]) {
+      assert.equal(slotPosition(2 * slot, level + 1), slotPosition(slot, level));
     }
   }
 });
 
-test("count_is_position_times_slots_on_average", () => {
-  for (const level of [0, 1, 2, 3]) {
-    const slots = 4 ** level;
-    for (const position of [0.1, 0.37, 0.5, 0.83]) {
-      let total = 0;
-      for (let row = 0; row < 8; row++) {
-        for (let column = 0; column < 8; column++) {
-          total += dotCount(position, level, cellThreshold(column, row));
-        }
-      }
-      assert.ok(Math.abs(total / 64 - position * slots) < 0.5, `${level} ${position}`);
-    }
-  }
-});
-
-test("empty_at_zero_full_at_one", () => {
-  for (let level = MIN_LEVEL; level <= MAX_LEVEL; level++) {
-    for (const threshold of [0.008, 0.5, 0.99]) {
-      assert.equal(dotCount(0, level, threshold), 0);
-      assert.equal(dotCount(1, level, threshold), 4 ** Math.max(level, 0));
-    }
-  }
-});
-
-test("first_slots_form_regular_lattice_across_cells", () => {
-  const firstFour = litSlots(0.25, 2, 0.999);
-  assert.deepEqual([...firstFour].sort(), ["0,0", "0,2", "2,0", "2,2"]);
-
-  const positions = [0, 2].map((slot) => slotPosition(slot, 2));
-  assert.equal(positions[1] - positions[0], 0.5);
-  assert.equal(slotPosition(4, 2) - slotPosition(0, 2), 1);
-});
-
-test("level_keeps_spacing_between_5_and_10_px", () => {
+test("level_keeps_spacing_between_10_and_20_px", () => {
   for (let cellPx = 0.4; cellPx < 200; cellPx *= 1.07) {
     const { level, fade } = levelFor(cellPx);
     const spacingPx = cellPx / 2 ** level;
     assert.ok(fade >= 0 && fade <= 1);
     if (level > MIN_LEVEL && level < MAX_LEVEL) {
-      assert.ok(spacingPx >= 5 && spacingPx < 10, `${cellPx} ${level}`);
+      assert.ok(spacingPx >= 10 && spacingPx < 20, `${cellPx} ${level}`);
     }
   }
-  assert.equal(levelFor(7).fade, 0);
-  assert.ok(levelFor(5 * 2 ** 0.9).fade > 0.3);
-  assert.equal(levelFor(5 * 2 ** 4.9).fade, 0);
+  assert.equal(levelFor(14).fade, 0);
+  assert.ok(levelFor(10 * 2 ** 0.9).fade > 0.3);
+  assert.equal(levelFor(10 * 2 ** (MAX_LEVEL + 0.9)).fade, 0);
+});
+
+test("the dot level stops rising at its maximum", () => {
+  assert.equal(levelFor(10 * 2 ** 6.9).level, MAX_LEVEL);
+  assert.equal(levelFor(10 * 2 ** 10).level, MAX_LEVEL);
+  assert.equal(levelFor(10 * 2 ** 10).fade, 0);
 });
 
 test("block_means_ignore_no_data", () => {
@@ -143,10 +119,6 @@ test("hatch_marks_only_in_area_no_data_cells", () => {
   assert.equal(blockMeans(mixedCells, 2, 2, 2).means[0], NO_DATA_BYTE);
 });
 
-test("full_density_inks_eighteen_percent", () => {
-  assert.ok(Math.abs(Math.PI * DOT_RADIUS_RATIO ** 2 - 0.18) < 0.005);
-});
-
 test("a cell's size on screen follows the zoom and stretches with latitude", () => {
   const cell = { width: 0.05, height: 0.05 };
   const equator = cellSizePx(10, cell, 0);
@@ -156,88 +128,143 @@ test("a cell's size on screen follows the zoom and stretches with latitude", () 
   assert.ok(Math.abs(cellSizePx(10, cell, 60) / equator - Math.SQRT2) < 1e-9);
 });
 
-test("a dot that only the next level lights fades in from nothing", () => {
-  const threshold = 0.5078125;
-  const radiiPx = { parent: 2, next: 1 };
-  const wasLit = isDotLit(64, 0, threshold, 0, 0);
-  const willBeLit = isDotLit(64, 1, threshold, 0, 0);
+test("the dot radius stops growing once the level reaches its maximum", () => {
+  const cell = { width: 0.05, height: 0.05 };
+  const radiusPx = (zoom: number) => {
+    const cellPx = cellSizePx(zoom, cell, 0);
+    return maxDotRadiusPx(cellPx / 2 ** levelFor(cellPx).level);
+  };
 
-  assert.equal(dotCount(64 / 253, 0, threshold), 0);
-  assert.equal(dotCount(64 / 253, 1, threshold), 1);
-  assert.deepEqual([wasLit, willBeLit], [false, true]);
-  assert.equal(crossfadeDot(wasLit, willBeLit, 0, radiiPx).opacity, 0);
-  assert.ok(Math.abs(crossfadeDot(wasLit, willBeLit, 0.25, radiiPx).opacity - 0.25) < 1e-9);
-  assert.equal(crossfadeDot(wasLit, willBeLit, 0.25, radiiPx).radiusPx, 1);
-  assert.equal(crossfadeDot(wasLit, willBeLit, 1, radiiPx).opacity, 1);
+  assert.ok(radiusPx(13) < MAX_DOT_RADIUS_PX);
+  assert.equal(radiusPx(15), MAX_DOT_RADIUS_PX);
 });
 
-test("a block dot that the finer level leaves unlit fades out", () => {
-  const radiiPx = { parent: 4, next: 2 };
-  const none = NO_DATA_BYTE;
-  const { means } = blockMeans(Uint8Array.of(0, 253, 253, 253), 2, 2, 2);
-  const threshold = cellThreshold(0, 0);
-  const wasLit = isDotLit(means[0], -1, threshold, 0, 0);
-  const willBeLit = isDotLit(0, 0, threshold, 0, 0);
-
-  assert.equal(means[0], 190);
-  assert.deepEqual([wasLit, willBeLit], [true, false]);
-  assert.ok(Math.abs(crossfadeDot(wasLit, willBeLit, 0.2, radiiPx).opacity - 0.8) < 1e-9);
-  assert.equal(crossfadeDot(wasLit, willBeLit, 0.5, radiiPx).radiusPx, 3);
-  assert.equal(crossfadeDot(wasLit, willBeLit, 1, radiiPx).opacity, 0);
-  assert.equal(isDotLit(none, 0, threshold, 0, 0), false);
+test("the zoom cap on the largest dot radius is 6.4 css px", () => {
+  assert.ok(Math.abs(MAX_DOT_RADIUS_PX - 6.4) < 1e-9);
+  assert.equal(maxDotRadiusPx(100), MAX_DOT_RADIUS_PX);
+  assert.equal(maxDotRadiusPx(10), DOT_RADIUS_RATIO * 10);
 });
 
-test("dots lit at both levels keep full opacity while they change size", () => {
-  const radiiPx = { parent: 3, next: 2 };
-
-  for (const fade of [0, 0.3, 1]) {
-    assert.equal(crossfadeDot(true, true, fade, radiiPx).opacity, 1);
-    assert.equal(crossfadeDot(false, false, fade, radiiPx).opacity, 0);
-  }
-  assert.equal(crossfadeDot(true, true, 0, radiiPx).radiusPx, 3);
-  assert.equal(crossfadeDot(true, true, 1, radiiPx).radiusPx, 2);
+test("full value inks 32 percent of a site", () => {
+  assert.ok(Math.abs(Math.PI * DOT_RADIUS_RATIO ** 2 - 0.32) < 0.005);
 });
 
-test("every dot lit at a level stays lit at the next level", () => {
-  for (let level = 0; level < MAX_LEVEL; level++) {
-    for (const byte of [0, 20, 100, 127, 200, 253]) {
-      for (const threshold of [0.008, 0.3, 0.99]) {
-        const slots = 2 ** level;
-        for (let row = 0; row < slots; row++) {
-          for (let column = 0; column < slots; column++) {
-            const wasLit = isDotLit(byte, level, threshold, column, row);
-            const willBeLit = isDotLit(byte, level + 1, threshold, 2 * column, 2 * row);
-            assert.ok(!wasLit || willBeLit, `${level} ${byte} ${threshold}`);
+test("dot area is proportional to the value", () => {
+  const areaAt = (position: number) => dotRadiusPx(position, 4, 0) ** 2;
+
+  assert.equal(dotRadiusPx(0, 4, 0), 0);
+  assert.ok(Math.abs(areaAt(0.5) * 2 - areaAt(1)) < 1e-9);
+  assert.ok(Math.abs(areaAt(0.25) * 4 - areaAt(1)) < 1e-9);
+});
+
+test("a dot below the minimum radius fades by area instead of shrinking", () => {
+  assert.deepEqual(dotAppearance(2), { radiusPx: 2, opacity: 1 });
+  assert.deepEqual(dotAppearance(MIN_DOT_RADIUS_PX), { radiusPx: MIN_DOT_RADIUS_PX, opacity: 1 });
+
+  const faint = dotAppearance(MIN_DOT_RADIUS_PX / 2);
+  assert.equal(faint.radiusPx, MIN_DOT_RADIUS_PX);
+  assert.equal(faint.opacity, 0.25);
+  assert.equal(dotAppearance(0).opacity, 0);
+});
+
+test("site noise is deterministic and spans -1 to 1", () => {
+  assert.deepEqual(siteNoise(37, 91), siteNoise(37, 91));
+  assert.notDeepEqual(siteNoise(37, 91), siteNoise(91, 37));
+
+  const values = sampleNoise().flatMap(({ x, y }) => [x, y]);
+  const lowest = values.reduce((low, value) => Math.min(low, value), 1);
+  const highest = values.reduce((high, value) => Math.max(high, value), -1);
+  assert.ok(lowest >= -1 && lowest < -0.95);
+  assert.ok(highest <= 1 && highest > 0.95);
+});
+
+test("jitter keeps each cell's total ink at its value", () => {
+  const maxRadiusPx = 3;
+  for (let level = 0; level <= MAX_LEVEL; level++) {
+    for (const cellColumn of [-3, 0, 2]) {
+      for (const cellRow of [-1, 0, 5]) {
+        const columns = ownedSlots(cellColumn, level);
+        const rows = ownedSlots(cellRow, level);
+        let ink = 0;
+        for (const row of rows) {
+          for (const column of columns) {
+            ink += dotRadiusPx(0.4, maxRadiusPx, areaNoise(column, row, level)) ** 2;
           }
         }
+        const expected = 0.4 * maxRadiusPx ** 2 * columns.length * rows.length;
+        assert.equal(columns.length, 2 ** level);
+        assert.ok(Math.abs(ink / expected - 1) < 1e-9, `${level} ${cellColumn} ${cellRow}`);
       }
     }
   }
 });
 
-test("a parent dot stays inside its own site at the highest latitude", () => {
-  const edgePx = 0.5;
-  const cell = { width: 0.05, height: 0.05 };
-  const stretch = 2;
-  for (let zoom = 8; zoom < 12; zoom += 0.05) {
-    const { level, fade } = levelFor(cellSizePx(zoom, cell, 60));
-    if (fade === 0) continue;
+test("a cell with a single dot site has no size jitter", () => {
+  for (const level of [-3, 0]) {
+    assert.equal(areaNoise(5, 9, level), 0);
+    assert.equal(dotRadiusPx(0.6, 2, areaNoise(5, 9, level)), dotRadiusPx(0.6, 2, 0));
+  }
+  assert.notEqual(areaNoise(5, 9, 1), 0);
+});
 
-    const parentSpacingPx = cellSizePx(zoom, cell, 60) / 2 ** level;
-    const halfWidthPx = parentSpacingPx / Math.sqrt(stretch) / 2;
-    const reachPx = DOT_RADIUS_RATIO * parentSpacingPx + edgePx;
-    assert.ok(reachPx <= halfWidthPx, `${zoom} ${reachPx} ${halfWidthPx}`);
+test("size jitter changes a radius by at most 10 percent", () => {
+  assert.ok(Math.abs(AREA_JITTER_RATIO - 0.19) < 1e-9);
+  for (let column = 0; column < 128; column++) {
+    for (let row = 0; row < 64; row++) {
+      const area = areaNoise(column, row, 3);
+      const scale = dotRadiusPx(1, 1, area);
+      assert.ok(area >= -1 && area <= 1);
+      assert.ok(scale >= 1 - SIZE_JITTER_RATIO - 1e-9 && scale <= MAX_RADIUS_SCALE + 1e-9);
+    }
   }
 });
 
-function litSlots(position: number, level: number, threshold: number) {
-  const slots = 2 ** Math.max(level, 0);
-  const count = dotCount(position, level, threshold);
-  const lit = new Set<string>();
-  for (let row = 0; row < slots; row++) {
-    for (let column = 0; column < slots; column++) {
-      if (bayerRank(column, row, Math.max(level, 0)) < count) lit.add(`${column},${row}`);
+test("jittered dots stay in their sub-cell and clear of their neighbours up to 60 degrees", () => {
+  for (const latitude of [0, 30, 60]) {
+    const stretch = 1 / Math.cos((latitude * Math.PI) / 180);
+    for (const geometricPx of [5, 7, 10, 20]) {
+      const spacingXPx = geometricPx / Math.sqrt(stretch);
+      const spacingYPx = geometricPx * Math.sqrt(stretch);
+      const radiusPx = containedRadiusPx(
+        spacingXPx,
+        spacingYPx,
+        maxDotRadiusPx(geometricPx),
+        HALO_WIDTH_PX,
+      );
+      const reachPx = radiusPx * MAX_RADIUS_SCALE + EDGE_PX + HALO_WIDTH_PX;
+
+      assert.ok(POSITION_JITTER_RATIO * spacingXPx + reachPx <= spacingXPx / 2 + 1e-9);
+      assert.ok(POSITION_JITTER_RATIO * spacingYPx + reachPx <= spacingYPx / 2 + 1e-9);
     }
   }
-  return lit;
+});
+
+test("the contained radius keeps the full radius where there is room", () => {
+  assert.equal(containedRadiusPx(100, 100, 2.4, HALO_WIDTH_PX), 2.4);
+  assert.equal(containedRadiusPx(1, 100, 2.4, 0), 0);
+});
+
+test("a site keeps its noise because it is indexed on the finest level", () => {
+  const finestIndex = (slot: number, level: number) => slot * 2 ** (MAX_LEVEL - level);
+
+  assert.deepEqual(
+    siteNoise(finestIndex(3, 3), finestIndex(2, 3)),
+    siteNoise(finestIndex(6, 4), finestIndex(4, 4)),
+  );
+});
+
+function ownedSlots(cell: number, level: number) {
+  const slots = [];
+  for (let slot = (cell - 1) * 2 ** level; slot <= (cell + 1) * 2 ** level; slot++) {
+    if (Math.floor(slotPosition(slot, level)) === cell) slots.push(slot);
+  }
+  return slots;
+}
+
+function sampleNoise() {
+  const sites = [];
+  for (let row = 0; row < 256; row++) {
+    for (let column = 0; column < 256; column++) sites.push(siteNoise(column, row));
+  }
+  return sites;
 }

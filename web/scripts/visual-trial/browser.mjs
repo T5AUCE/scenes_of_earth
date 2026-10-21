@@ -521,11 +521,5 @@ function takeSample([linePattern, labelPattern]) {
         .map((label) => label.innerText.trim()),
     ),
     colourOwner: document.querySelector(".colour-picker select")?.value || null,
-    draws: Object.fromEntries(cards
-      .filter((card) => card.getAttribute("aria-label"))
-      .map((card) => [
-        card.getAttribute("aria-label"),
-        card.querySelector(".colour-chip")?.innerText.trim() ?? "",
-      ])),
   };
 }

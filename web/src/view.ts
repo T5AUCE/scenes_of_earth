@@ -6,6 +6,7 @@ import { openStore, type Store } from "./data";
 import {
   DROPPED_NOTE,
   formatDisplayParams,
+  loadStoredInks,
   loadStoredPalettes,
   loadStoredPick,
   NO_TOKENS,
@@ -23,6 +24,7 @@ import { createTimeline, formatTime, scrubberTimes } from "./timeline";
 import type { DisplayTokens, DrawSlots, LayerDoc, LayerView, Scene } from "./types";
 
 type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
+type AddNote = (text: string) => () => void;
 
 /** Map layer and source id of the scene's area outline. */
 export const OUTLINE_ID = "soe-area-outline";
@@ -64,7 +66,9 @@ export function mountScene(
 
   const notes = makeHtmlElement("div", "", box);
   const addNote = (text: string) => {
-    makeHtmlElement("div", text, notes).className = "notice";
+    const note = makeHtmlElement("div", text, notes);
+    note.className = "notice";
+    return () => note.remove();
   };
 
   const removeScaleBar = showScaleBar(map);
@@ -86,6 +90,7 @@ export function mountScene(
     linked,
     loadStoredPalettes(),
     loadStoredPick(),
+    loadStoredInks(),
   );
   if (dropped) addNote(DROPPED_NOTE);
   const changed = () => {
@@ -126,7 +131,7 @@ function addOutline(
   map: MapLibreMap,
   scene: Scene,
   shift: number,
-  addNote: (text: string) => void,
+  addNote: AddNote,
   isMounted: () => boolean,
 ) {
   const data = shift === 0 ? scene.area.geometry_href : EMPTY_FEATURES;
@@ -179,7 +184,7 @@ function mountLayerViews(
   layers: LayerDoc[],
   store: Promise<Store>,
   shift: number,
-  addNote: (text: string) => void,
+  addNote: AddNote,
   display: SceneDisplay,
 ): MountedLayer[] {
   const layersWithKind = layers.map((layer) => ({
@@ -225,7 +230,7 @@ function mountBlend(
   mounted: MountedLayer[],
   store: Promise<Store>,
   shift: number,
-  addNote: (text: string) => void,
+  addNote: AddNote,
 ) {
   const layerDocs = mounted.map(({ layer }) => layer);
   const pair = blendPair(layerDocs);

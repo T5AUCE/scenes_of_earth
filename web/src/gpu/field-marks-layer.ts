@@ -1,12 +1,13 @@
 /** Draw nested field dots and no-data hatching from tiled grid textures. */
 import type { CustomLayerInterface } from "maplibre-gl";
 
+import type { InkPaint } from "../render/palettes";
 import {
   blockMeans,
   cellSizePx,
-  DOT_RADIUS_RATIO,
   levelFor,
   markBytes,
+  maxDotRadiusPx,
 } from "../render/lattice";
 import { FIELD_MARKS_FRAGMENT, FIELD_MARKS_VERTEX } from "./field-marks-shaders";
 import {
@@ -18,8 +19,8 @@ import {
 
 /** What createFieldMarksLayer needs to place and report on a layer. */
 export interface FieldMarksOptions extends TiledLayerOptions {
-  /** Dot ink as RGB channels from 0 to 255. */
-  ink: [number, number, number];
+  /** The ink of dots and hatch with its halo, as RGB channels from 0 to 255. */
+  ink: InkPaint;
 }
 
 interface BlockData {
@@ -42,13 +43,13 @@ const UNIFORM_NAMES = [
   "uExtentCells",
   "uSlots",
   "uParentSlots",
-  "uLevelBits",
   "uBlockCells",
   "uRadiusPx",
   "uParentRadiusPx",
   "uFading",
   "uFade",
   "uInk",
+  "uHaloInk",
   "uHalo",
   "uDots",
   "uHatch",
@@ -57,7 +58,7 @@ const UNIFORM_NAMES = [
 const COLOR_MAX = 255;
 
 /**
- * Draw field values as dot counts and hatch in-area cells with no value.
+ * Draw field values as dot sizes and hatch in-area cells with no value.
  * Setters take effect on the next frame.
  */
 export function createFieldMarksLayer(options: FieldMarksOptions) {
@@ -67,6 +68,7 @@ export function createFieldMarksLayer(options: FieldMarksOptions) {
     setMask: (mask: ArrayLike<number>) => layer.setMask(mask),
     setPositions: (positions: Uint8Array) => layer.setPositions(positions),
     setHalo: (isOn: boolean) => layer.setHalo(isOn),
+    setInk: (ink: InkPaint) => layer.setInk(ink),
     setDots: (isOn: boolean) => layer.setDots(isOn),
     setHatch: (isOn: boolean) => layer.setHatch(isOn),
   };
@@ -83,7 +85,7 @@ class FieldMarksLayer extends TiledGpuLayer {
   private isHatch = true;
   private uploaded: BlockFactors | null = null;
   private frame = { level: 0, fade: 0, cellPx: 1 };
-  private readonly marksOptions: FieldMarksOptions;
+  private ink: InkPaint;
 
   constructor(options: FieldMarksOptions) {
     super(options, {
@@ -92,7 +94,7 @@ class FieldMarksLayer extends TiledGpuLayer {
       fragment: FIELD_MARKS_FRAGMENT,
       uniformNames: UNIFORM_NAMES,
     });
-    this.marksOptions = options;
+    this.ink = options.ink;
   }
 
   setMask(mask: ArrayLike<number>) {
@@ -116,6 +118,11 @@ class FieldMarksLayer extends TiledGpuLayer {
 
   setHalo(isOn: boolean) {
     this.isHalo = isOn;
+    this.map?.triggerRepaint();
+  }
+
+  setInk(ink: InkPaint) {
+    this.ink = ink;
     this.map?.triggerRepaint();
   }
 
@@ -226,9 +233,7 @@ class FieldMarksLayer extends TiledGpuLayer {
     const { level, fade, cellPx } = this.frame;
     const drawnLevel = fade > 0 ? level + 1 : level;
     const pixelRatio = this.map!.getPixelRatio();
-    const radiusPx = (dotLevel: number) =>
-      DOT_RADIUS_RATIO * (cellPx / 2 ** dotLevel) * pixelRatio;
-    const [red, green, blue] = this.marksOptions.ink;
+    const radiusPx = (dotLevel: number) => maxDotRadiusPx(cellPx / 2 ** dotLevel) * pixelRatio;
     const { grid } = this.blockData(blockFactors(level, fade).factor);
     const original = this.options.grid;
 
@@ -239,13 +244,13 @@ class FieldMarksLayer extends TiledGpuLayer {
     gl.uniform2f(uniform("uExtentCells"), original.nx, original.ny);
     gl.uniform1f(uniform("uSlots"), 2 ** Math.max(drawnLevel, 0));
     gl.uniform1f(uniform("uParentSlots"), 2 ** Math.max(drawnLevel - 1, -1));
-    gl.uniform1i(uniform("uLevelBits"), Math.max(drawnLevel, 0));
     gl.uniform1f(uniform("uBlockCells"), 2 ** Math.max(-drawnLevel, 0));
     gl.uniform1f(uniform("uRadiusPx"), radiusPx(drawnLevel));
     gl.uniform1f(uniform("uParentRadiusPx"), radiusPx(level));
     gl.uniform1i(uniform("uFading"), fade > 0 ? 1 : 0);
     gl.uniform1f(uniform("uFade"), fade);
-    gl.uniform3f(uniform("uInk"), red / COLOR_MAX, green / COLOR_MAX, blue / COLOR_MAX);
+    gl.uniform3f(uniform("uInk"), ...channels(this.ink.ink));
+    gl.uniform3f(uniform("uHaloInk"), ...channels(this.ink.halo));
     gl.uniform1i(uniform("uHalo"), this.isHalo ? 1 : 0);
     gl.uniform1i(uniform("uDots"), this.isDots ? 1 : 0);
     gl.uniform1i(uniform("uHatch"), this.isHatch ? 1 : 0);
@@ -256,6 +261,10 @@ class FieldMarksLayer extends TiledGpuLayer {
       gl.uniform2f(uniform("uWindow"), window.column, window.row);
     });
   }
+}
+
+function channels([red, green, blue]: number[]): [number, number, number] {
+  return [red / COLOR_MAX, green / COLOR_MAX, blue / COLOR_MAX];
 }
 
 function blockFactors(level: number, fade: number): BlockFactors {

@@ -12,10 +12,13 @@ type Segment = [Point, Point];
 type Edge = "top" | "right" | "bottom" | "left";
 type Corners = [number, number, number, number];
 
-/** The ink shared by isotherm lines and their legend sample. */
-export const ISOTHERM_COLOR = "#313f4d";
 /** Every fifth line is bold. */
 export const BOLD_ISOTHERM_MULTIPLE = 5;
+
+/** The casing width as a multiple of the line width, which keeps their dashes aligned. */
+export const ISOTHERM_CASING_RATIO = 2.5;
+/** Dash and gap lengths in multiples of the line width, shared by a line and its casing. */
+export const ISOTHERM_DASH_PATTERN = [3, 2];
 
 const FIRST_ISOTHERM_INTERVAL_DEG = 0.5;
 const INTERVAL_MULTIPLIERS = [1, 2, 5];

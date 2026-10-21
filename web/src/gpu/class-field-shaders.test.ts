@@ -3,7 +3,6 @@ import { test } from "node:test";
 
 import {
   classFieldAlpha,
-  EDGES_OUTLINE_STRENGTH,
   edgeCoverage,
   FILL_OUTLINE_STRENGTH,
   sampleClassField,
@@ -361,33 +360,7 @@ test("no-data keeps the nearest-cell mask and isolated classes whole", () => {
   assert.equal(sampleClassField(nearestEmpty, { ...edges, smooth: false }).discarded, true);
 });
 
-
-test("edges mode draws no fill", () => {
-  const interior = sampleClassField(
-    {
-      ids: [
-        [COVER, GRASS, GRASS, COVER],
-        [GRASS, TREE, TREE, GRASS],
-        [GRASS, TREE, TREE, GRASS],
-        [COVER, GRASS, GRASS, COVER],
-      ],
-      fraction: [0.5, 0.5],
-      positionDx: [0.01, 0],
-      positionDy: [0, 0.01],
-    },
-    { smooth: true, rounding: 0, softnessCells: 0 },
-  );
-  const fillMode = classFieldAlpha(interior, fillAppearance());
-  const edgesMode = classFieldAlpha(interior, edgesAppearance());
-
-  assert.equal(edgesMode.fill, 0);
-  assert.equal(edgesMode.ink, 0);
-  assert.equal(edgesMode.alpha, 0);
-  assert.equal(fillMode.fill, 1);
-  assert.equal(fillMode.alpha, 1);
-});
-
-test("no-data fragments draw no fill or ink in either appearance", () => {
+test("no-data fragments draw no ink or alpha", () => {
   const noData = sampleClassField(
     {
       ids: [
@@ -404,17 +377,10 @@ test("no-data fragments draw no fill or ink in either appearance", () => {
   );
 
   assert.equal(noData.discarded, true);
-  assert.deepEqual(
-    classFieldAlpha(noData, fillAppearance()),
-    { fill: 0, ink: 0, alpha: 0 },
-  );
-  assert.deepEqual(
-    classFieldAlpha(noData, edgesAppearance()),
-    { fill: 0, ink: 0, alpha: 0 },
-  );
+  assert.deepEqual(classFieldAlpha(noData, fillAppearance()), { ink: 0, alpha: 0 });
 });
 
-test("edges mode ink is stronger than the faint outline", () => {
+test("a class fill is opaque and its outline uses the faint ink weight", () => {
   const result = sampleClassField(
     {
       ids: edgeNeighbourhood([TREE, TREE], [GRASS, GRASS]),
@@ -424,15 +390,12 @@ test("edges mode ink is stronger than the faint outline", () => {
     },
     { smooth: true, rounding: 0, softnessCells: 0 },
   );
-  const fillMode = classFieldAlpha(result, fillAppearance());
-  const edgesMode = classFieldAlpha(result, edgesAppearance());
+  const drawn = classFieldAlpha(result, fillAppearance());
 
   assert.ok(result.outline > 0.99);
-  assert.ok(edgesMode.ink > 2 * fillMode.ink);
-  assert.ok(Math.abs(fillMode.ink - result.outline * FILL_OUTLINE_STRENGTH) < 1e-12);
-  assert.ok(Math.abs(edgesMode.ink - result.outline * EDGES_OUTLINE_STRENGTH) < 1e-12);
+  assert.equal(drawn.alpha, 1);
+  assert.ok(Math.abs(drawn.ink - result.outline * FILL_OUTLINE_STRENGTH) < 1e-12);
 });
-
 
 function edgeNeighbourhood(
   left: readonly [number, number],
@@ -451,11 +414,7 @@ function weightOf(result: ClassFieldResult, id: number): number {
 }
 
 function fillAppearance(): ClassFieldAppearance {
-  return { fillOpacity: 1, outlineStrength: FILL_OUTLINE_STRENGTH, outline: true };
-}
-
-function edgesAppearance(): ClassFieldAppearance {
-  return { fillOpacity: 0, outlineStrength: EDGES_OUTLINE_STRENGTH, outline: true };
+  return { outlineStrength: FILL_OUTLINE_STRENGTH, outline: true };
 }
 
 function strongest(result: ClassFieldResult): number {

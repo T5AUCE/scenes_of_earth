@@ -9,20 +9,32 @@ import type {
 import { evenStops } from "../render/colormap";
 import {
   BOLD_ISOTHERM_MULTIPLE,
+  ISOTHERM_CASING_RATIO,
+  ISOTHERM_DASH_PATTERN,
   type Isoline,
-  ISOTHERM_COLOR,
   isolineInterval,
   isolineLevels,
   toLngLat,
   traceIsolines,
 } from "../render/isolines";
+import { type InkPaint, rgbCss } from "../render/palettes";
 import type { GridDoc, LayerContext } from "../types";
 
 const CACHED_STEPS = 24;
-const MINOR_LINE_WIDTH_PX = 0.9;
-const BOLD_LINE_WIDTH_PX = 1.5;
-const LINE_OPACITY = 0.85;
-const DASH_PATTERN = [3, 2];
+const LINE_WIDTH_STOPS_PX: readonly (readonly [number, number, number])[] = [
+  [0, 1.5, 0.9], // zoom, bold width, regular width
+  [8, 1.8, 1.1],
+  [14, 2.6, 1.8],
+  [22, 3.8, 2.8],
+];
+const LINE_OPACITY_STOPS: readonly (readonly [number, number])[] = [
+  [0, 0.85],
+  [16, 1],
+];
+const CASING_DASH_PATTERN = ISOTHERM_DASH_PATTERN.map(
+  (length) => length / ISOTHERM_CASING_RATIO,
+);
+const CASING_OPACITY = 0.7;
 
 const LABEL_SIZE_PX = 10;
 const LABEL_SPACING_PX = 300;
@@ -30,7 +42,6 @@ const LABEL_MAX_ANGLE_DEG = 120;
 const LABEL_HALO_WIDTH_PX = 1;
 const LABEL_DIGITS = 6;
 const BOLD_TOLERANCE = 1e-6;
-const PAGE_BACKGROUND_PROPERTY = "--page-background";
 
 type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
 
@@ -43,6 +54,7 @@ export interface IsolineOverlay {
   readonly interval: number;
   setValues(values: ArrayLike<number>, step: number): void;
   setRange(range: [number, number] | null): void;
+  setInk(ink: InkPaint): void;
   setVisible(visible: boolean): void;
   destroy(): void;
 }
@@ -50,21 +62,27 @@ export interface IsolineOverlay {
 /** Add an empty isotherm source for a layer; values arrive one time step at a time. */
 export function createIsolineOverlay(
   { map, layer, shift, beforeId, display }: LayerContext,
+  ink: InkPaint,
 ): IsolineOverlay {
   const stops = layer.style.stops;
   if (!stops) throw new Error(`Layer "${layer.id}" needs stops for isotherms`);
 
   let { interval, levels } = isothermScale(stops, display?.range);
   const sourceId = `${layer.id}-isotherms`;
-  const lineId = `${sourceId}-lines`;
-  const labelId = `${sourceId}-labels`;
+  const ids = {
+    casingId: `${sourceId}-casing`,
+    lineId: `${sourceId}-lines`,
+    labelId: `${sourceId}-labels`,
+  };
   const tracedSteps = new Map<number, Isoline[]>();
 
   map.addSource(sourceId, { type: "geojson", data: EMPTY_LINES });
-  addIsothermLayers(map, sourceId, lineId, labelId, beforeId);
+  addIsothermLayers(map, sourceId, ids, beforeId);
+  paintInk(map, ids, ink);
+  const layerIds = Object.values(ids);
 
   return {
-    layerIds: [lineId, labelId],
+    layerIds,
 
     get interval() {
       return interval;
@@ -91,15 +109,19 @@ export function createIsolineOverlay(
       tracedSteps.clear();
     },
 
+    setInk(next) {
+      paintInk(map, ids, next);
+    },
+
     setVisible(visible) {
       const visibility = visible ? "visible" : "none";
-      for (const id of [lineId, labelId]) {
+      for (const id of layerIds) {
         map.setLayoutProperty(id, "visibility", visibility);
       }
     },
 
     destroy() {
-      for (const id of [lineId, labelId]) {
+      for (const id of layerIds) {
         if (map.getLayer(id)) map.removeLayer(id);
       }
       if (map.getSource(sourceId)) map.removeSource(sourceId);
@@ -107,19 +129,33 @@ export function createIsolineOverlay(
   };
 }
 
+interface IsothermLayerIds {
+  casingId: string;
+  lineId: string;
+  labelId: string;
+}
+
 function addIsothermLayers(
   map: MapLibreMap,
   sourceId: string,
-  lineId: string,
-  labelId: string,
+  { casingId, lineId, labelId }: IsothermLayerIds,
   beforeId: string | undefined,
 ) {
-  const width: ExpressionSpecification = [
-    "case",
-    ["get", "bold"],
-    BOLD_LINE_WIDTH_PX,
-    MINOR_LINE_WIDTH_PX,
-  ];
+  // The casing repeats the line's dashes scaled to its width, so both line up in screen pixels.
+  map.addLayer(
+    {
+      id: casingId,
+      type: "line",
+      source: sourceId,
+      layout: { "line-cap": "butt", "line-join": "round" },
+      paint: {
+        "line-dasharray": CASING_DASH_PATTERN,
+        "line-opacity": CASING_OPACITY,
+        "line-width": isothermWidth(ISOTHERM_CASING_RATIO),
+      },
+    },
+    beforeId,
+  );
   map.addLayer(
     {
       id: lineId,
@@ -127,19 +163,15 @@ function addIsothermLayers(
       source: sourceId,
       layout: { "line-cap": "butt", "line-join": "round" },
       paint: {
-        "line-color": ISOTHERM_COLOR,
-        "line-dasharray": DASH_PATTERN,
-        "line-opacity": LINE_OPACITY,
-        "line-width": width,
+        "line-dasharray": ISOTHERM_DASH_PATTERN,
+        "line-opacity": zoomStops(LINE_OPACITY_STOPS),
+        "line-width": isothermWidth(1),
       },
     },
     beforeId,
   );
 
   const font = textFont(map);
-  const haloColor = getComputedStyle(document.documentElement)
-    .getPropertyValue(PAGE_BACKGROUND_PROPERTY)
-    .trim();
   map.addLayer(
     {
       id: labelId,
@@ -153,14 +185,33 @@ function addIsothermLayers(
         "text-size": LABEL_SIZE_PX,
         ...(font ? { "text-font": font } : {}),
       },
-      paint: {
-        "text-color": ISOTHERM_COLOR,
-        "text-halo-color": haloColor,
-        "text-halo-width": LABEL_HALO_WIDTH_PX,
-      },
+      paint: { "text-halo-width": LABEL_HALO_WIDTH_PX },
     },
     beforeId,
   );
+}
+
+function paintInk(
+  map: MapLibreMap,
+  { casingId, lineId, labelId }: IsothermLayerIds,
+  { ink, halo }: InkPaint,
+) {
+  map.setPaintProperty(casingId, "line-color", rgbCss(halo));
+  map.setPaintProperty(lineId, "line-color", rgbCss(ink));
+  map.setPaintProperty(labelId, "text-color", rgbCss(ink));
+  map.setPaintProperty(labelId, "text-halo-color", rgbCss(halo));
+}
+
+function isothermWidth(widthScale: number): ExpressionSpecification {
+  const stops = LINE_WIDTH_STOPS_PX.flatMap(([zoom, bold, regular]) => [
+    zoom,
+    ["case", ["get", "bold"], bold * widthScale, regular * widthScale],
+  ]);
+  return ["interpolate", ["linear"], ["zoom"], ...stops] as ExpressionSpecification;
+}
+
+function zoomStops(stops: readonly (readonly [number, number])[]): ExpressionSpecification {
+  return ["interpolate", ["linear"], ["zoom"], ...stops.flat()] as ExpressionSpecification;
 }
 
 function textFont(map: MapLibreMap) {

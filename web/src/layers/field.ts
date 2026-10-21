@@ -1,11 +1,14 @@
 /** Draw field time series as colour fills or fallback marks with shared cached values. */
 import { arrayDoc, cacheByIndex, decode, readArray, readMask, type Store } from "../data";
-import { defaultPalette as layerDefaultPalette, rangeDecimals } from "../display-state";
+import {
+  defaultInk,
+  defaultPalette as layerDefaultPalette,
+  rangeDecimals,
+} from "../display-state";
 import { makeHtmlElement } from "../html";
 import { createFieldMarksLayer } from "../gpu/field-marks-layer";
 import { keepThroughContextLoss } from "../gpu/tiled-layer";
 import {
-  DOT_INK_RGB,
   dotLegend,
   gradientLegend,
   hatchLegend,
@@ -15,9 +18,15 @@ import { addImageLayer, maxTextureSize, removeLayerAndSource, setImage } from ".
 import { lut, paintColormap, stopsForRange } from "../render/colormap";
 import { hasHatchedCells, positionBytes } from "../render/lattice";
 import { sampleTable } from "../render/mercator";
-import { FIELD_PALETTES, fieldGradient, rgbCss } from "../render/palettes";
+import {
+  FIELD_PALETTES,
+  fieldGradient,
+  INK_COLORS,
+  inkPaint,
+  rgbCss,
+} from "../render/palettes";
 import { latestOnly, stepAt } from "../timeline";
-import type { LayerContext, LayerDoc, LayerMenu, LayerView, TimeDoc } from "../types";
+import type { InkMenu, LayerContext, LayerDoc, LayerMenu, LayerView, TimeDoc } from "../types";
 import { type Draw, layerDraws } from "./allocate";
 import { createIsolineOverlay, type IsolineOverlay } from "./isolines";
 import { FALLBACK_PALETTE_NOTE } from "./layer-menu";
@@ -56,6 +65,8 @@ class FieldView implements LayerView {
   private readonly readStep;
   private readonly drawLatestStep;
   private palette: string;
+  // Only a layer with dots or isotherms draws its ink, so the empty default is never painted.
+  private ink: string;
   private range: [number, number] | null;
   private colors;
   private stops: number[];
@@ -78,6 +89,7 @@ class FieldView implements LayerView {
     this.time = layer.time;
     this.fittedStops = fittedStops;
     this.palette = display?.palette ?? defaultPalette;
+    this.ink = display?.ink ?? defaultInk(layer) ?? "";
     this.range = display?.range ?? null;
     this.colors = lut(gradientOf(this.palette));
     this.stops = stopsForRange(this.fittedStops, this.range);
@@ -96,7 +108,9 @@ class FieldView implements LayerView {
     this.mask = this.marks
       ? store.then((opened) => readMask(opened, layer)).catch(() => null)
       : null;
-    this.isolines = fallback === "isolines" ? createIsolineOverlay(context) : null;
+    this.isolines = fallback === "isolines"
+      ? createIsolineOverlay(context, inkPaint(this.ink))
+      : null;
     this.isolines?.setVisible(false);
 
     this.table = sampleTable(layer.grid, maxTextureSize(map), { preserveCoverage: true });
@@ -133,7 +147,7 @@ class FieldView implements LayerView {
       id: this.marksId,
       grid: layer.grid,
       shift,
-      ink: DOT_INK_RGB,
+      ink: inkPaint(this.ink),
       onFail: (error) => report(error),
     });
     marks.setHalo(true);
@@ -149,8 +163,12 @@ class FieldView implements LayerView {
 
   private legendOf() {
     const { layer } = this.context;
-    if (this.draw === "dots") return dotLegend(this.stops, layer.units, layer.grid.res);
-    if (this.draw === "isolines") return isothermLegend(this.isolines!.interval);
+    if (this.draw === "dots") {
+      return dotLegend(this.stops, layer.units, layer.grid.res, inkPaint(this.ink));
+    }
+    if (this.draw === "isolines") {
+      return isothermLegend(this.isolines!.interval, inkPaint(this.ink));
+    }
 
     return gradientLegend(this.colors, this.stops, layer.units, this.range !== null);
   }
@@ -175,6 +193,7 @@ class FieldView implements LayerView {
       })),
       defaultPalette: layerDefaultPalette(layer),
       custom: true,
+      ink: this.createInkMenu(),
       get palette() {
         return view.palette;
       },
@@ -195,6 +214,29 @@ class FieldView implements LayerView {
           this.restyle();
         },
       } : undefined,
+    };
+  }
+
+  private createInkMenu(): InkMenu | undefined {
+    const view = this;
+    if (!this.marks && !this.isolines) return undefined;
+
+    return {
+      heading: this.marks ? "Dot ink" : "Isotherm ink",
+      presets: INK_COLORS.map(({ name, label, color }) => ({ name, label, colors: [color] })),
+      defaultInk: defaultInk(this.context.layer)!,
+      get inUse() {
+        return view.draw === "dots" || view.draw === "isolines";
+      },
+      get value() {
+        return view.ink;
+      },
+      set: (ink) => {
+        this.ink = ink;
+        this.marks?.setInk(inkPaint(ink));
+        this.isolines?.setInk(inkPaint(ink));
+        this.showLegend();
+      },
     };
   }
 

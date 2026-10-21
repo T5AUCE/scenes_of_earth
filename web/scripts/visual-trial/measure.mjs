@@ -122,7 +122,6 @@ export function viewRecord({ spot, scene, zoom, sample, failures, messages, time
     legend_classes: sample?.classLabels ?? [],
     landcover_renderer: sample?.landcoverRenderer ?? null,
     colour_owner: sample?.colourOwner ?? null,
-    draws: sample?.draws ?? {},
     ...frameStats(sample?.frameDeltas ?? []),
     ...marksFrameStats(sample?.marksFrameDeltas ?? []),
     gl_errors: sample?.glErrors ?? [],

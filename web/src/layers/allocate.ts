@@ -5,7 +5,7 @@ import type { LayerDoc } from "../types";
 export const BLEND = "blend";
 
 /** A channel a visible layer or part can draw through. */
-export type Draw = "colour" | "dots" | "isolines" | "edges" | "contours" | "shade";
+export type Draw = "colour" | "dots" | "isolines" | "contours" | "shade";
 
 /** A unit that cannot draw, with the reason the viewer is shown. */
 export interface Hidden {
@@ -30,19 +30,17 @@ export interface ColourAllocation {
 
 type Claim = "colour" | "dots" | "line.dashed" | "line.solid";
 
-/** The resources each draw needs; land-cover outlines deliberately claim no line set. */
+/** The resources each draw needs. */
 const CLAIMS: Record<Draw, Claim[]> = {
   colour: ["colour"],
   dots: ["dots"],
   isolines: ["line.dashed"],
-  edges: [],
   contours: ["line.solid"],
   shade: [],
 };
 
 const COLOUR_ENCODINGS = ["ramp", "fill"];
-const FALLBACKS = new Set<Draw>(["dots", "isolines", "edges"]);
-const KIND_FALLBACKS: Record<string, Draw> = { categorical: "edges" };
+const FALLBACKS = new Set<Draw>(["dots", "isolines"]);
 const FIXED_DRAWS: Draw[] = ["shade", "contours"];
 const CLAIM_LABELS: Partial<Record<Draw, string>> = {
   dots: "dots",
@@ -58,17 +56,13 @@ export function layerDraws({ style }: LayerDoc): LayerDraws {
 
   return {
     colour: COLOUR_ENCODINGS.some((name) => encodings.has(name)),
-    fallback: fallbackOf(style.encodings, style.kind),
+    fallback: fallbackOf(style.encodings),
     blend: blendRole(encodings),
   };
 }
 
-function fallbackOf(encodings: string[], kind: string): Draw | null {
-  const fallback = encodings.find(
-    (name): name is Draw => FALLBACKS.has(name as Draw),
-  );
-
-  return fallback ?? KIND_FALLBACKS[kind] ?? null;
+function fallbackOf(encodings: string[]): Draw | null {
+  return encodings.find((name): name is Draw => FALLBACKS.has(name as Draw)) ?? null;
 }
 
 function blendRole(encodings: Set<string>): LayerDraws["blend"] {
