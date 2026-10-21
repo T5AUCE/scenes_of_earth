@@ -104,7 +104,7 @@ function canStore(entry) {
     && (!vary || vary === "accept-encoding");
 }
 
-/** Treats incomplete, corrupt or obsolete entries as misses rather than aborting a trial. */
+/** Treats unusable cache entries as misses rather than aborting a trial. */
 export function readEntry(file) {
   try {
     const entry = JSON.parse(fs.readFileSync(file, "utf8"));

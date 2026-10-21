@@ -1,3 +1,4 @@
+/** Cache traced isotherms and display their dashed lines with temperature labels. */
 import type {
   ExpressionSpecification,
   GeoJSONSource,
@@ -169,7 +170,6 @@ function textFont(map: MapLibreMap) {
   )?.layout?.["text-font"];
 }
 
-/** The interval and levels over stops, or over an even range of stops when one is set. */
 function isothermScale(
   stops: readonly number[],
   range: [number, number] | undefined,

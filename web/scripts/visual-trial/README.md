@@ -50,11 +50,11 @@ The setup resolves the cache root to an absolute path. Browser download staging 
 build (default `["terrain"]`; `start` and `end` may be added for time-varying layers). `enable`
 lists checkbox labels in the scene panel to switch on. Presets live in `places/`.
 
-`colour` names the layer that holds the map's colour, as the link's `colour=` parameter, so the
+`colour` sets the link's `colour=` parameter to the layer that holds the map's colour, so the
 trial never has to click the picker. A layer id holds that layer's colours, while `blend` picks the
 combined rainfall and temperature layer. The `colour` preset opens Kenya and Fiji with all four
-layers and one spot per pick: temperature, rainfall, land cover and the blend. If both halves of the
-blend are present, the blend pick also switches them off in the link.
+layers. Each spot picks temperature or rainfall, land cover or the blend. If both halves of the
+blend are present, picking the blend also switches them off in the link.
 
 `landcover: true` runs each spot twice in isolated browser contexts, first with the GPU enabled
 and then with `soe.debug.gpu=off`. Screenshots have `-gpu` and `-image` suffixes. The GPU also
@@ -94,11 +94,11 @@ their remaining budget expires, and `Retry-After` waits cannot extend the deadli
   the view had no colour picker.
 - `draws` maps each layer card title to its chip text, such as `Colour`, `As dots`, `As isotherms`,
   `As outlines` or a hidden reason, so one line shows how the whole scene was drawn.
-- `frame_ms_p50` and `frame_ms_p95` summarize rAF deltas during a scripted two-second pan and
+- `frame_ms_p50` and `frame_ms_p95` summarise rAF deltas during a scripted two-second pan and
   include browser scheduling and the rest of the map, not just GPU draw time. They are null for
   other trials. A 60 Hz browser normally has a 16.7 ms floor, so these values cannot establish
   an 8 ms GPU draw budget. The current headless browser also uses SwiftShader, not hardware GL.
-- `marks_frame_ms_p50` and `marks_frame_ms_p95` summarize the same pan for colour spots, where the
+- `marks_frame_ms_p50` and `marks_frame_ms_p95` summarise the same pan for colour spots, where the
   dots layer is usually the heaviest draw, and carry the same caveats as `frame_ms_*`.
 - `gl_errors` lists nonzero errors observed through WebGL2 `getError`, including upload checks.
 - `display_checks` reports visibility and palette repaint checks from frame readbacks. It also
@@ -124,7 +124,7 @@ Contour layer ids are matched by the patterns at the top of `measure.mjs`.
 - `--start` always starts a fresh Vite because its file watcher misses edits on this mount. With
   `--app`, restart Vite yourself after editing source.
 - A view is settled only after the scene mask has revealed the data and the requested layer views
-  have initialized. Two successive MapLibre `idle` samples must then agree with every tile loaded.
+  have initialised. Two successive MapLibre `idle` samples must then agree with every tile loaded.
   There are no fixed sleeps. Readiness is part of every success check, so early idle events do not
   settle a scene whose mask geometry is still loading.
 - Startup HTTP failures and JavaScript diagnostics belong to the first view. Later views contain

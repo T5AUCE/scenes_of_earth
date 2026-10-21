@@ -107,8 +107,10 @@ test("a queued missing-step note stays hidden once the blend is switched off", a
   const pendingReads: (() => void)[] = [];
   Object.assign(globalThis, { pendingReads, ImageData: class {} });
   const view = createBlendView(
-    [layerOf("rain", ["2026-08-01", "2026-09-01"], "2026-10-01"),
-      layerOf("temperature", ["2026-08-01"], "2026-09-01"),],
+    [
+      layerOf("rain", ["2026-08-01", "2026-09-01"], "2026-10-01"),
+      layerOf("temperature", ["2026-08-01"], "2026-09-01"),
+    ],
     {
       map: { setPaintProperty() {} },
       store: Promise.resolve({}),

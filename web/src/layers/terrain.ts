@@ -1,3 +1,4 @@
+/** Combine terrain shading with contours and adapt relief strength to colour fills. */
 import { removeLayerAndSource } from "../map";
 import { CONTOUR_COLORS, contourColor, DEFAULT_CONTOUR_COLOR } from "../render/palettes";
 import type {

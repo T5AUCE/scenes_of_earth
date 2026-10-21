@@ -1,3 +1,4 @@
+/** Combine cached rainfall and temperature steps into a bivariate colour layer. */
 import { makeHtmlElement } from "../html";
 import { bivariateLegend } from "../legend";
 import { addImageLayer, maxTextureSize, removeLayerAndSource, setImage } from "../map";
@@ -16,6 +17,7 @@ import { fieldReader } from "./field";
 
 const BLEND_OPACITY = 0.8;
 const SMOOTH_NOTE = "Smoothed for display; values are per cell.";
+
 /** The title of the blended layer, as its card and the colour picker name it. */
 export const BLEND_TITLE = "Rainfall + temperature (blended)";
 const BLEND_COLORS = lut2d(BIVARIATE_GREEN);
@@ -108,12 +110,14 @@ class Blend implements BlendView {
 
     this.noteBox.className = "option-note";
     this.noteBox.hidden = true;
-    this.parts = [{
-      id: BLEND,
-      label: BLEND_TITLE,
-      layerIds: [this.id],
-      note: this.noteBox,
-    }];
+    this.parts = [
+      {
+        id: BLEND,
+        label: BLEND_TITLE,
+        layerIds: [this.id],
+        note: this.noteBox,
+      },
+    ];
     this.showLegend();
   }
 
@@ -127,7 +131,6 @@ class Blend implements BlendView {
     this.refresh();
   }
 
-  // A new colour scale repaints the step on screen from its values.
   restyle() {
     this.showLegend();
     if (this.values) this.paint(this.values);

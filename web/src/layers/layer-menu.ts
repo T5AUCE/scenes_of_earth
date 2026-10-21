@@ -1,3 +1,4 @@
+/** Build layer controls and popovers for palette choices and display settings. */
 import { makeHtmlElement } from "../html";
 import {
   customColors,
@@ -44,8 +45,8 @@ function slider({ label, min, max, step, value, set }: LayerControl) {
 }
 
 /**
- * An Edit button and the popover it opens. The popover is filled each time it opens, applies every
- * change at once and calls onChange so the caller can record it.
+ * Build an Edit button and a popover that refreshes whenever it opens.
+ * Apply changes immediately and notify the caller through onChange.
  */
 export function layerMenu(menu: LayerMenu, onChange: (changed: MenuChange) => void) {
   const popover = makeHtmlElement("div");
@@ -111,7 +112,18 @@ function menuSections(
   close.type = "button";
   close.ariaLabel = "Close";
   close.onclick = () => popover.hidePopover();
+  const reset = resetButton(menu, onChange, refill);
 
+  return [
+    head,
+    paletteSection(menu, group, onChange),
+    ...edgesSection(menu),
+    ...rangeSection(menu.range, onChange),
+    reset,
+  ];
+}
+
+function resetButton(menu: LayerMenu, onChange: (changed: MenuChange) => void, refill: () => void) {
   const reset = makeHtmlElement("button", "Reset layer");
   reset.type = "button";
   reset.className = "menu-reset";
@@ -135,13 +147,7 @@ function menuSections(
     );
   };
 
-  return [
-    head,
-    paletteSection(menu, group, onChange),
-    ...edgesSection(menu),
-    ...rangeSection(menu.range, onChange),
-    reset,
-  ];
+  return reset;
 }
 
 function edgesSection(menu: LayerMenu) {
@@ -219,10 +225,6 @@ function paletteRadio(group: string, name: string, label: string, isChecked: boo
   input.checked = isChecked;
   row.append(input, label);
   return { row, input };
-}
-
-function gradientCss(colors: string[]) {
-  return `linear-gradient(to right, ${colors.join(", ")})`;
 }
 
 function swatch(colors: string[], blocks: boolean) {
@@ -363,7 +365,6 @@ function rangeSection(range: RangeMenu | undefined, onChange: (changed: MenuChan
   return [section];
 }
 
-/** Shows a warning after the trigger until the user resets or cancels. */
 function askBeforeReset(trigger: HTMLButtonElement, message: string, reset: () => void) {
   const popover = trigger.closest(".layer-menu");
   popover?.querySelector(".reset-warning")?.remove();
@@ -405,6 +406,10 @@ function labelled(text: string, input: HTMLInputElement) {
   const row = makeHtmlElement("label", `${text} `);
   row.append(input);
   return row;
+}
+
+function gradientCss(colors: string[]) {
+  return `linear-gradient(to right, ${colors.join(", ")})`;
 }
 
 function typedRange(low: HTMLInputElement, high: HTMLInputElement, range: RangeMenu) {

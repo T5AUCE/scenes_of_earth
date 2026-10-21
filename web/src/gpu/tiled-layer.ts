@@ -1,3 +1,4 @@
+/** Manage tiled GPU resources and restore custom layers after context loss. */
 import type {
   CustomLayerInterface,
   CustomRenderMethodInput,
@@ -49,7 +50,7 @@ interface GpuTile {
   quad: QuadExtent;
 }
 
-/** The GPU resources every tiled layer holds. */
+/** The GPU resources held by every tiled layer. */
 export interface TiledGpu {
   program: WebGLProgram;
   uniforms: Map<string, WebGLUniformLocation | null>;
@@ -75,9 +76,8 @@ const CORNERS = Float32Array.of(0, 0, 1, 0, 0, 1, 1, 1);
 const TILE_UNIFORM_NAMES = ["uMatrix", "uTile", "uRows", "uRowCount"];
 
 /**
- * The lifecycle of a MapLibre custom layer that draws a grid of cells as textured quads: shader
- * setup, context loss, failure reporting, tile uploads and world copies. A subclass chooses the
- * shaders, uploads its own data and sets its own uniforms.
+ * Draw a cell grid as textured quads through the MapLibre custom-layer lifecycle.
+ * Subclasses supply shaders and data while this class manages shared GPU resources.
  */
 export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
   implements CustomLayerInterface
@@ -106,15 +106,6 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
     canvas.addEventListener("webglcontextlost", this.onContextLost);
     canvas.addEventListener("webglcontextrestored", this.onContextRestored);
     this.build();
-  }
-
-  onRemove() {
-    const canvas = this.map?.getCanvas();
-    canvas?.removeEventListener("webglcontextlost", this.onContextLost);
-    canvas?.removeEventListener("webglcontextrestored", this.onContextRestored);
-    this.release();
-    this.map = null;
-    this.gl = null;
   }
 
   private readonly onContextLost = (event: Event) => {
@@ -180,6 +171,15 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
     return { vertexArray, corners };
   }
 
+  onRemove() {
+    const canvas = this.map?.getCanvas();
+    canvas?.removeEventListener("webglcontextlost", this.onContextLost);
+    canvas?.removeEventListener("webglcontextrestored", this.onContextRestored);
+    this.release();
+    this.map = null;
+    this.gl = null;
+  }
+
   private release() {
     const { gpu, gl } = this;
     this.gpu = null;
@@ -212,7 +212,7 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
         throw new Error(`${this.program.name} need Mercator drawing`);
       }
       this.uploadStaleData(gl, this.gpu);
-      // MapLibre's model-view matrix uses world pixels, not normalized Mercator coordinates.
+      // MapLibre's model-view matrix uses world pixels rather than normalised Mercator coordinates.
       this.draw(gl, this.gpu, input.defaultProjectionData.mainMatrix);
     } catch (error) {
       this.fail(error as Error);
@@ -255,10 +255,6 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
     gl.activeTexture(gl.TEXTURE0);
   }
 
-  protected uniform(gpu: Gpu, name: string) {
-    return gpu.uniforms.get(name)!;
-  }
-
   protected uploadRows(gl: WebGL2RenderingContext, gpu: Gpu, grid: TiledGrid) {
     deleteResources(gl, { textures: [gpu.rows] });
     gpu.rows = null;
@@ -266,8 +262,7 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
   }
 
   /**
-   * Replace the layer's tile textures with one-byte cells of the grid, each with its halo, and
-   * with the cells of a companion grid of the same size when there is one.
+   * Upload one-byte grid cells with tile halos and an optional companion grid of the same size.
    */
   protected uploadTiles(
     gl: WebGL2RenderingContext,
@@ -281,24 +276,46 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
     });
     gpu.tiles = [];
     const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
-
     for (const tile of textureTiles(grid.nx, grid.ny, maxTextureSize)) {
-      const { window } = tile;
-      const upload = (source: Uint8Array) => {
-        const windowCells = new Uint8Array(window.width * window.height);
-        for (let row = 0; row < window.height; row++) {
-          const start = (window.row + row) * grid.nx + window.column;
-          windowCells.set(source.subarray(start, start + window.width), row * window.width);
-        }
-        return uploadTexture(gl, "ids", window.width, window.height, windowCells);
-      };
+      const texture = this.uploadWindow(gl, grid, tile.window, cells);
       gpu.tiles.push({
-        texture: upload(cells),
-        companion: companionCells ? upload(companionCells) : null,
+        texture,
+        companion: this.uploadCompanion(gl, grid, tile, companionCells, texture),
         tile,
         quad: quadExtent(grid, tile.core, this.options.shift),
       });
     }
+  }
+
+  private uploadCompanion(
+    gl: WebGL2RenderingContext,
+    grid: TiledGrid,
+    tile: TextureTile,
+    companionCells: Uint8Array | undefined,
+    texture: WebGLTexture,
+  ) {
+    if (!companionCells) return null;
+
+    try {
+      return this.uploadWindow(gl, grid, tile.window, companionCells);
+    } catch (error) {
+      deleteResources(gl, { textures: [texture] });
+      throw error;
+    }
+  }
+
+  private uploadWindow(
+    gl: WebGL2RenderingContext,
+    grid: TiledGrid,
+    window: TextureTile["window"],
+    cells: Uint8Array,
+  ) {
+    const windowCells = new Uint8Array(window.width * window.height);
+    for (let row = 0; row < window.height; row++) {
+      const start = (window.row + row) * grid.nx + window.column;
+      windowCells.set(cells.subarray(start, start + window.width), row * window.width);
+    }
+    return uploadTexture(gl, "ids", window.width, window.height, windowCells);
   }
 
   /** Draw every tile in every world copy, after `bindTile` sets the tile's own uniforms. */
@@ -333,25 +350,10 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
       }
     }
   }
-}
 
-/** Read where a layer sits now, with `fallbackBeforeId` for a layer that is last in the style. */
-export function layerPosition(
-  map: MapLibreMap,
-  id: string,
-  fallbackBeforeId: string | undefined,
-): LayerPosition {
-  const layers = map.getLayersOrder();
-  const index = layers.indexOf(id);
-  const layer = map.getLayer(id);
-  const isHidden = layer && map.getLayoutProperty(id, "visibility") === "none";
-
-  return {
-    beforeId: index < 0 ? fallbackBeforeId : layers[index + 1],
-    visibility: isHidden ? "none" : "visible",
-    minzoom: layer?.minzoom ?? 0,
-    maxzoom: layer?.maxzoom ?? map.getMaxZoom(),
-  };
+  protected uniform(gpu: Gpu, name: string) {
+    return gpu.uniforms.get(name)!;
+  }
 }
 
 /**
@@ -400,5 +402,24 @@ export function keepThroughContextLoss(
     canvas.removeEventListener("webglcontextrestored", onRestored);
     map.off("style.load", restore);
     lost = null;
+  };
+}
+
+/** Read a layer's position with a fallback anchor when it is absent from the style. */
+export function layerPosition(
+  map: MapLibreMap,
+  id: string,
+  fallbackBeforeId: string | undefined,
+): LayerPosition {
+  const layers = map.getLayersOrder();
+  const index = layers.indexOf(id);
+  const layer = map.getLayer(id);
+  const isHidden = layer && map.getLayoutProperty(id, "visibility") === "none";
+
+  return {
+    beforeId: index < 0 ? fallbackBeforeId : layers[index + 1],
+    visibility: isHidden ? "none" : "visible",
+    minzoom: layer?.minzoom ?? 0,
+    maxzoom: layer?.maxzoom ?? map.getMaxZoom(),
   };
 }

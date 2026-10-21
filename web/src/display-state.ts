@@ -1,3 +1,4 @@
+/** Resolve scene display choices and persist browser preferences independently of links. */
 import {
   CLASS_PALETTE_OPTIONS,
   CONTOUR_COLORS,
@@ -10,6 +11,7 @@ import type { DisplayTokens, EdgeSettings, LayerDisplay, LayerDoc } from "./type
 const STORAGE_KEY = "soe.display.v1";
 const EDGES_STORAGE_KEY = "soe.edges.v1";
 const COLOUR_STORAGE_KEY = "soe.colour.v1";
+
 const PALETTE_FIELDS = 2;
 const RANGE_FIELDS = 3;
 const SIGNIFICANT_DIGITS = 3;
@@ -157,14 +159,14 @@ function spanResolution({ stats }: LayerDoc) {
   return span > 0 ? span / 10 ** (SIGNIFICANT_DIGITS - 1) : 1;
 }
 
-/** The link units of a layer: the layer itself and each of its extra parts. */
+/** Return link units for the layer itself and each extra part. */
 export function layerUnits(layer: LayerDoc) {
   return [layer.id, ...(layer.style.parts ?? []).map((part) => `${layer.id}.${part}`)];
 }
 
 /**
- * Combine the link, the palettes and colour pick this browser remembers, and the bundle's
- * defaults, in that order of precedence. Tokens that name nothing in the scene are dropped.
+ * Resolve linked choices before browser preferences and bundle defaults.
+ * Drop tokens that name nothing in the scene.
  */
 export function resolveDisplay(
   layers: LayerDoc[],
@@ -262,8 +264,9 @@ export function formatDisplayParams(display: SceneDisplay, layers: LayerDoc[]) {
   const on = new Set(units.filter((unit) => !display.off.has(unit)));
   const owner = allocate(layers, on, display.colour).owner;
   const pair = blendPair(layers);
-  const off = units.filter((unit) => display.off.has(unit)
-    && !(owner === BLEND && pair?.includes(unit)));
+  const off = units.filter((unit) =>
+    display.off.has(unit) && !(owner === BLEND && pair?.includes(unit)),
+  );
 
   const parameters = {
     pal: layers.flatMap((layer) => {
@@ -391,7 +394,7 @@ export function storePick(pick: string | null) {
   }
 }
 
-/** Replace what a layer overrides; a layer that overrides nothing is removed. */
+/** Replace a layer's overrides or remove its entry when no overrides remain. */
 export function setLayerDisplay(display: SceneDisplay, layerId: string, layer: LayerDisplay) {
   const { palette, range } = layer;
   if (!palette && !range) {
@@ -463,7 +466,7 @@ function isPaletteOf(layer: LayerDoc | undefined, palette: string | undefined) {
   }
 }
 
-// Only field layers have a range, and the numbers are rounded to keep links short.
+// Rounding field ranges to the data precision keeps links short.
 function rangeOf(layer: LayerDoc | undefined, lowText: string, highText: string) {
   if (layer?.style.kind !== "field" || !lowText || !highText) return null;
 

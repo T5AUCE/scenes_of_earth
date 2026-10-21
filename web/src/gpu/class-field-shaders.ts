@@ -1,5 +1,5 @@
 /**
- * Draw class fields with GLSL ES 3.00.
+ * Draw categorical fills and borders with GLSL ES 3.00 and mirror their decisions for tests.
  *
  * The vertex uniform `uMatrix` takes a quad corner in [0, 1]² to clip space. `uTile` holds its
  * first column and column count relative to the texture, followed by its vertical start and
@@ -330,7 +330,7 @@ export interface EdgeOptions {
 export interface ClassFieldResult {
   discarded: boolean;
   nearest: number;
-  /** Normalized influence by class id; classes with no influence are omitted. */
+  /** Normalised influence by class id; classes with no influence are omitted. */
   weights: { id: number; weight: number }[];
   /** Outline ink in [0, 1] before the outline strength scales it. */
   outline: number;
@@ -535,6 +535,6 @@ function distancePx(current: ClassSum, other: ClassSum, fragment: ClassFieldFrag
 }
 
 function smoothstep(fraction: number): number {
-  const t = Math.min(1, Math.max(0, fraction));
-  return t * t * (3 - 2 * t);
+  const clamped = Math.min(1, Math.max(0, fraction));
+  return clamped * clamped * (3 - 2 * clamped);
 }

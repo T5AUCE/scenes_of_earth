@@ -298,12 +298,16 @@ test("the last entry for a layer wins and ranges are rounded to the data's preci
 });
 
 test("every layer with a menu names its palette but ranges and off parts only when set", () => {
-  const { display } = resolveDisplay(LAYERS, {
-    pal: "chirps_monthly:ink-blue,esa_worldcover:painted",
-    range: "",
-    off: "",
-    colour: "",
-  }, {});
+  const { display } = resolveDisplay(
+    LAYERS,
+    {
+      pal: "chirps_monthly:ink-blue,esa_worldcover:painted",
+      range: "",
+      off: "",
+      colour: "",
+    },
+    {},
+  );
 
   assert.equal(
     formatDisplayParams(display, LAYERS),
@@ -399,19 +403,6 @@ test("range decimals follow the scale factor, else the span of the area's values
   assert.equal(rangeDecimals(unscaled(3, 3)), 0);
 });
 
-function useStorage(overrides: object = {}) {
-  const items = new Map<string, string>();
-  Object.assign(globalThis, {
-    localStorage: {
-      getItem: (key: string) => items.get(key) ?? null,
-      setItem: (key: string, value: string) => items.set(key, value),
-      removeItem: (key: string) => items.delete(key),
-      ...overrides,
-    },
-  });
-  return items;
-}
-
 test("edge settings default to quarter rounding with no softness or outline", () => {
   useStorage();
 
@@ -484,9 +475,26 @@ test("invalid or blocked edge storage uses defaults without preventing changes",
   items.set("soe.edges.v1", "broken JSON");
   assert.deepEqual(loadStoredEdges("esa_worldcover"), DEFAULT_EDGES);
   useStorage({
-    getItem: () => { throw new Error("blocked"); },
-    setItem: () => { throw new Error("blocked"); },
+    getItem: () => {
+      throw new Error("blocked");
+    },
+    setItem: () => {
+      throw new Error("blocked");
+    },
   });
   assert.deepEqual(loadStoredEdges("esa_worldcover"), DEFAULT_EDGES);
   assert.doesNotThrow(() => storeEdges("esa_worldcover", { ...DEFAULT_EDGES }));
 });
+
+function useStorage(overrides: object = {}) {
+  const items = new Map<string, string>();
+  Object.assign(globalThis, {
+    localStorage: {
+      getItem: (key: string) => items.get(key) ?? null,
+      setItem: (key: string, value: string) => items.set(key, value),
+      removeItem: (key: string) => items.delete(key),
+      ...overrides,
+    },
+  });
+  return items;
+}

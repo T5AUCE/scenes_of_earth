@@ -220,7 +220,9 @@ test("a colour spot sets the pick through the scene link", async () => {
   let url = null;
   const page = {
     on: () => {},
-    goto: async (value) => { url = value; },
+    goto: async (value) => {
+      url = value;
+    },
     waitForFunction: async () => {},
     evaluate: async (callback) => {
       if (callback.name === "waitForIdle") return true;
@@ -348,7 +350,7 @@ test("immutable cache entries still respect expiration and upstream age", () => 
   assert.equal(isFresh({ ...entry, headers: { ...entry.headers, age: "60" } }, 2000, 0), false);
 });
 
-test("cache freshness honors expires, no-cache and uncacheable responses", () => {
+test("cache freshness honours expires, no-cache and uncacheable responses", () => {
   const entry = makeCacheEntry({ date: new Date(1000).toUTCString() });
   const makeEntryWithControl = (control) => ({
     ...entry,

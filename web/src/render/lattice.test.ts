@@ -31,19 +31,6 @@ const {
   slotPosition,
 } = await import("./lattice.ts").finally(() => hooks.deregister());
 
-/** The (column, row) slots of one cell at a level that a position and threshold light. */
-function litSlots(position: number, level: number, threshold: number) {
-  const slots = 2 ** Math.max(level, 0);
-  const count = dotCount(position, level, threshold);
-  const lit = new Set<string>();
-  for (let row = 0; row < slots; row++) {
-    for (let column = 0; column < slots; column++) {
-      if (bayerRank(column, row, Math.max(level, 0)) < count) lit.add(`${column},${row}`);
-    }
-  }
-  return lit;
-}
-
 test("dots_nest_across_levels", () => {
   for (const position of [0.05, 0.2, 0.5, 0.8, 1]) {
     for (let level = 0; level < MAX_LEVEL; level++) {
@@ -242,3 +229,15 @@ test("a parent dot stays inside its own site at the highest latitude", () => {
     assert.ok(reachPx <= halfWidthPx, `${zoom} ${reachPx} ${halfWidthPx}`);
   }
 });
+
+function litSlots(position: number, level: number, threshold: number) {
+  const slots = 2 ** Math.max(level, 0);
+  const count = dotCount(position, level, threshold);
+  const lit = new Set<string>();
+  for (let row = 0; row < slots; row++) {
+    for (let column = 0; column < slots; column++) {
+      if (bayerRank(column, row, Math.max(level, 0)) < count) lit.add(`${column},${row}`);
+    }
+  }
+  return lit;
+}

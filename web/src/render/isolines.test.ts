@@ -125,7 +125,11 @@ test("adjacent segments chain into one polyline", () => {
   assert.equal(lines.length, 1);
   assert.deepEqual(lines[0], {
     value: 1,
-    coordinates: [[0, 0.5], [1, 0.5], [2, 0.5]],
+    coordinates: [
+      [0, 0.5],
+      [1, 0.5],
+      [2, 0.5],
+    ],
   });
 });
 
@@ -135,7 +139,11 @@ test("an exact-level ridge does not retrace a segment", () => {
   assert.deepEqual(traceIsolines(values, 3, 3, [1]), [
     {
       value: 1,
-      coordinates: [[0, 1], [1, 1], [2, 1]],
+      coordinates: [
+        [0, 1],
+        [1, 1],
+        [2, 1],
+      ],
     },
   ]);
 });

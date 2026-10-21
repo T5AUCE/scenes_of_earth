@@ -1,3 +1,4 @@
+/** Define built-in palettes and encode custom gradients for menus and shared links. */
 import type { ClassDoc } from "../types";
 
 /** A palette the menu can offer, by the name that is stored and written to links. */
@@ -7,7 +8,6 @@ export interface PaletteOption {
 }
 
 const HEX_DIGITS = 2;
-// The red, green and blue pairs follow the # in #rrggbb.
 const HEX_CHANNEL_STARTS = [1, 3, 5];
 /** The fewest colour stops a custom gradient may have. */
 export const MIN_CUSTOM_COLORS = 2;
@@ -18,7 +18,7 @@ const CUSTOM_PATTERN = new RegExp(
   `^${CUSTOM_PREFIX}(-[0-9a-f]{6}){${MIN_CUSTOM_COLORS},${MAX_CUSTOM_COLORS}}$`,
 );
 
-// ColorBrewer Blues, 9 classes.
+/** Nine-class ColorBrewer Blues palette. */
 const INK_BLUE = [
   [247, 251, 255],
   [222, 235, 247],
@@ -31,8 +31,7 @@ const INK_BLUE = [
   [8, 48, 107],
 ];
 
-// The ramp follows the bivariate palette's wet row (OKLCH hue 255 to 165 to 45 at chroma 0.125) so
-// temperature looks the same on its own as it does when paired with rain.
+// Matching the bivariate palette's wet row keeps temperature colours consistent across views.
 const CLIMATE = [
   [0x44, 0x7d, 0xc4],
   [0x00, 0x89, 0xba],
@@ -45,7 +44,7 @@ const CLIMATE = [
   [0xcf, 0x76, 0x4c],
 ];
 
-// Crameri batlow (MIT, cmcrameri 1.10) sampled at nine even positions.
+/** Crameri batlow sampled at nine even positions (MIT, cmcrameri 1.10). */
 const BATLOW = [
   [1, 25, 89],
   [17, 67, 96],
@@ -72,7 +71,7 @@ const BIVARIATE_GREEN_HEX = [
  */
 export const BIVARIATE_GREEN = BIVARIATE_GREEN_HEX.map((row) => row.map(hexToRgb));
 
-// Cividis (Nuñez et al. 2018, CC0, matplotlib 3.11) sampled at nine even positions.
+/** Cividis sampled at nine even positions (Nuñez et al. 2018, CC0, matplotlib 3.11). */
 const CIVIDIS = [
   [0, 34, 78],
   [26, 56, 111],
@@ -85,7 +84,7 @@ const CIVIDIS = [
   [254, 232, 56],
 ];
 
-// ColorBrewer RdBu, 9 classes, reversed so that low values are blue.
+// Reversing the nine-class ColorBrewer RdBu palette makes low values blue.
 const BLUE_RED = [
   [33, 102, 172],
   [67, 147, 195],

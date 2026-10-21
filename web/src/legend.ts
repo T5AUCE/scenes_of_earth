@@ -1,3 +1,4 @@
+/** Build legends for colour scales and the map's non-colour encodings. */
 import {
   COLOR_CHANNELS,
   LAST_ENTRY,
@@ -15,11 +16,12 @@ const ISOTHERM_SAMPLE_WIDTH_PX = 24;
 const ISOTHERM_SAMPLE_BORDER_PX = 2;
 const ISOTHERM_SAMPLE_GAP_PX = 6;
 
-/** The red, green and blue of the rain dots, a dark blue that reads on every colour. */
+/** Dark blue dot ink that remains readable over colour fills, as an RGB triple. */
 export const DOT_INK_RGB: [number, number, number] = [26, 54, 88];
 const DOT_BOX_PX = 28;
 const DOT_LEGEND_LEVEL = 2;
 const DOT_LEGEND_THRESHOLD = 0.5;
+
 const BIVARIATE_SIZE_PX = 112;
 const BIVARIATE_GRID_ALPHA = 0.35;
 const BIVARIATE_READING = "Darker is wetter. Blue is cool, green mild and terracotta hot.";
@@ -38,16 +40,14 @@ export function isothermLegend(interval: number) {
   const element = document.createElement("div");
   const sample = document.createElement("span");
   sample.className = "legend-isotherm";
-  sample.style.borderTop =
-    `${ISOTHERM_SAMPLE_BORDER_PX}px dashed ${ISOTHERM_COLOR}`;
+  sample.style.borderTop = `${ISOTHERM_SAMPLE_BORDER_PX}px dashed ${ISOTHERM_COLOR}`;
   sample.style.display = "inline-block";
   sample.style.marginRight = `${ISOTHERM_SAMPLE_GAP_PX}px`;
   sample.style.verticalAlign = "middle";
   sample.style.width = `${ISOTHERM_SAMPLE_WIDTH_PX}px`;
   const boldInterval = interval * BOLD_ISOTHERM_MULTIPLE;
   const label = document.createElement("span");
-  label.textContent =
-    `Isotherms every ${interval} °C (bold every ${boldInterval} °C)`;
+  label.textContent = `Isotherms every ${interval} °C (bold every ${boldInterval} °C)`;
   element.append(sample, label);
   return element;
 }
@@ -90,7 +90,7 @@ export function dotLegend(stops: number[], units: string, resDeg: number, blockC
   return element;
 }
 
-/** One axis of the two-way legend with its name, units, stops and whether its low end is open. */
+/** A labelled bivariate scale with an optional open lower end. */
 export interface BivariateLegendAxis {
   title: string;
   units: string;
@@ -100,7 +100,7 @@ export interface BivariateLegendAxis {
 
 /**
  * A square of the blend's colours with rain rising and temperature growing warmer to the right.
- * Faint lines mark the nine stops of each axis, and labels name the first, middle and last.
+ * Faint lines mark each axis's nine stops while labels identify its endpoints and midpoint.
  */
 export function bivariateLegend(
   colors: Uint8ClampedArray,
@@ -234,8 +234,8 @@ function dotBox(position: number) {
 }
 
 /**
- * A colour bar with stop labels under their colours and a separate units caption. The top label
- * is open ended, and so is the bottom one when the scale is a custom range.
+ * Build a colour bar with positioned stop labels and a separate units caption.
+ * The top label is open-ended while a custom range also opens the bottom label.
  */
 export function gradientLegend(
   colors: Uint8ClampedArray,

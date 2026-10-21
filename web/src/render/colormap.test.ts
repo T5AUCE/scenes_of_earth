@@ -17,8 +17,7 @@ import {
   stopPosition,
   stopsForRange,
 } from "./colormap.ts";
-import { crossSampleTable, mercY, sampleTable } from "./mercator.ts";
-import type { SampleTable } from "./mercator.ts";
+import { crossSampleTable, mercY, sampleTable, type SampleTable } from "./mercator.ts";
 import {
   BIVARIATE_GREEN,
   CLASS_PALETTES,
@@ -176,15 +175,6 @@ test("uint16 rain decodes with the scale factor and the fill becomes NaN", () =>
   assert.ok(Number.isNaN(values[2]));
 });
 
-function pixelAt(samples: SampleTable, bbox: Bbox, longitude: number, latitude: number) {
-  const [west, south, east, north] = bbox;
-  const column = Math.floor(((longitude - west) / (east - west)) * samples.width);
-  const row = Math.floor(
-    ((mercY(north) - mercY(latitude)) / (mercY(north) - mercY(south))) * samples.height,
-  );
-  return row * samples.width + column;
-}
-
 const WORLDCOVER_CLASSES = [10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100].map((value) => ({
   value,
   label: `Class ${value}`,
@@ -323,3 +313,12 @@ test("a custom range spreads the stops evenly and no range keeps the fitted ones
   assert.deepEqual(stopsForRange(fitted, [0, 20]), [0, 10, 20]);
   assert.equal(stopsForRange(fitted, null), fitted);
 });
+
+function pixelAt(samples: SampleTable, bbox: Bbox, longitude: number, latitude: number) {
+  const [west, south, east, north] = bbox;
+  const column = Math.floor(((longitude - west) / (east - west)) * samples.width);
+  const row = Math.floor(
+    ((mercY(north) - mercY(latitude)) / (mercY(north) - mercY(south))) * samples.height,
+  );
+  return row * samples.width + column;
+}

@@ -1,13 +1,14 @@
+/** Project grid samples and their pixel footprints into a shared Mercator world copy. */
 import type { Bbox } from "../types";
 
 /** The nearest source cells and optional coverage of a Web Mercator image. */
 export interface SampleTable {
   width: number;
   height: number;
-  src: Int32Array; // per output pixel: source cell index
+  src: Int32Array; // source cell index per output pixel
   footprint?: {
     sourceWidth: number;
-    // Source row and column edges and centres per output row and column, in cell units.
+    /** Source edges and centres per output row and column, in grid cells. */
     rowEdges: Float64Array;
     rowCenters: Float64Array;
     columnEdges: Float64Array;
@@ -27,7 +28,7 @@ export type Coordinates = number[] | Coordinates[];
 type Corners = [[number, number], [number, number], [number, number], [number, number]];
 
 const MAX_TEXTURE_SIZE_PX = 4096;
-// Keeps rounding noise from adding a row to an already exact fit.
+// Rounding noise must not add a row to an exact fit.
 const ROW_COUNT_TOLERANCE = 1e-9;
 const CELL_EDGE_TOLERANCE_CELLS = 1e-9;
 
@@ -71,8 +72,8 @@ export function sampleTable(
 
 /**
  * The cells of `otherGrid` under each pixel of a table made for another grid, with -1 where the
- * pixel centre lies outside it. This lets two layers on different grids share one image, and the
- * footprints let each layer keep the pixels that only part of a cell reaches.
+ * pixel centre lies outside it. Two layers on different grids can then share one image.
+ * Footprints retain pixels reached by only part of a cell.
  */
 export function crossSampleTable(
   table: SampleTable,
@@ -101,7 +102,6 @@ export function crossSampleTable(
   return { width: table.width, height: table.height, src, footprint };
 }
 
-// The source cells each pixel of an image over imageBbox overlaps, which may be outside the grid.
 function pixelFootprints(imageBbox: Bbox, grid: Grid, width: number, height: number) {
   const [west, south, east, north] = imageBbox;
   const [gridWest, gridSouth, gridEast, gridNorth] = grid.bbox;

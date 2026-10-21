@@ -2,7 +2,11 @@
 
 const MAX_LISTED_MESSAGES = 5;
 
-/** Summarize positive rAF deltas in milliseconds using nearest-rank percentiles. */
+/** Matches contour overlay layer ids so unrelated map features are not counted. */
+export const CONTOUR_LINE_PATTERN = /-contours-\d+$/;
+export const CONTOUR_LABEL_PATTERN = /-contours-labels$/;
+
+/** Summarise positive rAF deltas in milliseconds using nearest-rank percentiles. */
 export function frameStats(deltas) {
   const sorted = deltas.filter((delta) => Number.isFinite(delta) && delta > 0)
     .sort((first, second) => first - second);
@@ -14,16 +18,12 @@ export function frameStats(deltas) {
   return { frame_ms_p50: percentile(0.5), frame_ms_p95: percentile(0.95) };
 }
 
-/** Summarize the marks-layer pan deltas under the colour trial's field names. */
+/** Summarise the marks-layer pan deltas under the colour trial's field names. */
 export function marksFrameStats(deltas) {
   const { frame_ms_p50, frame_ms_p95 } = frameStats(deltas);
 
   return { marks_frame_ms_p50: frame_ms_p50, marks_frame_ms_p95: frame_ms_p95 };
 }
-
-/** Matches contour overlay layer ids so unrelated map features are not counted. */
-export const CONTOUR_LINE_PATTERN = /-contours-\d+$/;
-export const CONTOUR_LABEL_PATTERN = /-contours-labels$/;
 
 /**
  * Returns the shortest distance in pixels from a point to any polyline.
@@ -94,7 +94,7 @@ export function sameSample(first, second) {
   return Boolean(first) && JSON.stringify(first) === JSON.stringify(second);
 }
 
-/** Rejects idle samples until both the mask and requested layer data have initialized. */
+/** Rejects idle samples until both the mask and requested layer data have initialised. */
 export function isSettled(previous, sample, idle) {
   return idle && sample.sceneReady === true && sample.tilesLoaded && sameSample(previous, sample);
 }

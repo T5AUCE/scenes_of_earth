@@ -1,3 +1,4 @@
+/** Create the basemap and manage scene imagery with camera and label-placement helpers. */
 import {
   AttributionControl,
   LngLat,
@@ -14,7 +15,7 @@ import { clampAround, nearestEquivalent, panLimit } from "./pan-lock";
 import { imageCorners } from "./render/mercator";
 import type { Bbox } from "./types";
 
-// OpenFreeMap: free, no API key.
+// OpenFreeMap needs no API key.
 const BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 /** The map's highest zoom, used as the open upper end of layer zoom ranges. */
 export const MAX_ZOOM = 24;
@@ -60,7 +61,7 @@ export function createMap(container: string): MapLibreMap {
   return map;
 }
 
-/** Adds a metric scale bar, which tells how far apart dots sit, and returns how to remove it. */
+/** Add a metric scale bar for reading dot spacing and return its removal callback. */
 export function showScaleBar(map: MapLibreMap) {
   const control = new ScaleControl({ unit: "metric" });
   map.addControl(control, "bottom-left");

@@ -1,3 +1,4 @@
+/** Describe API responses and bundle metadata alongside the viewer's renderer contracts. */
 import type {} from "geojson";
 import type { Map as MapLibreMap } from "maplibre-gl";
 
@@ -18,7 +19,7 @@ export interface Layer {
   id: string;
   title: string;
   units: string;
-  kind: string; // style.kind: how to render it
+  kind: string; // renderer selected by style.kind
   time_varying: boolean;
   coverage: Bbox;
   time: { step: string; first: string; last: string } | null; // request periods, e.g. "YYYY-MM"
@@ -80,7 +81,7 @@ export interface TimeDoc {
   step: string; // ISO 8601 duration, e.g. P1M
   values: string[]; // "YYYY-MM-DD" period starts
   end: string; // "YYYY-MM-DD", the day after the last period
-  method: string | null; // how a step summarises its period: sum, mean, point or max
+  method: string | null; // period summary method (sum, mean, point or max)
 }
 
 /** The requested range of a scene, as ISO dates. */
@@ -143,7 +144,7 @@ export interface ClassDoc {
   color: string; // #rrggbb
 }
 
-/** One built layer's sources, display choices, grid and stored arrays. */
+/** A built layer's metadata and storage contract. */
 export interface LayerDoc {
   id: string;
   title: string;
@@ -197,7 +198,7 @@ export interface Scene {
   };
 }
 
-/** A toggleable piece of a layer: map layers shown or hidden together. */
+/** A toggleable group of map layers within one data layer. */
 export interface Part {
   /** The layer's id for its first part and `<layer id>.<part>` for the others, as links name it. */
   id: string;
@@ -210,7 +211,7 @@ export interface Part {
   note?: HTMLElement;
 }
 
-/** The raw `pal`, `range` and `off` values of a link, each a comma-joined list. */
+/** Raw display parameters from a link, including the colour owner. */
 export interface DisplayTokens {
   pal: string;
   range: string;

@@ -1,36 +1,24 @@
+/** Mount scene renderers and coordinate their controls with colour ownership and time. */
 import type { GeoJSONSource, Map as MapLibreMap } from "maplibre-gl";
 
 import { loadAreaFeature } from "./api";
 import { openStore, type Store } from "./data";
 import {
-  applyColourAction,
-  type ColourAction,
   DROPPED_NOTE,
   formatDisplayParams,
-  layerUnits,
   loadStoredPalettes,
   loadStoredPick,
   NO_TOKENS,
   resolveDisplay,
-  recordMenuChange,
   type SceneDisplay,
-  shouldStorePick,
-  storePick,
 } from "./display-state";
 import { makeHtmlElement } from "./html";
-import {
-  allocate,
-  BLEND,
-  blendPair,
-  type Draw,
-  type Hidden,
-  layerDraws,
-} from "./layers/allocate";
+import { blendPair } from "./layers/allocate";
 import { BLEND_TITLE, type BlendView, createBlendView } from "./layers/blend";
-import { layerMenu, partControls, type MenuChange } from "./layers/layer-menu";
 import { LAYER_KINDS } from "./layers/registry";
 import { firstSymbolId, removeLayerAndSource, showScaleBar } from "./map";
 import { shiftLongitudes, worldShift } from "./render/mercator";
+import { mountCards, type MountedLayer, outlineCard } from "./scene-cards";
 import { createTimeline, formatTime, scrubberTimes } from "./timeline";
 import type { DisplayTokens, DrawSlots, LayerDoc, LayerView, Scene } from "./types";
 
@@ -42,26 +30,13 @@ const OUTLINE_COLOR = "#333";
 const OUTLINE_WIDTH_PX = 1.5;
 const EMPTY_FEATURES: GeoJsonData = { type: "FeatureCollection", features: [] };
 
-// Hidden layers from bottom to top, so each kind of drawing can be put in its own band.
+// Hidden anchors keep each kind of drawing in its own band.
 const SLOTS: DrawSlots = {
   fill: "soe-slot-fill",
   shade: "soe-slot-shade",
   marks: "soe-slot-marks",
   lines: "soe-slot-lines",
 };
-
-const CHIP_TEXT: Partial<Record<Draw, string>> = {
-  colour: "Colour",
-  dots: "As dots",
-  isolines: "As isotherms",
-  edges: "As outlines",
-};
-
-/** A layer's view with the layer it draws. */
-interface MountedLayer {
-  layer: LayerDoc;
-  view: LayerView;
-}
 
 /** Where a scene puts its pieces; the caller owns the containers. */
 export interface SceneSlots {
@@ -74,7 +49,7 @@ export interface SceneSlots {
   onDisplay(params: string): void;
 }
 
-/** Draws a scene's layers, outline, cards and timeline; a failure partway removes all of it. */
+/** Mount a scene and its controls, removing partial mounts if setup fails. */
 export function mountScene(
   map: MapLibreMap,
   scene: Scene,
@@ -130,7 +105,7 @@ export function mountScene(
     blend = mountBlend(map, mounted, store, shift, addNote);
 
     mountCards(map, mounted, display, box, changed, blend);
-    box.append(outlineCard(map));
+    box.append(outlineCard(map, OUTLINE_ID));
     changed();
 
     timeline = createSceneTimeline(blend ? [...views, blend] : views, scene.period, onTime);
@@ -174,12 +149,6 @@ function addOutline(
     .catch((error) => addNote(`Area outline: ${error.message}`));
 }
 
-function addSlotAnchors(map: MapLibreMap) {
-  for (const id of Object.values(SLOTS)) {
-    map.addLayer({ id, type: "background", layout: { visibility: "none" } }, OUTLINE_ID);
-  }
-}
-
 async function showShiftedOutline(
   map: MapLibreMap,
   geometryHref: string,
@@ -198,7 +167,13 @@ async function showShiftedOutline(
   (map.getSource(OUTLINE_ID) as GeoJSONSource).setData(shifted as GeoJsonData);
 }
 
-// Unknown kinds get a note, and a layer that fails to start does not stop the others.
+function addSlotAnchors(map: MapLibreMap) {
+  for (const id of Object.values(SLOTS)) {
+    map.addLayer({ id, type: "background", layout: { visibility: "none" } }, OUTLINE_ID);
+  }
+}
+
+// Unsupported or failed renderers must not prevent the other layers from mounting.
 function mountLayerViews(
   map: MapLibreMap,
   layers: LayerDoc[],
@@ -252,11 +227,11 @@ function mountBlend(
   shift: number,
   addNote: (text: string) => void,
 ) {
-  const docs = mounted.map(({ layer }) => layer);
-  const pair = blendPair(docs);
+  const layerDocs = mounted.map(({ layer }) => layer);
+  const pair = blendPair(layerDocs);
   if (!pair) return null;
 
-  const [rain, temperature] = pair.map((id) => docs.find((layer) => layer.id === id)!);
+  const [rain, temperature] = pair.map((id) => layerDocs.find((layer) => layer.id === id)!);
   const rangeOf = (id: string) => {
     const mountedLayer = mounted.find(({ layer }) => layer.id === id);
     return mountedLayer?.view.menu?.range?.value ?? null;
@@ -271,301 +246,6 @@ function mountBlend(
   } catch (error) {
     report(error);
     return null;
-  }
-}
-
-// The user's pick decides who holds colour. Every other visible layer then draws its fallback.
-function mountCards(
-  map: MapLibreMap,
-  mounted: MountedLayer[],
-  display: SceneDisplay,
-  box: HTMLElement,
-  changed: () => void,
-  blend: BlendView | null,
-) {
-  const docs = mounted.map(({ layer }) => layer);
-  const units = docs.flatMap(layerUnits);
-  const colourDocs = docs.filter((layer) => layerDraws(layer).colour);
-  const hasChoice = colourDocs.length >= 2;
-  const picker = colourPicker(colourDocs, blend !== null, (unit) => act({ kind: "pick", unit }));
-  const menuChanged = () => {
-    blend?.restyle();
-    changed();
-  };
-  const cards = mounted.map((layer) => layerCard(layer, display, hasChoice, act, menuChanged));
-  const blendCard = blend && blendCardFor(blend, (on) => act({ kind: "toggle", unit: BLEND, on }));
-  const shown = new Map<LayerView, Draw | null>();
-  let isUnderColour: boolean | null = null;
-
-  box.append(picker.row, ...cards.map(({ element }) => element));
-  if (blendCard) cards[lastFieldIndex(mounted)].element.after(blendCard.element);
-  mounted.forEach(({ view }) => view.blocked?.changes.addEventListener("change", refresh));
-  refresh();
-
-  function act(action: ColourAction) {
-    const next = applyColourAction({ pick: display.colour, off: display.off }, action, docs);
-    if (shouldStorePick(display.colour, action, next.pick)) storePick(next.pick);
-    display.colour = next.pick;
-    display.off = new Set(next.off);
-    refresh();
-    changed();
-  }
-
-  function refresh() {
-    const on = new Set(units.filter((unit) => !display.off.has(unit)));
-    const { owner, draws } = allocate(docs, on, display.colour, blockedFallbacks(mounted));
-
-    picker.show(owner, hasChoice);
-    cards.forEach((card) => card.show(draws, on));
-    mounted.forEach(({ view }) => drawView(map, view, on, draws, shown));
-    if (blend && blendCard) {
-      blendCard.show(owner === BLEND);
-      drawBlend(blend, draws, shown);
-    }
-
-    const isUnder = owner !== null;
-    if (isUnder === isUnderColour) return;
-
-    isUnderColour = isUnder;
-    mounted.forEach(({ view }) => view.setColourUnder?.(isUnder));
-  }
-}
-
-function blockedFallbacks(mounted: MountedLayer[]) {
-  const reasons = mounted.map(({ layer, view }) => [layer.id, view.blocked?.reason] as const);
-  return new Map(reasons.filter((entry): entry is [string, string] => Boolean(entry[1])));
-}
-
-type Draws = Map<string, Draw | Hidden>;
-
-function drawView(
-  map: MapLibreMap,
-  view: LayerView,
-  on: ReadonlySet<string>,
-  draws: Draws,
-  shown: Map<LayerView, Draw | null>,
-) {
-  const [main, ...rest] = view.parts;
-  const parts = view.show ? rest : view.parts;
-
-  if (view.show) {
-    const draw = drawOf(draws.get(main.id));
-    if (shown.get(view) !== draw) view.show(draw);
-    shown.set(view, draw);
-  }
-
-  for (const part of parts) {
-    const isVisible = on.has(part.id) && drawOf(draws.get(part.id)) !== null;
-    setVisible(map, part.layerIds, isVisible);
-    part.onToggle?.(isVisible);
-  }
-}
-
-function drawBlend(blend: BlendView, draws: Draws, shown: Map<LayerView, Draw | null>) {
-  const draw = drawOf(draws.get(BLEND));
-  if (shown.get(blend) !== draw) blend.show(draw);
-  shown.set(blend, draw);
-}
-
-function drawOf(draw: Draw | Hidden | undefined) {
-  return typeof draw === "string" ? draw : null;
-}
-
-function colourPicker(layers: LayerDoc[], hasBlend: boolean, onPick: (unit: string) => void) {
-  const row = makeHtmlElement("label");
-  row.className = "colour-picker";
-  makeHtmlElement("span", "Colour", row);
-  const select = document.createElement("select");
-  for (const { id, title } of layers) {
-    const option = makeHtmlElement("option", title, select) as HTMLOptionElement;
-    option.value = id;
-  }
-  if (hasBlend) {
-    const option = makeHtmlElement("option", BLEND_TITLE, select) as HTMLOptionElement;
-    option.value = BLEND;
-  }
-  select.onchange = () => onPick(select.value);
-  row.append(select);
-
-  return {
-    row,
-    show(owner: string | null, isVisible: boolean) {
-      row.hidden = !isVisible;
-      select.value = owner ?? "";
-    },
-  };
-}
-
-interface LayerCard {
-  element: HTMLElement;
-  show(draws: Draws, on: ReadonlySet<string>): void;
-}
-
-function layerCard(
-  { layer, view }: MountedLayer,
-  display: SceneDisplay,
-  hasChoice: boolean,
-  act: (action: ColourAction) => void,
-  changed: () => void,
-): LayerCard {
-  const card = makeHtmlElement("section");
-  card.className = "card";
-  card.setAttribute("aria-label", layer.title);
-  const checks = new Map<string, HTMLInputElement>();
-  const slidersByPart = new Map<string, HTMLElement>();
-  const reasons = new Map<string, HTMLElement>();
-  const chip = makeHtmlElement("span");
-  chip.className = "colour-chip";
-  const pickButton = makeHtmlElement("button", "Show in colour");
-  pickButton.type = "button";
-  pickButton.className = "colour-pick";
-  pickButton.setAttribute("aria-label", `Show ${layer.title} in colour`);
-  pickButton.onclick = () => {
-    // The button hides itself when the pick lands, so focus moves to a control that stays.
-    checks.get(view.parts[0].id)!.focus();
-    act({ kind: "pick", unit: view.parts[0].id });
-  };
-
-  view.parts.forEach((part, index) => {
-    const sliders = part.controls ? partControls(part.controls) : null;
-    const row = makeHtmlElement("div", "", card);
-    row.className = "check-row";
-    const label = checkbox(part.label, !display.off.has(part.id), (isOn) => {
-      act({ kind: "toggle", unit: part.id, on: isOn });
-    });
-    checks.set(part.id, label.querySelector("input")!);
-    row.append(label);
-    if (index === 0) {
-      if (hasChoice && layerDraws(layer).colour) row.append(chip, pickButton);
-      addFirstPartExtras(view, row, card, display, changed);
-    } else {
-      const reason = makeHtmlElement("div", "", card);
-      reason.className = "option-note";
-      reasons.set(part.id, reason);
-    }
-    if (sliders) {
-      slidersByPart.set(part.id, sliders);
-      card.append(sliders);
-    }
-    if (part.note) {
-      part.note.classList.add("option-note");
-      card.append(part.note);
-    }
-  });
-
-  const legend = view.legend();
-  if (legend) card.append(legend);
-
-  return {
-    element: card,
-    show(draws, on) {
-      for (const part of view.parts) {
-        const isOn = on.has(part.id);
-        checks.get(part.id)!.checked = isOn;
-        const sliders = slidersByPart.get(part.id);
-        if (sliders) sliders.hidden = !isOn;
-        const reason = reasons.get(part.id);
-        if (reason) reason.textContent = isOn ? hiddenReason(draws.get(part.id)) : "";
-      }
-
-      const main = view.parts[0].id;
-      const draw = draws.get(main);
-      chip.textContent = on.has(main) ? chipText(draw) : "";
-      chip.hidden = !chip.textContent;
-      pickButton.hidden = chip.hidden || draw === "colour";
-    },
-  };
-}
-
-function lastFieldIndex(mounted: MountedLayer[]) {
-  return mounted.map(({ layer }) => layer.style.kind).lastIndexOf("field");
-}
-
-function blendCardFor(blend: BlendView, onToggle: (on: boolean) => void) {
-  const card = makeHtmlElement("section");
-  card.className = "card";
-  card.setAttribute("aria-label", BLEND_TITLE);
-  const [part] = blend.parts;
-  const row = makeHtmlElement("div", "", card);
-  row.className = "check-row";
-  const label = checkbox(part.label, false, onToggle);
-  const check = label.querySelector("input")!;
-  row.append(label);
-  addOptions(blend, row, card);
-  card.append(part.note!, blend.legend()!);
-
-  return {
-    element: card,
-    show(isOwner: boolean) {
-      check.checked = isOwner;
-      blend.legend()!.hidden = !isOwner;
-    },
-  };
-}
-
-function chipText(draw: Draw | Hidden | undefined) {
-  if (draw === undefined) return "";
-
-  return typeof draw === "string" ? CHIP_TEXT[draw] ?? "" : draw.hidden;
-}
-
-function hiddenReason(draw: Draw | Hidden | undefined) {
-  return typeof draw === "object" ? draw.hidden : "";
-}
-
-function addFirstPartExtras(
-  view: LayerView,
-  row: HTMLElement,
-  card: HTMLElement,
-  display: SceneDisplay,
-  changed: () => void,
-) {
-  addOptions(view, row, card);
-
-  if (view.menu) {
-    const { button, popover } = layerMenu(
-      view.menu,
-      (change) => menuChanged(view, display, change, changed),
-    );
-    row.append(button);
-    card.append(popover);
-  }
-}
-
-function addOptions(view: LayerView, row: HTMLElement, card: HTMLElement) {
-  if (view.options.length === 0) return;
-
-  if (!view.time) row.classList.add("inline-options");
-  const options = makeHtmlElement("span", "", row);
-  options.className = "option-checks";
-  for (const { label, initial, set } of view.options) {
-    options.append(checkbox(label, initial ?? false, set));
-  }
-  for (const { note } of view.options) {
-    if (note) makeHtmlElement("div", note, card).className = "option-note";
-  }
-}
-
-function menuChanged(
-  view: LayerView,
-  display: SceneDisplay,
-  change: MenuChange,
-  changed: () => void,
-) {
-  recordMenuChange(display, view.parts[0].id, view.menu!, change);
-  changed();
-}
-
-function outlineCard(map: MapLibreMap) {
-  const card = makeHtmlElement("section");
-  card.className = "card";
-  card.append(checkbox("Area outline", true, (on) => setVisible(map, [OUTLINE_ID], on)));
-  return card;
-}
-
-function setVisible(map: MapLibreMap, layerIds: string[], visible: boolean) {
-  for (const id of layerIds) {
-    map.setLayoutProperty(id, "visibility", visible ? "visible" : "none");
   }
 }
 
@@ -585,14 +265,4 @@ function createSceneTimeline(
     views.forEach((view) => view.setTime(time));
     onTime(time, formatTime(time, steps));
   });
-}
-
-function checkbox(label: string, checked: boolean, onChange: (on: boolean) => void) {
-  const row = makeHtmlElement("label");
-  const box = document.createElement("input");
-  box.type = "checkbox";
-  box.checked = checked;
-  box.onchange = () => onChange(box.checked);
-  row.append(box, ` ${label}`);
-  return row;
 }

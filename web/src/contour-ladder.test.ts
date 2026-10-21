@@ -160,7 +160,10 @@ class TestDemSource {
     TestDemSource.instances.push(this);
   }
 
-  setupMaplibre() { this.setups += 1; }
+  setupMaplibre() {
+    this.setups += 1;
+  }
+
   contourProtocolUrl(options: object) {
     this.contourOptions = options;
     return "dem-contour://{z}/{x}/{y}";
@@ -305,7 +308,7 @@ test("relief stays single-layered through zoom and source loading events", (cont
   assert.ok([...map.listeners.values()].every((listeners) => listeners.size === 0));
 });
 
-test("relief strength updates only the main hillshade and zero stays flat through zoom", (context) => {
+test("relief strength updates only the main hillshade and zero stays flat on zoom", (context) => {
   mockPage(context);
   const map = new TestMap();
   const view = createTerrainView(layerContext(map));
@@ -391,7 +394,9 @@ function layerContext(map: TestMap): LayerContext {
     shift: 0,
     slots: { fill: "places", shade: "places", marks: "places", lines: "places" },
     beforeId: "places",
-    report: (error) => { throw error; },
+    report: (error) => {
+      throw error;
+    },
   };
 }
 
@@ -413,37 +418,69 @@ function mockPage(context: TestContext) {
 
 class TestMap {
   readonly sources = new Map<string, any>();
-  readonly layers = new Map<string, any>([["places", {
-    id: "places",
-    type: "symbol",
-    source: "basemap",
-    layout: { "text-font": ["Noto Sans Regular"] },
-  }]]);
+  readonly layers = new Map<string, any>([
+    [
+      "places",
+      {
+        id: "places",
+        type: "symbol",
+        source: "basemap",
+        layout: { "text-font": ["Noto Sans Regular"] },
+      },
+    ],
+  ]);
   readonly listeners = new Map<string, Set<(event: object) => void>>();
   zoom = 6;
 
-  getStyle() { return { layers: [...this.layers.values()] }; }
-  getZoom() { return this.zoom; }
-  getLayer(id: string) { return this.layers.get(id); }
-  addSource(id: string, source: object) { this.sources.set(id, source); }
-  addLayer(layer: { id: string }) { this.layers.set(layer.id, layer); }
-  removeLayer(id: string) { this.layers.delete(id); }
-  removeSource(id: string) { this.sources.delete(id); }
   zooming = false;
   readonly paints: [string, unknown][] = [];
+
+  getStyle() {
+    return { layers: [...this.layers.values()] };
+  }
+
+  getZoom() {
+    return this.zoom;
+  }
+
+  getLayer(id: string) {
+    return this.layers.get(id);
+  }
+
+  addSource(id: string, source: object) {
+    this.sources.set(id, source);
+  }
+
+  addLayer(layer: { id: string }) {
+    this.layers.set(layer.id, layer);
+  }
+
+  removeLayer(id: string) {
+    this.layers.delete(id);
+  }
+
+  removeSource(id: string) {
+    this.sources.delete(id);
+  }
 
   setPaintProperty(id: string, property: string, value: unknown) {
     this.paints.push([id, value]);
     this.layers.get(id).paint[property] = value;
   }
+
   setLayerZoomRange(id: string, minzoom: number, maxzoom: number) {
     Object.assign(this.layers.get(id), { minzoom, maxzoom });
   }
+
   on(event: string, listener: (event: object) => void) {
     if (!this.listeners.has(event)) this.listeners.set(event, new Set());
     this.listeners.get(event)!.add(listener);
   }
-  off(event: string, listener: (event: object) => void) { this.listeners.get(event)?.delete(listener); }
+
+  off(event: string, listener: (event: object) => void) {
+    this.listeners.get(event)?.delete(listener);
+  }
+
   emit(event: string, data: object = {}) {
     this.listeners.get(event)?.forEach((listener) => listener(data));
   }

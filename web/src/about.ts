@@ -1,3 +1,4 @@
+/** Render scene summaries and explain display choices with notices and source credits. */
 import { makeHtmlElement } from "./html";
 import {
   areaKm2,
@@ -60,7 +61,7 @@ const SMOOTHING_LINES = [
     + "bundles use cell centres, with touched cells only when no centre lies inside the area.",
 ];
 
-/** One line on the scene: area, period and layer count. */
+/** Summarise the scene's area and period with its layer count on one line. */
 export function summaryText(scene: Scene) {
   const layerCount = scene.layers.length;
   return [
@@ -91,7 +92,7 @@ function periodText(scene: Scene) {
 export const creditsLine = (scene: Scene) =>
   creditEntries(scene).map((entry) => entry.name).join(" · ");
 
-/** The About tab: area, layers, notices, smoothing and versions. */
+/** Render the About tab with scene metadata and explanations of the display. */
 export function renderAbout(scene: Scene) {
   const root = makeHtmlElement("div");
   makeHtmlElement("h3", scene.title, root);
@@ -128,21 +129,17 @@ function appendNotices(root: HTMLElement, scene: Scene) {
   const heading = makeHtmlElement("h4", "Notices and limits", root);
   heading.id = NOTICES_HEADING_ID;
   const list = makeHtmlElement("ul", "", root);
-
   if (scene.area.clipped_to_coverage) makeHtmlElement("li", CLIPPED_NOTICE, list);
-
   for (const limit of scene.notices.limits) makeHtmlElement("li", limit, list);
 }
 
 function appendDisplay(root: HTMLElement) {
   makeHtmlElement("h4", "What the map draws", root);
-
   for (const line of DISPLAY_LINES) makeHtmlElement("p", line, root);
 }
 
 function appendSmoothing(root: HTMLElement) {
   makeHtmlElement("h4", "How the map is smoothed", root);
-
   for (const line of SMOOTHING_LINES) makeHtmlElement("p", line, root);
 }
 
@@ -170,7 +167,7 @@ function definitionList(rows: [string, string][]) {
   return list;
 }
 
-/** The Credits tab: each source, the basemap and the terms. */
+/** Render source credits and basemap attribution with the terms of use. */
 export function renderCredits(scene: Scene) {
   const root = makeHtmlElement("div");
 

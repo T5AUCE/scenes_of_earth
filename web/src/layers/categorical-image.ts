@@ -1,10 +1,10 @@
+/** Paint categorical grid images when GPU class fields are unavailable. */
 import type { Map as MapLibreMap } from "maplibre-gl";
 
 import { addImageLayer, maxTextureSize, setImage } from "../map";
 import { paintClassIds } from "../render/colormap";
 import { sampleTable } from "../render/mercator";
-import { smoothClassIds } from "../render/smooth-classes";
-import type { ClassRaster } from "../render/smooth-classes";
+import { smoothClassIds, type ClassRaster } from "../render/smooth-classes";
 import type { Bbox } from "../types";
 
 /** Where and how the image painter draws one class layer. */

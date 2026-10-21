@@ -1,3 +1,4 @@
+/** Allocate colour ownership and non-conflicting fallback channels to visible scene units. */
 import type { LayerDoc } from "../types";
 
 /** The link unit of the virtual rainfall + temperature blend. */
@@ -51,7 +52,7 @@ const CLAIM_LABELS: Partial<Record<Draw, string>> = {
 };
 const ONLY_IN_COLOUR = "Shown only in colour";
 
-/** The draw a layer offers when it does not hold colour, following its encodings first. */
+/** Describe a layer's colour support and fallback, following its encodings first. */
 export function layerDraws({ style }: LayerDoc): LayerDraws {
   const encodings = new Set(style.encodings);
 
@@ -197,7 +198,7 @@ function colourOwner(candidates: Unit[], pick: string | null): string | null {
   return auto[0]?.id ?? null;
 }
 
-// Colour is clearest for temperature, whose fallback is isotherms; then rain's dots.
+// Temperature needs colour most because its fallback is isotherms rather than rain's dots.
 function rank(unit: Unit): number {
   if (unit.kind === "categorical") return 3;
   if (unit.kind === "field" && unit.fallback === "isolines") return 0;

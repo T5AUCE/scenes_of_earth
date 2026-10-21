@@ -1,3 +1,4 @@
+/** Encode field values as nested dot lattices and mask-aware no-data hatching. */
 import { stopPosition } from "./colormap";
 
 /** The finest and coarsest dot levels; a level L puts 2^L dot sites along each cell side. */
@@ -18,7 +19,7 @@ const WORLD_PX_AT_ZOOM_0 = 512;
 const DEGREES_PER_RADIAN = 180 / Math.PI;
 const MIN_SPACING_PX = 5;
 const FADE_START = 0.75;
-// Near the cell centre at level 0 and on sub-cell centres at level 4, nested across levels.
+// This offset nests sites across levels and centres the finest sites in their sub-cells.
 const SLOT_OFFSET_CELLS = 15 / 32;
 const THRESHOLD_BITS = 3;
 const THRESHOLD_SIZE = 2 ** THRESHOLD_BITS;
@@ -37,7 +38,7 @@ export function cellSizePx(
   return (worldPx / 360) * Math.sqrt(cellDegrees.width * cellDegrees.height * stretch);
 }
 
-/** The level whose dot spacing is 5 to 10 px, and how far it has faded into the next level. */
+/** Choose the level with 5 to 10 px dot spacing and its progress towards the next level. */
 export function levelFor(cellPx: number) {
   const exact = Math.log2(cellPx / MIN_SPACING_PX);
   const level = Math.min(MAX_LEVEL, Math.max(MIN_LEVEL, Math.floor(exact)));
@@ -49,8 +50,8 @@ export function levelFor(cellPx: number) {
 }
 
 /**
- * The place of a slot along one axis in cells. Slots at level L are 2^-L cells apart, and
- * every slot of a level is also a slot of the next one.
+ * Locate a slot along one axis in cells. Sites are 2^-L cells apart at level L.
+ * Every slot of a level is also a slot of the next one.
  */
 export function slotPosition(slot: number, level: number) {
   return slot / 2 ** level + SLOT_OFFSET_CELLS;
@@ -125,8 +126,7 @@ function markByte(positionByte: number, inArea: boolean) {
 
 /**
  * How a dot looks while its level fades into the next one. A dot of the level above grows to the
- * new radius, one that is lit in only one of the levels fades out or in, and a dot of neither
- * level is not drawn.
+ * new radius. A dot lit in only one level fades out or in while an unlit dot stays invisible.
  */
 export function crossfadeDot(
   wasLit: boolean,

@@ -24,8 +24,7 @@ const {
   dotLegend,
   gradientLegend,
   isothermLegend,
-} =
-  await import("./legend.ts").finally(() => hooks.deregister());
+} = await import("./legend.ts").finally(() => hooks.deregister());
 
 const KENYA_RAINFALL_STOPS = [0, 10, 30, 40, 60, 80, 100, 130, 200];
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");

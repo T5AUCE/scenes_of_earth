@@ -35,12 +35,15 @@ export const VIEW_TIMEOUT_MS = 60 * 1000;
 
 /** Launches Chromium from the first tool directory that has one. Throws a hint if none does. */
 export async function launchBrowser() {
-  for (const dir of TOOL_DIRS.filter(Boolean)) {
-    const executablePath = findExecutable(path.join(dir, "browsers"));
+  for (const directory of TOOL_DIRS.filter(Boolean)) {
+    const executablePath = findExecutable(path.join(directory, "browsers"));
     if (!executablePath) continue;
 
-    const libs = path.join(dir, LIBS_SUBDIR);
-    const libraryPath = [fs.existsSync(libs) ? libs : null, process.env.LD_LIBRARY_PATH];
+    const libraries = path.join(directory, LIBS_SUBDIR);
+    const libraryPath = [
+      fs.existsSync(libraries) ? libraries : null,
+      process.env.LD_LIBRARY_PATH,
+    ];
     return chromium.launch({
       executablePath,
       env: { ...process.env, LD_LIBRARY_PATH: libraryPath.filter(Boolean).join(":") },
@@ -294,7 +297,7 @@ async function checkDisplay(page, renderer) {
   const menu = page.locator(".layer-menu:popover-open");
   const original = await menu.locator("input[type=radio]:checked").inputValue();
   await menu.getByRole("radio", { name: "ESA", exact: false }).check();
-  const recolored = await page.evaluate(frameHash);
+  const recoloured = await page.evaluate(frameHash);
   await menu.locator(`input[type=radio][value="${original}"]`).check();
   const rounding = menu.getByRole("slider", { name: "Rounding", exact: true });
   const hasEdges = await rounding.count() > 0;
@@ -315,7 +318,7 @@ async function checkDisplay(page, renderer) {
 
   return {
     visibility: hidden !== before && shown !== hidden,
-    palette_repaints: recolored !== shown,
+    palette_repaints: recoloured !== shown,
     edges_available: hasEdges,
     edges_repaint: edgesRepaint,
     fallback_note: renderer === "image" ? fallbackNote === 1 && !hasEdges : null,
@@ -329,8 +332,10 @@ async function checkContextRestore(page) {
 
   await settledSample(page);
   const after = await page.evaluate(frameHash);
-  const mounted = await page.evaluate(() => document.body.dataset.landcoverRenderer === "gpu"
-    && Boolean(window.__map.getLayer("esa_worldcover-classes")));
+  const mounted = await page.evaluate(() =>
+    document.body.dataset.landcoverRenderer === "gpu"
+    && Boolean(window.__map.getLayer("esa_worldcover-classes")),
+  );
   return mounted && before === after;
 }
 

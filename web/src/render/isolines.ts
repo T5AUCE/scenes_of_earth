@@ -1,3 +1,4 @@
+/** Trace marching-squares isolines and choose stable intervals for temperature displays. */
 import type { GridDoc } from "../types";
 
 /** A traced isoline in fractional cell coordinates, where whole numbers are cell centres. */
@@ -94,13 +95,13 @@ function traceLevel(
   const segments: Segment[] = [];
   const seenSegments = new Set<string>();
   for (let row = 0; row + 1 < ny; row++) {
-    for (let col = 0; col + 1 < nx; col++) {
-      const corners = cellCorners(values, nx, col, row);
+    for (let column = 0; column + 1 < nx; column++) {
+      const corners = cellCorners(values, nx, column, row);
       if (corners.some((value) => !Number.isFinite(value))) continue;
 
       for (const [from, to] of cellEdges(corners, level)) {
-        const start = edgePoint(from, col, row, corners, level);
-        const end = edgePoint(to, col, row, corners, level);
+        const start = edgePoint(from, column, row, corners, level);
+        const end = edgePoint(to, column, row, corners, level);
         if (pointKey(start) === pointKey(end)) continue;
 
         const key = segmentKey(start, end);
@@ -117,10 +118,10 @@ function traceLevel(
 function cellCorners(
   values: ArrayLike<number>,
   nx: number,
-  col: number,
+  column: number,
   row: number,
 ): Corners {
-  const top = row * nx + col;
+  const top = row * nx + column;
   const bottom = top + nx;
 
   return [values[top], values[top + 1], values[bottom + 1], values[bottom]];
@@ -142,16 +143,16 @@ function cellEdges([topLeft, topRight, bottomRight, bottomLeft]: Corners, level:
 
 function edgePoint(
   edge: Edge,
-  col: number,
+  column: number,
   row: number,
   [topLeft, topRight, bottomRight, bottomLeft]: Corners,
   level: number,
 ): Point {
-  if (edge === "top") return [col + fraction(topLeft, topRight, level), row];
-  if (edge === "right") return [col + 1, row + fraction(topRight, bottomRight, level)];
-  if (edge === "bottom") return [col + fraction(bottomLeft, bottomRight, level), row + 1];
+  if (edge === "top") return [column + fraction(topLeft, topRight, level), row];
+  if (edge === "right") return [column + 1, row + fraction(topRight, bottomRight, level)];
+  if (edge === "bottom") return [column + fraction(bottomLeft, bottomRight, level), row + 1];
 
-  return [col, row + fraction(topLeft, bottomLeft, level)];
+  return [column, row + fraction(topLeft, bottomLeft, level)];
 }
 
 function fraction(start: number, end: number, level: number) {
@@ -226,8 +227,8 @@ export function toLngLat(
   const degreesPerRow = (north - south) / ny;
 
   // Values sample cell centres, which sit half a cell inside the grid bbox.
-  return coordinates.map(([col, row]) => [
-    west + (col + 0.5) * degreesPerColumn + shift,
+  return coordinates.map(([column, row]) => [
+    west + (column + 0.5) * degreesPerColumn + shift,
     north - (row + 0.5) * degreesPerRow,
   ]);
 }

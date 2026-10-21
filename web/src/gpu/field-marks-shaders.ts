@@ -1,11 +1,13 @@
+/** Supply GLSL ES 3.00 shaders for nested field dots and mask-aware no-data hatching. */
 import { CLASS_FIELD_VERTEX } from "./class-field-shaders";
 
 /**
- * Draw the dots of a field with GLSL ES 3.00, with the vertex shader of the class fields.
+ * Reuse the class-field vertex shader to place field dots and hatching.
  *
- * `uIds` holds a position byte per cell, or per block of cells below level 0, where 0 to 253
- * is a place on the colour stops, 254 hatches an in-area cell with no value and 255 draws
- * nothing. `uIdsSize` is its size and `uWindow` the grid column and row of its first texel,
+ * `uIds` holds a position byte per cell or per block of cells below level 0.
+ * Bytes from 0 to 253 locate a value on the colour stops. Byte 254 hatches an in-area cell
+ * with no value while 255 draws nothing. `uIdsSize` is its size and `uWindow` the grid column
+ * and row of its first texel,
  * while `uGridSize` is the whole grid's size in texels and `uExtentCells` the size in cells of
  * the grid before it was padded to whole blocks. `uRows` holds `uRowCount` fractional grid rows
  * at even Mercator heights.
@@ -13,7 +15,7 @@ import { CLASS_FIELD_VERTEX } from "./class-field-shaders";
  * Each texel is one cell of the dot level, or a block of `uBlockCells` cells below level 0.
  * `uSlots` is the number of dot sites along a cell side and `uLevelBits` its base-2 logarithm.
  * `uRadiusPx` is the dot radius. While `uFading`, the level above fades into this one by
- * `uFade`. Its sites are `uParentSlots` along a texel, and a dot lit there grows from
+ * `uFade`. Its sites are `uParentSlots` along a texel while a dot lit there grows from
  * `uParentRadiusPx`. Below level 1 the parent's own bytes come from `uParentIds`, which has the
  * size of `uIds`. `uDots` draws the dots and `uHatch` the no-data hatch, whose screen-space
  * lines are measured through `uPixelRatio`.

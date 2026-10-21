@@ -1,3 +1,4 @@
+/** Draw tiled categorical class fills or borders through the shared GPU lifecycle. */
 import type { CustomLayerInterface } from "maplibre-gl";
 
 import {

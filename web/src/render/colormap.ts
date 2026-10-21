@@ -1,3 +1,4 @@
+/** Map sampled field values and class ids to univariate or bivariate colours. */
 import type { SampleTable } from "./mercator";
 
 const LUT_ENTRIES = 256;
@@ -98,7 +99,7 @@ function bilinear(
   return low + (along(row.low + 1) - low) * row.fraction;
 }
 
-// Björn Ottosson's OKLab, with sRGB channels from 0 to 255.
+/** Convert sRGB channels from 0 to 255 using Björn Ottosson's OKLab transform. */
 function rgbToOklab([red, green, blue]: number[]) {
   const [r, g, b] = [red, green, blue].map((channel) => srgbToLinear(channel / OPAQUE));
   const long = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
@@ -133,7 +134,7 @@ function linearToSrgb(channel: number) {
   return clamped <= 0.0031308 ? 12.92 * clamped : 1.055 * clamped ** (1 / 2.4) - 0.055;
 }
 
-/** One input of the blended layer with its values, the cells each pixel reads and its scale. */
+/** A scaled input grid with sample locations for the blended layer. */
 export interface BivariateAxis {
   values: Float32Array;
   /** The cells of `values` under each output pixel, with -1 where the layer has none. */
@@ -143,7 +144,8 @@ export interface BivariateAxis {
 
 /**
  * Colour each pixel by both inputs through a lut2d table. An input whose nearest cell is empty
- * takes the nearest finite cell its footprint overlaps, and a pixel still missing one stays clear.
+ * takes the nearest finite cell its footprint overlaps.
+ * Pixels still missing either input stay clear.
  */
 export function paintBivariate(
   rows: BivariateAxis,

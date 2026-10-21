@@ -1,3 +1,4 @@
+/** Draw categorical classes with GPU borders and a CPU image fallback. */
 import { arrayDoc, decode, readArray } from "../data";
 import {
   DEFAULT_EDGES,
@@ -101,6 +102,7 @@ class CategoricalView implements LayerView {
 
   private createEdgesMenu(): EdgesMenu {
     const view = this;
+
     return {
       controls: [
         {
@@ -148,6 +150,7 @@ class CategoricalView implements LayerView {
 
   private createMenu(): LayerMenu {
     const view = this;
+
     return {
       title: this.context.layer.title,
       heading: "Colours",
@@ -182,6 +185,7 @@ class CategoricalView implements LayerView {
 
   private createBlocked(): NonNullable<LayerView["blocked"]> {
     const view = this;
+
     return {
       changes: new EventTarget(),
       get reason() {
@@ -283,6 +287,7 @@ class CategoricalView implements LayerView {
 
     const { map } = this.context;
     if (!map.getLayer(this.id)) return;
+
     map.setLayoutProperty(this.id, "visibility", visibility);
   }
 

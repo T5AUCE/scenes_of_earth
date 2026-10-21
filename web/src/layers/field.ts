@@ -1,3 +1,4 @@
+/** Draw field time series as colour fills or fallback marks with shared cached values. */
 import { arrayDoc, cacheByIndex, decode, readArray, readMask, type Store } from "../data";
 import { defaultPalette as layerDefaultPalette, rangeDecimals } from "../display-state";
 import { makeHtmlElement } from "../html";
@@ -29,23 +30,6 @@ type StepReader = (step: number) => Promise<Float32Array>;
 
 // Layers read by the blend share their cached steps with the layer's own view.
 const readers = new WeakMap<Promise<Store>, Map<string, StepReader>>();
-
-/** The cached reader of a layer's decoded steps, shared by everything that draws the layer. */
-export function fieldReader(layer: LayerDoc, store: Promise<Store>): StepReader {
-  const byLayer = readers.get(store) ?? new Map<string, StepReader>();
-  readers.set(store, byLayer);
-
-  const existing = byLayer.get(layer.id);
-  if (existing) return existing;
-
-  const valueArray = arrayDoc(layer, "value");
-  const reader = cacheByIndex(CACHED_STEPS, async (step) => {
-    const raw = await readArray(await store, valueArray.path, [step, null, null]);
-    return decode(raw, valueArray);
-  });
-  byLayer.set(layer.id, reader);
-  return reader;
-}
 
 /** Render a field time series with cached steps and a fitted colour legend. */
 export function createSeriesView(context: LayerContext): LayerView {
@@ -96,7 +80,7 @@ class FieldView implements LayerView {
     this.palette = display?.palette ?? defaultPalette;
     this.range = display?.range ?? null;
     this.colors = lut(gradientOf(this.palette));
-    this.stops = this.stopsFor(this.range);
+    this.stops = stopsForRange(this.fittedStops, this.range);
 
     addImageLayer(map, this.id, layer.grid.bbox, shift, slots.fill, {
       "raster-opacity": 0,
@@ -108,8 +92,7 @@ class FieldView implements LayerView {
     this.stopKeepingMarks = this.marks
       ? keepThroughContextLoss(map, this.marks.layer, slots.marks)
       : null;
-    // The area mask is static, so the marks layer reads it once for the whole time series. A
-    // failed read only costs the no-data hatch, so the dots still draw.
+    // A failed static mask read drops the hatch without preventing dots from drawing.
     this.mask = this.marks
       ? store.then((opened) => readMask(opened, layer)).catch(() => null)
       : null;
@@ -122,15 +105,17 @@ class FieldView implements LayerView {
 
     this.showLegend();
     this.menu = this.createMenu();
-    this.parts = [{
-      id: layer.id,
-      label: layer.title,
-      layerIds: [
-        this.id,
-        ...(this.marks ? [this.marksId] : []),
-        ...(this.isolines?.layerIds ?? []),
-      ],
-    }];
+    this.parts = [
+      {
+        id: layer.id,
+        label: layer.title,
+        layerIds: [
+          this.id,
+          ...(this.marks ? [this.marksId] : []),
+          ...(this.isolines?.layerIds ?? []),
+        ],
+      },
+    ];
     this.options = [
       {
         label: "Smooth",
@@ -140,10 +125,6 @@ class FieldView implements LayerView {
         },
       },
     ];
-  }
-
-  private stopsFor(range: [number, number] | null) {
-    return stopsForRange(this.fittedStops, range);
   }
 
   private addMarks() {
@@ -158,6 +139,20 @@ class FieldView implements LayerView {
     marks.setHalo(true);
     map.addLayer(marks.layer, slots.marks);
     return marks;
+  }
+
+  private showLegend() {
+    const element = this.legendOf();
+    if (this.hasHatched) element.append(hatchLegend());
+    this.legendBox.replaceChildren(element);
+  }
+
+  private legendOf() {
+    const { layer } = this.context;
+    if (this.draw === "dots") return dotLegend(this.stops, layer.units, layer.grid.res);
+    if (this.draw === "isolines") return isothermLegend(this.isolines!.interval);
+
+    return gradientLegend(this.colors, this.stops, layer.units, this.range !== null);
   }
 
   private createMenu(): LayerMenu {
@@ -203,35 +198,12 @@ class FieldView implements LayerView {
     };
   }
 
-  // A new colour scale repaints the step on screen from the cached values.
   private restyle() {
     this.colors = lut(gradientOf(this.palette));
-    this.stops = this.stopsFor(this.range);
+    this.stops = stopsForRange(this.fittedStops, this.range);
     this.isolines?.setRange(this.range);
     this.showLegend();
     if (this.shownStep >= 0) this.drawLatestStep(this.shownStep);
-  }
-
-  private showLegend() {
-    const element = this.legendOf();
-    if (this.hasHatched) element.append(hatchLegend());
-
-    this.legendBox.replaceChildren(element);
-  }
-
-  private legendOf() {
-    const { layer } = this.context;
-    if (this.draw === "dots") return dotLegend(this.stops, layer.units, layer.grid.res);
-    if (this.draw === "isolines") return isothermLegend(this.isolines!.interval);
-
-    return gradientLegend(this.colors, this.stops, layer.units, this.range !== null);
-  }
-
-  private setHatched(hasHatched: boolean) {
-    if (hasHatched === this.hasHatched) return;
-
-    this.hasHatched = hasHatched;
-    this.showLegend();
   }
 
   setTime(time: string) {
@@ -254,6 +226,13 @@ class FieldView implements LayerView {
     this.marks?.setHatch(false);
     this.isolines?.setVisible(false);
     this.setHatched(false);
+  }
+
+  private setHatched(hasHatched: boolean) {
+    if (hasHatched === this.hasHatched) return;
+
+    this.hasHatched = hasHatched;
+    this.showLegend();
   }
 
   private async drawStep(step: number) {
@@ -282,7 +261,6 @@ class FieldView implements LayerView {
   ) {
     const { map } = this.context;
     this.updateMarks(values, mask);
-
     if (this.draw === "colour") {
       const rgba = paintColormap(values, this.table, this.colors, this.stops);
       setImage(map, this.id, new ImageData(rgba, this.table.width, this.table.height));
@@ -316,6 +294,22 @@ class FieldView implements LayerView {
     removeLayerAndSource(this.context.map, this.marksId);
     this.isolines?.destroy();
   }
+}
+
+/** Read decoded steps from a cache shared by every renderer of the layer. */
+export function fieldReader(layer: LayerDoc, store: Promise<Store>): StepReader {
+  const byLayer = readers.get(store) ?? new Map<string, StepReader>();
+  readers.set(store, byLayer);
+  const existing = byLayer.get(layer.id);
+  if (existing) return existing;
+
+  const valueArray = arrayDoc(layer, "value");
+  const reader = cacheByIndex(CACHED_STEPS, async (step) => {
+    const raw = await readArray(await store, valueArray.path, [step, null, null]);
+    return decode(raw, valueArray);
+  });
+  byLayer.set(layer.id, reader);
+  return reader;
 }
 
 function gradientOf(palette: string) {

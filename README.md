@@ -56,7 +56,7 @@ the parameters below describe what a link can carry.
   five six-digit hex colours separated by hyphens (`custom-1a2b3c-88cc44`). For the terrain layer it is
   the contour colour (`brown`, `grey` or `black`).
 - `range` lists `layer:low:high` display ranges for field layers. Values may lie outside the values in
-  the area, and are rounded to the precision of the data.
+  the area and are rounded to the precision of the data.
 - `off` lists the layers or parts that start switched off, such as `terrain.contours`.
 - `colour` names the layer that holds the map's colours, or `blend` for the combined rainfall and
   temperature layer. Every other visible layer then draws dots, isotherms or outlines instead. The

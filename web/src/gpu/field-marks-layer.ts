@@ -1,3 +1,4 @@
+/** Draw nested field dots and no-data hatching from tiled grid textures. */
 import type { CustomLayerInterface } from "maplibre-gl";
 
 import {
@@ -17,7 +18,7 @@ import {
 
 /** What createFieldMarksLayer needs to place and report on a layer. */
 export interface FieldMarksOptions extends TiledLayerOptions {
-  /** The ink of the dots as red, green and blue from 0 to 255. */
+  /** Dot ink as RGB channels from 0 to 255. */
   ink: [number, number, number];
 }
 
@@ -26,7 +27,7 @@ interface BlockData {
   cells: Uint8Array;
 }
 
-/** What the uploaded textures hold, where a parent factor of 0 means no parent texture. */
+/** Block sizes of uploaded textures; a zero parent factor means no parent texture. */
 interface BlockFactors {
   factor: number;
   parentFactor: number;
@@ -56,9 +57,8 @@ const UNIFORM_NAMES = [
 const COLOR_MAX = 255;
 
 /**
- * A MapLibre custom layer that draws a field as a lattice of dots, with the dot count of each
- * cell set by the field's position on its colour stops, and hatches in-area cells that have no
- * value. The setters take effect on the next frame.
+ * Draw field values as dot counts and hatch in-area cells with no value.
+ * Setters take effect on the next frame.
  */
 export function createFieldMarksLayer(options: FieldMarksOptions) {
   const layer = new FieldMarksLayer(options);
@@ -76,7 +76,7 @@ class FieldMarksLayer extends TiledGpuLayer {
   private positions: Uint8Array | null = null;
   private mask: ArrayLike<number> | null = null;
   private markCells: Uint8Array | null = null;
-  // Keyed by cells per block, which levels from 0 up share.
+  // Levels from zero upwards share the same one-cell blocks.
   private readonly pyramid = new Map<number, BlockData>();
   private isHalo = false;
   private isDots = true;
@@ -107,6 +107,13 @@ class FieldMarksLayer extends TiledGpuLayer {
     this.resetData();
   }
 
+  private resetData() {
+    this.markCells = null;
+    this.pyramid.clear();
+    this.uploaded = null;
+    this.map?.triggerRepaint();
+  }
+
   setHalo(isOn: boolean) {
     this.isHalo = isOn;
     this.map?.triggerRepaint();
@@ -119,13 +126,6 @@ class FieldMarksLayer extends TiledGpuLayer {
 
   setHatch(isOn: boolean) {
     this.isHatch = isOn;
-    this.map?.triggerRepaint();
-  }
-
-  private resetData() {
-    this.markCells = null;
-    this.pyramid.clear();
-    this.uploaded = null;
     this.map?.triggerRepaint();
   }
 
@@ -186,7 +186,7 @@ class FieldMarksLayer extends TiledGpuLayer {
     const [west, south, east, north] = grid.bbox;
     const data = {
       grid: {
-        // The padded blocks keep the cells' size, and the shader clips them to the original grid.
+        // Padding preserves cell size because the shader clips blocks to the original grid.
         bbox: [
           west,
           north - ((north - south) / grid.ny) * factor * height,
@@ -208,14 +208,14 @@ class FieldMarksLayer extends TiledGpuLayer {
     return this.markCells;
   }
 
-  /** The blocks of twice the factor, repeated over the blocks they contain. */
   private parentCells(factor: number) {
     const { grid } = this.blockData(factor);
     const parent = this.blockData(2 * factor);
     const cells = new Uint8Array(grid.nx * grid.ny);
     for (let row = 0; row < grid.ny; row++) {
       for (let column = 0; column < grid.nx; column++) {
-        cells[row * grid.nx + column] = parent.cells[(row >> 1) * parent.grid.nx + (column >> 1)];
+        const parentCell = (row >> 1) * parent.grid.nx + (column >> 1);
+        cells[row * grid.nx + column] = parent.cells[parentCell];
       }
     }
     return cells;
@@ -258,7 +258,6 @@ class FieldMarksLayer extends TiledGpuLayer {
   }
 }
 
-/** The block sizes the textures need to draw a level, with a parent texture only while it fades. */
 function blockFactors(level: number, fade: number): BlockFactors {
   const drawnLevel = fade > 0 ? level + 1 : level;
   const factor = 2 ** Math.max(-drawnLevel, 0);

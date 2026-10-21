@@ -1,9 +1,10 @@
+/** Read scene routes and build share links with display choices and time precision. */
 import type { DisplayTokens } from "./types";
 
 // The finest step decides whether a link keeps a year, month or day.
 const TIME_PATTERN = /^\d{4}(-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?)?$/;
 
-/** Where an address points: the world view, or a scene with an optional time and open tab. */
+/** A world or scene destination with optional time and panel state. */
 export type Route =
   | { kind: "world" }
   | {
@@ -23,9 +24,7 @@ export function sceneUrl(id: string, label: string | null, display = "") {
   return (label ? `?scene=${id}&t=${label}` : `?scene=${id}`) + display;
 }
 
-/**
- * Read an address and history entry; the caller must validate the returned id before use.
- */
+/** Read a route from an address and history entry; validate its id before use. */
 export function routeFor(search: string, state: { panel?: string } | null): Route {
   const parameters = new URLSearchParams(search);
   const id = parameters.get("scene");

@@ -131,7 +131,6 @@ test("a cross table maps fine pixels to the coarse cells under them", () => {
   const fine = gridOf([0, 0, 4, 4], 8, 8);
   const coarse = gridOf([0, 0, 4, 4], 4, 4);
   const table = sampleTable(fine);
-
   const cells = crossSampleTable(table, fine, coarse).src;
 
   assert.deepEqual([...cells.subarray(0, 8)], [0, 0, 1, 1, 2, 2, 3, 3]);
@@ -142,7 +141,6 @@ test("a cross table marks pixels outside the other grid", () => {
   const fine = gridOf([0, 0, 4, 4], 8, 8);
   const smaller = gridOf([1, 2, 4, 4], 3, 2);
   const table = sampleTable(fine);
-
   const cells = crossSampleTable(table, fine, smaller).src;
 
   assert.deepEqual([...cells.subarray(0, 8)], [-1, -1, 0, 0, 1, 1, 2, 2]);
@@ -153,7 +151,6 @@ test("a cross table footprint reaches the other grid from a pixel whose centre i
   const fine = gridOf([0, 0, 4, 4], 8, 8);
   const shifted = gridOf([0.3, 0, 4, 4], 4, 4);
   const table = sampleTable(fine);
-
   const cross = crossSampleTable(table, fine, shifted);
 
   assert.equal(cross.src[0], -1);
