@@ -25,8 +25,9 @@ const CLIPPED_NOTICE = "The area reaches beyond the data coverage and was clippe
 const DISPLAY_LINES = [
   "One layer holds the map's colour at a time. The Colour row at the top of the layer cards names "
     + "it, while the other visible layers show the same data in a quieter way.",
-  "Rainfall without colour becomes dots. A cell with more rain gets more dots, and their spacing "
-    + "stays even on screen, so wet and dry places stay visible without a colour scale.",
+  "Rainfall without colour becomes dots. Bigger dots mean more rain. Dots sit on the data grid, "
+    + "and zooming in adds dots within each cell without adding data. The dot density slider "
+    + "packs in more, smaller dots or fewer, larger ones.",
   "Temperature without colour becomes isotherms, the thin dashed lines that join places at the "
     + "same temperature. The legend names their interval and marks every fifth line more boldly.",
   "Land cover without colour keeps only the borders between classes, so the relief and any dots or "

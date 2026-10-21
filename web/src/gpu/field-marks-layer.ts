@@ -3,12 +3,13 @@ import type { CustomLayerInterface } from "maplibre-gl";
 
 import type { InkPaint } from "../render/palettes";
 import {
-  aimedSpacingPx,
+  DEFAULT_DENSITY_RATIO,
   blockMeans,
-  cellSizePx,
-  levelFor,
+  dotLattice,
+  highZoomDotOpacity,
   markBytes,
   maxDotRadiusPx,
+  type DotLattice,
 } from "../render/lattice";
 import { FIELD_MARKS_FRAGMENT, FIELD_MARKS_VERTEX } from "./field-marks-shaders";
 import {
@@ -55,6 +56,7 @@ const UNIFORM_NAMES = [
   "uDots",
   "uHatch",
   "uPixelRatio",
+  "uDotOpacity",
 ];
 const COLOR_MAX = 255;
 
@@ -70,6 +72,7 @@ export function createFieldMarksLayer(options: FieldMarksOptions) {
     setPositions: (positions: Uint8Array) => layer.setPositions(positions),
     setHalo: (isOn: boolean) => layer.setHalo(isOn),
     setInk: (ink: InkPaint) => layer.setInk(ink),
+    setDensity: (density: number) => layer.setDensity(density),
     setDots: (isOn: boolean) => layer.setDots(isOn),
     setHatch: (isOn: boolean) => layer.setHatch(isOn),
   };
@@ -84,8 +87,16 @@ class FieldMarksLayer extends TiledGpuLayer {
   private isHalo = false;
   private isDots = true;
   private isHatch = true;
+  private density = DEFAULT_DENSITY_RATIO;
   private uploaded: BlockFactors | null = null;
-  private frame = { level: 0, fade: 0, cellPx: 1, aimedPx: 1 };
+  private frame: DotLattice = {
+    level: 0,
+    fade: 0,
+    sidesPx: { width: 1, height: 1 },
+    aimedPx: 1,
+    density: DEFAULT_DENSITY_RATIO,
+    pixelRatio: 1,
+  };
   private ink: InkPaint;
 
   constructor(options: FieldMarksOptions) {
@@ -127,6 +138,11 @@ class FieldMarksLayer extends TiledGpuLayer {
     this.map?.triggerRepaint();
   }
 
+  setDensity(density: number) {
+    this.density = density;
+    this.map?.triggerRepaint();
+  }
+
   setDots(isOn: boolean) {
     this.isDots = isOn;
     this.map?.triggerRepaint();
@@ -156,11 +172,8 @@ class FieldMarksLayer extends TiledGpuLayer {
   }
 
   protected uploadStaleData(gl: WebGL2RenderingContext, gpu: TiledGpu) {
-    const cellPx = this.cellPx();
-    const aimedPx = aimedSpacingPx(this.map!.getZoom());
-    const { level, fade } = levelFor(cellPx, aimedPx);
-    this.frame = { level, fade, cellPx, aimedPx };
-    const factors = blockFactors(level, fade);
+    this.frame = this.lattice();
+    const factors = blockFactors(this.frame.level, this.frame.fade);
     if (
       this.uploaded?.factor === factors.factor
       && this.uploaded.parentFactor === factors.parentFactor
@@ -176,13 +189,15 @@ class FieldMarksLayer extends TiledGpuLayer {
     this.uploaded = factors;
   }
 
-  private cellPx() {
+  private lattice() {
     const { bbox, nx, ny } = this.options.grid;
     const [west, south, east, north] = bbox;
-    return cellSizePx(
-      this.map!.getZoom(),
+    return dotLattice(
       { width: (east - west) / nx, height: (north - south) / ny },
       (south + north) / 2,
+      this.map!.getZoom(),
+      this.density,
+      this.map!.getPixelRatio(),
     );
   }
 
@@ -232,11 +247,14 @@ class FieldMarksLayer extends TiledGpuLayer {
 
   protected draw(gl: WebGL2RenderingContext, gpu: TiledGpu, mainMatrix: ArrayLike<number>) {
     const uniform = (name: string) => this.uniform(gpu, name);
-    const { level, fade, cellPx, aimedPx } = this.frame;
+    const { level, fade, sidesPx, aimedPx, density } = this.frame;
     const drawnLevel = fade > 0 ? level + 1 : level;
     const pixelRatio = this.map!.getPixelRatio();
+    const dotOpacity = highZoomDotOpacity(this.map!.getZoom(), pixelRatio);
+    if (dotOpacity === 0 && !this.isHatch) return;
+    const cellPx = Math.sqrt(sidesPx.width * sidesPx.height);
     const radiusPx = (dotLevel: number) =>
-      maxDotRadiusPx(cellPx / 2 ** dotLevel, aimedPx) * pixelRatio;
+      maxDotRadiusPx(cellPx / 2 ** dotLevel, dotLevel, aimedPx, density) * pixelRatio;
     const { grid } = this.blockData(blockFactors(level, fade).factor);
     const original = this.options.grid;
 
@@ -255,9 +273,10 @@ class FieldMarksLayer extends TiledGpuLayer {
     gl.uniform3f(uniform("uInk"), ...channels(this.ink.ink));
     gl.uniform3f(uniform("uHaloInk"), ...channels(this.ink.halo));
     gl.uniform1i(uniform("uHalo"), this.isHalo ? 1 : 0);
-    gl.uniform1i(uniform("uDots"), this.isDots ? 1 : 0);
+    gl.uniform1i(uniform("uDots"), this.isDots && dotOpacity > 0 ? 1 : 0);
     gl.uniform1i(uniform("uHatch"), this.isHatch ? 1 : 0);
     gl.uniform1f(uniform("uPixelRatio"), pixelRatio);
+    gl.uniform1f(uniform("uDotOpacity"), dotOpacity);
 
     this.drawTiles(gl, gpu, mainMatrix, ({ window }) => {
       gl.uniform2i(uniform("uIdsSize"), window.width, window.height);

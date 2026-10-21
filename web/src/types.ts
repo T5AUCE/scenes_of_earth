@@ -218,6 +218,7 @@ export interface DisplayTokens {
   off: string;
   colour: string; // the picked owner, a layer id or blend
   ink: string; // `layer:preset` or `layer:rrggbb` entries
+  dens: string; // `layer:multiple` entries, the dot density as a multiple of the default
 }
 
 /** A layer's display choices that differ from the bundle; a missing field means its default. */
@@ -226,6 +227,8 @@ export interface LayerDisplay {
   /** A dot or isotherm ink, by preset name or as #rrggbb. */
   ink?: string;
   range?: [number, number];
+  /** The dot density as a multiple of the default one. */
+  density?: number;
 }
 
 /** Ids of the hidden map layers that fix where each kind of drawing sits, from bottom to top. */
@@ -251,6 +254,8 @@ export interface LayerContext {
   beforeId: string | undefined;
   /** The viewer's choices for this layer; absent means the bundle's defaults. */
   display?: LayerDisplay;
+  /** Records a change of the viewer's choices for this layer, so the share link follows it. */
+  changeDisplay(change: LayerDisplay): void;
   /**
    * Report failures after mounting, such as a step that cannot be read.
    * Returns a function that withdraws the note when the failure clears.
@@ -269,6 +274,10 @@ export interface LayerControl {
   step: number;
   value: number;
   set(value: number): void;
+  /** Whether the slider applies right now; absent means it always does. */
+  readonly isShown?: boolean;
+  /** Fires a change event when isShown may have changed. */
+  updates?: EventTarget;
 }
 
 /** The browser's edge choices for a categorical dataset, independent of shared links. */
@@ -343,6 +352,10 @@ export interface LayerMenu {
   readonly paletteNote?: string;
   /** Notify an open menu when renderer-dependent controls change. */
   updates?: EventTarget;
+  /** Reset a renderer control that lives outside the menu, such as the dot density. */
+  resetDensity?(): void;
+  /** Whether the dot density is at its default, so Reset layer needs no confirmation. */
+  readonly isDensityDefault?: boolean;
 }
 
 /** Own a drawn layer's controls and time axis along with its legend and teardown. */

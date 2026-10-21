@@ -30,15 +30,36 @@ interface MenuModes {
 let menuCount = 0;
 const menuModes = new WeakMap<LayerMenu, MenuModes>();
 
-/** Builds the sliders shown directly under a part's checkbox, labelled for screen readers only. */
+/**
+ * Builds the sliders shown directly under a part's checkbox, labelled for screen readers only.
+ * A slider hides while its control reports that it does not apply.
+ */
 export function partControls(controls: LayerControl[]) {
   const box = makeHtmlElement("div");
   box.className = "part-controls";
   for (const control of controls) {
-    if (control.hint) makeHtmlElement("div", control.hint, box).className = "control-hint";
-    box.append(slider(control));
+    const hint = control.hint ? makeHtmlElement("div", control.hint, box) : null;
+    if (hint) hint.className = "control-hint";
+    const input = slider(control);
+    box.append(input);
+    keepInSync(control, [hint, input], input);
   }
   return box;
+}
+
+function keepInSync(
+  control: LayerControl,
+  elements: (HTMLElement | null)[],
+  input: HTMLInputElement,
+) {
+  const sync = () => {
+    for (const element of elements) {
+      if (element) element.hidden = control.isShown === false;
+    }
+    input.value = String(control.value);
+  };
+  control.updates?.addEventListener("change", sync);
+  sync();
 }
 
 function slider({ label, min, max, step, value, set }: LayerControl) {
@@ -146,6 +167,7 @@ function resetButton(menu: LayerMenu, onChange: (changed: MenuChange) => void, r
     menu.range?.set(null);
     menu.edges?.reset();
     if (menu.ink) menu.ink.set(menu.ink.defaultInk);
+    menu.resetDensity?.();
     onChange("palette");
     if (menu.ink) onChange("ink");
     refill();
@@ -154,7 +176,8 @@ function resetButton(menu: LayerMenu, onChange: (changed: MenuChange) => void, r
     const isDefault = menu.palette === menu.defaultPalette
       && !menu.range?.value
       && (menu.edges?.isDefault ?? true)
-      && (menu.ink === undefined || menu.ink.value === menu.ink.defaultInk);
+      && (menu.ink === undefined || menu.ink.value === menu.ink.defaultInk)
+      && (menu.isDensityDefault ?? true);
     if (isDefault) return resetLayer();
 
     askBeforeReset(

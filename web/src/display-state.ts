@@ -1,5 +1,12 @@
 /** Resolve scene display choices and persist browser preferences independently of links. */
 import {
+  DEFAULT_DENSITY_RATIO,
+  DENSITY_STEP_LOG2,
+  MAX_DENSITY_LOG2,
+  MIN_DENSITY_LOG2,
+  quantiseDensity,
+} from "./render/lattice";
+import {
   CLASS_PALETTE_OPTIONS,
   CONTOUR_COLORS,
   DEFAULT_CONTOUR_COLOR,
@@ -11,15 +18,23 @@ import {
   inkToLink,
 } from "./render/palettes";
 import { allocate, BLEND, blendPair, layerDraws, type BlendPair } from "./layers/allocate";
-import type { DisplayTokens, EdgeSettings, LayerDisplay, LayerDoc } from "./types";
+import type {
+  DisplayTokens,
+  EdgeSettings,
+  LayerControl,
+  LayerDisplay,
+  LayerDoc,
+} from "./types";
 
 const STORAGE_KEY = "soe.display.v1";
 const EDGES_STORAGE_KEY = "soe.edges.v1";
 const COLOUR_STORAGE_KEY = "soe.colour.v1";
 const INK_STORAGE_KEY = "soe.ink.v1";
+const DENSITY_STORAGE_KEY = "soe.density.v1";
 
 const PALETTE_FIELDS = 2;
 const INK_FIELDS = 2;
+const DENSITY_FIELDS = 2;
 const RANGE_FIELDS = 3;
 const SIGNIFICANT_DIGITS = 3;
 // log10 of an exact power of ten can land a hair above the integer and add a spurious decimal.
@@ -35,6 +50,7 @@ export const NO_TOKENS: DisplayTokens = {
   off: "",
   colour: "",
   ink: "",
+  dens: "",
 };
 
 /** Default class edges keep a one-pixel anti-aliased border and preserve isolated cells. */
@@ -163,6 +179,25 @@ export function defaultInk(layer: LayerDoc) {
   return fallback === "isolines" ? DEFAULT_ISOTHERM_INK : undefined;
 }
 
+/** A dot-density slider whose value uses the same normalisation as a density in a link. */
+export function densityControl(
+  readDensity: () => number,
+  set: (density: number) => void,
+): LayerControl {
+  return {
+    label: "Dot density",
+    hint: "Change dot density using slider",
+    min: MIN_DENSITY_LOG2,
+    max: MAX_DENSITY_LOG2,
+    step: DENSITY_STEP_LOG2,
+    get value() {
+      const steps = Math.round(Math.log2(quantiseDensity(readDensity())) / DENSITY_STEP_LOG2);
+      return steps * DENSITY_STEP_LOG2;
+    },
+    set: (value) => set(quantiseDensity(2 ** value)),
+  };
+}
+
 /**
  * The decimals a custom range keeps. They match the precision of scaled integer values and
  * otherwise give the area's value span about three significant figures.
@@ -195,6 +230,7 @@ export function resolveDisplay(
   stored: Record<string, string>,
   storedPick: string | null = null,
   storedInks: Record<string, string> = {},
+  storedDensities: Record<string, number> = {},
 ): ResolvedDisplay {
   const display: SceneDisplay = { layers: {}, off: new Set(), colour: null };
   const byId = new Map(layers.map((layer) => [layer.id, layer]));
@@ -235,6 +271,25 @@ export function resolveDisplay(
     }
   }
 
+  const linkedDensities = new Map<string, number>();
+  for (const fields of tokenFields(tokens.dens)) {
+    const [id, text] = fields;
+    const density = fields.length === DENSITY_FIELDS ? densityOf(byId.get(id), text) : null;
+    if (density === null) dropped = true;
+    else linkedDensities.set(id, density);
+  }
+
+  for (const layer of layers) {
+    const remembered = storedDensities[layer.id];
+    const linked = linkedDensities.get(layer.id);
+    const density = linked ?? (hasDots(layer) && remembered !== undefined
+      ? quantiseDensity(remembered)
+      : null);
+    if (density !== null && density !== DEFAULT_DENSITY_RATIO) {
+      setLayerDisplay(display, layer.id, { ...display.layers[layer.id], density });
+    }
+  }
+
   for (const fields of tokenFields(tokens.range)) {
     const [id, low, high] = fields;
     const range = fields.length === RANGE_FIELDS ? rangeOf(byId.get(id), low, high) : null;
@@ -269,6 +324,19 @@ function hasInk(layer: LayerDoc | undefined) {
   return layer !== undefined && defaultInk(layer) !== undefined;
 }
 
+function hasDots(layer: LayerDoc | undefined) {
+  return layer !== undefined && layerDraws(layer).fallback === "dots";
+}
+
+function densityOf(layer: LayerDoc | undefined, text: string | undefined) {
+  if (!hasDots(layer) || !text) return null;
+
+  const density = Number(text);
+  if (!Number.isFinite(density)) return null;
+
+  return quantiseDensity(density);
+}
+
 function lastToken(value: string) {
   return value.split(",").filter(Boolean).at(-1) ?? null;
 }
@@ -300,7 +368,8 @@ function addBlendHalves(off: Set<string>, pair: BlendPair | null) {
 /**
  * The link parameters, each starting with `&`. Every layer with a menu names its palette so that
  * the receiver sees the sender's colours whatever palettes their browser remembers. Ranges, inks
- * and off parts appear only when they differ from the defaults.
+ * and off parts appear only when they differ from the defaults. Every dot layer names its effective
+ * density, because an omitted default would let the receiver's stored density win.
  */
 export function formatDisplayParams(display: SceneDisplay, layers: LayerDoc[]) {
   const units = layers.flatMap(layerUnits);
@@ -325,6 +394,12 @@ export function formatDisplayParams(display: SceneDisplay, layers: LayerDoc[]) {
     ink: layers.flatMap(({ id }) => {
       const ink = display.layers[id]?.ink;
       return ink ? [`${id}:${inkToLink(ink)}`] : [];
+    }),
+    dens: layers.flatMap((layer) => {
+      if (!hasDots(layer)) return [];
+
+      const density = quantiseDensity(display.layers[layer.id]?.density ?? DEFAULT_DENSITY_RATIO);
+      return [`${layer.id}:${density}`];
     }),
   };
 
@@ -443,8 +518,8 @@ export function storePick(pick: string | null) {
 
 /** Replace a layer's overrides or remove its entry when no overrides remain. */
 export function setLayerDisplay(display: SceneDisplay, layerId: string, layer: LayerDisplay) {
-  const { palette, range, ink } = layer;
-  if (!palette && !range && !ink) {
+  const { palette, range, ink, density } = layer;
+  if (!palette && !range && !ink && !density) {
     delete display.layers[layerId];
     return;
   }
@@ -453,6 +528,7 @@ export function setLayerDisplay(display: SceneDisplay, layerId: string, layer: L
     ...(palette && { palette }),
     ...(range && { range }),
     ...(ink && { ink }),
+    ...(density && { density }),
   };
 }
 
@@ -473,7 +549,12 @@ export function recordMenuChange(
 ) {
   const palette = menu.palette === menu.defaultPalette ? undefined : menu.palette;
   const ink = menu.ink && menu.ink.value !== menu.ink.defaultInk ? menu.ink.value : undefined;
-  setLayerDisplay(display, layerId, { palette, range: menu.range?.value ?? undefined, ink });
+  setLayerDisplay(display, layerId, {
+    ...display.layers[layerId],
+    palette,
+    range: menu.range?.value ?? undefined,
+    ink,
+  });
   if (changed === "palette") storePalette(layerId, palette ?? null);
   if (changed === "ink") storeInk(layerId, ink ?? null);
 }
@@ -496,6 +577,39 @@ export function loadStoredInks(): Record<string, string> {
 /** Remember a layer's ink in this browser, or forget it when ink is null. */
 export function storeInk(layerId: string, ink: string | null) {
   storeName(INK_STORAGE_KEY, layerId, ink);
+}
+
+/** The dot densities this browser remembers by layer id; empty when storage is unavailable. */
+export function loadStoredDensities(): Record<string, number> {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(DENSITY_STORAGE_KEY) ?? "{}");
+    if (!isRecord(parsed)) return {};
+
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter((entry): entry is [string, number] => isStoredDensity(entry[1]))
+        .map(([layerId, density]) => [layerId, quantiseDensity(density)]),
+    );
+  } catch {
+    return {};
+  }
+}
+
+/** Remember a layer's dot density in this browser, or forget it when density is null. */
+export function storeDensity(layerId: string, density: number | null) {
+  try {
+    const stored = loadStoredDensities();
+    if (density === null) delete stored[layerId];
+    else stored[layerId] = quantiseDensity(density);
+
+    localStorage.setItem(DENSITY_STORAGE_KEY, JSON.stringify(stored));
+  } catch {
+    // The density still applies to this visit. A blocked store is not worth reporting.
+  }
+}
+
+function isStoredDensity(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 function loadStoredNames(key: string): Record<string, string> {

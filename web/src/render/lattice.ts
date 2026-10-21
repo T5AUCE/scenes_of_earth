@@ -6,32 +6,51 @@ export const MIN_LEVEL = -6;
 export const MAX_LEVEL = 6;
 
 /** Dot radius at the top of the colour scale as a share of the zoomed-in dot spacing. */
-export const DOT_RADIUS_RATIO = 0.10;
+export const DOT_RADIUS_RATIO = 0.09;
+
+/** A dot's radius grows with its value to this power, so a quarter-value dot is 35% as wide. */
+export const VALUE_RADIUS_EXPONENT = 0.75;
+
+/** Density steps are equal ratios, with the default exactly twelve steps above the minimum. */
+export const MIN_DENSITY_LOG2 = -1.5;
+export const MAX_DENSITY_LOG2 = 0.5;
+export const DENSITY_STEP_LOG2 = 1 / 8;
+
+/** Density scales the number of sites along each axis, not the total number of dots. */
+export const MIN_DENSITY_RATIO = 2 ** MIN_DENSITY_LOG2;
+export const MAX_DENSITY_RATIO = 2 ** MAX_DENSITY_LOG2;
+export const DEFAULT_DENSITY_RATIO = 1;
 
 /** Dot spacing to aim for in css px when zoomed in; zoomed out it eases down to the next one. */
-export const MIN_SPACING_PX = 50;
+export const MIN_SPACING_PX = 30;
 
 /** Dot spacing to aim for in css px when zoomed out, where denser dots read better. */
-const ZOOMED_OUT_SPACING_PX = 22;
+const ZOOMED_OUT_SPACING_PX = 15;
 
 /** The zoomed-out spacing applies up to the first zoom and the zoomed-in one from the second. */
 const ZOOMED_OUT_ZOOM = 6;
 const ZOOMED_IN_ZOOM = 10;
 
-/** The full-value dot radius in css px at the aimed spacing, the same at every zoom. */
+/** The full-value dot radius in css px at the aimed spacing at the default density. */
 const DOT_RADIUS_PX = DOT_RADIUS_RATIO * MIN_SPACING_PX;
 
-/** The largest dot radius in css px, reached once the level stops rising. */
+/** The largest dot radius in css px at the default density, reached once the level stops rising. */
 export const MAX_DOT_RADIUS_PX = 3 * DOT_RADIUS_PX;
 
 /** Dots that would be smaller than this radius in css px fade out by area instead. */
 export const MIN_DOT_RADIUS_PX = 0.5;
 
+/** The zoom where dots finish fading out at a device pixel ratio of one. */
+export const HIGH_ZOOM_FADE_END_ZOOM = 18;
+
+/** The zoom span over which dots fade out before that end. */
+export const HIGH_ZOOM_FADE_SPAN_ZOOM = 0.5;
+
 /** How far a dot may sit from its site along each axis, as a share of the dot spacing. */
 export const POSITION_JITTER_RATIO = 0.08;
 /** How far a dot's radius may fall below the one its value calls for, as a share of it. */
 export const SIZE_JITTER_RATIO = 0.2;
-// The area varies symmetrically around the value's area so a cell's total ink keeps its value.
+// The area varies symmetrically around the value's dot area so a cell keeps the ink of its value.
 export const AREA_JITTER_RATIO = 1 - (1 - SIZE_JITTER_RATIO) ** 2;
 /** The largest factor by which size jitter scales a radius. */
 export const MAX_RADIUS_SCALE = Math.sqrt(1 + AREA_JITTER_RATIO);
@@ -39,6 +58,8 @@ export const MAX_RADIUS_SCALE = Math.sqrt(1 + AREA_JITTER_RATIO);
 export const EDGE_PX = 0.5;
 /** The width in css px of the halo around a dot when it is drawn. */
 export const HALO_WIDTH_PX = 0.6;
+// Two routes to the same radius can differ in the last float bit.
+const RADIUS_TOLERANCE_PX = 1e-9;
 
 /** The byte that marks a cell with no value; positions use 0 to 253. */
 export const NO_DATA_BYTE = 255;
@@ -49,7 +70,6 @@ const MAX_POSITION_BYTE = 253;
 // MapLibre draws the world 512 px wide at zoom 0.
 const WORLD_PX_AT_ZOOM_0 = 512;
 const DEGREES_PER_RADIAN = 180 / Math.PI;
-const FADE_START = 0.75;
 // The offset keeps every level's sites nested in the next level's and the lattice phase stable.
 const SLOT_OFFSET_CELLS = 15 / 32;
 
@@ -73,11 +93,40 @@ export function cellSizePx(
   return (worldPx / 360) * Math.sqrt(cellDegrees.width * cellDegrees.height * stretch);
 }
 
-/** The dot spacing to aim for at a zoom, easing geometrically between the two set spacings. */
-export function aimedSpacingPx(zoom: number) {
+/** The on-screen width and height of a cell in css px, where Mercator stretches the height. */
+export function cellSidesPx(
+  zoom: number,
+  cellDegrees: { width: number; height: number },
+  latitude: number,
+) {
+  const pxPerDegree = (WORLD_PX_AT_ZOOM_0 * 2 ** zoom) / 360;
+  const stretch = 1 / Math.cos(latitude / DEGREES_PER_RADIAN);
+  return {
+    width: pxPerDegree * cellDegrees.width,
+    height: pxPerDegree * cellDegrees.height * stretch,
+  };
+}
+
+/** Keep a density within its range. */
+export function clampDensity(density: number) {
+  return Math.min(MAX_DENSITY_RATIO, Math.max(MIN_DENSITY_RATIO, density));
+}
+
+/** Keep a density within its range and on the slider's step. */
+export function quantiseDensity(density: number) {
+  const steps = Math.round(Math.log2(clampDensity(density)) / DENSITY_STEP_LOG2);
+  return 2 ** (steps * DENSITY_STEP_LOG2);
+}
+
+/**
+ * The dot spacing to aim for at a zoom, easing geometrically between the two set spacings and
+ * shrinking by the density.
+ */
+export function aimedSpacingPx(zoom: number, density = DEFAULT_DENSITY_RATIO) {
   const span = ZOOMED_IN_ZOOM - ZOOMED_OUT_ZOOM;
   const progress = Math.min(1, Math.max(0, (zoom - ZOOMED_OUT_ZOOM) / span));
-  return ZOOMED_OUT_SPACING_PX * (MIN_SPACING_PX / ZOOMED_OUT_SPACING_PX) ** progress;
+  const spacingPx = ZOOMED_OUT_SPACING_PX * (MIN_SPACING_PX / ZOOMED_OUT_SPACING_PX) ** progress;
+  return spacingPx / density;
 }
 
 /** Choose the level whose dot spacing is one to two aimed spacings and its progress to the next. */
@@ -86,8 +135,8 @@ export function levelFor(cellPx: number, aimedPx = MIN_SPACING_PX) {
   const level = Math.min(MAX_LEVEL, Math.max(MIN_LEVEL, Math.floor(exact)));
   if (level === MAX_LEVEL) return { level, fade: 0 };
 
-  const fraction = exact - level;
-  const progress = Math.min(1, Math.max(0, (fraction - FADE_START) / (1 - FADE_START)));
+  // A full-interval fade lets density steps change the dots between nested lattice levels.
+  const progress = Math.min(1, Math.max(0, exact - level));
   return { level, fade: progress * progress * (3 - 2 * progress) };
 }
 
@@ -99,9 +148,23 @@ export function slotPosition(slot: number, level: number) {
   return slot / 2 ** level + SLOT_OFFSET_CELLS;
 }
 
-/** The largest dot radius in css px for dots this far apart, which the zoom cap limits. */
-export function maxDotRadiusPx(spacingPx: number, aimedPx = MIN_SPACING_PX) {
-  return Math.min(DOT_RADIUS_PX * (spacingPx / aimedPx), MAX_DOT_RADIUS_PX);
+/**
+ * The largest dot radius in css px for dots this far apart at a lattice level. Dots shrink by the
+ * density that shrank the aimed spacing, so the share of the surface they ink stays put. Once the
+ * level reaches MAX_LEVEL no sites are added, so the default density keeps a denser setting from
+ * thinning the same dots.
+ */
+export function maxDotRadiusPx(
+  spacingPx: number,
+  level: number,
+  aimedPx = MIN_SPACING_PX,
+  density = DEFAULT_DENSITY_RATIO,
+) {
+  if (level >= MAX_LEVEL) {
+    return Math.min(DOT_RADIUS_PX * (spacingPx / (aimedPx * density)), MAX_DOT_RADIUS_PX);
+  }
+
+  return Math.min(DOT_RADIUS_PX * (spacingPx / aimedPx), MAX_DOT_RADIUS_PX) / density;
 }
 
 /**
@@ -119,9 +182,105 @@ export function containedRadiusPx(
   return Math.min(maxRadiusPx, Math.max(marginPx, 0) / MAX_RADIUS_SCALE);
 }
 
-/** The radius of a dot whose area is proportional to its position, then jittered by area. */
+/** The dot spacing along each axis in css px at a level, for cell sides in css px. */
+export function levelSpacingPx(sidesPx: { width: number; height: number }, level: number) {
+  return { x: sidesPx.width / 2 ** level, y: sidesPx.height / 2 ** level };
+}
+
+/**
+ * The dot lattice at a zoom, with a density whose dots the shortest cell axis can hold.
+ */
+export interface DotLattice {
+  level: number;
+  fade: number;
+  sidesPx: { width: number; height: number };
+  aimedPx: number;
+  density: number;
+  pixelRatio: number;
+}
+
+/**
+ * The largest dot radius in css px at a level as the shader draws it. The shader works in device
+ * px, so containment leaves room for the device-px edge and halo.
+ */
+export function levelRadiusPx(
+  sidesPx: { width: number; height: number },
+  level: number,
+  aimedPx: number,
+  pixelRatio: number,
+  density = DEFAULT_DENSITY_RATIO,
+) {
+  const spacingPx = levelSpacingPx(sidesPx, level);
+  const cellPx = Math.sqrt(sidesPx.width * sidesPx.height);
+  const zoomCapPx = maxDotRadiusPx(cellPx / 2 ** level, level, aimedPx, density);
+  return containedRadiusPx(
+    spacingPx.x * pixelRatio,
+    spacingPx.y * pixelRatio,
+    zoomCapPx * pixelRatio,
+    HALO_WIDTH_PX,
+  ) / pixelRatio;
+}
+
+/**
+ * The dot lattice for a cell at a zoom. A density whose dot the shortest axis would clip is
+ * lowered to the closest logarithmic step that fits, so a denser setting does not thin the ink.
+ */
+export function dotLattice(
+  cellDegrees: { width: number; height: number },
+  latitude: number,
+  zoom: number,
+  density: number,
+  pixelRatio: number,
+): DotLattice {
+  const sidesPx = cellSidesPx(zoom, cellDegrees, latitude);
+  const cellPx = Math.sqrt(sidesPx.width * sidesPx.height);
+  const fitting = containedDensity(cellPx, sidesPx, zoom, density, pixelRatio);
+  const aimedPx = aimedSpacingPx(zoom, fitting);
+  const { level, fade } = levelFor(cellPx, aimedPx);
+
+  return { level, fade, sidesPx, aimedPx, density: fitting, pixelRatio };
+}
+
+function containedDensity(
+  cellPx: number,
+  sidesPx: { width: number; height: number },
+  zoom: number,
+  density: number,
+  pixelRatio: number,
+) {
+  const highestStep = Math.round(Math.log2(quantiseDensity(density)) / DENSITY_STEP_LOG2);
+  const lowestStep = MIN_DENSITY_LOG2 / DENSITY_STEP_LOG2;
+  for (let step = highestStep; step >= lowestStep; step--) {
+    const candidate = 2 ** (step * DENSITY_STEP_LOG2);
+    if (fitsContainment(cellPx, sidesPx, zoom, candidate, pixelRatio)) return candidate;
+  }
+
+  return MIN_DENSITY_RATIO;
+}
+
+function fitsContainment(
+  cellPx: number,
+  sidesPx: { width: number; height: number },
+  zoom: number,
+  density: number,
+  pixelRatio: number,
+) {
+  const aimedPx = aimedSpacingPx(zoom, density);
+  const { level, fade } = levelFor(cellPx, aimedPx);
+  const drawnLevel = fade > 0 ? level + 1 : level;
+  for (let activeLevel = level; activeLevel <= drawnLevel; activeLevel++) {
+    const fullRadiusPx = maxDotRadiusPx(cellPx / 2 ** activeLevel, activeLevel, aimedPx, density);
+    const containedPx = levelRadiusPx(sidesPx, activeLevel, aimedPx, pixelRatio, density);
+    if (containedPx < fullRadiusPx - RADIUS_TOLERANCE_PX) return false;
+  }
+
+  return true;
+}
+
+/** The radius of a dot that grows with its position by the exponent, then jittered by area. */
 export function dotRadiusPx(position: number, maxRadiusPx: number, areaNoise: number) {
-  return maxRadiusPx * Math.sqrt(position * (1 + AREA_JITTER_RATIO * areaNoise));
+  return maxRadiusPx * position ** VALUE_RADIUS_EXPONENT
+    * Math.sqrt(1 + AREA_JITTER_RATIO * areaNoise);
 }
 
 /** The radius to draw and the opacity of a dot, which fades by area below the minimum radius. */
@@ -130,6 +289,18 @@ export function dotAppearance(radiusPx: number) {
     radiusPx: Math.max(radiusPx, MIN_DOT_RADIUS_PX),
     opacity: Math.min(1, (radiusPx / MIN_DOT_RADIUS_PX) ** 2),
   };
+}
+
+/**
+ * The opacity of dots at a zoom and device pixel ratio. The GPU keeps grid coordinates in
+ * float32, so dots break into noise once the device-pixel zoom passes about 18.7. They fade out
+ * before that.
+ */
+export function highZoomDotOpacity(zoom: number, pixelRatio: number) {
+  const endZoom = HIGH_ZOOM_FADE_END_ZOOM - Math.log2(Math.max(1, pixelRatio));
+  const startZoom = endZoom - HIGH_ZOOM_FADE_SPAN_ZOOM;
+  const progress = Math.min(1, Math.max(0, (zoom - startZoom) / HIGH_ZOOM_FADE_SPAN_ZOOM));
+  return 1 - progress * progress * (3 - 2 * progress);
 }
 
 /**

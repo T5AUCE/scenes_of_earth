@@ -21,7 +21,6 @@ import { createImagePainter } from "./categorical-image";
 const CATEGORICAL_OPACITY = 0.8;
 const ROUNDING_STEP = 0.05;
 const SOFTNESS_STEP_CELLS = 0.05;
-const SMOOTH_NOTE = "Edges are drawn smoothly from per-cell classes. No data is added.";
 const IMAGE_EDGES_NOTE = "Edge options need WebGL drawing.";
 
 /** Draw static classes with GPU edges, retaining the image painter as an automatic fallback. */
@@ -80,7 +79,6 @@ class CategoricalView implements LayerView {
     this.options = [
       {
         label: "Smooth",
-        note: SMOOTH_NOTE,
         initial: true,
         set: (on: boolean) => {
           this.smooth = on;

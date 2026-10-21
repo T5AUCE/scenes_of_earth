@@ -34,7 +34,7 @@ const LINE_OPACITY_STOPS: readonly (readonly [number, number])[] = [
 const CASING_DASH_PATTERN = ISOTHERM_DASH_PATTERN.map(
   (length) => length / ISOTHERM_CASING_RATIO,
 );
-const CASING_OPACITY = 0.7;
+const CASING_OPACITY = 0.55;
 
 const LABEL_SIZE_PX = 10;
 const LABEL_SPACING_PX = 300;
@@ -53,6 +53,7 @@ export interface IsolineOverlay {
   /** The spacing of the lines in degrees, which follows the display range. */
   readonly interval: number;
   setValues(values: ArrayLike<number>, step: number): void;
+  setSmooth(smooth: boolean): void;
   setRange(range: [number, number] | null): void;
   setInk(ink: InkPaint): void;
   setVisible(visible: boolean): void;
@@ -74,7 +75,8 @@ export function createIsolineOverlay(
     lineId: `${sourceId}-lines`,
     labelId: `${sourceId}-labels`,
   };
-  const tracedSteps = new Map<number, Isoline[]>();
+  const tracedSteps = new Map<string, Isoline[]>();
+  let smooth = true;
 
   map.addSource(sourceId, { type: "geojson", data: EMPTY_LINES });
   addIsothermLayers(map, sourceId, ids, beforeId);
@@ -91,14 +93,18 @@ export function createIsolineOverlay(
     setValues(values, step) {
       const traced = cachedTrace(
         tracedSteps,
-        step,
-        () => traceIsolines(values, layer.grid.nx, layer.grid.ny, levels),
+        traceKey(step, smooth),
+        () => traceIsolines(values, layer.grid.nx, layer.grid.ny, levels, smooth),
       );
       const features = traced.map((line) => lineFeature(line, interval, layer.grid, shift));
       (map.getSource(sourceId) as GeoJSONSource).setData({
         type: "FeatureCollection",
         features,
       });
+    },
+
+    setSmooth(next) {
+      smooth = next;
     },
 
     setRange(range) {
@@ -241,20 +247,24 @@ function sameLevels(left: readonly number[], right: readonly number[]) {
     && left.every((level, index) => level === right[index]);
 }
 
+function traceKey(step: number, smooth: boolean): string {
+  return `${step}:${smooth ? "smooth" : "raw"}`;
+}
+
 function cachedTrace(
-  cache: Map<number, Isoline[]>,
-  step: number,
+  cache: Map<string, Isoline[]>,
+  key: string,
   trace: () => Isoline[],
 ): Isoline[] {
-  const traced = cache.get(step);
+  const traced = cache.get(key);
   if (traced) {
-    cache.delete(step);
-    cache.set(step, traced);
+    cache.delete(key);
+    cache.set(key, traced);
     return traced;
   }
 
   const next = trace();
-  cache.set(step, next);
+  cache.set(key, next);
   if (cache.size > CACHED_STEPS) cache.delete(cache.keys().next().value!);
   return next;
 }

@@ -8,6 +8,7 @@ import {
   MAX_RADIUS_SCALE,
   MIN_DOT_RADIUS_PX,
   POSITION_JITTER_RATIO,
+  VALUE_RADIUS_EXPONENT,
 } from "../render/lattice";
 import { CLASS_FIELD_VERTEX } from "./class-field-shaders";
 
@@ -23,12 +24,14 @@ import { CLASS_FIELD_VERTEX } from "./class-field-shaders";
  *
  * Each texel is one cell of the dot level, or a block of `uBlockCells` cells below level 0.
  * `uInk` colours the dots and hatch while `uHaloInk` colours the halo around dots.
- * `uSlots` is the number of dot sites along a cell side. A dot's area is proportional to its
- * position byte, so `uRadiusPx` is the radius at byte 253 before it is shrunk to fit its sub-cell.
+ * `uSlots` is the number of dot sites along a cell side. A dot's radius grows with its position
+ * byte to a power, so `uRadiusPx` is the radius at byte 253 before it is shrunk to fit its
+ * sub-cell.
  * While `uFading`, the level above fades into this one by `uFade`. Its sites are `uParentSlots`
  * along a texel while a dot there shrinks from `uParentRadiusPx`. Below level 1 the parent's own
  * bytes come from `uParentIds`, which has the size of `uIds`. `uDots` draws the dots and `uHatch`
- * the no-data hatch, whose screen-space lines are measured through `uPixelRatio`.
+ * the no-data hatch, whose screen-space lines are measured through `uPixelRatio`. `uDotOpacity`
+ * fades dots and halos out before float32 grid coordinates break them up at high zoom.
  */
 export const FIELD_MARKS_VERTEX = CLASS_FIELD_VERTEX;
 
@@ -60,6 +63,7 @@ uniform bool uHalo;
 uniform bool uDots;
 uniform bool uHatch;
 uniform float uPixelRatio;
+uniform float uDotOpacity;
 out vec4 fragColor;
 
 const uint HATCH = 254u;
@@ -68,6 +72,7 @@ const float SLOT_OFFSET_CELLS = 15.0 / 32.0;
 const float FINEST_SLOTS = ${glslFloat(FINEST_SLOTS)};
 const float POSITION_JITTER = ${glslFloat(POSITION_JITTER_RATIO)};
 const float AREA_JITTER = ${glslFloat(AREA_JITTER_RATIO)};
+const float VALUE_RADIUS_EXPONENT = ${glslFloat(VALUE_RADIUS_EXPONENT)};
 const float MAX_RADIUS_SCALE = ${glslFloat(MAX_RADIUS_SCALE)};
 const float MIN_DOT_RADIUS_PX = ${glslFloat(MIN_DOT_RADIUS_PX)};
 const float NO_VALUE = -1.0;
@@ -148,7 +153,7 @@ float containedRadiusPx(mat2 pixelsPerGrid, float slots, float radiusPx) {
 float dotRadiusPx(float value, float maxRadiusPx, float areaNoise) {
   if (value == NO_VALUE) return 0.0;
 
-  return maxRadiusPx * sqrt(value * (1.0 + AREA_JITTER * areaNoise));
+  return maxRadiusPx * pow(value, VALUE_RADIUS_EXPONENT) * sqrt(1.0 + AREA_JITTER * areaNoise);
 }
 
 bool isInGrid(vec2 owner) {
@@ -258,14 +263,27 @@ void main() {
       float distancePx = length(pixelsPerGrid * (position - center));
       float wasRadiusPx = containedRadiusPx(pixelsPerGrid, uParentSlots, uParentRadiusPx);
       float willRadiusPx = containedRadiusPx(pixelsPerGrid, uSlots, uRadiusPx);
-      float radiusPx = mix(
-        dotRadiusPx(wasValue, wasRadiusPx, areaNoise(parentSlot, uParentSlots)),
-        dotRadiusPx(willValue, willRadiusPx, areaNoise(parentSlot * uSlots / uParentSlots, uSlots)),
-        uFade
+      float wasDotRadiusPx = dotRadiusPx(
+        wasValue,
+        wasRadiusPx,
+        areaNoise(parentSlot, uParentSlots)
       );
+      float willDotRadiusPx = dotRadiusPx(
+        willValue,
+        willRadiusPx,
+        areaNoise(parentSlot * uSlots / uParentSlots, uSlots)
+      );
+      // Areas mix so a density change keeps the ink of a level that fades.
+      float radiusPx = sqrt(mix(
+        wasDotRadiusPx * wasDotRadiusPx,
+        willDotRadiusPx * willDotRadiusPx,
+        uFade
+      ));
       mark = overlay(mark, markAt(distancePx, radiusPx, 1.0));
     }
   }
+
+  mark = Mark(mark.dotAlpha * uDotOpacity, mark.haloAlpha * uDotOpacity);
 
   float alpha = mark.dotAlpha + mark.haloAlpha * (1.0 - mark.dotAlpha);
   vec3 color = uInk * mark.dotAlpha + uHaloInk * mark.haloAlpha * (1.0 - mark.dotAlpha);

@@ -3,12 +3,15 @@ import { arrayDoc, cacheByIndex, decode, readArray, readMask, type Store } from 
 import {
   defaultInk,
   defaultPalette as layerDefaultPalette,
+  densityControl,
   rangeDecimals,
+  storeDensity,
 } from "../display-state";
 import { makeHtmlElement } from "../html";
 import { createFieldMarksLayer } from "../gpu/field-marks-layer";
 import { keepThroughContextLoss } from "../gpu/tiled-layer";
 import {
+  createZoomWatch,
   dotLegend,
   gradientLegend,
   hatchLegend,
@@ -16,7 +19,12 @@ import {
 } from "../legend";
 import { addImageLayer, maxTextureSize, removeLayerAndSource, setImage } from "../map";
 import { lut, paintColormap, stopsForRange } from "../render/colormap";
-import { hasHatchedCells, positionBytes } from "../render/lattice";
+import {
+  DEFAULT_DENSITY_RATIO,
+  hasHatchedCells,
+  positionBytes,
+  quantiseDensity,
+} from "../render/lattice";
 import { sampleTable } from "../render/mercator";
 import {
   FIELD_PALETTES,
@@ -26,7 +34,15 @@ import {
   rgbCss,
 } from "../render/palettes";
 import { latestOnly, stepAt } from "../timeline";
-import type { InkMenu, LayerContext, LayerDoc, LayerMenu, LayerView, TimeDoc } from "../types";
+import type {
+  InkMenu,
+  LayerContext,
+  LayerControl,
+  LayerDoc,
+  LayerMenu,
+  LayerView,
+  TimeDoc,
+} from "../types";
 import { type Draw, layerDraws } from "./allocate";
 import { createIsolineOverlay, type IsolineOverlay } from "./isolines";
 import { FALLBACK_PALETTE_NOTE } from "./layer-menu";
@@ -64,9 +80,11 @@ class FieldView implements LayerView {
   private readonly mask: Promise<ArrayLike<number> | null> | null;
   private readonly readStep;
   private readonly drawLatestStep;
+  private readonly dotsZoomWatch;
   private palette: string;
   // Only a layer with dots or isotherms draws its ink, so the empty default is never painted.
   private ink: string;
+  private density: number;
   private range: [number, number] | null;
   private colors;
   private stops: number[];
@@ -90,13 +108,14 @@ class FieldView implements LayerView {
     this.fittedStops = fittedStops;
     this.palette = display?.palette ?? defaultPalette;
     this.ink = display?.ink ?? defaultInk(layer) ?? "";
+    this.density = display?.density ?? DEFAULT_DENSITY_RATIO;
     this.range = display?.range ?? null;
     this.colors = lut(gradientOf(this.palette));
     this.stops = stopsForRange(this.fittedStops, this.range);
 
     addImageLayer(map, this.id, layer.grid.bbox, shift, slots.fill, {
       "raster-opacity": 0,
-      "raster-resampling": "nearest",
+      "raster-resampling": "linear",
     });
 
     const fallback = layerDraws(layer).fallback;
@@ -117,6 +136,7 @@ class FieldView implements LayerView {
     this.readStep = fieldReader(layer, store);
     this.drawLatestStep = latestOnly((step: number) => this.drawStep(step));
 
+    this.dotsZoomWatch = createZoomWatch(map, () => this.showLegend());
     this.showLegend();
     this.menu = this.createMenu();
     this.parts = [
@@ -128,14 +148,20 @@ class FieldView implements LayerView {
           ...(this.marks ? [this.marksId] : []),
           ...(this.isolines?.layerIds ?? []),
         ],
+        controls: this.marks ? [this.createDensityControl()] : undefined,
       },
     ];
     this.options = [
       {
         label: "Smooth",
         note: SMOOTH_NOTE,
+        initial: true,
         set: (on: boolean) => {
           map.setPaintProperty(this.id, "raster-resampling", on ? "linear" : "nearest");
+          this.isolines?.setSmooth(on);
+          if (this.draw === "isolines" && this.shownStep >= 0) {
+            this.drawLatestStep(this.shownStep);
+          }
         },
       },
     ];
@@ -151,6 +177,7 @@ class FieldView implements LayerView {
       onFail: (error) => report(error),
     });
     marks.setHalo(true);
+    marks.setDensity(this.density);
     map.addLayer(marks.layer, slots.marks);
     return marks;
   }
@@ -162,15 +189,43 @@ class FieldView implements LayerView {
   }
 
   private legendOf() {
-    const { layer } = this.context;
+    const { layer, map } = this.context;
     if (this.draw === "dots") {
-      return dotLegend(this.stops, layer.units, layer.grid.res, inkPaint(this.ink));
+      return dotLegend(
+        this.stops,
+        layer.units,
+        layer.grid,
+        map.getZoom(),
+        this.density,
+        inkPaint(this.ink),
+      );
     }
     if (this.draw === "isolines") {
       return isothermLegend(this.isolines!.interval, inkPaint(this.ink));
     }
 
     return gradientLegend(this.colors, this.stops, layer.units, this.range !== null);
+  }
+
+  private createDensityControl(): LayerControl {
+    const view = this;
+
+    return {
+      ...densityControl(() => view.density, (density) => this.setDensity(density)),
+      get isShown() {
+        return view.draw === "dots";
+      },
+      updates: this.menuUpdates,
+    };
+  }
+
+  private setDensity(density: number) {
+    this.density = quantiseDensity(density);
+    this.marks?.setDensity(this.density);
+    this.showLegend();
+    const stored = this.density === DEFAULT_DENSITY_RATIO ? null : this.density;
+    storeDensity(this.context.layer.id, stored);
+    this.context.changeDisplay({ density: stored ?? undefined });
   }
 
   private createMenu(): LayerMenu {
@@ -185,6 +240,13 @@ class FieldView implements LayerView {
       updates: this.menuUpdates,
       get paletteNote() {
         return view.draw === "colour" ? undefined : FALLBACK_PALETTE_NOTE;
+      },
+      resetDensity: () => {
+        view.setDensity(DEFAULT_DENSITY_RATIO);
+        view.menuUpdates.dispatchEvent(new Event("change"));
+      },
+      get isDensityDefault() {
+        return view.density === DEFAULT_DENSITY_RATIO;
       },
       palettes: FIELD_PALETTES.map(({ name, label }) => ({
         name,
@@ -256,6 +318,7 @@ class FieldView implements LayerView {
 
   show(next: Draw | null) {
     this.draw = next;
+    this.dotsZoomWatch.setActive(next === "dots");
     this.hideStep();
     this.showLegend();
     this.menuUpdates.dispatchEvent(new Event("change"));
@@ -331,6 +394,7 @@ class FieldView implements LayerView {
 
   destroy() {
     this.alive = false;
+    this.dotsZoomWatch.setActive(false);
     this.stopKeepingMarks?.();
     removeLayerAndSource(this.context.map, this.id);
     removeLayerAndSource(this.context.map, this.marksId);

@@ -26,7 +26,7 @@ test("a scene link reads the time and ignores a malformed one", () => {
     id,
     time: "2026-03",
     panel: null,
-    display: { pal: "", range: "", off: "", colour: "", ink: "" },
+    display: { pal: "", range: "", off: "", colour: "", ink: "", dens: "" },
   });
 
   const timeOf = (label: string) =>
@@ -72,6 +72,7 @@ test("display params round trip through the address", () => {
     off: "terrain.contours",
     colour: "",
     ink: "",
+    dens: "",
   });
 });
 

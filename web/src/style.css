@@ -249,6 +249,10 @@ body.scene-mode #panel {
   width: 100%;
 }
 
+#scene-column .card .part-controls input[type="range"][hidden] {
+  display: none;
+}
+
 #scene-column .card .edit-button {
   margin-left: auto;
   padding: 0 8px;
@@ -678,7 +682,7 @@ body.scene-mode #panel {
 
 .legend-dot-row {
   display: grid;
-  grid-template-columns: repeat(5, 34px);
+  grid-template-columns: repeat(5, 50px);
   margin: 2px 0;
 }
 

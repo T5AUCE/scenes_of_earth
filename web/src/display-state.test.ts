@@ -6,10 +6,12 @@ import { BLEND } from "./layers/allocate.ts";
 import { inkPaint } from "./render/palettes.ts";
 import type { DisplayTokens, LayerDoc } from "./types.ts";
 
-const stateUrl = new URL("./display-state.ts", import.meta.url).href;
+const resolvedParents = ["./display-state.ts", "./render/lattice.ts"].map(
+  (path) => new URL(path, import.meta.url).href,
+);
 const hooks = registerHooks({
   resolve(specifier, context, next) {
-    if (context.parentURL !== stateUrl || !specifier.startsWith("./")) {
+    if (!resolvedParents.includes(context.parentURL ?? "") || !specifier.startsWith("./")) {
       return next(specifier, context);
     }
 
@@ -19,11 +21,13 @@ const hooks = registerHooks({
 const {
   applyColourAction,
   DEFAULT_EDGES,
+  densityControl,
   formatDisplayParams,
   loadStoredInks,
   loadStoredPalettes,
   loadStoredEdges,
   loadStoredPick,
+  loadStoredDensities,
   NO_TOKENS,
   rangeDecimals,
   recordMenuChange,
@@ -34,7 +38,14 @@ const {
   storePalette,
   storeEdges,
   storePick,
-} = await import("./display-state.ts").finally(() => hooks.deregister());
+  storeDensity,
+} = await import("./display-state.ts");
+const {
+  DENSITY_STEP_LOG2,
+  MAX_DENSITY_RATIO,
+  MIN_DENSITY_RATIO,
+  quantiseDensity,
+} = await import("./render/lattice.ts").finally(() => hooks.deregister());
 
 const LAYERS = [
   {
@@ -87,7 +98,14 @@ test("opening a link saves nothing", () => {
   const writes: string[] = [];
   useStorage({ setItem: (key: string) => writes.push(key) });
 
-  const tokens = { pal: "chirps_monthly:batlow", range: "", off: "terrain", colour: "", ink: "" };
+  const tokens = {
+    pal: "chirps_monthly:batlow",
+    range: "",
+    off: "terrain",
+    colour: "",
+    ink: "",
+    dens: "",
+  };
   resolveDisplay(LAYERS, tokens, {});
 
   assert.deepEqual(writes, []);
@@ -189,7 +207,10 @@ test("the effective owner is written to the link", () => {
   const picked = applyColourAction(state, { kind: "pick", unit: "chirps_monthly" }, COLOUR_LAYERS);
   const display = { ...auto.display, colour: picked.pick, off: new Set(picked.off) };
 
-  assert.ok(formatDisplayParams(display, COLOUR_LAYERS).endsWith("&colour=chirps_monthly"));
+  assert.ok(
+    formatDisplayParams(display, COLOUR_LAYERS)
+      .endsWith("&colour=chirps_monthly&dens=chirps_monthly:1"),
+  );
 
   const single = resolveDisplay([TEMPERATURE], NO_TOKENS, {});
   assert.equal(formatDisplayParams(single.display, [TEMPERATURE]).includes("colour="), false);
@@ -201,12 +222,14 @@ test("a blend link drops the halves from off and restores them on open", () => {
 
   assert.equal(display.colour, BLEND);
   assert.deepEqual([...display.off], ["chirps_monthly", "era5land_temperature"]);
-  assert.ok(text.endsWith("&colour=blend"));
+  assert.ok(text.endsWith("&colour=blend&dens=chirps_monthly:1"));
   assert.equal(text.includes("off="), false);
 
   const pair = [LAYERS[0], TEMPERATURE];
   const pairOnly = resolveDisplay(pair, { ...NO_TOKENS, colour: BLEND }, {});
-  assert.ok(formatDisplayParams(pairOnly.display, pair).endsWith("&colour=blend"));
+  assert.ok(
+    formatDisplayParams(pairOnly.display, pair).endsWith("&colour=blend&dens=chirps_monthly:1"),
+  );
 });
 
 test("a blend link without a pair is dropped with the note", () => {
@@ -270,6 +293,7 @@ test("unknown layers, palettes and reversed ranges are dropped", () => {
     off: "chirps_monthly,terrain.nothing",
     colour: "",
     ink: "",
+    dens: "",
   };
   const { display, dropped } = resolveDisplay(LAYERS, tokens, {});
 
@@ -296,6 +320,7 @@ test("the last entry for a layer wins and ranges are rounded to the data's preci
     off: "",
     colour: "",
     ink: "",
+    dens: "",
   };
   const { display } = resolveDisplay(LAYERS, tokens, {});
 
@@ -311,6 +336,7 @@ test("every layer with a menu names its palette but ranges and off parts only wh
       off: "",
       colour: "",
       ink: "",
+      dens: "",
     },
     {},
   );
@@ -318,7 +344,7 @@ test("every layer with a menu names its palette but ranges and off parts only wh
   assert.equal(
     formatDisplayParams(display, LAYERS),
     "&pal=chirps_monthly:ink-blue,esa_worldcover:painted,terrain:brown"
-      + "&colour=chirps_monthly",
+      + "&colour=chirps_monthly&dens=chirps_monthly:1",
   );
 });
 
@@ -329,6 +355,7 @@ test("palettes, ranges and off parts round trip through the link text", () => {
     off: "terrain.contours,esa_worldcover",
     colour: "",
     ink: "",
+    dens: "",
   };
   const { display } = resolveDisplay(LAYERS, tokens, {});
   const text = formatDisplayParams(display, LAYERS);
@@ -337,7 +364,7 @@ test("palettes, ranges and off parts round trip through the link text", () => {
     text,
     "&pal=chirps_monthly:custom-1a2b3c-88cc44,esa_worldcover:esa,terrain:grey"
       + "&range=chirps_monthly:0:250&off=esa_worldcover,terrain.contours"
-      + "&colour=chirps_monthly",
+      + "&colour=chirps_monthly&dens=chirps_monthly:1",
   );
 });
 
@@ -379,7 +406,10 @@ test("a menu range change keeps the colour pick", () => {
 
   assert.equal(display.colour, "chirps_monthly");
   assert.deepEqual(display.layers.chirps_monthly, { range: [0, 90] });
-  assert.ok(formatDisplayParams(display, COLOUR_LAYERS).endsWith("&colour=chirps_monthly"));
+  assert.ok(
+    formatDisplayParams(display, COLOUR_LAYERS)
+      .endsWith("&colour=chirps_monthly&dens=chirps_monthly:1"),
+  );
 });
 
 test("choosing a palette remembers it and choosing the default forgets it", () => {
@@ -632,6 +662,204 @@ test("a dark ink gets a light halo and a light ink a dark one", () => {
     assert.deepEqual(inkPaint(ink).halo, dark, ink);
   }
   assert.deepEqual(inkPaint("navy").ink, [26, 54, 88]);
+});
+
+test("density links carry the normalised density including the explicit default", () => {
+  const tokens = { ...NO_TOKENS, dens: "chirps_monthly:1.5" };
+  const { display, dropped } = resolveDisplay(LAYERS, tokens, {});
+
+  assert.equal(dropped, false);
+  assert.deepEqual(display.layers.chirps_monthly, { density: MAX_DENSITY_RATIO });
+  assert.ok(
+    formatDisplayParams(display, LAYERS).includes(`&dens=chirps_monthly:${MAX_DENSITY_RATIO}`),
+  );
+
+  const defaults = resolveDisplay(LAYERS, { ...NO_TOKENS, dens: "chirps_monthly:1" }, {});
+  assert.equal(defaults.dropped, false);
+  assert.deepEqual(defaults.display.layers, {});
+  assert.ok(formatDisplayParams(defaults.display, LAYERS).includes("&dens=chirps_monthly:1"));
+});
+
+test("default and reset density links beat receiver storage without saving", () => {
+  const items = useStorage();
+  const oldPreference = JSON.stringify({ chirps_monthly: 2 });
+  items.set("soe.density.v1", oldPreference);
+  const stored = loadStoredDensities();
+  const defaultSender = resolveDisplay(COLOUR_LAYERS, NO_TOKENS, {}).display;
+  const resetSender = resolveDisplay(
+    COLOUR_LAYERS,
+    { ...NO_TOKENS, dens: "chirps_monthly:2" },
+    {},
+  ).display;
+  setLayerDisplay(resetSender, "chirps_monthly", { density: undefined });
+
+  for (const sender of [defaultSender, resetSender]) {
+    const link = new URLSearchParams(formatDisplayParams(sender, COLOUR_LAYERS));
+    const receiver = resolveDisplay(
+      COLOUR_LAYERS,
+      { ...NO_TOKENS, dens: link.get("dens")! },
+      {},
+      null,
+      {},
+      stored,
+    );
+
+    assert.deepEqual(receiver.display.layers, {});
+    assert.equal(receiver.dropped, false);
+    assert.equal(link.get("dens"), "chirps_monthly:1");
+    assert.deepEqual(loadStoredDensities(), stored);
+    assert.equal(items.get("soe.density.v1"), oldPreference);
+    assert.equal(items.size, 1);
+    assert.doesNotMatch(link.get("dens")!, /temperature|terrain|worldcover/);
+  }
+});
+
+test("a density outside the slider's range is clamped to its ends", () => {
+  const densityOf = (text: string) =>
+    resolveDisplay(LAYERS, { ...NO_TOKENS, dens: `chirps_monthly:${text}` }, {})
+      .display.layers.chirps_monthly?.density;
+
+  assert.equal(densityOf("5"), MAX_DENSITY_RATIO);
+  assert.equal(densityOf("0.1"), MIN_DENSITY_RATIO);
+  assert.equal(densityOf("-3"), MIN_DENSITY_RATIO);
+  assert.equal(densityOf("1.2345"), 2 ** 0.25);
+});
+
+test("a linked density reaches the control on the slider's step", () => {
+  const { display } = resolveDisplay(
+    LAYERS,
+    { ...NO_TOKENS, dens: "chirps_monthly:1.23" },
+    {},
+  );
+  const calls: number[] = [];
+  const control = densityControl(
+    () => display.layers.chirps_monthly!.density!,
+    (density) => calls.push(density),
+  );
+
+  assert.equal(control.value, 0.25);
+  assert.equal((control.value - control.min) / control.step, 14);
+  control.set(control.value);
+  assert.deepEqual(calls, [2 ** 0.25]);
+});
+
+test("the logarithmic control has sixteen equal ratio steps and the default on a step", () => {
+  let density = 1;
+  const control = densityControl(() => density, (next) => {
+    density = next;
+  });
+  const steps = (control.max - control.min) / control.step;
+
+  assert.equal(steps, 16);
+  assert.equal(control.value, 0);
+  assert.equal((control.value - control.min) / control.step, 12);
+  for (let step = 0; step <= steps; step++) {
+    control.set(control.min + step * control.step);
+    assert.equal(density, 2 ** (control.min + step * DENSITY_STEP_LOG2));
+    assert.equal(control.value, control.min + step * control.step);
+  }
+  control.set(-20);
+  assert.equal(density, MIN_DENSITY_RATIO);
+  control.set(20);
+  assert.equal(density, MAX_DENSITY_RATIO);
+});
+
+test("densities are remembered by layer, with the link winning for the visit", () => {
+  const items = useStorage();
+  storeDensity("chirps_monthly", 1.5);
+  storeDensity("era5land_temperature", 0.75);
+
+  assert.deepEqual(loadStoredDensities(), {
+    chirps_monthly: MAX_DENSITY_RATIO,
+    era5land_temperature: quantiseDensity(0.75),
+  });
+
+  const remembered = resolveDisplay(LAYERS, NO_TOKENS, {}, null, {}, loadStoredDensities());
+  const linked = resolveDisplay(
+    LAYERS,
+    { ...NO_TOKENS, dens: "chirps_monthly:2" },
+    {},
+    null,
+    {},
+    loadStoredDensities(),
+  );
+
+  assert.deepEqual(remembered.display.layers.chirps_monthly, { density: MAX_DENSITY_RATIO });
+  assert.deepEqual(linked.display.layers.chirps_monthly, { density: MAX_DENSITY_RATIO });
+  assert.equal(items.size, 1);
+});
+
+test("old stored densities clamp while invalid or blocked storage falls back to defaults", () => {
+  const items = useStorage();
+  items.set("soe.density.v1", JSON.stringify({
+    chirps_monthly: 3,
+    era5land_temperature: "1.5",
+    terrain: -1,
+  }));
+  assert.deepEqual(loadStoredDensities(), {
+    chirps_monthly: MAX_DENSITY_RATIO,
+    terrain: MIN_DENSITY_RATIO,
+  });
+
+  items.set("soe.density.v1", JSON.stringify({ chirps_monthly: 1.23 }));
+  assert.deepEqual(loadStoredDensities(), { chirps_monthly: 2 ** 0.25 });
+
+  useStorage({
+    getItem: () => {
+      throw new Error("blocked");
+    },
+    setItem: () => {
+      throw new Error("blocked");
+    },
+  });
+  assert.deepEqual(loadStoredDensities(), {});
+  assert.doesNotThrow(() => storeDensity("chirps_monthly", 1.5));
+});
+
+test("forgetting a stored density removes it", () => {
+  useStorage();
+  storeDensity("chirps_monthly", 1.5);
+  storeDensity("chirps_monthly", null);
+
+  assert.deepEqual(loadStoredDensities(), {});
+});
+
+test("invalid densities and layers without dots fall back to the default", () => {
+  const tokens = {
+    ...NO_TOKENS,
+    dens: "chirps_monthly:abc,chirps_monthly:,chirps_monthly:Infinity,chirps_monthly:1:2,"
+      + "nowhere:1.5,terrain:1.5,esa_worldcover:1.5,x",
+  };
+  const { display, dropped } = resolveDisplay(LAYERS, tokens, {});
+  const noDots = resolveDisplay(
+    COLOUR_LAYERS,
+    { ...NO_TOKENS, dens: "era5land_temperature:1.5" },
+    {},
+  );
+
+  assert.equal(dropped, true);
+  assert.deepEqual(display.layers, {});
+  assert.equal(noDots.dropped, true);
+  assert.deepEqual(noDots.display.layers, {});
+});
+
+test("the last density for a layer wins, even when it is the default", () => {
+  const tokens = { ...NO_TOKENS, dens: "chirps_monthly:1.5,chirps_monthly:1" };
+
+  assert.deepEqual(resolveDisplay(LAYERS, tokens, {}).display.layers, {});
+});
+
+test("a menu change keeps the layer's density", () => {
+  useStorage();
+  const { display } = resolveDisplay(LAYERS, { ...NO_TOKENS, dens: "chirps_monthly:1.5" }, {});
+  const menu = { palette: "cividis", defaultPalette: "ink-blue" };
+
+  recordMenuChange(display, "chirps_monthly", menu, "palette");
+
+  assert.deepEqual(display.layers.chirps_monthly, {
+    palette: "cividis",
+    density: MAX_DENSITY_RATIO,
+  });
 });
 
 function useStorage(overrides: object = {}) {

@@ -6,12 +6,14 @@ import { openStore, type Store } from "./data";
 import {
   DROPPED_NOTE,
   formatDisplayParams,
+  loadStoredDensities,
   loadStoredInks,
   loadStoredPalettes,
   loadStoredPick,
   NO_TOKENS,
   resolveDisplay,
   type SceneDisplay,
+  setLayerDisplay,
 } from "./display-state";
 import { makeHtmlElement } from "./html";
 import { blendPair } from "./layers/allocate";
@@ -91,6 +93,7 @@ export function mountScene(
     loadStoredPalettes(),
     loadStoredPick(),
     loadStoredInks(),
+    loadStoredDensities(),
   );
   if (dropped) addNote(DROPPED_NOTE);
   const changed = () => {
@@ -104,7 +107,7 @@ export function mountScene(
     const shift = worldShift(scene.area.bbox);
     addOutline(map, scene, shift, addNote, () => isMounted);
     addSlotAnchors(map);
-    mounted.push(...mountLayerViews(map, scene.layers, store, shift, addNote, display));
+    mounted.push(...mountLayerViews(map, scene.layers, store, shift, addNote, display, changed));
     views.push(...mounted.map(({ view }) => view));
 
     blend = mountBlend(map, mounted, store, shift, addNote);
@@ -186,6 +189,7 @@ function mountLayerViews(
   shift: number,
   addNote: AddNote,
   display: SceneDisplay,
+  onDisplayChange: () => void,
 ): MountedLayer[] {
   const layersWithKind = layers.map((layer) => ({
     layer,
@@ -213,6 +217,10 @@ function mountLayerViews(
         slots: SLOTS,
         beforeId: SLOTS.lines,
         display: display.layers[layer.id],
+        changeDisplay: (change) => {
+          setLayerDisplay(display, layer.id, { ...display.layers[layer.id], ...change });
+          onDisplayChange();
+        },
         report,
       });
       view.ready?.catch(report);
