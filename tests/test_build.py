@@ -12,7 +12,7 @@ from rasterio.transform import Affine
 from shapely.geometry import Polygon, box
 
 from soe.areas import Area, AreaError
-from soe.build import SourceChanged, build_scene, encode_values
+from soe.build import SourceChanged, _fill_outside, build_scene, encode_values
 from soe.bundle import JsonObject, validate
 from soe.plan import plan
 from soe.sources import (
@@ -201,8 +201,17 @@ def test_synthetic_build_across_180(tmp_path):
 
     for name in ("chirps_monthly", "terrain"):
         longitude = root[name]["lon"][:]
+        mask = root[name]["mask"][:]
 
         assert np.all(np.diff(longitude) > 0) and longitude[-1] > 180
+        for side in (longitude < 180, longitude > 180):
+            assert (mask[:, side] == 1).any()
+            assert (mask[:, side] == 2).any()
+
+    rain_mask = root["chirps_monthly/mask"][...]
+    precip = root["chirps_monthly/precip"][...]
+
+    assert (precip[:, rain_mask == 2] != RAIN.roles["value"].fill).all()
 
     bbox = doc["area"]["bbox"]
     west, east = bbox[0], bbox[2]
@@ -248,7 +257,7 @@ def test_synthetic_build_validates_and_opens(tmp_path):
     for layer in doc["layers"]:
         mask = root[layer["mask"]["path"]][...]
 
-        assert mask.sum() == layer["mask"]["cells_inside"] > 0
+        assert (mask == 1).sum() == layer["mask"]["cells_inside"] > 0
 
     mask = root["chirps_monthly/mask"][...]
 
@@ -295,10 +304,10 @@ def test_build_with_aggregation_factor_2(tmp_path):
     assert validate(doc) == []
     assert doc["layers"][0]["grid"] == {
         "crs": "EPSG:4326",
-        "bbox": [30, -20, 60, 10],
+        "bbox": [29.9, -20.1, 60.1, 10.1],
         "res": 0.1,
-        "nx": 300,
-        "ny": 300,
+        "nx": 302,
+        "ny": 302,
         "aggregation": 2,
     }
     assert any("averaged" in note for note in doc["notices"]["limits"])
@@ -306,7 +315,7 @@ def test_build_with_aggregation_factor_2(tmp_path):
     store = zarr.open_group(str(tmp_path / HASH_A / "data.zarr"), mode="r")
     precip = store["chirps_monthly/precip"]
 
-    assert precip.shape == (72, 300, 300) and precip[0][150, 150] != 65535
+    assert precip.shape == (72, 302, 302) and precip[0][150, 150] != 65535
 
 
 def test_series_at_different_factors_keep_grid_and_array_shapes_consistent(tmp_path):
@@ -397,8 +406,8 @@ def test_rain_is_uint16_sharded_and_round_trips(tmp_path):
     precip = root["chirps_monthly/precip"]
     rain = next(layer for layer in doc["layers"] if layer["id"] == "chirps_monthly")
 
-    assert precip.dtype == "uint16" and precip.chunks == (1, 20, 20)
-    assert precip.shards == (12, 20, 20)
+    assert precip.dtype == "uint16" and precip.chunks == (1, 22, 22)
+    assert precip.shards == (12, 22, 22)
     assert rain["arrays"]["value"] == {
         "path": "chirps_monthly/precip",
         "dtype": "uint16",
@@ -414,9 +423,11 @@ def test_rain_is_uint16_sharded_and_round_trips(tmp_path):
     bbox = rain["grid"]["bbox"]
     steps = rain["time"]["values"]
     expected = np.stack([RAIN.read_step_filled(step, bbox).values for step in steps])
+    mask = root["chirps_monthly/mask"][...]
+    expected[:, mask == 0] = np.nan
 
     assert np.isnan(RAIN.read_step(steps[0], bbox)).any()
-    assert not np.isnan(expected).any() and not (raw == 65535).any()
+    assert np.array_equal(raw == 65535, np.isnan(expected))
     assert np.nanmax(np.abs(decoded - expected)) <= 0.051
 
 
@@ -424,7 +435,7 @@ def test_static_layer_has_no_time_and_one_chunk(tmp_path):
     doc, root = build_nairobi(tmp_path)
     terrain = next(layer for layer in doc["layers"] if layer["id"] == "terrain")
 
-    assert terrain["time"] is None and terrain["grid"]["res"] == pytest.approx(0.05 / 102, abs=1e-8)
+    assert terrain["time"] is None and terrain["grid"]["res"] == pytest.approx(0.05 / 93, abs=1e-8)
     assert "aggregation" not in terrain["grid"]
     assert terrain["arrays"] == {} and terrain["tiles"]["url"]
     assert "time" not in dict(root["terrain"].members())
@@ -448,14 +459,18 @@ def test_static_dataset_with_its_own_role_is_written_without_a_special_case(tmp_
     build_scene(HASH_A, Area(NAIROBI), "2015-01", "2015-02", [dataset], "Test", tmp_path)
 
     doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
-    array = zarr.open_group(tmp_path / HASH_A / "data.zarr", mode="r")["landcover/landcover"]
+    root = zarr.open_group(tmp_path / HASH_A / "data.zarr", mode="r")
+    array = root["landcover/landcover"]
+    mask = root["landcover/mask"][...]
 
     assert doc["layers"][0]["arrays"]["classes"]["path"] == "landcover/landcover"
     assert doc["layers"][0]["arrays"]["classes"]["fill"] == 7
     assert array.dtype == "uint8" and array.attrs["long_name"] == "Land cover class"
     assert (array.attrs["scale_factor"], array.attrs["add_offset"]) == (2, 1)
     assert array.metadata.fill_value == 7
-    assert (array[:] == 40).all()
+    assert (array[:][mask != 0] == 40).all()
+    assert (array[:][mask == 0] == 7).all()
+    assert (mask == 2).any()
 
 
 def land_cover_dataset(classes: Role) -> StaticDataset:
@@ -490,6 +505,14 @@ def land_cover_dataset(classes: Role) -> StaticDataset:
     )
 
 
+def test_static_mask_keeps_finite_ring_values_but_fills_genuine_no_data():
+    data = np.array([10, 20, np.nan, 30], "float32")
+    mask = np.array([1, 2, 2, 0], "uint8")
+    spec = Role("value", "float32", fill=-9999)
+
+    assert _fill_outside(data, mask, spec).tolist() == [10, 20, -9999, -9999]
+
+
 def test_static_role_without_a_fill_value_fails_the_build_without_a_bundle(tmp_path):
     dataset = land_cover_dataset(Role("landcover", "uint8"))
 
@@ -515,7 +538,7 @@ def build_triangle(tmp_path: Path) -> tuple[dict, zarr.Group]:
     return doc, zarr.open_group(out / "data.zarr", mode="r")
 
 
-def test_cells_outside_the_area_hold_the_fill_value_in_every_layer(tmp_path):
+def test_cells_outside_the_stored_area_and_ring_hold_fill_in_every_layer(tmp_path):
     doc, root = build_triangle(tmp_path)
     arrays = {
         (layer["id"], role): (layer, array_doc)
@@ -527,8 +550,9 @@ def test_cells_outside_the_area_hold_the_fill_value_in_every_layer(tmp_path):
     terrain = next(layer for layer in doc["layers"] if layer["id"] == "terrain")
     assert terrain["arrays"] == {}
 
-    for layer, array_doc in arrays.values():
-        outside = root[layer["mask"]["path"]][...] == 0
+    for (_, role), (layer, array_doc) in arrays.items():
+        mask = root[layer["mask"]["path"]][...]
+        outside = mask != 1 if role == "source" else mask == 0
         stored = root[array_doc["path"]][...]
 
         assert outside.any() and (~outside).any()
@@ -546,22 +570,24 @@ def test_finite_touched_cell_survives_masking_while_source_no_data_stays_missing
     mask = root["chirps_monthly/mask"][...]
     precip = root["chirps_monthly/precip"][0]
     fill = layer["arrays"]["value"]["fill"]
-    height, width = precip.shape
-    valid_cells = height * width - 1
-    ordinary_cells = valid_cells - height
-    expected_mean = (50 * height + 10 * ordinary_cells) / valid_cells
+    area_height = precip.shape[0] - 2
+    valid_cells = int((mask == 1).sum()) - 1
+    ordinary_cells = valid_cells - area_height
+    expected_mean = (50 * area_height + 10 * ordinary_cells) / valid_cells
 
-    assert layer["mask"]["rule"] == "touched by the area"
-    assert layer["mask"]["cells_inside"] == mask.sum()
-    assert root["chirps_monthly/mask"].attrs["long_name"] == "1 = cell touched by the area"
-    assert mask[:, 0].all() and mask[5, 5] == 1
-    assert (precip[:, 0] * layer["arrays"]["value"]["scale_factor"] == 50).all()
+    assert layer["mask"]["rule"] == "1 = area cell, 2 = one-cell ring of real values"
+    assert layer["mask"]["cells_inside"] == (mask == 1).sum()
+    assert root["chirps_monthly/mask"].attrs["long_name"] == (
+        "0 = outside, 1 = area cell, 2 = one-cell ring of real values"
+    )
+    assert (mask[1:-1, 0] == 2).all() and mask[5, 5] == 1
+    assert (precip[1:-1, 1] * layer["arrays"]["value"]["scale_factor"] == 50).all()
     assert precip[5, 5] == fill
     assert layer["stats"]["mean"] == pytest.approx(expected_mean, abs=0.01)
 
 
 def _rain_with_marked_boundary(missing_cell: bool = False) -> SeriesDataset:
-    """Return rain with a distinct western edge and an optional missing interior cell."""
+    """Return rain with distinct western area and ring values plus an optional interior gap."""
 
     class MarkedRain(type(RAIN)):
         def read_step(
@@ -575,7 +601,8 @@ def _rain_with_marked_boundary(missing_cell: bool = False) -> SeriesDataset:
             height = round((bbox[3] - bbox[1]) / res)
             width = round((bbox[2] - bbox[0]) / res)
             raster = np.full((height, width), 10, "float32")
-            raster[:, 0] = 50
+            raster[:, 0] = 500
+            raster[:, 1] = 50
             if missing_cell:
                 raster[5, 5] = np.nan
             return raster
@@ -600,6 +627,77 @@ def test_area_statistics_follow_the_touched_cells(tmp_path):
 
     assert doc["layers"][0]["stats"]["max"] == 50
     assert doc["layers"][0]["stats"]["mean"] == pytest.approx(expected_mean, abs=0.01)
+
+
+def test_real_ring_values_do_not_change_area_statistics_stops_or_counts(tmp_path):
+    marked = _rain_with_marked_boundary()
+    area = Area(box(36.54, -1.46, 37.46, -0.54), BOUNDARY)
+
+    doc, root = build_rain(tmp_path, marked, area)
+    layer = doc["layers"][0]
+    mask = root["chirps_monthly/mask"][...]
+    raw = root["chirps_monthly/precip"][...]
+    decoded = raw * layer["arrays"]["value"]["scale_factor"]
+    bbox = layer["grid"]["bbox"]
+    source = marked.read_step("2015-01-01", bbox)
+    values = decoded[:, mask == 1]
+    expected_stats = {"min": 10.0, "max": 50.0, "mean": 12.0, "p98": 50.0}
+    quantiles = np.percentile(values, np.linspace(0, 98, 9)).tolist()
+
+    assert (mask == 2).any()
+    assert np.array_equal(decoded[0][mask == 2], source[mask == 2])
+    assert decoded[0][mask == 2].max() == 500
+    assert (raw[:, mask == 0] == layer["arrays"]["value"]["fill"]).all()
+    assert layer["stats"] == expected_stats
+    assert layer["style"]["stops"] == marked.stops(expected_stats, quantiles)
+    assert layer["mask"]["cells_inside"] == (mask == 1).sum() == 400
+
+
+def test_ring_inside_a_hole_keeps_real_values_but_does_not_enter_statistics(tmp_path):
+    hole = box(36.51, -1.49, 37.49, -0.51)
+    area = Area(Polygon(box(36, -2, 38, 0).exterior.coords, [hole.exterior.coords]), BOUNDARY)
+    rain = _rain_with_extreme_hole()
+
+    document, root = build_rain(tmp_path, rain, area)
+    layer = document["layers"][0]
+    mask = root["chirps_monthly/mask"][...]
+    raw = root["chirps_monthly/precip"][0]
+    longitude = root["chirps_monthly/lon"][...]
+    latitude = root["chirps_monthly/lat"][...]
+    hole_cells = (
+        (longitude[None, :] > 36.55)
+        & (longitude[None, :] < 37.45)
+        & (latitude[:, None] > -1.45)
+        & (latitude[:, None] < -0.55)
+    )
+    hole_ring = hole_cells & (mask == 2)
+
+    assert hole_ring.any() and (hole_cells & (mask == 0)).any()
+    assert (raw[hole_ring] * layer["arrays"]["value"]["scale_factor"] == 500).all()
+    assert (raw[hole_cells & (mask == 0)] == layer["arrays"]["value"]["fill"]).all()
+    assert layer["stats"] == {"min": 10.0, "max": 10.0, "mean": 10.0, "p98": 10.0}
+    assert layer["mask"]["cells_inside"] == (mask == 1).sum()
+
+
+def _rain_with_extreme_hole() -> SeriesDataset:
+    """Return extreme values only in cells wholly within the test hole."""
+
+    class HoleRain(type(RAIN)):
+        def read_step(self, step: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
+            res = self.grid.res * factor
+            width = round((bbox[2] - bbox[0]) / res)
+            height = round((bbox[3] - bbox[1]) / res)
+            longitude = bbox[0] + (np.arange(width) + 0.5) * res
+            latitude = bbox[3] - (np.arange(height) + 0.5) * res
+            in_hole = (
+                (longitude[None, :] > 36.55)
+                & (longitude[None, :] < 37.45)
+                & (latitude[:, None] > -1.45)
+                & (latitude[:, None] < -0.55)
+            )
+            return np.where(in_hole, 500, 10).astype("float32")
+
+    return HoleRain(**vars(RAIN))
 
 
 def test_terrain_layer_writes_a_mask_and_no_elevation_arrays(tmp_path):
@@ -671,8 +769,29 @@ def test_temperature_layer_states_mean_and_its_own_grid(tmp_path):
 
     assert layer["time"]["method"] == "mean"
     assert layer["grid"]["res"] == 0.1
-    assert layer["grid"]["bbox"] == pytest.approx([36.45, -1.55, 37.55, -0.45])
+    assert layer["grid"]["bbox"] == pytest.approx([36.35, -1.65, 37.65, -0.35])
+    assert (layer["grid"]["ny"], layer["grid"]["nx"]) == (13, 13)
     assert layer["arrays"]["value"]["dtype"] == "int16"
+
+
+def test_coarsened_temperature_at_coverage_edge_keeps_whole_source_blocks(tmp_path, monkeypatch):
+    monkeypatch.setattr("soe.plan.MAX_OUTPUT_BYTES", 1200)
+    temperature = make_registry(SyntheticSource())["era5land_temperature"]
+    area = Area(box(36, -60, 38, -58), BOUNDARY)
+
+    build_scene(HASH_A, area, "2015-01", "2015-01", [temperature], "Test", tmp_path)
+    document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    root = zarr.open_group(tmp_path / HASH_A / "data.zarr", mode="r")
+    layer = document["layers"][0]
+    grid = layer["grid"]
+    mask = root["era5land_temperature/mask"][...]
+
+    assert grid["aggregation"] == 2
+    assert grid["bbox"][1] == -60.05
+    assert grid["ny"] * grid["aggregation"] == temperature.grid.window(grid["bbox"])[3]
+    assert root["era5land_temperature/t2m"].shape == (1, grid["ny"], grid["nx"])
+    assert (mask[-1] == 1).any()
+    assert validate(document) == []
 
 
 def test_scene_with_preliminary_months_carries_the_notice(tmp_path):
@@ -728,9 +847,11 @@ def test_gap_cells_take_the_fallback_value_and_finite_cells_keep_theirs(tmp_path
     precip = root["chirps_monthly/precip"]
     expected = rain.read_step_filled("2015-01-01", document["layers"][0]["grid"]["bbox"]).values
     decoded = precip[0] * precip.attrs["scale_factor"]
-    assert np.allclose(decoded, expected, atol=0.051)
+    stored = root["chirps_monthly/mask"][...] != 0
+    assert np.allclose(decoded[stored], expected[stored], atol=0.051)
     assert 40 <= expected[3, 4] <= 100
-    assert (np.delete(decoded.ravel(), 3 * 20 + 4) == 10).all()
+    stored[3, 4] = False
+    assert (decoded[stored] == 10).all()
 
 
 def test_source_array_codes_main_fallback_and_both(tmp_path):
@@ -744,7 +865,7 @@ def test_source_array_codes_main_fallback_and_both(tmp_path):
     assert block["dtype"] == "uint8" and block["fill"] == 0
     assert codes.dtype == "uint8"
     assert root["chirps_monthly/source"].attrs["flag_values"] == [1, 2, 3]
-    assert (codes[3, 4], codes[5, 6], codes[0, 0]) == (2, 3, 1)
+    assert (codes[3, 4], codes[5, 6], codes[1, 1]) == (2, 3, 1)
 
 
 def test_source_array_is_zero_outside_the_area(tmp_path):
@@ -752,7 +873,7 @@ def test_source_array_is_zero_outside_the_area(tmp_path):
 
     _, root = build_rain(tmp_path, rain_with_gaps(lambda step: [(0, 0), (19, 19)]), triangle)
 
-    outside = root["chirps_monthly/mask"][...] == 0
+    outside = root["chirps_monthly/mask"][...] != 1
     assert outside.any() and (root["chirps_monthly/source"][...][outside] == 0).all()
 
 
@@ -768,7 +889,7 @@ def test_fallback_is_credited_and_noticed_with_its_cell_counts(tmp_path):
 
 
 def test_statistics_count_the_filled_cells(tmp_path):
-    every_cell = [(row, column) for row in range(20) for column in range(20)]
+    every_cell = [(row, column) for row in range(1, 21) for column in range(1, 21)]
 
     document, _ = build_rain(tmp_path, rain_with_gaps(lambda step: every_cell))
 
@@ -785,6 +906,38 @@ def test_scene_without_gaps_carries_no_trace_of_the_fallback(tmp_path):
     assert SOURCES["era5"]["attribution"] not in document["credits"]["lines"]
 
 
+def test_ring_only_fallback_is_stored_and_credited_without_area_counts_or_notices(tmp_path):
+    rain = rain_with_gaps(lambda step: [(0, 1)])
+    build_scene(HASH_A, Area(NAIROBI, BOUNDARY), "2026-07", "2026-08", [rain], "T", tmp_path)
+    document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    root = zarr.open_group(tmp_path / HASH_A / "data.zarr", mode="r")
+    layer = document["layers"][0]
+    mask = root["chirps_monthly/mask"][...]
+    precip = root["chirps_monthly/precip"]
+    codes = root["chirps_monthly/source"][...]
+    expected = rain.read_step_filled("2026-07-01", layer["grid"]["bbox"]).values[0, 1]
+
+    assert mask[0, 1] == 2
+    assert precip[0, 0, 1] * precip.attrs["scale_factor"] == pytest.approx(expected, abs=0.051)
+    assert (codes[mask != 1] == 0).all() and (codes[mask == 1] == 1).all()
+    assert layer["fallback_sources"] == [SOURCES["era5"]]
+    assert SOURCES["era5"]["attribution"] in document["credits"]["lines"]
+    assert document["notices"]["limits"] == []
+    assert layer["stats"] == {"min": 10.0, "max": 10.0, "mean": 10.0, "p98": 10.0}
+    assert validate(document) == []
+
+
+def test_genuine_no_data_in_the_ring_stays_fill_without_an_area_missing_notice(tmp_path):
+    rain = rain_with_gaps(lambda step: [(0, 1)], EmptyFallbackSource())
+
+    document, root = build_rain(tmp_path, rain)
+
+    assert root["chirps_monthly/mask"][0, 1] == 2
+    assert root["chirps_monthly/precip"][0, 0, 1] == RAIN.roles["value"].fill
+    assert document["notices"]["limits"] == []
+    assert "fallback_sources" not in document["layers"][0]
+
+
 def test_cell_with_no_value_from_either_source_stays_empty_and_is_counted(tmp_path):
     rain = rain_with_gaps(lambda step: [(3, 4)], EmptyFallbackSource())
 
@@ -799,7 +952,7 @@ def test_cell_with_no_value_from_either_source_stays_empty_and_is_counted(tmp_pa
 
 def test_temperature_gaps_take_era5_and_keep_land_values(tmp_path):
     temperature = make_registry(SyntheticSource())["era5land_temperature"]
-    bbox = [36.45, -1.55, 37.55, -0.45]
+    bbox = [36.35, -1.65, 37.65, -0.35]
     land = temperature.read_step("2015-01-01", bbox)
     filled = temperature.read_step_filled("2015-01-01", bbox)
 
@@ -808,10 +961,12 @@ def test_temperature_gaps_take_era5_and_keep_land_values(tmp_path):
     t2m = root["era5land_temperature/t2m"]
     decoded = t2m[0] * t2m.attrs["scale_factor"]
     codes = root["era5land_temperature/source"][...]
+    mask = root["era5land_temperature/mask"][...]
+    stored_land = (mask != 0) & np.isfinite(land)
 
     assert np.isnan(land).any() and filled.filled.any()
-    assert np.allclose(decoded[~np.isnan(land)], land[~np.isnan(land)], atol=0.051)
-    assert np.array_equal(codes == 2, np.isnan(land))
+    assert np.allclose(decoded[stored_land], land[stored_land], atol=0.051)
+    assert np.array_equal(codes == 2, np.isnan(land) & (mask == 1))
 
 
 def prepared_local_revisions(dataset: SeriesDataset) -> dict[str, str | None]:
@@ -958,18 +1113,19 @@ def test_preliminary_rain_fill_in_a_later_batch_keeps_its_month_in_the_notice(tm
     ]
 
 
-def test_land_cover_layer_writes_uint8_classes_that_are_zero_outside_the_mask(tmp_path):
+def test_land_cover_layer_keeps_real_classes_on_the_ring_and_zero_outside_it(tmp_path):
     area = Area(TRIANGLE, BOUNDARY)
     build_scene(HASH_A, area, None, None, [LAND_COVER], "Test", tmp_path)
     doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
     root = zarr.open_group(str(tmp_path / HASH_A / "data.zarr"), mode="r")
     classes = root["esa_worldcover/class"][...]
-    inside = root["esa_worldcover/mask"][...] == 1
+    mask = root["esa_worldcover/mask"][...]
     valid = {entry["value"] for entry in doc["layers"][0]["style"]["classes"]}
 
     assert classes.dtype == np.uint8
-    assert not inside.all() and (classes[~inside] == 0).all()
-    assert set(np.unique(classes[inside])) <= valid
+    assert (mask == 0).any() and (classes[mask == 0] == 0).all()
+    assert (mask == 2).any() and (classes[mask == 2] != 0).all()
+    assert set(np.unique(classes[mask != 0])) <= valid
     assert validate(doc) == []
 
 
@@ -978,7 +1134,7 @@ def test_land_cover_notice_states_the_cell_size_and_the_source_resolution(tmp_pa
     doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
 
     assert (
-        "Land cover shows the most common class in each 55 m cell (source 10 m)."
+        "Land cover shows the most common class in each 60 m cell (source 10 m)."
         in doc["notices"]["limits"]
     )
     assert SOURCES["worldcover"]["attribution"] in doc["credits"]["lines"]
@@ -988,5 +1144,10 @@ def test_land_cover_across_180_has_the_same_classes_on_both_sides(tmp_path):
     build_scene(HASH_A, Area(FIJI, BOUNDARY), None, None, [LAND_COVER], "Test", tmp_path)
     root = zarr.open_group(str(tmp_path / HASH_A / "data.zarr"), mode="r")
     classes = root["esa_worldcover/class"][...]
+    mask = root["esa_worldcover/mask"][...]
+    longitude = root["esa_worldcover/lon"][...]
 
-    assert (classes > 0).any(axis=0).all()
+    for side in (longitude < 180, longitude > 180):
+        assert (mask[:, side] == 1).any()
+        assert (mask[:, side] == 2).any()
+        assert (classes[:, side][mask[:, side] != 0] > 0).all()

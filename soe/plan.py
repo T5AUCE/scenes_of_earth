@@ -1,5 +1,6 @@
 """Plan a scene by choosing each layer's grid window, aggregation factor, mask and time steps."""
 from dataclasses import dataclass, field
+from math import ceil
 
 import numpy as np
 from rasterio.features import geometry_mask
@@ -28,6 +29,10 @@ MAX_SOURCE_CELL_STEPS = 100_000_000  # summed over series before any read
 MAX_OUTPUT_BYTES = 50_000_000  # raw arrays after aggregation
 MAX_SERIES_RES_DEG = 0.4  # coarsest cell size a series may be averaged to
 RES_TOLERANCE_DEG = 1e-9
+
+MASK_INSIDE = 1
+MASK_RING = 2
+MAX_RING_GRID_PASSES = 2
 
 
 @dataclass
@@ -83,10 +88,16 @@ def plan(area: Area, datasets: list[Dataset], start: str | None, end: str | None
 
     notices += _small_area_notices(area, shared_geometry)
 
-    budget_for_series = _budget_after_static_layers(datasets, windows)
+    budget_for_series = _budget_after_static_layers(datasets, windows, layer_geometries)
     factors = {}
     if series:
-        factors, series_windows = _aggregation_factors(series, windows, steps, budget_for_series)
+        factors, series_windows = _aggregation_factors(
+            series,
+            windows,
+            steps,
+            budget_for_series,
+            layer_geometries,
+        )
         windows.update(series_windows)
         _check_source_size(windows, steps)
 
@@ -101,6 +112,14 @@ def plan(area: Area, datasets: list[Dataset], start: str | None, end: str | None
         )
         for dataset in datasets
     }
+    final_source_cells = sum(
+        layer.shape[0] * layer.shape[1] * layer.factor**2 * len(layer.steps)
+        for layer in layers.values()
+    )
+    if final_source_cells > MAX_SOURCE_CELL_STEPS:
+        raise AreaError(
+            "area and period are too large to read; choose a smaller area or fewer months",
+        )
     bbox = _enclosing_bbox([layer.bbox for layer in layers.values()])
 
     return Plan(shared_geometry, layers, bbox, clipped, period, notices)
@@ -233,6 +252,7 @@ def _small_area_notices(area: Area, shared_geometry: BaseGeometry) -> list[str]:
 def _budget_after_static_layers(
     datasets: list[Dataset],
     windows: dict[str, CellSpan],
+    geometries: dict[str, BaseGeometry],
 ) -> int:
     """Output bytes left for series; static layers have a fixed cost, so they are budgeted first."""
     budget = MAX_OUTPUT_BYTES
@@ -240,7 +260,12 @@ def _budget_after_static_layers(
         if dataset.time_varying:
             continue
 
-        _, grid_shape, bbox, _ = _layer_grid(dataset, windows[dataset.id], 1)
+        _, grid_shape, bbox, _, _ = _ring_grid(
+            dataset,
+            geometries[dataset.id],
+            windows[dataset.id],
+            1,
+        )
         tile_count = dataset.tile_count(bbox)
         if dataset.needs_tiles and tile_count == 0:
             raise AreaError(f"{dataset.title} has no data in this area")
@@ -256,6 +281,85 @@ def _budget_after_static_layers(
         raise AreaError("the static layers alone exceed the size budget; choose a smaller area")
 
     return budget
+
+
+def _ring_grid(
+    dataset: Dataset,
+    geometry: BaseGeometry,
+    window: CellSpan,
+    factor: int,
+) -> tuple[Affine, tuple[int, int], list[float], float, np.ndarray]:
+    """Grow touched edges within source coverage, then add real-data support around the area."""
+    limits = dataset.grid.span(_extent(dataset.coverage))
+    if dataset.time_varying:
+        window = _fit_series_window(window, limits, factor)
+    for _ in range(MAX_RING_GRID_PASSES):
+        transform, shape, bbox, res = _layer_grid(dataset, window, factor)
+        inside = _cell_mask(geometry, transform, shape, all_touched=True)
+        native_cells = factor if dataset.time_varying else ceil(res / dataset.grid.res)
+        grown = _grow_window(window, limits, inside, native_cells)
+        if dataset.time_varying:
+            grown = _fit_series_window(grown, limits, factor)
+        if grown == window:
+            break
+        window = grown
+
+    transform, shape, bbox, res = _layer_grid(dataset, window, factor)
+    inside = _cell_mask(geometry, transform, shape, all_touched=True)
+    neighbours = np.zeros(shape, bool)
+    neighbours[1:] |= inside[:-1]
+    neighbours[:-1] |= inside[1:]
+    neighbours[:, 1:] |= inside[:, :-1]
+    neighbours[:, :-1] |= inside[:, 1:]
+    mask = inside.astype("uint8")
+    mask[neighbours & ~inside] = MASK_RING
+    return transform, shape, bbox, res, mask
+
+
+def _fit_series_window(window: CellSpan, limits: CellSpan, factor: int) -> CellSpan:
+    """Keep whole aggregation blocks when coverage truncates an outward-snapped window."""
+    c0, c1, r0, r1 = window
+    limit_c0, limit_c1, limit_r0, limit_r1 = limits
+    return (
+        *_fit_series_range(c0, c1, limit_c0, limit_c1, factor),
+        *_fit_series_range(r0, r1, limit_r0, limit_r1, factor),
+    )
+
+
+def _fit_series_range(
+    low: int,
+    high: int,
+    limit_low: int,
+    limit_high: int,
+    factor: int,
+) -> tuple[int, int]:
+    low, high = max(low, limit_low), min(high, limit_high)
+    extra = -(high - low) % factor
+    if low - extra >= limit_low:
+        return low - extra, high
+    if high + extra <= limit_high:
+        return low, high + extra
+
+    raise AreaError(
+        "area cannot fit whole aggregation cells within source coverage; "
+        "choose a smaller area or fewer months",
+    )
+
+
+def _grow_window(
+    window: CellSpan,
+    limits: CellSpan,
+    inside: np.ndarray,
+    native_cells: int,
+) -> CellSpan:
+    c0, c1, r0, r1 = window
+    limit_c0, limit_c1, limit_r0, limit_r1 = limits
+    return (
+        max(limit_c0, c0 - native_cells * bool(inside[:, 0].any())),
+        min(limit_c1, c1 + native_cells * bool(inside[:, -1].any())),
+        max(limit_r0, r0 - native_cells * bool(inside[0].any())),
+        min(limit_r1, r1 + native_cells * bool(inside[-1].any())),
+    )
 
 
 def _layer_grid(
@@ -288,6 +392,7 @@ def _aggregation_factors(
     windows: dict[str, CellSpan],
     steps: dict[str, list[str]],
     budget: int,
+    geometries: dict[str, BaseGeometry],
 ) -> tuple[dict[str, int], dict[str, CellSpan]]:
     """Block-mean factor of each series so all fit the budget, and the windows snapped to them.
 
@@ -299,7 +404,7 @@ def _aggregation_factors(
             dataset.id: _snap_window(windows[dataset.id], factors[dataset.id])
             for dataset in series
         }
-        if _series_bytes(series, snapped, steps, factors) <= budget:
+        if _series_bytes(series, snapped, steps, factors, geometries) <= budget:
             return factors, snapped
 
         finest = _finest_coarsenable(series, factors)
@@ -349,13 +454,17 @@ def _series_bytes(
     windows: dict[str, CellSpan],
     steps: dict[str, list[str]],
     factors: dict[str, int],
+    geometries: dict[str, BaseGeometry],
 ) -> int:
     """Output bytes of all series once each window is averaged over its factor x factor blocks."""
     total_bytes = 0
     for dataset in series:
-        c0, c1, r0, r1 = windows[dataset.id]
-        factor = factors[dataset.id]
-        grid_shape = ((r1 - r0) // factor, (c1 - c0) // factor)
+        _, grid_shape, _, _, _ = _ring_grid(
+            dataset,
+            geometries[dataset.id],
+            windows[dataset.id],
+            factors[dataset.id],
+        )
         total_bytes += _layer_bytes(dataset, grid_shape, len(steps[dataset.id]))
     return total_bytes
 
@@ -368,7 +477,7 @@ def _layer_plan(
     steps: list[str],
     clip_notices: list[str],
 ) -> LayerPlan:
-    transform, grid_shape, bbox, res = _layer_grid(dataset, window, factor)
+    transform, grid_shape, bbox, res, mask = _ring_grid(dataset, geometry, window, factor)
     notices = list(clip_notices)
     if factor > 1:
         notices.append(
@@ -376,8 +485,7 @@ def _layer_plan(
             f"({res:g} degrees) to fit the size budget.",
         )
 
-    mask = _cell_mask(geometry, transform, grid_shape, all_touched=True)
-    if not mask.any():
+    if not (mask == MASK_INSIDE).any():
         raise AreaError(f"area does not cover any {dataset.title} cells")
 
     notices += dataset.notices(bbox, steps)
@@ -389,8 +497,8 @@ def _layer_plan(
         bbox,
         res,
         factor,
-        mask.astype("uint8"),
-        int(mask.sum()),
+        mask,
+        int((mask == MASK_INSIDE).sum()),
         steps,
         dataset.sources_for(bbox),
         notices,

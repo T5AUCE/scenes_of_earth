@@ -60,6 +60,8 @@ const SMOOTHING_LINES = [
     + "with version 0.5.1 or later keep every cell touched by the area. Area averages give each "
     + "valid cell equal weight, including edge cells that extend outside the outline. Older "
     + "bundles use cell centres, with touched cells only when no centre lies inside the area.",
+  "A hidden one-cell ring of real source data lets isotherms reach the outline but is excluded "
+    + "from area averages.",
 ];
 
 /** Summarise the scene's area and period with its layer count on one line. */

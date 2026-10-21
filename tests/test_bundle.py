@@ -44,7 +44,7 @@ def test_validate_checks_the_layer_contract(tmp_path):
 
     assert any("time axis" in problem for problem in problems)
     assert any("static layer" in problem for problem in problems)
-    assert any("mask has no cells" in problem for problem in problems)
+    assert any("mask.cells_inside" in problem for problem in problems)
     assert any("missing grid" in problem for problem in problems)
 
 
@@ -98,10 +98,45 @@ def test_scene_json_states_the_requested_period(tmp_path):
     doc, store = build_nairobi(tmp_path, ("2015-01", "2016-02"))
     rain = doc["layers"][1]
 
-    assert doc["version"] == "0.5"
+    assert doc["version"] == "0.6"
     assert doc["period"] == {"start": "2015-01-01", "end": "2016-03-01", "step": "P1M"}
     assert rain["time"]["method"] == "sum"
     assert store["chirps_monthly/precip"].attrs["cell_methods"] == "time: sum"
+
+
+def test_validate_rejects_a_previous_bundle_format(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-01"))
+    doc["version"] = "0.5"
+
+    assert validate(doc, "0.6") == ["version must be 0.6"]
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("path", "another/mask"),
+        ("rule", "touched by the area"),
+        ("cells_inside", 0),
+        ("cells_inside", -1),
+        ("cells_inside", 1.5),
+        ("cells_inside", True),
+        ("cells_inside", "1"),
+        ("cells_inside", None),
+    ],
+)
+def test_validate_rejects_an_invalid_mask_block(tmp_path, key, value):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-01"))
+    doc["layers"][0]["mask"][key] = value
+
+    assert any(f"mask.{key}" in problem for problem in validate(doc))
+
+
+@pytest.mark.parametrize("key", ["path", "rule", "cells_inside"])
+def test_validate_reports_a_missing_mask_field_without_raising(tmp_path, key):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-01"))
+    del doc["layers"][0]["mask"][key]
+
+    assert any(f"mask.{key}" in problem for problem in validate(doc))
 
 
 def test_static_only_scene_has_no_period(tmp_path):

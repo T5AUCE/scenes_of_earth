@@ -146,6 +146,18 @@ test("hatch_marks_only_in_area_no_data_cells", () => {
   assert.equal(blockMeans(mixedCells, 2, 2, 2).means[0], NO_DATA_BYTE);
 });
 
+test("ring cells produce neither dots nor hatch marks even with a raw mask", () => {
+  const positions = Uint8Array.of(100, NO_DATA_BYTE, 100, NO_DATA_BYTE, 100, NO_DATA_BYTE);
+  const mask = Uint8Array.of(2, 2, 0, 0, 1, 1);
+
+  assert.deepEqual(
+    Array.from(markBytes(positions, mask)),
+    [NO_DATA_BYTE, NO_DATA_BYTE, NO_DATA_BYTE, NO_DATA_BYTE, 100, HATCH_BYTE],
+  );
+  assert.equal(hasHatchedCells(positions.subarray(0, 4), mask.subarray(0, 4)), false);
+  assert.equal(hasHatchedCells(positions, mask), true);
+});
+
 test("a cell's size on screen follows the zoom and stretches with latitude", () => {
   const cell = { width: 0.05, height: 0.05 };
   const equator = cellSizePx(10, cell, 0);

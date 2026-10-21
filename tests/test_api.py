@@ -83,7 +83,7 @@ def test_post_poll_and_serve(env):
     assert scene["credits"]["lines"] and scene["id"] == scene_id
     assert [layer["id"] for layer in scene["layers"]] == ["terrain", "chirps_monthly"]
     terrain = scene["layers"][0]
-    assert scene["version"] == "0.5" and terrain["arrays"] == {} and terrain["stats"]["p98"] > 0
+    assert scene["version"] == "0.6" and terrain["arrays"] == {} and terrain["stats"]["p98"] > 0
     assert terrain["tiles"]["source"]["attribution"] in scene["credits"]["lines"]
     assert client.get(f"/scenes/{scene_id}/scene.json").json()["id"] == scene_id
 
@@ -150,6 +150,43 @@ def test_series_without_steps_is_refused_before_any_read(tmp_path):
 
     assert response.status_code == 422
     assert "no data in the requested period" in response.text
+    assert source.reads == 0
+
+
+def test_ring_growth_exceeding_the_source_budget_is_refused_before_any_read(env, monkeypatch):
+    client, source, _ = env
+    monkeypatch.setattr("soe.plan.MAX_SOURCE_CELL_STEPS", 2600)
+
+    response = client.post("/api/scenes", json=body(layers=["chirps_monthly"]))
+
+    assert response.status_code == 422
+    assert "too large to read" in response.text
+    assert source.reads == 0
+
+
+def test_coverage_without_room_for_whole_aggregation_blocks_is_refused_before_read(
+    tmp_path,
+    monkeypatch,
+):
+    source = SyntheticSource()
+    registry = make_registry(source)
+    registry["era5land_temperature"] = replace(
+        registry["era5land_temperature"],
+        coverage=(-180, -1, 180, 1),
+    )
+    monkeypatch.setattr("soe.plan.MAX_OUTPUT_BYTES", 1200)
+    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", registry)
+    request = body(
+        layers=["era5land_temperature"],
+        area={"type": "polygon", "geometry": mapping(box(36, -1, 38, 1))},
+        end="2015-01",
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/api/scenes", json=request)
+
+    assert response.status_code == 422
+    assert "whole aggregation cells within source coverage" in response.text
     assert source.reads == 0
 
 

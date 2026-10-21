@@ -91,7 +91,11 @@ def test_unwrap_and_plan_across_180():
     scene_plan = plan_months(Area(FIJI), [RAIN], 2)
     layer_plan = scene_plan.layers["chirps_monthly"]
 
-    assert scene_plan.bbox[2] > 180 and layer_plan.bbox[2] > 180 and layer_plan.mask.sum() > 0
+    assert scene_plan.bbox[2] > 180 and layer_plan.bbox[2] > 180
+    longitude = layer_plan.bbox[0] + (np.arange(layer_plan.shape[1]) + 0.5) * layer_plan.res
+    for side in (longitude < 180, longitude > 180):
+        assert (layer_plan.mask[:, side] == 1).any()
+        assert (layer_plan.mask[:, side] == 2).any()
 
 
 def test_plan_rejections(tmp_path):
@@ -115,7 +119,12 @@ def test_plan_rejections(tmp_path):
     with pytest.raises(AreaError, match="source tiles"):  # 8190 existing tiles > 2500
         plan_months(Area(box(-100, -50, 70, 60)), [TERRAIN], 1)
 
-    assert plan_months(Area(box(0, 0, 11, 11)), [TERRAIN], 1).bbox == [0, 0, 11, 11]
+    assert plan_months(Area(box(0, 0, 11, 11)), [TERRAIN], 1).bbox == [
+        -0.05,
+        -0.05,
+        11.05,
+        11.05,
+    ]
 
 
 def test_plan_aggregates_and_snaps():
@@ -156,16 +165,19 @@ def test_plan_keeps_every_cell_an_off_grid_area_touches():
     layer_plan = plan_months(Area(off_grid), [RAIN]).layers["chirps_monthly"]
     height, width = layer_plan.shape
 
-    assert layer_plan.bbox == pytest.approx([177, -18.05, 178, -17])
-    assert layer_plan.shape == (21, 20)
-    assert _ones_bbox(layer_plan) == (0, height - 1, 0, width - 1)
-    assert layer_plan.mask.all()
-    assert layer_plan.cells_inside == layer_plan.mask.sum()
+    assert layer_plan.bbox == pytest.approx([176.95, -18.1, 178.05, -16.95])
+    assert layer_plan.shape == (23, 22)
+    assert _ones_bbox(layer_plan) == (1, height - 2, 1, width - 2)
+    assert (layer_plan.mask[0, 1:-1] == 2).all()
+    assert (layer_plan.mask[-1, 1:-1] == 2).all()
+    assert (layer_plan.mask[1:-1, 0] == 2).all()
+    assert (layer_plan.mask[1:-1, -1] == 2).all()
+    assert layer_plan.cells_inside == (layer_plan.mask == 1).sum()
 
 
 def _ones_bbox(layer_plan: LayerPlan) -> tuple[int, int, int, int]:
     """Return the first and last row and column that hold a one."""
-    rows, columns = np.nonzero(layer_plan.mask)
+    rows, columns = np.nonzero(layer_plan.mask == 1)
     return int(rows.min()), int(rows.max()), int(columns.min()), int(columns.max())
 
 
@@ -175,17 +187,24 @@ def test_plan_keeps_every_cell_an_off_grid_area_touches_on_the_half_cell_offset_
     layer_plan = plan_months(Area(off_grid), [temperature]).layers["era5land_temperature"]
     height, width = layer_plan.shape
 
-    assert layer_plan.bbox == pytest.approx([36.45, -1.55, 37.55, -0.45])
-    assert layer_plan.shape == (11, 11)
-    assert _ones_bbox(layer_plan) == (0, height - 1, 0, width - 1)
-    assert layer_plan.mask.all()
+    assert layer_plan.bbox == pytest.approx([36.35, -1.65, 37.65, -0.35])
+    assert layer_plan.shape == (13, 13)
+    assert _ones_bbox(layer_plan) == (1, height - 2, 1, width - 2)
+    assert (layer_plan.mask[0, 1:-1] == 2).all()
+    assert layer_plan.cells_inside == 121
 
 
-def test_plan_edge_aligned_area_does_not_add_a_row_or_column():
+def test_plan_edge_aligned_area_adds_exactly_one_ring_cell_per_side():
     layer_plan = plan_months(Area(box(177, -18, 178, -17)), [RAIN]).layers["chirps_monthly"]
 
-    assert layer_plan.shape == (20, 20)
-    assert layer_plan.mask.all()
+    expected = np.ones((22, 22), "uint8")
+    expected[0, :] = expected[-1, :] = 2
+    expected[:, 0] = expected[:, -1] = 2
+    expected[0, 0] = expected[0, -1] = expected[-1, 0] = expected[-1, -1] = 0
+
+    assert layer_plan.shape == (22, 22)
+    assert np.array_equal(layer_plan.mask, expected)
+    assert layer_plan.cells_inside == 400
 
 
 def test_plan_keeps_a_sub_cell_island_beside_a_large_polygon():
@@ -195,6 +214,8 @@ def test_plan_keeps_a_sub_cell_island_beside_a_large_polygon():
 
     assert _mask_at(layer_plan, 177.25, -17.75) == 1
     assert _mask_at(layer_plan, 178.005, -18.005) == 1
+    assert _mask_at(layer_plan, 176.975, -17.75) == 2
+    assert _mask_at(layer_plan, 178.075, -18.005) == 2
     assert _mask_at(layer_plan, 177.75, -17.75) == 0
 
 
@@ -202,6 +223,16 @@ def _mask_at(layer_plan: LayerPlan, lon: float, lat: float) -> int:
     """Return the mask value of the cell that contains the point."""
     column, row = ~layer_plan.transform @ (lon, lat)
     return int(layer_plan.mask[int(row), int(column)])
+
+
+def test_ring_stops_at_source_coverage_without_extrapolation():
+    rain = replace(RAIN, coverage=(-180, -30, 180, 30))
+    layer = plan_months(Area(box(36, 29, 37, 30)), [rain]).layers[rain.id]
+
+    assert layer.bbox == pytest.approx([35.95, 28.95, 37.05, 30])
+    assert (layer.mask[0, 1:-1] == 1).all()
+    assert (layer.mask[-1, 1:-1] == 2).all()
+    assert layer.cells_inside == 400
 
 
 def test_plan_keeps_a_sub_cell_island_east_of_180():
@@ -212,6 +243,8 @@ def test_plan_keeps_a_sub_cell_island_east_of_180():
     assert layer_plan.bbox[2] > 180
     assert _mask_at(layer_plan, 179.65, -16.75) == 1
     assert _mask_at(layer_plan, 180.205, -16.205) == 1
+    assert _mask_at(layer_plan, 179.375, -16.75) == 2
+    assert _mask_at(layer_plan, 180.275, -16.205) == 2
     assert _mask_at(layer_plan, 180.205, -16.4) == 0
 
 
@@ -223,6 +256,8 @@ def test_plan_leaves_cells_wholly_inside_a_hole_out_of_the_mask():
     assert _mask_at(layer_plan, 37, -1) == 0
     assert _mask_at(layer_plan, 36.25, -1) == 1
     assert _mask_at(layer_plan, 36.525, -1) == 1
+    assert _mask_at(layer_plan, 36.575, -1) == 2
+    assert _mask_at(layer_plan, 37.425, -1) == 2
 
 
 def test_drawn_area_with_enough_touched_cells_but_too_few_centres_is_rejected():
@@ -236,25 +271,27 @@ def test_drawn_area_with_enough_touched_cells_but_too_few_centres_is_rejected():
 
 
 def test_coarsened_mask_keeps_the_off_grid_edge_cells(monkeypatch):
-    monkeypatch.setattr("soe.plan.MAX_OUTPUT_BYTES", 500)
+    monkeypatch.setattr("soe.plan.MAX_OUTPUT_BYTES", 600)
     off_grid = box(36.54, -1.46, 37.46, -0.54)
     layer_plan = plan_months(Area(off_grid), [RAIN], months=1).layers["chirps_monthly"]
 
     assert layer_plan.factor == 2
     assert layer_plan.res == pytest.approx(0.1)
-    assert layer_plan.bbox == pytest.approx([36.5, -1.5, 37.5, -0.5])
-    assert layer_plan.shape == (10, 10)
-    assert layer_plan.mask.all()
+    assert layer_plan.bbox == pytest.approx([36.4, -1.6, 37.6, -0.4])
+    assert layer_plan.shape == (12, 12)
+    assert (layer_plan.mask[1:-1, 1:-1] == 1).all()
+    assert (layer_plan.mask[0, 1:-1] == 2).all()
 
 
 def test_plan_gives_each_layer_its_own_grid_and_mask():
     scene_plan = plan_months(Area(NAIROBI), [TERRAIN, RAIN])
     terrain, rain = scene_plan.layers["terrain"], scene_plan.layers["chirps_monthly"]
 
-    assert terrain.res == pytest.approx(0.05 / 102) and rain.res == pytest.approx(0.05)
-    assert terrain.shape == (2040, 2040) and rain.shape == (20, 20)
+    assert terrain.res == pytest.approx(0.05 / 93) and rain.res == pytest.approx(0.05)
+    assert terrain.shape == (2046, 2046) and rain.shape == (22, 22)
     assert terrain.mask.shape == terrain.shape and rain.mask.shape == rain.shape
-    assert terrain.cells_inside == terrain.mask.sum() and rain.cells_inside == rain.mask.sum()
+    assert terrain.cells_inside == (terrain.mask == 1).sum()
+    assert rain.cells_inside == (rain.mask == 1).sum()
     assert terrain.factor == 1 and terrain.steps == [] and len(rain.steps) == 12
 
 
@@ -269,7 +306,7 @@ def test_output_budget_is_summed_across_layers():
     assert both.layers["chirps_monthly"].factor == 2 and both.layers["terrain"].factor == 1
 
 
-@pytest.mark.parametrize(("budget_bytes", "factor"), [(2400, 1), (2399, 2)])
+@pytest.mark.parametrize(("budget_bytes", "factor"), [(2904, 1), (2903, 2)])
 def test_output_budget_reserves_the_provenance_array_of_a_layer_with_a_fallback(
     monkeypatch,
     budget_bytes,

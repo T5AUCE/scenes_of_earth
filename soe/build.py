@@ -17,8 +17,8 @@ from zarr.codecs import GzipCodec
 
 from . import __version__
 from .areas import Area, AreaError
-from .bundle import JsonObject, make, validate
-from .plan import LayerPlan, Plan, plan as make_plan
+from .bundle import VERSION, JsonObject, make, validate
+from .plan import MASK_INSIDE, LayerPlan, Plan, plan as make_plan
 from .sources import (
     FROM_FALLBACK,
     FROM_MAIN,
@@ -263,7 +263,7 @@ def _write_coordinates_and_mask(layer_group: zarr.Group, layer_plan: LayerPlan) 
         "mask",
         layer_plan.mask,
         ["lat", "lon"],
-        {"long_name": "1 = cell touched by the area"},
+        {"long_name": "0 = outside, 1 = area cell, 2 = one-cell ring of real values"},
     )
 
 
@@ -312,16 +312,17 @@ def _write_static_layer(
             spec.fill,
         )
 
-    stats = dataset.summary(arrays, layer_plan.mask, transform)
+    stats = dataset.summary(arrays, layer_plan.mask == MASK_INSIDE, transform)
     return {"stats": stats} if stats else {}
 
 
-def _fill_outside(data: np.ndarray, area_mask: np.ndarray, spec: Role) -> np.ndarray:
-    """Replace the cells outside the area with the role's fill value."""
+def _fill_outside(data: np.ndarray, mask: np.ndarray, spec: Role) -> np.ndarray:
+    """Fill missing samples and cells outside both the area and its real-data ring."""
     if spec.fill is None:
         raise ValueError(f"{spec.name}: a static role needs a fill value to hide outside cells")
 
-    return np.where(area_mask.astype(bool), data, spec.fill).astype(data.dtype)
+    valid = (mask != 0) & np.isfinite(data)
+    return np.where(valid, data, spec.fill).astype(data.dtype)
 
 
 def _attributes(spec: Role) -> JsonObject:
@@ -344,12 +345,13 @@ def _write_time_series(
     steps = layer_plan.steps
     step_count = len(steps)
     spec = dataset.roles["value"]
-    area_mask = layer_plan.mask.astype(bool)
+    area_mask = layer_plan.mask == MASK_INSIDE
+    stored_mask = layer_plan.mask != 0
 
     _write_time_coordinate(layer_group, steps)
     series = _create_time_array(layer_group, dataset, spec, layer_plan)
     statistics = _StatisticsAccumulator()
-    provenance = _Provenance(area_mask, step_count)
+    provenance = _Provenance(area_mask, stored_mask, step_count)
     worker_count = _choose_worker_count(layer_plan)
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -364,7 +366,7 @@ def _write_time_series(
             statistics.add(raster_batch, area_mask)
             provenance.add(batch_start, raster_batch, filled_batch)
             encoded_batch = encode_values(
-                np.where(area_mask, raster_batch, np.nan),
+                np.where(stored_mask, raster_batch, np.nan),
                 spec.dtype,
                 spec.scale,
                 spec.offset,
@@ -393,8 +395,7 @@ def _write_provenance(
     if dataset.fallback is None:
         return {}
 
-    fallback_cells = provenance.fallback_cells
-    if fallback_cells:
+    if provenance.fallback_used:
         _write_array(
             layer_group,
             SOURCE_ROLE.name,
@@ -409,20 +410,31 @@ def _write_provenance(
         )
 
     return {
-        "fallback_used": bool(fallback_cells),
+        "fallback_used": provenance.fallback_used,
         "notices": provenance.notices(dataset, steps),
     }
 
 
 class _Provenance:
-    """Track which source contributes values to each cell inside the area."""
+    """Track area provenance while crediting fallback data stored in the hidden ring too."""
 
-    def __init__(self, area_mask: np.ndarray, step_count: int) -> None:
+    def __init__(
+        self,
+        area_mask: np.ndarray,
+        stored_mask: np.ndarray,
+        step_count: int,
+    ) -> None:
         self._area_mask = area_mask
+        self._stored_mask = stored_mask
         self._step_filled = np.zeros(step_count, bool)
         self._from_main = np.zeros(area_mask.shape, bool)
         self._from_fallback = np.zeros(area_mask.shape, bool)
         self._missing = np.zeros(area_mask.shape, bool)  # lacks a value in some step
+
+    @property
+    def fallback_used(self) -> bool:
+        """Return whether any stored value came from the fallback and needs attribution."""
+        return bool((self._from_fallback & self._stored_mask).any())
 
     @property
     def fallback_cells(self) -> int:
@@ -639,7 +651,7 @@ def _finalize_scene(
     area: Area,
     scene_plan: Plan,
 ) -> None:
-    problems = validate(scene_document)
+    problems = validate(scene_document, VERSION)
     if problems:
         raise RuntimeError("Invalid scene.json: " + "; ".join(problems))
 

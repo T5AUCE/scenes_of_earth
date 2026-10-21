@@ -6,6 +6,7 @@ from .areas import Area
 # Existing importers must keep using bundle.validate and its contract names.
 from .bundle_validation import (
     COLOUR_PATTERN,
+    MASK_RULE,
     MIN_STOPS,
     STYLE_KINDS,
     JsonObject,
@@ -15,7 +16,7 @@ from .bundle_validation import (
 from .plan import LayerPlan, Plan
 from .sources import REQUEST_STEP, SOURCE_ROLE, SOURCES, STOP_COUNT, Dataset
 
-VERSION = "0.5"
+VERSION = "0.6"
 
 BOUNDARY_SOURCE_FIELDS = ("licence_url", "attribution", "citation", "modified")
 SYNTHETIC_DATA_CREDIT = "Data: synthetically generated, not real measurements"
@@ -115,7 +116,7 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
         "grid": grid,
         "mask": {
             "path": f"{dataset.id}/mask",
-            "rule": "touched by the area",
+            "rule": MASK_RULE,
             "cells_inside": layer_plan.cells_inside,
         },
         "time": None,

@@ -15,7 +15,7 @@ from shapely.geometry import mapping, shape
 
 from . import __version__, db
 from .areas import Area, AreaError, clean_polygon
-from .bundle import JsonObject
+from .bundle import VERSION, JsonObject
 from .plan import Plan, plan
 from .sources import (
     REQUEST_FORMATS,
@@ -234,8 +234,7 @@ def compute_scene_id(
     datasets: list[Dataset],
     revisions: dict[str, tuple[str | None, str | None]],
 ) -> str:
-    """Return the scene ID by hashing the canonical request with source identities and generator
-    version.
+    """Hash the canonical request with source identities and generator and bundle versions.
 
     The versions are those of each dataset's main source and its fallback source.
 
@@ -257,6 +256,7 @@ def compute_scene_id(
         synthetic,
         tile_urls,
         __version__,
+        VERSION,
     ]
     return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:ID_CHARS]
 

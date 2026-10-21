@@ -11,12 +11,16 @@ import {
   type Isoline,
   isolineInterval,
   isolineLevels,
+  sampleSmoothField,
   toLngLat,
   traceIsolines,
 } from "./isolines.ts";
 import { inkPaint } from "./palettes.ts";
 
 const KENYA_STOPS = [5, 8, 11, 14, 17, 20, 23, 26, 29];
+const SMOOTH_TURN_DEG = 8;
+const BILINEAR_TURN_DEG = 10;
+const SMOOTH_VERTEX_TOLERANCE_DEG = 1e-6;
 
 test("the interval keeps a scene at twelve isotherm levels or fewer", () => {
   const spans = [
@@ -352,20 +356,196 @@ test("refinement off keeps the native marching-squares output", () => {
   );
 });
 
-test("refined vertices lie on the native bilinear surface", () => {
-  const nx = 3;
-  const values = [0, 0, 0, 0, 2, 0, 0, 0, 0];
-  const level = 1;
-  const native = traceIsolines(values, nx, 3, [level]);
-  const lines = traceIsolines(values, nx, 3, [level], true);
+test("refined vertices lie on the smoothed field", () => {
+  const size = 7;
+  const values = paraboloidField(size, 3);
+  const level = -2.25;
+  const native = traceIsolines(values, size, size, [level]);
+  const lines = traceIsolines(values, size, size, [level], true);
 
   assert.ok(lines.length > 0);
   assert.ok(lines[0].coordinates.length > native[0].coordinates.length);
   for (const line of lines) {
     for (const point of line.coordinates) {
-      assert.ok(Math.abs(bilinearAt(values, nx, point) - level) < 1e-9);
-      assert.ok(point[0] >= 0 && point[0] <= nx - 1);
-      assert.ok(point[1] >= 0 && point[1] <= 2);
+      const value = sampleSmoothField(values, size, size, point[0], point[1]);
+      assert.ok(Math.abs(value - level) < SMOOTH_VERTEX_TOLERANCE_DEG, `vertex value was ${value}`);
+      assert.ok(point[0] >= 0 && point[0] <= size - 1);
+      assert.ok(point[1] >= 0 && point[1] <= size - 1);
+    }
+  }
+});
+
+test("Catmull-Rom reproduces a quadratic field between native centres", () => {
+  const size = 9;
+  const values = paraboloidField(size, 4);
+
+  for (const [x, y] of [[2.3, 2.2], [4.5, 3.25], [2.5, 3.5]]) {
+    const expected = -((x - 4) ** 2 + (y - 4) ** 2);
+    assert.ok(Math.abs(sampleSmoothField(values, size, size, x, y) - expected) < 1e-9);
+  }
+});
+
+test("unequal bicubic subdivisions keep a closed isotherm in one polyline", () => {
+  const size = 7;
+  const values = paraboloidField(size, 3);
+  const lines = traceIsolines(values, size, size, [-5], true);
+
+  assert.equal(lines.length, 1);
+  assert.deepEqual(lines[0].coordinates[0], lines[0].coordinates.at(-1));
+  assert.ok(lines[0].coordinates.length > 20);
+});
+
+test("refined lines turn smoothly across an interior cell border", () => {
+  const size = 11;
+  const values = paraboloidField(size, 5);
+  const level = -10;
+  const smoothTurns = borderTurnsDegrees(
+    traceIsolines(values, size, size, [level], true),
+    5,
+  );
+  const bilinearTurns = borderTurnsDegrees(
+    traceIsolines(values, size, size, [level], false),
+    5,
+  );
+
+  assert.ok(smoothTurns.length > 0);
+  assert.ok(Math.max(...smoothTurns) < SMOOTH_TURN_DEG);
+  assert.ok(Math.min(...bilinearTurns) > BILINEAR_TURN_DEG);
+});
+
+test("a fallback-edge correction preserves the next interior border's tangent", () => {
+  const size = 9;
+  const values = paraboloidField(size, 4);
+  const distance = 1e-5;
+  const middle = sampleSmoothField(values, size, size, 2, 3.5);
+  const before = sampleSmoothField(values, size, size, 2 - distance, 3.5);
+  const after = sampleSmoothField(values, size, size, 2 + distance, 3.5);
+
+  assert.ok(Math.abs((middle - before) / distance - (after - middle) / distance) < 1e-3);
+});
+
+test("the smooth field keeps every native cell-centre value", () => {
+  const size = 7;
+  const values = paraboloidField(size, 3);
+
+  for (let row = 0; row < size; row++) {
+    for (let column = 0; column < size; column++) {
+      const sampled = sampleSmoothField(values, size, size, column, row);
+      assert.ok(Math.abs(sampled - values[row * size + column]) < 1e-9);
+    }
+  }
+});
+
+test("a finite native centre beside NaN is preserved without inventing nearby data", () => {
+  const values = [0, 1, 2, 1, 2, NaN, 2, 3, 4];
+
+  assert.equal(sampleSmoothField(values, 3, 3, 1, 1), 2);
+  assert.ok(Number.isNaN(sampleSmoothField(values, 3, 3, 1.5, 1.5)));
+  assert.ok(Number.isNaN(sampleSmoothField(values, 3, 3, -0.1, 1)));
+});
+
+test("clamping prevents a distant extreme from adding an out-of-range isotherm", () => {
+  const size = 7;
+  const values = Array.from({ length: size * size }, (_, index) => {
+    const column = index % size;
+    return column < 2 ? -100 : column === 2 ? 0 : 1;
+  });
+
+  assert.equal(sampleSmoothField(values, size, size, 2.5, 3.5), 1);
+  assert.deepEqual(traceIsolines(values, size, size, [1.1], true), []);
+});
+
+test("bicubic and bilinear neighbours share a continuous finite edge", () => {
+  const size = 7;
+  const values = paraboloidField(size, 3);
+  values[0] = NaN;
+  const epsilon = 1e-8;
+
+  for (const y of [1.1, 1.5, 1.9]) {
+    const edge = sampleSmoothField(values, size, size, 2, y);
+    const left = sampleSmoothField(values, size, size, 2 - epsilon, y);
+    const right = sampleSmoothField(values, size, size, 2 + epsilon, y);
+    assert.ok(Math.abs(edge - left) < 1e-6);
+    assert.ok(Math.abs(edge - right) < 1e-6);
+    assert.ok(Math.abs(edge - bilinearAt(values, size, [2, y])) < 1e-9);
+  }
+});
+
+test("clamped bicubic quads agree on both sides of shared borders", () => {
+  const size = 7;
+  const values = Array.from({ length: size * size }, (_, index) => Math.sin(index * 5) * 10);
+  const epsilon = 1e-8;
+
+  for (let row = 2; row <= 4; row++) {
+    for (let column = 2; column <= 4; column++) {
+      for (const along of [0.1, 0.4, 0.7, 0.9]) {
+        for (const [x, y, across, down] of [
+          [column + along, row, 0, epsilon],
+          [column, row + along, epsilon, 0],
+        ]) {
+          const before = sampleSmoothField(values, size, size, x - across, y - down);
+          const edge = sampleSmoothField(values, size, size, x, y);
+          const after = sampleSmoothField(values, size, size, x + across, y + down);
+          assert.ok(Math.abs(before - edge) < 1e-5);
+          assert.ok(Math.abs(after - edge) < 1e-5);
+        }
+      }
+    }
+  }
+});
+
+test("bicubic samples stay within their native quad's corner range", () => {
+  const size = 5;
+  const values = new Array<number>(size * size).fill(0);
+  values[0] = 100;
+
+  for (let row = 0; row + 1 < size; row++) {
+    for (let column = 0; column + 1 < size; column++) {
+      const [low, high] = quadRange(values, size, column, row);
+      for (let down = 0; down <= 4; down++) {
+        for (let across = 0; across <= 4; across++) {
+          const value = sampleSmoothField(
+            values,
+            size,
+            size,
+            column + across / 4,
+            row + down / 4,
+          );
+          assert.ok(value >= low - 1e-9 && value <= high + 1e-9);
+        }
+      }
+    }
+  }
+});
+
+test("a quad beside no-data falls back to bilinear", () => {
+  const size = 8;
+  const values = paraboloidField(size, 4);
+  values[3 * size + 4] = NaN;
+
+  assert.ok(Math.abs(
+    sampleSmoothField(values, size, size, 4.5, 4.5) - bilinearAt(values, size, [4.5, 4.5]),
+  ) < 1e-9);
+  assert.ok(Number.isNaN(sampleSmoothField(values, size, size, 4.5, 3.5)));
+});
+
+test("any missing member of the 4x4 kernel selects bilinear or stops at a missing corner", () => {
+  const size = 9;
+  const values = paraboloidField(size, 4);
+  const point: [number, number] = [3.4, 3.6];
+  const expected = bilinearAt(values, size, point);
+
+  assert.ok(Math.abs(sampleSmoothField(values, size, size, ...point) - expected) > 0.1);
+  for (let row = 2; row <= 5; row++) {
+    for (let column = 2; column <= 5; column++) {
+      const missing = [...values];
+      missing[row * size + column] = NaN;
+      const sample = sampleSmoothField(missing, size, size, ...point);
+      if (row >= 3 && row <= 4 && column >= 3 && column <= 4) {
+        assert.ok(Number.isNaN(sample));
+      } else {
+        assert.ok(Math.abs(sample - expected) < 1e-9);
+      }
     }
   }
 });
@@ -380,10 +560,72 @@ test("refined chords stay within the midpoint error bound", () => {
     for (let index = 1; index < coordinates.length; index++) {
       for (const along of [0.25, 0.5, 0.75]) {
         const point = alongSegment(coordinates[index - 1], coordinates[index], along);
-        const error = Math.abs(bilinearAt(values, 2, point) - level);
+        const error = Math.abs(
+          sampleSmoothField(values, 2, 2, point[0], point[1]) - level,
+        );
         assert.ok(error <= 0.05 + 1e-6, `${along} along a chord gave ${error}`);
       }
     }
+  }
+});
+
+test("adaptive chords bound error against a steep bicubic field rather than bilinear", () => {
+  const size = 9;
+  const values = paraboloidField(size, 4).map((value) => value * 20);
+  const level = -105;
+  const lines = traceIsolines(values, size, size, [level], true);
+  let shortestSegment = Infinity;
+
+  assert.equal(lines.length, 1);
+  for (const { coordinates } of lines) {
+    for (let index = 1; index < coordinates.length; index++) {
+      const start = coordinates[index - 1];
+      const end = coordinates[index];
+      shortestSegment = Math.min(shortestSegment, Math.hypot(...segmentDirection(start, end)));
+      for (const along of [0, 0.25, 0.5, 0.75, 1]) {
+        const [x, y] = alongSegment(start, end, along);
+        const error = Math.abs(sampleSmoothField(values, size, size, x, y) - level);
+        assert.ok(error <= 0.05 + 1e-6, `${x},${y} has bicubic error ${error}`);
+      }
+    }
+  }
+  assert.ok(shortestSegment < 1 / 4);
+});
+
+test("the finite ring extends a padded 5x5 crossing to x zero and four", () => {
+  const values = paddedRingField();
+
+  for (const smooth of [false, true]) {
+    const lines = traceIsolines(values, 5, 5, [0.5], smooth);
+    assert.equal(lines.length, 1);
+    const coordinates = lines[0].coordinates;
+    assert.deepEqual([coordinates[0][0], coordinates.at(-1)![0]].sort(), [0, 4]);
+    assert.ok(coordinates.every(([, y]) => Math.abs(y - 2.5) < 1e-9));
+  }
+});
+
+function paddedRingField(): number[] {
+  return Array.from({ length: 25 }, (_, index) => {
+    const row = Math.floor(index / 5);
+    const column = index % 5;
+    const corner = (row === 0 || row === 4) && (column === 0 || column === 4);
+    return corner ? NaN : row - 2;
+  });
+}
+
+test("NaN beyond the finite padded ring still stops tracing", () => {
+  const ring = paddedRingField();
+  const values = new Array<number>(49).fill(NaN);
+  ring.forEach((value, index) => {
+    values[(Math.floor(index / 5) + 1) * 7 + index % 5 + 1] = value;
+  });
+
+  for (const smooth of [false, true]) {
+    const lines = traceIsolines(values, 7, 7, [0.5], smooth);
+    assert.equal(lines.length, 1);
+    const coordinates = lines[0].coordinates;
+    assert.deepEqual([coordinates[0][0], coordinates.at(-1)![0]].sort(), [1, 5]);
+    assert.ok(coordinates.every(([x, y]) => x >= 1 && x <= 5 && y === 3.5));
   }
 });
 
@@ -468,6 +710,22 @@ test("refined lines of adjacent levels never cross", () => {
   assert.deepEqual(crossings, []);
 });
 
+test("closely spaced levels on a curved bicubic field stay disjoint", () => {
+  const size = 9;
+  const lines = traceIsolines(paraboloidField(size, 4), size, size, [-5.1, -5, -4.9], true);
+  const segments: TestSegment[] = lines.flatMap(({ value, coordinates }) =>
+    coordinates.slice(1).map((end, index) => ({ value, start: coordinates[index], end })),
+  );
+
+  assert.equal(lines.length, 3);
+  for (let left = 0; left < segments.length; left++) {
+    for (let right = left + 1; right < segments.length; right++) {
+      if (segments[left].value === segments[right].value) continue;
+      assert.ok(!segmentsCross(segments[left], segments[right]));
+    }
+  }
+});
+
 test("rows map linearly to latitude and take the world shift", () => {
   const grid = { bbox: [34, -5, 42, 5] as [number, number, number, number], nx: 4, ny: 2 };
   const coordinates = toLngLat([[0, 0], [2, 1], [4, 2]], grid, -360);
@@ -483,10 +741,78 @@ test("rows map linearly to latitude and take the world shift", () => {
   );
 });
 
+test("padded antimeridian coordinates use the grown bbox and the world shift", () => {
+  const grid = {
+    bbox: [178.5, -20.5, 183.5, -15.5] as [number, number, number, number],
+    nx: 5,
+    ny: 5,
+  };
+  const lines = traceIsolines(paddedRingField(), 5, 5, [0.5], true);
+  const ends = [lines[0].coordinates[0], lines[0].coordinates.at(-1)!]
+    .sort(([left], [right]) => left - right);
+  const geographic = toLngLat(ends, grid, 0);
+
+  assert.deepEqual(geographic, [[179, -18.5], [183, -18.5]]);
+  assert.deepEqual(toLngLat(ends, grid, -360), [
+    [-181, -18.5],
+    [-177, -18.5],
+  ]);
+});
+
 interface TestSegment {
   value: number;
   start: [number, number];
   end: [number, number];
+}
+
+function paraboloidField(size: number, centre: number): number[] {
+  const values: number[] = [];
+  for (let row = 0; row < size; row++) {
+    for (let column = 0; column < size; column++) {
+      values.push(-((column - centre) ** 2 + (row - centre) ** 2));
+    }
+  }
+  return values;
+}
+
+function quadRange(
+  values: readonly number[],
+  nx: number,
+  column: number,
+  row: number,
+): [number, number] {
+  const top = row * nx + column;
+  const corners = [values[top], values[top + 1], values[top + nx + 1], values[top + nx]];
+  return [Math.min(...corners), Math.max(...corners)];
+}
+
+function borderTurnsDegrees(lines: readonly Isoline[], borderY: number): number[] {
+  const turns: number[] = [];
+  for (const { coordinates } of lines) {
+    for (let index = 1; index + 1 < coordinates.length; index++) {
+      if (Math.abs(coordinates[index][1] - borderY) > 1e-9) continue;
+      const incoming = segmentDirection(coordinates[index - 1], coordinates[index]);
+      const outgoing = segmentDirection(coordinates[index], coordinates[index + 1]);
+      turns.push(angleBetweenDegrees(incoming, outgoing));
+    }
+  }
+  return turns;
+}
+
+function segmentDirection(
+  start: [number, number],
+  end: [number, number],
+): [number, number] {
+  return [end[0] - start[0], end[1] - start[1]];
+}
+
+function angleBetweenDegrees(
+  left: [number, number],
+  right: [number, number],
+): number {
+  const dot = left[0] * right[0] + left[1] * right[1];
+  const cosine = dot / (Math.hypot(...left) * Math.hypot(...right));
+  return Math.acos(Math.min(1, Math.max(-1, cosine))) * 180 / Math.PI;
 }
 
 function edgePairs(lines: readonly Isoline[]): string[][] {

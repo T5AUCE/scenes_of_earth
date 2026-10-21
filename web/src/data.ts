@@ -26,8 +26,10 @@ export async function readArray(store: Store, path: string, selection: (number |
 }
 
 /** Reads the layer's whole inside-the-area mask. */
-export const readMask = (store: Store, layer: LayerDoc) =>
-  readArray(store, layer.mask.path, [null, null]);
+export async function readMask(store: Store, layer: LayerDoc) {
+  const raw = await readArray(store, layer.mask.path, [null, null]);
+  return Uint8Array.from(raw, (value) => value === 1 ? 1 : 0);
+}
 
 /** The layer's array for a role; throws when the layer has none. */
 export function arrayDoc(layer: LayerDoc, role: string) {

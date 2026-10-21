@@ -143,7 +143,7 @@ python -m soe.cli worldcover-index
 
 - `area.bbox` is `[W, S, E, N]` with W < E always. A shape across the antimeridian is unwrapped into one frame, so E may be
   above 180 (up to 360) and `lon` arrays rise past 180, as MapLibre's `LngLatBounds` does. `area.geojson` is in the same frame.
-- `scene.json` is version 0.5. The top-level `period` (`start`, `end` exclusive, `step`; ISO dates) is the requested range,
+- `scene.json` is version 0.6. The top-level `period` (`start`, `end` exclusive, `step`; ISO dates) is the requested range,
   or `null` for a scene without series. Each layer has its own `grid` (crs, bbox, res, nx, ny; `aggregation` for series), `mask`,
   `coverage`, `time` (`step` as an ISO 8601 duration, `end` = the day after the last step's period, `method` = how a step summarises
   its period (`sum`, `mean`, `point`, `max`), `count`, explicit `values`, or `null` for static layers) and
@@ -155,8 +155,13 @@ python -m soe.cli worldcover-index
   area over all steps (half an even stretch, half quantiles, rounded to two significant digits of the span so a 288-300
   field keeps whole degrees; rain starts at 0; a constant field has equal ends), evenly spaced along the palette.
   Stored value = (real value - add_offset) / scale_factor; every array also carries `scale_factor`, `add_offset` and, when
-  set, the Zarr `fill_value`. Cells outside the area's `mask` hold the fill value in every array of every layer; the viewer
-  reads them as no data.
+  set, the Zarr `fill_value`. The uint8 `mask` stores 0 for outside, 1 for area cells and 2 for
+  a one-cell ring of real source values along outer edges and holes. The ring uses four edge
+  neighbours and stops at source coverage; it never invents values. Values on 1 or 2 survive
+  storage while 0 and genuine source no-data hold fill. The viewer displays only mask 1;
+  isotherms use the hidden ring to reach the outline and are clipped by the area geometry.
+  Statistics, style stops, notices, provenance codes and `cells_inside` count only mask 1.
+  Ring-only fallback values still credit their source but add no area fallback count or notice.
 - Rain is stored as uint16 at 0.1 mm (fill 65535, values above 6553.4 mm are clipped). Series are chunked one step per
   chunk and sharded 12 steps per shard; static arrays are one chunk each. The root `zarr.json` has consolidated metadata.
 - Budgets: the raw size of all layers' arrays together is capped at 50 MB, and the source cells x steps read for all
@@ -168,11 +173,12 @@ python -m soe.cli worldcover-index
   clipped to the coverage of all selected layers, so one layer's mask can reach slightly beyond the outline.
 - The terrain layer holds no elevation array. The viewer draws shading and contours from the elevation tiles named by
   `layers[].tiles` (Terrarium encoding, 512 px, Mapterhorn by default), and the build keeps only `stats` (`min`, `max`, `mean`,
-  `p2`, `p98`, `slope_p50_deg`, `slope_p90_deg`, `cell_m`), taken inside the mask, which choose the contour intervals. The tile
+  `p2`, `p98`, `slope_p50_deg`, `slope_p90_deg`, `cell_m`), taken on mask 1, which choose the contour intervals. The tile
   URL is part of the scene id, so pointing `SOE_TERRAIN_TILES` at another copy renames the scenes. With `SOE_SYNTHETIC=1` the
   statistics are fake while the tiles are still the real hosted ones.
-- Land cover (`esa_worldcover`, not a default layer) is a static `categorical` layer with a uint8 `value` array (0 = no data
-  or outside the area) on cells of 0.05/k degrees (the same budget as terrain), holding the most common ESA WorldCover class
+- Land cover (`esa_worldcover`, not a default layer) is a static `categorical` layer with a uint8
+  `value` array (0 = no data or outside the stored area and ring) on cells of 0.05/k degrees
+  (the same budget as terrain), holding the most common ESA WorldCover class
   in each cell. It reads the tile's COG overview with at least 16 source pixels per cell (the 0.5 degree spike agreed with
   full resolution on 96.7-97.8 % of cells). `style.classes` holds the official colours; `style.palette: "painted"` names the
   softer set the viewer holds by default, and its "ESA colours" option switches to the official ones. Land cover is refused
@@ -183,8 +189,9 @@ python -m soe.cli worldcover-index
 - Terrain reads are cached in `SCENES_DIR/.cache/` (keyed by dataset, source versions, bbox, res and soe version), so
   rebuilding an area with other layers or dates does not read the tiles again. Deleting the folder is always safe, and it
   is the way to clear files that older versions left behind.
-- Format 0.5 renames `copdem_terrain` to `terrain`. Generator 0.7.0 changes every scene id, so build a new scene rather
-  than replacing an old bundle in place. The viewer rejects format 0.4 with a prompt to pick the area again.
+- Format 0.6 adds the real-data ring. Generator 0.8.0 and the bundle format both enter the scene
+  id, so new requests cannot reuse older bundles. Build a new scene rather than replacing an
+  immutable bundle in place. The viewer rejects older formats with a prompt to pick the area again.
 - Contours use `maplibre-contour` (BSD-3-Clause) with a scene-seeded nested 10–2000 m ladder. New tiers fade in over
   0.75 zoom levels and are traced one zoom early. Geometry stops refining at z12; bold heights never change on zoom.
   Labels are bold-only until the Kenya/Fiji/flat-area trial establishes whether the sparse-label fallback is needed.

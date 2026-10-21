@@ -11,6 +11,8 @@ MIN_STOPS = 2
 STYLE_KINDS = ("field", "categorical", "terrain")
 COLOUR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
 
+MASK_RULE = "1 = area cell, 2 = one-cell ring of real values"
+
 # The web duplicates these names in render/colormap.ts CLASS_PALETTES.
 CLASS_PALETTES = ("painted",)
 
@@ -28,7 +30,7 @@ TERRAIN_STATS = (
 )
 
 
-def validate(doc: JsonObject) -> list[str]:
+def validate(doc: JsonObject, expected_version: str = "0.6") -> list[str]:
     """Return a list of problems (empty when the bundle is fine)."""
     required = ("version", "id", "area", "period", "layers", "data", "credits", "notices")
     missing = [f"missing {key}" for key in required if key not in doc]
@@ -36,6 +38,8 @@ def validate(doc: JsonObject) -> list[str]:
         return missing
 
     problems = []
+    if doc["version"] != expected_version:
+        problems.append(f"version must be {expected_version}")
     if not doc["layers"]:
         problems.append("no layers")
 
@@ -108,8 +112,7 @@ def _layer_problems(layer: JsonObject) -> list[str]:
     elif not layer["arrays"] and not layer.get("tiles"):
         problems.append(f"{layer_id}: missing arrays")
 
-    if layer.get("mask") and layer["mask"]["cells_inside"] < 1:
-        problems.append(f"{layer_id}: mask has no cells")
+    problems += _mask_problems(layer_id, layer.get("mask"))
 
     time_axis = layer.get("time")
     time_axis_is_consistent = (
@@ -133,6 +136,20 @@ def _layer_problems(layer: JsonObject) -> list[str]:
         + _terrain_problems(layer)
         + _tiles_problems(layer_id, layer.get("tiles"))
     )
+
+
+def _mask_problems(layer_id: str, mask: object) -> list[str]:
+    if not isinstance(mask, dict):
+        return [f"{layer_id}: mask must be an object"]
+
+    problems = []
+    for key, expected in (("path", f"{layer_id}/mask"), ("rule", MASK_RULE)):
+        if mask.get(key) != expected:
+            problems.append(f"{layer_id}: mask.{key} must be {expected!r}")
+    cells_inside = mask.get("cells_inside")
+    if not _is_int(cells_inside) or cells_inside < 1:
+        problems.append(f"{layer_id}: mask.cells_inside must be an integer >= 1")
+    return problems
 
 
 def _source_array_problems(layer: JsonObject) -> list[str]:

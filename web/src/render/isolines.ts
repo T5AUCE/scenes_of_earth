@@ -11,6 +11,7 @@ type Point = [number, number];
 type Segment = [Point, Point];
 type Edge = "top" | "right" | "bottom" | "left";
 type Corners = [number, number, number, number];
+type FieldSampler = (x: number, y: number) => number;
 
 interface ScalarField {
   values: ArrayLike<number>;
@@ -18,8 +19,16 @@ interface ScalarField {
   ny: number;
 }
 
+interface SmoothField extends ScalarField {
+  modes: Uint8Array;
+  coefficients: Float64Array;
+  edgeClamps: Uint8Array;
+}
+
 interface CellTrace {
-  field: ScalarField;
+  sample?: FieldSampler;
+  crossings?: Map<number, Point>;
+  crossingWidth?: number;
   level: number;
   segments: Segment[];
   seen: Set<string>;
@@ -42,6 +51,14 @@ const REFINEMENT_FACTOR = 4;
 // Bounds the extra cells spent on steep fields whose chords keep missing the bound.
 const MAX_SUBDIVISION_DEPTH = 4;
 const CHORD_ERROR_DEG = 0.05;
+const MAX_CROSSING_ITERATIONS = 28;
+const CROSSING_BISECTION_PERIOD = 4;
+const CROSSING_VALUE_TOLERANCE_DEG = 1e-10;
+// Integer edge keys avoid coordinate strings in the crossing cache's hot path.
+const SUBDIVISION_SCALE = REFINEMENT_FACTOR * 2 ** MAX_SUBDIVISION_DEPTH;
+const CROSSING_KEY_STRIDE = 2 * 2 ** MAX_SUBDIVISION_DEPTH + 2;
+const EMPTY_EDGES: [Edge, Edge][] = [];
+const EDGE_FLAGS: Record<Edge, number> = { top: 1, bottom: 2, left: 4, right: 8 };
 
 const CASE_EDGES: Record<number, [Edge, Edge][]> = {
   1: [["left", "top"]],
@@ -96,8 +113,8 @@ export function isolineLevels(low: number, high: number, interval: number): numb
 /**
  * Trace each level through a row-major grid with marching squares. A cell with any no-data
  * corner is skipped, and adjacent segments share endpoints so they chain into polylines.
- * With refine, every fully finite quad is bilinearly subdivided, and any chord that bows
- * away from the native bilinear surface is subdivided further.
+ * With refine, every fully finite quad is subdivided four times per axis with a clamped
+ * bicubic field, and any chord that bows away from that field is subdivided further.
  */
 export function traceIsolines(
   values: ArrayLike<number>,
@@ -110,10 +127,10 @@ export function traceIsolines(
     return levels.flatMap((level) => traceLevel(values, nx, ny, level));
   }
 
-  const refined = refineField(values, nx, ny, REFINEMENT_FACTOR);
-  const native = { values, nx, ny };
+  const sample = createSmoothSampler(values, nx, ny);
+  const refined = refineField(sample, nx, ny);
   const scale = 1 / REFINEMENT_FACTOR;
-  return levels.flatMap((level) => traceRefinedLevel(refined, native, level, scale));
+  return traceRefinedLevels(refined, sample, levels, scale);
 }
 
 function traceLevel(
@@ -123,38 +140,84 @@ function traceLevel(
   level: number,
 ): Isoline[] {
   const trace: CellTrace = {
-    field: { values, nx, ny },
     level,
     segments: [],
     seen: new Set(),
   };
+  // Reuse one corner array per level so the hot loop does not allocate per cell.
+  const corners: Corners = [0, 0, 0, 0];
   for (let row = 0; row + 1 < ny; row++) {
     for (let column = 0; column + 1 < nx; column++) {
-      const corners = cellCorners(values, nx, column, row);
-      if (corners.some((value) => !Number.isFinite(value))) continue;
+      const top = row * nx + column;
+      corners[0] = values[top];
+      corners[1] = values[top + 1];
+      corners[2] = values[top + nx + 1];
+      corners[3] = values[top + nx];
+      if (!Number.isFinite(corners[0]) || !Number.isFinite(corners[1])
+        || !Number.isFinite(corners[2]) || !Number.isFinite(corners[3])) continue;
 
-      addCellSegments(trace, column, row, 1, corners, cellEdges(corners, level));
+      const segments = cellSegments(trace, column, row, 1, corners, cellEdges(corners, level));
+      appendSegments(trace, segments);
     }
   }
   return chainSegments(trace.segments, level);
 }
 
-function traceRefinedLevel(
+function traceRefinedLevels(
   refined: ScalarField,
-  native: ScalarField,
-  level: number,
+  sample: FieldSampler,
+  levels: readonly number[],
   scale: number,
 ): Isoline[] {
-  const trace: CellTrace = { field: native, level, segments: [], seen: new Set() };
-  for (let row = 0; row + 1 < refined.ny; row++) {
-    for (let column = 0; column + 1 < refined.nx; column++) {
-      const corners = cellCorners(refined.values, refined.nx, column, row);
-      if (corners.some((value) => !Number.isFinite(value))) continue;
+  const traces: CellTrace[] = levels.map((level) => ({
+    sample,
+    crossings: new Map(),
+    crossingWidth: (refined.nx - 1) * 2 ** MAX_SUBDIVISION_DEPTH + 1,
+    level,
+    segments: [],
+    seen: new Set(),
+  }));
+  const corners: Corners = [0, 0, 0, 0];
+  const factor = REFINEMENT_FACTOR;
+  for (let row = 0; row + factor < refined.ny; row += factor) {
+    for (let column = 0; column + factor < refined.nx; column += factor) {
+      const top = row * refined.nx + column;
+      corners[0] = refined.values[top];
+      corners[1] = refined.values[top + factor];
+      corners[2] = refined.values[top + factor * refined.nx + factor];
+      corners[3] = refined.values[top + factor * refined.nx];
+      if (!Number.isFinite(corners[0]) || !Number.isFinite(corners[1])
+        || !Number.isFinite(corners[2]) || !Number.isFinite(corners[3])) continue;
 
-      collectCellSegments(trace, column * scale, row * scale, scale, corners, 0);
+      const low = Math.min(corners[0], corners[1], corners[2], corners[3]);
+      const high = Math.max(corners[0], corners[1], corners[2], corners[3]);
+      for (const trace of traces) {
+        if (trace.level <= low || trace.level > high) continue;
+        traceRefinedQuad(trace, refined, column, row, scale);
+      }
     }
   }
-  return chainSegments(trace.segments, level);
+  return traces.flatMap((trace) => chainSegments(trace.segments, trace.level));
+}
+
+function traceRefinedQuad(
+  trace: CellTrace,
+  refined: ScalarField,
+  column: number,
+  row: number,
+  scale: number,
+) {
+  const corners: Corners = [0, 0, 0, 0];
+  for (let localRow = row; localRow < row + REFINEMENT_FACTOR; localRow++) {
+    for (let localColumn = column; localColumn < column + REFINEMENT_FACTOR; localColumn++) {
+      const top = localRow * refined.nx + localColumn;
+      corners[0] = refined.values[top];
+      corners[1] = refined.values[top + 1];
+      corners[2] = refined.values[top + refined.nx + 1];
+      corners[3] = refined.values[top + refined.nx];
+      collectCellSegments(trace, localColumn * scale, localRow * scale, scale, corners, 0);
+    }
+  }
 }
 
 function collectCellSegments(
@@ -168,27 +231,15 @@ function collectCellSegments(
   const edges = cellEdges(corners, trace.level);
   if (edges.length === 0) return;
 
-  // A finite cell can still bow away from the native surface between its crossings.
-  if (depth < MAX_SUBDIVISION_DEPTH && needsSubdivision(trace, x, y, size, corners, edges)) {
+  const segments = cellSegments(trace, x, y, size, corners, edges);
+  // A finite cell can still bow away from the smoothed surface between its crossings.
+  if (depth < MAX_SUBDIVISION_DEPTH && segments.some(([start, end]) =>
+    chordErrorDegrees(trace.sample!, start, end, trace.level) > CHORD_ERROR_DEG,
+  )) {
     subdivideCell(trace, x, y, size, corners, depth + 1);
     return;
   }
-  addCellSegments(trace, x, y, size, corners, edges);
-}
-
-function needsSubdivision(
-  { field, level }: CellTrace,
-  x: number,
-  y: number,
-  size: number,
-  corners: Corners,
-  edges: readonly [Edge, Edge][],
-): boolean {
-  return edges.some(([from, to]) => {
-    const start = cellPoint(x, y, size, edgePoint(from, 0, 0, corners, level));
-    const end = cellPoint(x, y, size, edgePoint(to, 0, 0, corners, level));
-    return midpointErrorDegrees(field, start, end, level) > CHORD_ERROR_DEG;
-  });
+  appendSegments(trace, segments);
 }
 
 function subdivideCell(
@@ -199,12 +250,13 @@ function subdivideCell(
   [topLeft, topRight, bottomRight, bottomLeft]: Corners,
   depth: number,
 ) {
-  const topMiddle = (topLeft + topRight) / 2;
-  const rightMiddle = (topRight + bottomRight) / 2;
-  const bottomMiddle = (bottomLeft + bottomRight) / 2;
-  const leftMiddle = (topLeft + bottomLeft) / 2;
-  const centre = (topLeft + topRight + bottomRight + bottomLeft) / 4;
   const half = size / 2;
+  const sample = trace.sample!;
+  const topMiddle = sample(x + half, y);
+  const rightMiddle = sample(x + size, y + half);
+  const bottomMiddle = sample(x + half, y + size);
+  const leftMiddle = sample(x, y + half);
+  const centre = sample(x + half, y + half);
 
   collectCellSegments(trace, x, y, half, [topLeft, topMiddle, centre, leftMiddle], depth);
   collectCellSegments(
@@ -233,17 +285,22 @@ function subdivideCell(
   );
 }
 
-function addCellSegments(
+function cellSegments(
   trace: CellTrace,
   x: number,
   y: number,
   size: number,
   corners: Corners,
   edges: readonly [Edge, Edge][],
-) {
-  for (const [from, to] of edges) {
-    const start = cellPoint(x, y, size, edgePoint(from, 0, 0, corners, trace.level));
-    const end = cellPoint(x, y, size, edgePoint(to, 0, 0, corners, trace.level));
+): Segment[] {
+  return edges.map(([from, to]) => [
+    crossingPoint(trace, from, x, y, size, corners),
+    crossingPoint(trace, to, x, y, size, corners),
+  ]);
+}
+
+function appendSegments(trace: CellTrace, segments: Segment[]) {
+  for (const [start, end] of segments) {
     if (pointKey(start) === pointKey(end)) continue;
 
     const key = segmentKey(start, end);
@@ -254,56 +311,343 @@ function addCellSegments(
   }
 }
 
+function crossingPoint(
+  { sample, crossings, crossingWidth, level }: CellTrace,
+  edge: Edge,
+  x: number,
+  y: number,
+  size: number,
+  corners: Corners,
+): Point {
+  const linear = cellPoint(x, y, size, edgePoint(edge, 0, 0, corners, level));
+  if (!sample) return linear;
+
+  const horizontal = edge === "top" || edge === "bottom";
+  const start: Point = [edge === "right" ? x + size : x, edge === "bottom" ? y + size : y];
+  const end: Point = [start[0] + (horizontal ? size : 0), start[1] + (horizontal ? 0 : size)];
+  const startIndex = Math.round(start[0] * SUBDIVISION_SCALE)
+    + Math.round(start[1] * SUBDIVISION_SCALE) * crossingWidth!;
+  const key = startIndex * CROSSING_KEY_STRIDE
+    + Math.round(size * SUBDIVISION_SCALE) * 2 + (horizontal ? 0 : 1);
+  const cached = crossings!.get(key);
+  if (cached) return cached;
+
+  const point = solveCrossing(sample, start, end, linear, level);
+  crossings!.set(key, point);
+  return point;
+}
+
 function cellPoint(x: number, y: number, size: number, [across, down]: Point): Point {
   return [x + across * size, y + down * size];
 }
 
-function midpointErrorDegrees(
-  field: ScalarField,
+function solveCrossing(
+  sample: FieldSampler,
+  start: Point,
+  end: Point,
+  linear: Point,
+  level: number,
+): Point {
+  const horizontal = start[1] === end[1];
+  const axis = horizontal ? 0 : 1;
+  const size = end[axis] - start[axis];
+  let low = 0;
+  let high = 1;
+  let startValue = sample(...start);
+  let endValue = sample(...end);
+  if (startValue === level) return start;
+  if (endValue === level) return end;
+
+  // Solve the shared field rather than a cell's chord so unequal subdivisions still join.
+  let point = linear;
+  for (let iteration = 0; iteration < MAX_CROSSING_ITERATIONS; iteration++) {
+    const value = sample(...point);
+    if (Math.abs(value - level) <= CROSSING_VALUE_TOLERANCE_DEG) return point;
+    const along = (point[axis] - start[axis]) / size;
+    if ((value < level) === (startValue < level)) {
+      low = along;
+      startValue = value;
+    } else {
+      high = along;
+      endValue = value;
+    }
+    const middle = iteration % CROSSING_BISECTION_PERIOD === CROSSING_BISECTION_PERIOD - 1
+      ? (low + high) / 2
+      : low + (high - low) * (level - startValue) / (endValue - startValue);
+    point = [
+      start[0] + (end[0] - start[0]) * middle,
+      start[1] + (end[1] - start[1]) * middle,
+    ];
+  }
+  return point;
+}
+
+function chordErrorDegrees(
+  sample: FieldSampler,
   start: Point,
   end: Point,
   level: number,
 ): number {
-  const across = (start[0] + end[0]) / 2;
-  const down = (start[1] + end[1]) / 2;
-  return Math.abs(sampleBilinear(field, across, down) - level);
+  let error = 0;
+  for (const along of [0.25, 0.5, 0.75]) {
+    const across = start[0] + (end[0] - start[0]) * along;
+    const down = start[1] + (end[1] - start[1]) * along;
+    error = Math.max(error, Math.abs(sample(across, down) - level));
+  }
+  return error;
 }
 
-function sampleBilinear({ values, nx, ny }: ScalarField, x: number, y: number): number {
-  const column = Math.min(Math.floor(x), nx - 2);
-  const row = Math.min(Math.floor(y), ny - 2);
-  const top = row * nx + column;
-  const across = x - column;
-  const down = y - row;
-  const topValue = values[top] + (values[top + 1] - values[top]) * across;
-  const bottomValue = values[top + nx] + (values[top + nx + 1] - values[top + nx]) * across;
-  return topValue + (bottomValue - topValue) * down;
-}
-
-function refineField(
+/**
+ * Sample the bicubic field that Smooth traces at fractional grid coordinates. Quads without
+ * a full 4x4 neighbourhood use bilinear, so a missing sample is never bridged.
+ * Shared edges are bounded consistently so clamping and fallback cannot split a contour.
+ */
+export function sampleSmoothField(
   values: ArrayLike<number>,
   nx: number,
   ny: number,
-  factor: number,
-): ScalarField {
-  const refinedNx = (nx - 1) * factor + 1;
-  const refinedNy = (ny - 1) * factor + 1;
-  const refined = new Float32Array(refinedNx * refinedNy).fill(NaN);
-  for (let row = 0; row < ny; row++) {
-    for (let column = 0; column < nx; column++) {
-      refined[row * factor * refinedNx + column * factor] = values[row * nx + column];
-    }
-  }
+  x: number,
+  y: number,
+): number {
+  return createSmoothSampler(values, nx, ny)(x, y);
+}
 
+function createSmoothSampler(values: ArrayLike<number>, nx: number, ny: number): FieldSampler {
+  const field = { values, nx, ny };
+  const modes = quadModes(field);
+  const coefficients = cubicCoefficients(field, modes);
+  const smooth = { ...field, modes, coefficients, edgeClamps: new Uint8Array(modes.length) };
+  prepareBoundaries(smooth);
+  return (x, y) => sampleSmoothQuad(smooth, x, y);
+}
+
+function quadModes(field: ScalarField): Uint8Array {
+  const { nx, ny } = field;
+  const modes = new Uint8Array(Math.max(0, nx - 1) * Math.max(0, ny - 1));
   for (let row = 0; row + 1 < ny; row++) {
     for (let column = 0; column + 1 < nx; column++) {
-      const top = row * nx + column;
-      if (isFiniteQuad(values, top, nx)) {
-        fillRefinedQuad(refined, refinedNx, values, nx, column, row, factor);
+      if (hasFullNeighbourhood(field, column, row)) {
+        modes[row * (nx - 1) + column] = 1;
       }
     }
   }
-  return { values: refined, nx: refinedNx, ny: refinedNy };
+  return modes;
+}
+
+function hasFullNeighbourhood(
+  { values, nx, ny }: ScalarField,
+  column: number,
+  row: number,
+): boolean {
+  if (column < 1 || row < 1 || column + 2 >= nx || row + 2 >= ny) return false;
+
+  for (let localRow = row - 1; localRow <= row + 2; localRow++) {
+    const start = localRow * nx + column - 1;
+    for (let localColumn = 0; localColumn < 4; localColumn++) {
+      if (!Number.isFinite(values[start + localColumn])) return false;
+    }
+  }
+  return true;
+}
+
+function cubicCoefficients(field: ScalarField, modes: Uint8Array): Float64Array {
+  const { values, nx, ny } = field;
+  const coefficients = new Float64Array(modes.length * 16);
+  const rows = new Float64Array(16);
+  for (let row = 1; row + 2 < ny; row++) {
+    for (let column = 1; column + 2 < nx; column++) {
+      const quad = row * (nx - 1) + column;
+      if (!modes[quad]) continue;
+      for (let offset = -1; offset <= 2; offset++) {
+        const start = (row + offset) * nx + column;
+        writeCubicPolynomial(
+          rows,
+          (offset + 1) * 4,
+          1,
+          values[start - 1],
+          values[start],
+          values[start + 1],
+          values[start + 2],
+        );
+      }
+      for (let power = 0; power < 4; power++) {
+        writeCubicPolynomial(
+          coefficients,
+          quad * 16 + power,
+          4,
+          rows[power],
+          rows[4 + power],
+          rows[8 + power],
+          rows[12 + power],
+        );
+      }
+    }
+  }
+  return coefficients;
+}
+
+function writeCubicPolynomial(
+  output: Float64Array,
+  start: number,
+  stride: number,
+  p0: number,
+  p1: number,
+  p2: number,
+  p3: number,
+) {
+  output[start] = p1;
+  output[start + stride] = (p2 - p0) / 2;
+  output[start + 2 * stride] = p0 - 2.5 * p1 + 2 * p2 - p3 / 2;
+  output[start + 3 * stride] = (3 * p1 - 3 * p2 + p3 - p0) / 2;
+}
+
+function prepareBoundaries(field: SmoothField) {
+  const { nx, ny, modes } = field;
+  const polynomial = new Float64Array(4);
+  for (let row = 1; row + 2 < ny; row++) {
+    for (let column = 1; column + 2 < nx; column++) {
+      const quad = row * (nx - 1) + column;
+      if (!modes[quad]) continue;
+      prepareBoundary(field, quad, "top", modes[quad - (nx - 1)], polynomial);
+      prepareBoundary(field, quad, "bottom", modes[quad + (nx - 1)], polynomial);
+      prepareBoundary(field, quad, "left", modes[quad - 1], polynomial);
+      prepareBoundary(field, quad, "right", modes[quad + 1], polynomial);
+    }
+  }
+}
+
+function prepareBoundary(
+  { coefficients, edgeClamps }: SmoothField,
+  quad: number,
+  edge: Edge,
+  neighbour: number,
+  polynomial: Float64Array,
+) {
+  const horizontal = edge === "top" || edge === "bottom";
+  const stride = horizontal ? 1 : 4;
+  const inward = horizontal ? 4 : 1;
+  const near = edge === "top" || edge === "left";
+  for (let power = 0; power < 4; power++) {
+    const index = quad * 16 + power * stride;
+    polynomial[power] = near ? coefficients[index]
+      : coefficients[index] + coefficients[index + inward]
+        + coefficients[index + 2 * inward] + coefficients[index + 3 * inward];
+  }
+  if (neighbour) {
+    if (polynomialOvershoots(polynomial)) edgeClamps[quad] |= EDGE_FLAGS[edge];
+    return;
+  }
+
+  // A bilinear neighbour fixes the shared edge, without changing the opposite edge.
+  for (let power = 1; power < 4; power++) {
+    const delta = power === 1 ? polynomial[2] + polynomial[3] : -polynomial[power];
+    const index = quad * 16 + power * stride;
+    if (near) coefficients[index] += delta;
+    coefficients[index + 2 * inward] += (near ? -3 : 3) * delta;
+    coefficients[index + 3 * inward] += (near ? 2 : -2) * delta;
+  }
+}
+
+function polynomialOvershoots(polynomial: Float64Array): boolean {
+  const [constant, linear, quadratic, cubic] = polynomial;
+  const end = constant + linear + quadratic + cubic;
+  const low = Math.min(constant, end);
+  const high = Math.max(constant, end);
+  const discriminant = quadratic * quadratic - 3 * cubic * linear;
+  if (cubic === 0) return polynomialOutsideRange(polynomial, -linear / (2 * quadratic), low, high);
+  if (discriminant < 0) return false;
+
+  const root = Math.sqrt(discriminant);
+  return polynomialOutsideRange(polynomial, (-quadratic - root) / (3 * cubic), low, high)
+    || polynomialOutsideRange(polynomial, (-quadratic + root) / (3 * cubic), low, high);
+}
+
+function polynomialOutsideRange(
+  polynomial: Float64Array,
+  along: number,
+  low: number,
+  high: number,
+): boolean {
+  if (!(along > 0 && along < 1)) return false;
+
+  const value = polynomialValue(polynomial, 0, along);
+  return value < low || value > high;
+}
+
+function sampleSmoothQuad(
+  field: SmoothField,
+  x: number,
+  y: number,
+): number {
+  const { values, nx, ny, modes } = field;
+  if (x < 0 || y < 0 || x > nx - 1 || y > ny - 1 || nx < 2 || ny < 2) return NaN;
+  if (Number.isInteger(x) && Number.isInteger(y)) return values[y * nx + x];
+
+  const column = Math.max(0, Math.min(Math.floor(x), nx - 2));
+  const row = Math.max(0, Math.min(Math.floor(y), ny - 2));
+  const across = x - column;
+  const down = y - row;
+  if (Number.isInteger(y)) return sampleEdge(field, column, y, across, true);
+  if (Number.isInteger(x)) return sampleEdge(field, x, row, down, false);
+  return interpolateQuad(field, column, row, across, down, modes[row * (nx - 1) + column] === 1);
+}
+
+function sampleEdge(
+  field: SmoothField,
+  column: number,
+  row: number,
+  along: number,
+  horizontal: boolean,
+): number {
+  const { values, nx, modes } = field;
+  const start = row * nx + column;
+  const stride = horizontal ? 1 : nx;
+  const first = values[start];
+  const last = values[start + stride];
+  if (!Number.isFinite(first) || !Number.isFinite(last)) return NaN;
+
+  const quad = row * (nx - 1) + column;
+  const before = horizontal ? quad - (nx - 1) : quad - 1;
+  const bothBicubic = (horizontal ? row > 0 && row < field.ny - 1 : column > 0 && column < nx - 1)
+    && modes[before] === 1 && modes[quad] === 1;
+  if (!bothBicubic) return first + (last - first) * along;
+
+  const value = catmullRom(values[start - stride], first, last, values[start + 2 * stride], along);
+  return Math.min(Math.max(first, last), Math.max(Math.min(first, last), value));
+}
+
+function catmullRom(p0: number, p1: number, p2: number, p3: number, along: number): number {
+  const squared = along * along;
+  const cubed = squared * along;
+  return 0.5 * (
+    2 * p1
+    + (p2 - p0) * along
+    + (2 * p0 - 5 * p1 + 4 * p2 - p3) * squared
+    + (3 * p1 - 3 * p2 + p3 - p0) * cubed
+  );
+}
+
+function interpolateQuad(
+  field: SmoothField,
+  column: number,
+  row: number,
+  across: number,
+  down: number,
+  useBicubic: boolean,
+): number {
+  const { values, nx } = field;
+  const top = row * nx + column;
+  if (!isFiniteQuad(values, top, nx)) return NaN;
+  const topLeft = values[top];
+  const topRight = values[top + 1];
+  const bottomRight = values[top + nx + 1];
+  const bottomLeft = values[top + nx];
+  if (!useBicubic) return bilinearQuad(topLeft, topRight, bottomRight, bottomLeft, across, down);
+
+  const value = boundedBicubicValue(field, column, row, across, down);
+  const low = Math.min(topLeft, topRight, bottomRight, bottomLeft);
+  const high = Math.max(topLeft, topRight, bottomRight, bottomLeft);
+  return Math.min(high, Math.max(low, value));
 }
 
 function isFiniteQuad(values: ArrayLike<number>, top: number, nx: number): boolean {
@@ -313,52 +657,88 @@ function isFiniteQuad(values: ArrayLike<number>, top: number, nx: number): boole
     && Number.isFinite(values[top + nx + 1]);
 }
 
-function fillRefinedQuad(
-  refined: Float32Array,
-  refinedNx: number,
-  values: ArrayLike<number>,
-  nx: number,
-  column: number,
-  row: number,
-  factor: number,
-) {
-  const top = row * nx + column;
-  const topLeft = values[top];
-  const topRight = values[top + 1];
-  const bottomLeft = values[top + nx];
-  const bottomRight = values[top + nx + 1];
-  const firstRow = row * factor;
-  const firstColumn = column * factor;
-
-  for (let localRow = 0; localRow <= factor; localRow++) {
-    const down = localRow / factor;
-    const left = topLeft + (bottomLeft - topLeft) * down;
-    const right = topRight + (bottomRight - topRight) * down;
-    const refinedIndex = (firstRow + localRow) * refinedNx + firstColumn;
-    for (let localColumn = 0; localColumn <= factor; localColumn++) {
-      if (localColumn % factor === 0 && localRow % factor === 0) continue;
-      const across = localColumn / factor;
-      refined[refinedIndex + localColumn] = left + (right - left) * across;
-    }
-  }
+function bilinearQuad(
+  topLeft: number,
+  topRight: number,
+  bottomRight: number,
+  bottomLeft: number,
+  across: number,
+  down: number,
+): number {
+  const top = topLeft + (topRight - topLeft) * across;
+  const bottom = bottomLeft + (bottomRight - bottomLeft) * across;
+  return top + (bottom - top) * down;
 }
 
-function cellCorners(
-  values: ArrayLike<number>,
-  nx: number,
+function boundedBicubicValue(
+  field: SmoothField,
   column: number,
   row: number,
-): Corners {
-  const top = row * nx + column;
-  const bottom = top + nx;
+  across: number,
+  down: number,
+): number {
+  const { nx, coefficients, edgeClamps } = field;
+  const quad = row * (nx - 1) + column;
+  const start = quad * 16;
+  const constantRow = polynomialValue(coefficients, start, across);
+  const linearRow = polynomialValue(coefficients, start + 4, across);
+  const quadraticRow = polynomialValue(coefficients, start + 8, across);
+  const cubicRow = polynomialValue(coefficients, start + 12, across);
+  const value = constantRow + down * (linearRow + down * (quadraticRow + down * cubicRow));
+  const clamps = edgeClamps[quad];
+  if (!clamps) return value;
 
-  return [values[top], values[top + 1], values[bottom + 1], values[bottom]];
+  const left = polynomialColumn(coefficients, start, down);
+  const right = polynomialColumn(coefficients, start + 1, down)
+    + polynomialColumn(coefficients, start + 2, down)
+    + polynomialColumn(coefficients, start + 3, down) + left;
+  // Cubic weights preserve the opposite boundary's tangent when an edge needs clamping.
+  const topCorrection = clamps & EDGE_FLAGS.top
+    ? sampleEdge(field, column, row, across, true) - constantRow : 0;
+  const bottomCorrection = clamps & EDGE_FLAGS.bottom
+    ? sampleEdge(field, column, row + 1, across, true)
+      - (constantRow + linearRow + quadraticRow + cubicRow) : 0;
+  const leftCorrection = clamps & EDGE_FLAGS.left
+    ? sampleEdge(field, column, row, down, false) - left : 0;
+  const rightCorrection = clamps & EDGE_FLAGS.right
+    ? sampleEdge(field, column + 1, row, down, false) - right : 0;
+  const acrossWeight = across * across * (3 - 2 * across);
+  const downWeight = down * down * (3 - 2 * down);
+  return value
+    + (1 - downWeight) * topCorrection + downWeight * bottomCorrection
+    + (1 - acrossWeight) * leftCorrection + acrossWeight * rightCorrection;
+}
+
+function polynomialValue(coefficients: Float64Array, start: number, along: number): number {
+  return coefficients[start] + along * (coefficients[start + 1]
+    + along * (coefficients[start + 2] + along * coefficients[start + 3]));
+}
+
+function polynomialColumn(coefficients: Float64Array, start: number, along: number): number {
+  return coefficients[start] + along * (coefficients[start + 4]
+    + along * (coefficients[start + 8] + along * coefficients[start + 12]));
+}
+
+function refineField(sample: FieldSampler, nx: number, ny: number): ScalarField {
+  const refinedNx = (nx - 1) * REFINEMENT_FACTOR + 1;
+  const refinedNy = (ny - 1) * REFINEMENT_FACTOR + 1;
+  const refined = new Float64Array(refinedNx * refinedNy);
+  for (let row = 0; row < refinedNy; row++) {
+    for (let column = 0; column < refinedNx; column++) {
+      refined[row * refinedNx + column] = sample(
+        column / REFINEMENT_FACTOR,
+        row / REFINEMENT_FACTOR,
+      );
+    }
+  }
+  return { values: refined, nx: refinedNx, ny: refinedNy };
 }
 
 function cellEdges([topLeft, topRight, bottomRight, bottomLeft]: Corners, level: number) {
-  const above = (value: number) => (value >= level ? 1 : 0);
-  const cellCase =
-    above(topLeft) + above(topRight) * 2 + above(bottomRight) * 4 + above(bottomLeft) * 8;
+  const cellCase = (topLeft >= level ? 1 : 0)
+    + (topRight >= level ? 2 : 0)
+    + (bottomRight >= level ? 4 : 0)
+    + (bottomLeft >= level ? 8 : 0);
   if (cellCase === 5 || cellCase === 10) {
     // An exact tie counts as high so the pairing stays deterministic.
     const joinsHigh = saddleValue(topLeft, topRight, bottomRight, bottomLeft) >= level;
@@ -366,7 +746,7 @@ function cellEdges([topLeft, topRight, bottomRight, bottomLeft]: Corners, level:
 
     return joinsHigh ? SADDLE_10_HIGH : SADDLE_10_LOW;
   }
-  return CASE_EDGES[cellCase] ?? [];
+  return CASE_EDGES[cellCase] ?? EMPTY_EDGES;
 }
 
 function saddleValue(

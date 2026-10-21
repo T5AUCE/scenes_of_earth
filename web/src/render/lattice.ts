@@ -369,14 +369,14 @@ export function isHatched(inArea: boolean, positionByte: number) {
 /** Whether a step has any in-area cell with no value, which the legend reports. */
 export function hasHatchedCells(positions: ArrayLike<number>, mask: ArrayLike<number>) {
   for (let cell = 0; cell < positions.length; cell++) {
-    if (isHatched(mask[cell] !== 0, positions[cell])) return true;
+    if (isHatched(mask[cell] === 1, positions[cell])) return true;
   }
   return false;
 }
 
 /** Combine a step's position bytes with the area mask, so outside cells draw nothing. */
 export function markBytes(positions: ArrayLike<number>, mask: ArrayLike<number>) {
-  return Uint8Array.from(positions, (position, cell) => markByte(position, mask[cell] !== 0));
+  return Uint8Array.from(positions, (position, cell) => markByte(position, mask[cell] === 1));
 }
 
 function markByte(positionByte: number, inArea: boolean) {
