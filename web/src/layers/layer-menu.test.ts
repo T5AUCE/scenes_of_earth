@@ -17,7 +17,8 @@ const hooks = registerHooks({
 const {
   CUSTOM_INK_NOTE,
   CUSTOM_PALETTE_NOTE,
-  menuSections,
+  menuMainSections,
+  menuResetButton,
 } = await import("./layer-menu.ts").finally(() => hooks.deregister());
 
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
@@ -199,12 +200,12 @@ function fieldMenu(isDrawn: boolean, ink = "navy", palette = "ink-blue") {
 }
 
 function sectionsOf(menu: LayerMenu, changes: string[] = []) {
-  return menuSections(
-    menu,
-    "test",
-    (change) => changes.push(change),
-    () => {},
-  ) as unknown as TestElement[];
+  const push = (change: string) => changes.push(change);
+
+  return [
+    ...menuMainSections(menu, "test", push),
+    menuResetButton(menu, push, () => {}),
+  ] as unknown as TestElement[];
 }
 
 function descendants(elements: TestElement[]): TestElement[] {

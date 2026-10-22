@@ -2,9 +2,9 @@
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { cardTitle } from "../card-title";
+import { cardTitle, drawLabel } from "../card-title";
 import { layerUnits } from "../display-state";
-import { BLEND, type Draw, type Hidden } from "../layers/allocate";
+import { BLEND, drawOptions, type Draw, type Hidden } from "../layers/allocate";
 import { BLEND_TITLE, type BlendView } from "../layers/blend";
 import type { MountedLayer } from "../scene-cards";
 import type { SceneStore, SceneStoreSnapshot } from "../scene-store";
@@ -88,6 +88,16 @@ function SceneColumn({
   );
   const blendIndex = mounted.map(({ layer }) => layer.style.kind).lastIndexOf(LAST_FIELD);
   const target = editorTarget(mounted, blend, selected);
+  const toggleTarget = (on: boolean) => {
+    if (selected === BLEND) {
+      toggleBlend(on);
+
+      return;
+    }
+    const entry = mounted.find(({ layer }) => layer.id === selected);
+    if (!entry) return;
+    toggleLayer(entry, on);
+  };
 
   return (
     <>
@@ -113,6 +123,7 @@ function SceneColumn({
           onOptionChange={optionChange}
           onNotice={setNotice}
           onClose={() => setSelected(null)}
+          onToggleTarget={toggleTarget}
         />
       )}
     </>
@@ -212,6 +223,14 @@ function layerCardTitle(
   allocation: SceneStoreSnapshot["allocation"],
   smoothed: boolean,
 ): string {
+  // A layer with no draw never moves, so its title names the parts that are on.
+  if (drawOptions(layer).length === 0) {
+    return cardTitle(layer, {
+      draw: undefined,
+      off: !isMasterOn(layer, display.off),
+      parts: onPartTitles(layer, display, allocation),
+    });
+  }
   const draw = allocation.draws.get(layer.id) ?? activePartDraw(layer, display, allocation);
 
   return cardTitle(layer, {
@@ -219,6 +238,21 @@ function layerCardTitle(
     off: !isMasterOn(layer, display.off),
     smoothed,
   });
+}
+
+function onPartTitles(
+  layer: LayerDoc,
+  display: SceneStoreSnapshot["display"],
+  allocation: SceneStoreSnapshot["allocation"],
+): string[] {
+  const titles: string[] = [];
+  for (const unit of layerUnits(layer)) {
+    if (display.off.has(unit)) continue;
+    const draw = allocation.draws.get(unit);
+    if (typeof draw === "string") titles.push(drawLabel(draw, layer));
+  }
+
+  return titles;
 }
 
 function activePartDraw(

@@ -1,7 +1,7 @@
-/** Edit one layer in a persistent panel: Show as first, then parts, options and menu sections. */
+/** Edit one layer in a persistent panel, with Show as, options and menu sections. */
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
-import { showAsLabel } from "../card-title";
+import { drawLabel } from "../card-title";
 import { recordMenuChange } from "../display-state";
 import {
   BLEND,
@@ -9,7 +9,8 @@ import {
   type Draw,
 } from "../layers/allocate";
 import {
-  menuSections,
+  menuMainSections,
+  menuResetButton,
   partControls,
   type MenuChange,
 } from "../layers/layer-menu";
@@ -22,10 +23,14 @@ import {
 } from "../show-as";
 import type { LayerDoc, LayerView, Part } from "../types";
 import { DomNode } from "./dom-node";
+import { RangeSection } from "./range-section";
 import { ShowAsSection } from "./show-as-section";
 import { useSceneStore } from "./use-scene-store";
 
 const COLOUR_NOTICE = "Only one layer can use colour unless layers are combined.";
+const NOTICE_VISIBLE_MS = 3 * 1000;
+/** Matches the CSS: a 1 s fade, then a 0.6 s collapse of the gap. */
+const NOTICE_FADE_MS = 1600;
 
 /** The unit whose editor is open, with the view that owns its controls. */
 export interface EditorTarget {
@@ -43,6 +48,7 @@ interface LayerEditorProps {
   onOptionChange(unit: string, index: number, on: boolean): void;
   onNotice(text: string | null): void;
   onClose(): void;
+  onToggleTarget?(on: boolean): void;
 }
 
 /** The single editor panel; it swaps contents when another card's Edit is pressed. */
@@ -55,12 +61,17 @@ export function LayerEditor({
   onOptionChange,
   onNotice,
   onClose,
+  onToggleTarget,
 }: LayerEditorProps): React.ReactElement {
   const { display, allocation } = useSceneStore(store);
   const panel = useRef<HTMLElement>(null);
   const { unit, title, view } = target;
   const options = showAsOptions(unit, layers);
   const current = allocation.as.get(unit) ?? display.showAs[unit];
+  // An off unit leaves no draw while a hidden one holds a reason, so both count as hidden.
+  const hidden = typeof allocation.draws.get(unit) !== "string";
+  const tabLayer = layers.find(({ id }) => id === unit) ?? { title, units: "" };
+  const [fading, setFading] = useState(false);
 
   useEffect(() => {
     panel.current?.focus();
@@ -78,14 +89,51 @@ export function LayerEditor({
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [onClose]);
 
+  useEffect(() => {
+    if (notice === null) {
+      setFading(false);
+
+      return;
+    }
+    setFading(false);
+    const fadeTimer = setTimeout(() => setFading(true), NOTICE_VISIBLE_MS);
+    const removeTimer = setTimeout(
+      () => onNotice(null),
+      NOTICE_VISIBLE_MS + NOTICE_FADE_MS,
+    );
+
+    return () => {
+      clearTimeout(fadeTimer);
+      clearTimeout(removeTimer);
+    };
+  }, [notice, onNotice]);
+
   const chooseDraw = (draw: Draw) => {
     const before = store.getSnapshot().allocation;
+    // Choosing a draw while off shows the layer again.
+    if (display.off.has(unit)) toggleTarget(true);
     const action: ShowAsAction = { kind: "choose", unit, draw };
     store.dispatch(action);
     storeShowAs(unit, draw);
     const after = store.getSnapshot().allocation;
     onNotice(noticeFor(displacedOwner(before, after, action), after, layers));
   };
+
+  const hideUnit = () => {
+    toggleTarget(false);
+    onNotice(null);
+  };
+
+  const toggleTarget = useCallback((on: boolean) => {
+    if (onToggleTarget) {
+      onToggleTarget(on);
+
+      return;
+    }
+    store.dispatch({ kind: "toggle", unit, on });
+    // The blend switch remembers its choice because it has no card switch of its own.
+    if (unit === BLEND) storeShowAs(BLEND, on ? "colour" : null);
+  }, [onToggleTarget, store, unit]);
 
   const clearNotice = useCallback(() => onNotice(null), [onNotice]);
   const applyMenuChange = useCallback(
@@ -123,18 +171,18 @@ export function LayerEditor({
         unit={unit}
         options={options}
         current={current}
+        hidden={hidden}
+        layer={tabLayer}
         notice={notice}
+        fading={fading}
         onChoose={chooseDraw}
-      />
-      <PartsSection
-        view={view}
-        display={display}
-        store={store}
-        onNotice={onNotice}
+        onHide={hideUnit}
       />
       <OptionsSection
         unit={unit}
         view={view}
+        display={display}
+        store={store}
         optionStates={optionStates}
         onOptionChange={onOptionChange}
         onNotice={onNotice}
@@ -142,7 +190,6 @@ export function LayerEditor({
       {view.menu && (
         <MenuContent
           menu={view.menu}
-          unit={unit}
           draw={allocation.as.get(unit)}
           onChange={applyMenuChange}
           onUserInput={clearNotice}
@@ -167,33 +214,60 @@ function noticeFor(
   }
 
   const draw = after.as.get(displaced);
-  return draw ? `${COLOUR_NOTICE} ${title} now shows as ${showAsLabel(draw)}.` : COLOUR_NOTICE;
+  return draw && layer
+    ? `${COLOUR_NOTICE} ${title} now shows as ${drawLabel(draw, layer)}.`
+    : COLOUR_NOTICE;
 }
 
-interface PartsSectionProps {
+interface OptionsSectionProps {
+  unit: string;
   view: LayerView;
   display: ReturnType<SceneStore["getSnapshot"]>["display"];
   store: SceneStore;
+  optionStates: Readonly<Record<string, readonly boolean[]>>;
+  onOptionChange(unit: string, index: number, on: boolean): void;
   onNotice(text: string | null): void;
 }
 
-function PartsSection({
+function OptionsSection({
+  unit,
   view,
   display,
   store,
+  optionStates,
+  onOptionChange,
   onNotice,
-}: PartsSectionProps): React.ReactElement | null {
+}: OptionsSectionProps): React.ReactElement | null {
   const clearNotice = useCallback(() => onNotice(null), [onNotice]);
-  const hasControls = view.parts.some(({ controls }) => controls !== undefined);
-  const hasNote = view.parts.some(({ note }) => note !== undefined);
-  if (view.parts.length < 2 && !hasControls && !hasNote) return null;
-
   const showNames = view.parts.length > 1;
+  const rows = view.parts.filter(
+    (part) => showNames || part.controls !== undefined || part.note !== undefined,
+  );
+  if (view.options.length === 0 && rows.length === 0) return null;
+
+  const states = optionStates[unit] ?? view.options.map(({ initial }) => initial ?? false);
 
   return (
-    <fieldset className="editor-parts">
-      <legend>Parts</legend>
-      {view.parts.map((part) => (
+    <fieldset className="editor-options">
+      <legend>Options</legend>
+      {view.options.map((option, index) => (
+        <div key={option.label} className="editor-option">
+          <label>
+            <input
+              type="checkbox"
+              checked={states[index] ?? false}
+              onChange={(event) => {
+                option.set(event.target.checked);
+                onOptionChange(unit, index, event.target.checked);
+                onNotice(null);
+              }}
+            />
+            {option.label}
+          </label>
+          {option.note && <p className="option-note">{option.note}</p>}
+        </div>
+      ))}
+      {rows.map((part) => (
         <PartRow
           key={part.id}
           part={part}
@@ -265,52 +339,8 @@ function PartRow({
   );
 }
 
-interface OptionsSectionProps {
-  unit: string;
-  view: LayerView;
-  optionStates: Readonly<Record<string, readonly boolean[]>>;
-  onOptionChange(unit: string, index: number, on: boolean): void;
-  onNotice(text: string | null): void;
-}
-
-function OptionsSection({
-  unit,
-  view,
-  optionStates,
-  onOptionChange,
-  onNotice,
-}: OptionsSectionProps): React.ReactElement | null {
-  if (view.options.length === 0) return null;
-
-  const states = optionStates[unit] ?? view.options.map(({ initial }) => initial ?? false);
-
-  return (
-    <fieldset className="editor-options">
-      <legend>Options</legend>
-      {view.options.map((option, index) => (
-        <div key={option.label} className="editor-option">
-          <label>
-            <input
-              type="checkbox"
-              checked={states[index] ?? false}
-              onChange={(event) => {
-                option.set(event.target.checked);
-                onOptionChange(unit, index, event.target.checked);
-                onNotice(null);
-              }}
-            />
-            {option.label}
-          </label>
-          {option.note && <p className="option-note">{option.note}</p>}
-        </div>
-      ))}
-    </fieldset>
-  );
-}
-
 interface MenuContentProps {
   menu: NonNullable<LayerView["menu"]>;
-  unit: string;
   draw: Draw | undefined;
   onChange(changed: MenuChange): void;
   onUserInput(): void;
@@ -319,23 +349,22 @@ interface MenuContentProps {
 /** Mount the menu sections built by the old menu module inside the React editor. */
 function MenuContent({
   menu,
-  unit,
   draw,
   onChange,
   onUserInput,
 }: MenuContentProps): React.ReactElement {
-  const [host] = useState(() => {
+  const [topHost] = useState(() => {
     const element = document.createElement("div");
     element.className = "menu-sections";
     return element;
   });
+  const [bottomHost] = useState(() => document.createElement("div"));
   const group = useId();
   const fillRef = useRef<() => void>(() => {});
   const fill = useCallback(() => {
-    host.replaceChildren(
-      ...menuSections(menu, group, onChange, () => fillRef.current()),
-    );
-  }, [group, host, menu, onChange]);
+    topHost.replaceChildren(...menuMainSections(menu, group, onChange));
+    bottomHost.replaceChildren(menuResetButton(menu, onChange, () => fillRef.current()));
+  }, [bottomHost, group, menu, onChange, topHost]);
 
   useEffect(() => {
     fillRef.current = fill;
@@ -353,16 +382,29 @@ function MenuContent({
   }, [fill, menu.updates]);
 
   useEffect(() => {
-    host.addEventListener("input", onUserInput);
-    host.addEventListener("change", onUserInput);
+    for (const host of [topHost, bottomHost]) {
+      host.addEventListener("input", onUserInput);
+      host.addEventListener("change", onUserInput);
+    }
 
     return () => {
-      host.removeEventListener("input", onUserInput);
-      host.removeEventListener("change", onUserInput);
+      for (const host of [topHost, bottomHost]) {
+        host.removeEventListener("input", onUserInput);
+        host.removeEventListener("change", onUserInput);
+      }
     };
-  }, [host, onUserInput]);
+  }, [bottomHost, onUserInput, topHost]);
 
-  useEffect(() => () => host.replaceChildren(), [host]);
+  useEffect(() => () => {
+    topHost.replaceChildren();
+    bottomHost.replaceChildren();
+  }, [bottomHost, topHost]);
 
-  return <DomNode node={host} className="editor-menu" />;
+  return (
+    <>
+      <DomNode node={topHost} className="editor-menu" />
+      {menu.range && <RangeSection range={menu.range} onChange={onChange} />}
+      <DomNode node={bottomHost} className="editor-menu-reset" />
+    </>
+  );
 }

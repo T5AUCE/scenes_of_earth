@@ -23,7 +23,7 @@ test("a card shows its legend, title, master switch and Edit button", async (con
 
   await act(async () => root.render(
     <LayerCard
-      title="Rainfall · dots, smoothed"
+      title="Rainfall · Dots, Smoothed"
       checked
       onToggle={(on) => {
         toggled = on;
@@ -33,7 +33,7 @@ test("a card shows its legend, title, master switch and Edit button", async (con
     />,
   ));
 
-  assert.match(container.textContent ?? "", /Rainfall · dots, smoothed/);
+  assert.match(container.textContent ?? "", /Rainfall · Dots, Smoothed/);
   assert.equal(container.querySelector(".card-legend")?.textContent, "legend");
   const input = container.querySelector('input[role="switch"]') as HTMLInputElement;
   assert.equal(input.checked, true);

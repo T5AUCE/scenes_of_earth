@@ -8,7 +8,7 @@ import {
   MIN_CUSTOM_COLORS,
   rgbToHex,
 } from "../render/palettes";
-import type { InkMenu, LayerControl, LayerMenu, PaletteChoice, RangeMenu } from "../types";
+import type { InkMenu, LayerControl, LayerMenu, PaletteChoice } from "../types";
 
 /** The note a menu shows while its layer draws a fallback, since the palette is not visible. */
 export const FALLBACK_PALETTE_NOTE = "Colours apply while this layer holds colour.";
@@ -89,24 +89,24 @@ function slider({ label, min, max, step, value, set }: LayerControl) {
   return input;
 }
 
-/** One colour section chosen by how the layer is drawn, and its other controls. */
-export function menuSections(
+/** The colour and edge sections, while the display range lives in a React component. */
+export function menuMainSections(
   menu: LayerMenu,
   group: string,
   onChange: (changed: MenuChange) => void,
-  refill: () => void,
 ) {
-  const reset = resetButton(menu, onChange, refill);
-
   return [
     menu.ink?.inUse ? inkSection(menu, group, onChange) : paletteSection(menu, group, onChange),
     ...edgesSection(menu),
-    ...rangeSection(menu.range, onChange),
-    reset,
   ];
 }
 
-function resetButton(menu: LayerMenu, onChange: (changed: MenuChange) => void, refill: () => void) {
+/** The reset control, kept separate so the React range can sit before it. */
+export function menuResetButton(
+  menu: LayerMenu,
+  onChange: (changed: MenuChange) => void,
+  refill: () => void,
+) {
   const reset = makeHtmlElement("button", "Reset layer");
   reset.type = "button";
   reset.className = "menu-reset";
@@ -445,49 +445,6 @@ function colorInputs(colors: string[], changed: () => void, rebuild: () => void)
   return rows;
 }
 
-function rangeSection(range: RangeMenu | undefined, onChange: (changed: MenuChange) => void) {
-  if (!range) return [];
-
-  const section = makeHtmlElement("fieldset");
-  const legend = makeHtmlElement("legend", `Display range (${range.units})`, section);
-  const low = numberInput("Low", range);
-  const high = numberInput("High", range);
-  const show = ([first, second]: [number, number]) => {
-    low.value = String(first);
-    high.value = String(second);
-  };
-  show(range.value ?? range.fitted);
-
-  const apply = () => {
-    const next = typedRange(low, high, range);
-    if (!next) return show(range.value ?? range.fitted);
-
-    range.set(next);
-    show(next);
-    fitted.disabled = false;
-    onChange("range");
-  };
-  low.onchange = apply;
-  high.onchange = apply;
-
-  const fitted = makeHtmlElement("button", "Reset", legend);
-  fitted.type = "button";
-  fitted.className = "range-reset";
-  fitted.ariaLabel = "Reset to this area's range";
-  fitted.disabled = !range.value;
-  fitted.onclick = () => {
-    range.set(null);
-    show(range.fitted);
-    fitted.disabled = true;
-    onChange("range");
-  };
-
-  const note = makeHtmlElement("div", "Values outside the range take the end colour.");
-  note.className = "option-note";
-  section.append(labelled("Low", low), labelled("High", high), note);
-  return [section];
-}
-
 function askBeforeReset(trigger: HTMLButtonElement, message: string, reset: () => void) {
   const panel = trigger.closest(".layer-editor");
   panel?.querySelector(".reset-warning")?.remove();
@@ -517,14 +474,6 @@ function askBeforeReset(trigger: HTMLButtonElement, message: string, reset: () =
   cancel.focus();
 }
 
-function numberInput(label: string, { decimals }: RangeMenu) {
-  const input = document.createElement("input");
-  input.type = "number";
-  input.ariaLabel = label;
-  input.step = String(10 ** -decimals);
-  return input;
-}
-
 function labelled(text: string, input: HTMLInputElement) {
   const row = makeHtmlElement("label", `${text} `);
   row.append(input);
@@ -533,12 +482,4 @@ function labelled(text: string, input: HTMLInputElement) {
 
 function gradientCss(colors: string[]) {
   return `linear-gradient(to right, ${colors.join(", ")})`;
-}
-
-function typedRange(low: HTMLInputElement, high: HTMLInputElement, range: RangeMenu) {
-  const rounded = (text: string) => Number(Number(text).toFixed(range.decimals));
-  if (!low.value || !high.value) return null;
-
-  const next: [number, number] = [rounded(low.value), rounded(high.value)];
-  return Number.isFinite(next[0]) && Number.isFinite(next[1]) && next[0] < next[1] ? next : null;
 }

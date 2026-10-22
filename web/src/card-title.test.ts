@@ -11,32 +11,32 @@ const OTHER = layer("Wind", "m/s");
 test("a dotted layer says that it is smoothed while the option applies", () => {
   assert.equal(
     cardTitle(RAIN, { draw: "dots", off: false, smoothed: true }),
-    "Rainfall · dots, smoothed",
+    "Rainfall · Dots, Smoothed",
   );
-  assert.equal(cardTitle(RAIN, { draw: "dots", off: false }), "Rainfall · dots");
+  assert.equal(cardTitle(RAIN, { draw: "dots", off: false }), "Rainfall · Dots");
 });
 
 test("a temperature field names its lines isotherms and other fields name them lines", () => {
   assert.equal(
     cardTitle(TEMPERATURE, { draw: "isolines", off: false }),
-    "Temperature · isotherms",
+    "Temperature · Isotherms",
   );
-  assert.equal(cardTitle(OTHER, { draw: "isolines", off: false }), "Wind · lines");
+  assert.equal(cardTitle(OTHER, { draw: "isolines", off: false }), "Wind · Lines");
 });
 
 test("colour, contours and relief keep their plain names", () => {
-  assert.equal(cardTitle(RAIN, { draw: "colour", off: false }), "Rainfall · colour");
-  assert.equal(cardTitle(OTHER, { draw: "contours", off: false }), "Wind · contours");
-  assert.equal(cardTitle(OTHER, { draw: "shade", off: false }), "Wind · relief");
+  assert.equal(cardTitle(RAIN, { draw: "colour", off: false }), "Rainfall · Colour");
+  assert.equal(cardTitle(OTHER, { draw: "contours", off: false }), "Wind · Contours");
+  assert.equal(cardTitle(OTHER, { draw: "shade", off: false }), "Wind · Relief");
 });
 
-test("a hidden layer names colour ownership as the reason", () => {
+test("a layer hidden by colour reads hidden", () => {
   assert.equal(
     cardTitle({ title: "Land cover", units: "" }, {
       draw: { hidden: "Shown only in colour" },
       off: false,
     }),
-    "Land cover · hidden while another layer uses colour",
+    "Land cover · Hidden",
   );
 });
 
@@ -46,15 +46,44 @@ test("a layer stopped by a slot conflict keeps its reason in the title", () => {
       draw: { hidden: "Hidden: the dashed line is in use (isotherms)" },
       off: false,
     }),
-    "Temperature · hidden (Hidden: the dashed line is in use (isotherms))",
+    "Temperature · Hidden (Hidden: the dashed line is in use (isotherms))",
   );
 });
 
 test("a switched-off layer reads off whatever it would draw", () => {
   assert.equal(
     cardTitle(RAIN, { draw: "dots", off: true, smoothed: true }),
-    "Rainfall · off",
+    "Rainfall · Off",
   );
+});
+
+test("a multi-part layer with no draw names the parts that are on", () => {
+  const terrain = layer("Terrain", "");
+  assert.equal(
+    cardTitle(terrain, { draw: undefined, off: false, parts: ["relief", "contours"] }),
+    "Terrain · Relief, Contours",
+  );
+  assert.equal(
+    cardTitle(terrain, { draw: undefined, off: false, parts: ["relief"] }),
+    "Terrain · Relief",
+  );
+  assert.equal(
+    cardTitle(terrain, { draw: undefined, off: false, parts: ["contours"] }),
+    "Terrain · Contours",
+  );
+});
+
+test("a multi-part layer with no parts on reads off", () => {
+  const terrain = layer("Terrain", "");
+  assert.equal(cardTitle(terrain, { draw: undefined, off: false, parts: [] }), "Terrain · Off");
+  assert.equal(
+    cardTitle(terrain, { draw: undefined, off: true, parts: ["relief"] }),
+    "Terrain · Off",
+  );
+});
+
+test("a layer with no draw and no parts keeps its plain title", () => {
+  assert.equal(cardTitle(layer("Terrain", ""), { draw: undefined, off: false }), "Terrain");
 });
 
 test("draw labels stand alone for card titles", () => {
@@ -64,10 +93,13 @@ test("draw labels stand alone for card titles", () => {
   assert.equal(drawLabel("shade", RAIN), "relief");
 });
 
-test("Show as radios stay layer-agnostic", () => {
-  assert.equal(showAsLabel("colour"), "Colour");
-  assert.equal(showAsLabel("dots"), "Dots");
-  assert.equal(showAsLabel("isolines"), "Lines");
+test("Show as tabs name temperature isolines Isotherms", () => {
+  assert.equal(showAsLabel("colour", RAIN), "Colour");
+  assert.equal(showAsLabel("dots", RAIN), "Dots");
+  assert.equal(showAsLabel("isolines", TEMPERATURE), "Isotherms");
+  assert.equal(showAsLabel("isolines", RAIN), "Lines");
+  assert.equal(showAsLabel("contours", RAIN), "Contours");
+  assert.equal(showAsLabel("shade", RAIN), "Relief");
 });
 
 function layer(title: string, units: string): LayerDoc {

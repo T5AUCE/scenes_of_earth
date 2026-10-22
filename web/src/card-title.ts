@@ -12,9 +12,12 @@ export interface CardTitleState {
   off: boolean;
   /** Whether the Smooth option applies to this layer, which only marks dots. */
   smoothed?: boolean;
+  /** The on parts of a multi-part layer with no draw, already lowercase. */
+  parts?: readonly string[];
 }
 
-type TitledLayer = Pick<LayerDoc, "title" | "units">;
+/** The fields a title or tab label reads, so tests can use a small stub. */
+export type TitledLayer = Pick<LayerDoc, "title" | "units">;
 
 const SHOW_AS_LABELS: Record<Draw, string> = {
   colour: "Colour",
@@ -24,8 +27,10 @@ const SHOW_AS_LABELS: Record<Draw, string> = {
   shade: "Relief",
 };
 
-/** The label of a Show as radio, which stays layer-agnostic while the title says isotherms. */
-export function showAsLabel(draw: Draw): string {
+/** The capitalised tab label for a draw, saying Isotherms for temperature isolines. */
+export function showAsLabel(draw: Draw, layer: TitledLayer): string {
+  if (draw === "isolines") return isTemperature(layer) ? "Isotherms" : "Lines";
+
   return SHOW_AS_LABELS[draw];
 }
 
@@ -36,22 +41,36 @@ export function drawLabel(draw: Draw, layer: TitledLayer): string {
   return draw === "shade" ? "relief" : draw;
 }
 
-/** A card title such as "Rainfall · dots, smoothed" or "Land cover · hidden while...". */
-export function cardTitle(layer: TitledLayer, { draw, off, smoothed }: CardTitleState): string {
-  if (off) return `${layer.title} · off`;
-  if (typeof draw === "object") return `${layer.title} · ${hiddenTitle(draw)}`;
-  if (draw === undefined) return layer.title;
+/** A card title such as "Rainfall · Dots, Smoothed" or "Terrain · Relief, Contours". */
+export function cardTitle(
+  layer: TitledLayer,
+  { draw, off, smoothed, parts }: CardTitleState,
+): string {
+  if (off) return titled(layer, ["off"]);
+  if (typeof draw === "object") return titled(layer, [hiddenTitle(draw)]);
+  if (draw === undefined) return partTitle(layer, parts);
 
   const label = drawLabel(draw, layer);
-  const suffix = smoothed === true && draw === "dots" ? ", smoothed" : "";
+  const smooth = smoothed === true && draw === "dots";
 
-  return `${layer.title} · ${label}${suffix}`;
+  return titled(layer, smooth ? [label, "smoothed"] : [label]);
+}
+
+function partTitle(layer: TitledLayer, parts: readonly string[] | undefined): string {
+  if (parts === undefined) return layer.title;
+
+  return titled(layer, parts.length === 0 ? ["off"] : parts);
+}
+
+/** Join a layer title and its states, each state starting with a capital as titles always do. */
+function titled(layer: TitledLayer, states: readonly string[]): string {
+  const capitalised = states.map((state) => state.charAt(0).toUpperCase() + state.slice(1));
+
+  return `${layer.title} · ${capitalised.join(", ")}`;
 }
 
 function hiddenTitle({ hidden }: Hidden): string {
-  return hidden === ONLY_IN_COLOUR
-    ? "hidden while another layer uses colour"
-    : `hidden (${hidden})`;
+  return hidden === ONLY_IN_COLOUR ? "hidden" : `hidden (${hidden})`;
 }
 
 function isTemperature({ title, units }: TitledLayer): boolean {
