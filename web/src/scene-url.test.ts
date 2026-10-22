@@ -26,7 +26,7 @@ test("a scene link reads the time and ignores a malformed one", () => {
     id,
     time: "2026-03",
     panel: null,
-    display: { pal: "", range: "", off: "", colour: "", ink: "", dens: "" },
+    display: { pal: "", range: "", off: "", as: "", ink: "", dens: "" },
   });
 
   const timeOf = (label: string) =>
@@ -70,21 +70,20 @@ test("display params round trip through the address", () => {
     pal: "chirps_monthly:batlow",
     range: "chirps_monthly:0:250",
     off: "terrain.contours",
-    colour: "",
+    as: "",
     ink: "",
     dens: "",
   });
 });
 
-test("the colour param round trips through the address", () => {
-  const url = sceneUrl(id, null, "&colour=blend");
-  const route = routeFor(url, null) as { display: { colour: string } };
+test("the as param round trips through the address", () => {
+  const url = sceneUrl(id, null, "&as=chirps_monthly:dots,blend:colour");
+  const route = routeFor(url, null) as { display: { as: string } };
+  const plain = routeFor(`?scene=${id}`, null) as { display: { as: string } };
 
-  const plain = routeFor(`?scene=${id}`, null) as { display: { colour: string } };
-
-  assert.equal(url, `?scene=${id}&colour=blend`);
-  assert.equal(route.display.colour, "blend");
-  assert.equal(plain.display.colour, "");
+  assert.equal(url, `?scene=${id}&as=chirps_monthly:dots,blend:colour`);
+  assert.equal(route.display.as, "chirps_monthly:dots,blend:colour");
+  assert.equal(plain.display.as, "");
 });
 
 test("the ink param round trips through the address", () => {
@@ -104,12 +103,16 @@ test("colons and commas are not percent encoded", () => {
 });
 
 test("repeated display parameters are joined in order", () => {
-  const route = routeFor(`?scene=${id}&pal=a:x&pal=b:y&off=u`, null) as {
-    display: { pal: string; off: string };
+  const route = routeFor(
+    `?scene=${id}&pal=a:x&pal=b:y&off=u&as=temp:colour&as=temp:isolines,rain:colour`,
+    null,
+  ) as {
+    display: { pal: string; off: string; as: string };
   };
 
   assert.equal(route.display.pal, "a:x,b:y");
   assert.equal(route.display.off, "u");
+  assert.equal(route.display.as, "temp:colour,temp:isolines,rain:colour");
 });
 
 test("a link without display params is unchanged", () => {

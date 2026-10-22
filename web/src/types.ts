@@ -211,12 +211,12 @@ export interface Part {
   note?: HTMLElement;
 }
 
-/** Raw display parameters from a link, including the colour owner. */
+/** Raw display parameters from a link, including per-unit Show as choices. */
 export interface DisplayTokens {
   pal: string;
   range: string;
   off: string;
-  colour: string; // the picked owner, a layer id or blend
+  as: string; // `unit:draw` entries, where the unit is a layer id or blend
   ink: string; // `layer:preset` or `layer:rrggbb` entries
   dens: string; // `layer:multiple` entries, the dot density as a multiple of the default
 }

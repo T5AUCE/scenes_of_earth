@@ -71,7 +71,9 @@ export function createTerrainView(context: LayerContext): LayerView {
     min: RELIEF_STRENGTH.min,
     max: RELIEF_STRENGTH.max,
     step: RELIEF_STRENGTH.step,
-    value: RELIEF_STRENGTH.initial,
+    get value() {
+      return strengthValue;
+    },
     set: (value) => {
       strengthValue = value;
       applyStrength();

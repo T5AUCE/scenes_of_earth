@@ -9,7 +9,6 @@ import {
   loadStoredDensities,
   loadStoredInks,
   loadStoredPalettes,
-  loadStoredPick,
   NO_TOKENS,
   resolveDisplay,
   type SceneDisplay,
@@ -21,9 +20,19 @@ import { BLEND_TITLE, type BlendView, createBlendView } from "./layers/blend";
 import { LAYER_KINDS } from "./layers/registry";
 import { firstSymbolId, removeLayerAndSource, showScaleBar } from "./map";
 import { shiftLongitudes, worldShift } from "./render/mercator";
-import { mountCards, type MountedLayer, outlineCard } from "./scene-cards";
+import { setOutline, subscribeDrawing, type MountedLayer } from "./scene-cards";
+import { createSceneStore, type SceneStore } from "./scene-store";
+import { loadStoredShowAs } from "./show-as";
 import { createTimeline, formatTime, scrubberTimes } from "./timeline";
-import type { DisplayTokens, DrawSlots, LayerDoc, LayerView, Scene } from "./types";
+import { mountSceneColumn } from "./ui/scene-column";
+import type {
+  DisplayTokens,
+  DrawSlots,
+  LayerDisplay,
+  LayerDoc,
+  LayerView,
+  Scene,
+} from "./types";
 
 type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
 type AddNote = (text: string) => () => void;
@@ -65,8 +74,13 @@ export function mountScene(
   let blend: BlendView | null = null;
   let timeline: ReturnType<typeof createSceneTimeline> = null;
   let isMounted = true;
+  let sceneStore: SceneStore | null = null;
+  let stopDrawing = () => {};
+  let stopLinking = () => {};
+  let column: ReturnType<typeof mountSceneColumn> | null = null;
 
   const notes = makeHtmlElement("div", "", box);
+  const host = makeHtmlElement("div", "", box);
   const addNote = (text: string) => {
     const note = makeHtmlElement("div", text, notes);
     note.className = "notice";
@@ -77,6 +91,9 @@ export function mountScene(
 
   const unmount = () => {
     isMounted = false;
+    column?.unmount();
+    stopDrawing();
+    stopLinking();
     removeScaleBar();
     timeline?.destroy();
     views.forEach((view) => view.destroy());
@@ -91,30 +108,47 @@ export function mountScene(
     scene.layers,
     linked,
     loadStoredPalettes(),
-    loadStoredPick(),
+    loadStoredShowAs(),
     loadStoredInks(),
     loadStoredDensities(),
   );
   if (dropped) addNote(DROPPED_NOTE);
-  const changed = () => {
-    onDisplay(formatDisplayParams(display, mounted.map(({ layer }) => layer)));
+  const changeDisplay = (layerId: string, change: LayerDisplay) => {
+    const apply = (target: SceneDisplay) => {
+      setLayerDisplay(target, layerId, { ...target.layers[layerId], ...change });
+    };
+    if (sceneStore) sceneStore.dispatch({ kind: "display", update: apply });
+    else apply(display);
   };
 
   try {
-    const store = openStore(scene.data.href);
-    store.catch((error) => addNote(`Cannot open the data: ${error.message}`));
+    const dataStore = openStore(scene.data.href);
+    dataStore.catch((error) => addNote(`Cannot open the data: ${error.message}`));
 
     const shift = worldShift(scene.area.bbox);
     addOutline(map, scene, shift, addNote, () => isMounted);
     addSlotAnchors(map);
-    mounted.push(...mountLayerViews(map, scene.layers, store, shift, addNote, display, changed));
+    mounted.push(
+      ...mountLayerViews(map, scene.layers, dataStore, shift, addNote, display, changeDisplay),
+    );
     views.push(...mounted.map(({ view }) => view));
 
-    blend = mountBlend(map, mounted, store, shift, addNote);
+    blend = mountBlend(map, mounted, dataStore, shift, addNote);
 
-    mountCards(map, mounted, display, box, changed, blend);
-    box.append(outlineCard(map, OUTLINE_ID));
-    changed();
+    const store = createSceneStore(mounted.map(({ layer }) => layer), display);
+    sceneStore = store;
+    const layerDocs = mounted.map(({ layer }) => layer);
+    column = mountSceneColumn(host, {
+      mounted,
+      blend,
+      store,
+      onOutline: (on) => setOutline(map, OUTLINE_ID, on),
+    });
+    stopDrawing = subscribeDrawing(map, mounted, blend, store);
+    stopLinking = store.subscribe(() => {
+      onDisplay(formatDisplayParams(store.getSnapshot().display, layerDocs));
+    });
+    onDisplay(formatDisplayParams(store.getSnapshot().display, layerDocs));
 
     timeline = createSceneTimeline(blend ? [...views, blend] : views, scene.period, onTime);
     if (timeline) timeBar.append(timeline.element);
@@ -189,7 +223,7 @@ function mountLayerViews(
   shift: number,
   addNote: AddNote,
   display: SceneDisplay,
-  onDisplayChange: () => void,
+  changeDisplay: (layerId: string, change: LayerDisplay) => void,
 ): MountedLayer[] {
   const layersWithKind = layers.map((layer) => ({
     layer,
@@ -217,10 +251,7 @@ function mountLayerViews(
         slots: SLOTS,
         beforeId: SLOTS.lines,
         display: display.layers[layer.id],
-        changeDisplay: (change) => {
-          setLayerDisplay(display, layer.id, { ...display.layers[layer.id], ...change });
-          onDisplayChange();
-        },
+        changeDisplay: (change) => changeDisplay(layer.id, change),
         report,
       });
       view.ready?.catch(report);

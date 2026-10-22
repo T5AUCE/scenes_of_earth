@@ -7,18 +7,24 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node --test \"src/**/*.test.ts\" \"scripts/**/*.test.mjs\"",
+    "test": "node --import tsx/esm --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\" \"scripts/**/*.test.mjs\"",
     "trial": "node scripts/visual-trial.mjs"
   },
   "dependencies": {
     "maplibre-contour": "^0.1.1",
     "maplibre-gl": "^6.13.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "zarrita": "^0.7.5"
   },
   "devDependencies": {
     "@types/geojson": "^7946.0.16",
     "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "happy-dom": "^21.0.4",
     "playwright-core": "^1.64.1",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.4"
   }

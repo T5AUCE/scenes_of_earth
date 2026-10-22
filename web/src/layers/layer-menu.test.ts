@@ -130,6 +130,16 @@ test("switching custom colours to Presets keeps that mode and the custom draft",
   assert.deepEqual(inputs.map((input) => input.value), ["#1a2b3c", "#88cc44"]);
 });
 
+test("reset layer reports a reset after applying the defaults", () => {
+  const { menu, changes } = fieldMenu(false);
+  const reset = descendants(sectionsOf(menu, changes))
+    .find((element) => element.className === "menu-reset")!;
+
+  reset.onclick!();
+
+  assert.equal(changes.at(-1), "reset");
+});
+
 test("picking a preset clears the note about applied custom colours", () => {
   const { menu } = fieldMenu(false, "navy", "custom-1a2b3c-88cc44");
   findRadio(sectionsOf(menu), "Presets").onchange!();
@@ -189,13 +199,11 @@ function fieldMenu(isDrawn: boolean, ink = "navy", palette = "ink-blue") {
 }
 
 function sectionsOf(menu: LayerMenu, changes: string[] = []) {
-  const popover = new TestElement("div");
   return menuSections(
     menu,
     "test",
     (change) => changes.push(change),
     () => {},
-    popover as unknown as HTMLElement,
   ) as unknown as TestElement[];
 }
 
@@ -237,6 +245,7 @@ class TestElement {
   value = "";
   checked = false;
   onchange: (() => void) | null = null;
+  onclick: (() => void) | null = null;
   private text = "";
 
   constructor(tagName: string) {

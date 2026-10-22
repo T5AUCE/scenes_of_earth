@@ -26,6 +26,8 @@ export type BlendPair = readonly [string, string];
 export interface ColourAllocation {
   owner: string | null;
   draws: Map<string, Draw | Hidden>;
+  /** The draw each on unit is set to show before slot conflicts. */
+  as: Map<string, Draw>;
 }
 
 type Claim = "colour" | "dots" | "line.dashed" | "line.solid";
@@ -59,6 +61,16 @@ export function layerDraws({ style }: LayerDoc): LayerDraws {
     fallback: fallbackOf(style.encodings),
     blend: blendRole(encodings),
   };
+}
+
+/** The Show as choices a layer offers, colour first and then its mounted fallback. */
+export function drawOptions(layer: LayerDoc): Draw[] {
+  const { colour, fallback } = layerDraws(layer);
+  const options: Draw[] = [];
+  if (colour) options.push("colour");
+  if (fallback) options.push(fallback);
+
+  return options;
 }
 
 function fallbackOf(encodings: string[]): Draw | null {
@@ -106,36 +118,48 @@ export function differingPeriodNote(halves: readonly { title: string; period: st
 }
 
 /**
- * Give colour to the picked unit when it is a candidate, else to the best-ranked candidate.
- * Every other visible unit takes its fallback's first free channel or is hidden with a reason.
- * A unit named in `blocked` cannot draw its fallback and is hidden with the given reason.
+ * Give colour to the explicit owner when it is on, else to the best-ranked candidate without an
+ * explicit choice. Every other visible unit takes its explicit draw or fallback's first free
+ * channel, and is hidden with a reason when neither is available. A unit named in `blocked`
+ * cannot draw its fallback and is hidden with the given reason.
  */
 export function allocate(
   layers: readonly LayerDoc[],
   on: ReadonlySet<string>,
-  pick: string | null,
+  showAs: Readonly<Record<string, Draw>>,
   blocked: ReadonlyMap<string, string> = new Map(),
 ): ColourAllocation {
   const pair = blendPair(layers);
   const mains = layers.map(layerUnit);
   const parts = layers.flatMap(partUnits);
   const visible = [...mains, ...parts].filter((unit) => on.has(unit.id));
-  const blendOn = pair !== null && (on.has(BLEND) || pick === BLEND);
+  const blendOn = pair !== null && (on.has(BLEND) || showAs[BLEND] === "colour");
   const blend = blendOn ? [blendUnit()] : [];
 
   const candidates = [...visible, ...blend].filter((unit) => unit.colour);
-  const owner = colourOwner(candidates, pick);
+  const owner = colourOwner(candidates, showAs);
   const draws = new Map<string, Draw | Hidden>();
+  const as = new Map<string, Draw>();
   const claimed = new Map<Claim, string>();
 
   for (const unit of visible) {
-    if (unit.id === owner) draws.set(unit.id, claim(unit, "colour", claimed));
-    else drawFallbackOrFixed(unit, draws, claimed, blocked);
-  }
-  if (owner === BLEND) draws.set(BLEND, claim(blendUnit(), "colour", claimed));
-  else if (blendOn) draws.set(BLEND, { hidden: ONLY_IN_COLOUR });
+    const draw = unit.id === owner ? "colour" : intendedDraw(unit, showAs);
+    if (draw === null) {
+      if (unit.colour) draws.set(unit.id, { hidden: ONLY_IN_COLOUR });
+      continue;
+    }
 
-  return { owner, draws };
+    as.set(unit.id, draw);
+    drawUnit(unit, draw, draws, claimed, blocked);
+  }
+  if (owner === BLEND) {
+    as.set(BLEND, "colour");
+    draws.set(BLEND, claim(blendUnit(), "colour", claimed));
+  } else if (blendOn) {
+    draws.set(BLEND, { hidden: ONLY_IN_COLOUR });
+  }
+
+  return { owner, draws, as };
 }
 
 interface Unit {
@@ -182,11 +206,15 @@ function blendUnit(): Unit {
   };
 }
 
-function colourOwner(candidates: Unit[], pick: string | null): string | null {
-  if (pick !== null && candidates.some(({ id }) => id === pick)) return pick;
+function colourOwner(
+  candidates: Unit[],
+  showAs: Readonly<Record<string, Draw>>,
+): string | null {
+  const explicit = candidates.find(({ id }) => showAs[id] === "colour");
+  if (explicit) return explicit.id;
 
   const auto = candidates
-    .filter(({ id }) => id !== BLEND)
+    .filter(({ id }) => id !== BLEND && showAs[id] === undefined)
     .sort((first, second) => rank(first) - rank(second) || first.order - second.order);
 
   return auto[0]?.id ?? null;
@@ -201,26 +229,33 @@ function rank(unit: Unit): number {
   return 2;
 }
 
-function drawFallbackOrFixed(
+function intendedDraw(
   unit: Unit,
+  showAs: Readonly<Record<string, Draw>>,
+): Draw | null {
+  const fixed = FIXED_DRAWS.find((draw) => unit.encodings.includes(draw));
+  if (fixed) return fixed;
+
+  const explicit = showAs[unit.id];
+  if (explicit !== undefined && explicit !== "colour") return explicit;
+
+  return unit.fallback;
+}
+
+function drawUnit(
+  unit: Unit,
+  draw: Draw,
   draws: Map<string, Draw | Hidden>,
   claimed: Map<Claim, string>,
   blocked: ReadonlyMap<string, string>,
 ) {
-  const fixed = FIXED_DRAWS.find((draw) => unit.encodings.includes(draw));
-  if (fixed) {
-    draws.set(unit.id, claim(unit, fixed, claimed));
+  const reason = draw === "colour" ? undefined : blocked.get(unit.id);
+  if (reason) {
+    draws.set(unit.id, { hidden: reason });
     return;
   }
 
-  if (!unit.fallback) {
-    if (unit.colour) draws.set(unit.id, { hidden: ONLY_IN_COLOUR });
-    return;
-  }
-
-  const reason = blocked.get(unit.id);
-  if (reason) draws.set(unit.id, { hidden: reason });
-  else draws.set(unit.id, claim(unit, unit.fallback, claimed));
+  draws.set(unit.id, claim(unit, draw, claimed));
 }
 
 function claim(unit: Unit, draw: Draw, claimed: Map<Claim, string>): Draw | Hidden {

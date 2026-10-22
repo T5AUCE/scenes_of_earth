@@ -49,7 +49,7 @@ function displayTokens(parameters: URLSearchParams): DisplayTokens {
     pal: joined("pal"),
     range: joined("range"),
     off: joined("off"),
-    colour: joined("colour"),
+    as: joined("as"),
     ink: joined("ink"),
     dens: joined("dens"),
   };

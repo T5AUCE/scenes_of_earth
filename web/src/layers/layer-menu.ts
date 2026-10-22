@@ -1,4 +1,4 @@
-/** Build layer controls and popovers for palette choices and display settings. */
+/** Build the layer controls that the editor panel mounts around the Show as section. */
 import { makeHtmlElement } from "../html";
 import {
   customColors,
@@ -10,8 +10,6 @@ import {
 } from "../render/palettes";
 import type { InkMenu, LayerControl, LayerMenu, PaletteChoice, RangeMenu } from "../types";
 
-const MENU_GAP_PX = 8;
-
 /** The note a menu shows while its layer draws a fallback, since the palette is not visible. */
 export const FALLBACK_PALETTE_NOTE = "Colours apply while this layer holds colour.";
 /** The note shown when Presets is open while the map still uses a custom palette. */
@@ -20,38 +18,50 @@ export const CUSTOM_PALETTE_NOTE = "The map currently shows custom colours.";
 export const CUSTOM_INK_NOTE = "The map currently shows a custom ink.";
 
 /** What a menu change touched, so the caller can remember a palette or ink but not a range. */
-export type MenuChange = "palette" | "range" | "ink";
+export type MenuChange = "palette" | "range" | "ink" | "reset";
 
 interface MenuModes {
   customPalette: boolean;
   customInk: boolean;
 }
 
-let menuCount = 0;
 const menuModes = new WeakMap<LayerMenu, MenuModes>();
 
+/** The sliders for one part and the teardown that drops their menu listeners. */
+export interface PartControls {
+  element: HTMLElement;
+  dispose(): void;
+}
+
 /**
- * Builds the sliders shown directly under a part's checkbox, labelled for screen readers only.
+ * Build the sliders shown directly under a part's checkbox, labelled for screen readers only.
  * A slider hides while its control reports that it does not apply.
  */
-export function partControls(controls: LayerControl[]) {
+export function partControls(controls: LayerControl[]): PartControls {
   const box = makeHtmlElement("div");
   box.className = "part-controls";
+  const cleanups: Array<() => void> = [];
   for (const control of controls) {
     const hint = control.hint ? makeHtmlElement("div", control.hint, box) : null;
     if (hint) hint.className = "control-hint";
     const input = slider(control);
     box.append(input);
-    keepInSync(control, [hint, input], input);
+    cleanups.push(keepInSync(control, [hint, input], input));
   }
-  return box;
+
+  return {
+    element: box,
+    dispose: () => {
+      for (const cleanup of cleanups) cleanup();
+    },
+  };
 }
 
 function keepInSync(
   control: LayerControl,
   elements: (HTMLElement | null)[],
   input: HTMLInputElement,
-) {
+): () => void {
   const sync = () => {
     for (const element of elements) {
       if (element) element.hidden = control.isShown === false;
@@ -60,6 +70,10 @@ function keepInSync(
   };
   control.updates?.addEventListener("change", sync);
   sync();
+
+  return () => {
+    control.updates?.removeEventListener("change", sync);
+  };
 }
 
 function slider({ label, min, max, step, value, set }: LayerControl) {
@@ -75,79 +89,16 @@ function slider({ label, min, max, step, value, set }: LayerControl) {
   return input;
 }
 
-/**
- * Build an Edit button and a popover that refreshes whenever it opens.
- * Apply changes immediately and notify the caller through onChange.
- */
-export function layerMenu(menu: LayerMenu, onChange: (changed: MenuChange) => void) {
-  const popover = makeHtmlElement("div");
-  popover.className = "layer-menu";
-  popover.popover = "auto";
-  popover.role = "dialog";
-  popover.ariaLabel = menu.title;
-
-  const button = makeHtmlElement("button", "Edit");
-  button.className = "edit-button";
-  button.type = "button";
-  button.ariaLabel = `Edit ${menu.title} display`;
-  button.ariaHasPopup = "dialog";
-  button.ariaExpanded = "false";
-  button.popoverTargetElement = popover;
-
-  const group = `palette-${menuCount++}`;
-  const fill = () => {
-    popover.replaceChildren(...menuSections(menu, group, onChange, fill, popover));
-  };
-  menu.updates?.addEventListener("change", () => {
-    if (popover.matches(":popover-open")) fill();
-  });
-  const place = () => placeBesideColumn(popover, button);
-  // The custom colour editor changes the menu's height while it is open.
-  const resizeObserver = new ResizeObserver(place);
-
-  popover.addEventListener("beforetoggle", (event) => {
-    if ((event as ToggleEvent).newState !== "open") return;
-
-    fill();
-    place();
-  });
-  popover.addEventListener("toggle", (event) => {
-    const isOpen = (event as ToggleEvent).newState === "open";
-    button.ariaExpanded = String(isOpen);
-    if (!isOpen) {
-      resizeObserver.disconnect();
-      window.removeEventListener("resize", place);
-      return;
-    }
-
-    place();
-    resizeObserver.observe(popover);
-    window.addEventListener("resize", place);
-    popover.querySelector("input")?.focus();
-  });
-
-  return { button, popover };
-}
-
-/** The menu's head, one colour section chosen by how the layer is drawn, and its other controls. */
+/** One colour section chosen by how the layer is drawn, and its other controls. */
 export function menuSections(
   menu: LayerMenu,
   group: string,
   onChange: (changed: MenuChange) => void,
   refill: () => void,
-  popover: HTMLElement,
 ) {
-  const head = makeHtmlElement("div");
-  head.className = "menu-head";
-  makeHtmlElement("strong", menu.title, head);
-  const close = makeHtmlElement("button", "✕", head);
-  close.type = "button";
-  close.ariaLabel = "Close";
-  close.onclick = () => popover.hidePopover();
   const reset = resetButton(menu, onChange, refill);
 
   return [
-    head,
     menu.ink?.inUse ? inkSection(menu, group, onChange) : paletteSection(menu, group, onChange),
     ...edgesSection(menu),
     ...rangeSection(menu.range, onChange),
@@ -170,6 +121,7 @@ function resetButton(menu: LayerMenu, onChange: (changed: MenuChange) => void, r
     menu.resetDensity?.();
     onChange("palette");
     if (menu.ink) onChange("ink");
+    onChange("reset");
     refill();
   };
   reset.onclick = () => {
@@ -537,22 +489,22 @@ function rangeSection(range: RangeMenu | undefined, onChange: (changed: MenuChan
 }
 
 function askBeforeReset(trigger: HTMLButtonElement, message: string, reset: () => void) {
-  const popover = trigger.closest(".layer-menu");
-  popover?.querySelector(".reset-warning")?.remove();
+  const panel = trigger.closest(".layer-editor");
+  panel?.querySelector(".reset-warning")?.remove();
 
-  const panel = makeHtmlElement("div");
-  panel.className = "reset-warning";
-  panel.role = "alertdialog";
-  panel.ariaLabel = "Confirm reset";
-  makeHtmlElement("div", message, panel);
+  const warning = makeHtmlElement("div");
+  warning.className = "reset-warning";
+  warning.role = "alertdialog";
+  warning.ariaLabel = "Confirm reset";
+  makeHtmlElement("div", message, warning);
 
-  const confirm = makeHtmlElement("button", "Reset", panel);
+  const confirm = makeHtmlElement("button", "Reset", warning);
   confirm.type = "button";
-  const cancel = makeHtmlElement("button", "Cancel", panel);
+  const cancel = makeHtmlElement("button", "Cancel", warning);
   cancel.type = "button";
 
   const close = () => {
-    panel.remove();
+    warning.remove();
     if (trigger.isConnected && !trigger.disabled) trigger.focus();
   };
   confirm.onclick = () => {
@@ -561,7 +513,7 @@ function askBeforeReset(trigger: HTMLButtonElement, message: string, reset: () =
   };
   cancel.onclick = close;
 
-  trigger.after(panel);
+  trigger.after(warning);
   cancel.focus();
 }
 
@@ -589,14 +541,4 @@ function typedRange(low: HTMLInputElement, high: HTMLInputElement, range: RangeM
 
   const next: [number, number] = [rounded(low.value), rounded(high.value)];
   return Number.isFinite(next[0]) && Number.isFinite(next[1]) && next[0] < next[1] ? next : null;
-}
-
-// The menu sits beside the column so it never covers the layers it edits.
-function placeBesideColumn(popover: HTMLElement, button: HTMLElement) {
-  const column = button.closest("#scene-column")?.getBoundingClientRect();
-  const anchor = button.getBoundingClientRect();
-  const room = window.innerHeight - popover.offsetHeight - MENU_GAP_PX;
-
-  popover.style.right = `${window.innerWidth - (column?.left ?? anchor.left) + MENU_GAP_PX}px`;
-  popover.style.top = `${Math.max(MENU_GAP_PX, Math.min(anchor.top, room))}px`;
 }
