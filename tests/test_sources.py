@@ -40,7 +40,7 @@ from soe.sources import (
 )
 from soe.sources import remote
 from soe.sources.chirps import previous_month
-from soe.sources.fallback import read_nearest
+from soe.sources.fallback import read_bilinear
 from soe.sources.grid import block_mean
 from soe.sources.periods import add_duration
 from soe.sources import worldcover
@@ -363,42 +363,52 @@ def test_temperature_fill_is_seamless_across_180_degrees(tmp_path, bbox):
     read = temperature.read_step_filled("2016-01-01", bbox)
 
     assert read.filled.all()
-    assert read.values[0] == pytest.approx([14.39, 14.39, 0])
+    assert read.values[0] == pytest.approx([14.388, 11.512, 5.756])
 
 
-def test_tenth_degree_cells_take_the_quarter_degree_box_holding_their_centre():
-    sampled = read_nearest(ERA5_LAND_TEMPERATURE_GRID, ERA5_GRID, (0, 0, 10, 10), cell_ids)
+def test_bilinear_sample_matches_a_hand_computed_point_and_lies_between_its_neighbours():
+    sampled = read_bilinear(CHIRPS_GRID, ERA5_GRID, (2, 2, 1, 1), cell_ids)
+    neighbours = np.array([0, 1, 10000, 10001])
 
-    expected = np.array([0, 0, 1, 1, 2, 2, 2, 3, 3, 4])
-    assert np.array_equal(sampled, expected[:, None] * 10000 + expected[None, :])
-
-
-def test_centre_on_a_shared_edge_belongs_to_the_box_east_and_south_of_it():
-    sampled = read_nearest(CHIRPS_GRID, ERA5_GRID, (0, 0, 10, 10), cell_ids)
-
-    expected = np.array([0, 0, 1, 1, 1, 1, 1, 2, 2, 2])
-    assert np.array_equal(sampled, expected[:, None] * 10000 + expected[None, :])
+    assert sampled[0, 0] == pytest.approx(5000.5)
+    assert neighbours.min() <= sampled[0, 0] <= neighbours.max()
 
 
 @pytest.mark.parametrize("first_column", [3598, -2])
-def test_sampling_wraps_across_180_and_across_minus_180(first_column):
-    sampled = read_nearest(ERA5_LAND_TEMPERATURE_GRID, ERA5_GRID, (first_column, 0, 4, 1), cell_ids)
+def test_bilinear_sampling_wraps_across_180_and_across_minus_180(first_column):
+    sampled = read_bilinear(
+        ERA5_LAND_TEMPERATURE_GRID,
+        ERA5_GRID,
+        (first_column, 0, 4, 1),
+        cell_ids,
+    )
 
-    assert sampled[0].tolist() == [1439, 0, 0, 0]
+    assert sampled[0] == pytest.approx([1151.2, 575.6, 0, 0.4])
 
 
-def test_sampling_past_60_south_reads_nothing(tmp_path):
+def test_a_nan_coarse_neighbour_gives_way_to_the_nearest_finite_one():
+    def gappy_cell_ids(window: tuple[int, int, int, int]) -> np.ndarray:
+        values = cell_ids(window)
+        values[0, 0] = np.nan
+        return values
+
+    sampled = read_bilinear(CHIRPS_GRID, ERA5_GRID, (1, 0, 1, 1), gappy_cell_ids)
+
+    assert sampled[0, 0] == 1
+
+
+def test_sampling_past_60_south_keeps_the_last_finite_coarse_row(tmp_path):
     write_cube(tmp_path, "era5_temperature", 7)
     cube = MonthlyCube(ERA5_TEMPERATURE_CUBE, tmp_path)
 
-    sampled = read_nearest(
+    sampled = read_bilinear(
         ERA5_LAND_TEMPERATURE_GRID,
         ERA5_GRID,
         (0, 1198, 2, 6),
         lambda window: cube.read("2016-01", window),
     )
 
-    assert sampled[:4] == pytest.approx(7) and np.isnan(sampled[4:]).all()
+    assert sampled[:5] == pytest.approx(7) and np.isnan(sampled[5:]).all()
 
 
 class GappySource(SyntheticSource):

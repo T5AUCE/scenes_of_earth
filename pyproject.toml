@@ -39,3 +39,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-n auto -m 'not slow'"
 markers = ["slow: cube ingestion tests, skipped by default; run them with `pytest -m slow`"]
+
+[tool.pyright]
+include = ["soe", "tests", "main.py"]
+exclude = ["**/node_modules", "**/__pycache__", "**/.*", "data", "build", "web", "reports"]

@@ -30,7 +30,7 @@ from tests.helpers import RAIN, write_cube
 
 SQUARE = mapping(box(36.5, -1.5, 37.5, -0.5))
 PINNED_REVISION = "Tue, 01 Sep 2015 00:00:00 GMT"
-PINNED_SCENE_ID = "2ea6b76f54cfe15ec22f"  # Computed for soe 0.8.0 and scene format 0.6.
+PINNED_SCENE_ID = "2990cb0a9c9806889f9b"  # Computed for soe 0.8.1 and scene format 0.6.
 
 
 def request_body(**overrides: object) -> str:

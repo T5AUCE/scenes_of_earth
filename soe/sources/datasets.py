@@ -10,7 +10,7 @@ import numpy as np
 from rasterio.transform import Affine
 
 from .cubes import CubeSpec
-from .fallback import read_nearest
+from .fallback import read_bilinear
 from .grid import Bbox, Grid, block_mean
 from .periods import MONTH_CHARS, add_duration
 
@@ -235,7 +235,7 @@ class SeriesDataset(Dataset):
 
     def _read_fallback(self, step: str, bbox: Bbox, factor: int) -> np.ndarray:
         month = step[:MONTH_CHARS]
-        sampled = read_nearest(
+        sampled = read_bilinear(
             self.grid,
             self.fallback.cube.grid,
             self.grid.window(bbox),
