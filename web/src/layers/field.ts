@@ -18,6 +18,7 @@ import {
   isothermLegend,
 } from "../legend";
 import { addImageLayer, maxTextureSize, removeLayerAndSource, setImage } from "../map";
+import { displayStops, displayUnitFor, isUnitFor, unitOptions } from "../units";
 import { lut, paintColormap, stopsForRange } from "../render/colormap";
 import {
   DEFAULT_DENSITY_RATIO,
@@ -42,6 +43,7 @@ import type {
   LayerMenu,
   LayerView,
   TimeDoc,
+  UnitsMenu,
 } from "../types";
 import { type Draw, layerDraws } from "./allocate";
 import { createIsolineOverlay, type IsolineOverlay } from "./isolines";
@@ -86,6 +88,7 @@ class FieldView implements LayerView {
   private ink: string;
   private density: number;
   private range: [number, number] | null;
+  private units: string;
   private colors;
   private stops: number[];
   private draw: Draw | null = null;
@@ -110,6 +113,7 @@ class FieldView implements LayerView {
     this.ink = display?.ink ?? defaultInk(layer) ?? "";
     this.density = display?.density ?? DEFAULT_DENSITY_RATIO;
     this.range = display?.range ?? null;
+    this.units = displayUnitFor(layer.units, display?.units);
     this.colors = lut(gradientOf(this.palette));
     this.stops = stopsForRange(this.fittedStops, this.range);
 
@@ -190,10 +194,11 @@ class FieldView implements LayerView {
 
   private legendOf() {
     const { layer, map } = this.context;
+    const stops = displayStops(this.stops, layer.units, this.units, rangeDecimals(layer));
     if (this.draw === "dots") {
       return dotLegend(
-        this.stops,
-        layer.units,
+        stops,
+        this.units,
         layer.grid,
         map.getZoom(),
         this.density,
@@ -201,10 +206,10 @@ class FieldView implements LayerView {
       );
     }
     if (this.draw === "isolines") {
-      return isothermLegend(this.isolines!.interval, inkPaint(this.ink));
+      return isothermLegend(this.isolines!.interval, inkPaint(this.ink), this.units);
     }
 
-    return gradientLegend(this.colors, this.stops, layer.units, this.range !== null);
+    return gradientLegend(this.colors, stops, this.units, this.range !== null);
   }
 
   private createDensityControl(): LayerControl {
@@ -256,6 +261,7 @@ class FieldView implements LayerView {
       defaultPalette: layerDefaultPalette(layer),
       custom: true,
       ink: this.createInkMenu(),
+      units: this.createUnitsMenu(),
       get palette() {
         return view.palette;
       },
@@ -268,6 +274,9 @@ class FieldView implements LayerView {
         bounds: [stats.min, stats.max],
         decimals: rangeDecimals(layer),
         units: layer.units,
+        get displayUnit() {
+          return view.units;
+        },
         get value() {
           return view.range;
         },
@@ -276,6 +285,31 @@ class FieldView implements LayerView {
           this.restyle();
         },
       } : undefined,
+    };
+  }
+
+  private createUnitsMenu(): UnitsMenu | undefined {
+    const view = this;
+    const { layer } = this.context;
+    const options = unitOptions(layer.units);
+    if (!options) return undefined;
+
+    return {
+      options,
+      defaultUnit: layer.units,
+      get value() {
+        return view.units;
+      },
+      set: (unit) => {
+        if (!isUnitFor(layer.units, unit) || unit === view.units) return;
+        this.units = unit;
+        this.isolines?.setUnits(unit);
+        this.showLegend();
+        this.menuUpdates.dispatchEvent(new Event("change"));
+        if (view.draw === "isolines" && this.shownStep >= 0) {
+          this.drawLatestStep(this.shownStep);
+        }
+      },
     };
   }
 

@@ -49,6 +49,11 @@ export function createScenePanel(scene: Scene, dialog: HTMLDialogElement, hooks:
       return dialog.open;
     },
 
+    updateUnits(elevationUnit: string, displayUnits: Record<string, string>) {
+      collapsed.setUnits(elevationUnit);
+      full.setUnits(elevationUnit, displayUnits);
+    },
+
     destroy() {
       if (dialog.open) dialog.close();
       dialog.oncancel = null;
@@ -65,6 +70,7 @@ function makeCollapsed(scene: Scene, dialog: HTMLDialogElement, hooks: PanelHook
   element.setAttribute("aria-label", "Scene details");
 
   let selected: PanelTab = "about";
+  let elevationUnit = "m";
 
   const header = makeHtmlElement("div", "", element);
   header.className = "panel-header";
@@ -83,7 +89,7 @@ function makeCollapsed(scene: Scene, dialog: HTMLDialogElement, hooks: PanelHook
 
   const select = (tab: PanelTab) => {
     selected = tab;
-    body.textContent = tab === "charts" ? CHARTS_PLACEHOLDER : summaryText(scene);
+    body.textContent = tab === "charts" ? CHARTS_PLACEHOLDER : summaryText(scene, elevationUnit);
 
     for (const { tab: chipTab, chip } of chips) {
       chip.setAttribute("aria-pressed", String(chipTab === tab));
@@ -116,7 +122,12 @@ function makeCollapsed(scene: Scene, dialog: HTMLDialogElement, hooks: PanelHook
   footer.className = "panel-footer";
   footer.onclick = () => hooks.requestOpen("credits");
 
-  return { element, expand };
+  const setUnits = (unit: string) => {
+    elevationUnit = unit;
+    select(selected);
+  };
+
+  return { element, expand, setUnits };
 }
 
 function makeFull(scene: Scene, dialog: HTMLDialogElement, hooks: PanelHooks) {
@@ -151,7 +162,12 @@ function makeFull(scene: Scene, dialog: HTMLDialogElement, hooks: PanelHooks) {
     hooks.requestClose();
   };
 
+  let current: PanelTab = "about";
+  let elevationUnit = "m";
+  let displayUnits: Record<string, string> = {};
+
   const selectTab = (selected: PanelTab) => {
+    current = selected;
     for (const { tab, button } of tabButtons) {
       const isSelected = tab === selected;
       button.setAttribute("aria-selected", String(isSelected));
@@ -159,13 +175,13 @@ function makeFull(scene: Scene, dialog: HTMLDialogElement, hooks: PanelHooks) {
       if (isSelected) button.focus();
     }
 
-    content.replaceChildren(renderTab(scene, selected));
+    content.replaceChildren(renderTab(scene, selected, elevationUnit, displayUnits));
     content.scrollTop = 0;
   };
 
   tabs.onkeydown = (event) => {
-    const current = tabButtons.findIndex(({ button }) => button === event.target);
-    const target = tabIndexForKey(event.key, current, tabButtons.length);
+    const index = tabButtons.findIndex(({ button }) => button === event.target);
+    const target = tabIndexForKey(event.key, index, tabButtons.length);
     if (target === null) return;
 
     event.preventDefault();
@@ -174,7 +190,13 @@ function makeFull(scene: Scene, dialog: HTMLDialogElement, hooks: PanelHooks) {
 
   for (const { tab, button } of tabButtons) button.onclick = () => selectTab(tab);
 
-  return { selectTab, setTimeLabel: timeControl.setLabel };
+  const setUnits = (elevation: string, units: Record<string, string>) => {
+    elevationUnit = elevation;
+    displayUnits = units;
+    if (dialog.open) selectTab(current);
+  };
+
+  return { selectTab, setTimeLabel: timeControl.setLabel, setUnits };
 }
 
 // Shown only for scenes with a time axis; it drives the same timeline as the time bar.
@@ -202,8 +224,13 @@ function makeTimeControl(hooks: PanelHooks) {
   };
 }
 
-function renderTab(scene: Scene, tab: PanelTab) {
-  if (tab === "about") return renderAbout(scene);
+function renderTab(
+  scene: Scene,
+  tab: PanelTab,
+  elevationUnit: string,
+  displayUnits: Record<string, string>,
+) {
+  if (tab === "about") return renderAbout(scene, elevationUnit, displayUnits);
   if (tab === "credits") return renderCredits(scene);
   return makeHtmlElement("p", CHARTS_PLACEHOLDER);
 }

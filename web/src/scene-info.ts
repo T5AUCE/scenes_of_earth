@@ -1,9 +1,8 @@
+import { formatLength, METERS_PER_KILOMETER } from "./units";
 import type { CreditDoc, Scene } from "./types";
 
 const METERS_PER_DEGREE = 111_320;
-const METERS_PER_KILOMETER = 1000;
 const DEGREES_PER_RADIAN = 180 / Math.PI;
-const CELL_SIZE_ROUNDING_M = 10;
 
 /** A credited source; isBoundary marks the area boundary's source. */
 export interface CreditEntry extends CreditDoc {
@@ -24,14 +23,10 @@ export function areaKm2(scene: Scene) {
   return finest.mask.cells_inside * cellKm2;
 }
 
-/** A cell size in metres, or in kilometres from 1 km up. */
-export function formatCellSize(resolutionDegrees: number) {
+/** A cell size in metres or feet, favouring kilometres or miles once past one of them. */
+export function formatCellSize(resolutionDegrees: number, elevationUnit = "m") {
   const meters = resolutionDegrees * METERS_PER_DEGREE;
-  if (meters >= METERS_PER_KILOMETER) {
-    return `${Number((meters / METERS_PER_KILOMETER).toPrecision(2))} km`;
-  }
-
-  return `${Math.round(meters / CELL_SIZE_ROUNDING_M) * CELL_SIZE_ROUNDING_M} m`;
+  return formatLength(meters, elevationUnit);
 }
 
 /** One entry per source that the bundle credits: each layer, then the area boundary. */

@@ -2,6 +2,7 @@
 import { useEffect, useRef } from "react";
 
 import type { RangeMenu } from "../types";
+import { convertRange, convertValue, displayDecimals } from "../units";
 
 interface RangeSectionProps {
   range: RangeMenu;
@@ -16,11 +17,18 @@ export function RangeSection({
   const low = useRef<HTMLInputElement>(null);
   const high = useRef<HTMLInputElement>(null);
   const dirty = useRef(false);
+  // The stored range stays native while the inputs show the chosen display unit.
+  const displayUnit = range.displayUnit ?? range.units;
+  const shownDecimals = displayDecimals(range.decimals, range.units, displayUnit);
+  const shownFitted = shownRange(range.fitted, range.units, displayUnit, shownDecimals);
+  const shownValue = range.value
+    ? shownRange(range.value, range.units, displayUnit, shownDecimals)
+    : null;
 
   useEffect(() => {
-    show(range.value ?? range.fitted);
+    show(shownValue ?? shownFitted);
     dirty.current = false;
-  }, [range, range.fitted, range.value]);
+  }, [range, range.fitted, range.value, range.displayUnit]);
 
   // A native listener marks edits, so typing always arms the next blur or Enter.
   useEffect(() => {
@@ -46,22 +54,28 @@ export function RangeSection({
   const commit = () => {
     if (!dirty.current) return;
     dirty.current = false;
-    const next = typedRange(low.current?.value ?? "", high.current?.value ?? "", range.decimals);
+    const next = typedRange(
+      low.current?.value ?? "",
+      high.current?.value ?? "",
+      range,
+      displayUnit,
+      shownDecimals,
+    );
     if (!next) {
-      show(range.value ?? range.fitted);
+      show(shownValue ?? shownFitted);
 
       return;
     }
 
     range.set(next);
-    show(next);
+    show(shownRange(next, range.units, displayUnit, shownDecimals));
     onChange("range");
   };
 
   const reset = () => {
     dirty.current = false;
     range.set(null);
-    show(range.fitted);
+    show(shownFitted);
     onChange("range");
   };
 
@@ -70,7 +84,7 @@ export function RangeSection({
   return (
     <fieldset className="editor-range">
       <legend>
-        {`Display range (${range.units}) `}
+        {`Display range (${displayUnit}) `}
         <button
           type="button"
           className="range-reset"
@@ -89,8 +103,8 @@ export function RangeSection({
             ref={low}
             type="number"
             aria-label="Low"
-            step={String(10 ** -range.decimals)}
-            defaultValue={String((range.value ?? range.fitted)[0])}
+            step={String(10 ** -shownDecimals)}
+            defaultValue={String((shownValue ?? shownFitted)[0])}
             onBlur={commit}
             onKeyDown={(event) => {
               if (event.key === "Enter") commit();
@@ -104,8 +118,8 @@ export function RangeSection({
             ref={high}
             type="number"
             aria-label="High"
-            step={String(10 ** -range.decimals)}
-            defaultValue={String((range.value ?? range.fitted)[1])}
+            step={String(10 ** -shownDecimals)}
+            defaultValue={String((shownValue ?? shownFitted)[1])}
             onBlur={commit}
             onKeyDown={(event) => {
               if (event.key === "Enter") commit();
@@ -121,14 +135,49 @@ export function RangeSection({
 function typedRange(
   lowText: string,
   highText: string,
-  decimals: number,
+  range: RangeMenu,
+  displayUnit: string,
+  shownDecimals: number,
 ): [number, number] | null {
-  const rounded = (text: string) => Number(Number(text).toFixed(decimals));
   if (!lowText || !highText) return null;
 
-  const next: [number, number] = [rounded(lowText), rounded(highText)];
+  const currentNative = range.value ?? range.fitted;
+  const currentShown = shownRange(currentNative, range.units, displayUnit, shownDecimals);
+  const lowNumber = Number(lowText);
+  const highNumber = Number(highText);
+  if (!Number.isFinite(lowNumber) || !Number.isFinite(highNumber)) return null;
 
-  return Number.isFinite(next[0]) && Number.isFinite(next[1]) && next[0] < next[1]
-    ? next
+  // An untouched endpoint keeps its stored native, so display rounding never quantises it.
+  const isLowUntouched = lowNumber === currentShown[0];
+  const isHighUntouched = highNumber === currentShown[1];
+  const nativeLow = isLowUntouched
+    ? currentNative[0]
+    : convertValue(roundedDisplay(lowNumber, shownDecimals), displayUnit, range.units);
+  const nativeHigh = isHighUntouched
+    ? currentNative[1]
+    : convertValue(roundedDisplay(highNumber, shownDecimals), displayUnit, range.units);
+
+  return Number.isFinite(nativeLow) && Number.isFinite(nativeHigh) && nativeLow < nativeHigh
+    ? [nativeLow, nativeHigh]
     : null;
+}
+
+function shownRange(
+  nativeRange: readonly [number, number],
+  nativeUnits: string,
+  displayUnit: string,
+  shownDecimals: number,
+): [number, number] {
+  const converted = convertRange(nativeRange, nativeUnits, displayUnit);
+  if (nativeUnits === displayUnit) return converted;
+
+  // Inputs show rounded conversions, so long floats never reach the box.
+  return [
+    roundedDisplay(converted[0], shownDecimals),
+    roundedDisplay(converted[1], shownDecimals),
+  ];
+}
+
+function roundedDisplay(value: number, shownDecimals: number): number {
+  return Number(value.toFixed(shownDecimals));
 }

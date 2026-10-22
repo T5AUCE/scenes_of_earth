@@ -52,6 +52,7 @@ function displayTokens(parameters: URLSearchParams): DisplayTokens {
     as: joined("as"),
     ink: joined("ink"),
     dens: joined("dens"),
+    units: joined("units"),
   };
 }
 

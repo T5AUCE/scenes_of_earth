@@ -18,6 +18,7 @@ import {
   traceIsolines,
 } from "../render/isolines";
 import { type InkPaint, rgbCss } from "../render/palettes";
+import { convertValue, displayUnitFor, isUnitFor } from "../units";
 import type { GridDoc, LayerContext } from "../types";
 
 const CACHED_STEPS = 24;
@@ -50,11 +51,12 @@ const EMPTY_LINES: GeoJsonData = { type: "FeatureCollection", features: [] };
 /** The dashed isotherm lines and labels drawn as a temperature layer's fallback. */
 export interface IsolineOverlay {
   readonly layerIds: readonly string[];
-  /** The spacing of the lines in degrees, which follows the display range. */
+  /** The spacing of the lines in display units, which follows the display range. */
   readonly interval: number;
   setValues(values: ArrayLike<number>, step: number): void;
   setSmooth(smooth: boolean): void;
   setRange(range: [number, number] | null): void;
+  setUnits(unit: string): void;
   setInk(ink: InkPaint): void;
   setVisible(visible: boolean): void;
   destroy(): void;
@@ -68,7 +70,10 @@ export function createIsolineOverlay(
   const stops = layer.style.stops;
   if (!stops) throw new Error(`Layer "${layer.id}" needs stops for isotherms`);
 
-  let { interval, levels } = isothermScale(stops, display?.range);
+  const nativeUnits = layer.units;
+  let displayUnit = displayUnitFor(nativeUnits, display?.units);
+  let currentRange = display?.range ?? undefined;
+  let { interval, levels } = isothermScale(stops, currentRange, nativeUnits, displayUnit);
   const sourceId = `${layer.id}-isotherms`;
   const ids = {
     casingId: `${sourceId}-casing`,
@@ -96,7 +101,10 @@ export function createIsolineOverlay(
         traceKey(step, smooth),
         () => traceIsolines(values, layer.grid.nx, layer.grid.ny, levels, smooth),
       );
-      const features = traced.map((line) => lineFeature(line, interval, layer.grid, shift));
+      const features = traced.map(
+        (line) =>
+          lineFeature(line, interval, layer.grid, shift, nativeUnits, displayUnit),
+      );
       (map.getSource(sourceId) as GeoJSONSource).setData({
         type: "FeatureCollection",
         features,
@@ -108,9 +116,19 @@ export function createIsolineOverlay(
     },
 
     setRange(range) {
-      const next = isothermScale(stops, range ?? undefined);
+      currentRange = range ?? undefined;
+      const next = isothermScale(stops, currentRange, nativeUnits, displayUnit);
       interval = next.interval;
       if (sameLevels(next.levels, levels)) return;
+      levels = next.levels;
+      tracedSteps.clear();
+    },
+
+    setUnits(unit) {
+      if (!isUnitFor(nativeUnits, unit) || unit === displayUnit) return;
+      displayUnit = unit;
+      const next = isothermScale(stops, currentRange, nativeUnits, displayUnit);
+      interval = next.interval;
       levels = next.levels;
       tracedSteps.clear();
     },
@@ -230,14 +248,23 @@ function textFont(map: MapLibreMap) {
 function isothermScale(
   stops: readonly number[],
   range: [number, number] | undefined,
+  nativeUnits: string,
+  displayUnit: string,
 ): { interval: number; levels: number[] } {
+  // Geometry stays in native units while the interval stays round in the display unit.
   const effectiveStops = range ? evenStops(...range, stops.length) : stops;
-  const interval = isolineInterval(effectiveStops);
-  const levels = isolineLevels(
-    effectiveStops[0],
-    effectiveStops[effectiveStops.length - 1],
+  // Full precision keeps label rounding out of level selection.
+  const shownStops = effectiveStops.map(
+    (stop) => convertValue(stop, nativeUnits, displayUnit),
+  );
+  const interval = isolineInterval(shownStops);
+  const shownLevels = isolineLevels(
+    shownStops[0],
+    shownStops[shownStops.length - 1],
     interval,
   );
+
+  const levels = shownLevels.map((level) => convertValue(level, displayUnit, nativeUnits));
 
   return { interval, levels };
 }
@@ -269,12 +296,21 @@ function cachedTrace(
   return next;
 }
 
-function lineFeature(line: Isoline, interval: number, grid: GridDoc, shift: number) {
+function lineFeature(
+  line: Isoline,
+  interval: number,
+  grid: GridDoc,
+  shift: number,
+  nativeUnits: string,
+  displayUnit: string,
+) {
+  // Boldness and labels use display values so a Fahrenheit interval stays round.
+  const shown = convertValue(line.value, nativeUnits, displayUnit);
   return {
     type: "Feature" as const,
     properties: {
-      bold: isBoldLevel(line.value, interval),
-      label: `${formatLevel(line.value)}°`,
+      bold: isBoldLevel(shown, interval),
+      label: `${formatLevel(shown)}°`,
     },
     geometry: {
       type: "LineString" as const,

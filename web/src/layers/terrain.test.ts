@@ -18,7 +18,11 @@ const mockModules = {
     export const terrainTileBounds = () => ({});
     export class ContourOverlay {
       part = { id: "contours", label: "Contours", layerIds: [] };
+      units = "m";
       setColor() {}
+      setUnits(unit) {
+        this.units = unit;
+      }
       destroy() {}
     }
   `,
@@ -37,7 +41,7 @@ const hooks = registerHooks({
     return next(specifier, context);
   },
 });
-const { watchTerrainTiles } = await import("./terrain.ts");
+const { createTerrainView, watchTerrainTiles } = await import("./terrain.ts");
 hooks.deregister();
 
 test("a cancellation or missing tile is ignored", (context) => {
@@ -207,3 +211,56 @@ function tile(z = 8, x = 1, y = 2) {
 function failure() {
   return { name: "Error", message: "Network request failed" };
 }
+
+test("terrain offers metres and feet and forwards the choice to contours", () => {
+  const map = {
+    addSource() {},
+    addLayer() {},
+    on() {},
+    off() {},
+    setPaintProperty() {},
+  };
+  const view = createTerrainView({
+    map,
+    store: Promise.resolve({}),
+    layer: {
+      id: "terrain",
+      title: "Terrain",
+      units: "m",
+      grid: { bbox: [0, 0, 1, 1], res: 1, nx: 2, ny: 2 },
+      tiles: {
+        url: "https://example.test/{z}/{x}/{y}",
+        encoding: "terrarium",
+        tile_size: 512,
+        maxzoom: 11,
+        source: { name: "DEM", licence: "open" },
+      },
+      stats: {
+        min: 0,
+        max: 100,
+        mean: 50,
+        p2: 5,
+        p98: 95,
+        slope_p50_deg: 5,
+        slope_p90_deg: 10,
+        cell_m: 500,
+      },
+    },
+    shift: 0,
+    slots: { fill: "fill", shade: "shade", marks: "marks", lines: "lines" },
+    beforeId: undefined,
+    report: () => () => {},
+  } as unknown as Parameters<typeof createTerrainView>[0]);
+
+  assert.deepEqual(view.menu?.units?.options, ["m", "ft"]);
+  assert.equal(view.menu?.units?.defaultUnit, "m");
+  assert.equal(view.menu?.units?.value, "m");
+
+  view.menu?.units?.set("ft");
+  assert.equal(view.menu?.units?.value, "ft");
+
+  view.menu?.units?.set("m");
+  assert.equal(view.menu?.units?.value, "m");
+
+  view.destroy();
+});

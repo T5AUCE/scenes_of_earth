@@ -128,7 +128,7 @@ test("Close and Escape both close the editor", async (context) => {
   await act(async () => root.unmount());
 });
 
-test("Reset layer clears the layer's Show as choice", async (context) => {
+test("Reset layer keeps the layer's Show as choice", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
@@ -155,8 +155,8 @@ test("Reset layer clears the layer's Show as choice", async (context) => {
       .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
 
-  assert.deepEqual(store.getSnapshot().display.showAs, {});
-  assert.equal(store.getSnapshot().allocation.owner, "temp");
+  assert.deepEqual(store.getSnapshot().display.showAs, { rain: "colour" });
+  assert.equal(store.getSnapshot().allocation.owner, "rain");
 
   await act(async () => root.unmount());
 });
@@ -658,6 +658,33 @@ test("multi-part layers keep per-part checkboxes in Options", async (context) =>
   await act(async () => root.unmount());
 });
 
+test("the terrain editor keeps the contours switch without the interval text", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { LayerEditor } = await import("./layer-editor.tsx");
+  const store = createSceneStore([TERRAIN], display());
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+
+  await act(async () => root.render(
+    <Harness
+      Editor={LayerEditor}
+      target={{ unit: "terrain", title: "Terrain", view: terrainView() }}
+      layers={[TERRAIN]}
+      store={store}
+    />,
+  ));
+
+  assert.ok(checkboxByLabel(container, "Contours"));
+  assert.doesNotMatch(container.textContent ?? "", /Contours every/);
+
+  await act(async () => root.unmount());
+});
+
 test("Show as offers Hidden alongside each draw", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
@@ -853,6 +880,84 @@ test("the editor shows Low and High on one line", async (context) => {
   assert.ok(low);
   assert.ok(high);
   assert.equal(low.closest(".range-row"), high.closest(".range-row"));
+
+  await act(async () => root.unmount());
+});
+
+test("a convertible layer offers a Units choice and others show none", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { LayerEditor } = await import("./layer-editor.tsx");
+  const store = createSceneStore([RAIN], display());
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+
+  await act(async () => root.render(
+    <Harness
+      Editor={LayerEditor}
+      target={{ unit: "rain", title: "Rainfall", view: unitsView("rain", "mm/month") }}
+      layers={[RAIN]}
+      store={store}
+    />,
+  ));
+  assert.ok(container.querySelector(".editor-units"));
+  assert.ok(inputByValue(container, "mm/month"));
+  assert.ok(inputByValue(container, "in/month"));
+
+  await act(async () => root.render(
+    <Harness
+      Editor={LayerEditor}
+      target={{ unit: "land", title: "Land cover", view: fieldView("land") }}
+      layers={[LAND]}
+      store={store}
+    />,
+  ));
+  assert.equal(container.querySelector(".editor-units"), null);
+
+  await act(async () => root.unmount());
+});
+
+test("choosing inches updates the store and Reset returns to millimetres", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { LayerEditor } = await import("./layer-editor.tsx");
+  const store = createSceneStore([RAIN], display());
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const view = unitsView("rain", "mm/month");
+
+  await act(async () => root.render(
+    <Harness
+      Editor={LayerEditor}
+      target={{ unit: "rain", title: "Rainfall", view }}
+      layers={[RAIN]}
+      store={store}
+    />,
+  ));
+
+  await act(async () => {
+    inputByValue(container, "in/month")
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.equal(store.getSnapshot().display.layers.rain?.units, "in/month");
+
+  await act(async () => {
+    buttonWithText(container, "Reset layer")
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  await act(async () => {
+    buttonWithText(container, "Reset")
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.equal(store.getSnapshot().display.layers.rain?.units, undefined);
 
   await act(async () => root.unmount());
 });
@@ -1143,6 +1248,29 @@ function rangeView(): LayerView {
         units: "mm",
         value: null,
         set: () => {},
+      },
+    },
+  };
+}
+
+function unitsView(id: string, native: string): LayerView {
+  const base = fieldView(id);
+  let value = native;
+  const options = native === "mm/month" ? ["mm/month", "in/month"] : ["°C", "°F"];
+
+  return {
+    ...base,
+    menu: {
+      ...base.menu!,
+      units: {
+        options,
+        defaultUnit: native,
+        get value() {
+          return value;
+        },
+        set: (next: string) => {
+          value = next;
+        },
       },
     },
   };

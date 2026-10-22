@@ -10,6 +10,7 @@ import {
   contourLadder,
   FADE_SPAN_ZOOM,
   finestIntervalAt,
+  INTERVAL_CHAIN_FT,
   INTERVAL_CHAIN_M,
   labelIntervalsAt,
   metresPerPixel,
@@ -63,10 +64,27 @@ test("every tier is traced one whole zoom before it enters except at the z0 floo
 test("the slope spacing rule is met at entry and was not met one zoom earlier", () => {
   const ladder = contourLadder(FIJI, -18);
   const required = (zoom: number) =>
-    2.5 * metresPerPixel(zoom, -18) * Math.tan(FIJI.slope_p90_deg * Math.PI / 180);
+    5 * metresPerPixel(zoom, -18) * Math.tan(FIJI.slope_p90_deg * Math.PI / 180);
   for (const tier of ladder.tiers) {
     assert.ok(tier.interval >= required(tier.entryZoom));
     if (tier.entryZoom > 0) assert.ok(tier.interval < required(tier.entryZoom - 1));
+  }
+});
+
+test("the feet ladder stays round and nested like the metre ladder", () => {
+  for (const [index, interval] of INTERVAL_CHAIN_FT.entries()) {
+    if (index > 0) assert.equal(interval % INTERVAL_CHAIN_FT[index - 1], 0);
+  }
+  for (const sample of [FIJI, KENYA, FLAT]) {
+    const ladder = contourLadder(sample, -18, { elevationUnit: "ft" });
+    let previous = Infinity;
+    for (let zoom = 0; zoom <= 14; zoom += 1) {
+      const interval = finestIntervalAt(ladder, zoom) ?? Infinity;
+      assert.ok(interval <= previous);
+      if (Number.isFinite(previous)) assert.equal(previous % interval, 0);
+      previous = interval;
+    }
+    assert.ok(ladder.tiers.every((tier) => INTERVAL_CHAIN_FT.includes(tier.interval)));
   }
 });
 
@@ -257,6 +275,94 @@ test("contour styles validate in MapLibre and cap refinement at z12", (context) 
   assert.equal(map.layers.size, 1);
 });
 
+test("feet contours use scaled elevations with round feet labels", (context) => {
+  mockPage(context);
+  const map = new TestMap();
+  const dem = sharedDemSource(TILES);
+  const overlay = new ContourOverlay(
+    { ...layerContext(map), display: { units: "ft" } },
+    dem,
+    TILES,
+    FIJI,
+  );
+  const { multiplier } = (dem as unknown as TestDemSource).contourOptions as {
+    multiplier?: number;
+  };
+  assert.ok(multiplier !== undefined && Math.abs(multiplier - 3.28084) < 1e-4);
+
+  const labels = map.layers.get("terrain-contours-labels")!;
+  const field = JSON.stringify(labels.layout["text-field"]);
+  assert.ok(field.includes("ft"));
+  assert.ok(!field.includes('" m"'));
+
+  const feetLadder = contourLadder(FIJI, 0, { elevationUnit: "ft" });
+  const multipleOf = (interval: number) => ["==", ["%", ["get", "ele"], interval], 0];
+  const soleMultiple = (interval: number, coarser: number) => [
+    "all",
+    multipleOf(interval),
+    ["!", multipleOf(coarser)],
+  ];
+  assert.deepEqual(
+    [...map.layers.values()]
+      .filter((layer) => layer.type === "line")
+      .map((layer) => layer.filter),
+    feetLadder.tiers.map((tier, index) => {
+      const coarser = feetLadder.tiers[index - 1];
+      if (!coarser) return multipleOf(tier.interval);
+
+      return soleMultiple(tier.interval, coarser.interval);
+    }),
+  );
+
+  map.zoom = 12;
+  map.emit("zoomend");
+  const interval = feetLadder.tiers.length > 0 ? overlay.legend.textContent : "";
+  assert.match(interval ?? "", /ft/);
+
+  overlay.setUnits("m");
+  const relabelled = map.layers.get("terrain-contours-labels")!;
+  assert.ok(JSON.stringify(relabelled.layout["text-field"]).includes("m"));
+  assert.doesNotMatch(overlay.legend.textContent ?? "", /ft/);
+  overlay.destroy();
+});
+
+test("the terrain legend shows the interval while the contours part carries no note", (context) => {
+  mockPage(context);
+  const map = new TestMap();
+  const view = createTerrainView(layerContext(map));
+  const contours = view.parts.find((part) => part.id === "terrain.contours")!;
+  assert.equal(contours.note, undefined);
+
+  const legend = view.legend();
+  assert.ok(legend);
+  map.zoom = 12;
+  map.emit("zoomend");
+  const ladder = contourLadder(FIJI, 0, { maxZoom: 12 });
+  assert.equal(
+    legend.textContent,
+    contourLegendText(finestIntervalAt(ladder, 12)!, ladder.boldInterval),
+  );
+  assert.equal(legend.hidden, false);
+
+  map.zoom = 0;
+  map.emit("zoomend");
+  assert.equal(legend.hidden, finestIntervalAt(ladder, 0) === null);
+
+  map.zoom = 12;
+  map.emit("zoomend");
+  view.menu?.units?.set("ft");
+  assert.equal(view.legend(), legend);
+  const feetLadder = contourLadder(FIJI, 0, { maxZoom: 12, elevationUnit: "ft" });
+  assert.equal(
+    legend.textContent,
+    contourLegendText(finestIntervalAt(feetLadder, 12)!, feetLadder.boldInterval, "ft"),
+  );
+
+  contours.onToggle?.(false);
+  assert.equal(legend.hidden, true);
+  view.destroy();
+});
+
 test("the configured contour buffer stays inside the plugin's materialized padding", (context) => {
   mockPage(context);
   const map = new TestMap();
@@ -359,6 +465,63 @@ test("shared relief and contour layers keep their mask-gated zoom bounds", (cont
   assert.equal(map.sources.size, 0);
 });
 
+test("switching units refreshes the mask gate and drops removed tiers", (context) => {
+  mockPage(context);
+  const map = new TestMap();
+  const view = createTerrainView(layerContext(map, KENYA));
+  const ids = view.parts.flatMap((part) => part.layerIds);
+  const gate = new SceneDataLayers(map as unknown as MapLibreMap, ids);
+  gate.update(5);
+  gate.show();
+
+  const layersBeforeFeet = new Map(ids.map((id) => [id, map.layers.get(id)]));
+  view.menu?.units?.set("ft");
+  const feetIds = view.parts.flatMap((part) => part.layerIds);
+  // Persisting layers still show the mask gate, so only rebuilt tiers carry fresh native zooms.
+  const feetNative = feetIds
+    .filter((id) => map.layers.get(id) !== layersBeforeFeet.get(id))
+    .map((id) => ({ id, min: map.layers.get(id)?.minzoom ?? 0 }));
+  assert.ok(!feetIds.includes("terrain-contours-10"));
+  assert.ok(feetNative.length > 0);
+  gate.sync(feetIds);
+  gate.update(undefined);
+  for (const { id, min } of feetNative) {
+    assert.equal(map.layers.get(id)?.minzoom, min);
+  }
+  gate.update(5);
+  for (const { id, min } of feetNative) {
+    assert.equal(map.layers.get(id)?.minzoom, Math.max(min, 4.75));
+  }
+  gate.update(undefined);
+  for (const { id, min } of feetNative) {
+    assert.equal(map.layers.get(id)?.minzoom, min);
+  }
+
+  const layersBeforeMetres = new Map(feetIds.map((id) => [id, map.layers.get(id)]));
+  view.menu?.units?.set("m");
+  const metreIds = view.parts.flatMap((part) => part.layerIds);
+  // Persisting layers still show the mask gate, so only rebuilt tiers carry fresh native zooms.
+  const metreNative = metreIds
+    .filter((id) => map.layers.get(id) !== layersBeforeMetres.get(id))
+    .map((id) => ({ id, min: map.layers.get(id)?.minzoom ?? 0 }));
+  assert.ok(metreIds.includes("terrain-contours-10"));
+  assert.ok(metreNative.length > 0);
+  gate.sync(metreIds);
+  gate.update(undefined);
+  for (const { id, min } of metreNative) {
+    assert.equal(map.layers.get(id)?.minzoom, min);
+  }
+  gate.update(5);
+  for (const { id, min } of metreNative) {
+    assert.equal(map.layers.get(id)?.minzoom, Math.max(min, 4.75));
+  }
+  gate.update(undefined);
+  for (const { id, min } of metreNative) {
+    assert.equal(map.layers.get(id)?.minzoom, min);
+  }
+  view.destroy();
+});
+
 test("flat and capped contour styles validate when several tiers enter together", (context) => {
   mockPage(context);
   for (const sample of [FLAT, makeStats(0, 0, 0, 0), makeStats(0, 1000, 89.9, 89.9)]) {
@@ -379,7 +542,7 @@ test("flat and capped contour styles validate when several tiers enter together"
   }
 });
 
-function layerContext(map: TestMap): LayerContext {
+function layerContext(map: TestMap, stats: TerrainStats = FIJI): LayerContext {
   return {
     map: map as unknown as MapLibreMap,
     store: Promise.resolve({} as never),
@@ -389,7 +552,7 @@ function layerContext(map: TestMap): LayerContext {
       units: "m",
       grid: { bbox: [33, -5, 42, 5], res: 0.01, nx: 900, ny: 1000 },
       tiles: TILES,
-      stats: FIJI,
+      stats,
     } as LayerContext["layer"],
     shift: 0,
     slots: { fill: "places", shade: "places", marks: "places", lines: "places" },

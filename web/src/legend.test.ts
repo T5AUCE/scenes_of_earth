@@ -122,6 +122,13 @@ test("the isotherm legend shows the dashed ink over its dashed casing", () => {
   assert.equal(label.textContent, "Isotherms every 2 °C (bold every 10 °C)");
 });
 
+test("the isotherm legend names the chosen units", () => {
+  const legend = isothermLegend(2, inkPaint("charcoal"), "°F") as unknown as TestElement;
+  const [, label] = legend.children;
+
+  assert.equal(label.textContent, "Isotherms every 2 °F (bold every 10 °F)");
+});
+
 test("the bivariate legend puts its ticks at the fitted stops", () => {
   const rain = {
     title: "Rainfall",

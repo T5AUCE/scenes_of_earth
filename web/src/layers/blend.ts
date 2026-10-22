@@ -1,7 +1,9 @@
 /** Combine cached rainfall and temperature steps into a bivariate colour layer. */
+import { rangeDecimals } from "../display-state";
 import { makeHtmlElement } from "../html";
 import { bivariateLegend } from "../legend";
 import { addImageLayer, maxTextureSize, removeLayerAndSource, setImage } from "../map";
+import { displayStops } from "../units";
 import {
   type BivariateAxis,
   lut2d,
@@ -27,6 +29,8 @@ export interface BlendContext
   extends Pick<LayerContext, "map" | "store" | "shift" | "slots" | "report"> {
   /** The custom range set in a layer's menu, or null while its fitted range applies. */
   rangeOf(layerId: string): [number, number] | null;
+  /** The display unit chosen in a layer's menu, or its native units. */
+  unitsOf(layerId: string): string;
 }
 
 /** The blended layer, which repaints when a half's range changes. */
@@ -207,7 +211,7 @@ class Blend implements BlendView {
     const [rain, temperature] = this.halves.map((half, index): BivariateAxis => ({
       values: values[index],
       table: half.table,
-      stops: this.stopsOf(half),
+      stops: this.nativeStops(half),
     }));
     const rgba = paintBivariate(rain, temperature, BLEND_COLORS);
 
@@ -216,15 +220,20 @@ class Blend implements BlendView {
     this.context.map.setPaintProperty(this.id, "raster-opacity", BLEND_OPACITY);
   }
 
-  private stopsOf({ layer, fitted }: Half) {
+  private nativeStops({ layer, fitted }: Half) {
     return stopsForRange(fitted, this.context.rangeOf(layer.id));
   }
 
   private showLegend() {
     const [rain, temperature] = this.halves.map((half) => ({
       title: half.layer.title,
-      units: half.layer.units,
-      stops: this.stopsOf(half),
+      units: this.context.unitsOf(half.layer.id),
+      stops: displayStops(
+        this.nativeStops(half),
+        half.layer.units,
+        this.context.unitsOf(half.layer.id),
+        rangeDecimals(half.layer),
+      ),
       isBottomOpen: this.context.rangeOf(half.layer.id) !== null,
     }));
     const isFitted = this.halves.every(({ layer }) => this.context.rangeOf(layer.id) === null);

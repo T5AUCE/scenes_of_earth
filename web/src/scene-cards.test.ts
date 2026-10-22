@@ -150,6 +150,39 @@ test("the blend restyles only when its ranges change", () => {
   assert.equal(restyles, 1);
 });
 
+test("the blend restyles when a half's display units change", () => {
+  const store = createSceneStore(LAYERS, display());
+  const rain = view("rain");
+  const temperature = view("temp");
+  let restyles = 0;
+  const blend = { ...blendView(), restyle: () => restyles++ };
+  const map = fakeMap(() => {});
+
+  subscribeDrawing(
+    map,
+    [{ layer: RAIN, view: rain }, { layer: TEMPERATURE, view: temperature }],
+    blend,
+    store,
+  );
+  restyles = 0;
+
+  store.dispatch({
+    kind: "display",
+    update: (next) => {
+      next.layers.rain = { units: "in/month" };
+    },
+  });
+  assert.equal(restyles, 1);
+
+  store.dispatch({
+    kind: "display",
+    update: (next) => {
+      next.layers.rain = { units: "in/month" };
+    },
+  });
+  assert.equal(restyles, 1);
+});
+
 function display() {
   return { layers: {}, off: new Set<string>(), showAs: {} };
 }

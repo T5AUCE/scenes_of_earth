@@ -12,6 +12,7 @@ import {
   contourLadder,
   FADE_SPAN_ZOOM,
   finestIntervalAt,
+  INTERVAL_CHAIN_FT,
   INTERVAL_CHAIN_M,
   type ContourLadder,
   type LadderTier,
@@ -19,6 +20,7 @@ import {
 import { makeHtmlElement } from "../html";
 import { contourLegendText } from "../legend";
 import { contourColor, DEFAULT_CONTOUR_COLOR } from "../render/palettes";
+import { convertValue, displayUnitFor, isUnitFor } from "../units";
 import type { LayerContext, Part, TerrainStats, TerrainTiles } from "../types";
 
 const CONTOUR_OPACITY = 0.55;
@@ -65,7 +67,13 @@ export class ContourOverlay {
   readonly part: Part;
   private readonly map: MapLibreMap;
   private readonly sourceId: string;
-  private readonly ladder: ContourLadder;
+  private readonly dem: DemSource;
+  private readonly stats: TerrainStats;
+  private readonly bbox: LayerContext["layer"]["grid"]["bbox"];
+  private readonly beforeId: string | undefined;
+  private readonly maxzoom: number;
+  private ladder!: ContourLadder;
+  private elevationUnit: string;
   private isOn = true;
   private color: string;
   private labelId?: string;
@@ -77,40 +85,75 @@ export class ContourOverlay {
     stats: TerrainStats,
   ) {
     const { map, layer, beforeId, display } = context;
+    // The card would set the interval in card type, so it takes the legend caption style.
+    this.legend.className = "legend-contour";
     this.map = map;
+    this.dem = dem;
+    this.stats = stats;
+    this.bbox = layer.grid.bbox;
+    this.beforeId = beforeId;
     this.color = contourColor(display?.palette ?? DEFAULT_CONTOUR_COLOR)!;
     this.sourceId = `${layer.id}-contours`;
-    const [, south, , north] = layer.grid.bbox;
-    const maxzoom = Math.min(MAX_CONTOUR_ZOOM, tiles.maxzoom + CONTOUR_OVERZOOM);
-    this.ladder = contourLadder(stats, (south + north) / 2, { maxZoom: maxzoom });
+    this.elevationUnit = displayUnitFor(layer.units, display?.units);
+    this.maxzoom = Math.min(MAX_CONTOUR_ZOOM, tiles.maxzoom + CONTOUR_OVERZOOM);
     this.part = {
       id: `${layer.id}.contours`,
       label: "Contours",
       layerIds: [],
-      note: this.legend,
       onToggle: (visible) => {
         this.isOn = visible;
         this.updateLegend();
       },
     };
 
-    map.addSource(this.sourceId, {
+    this.build();
+    map.on("zoomend", this.updateLegend);
+    this.updateLegend();
+  }
+
+  /** Switch the tiers, labels and legend to metres or feet, keeping the map colours. */
+  setUnits(unit: string) {
+    if (!isUnitFor("m", unit) || unit === this.elevationUnit) return;
+
+    this.elevationUnit = unit;
+    this.rebuild();
+  }
+
+  private build() {
+    this.ladder = contourLadder(this.stats, centreLatitude(this.bbox), {
+      maxZoom: this.maxzoom,
+      elevationUnit: this.elevationUnit,
+    });
+    this.map.addSource(this.sourceId, {
       type: "vector",
       tiles: [
-        dem.contourProtocolUrl({
+        this.dem.contourProtocolUrl({
           thresholds: this.ladder.thresholds,
           overzoom: CONTOUR_OVERZOOM,
           buffer: CONTOUR_BUFFER_PX,
+          ...elevationMultiplier(this.elevationUnit),
         }),
       ],
-      maxzoom,
-      ...terrainTileBounds(layer.grid.bbox),
+      maxzoom: this.maxzoom,
+      ...terrainTileBounds(this.bbox),
     });
     for (const [index, tier] of this.ladder.tiers.entries()) {
-      this.addLine(tier, this.ladder.tiers[index - 1], beforeId);
+      this.addLine(tier, this.ladder.tiers[index - 1], this.beforeId);
     }
-    this.addLabels(beforeId);
-    map.on("zoomend", this.updateLegend);
+    this.addLabels(this.beforeId);
+  }
+
+  private rebuild() {
+    for (const id of this.part.layerIds) this.map.removeLayer(id);
+    this.map.removeSource(this.sourceId);
+    this.part.layerIds.length = 0;
+    this.labelId = undefined;
+    this.build();
+    if (!this.isOn) {
+      for (const id of this.part.layerIds) {
+        this.map.setLayoutProperty(id, "visibility", "none");
+      }
+    }
     this.updateLegend();
   }
 
@@ -162,10 +205,10 @@ export class ContourOverlay {
         layout: {
           "symbol-placement": "line",
           "symbol-spacing": LABEL_SPACING_PX,
-          "symbol-sort-key": labelPriority(),
+          "symbol-sort-key": labelPriority(this.elevationUnit),
           "text-size": LABEL_SIZE_PX,
           "text-max-angle": LABEL_MAX_ANGLE_DEG,
-          "text-field": labelField(tiers),
+          "text-field": labelField(tiers, this.elevationUnit),
           ...(font ? { "text-font": font } : {}),
         },
         paint: {
@@ -193,7 +236,7 @@ export class ContourOverlay {
   private readonly updateLegend = () => {
     const interval = finestIntervalAt(this.ladder, this.map.getZoom());
     this.legend.textContent = interval
-      ? contourLegendText(interval, this.ladder.boldInterval)
+      ? contourLegendText(interval, this.ladder.boldInterval, this.elevationUnit)
       : "";
     this.legend.hidden = !this.isOn || !interval;
   };
@@ -211,20 +254,36 @@ function labelledTiers(ladder: ContourLadder): ContourLadder["labelTiers"] {
   return [...bold, ...sparse];
 }
 
-function labelPriority(): ExpressionSpecification {
-  const conditions = [...INTERVAL_CHAIN_M].reverse()
+function labelPriority(elevationUnit: string): ExpressionSpecification {
+  const chain = elevationUnit === "ft" ? INTERVAL_CHAIN_FT : INTERVAL_CHAIN_M;
+  const conditions = [...chain].reverse()
     .flatMap((interval) => [multipleOf(interval), -interval]);
   return ["case", ...conditions, 0] as ExpressionSpecification;
 }
 
-function labelField(tiers: ContourLadder["labelTiers"]): ExpressionSpecification {
+function labelField(
+  tiers: ContourLadder["labelTiers"],
+  elevationUnit: string,
+): ExpressionSpecification {
   const field: ExpressionSpecification = ["step", ["zoom"], ""];
   const intervalsByZoom = new Map(tiers.map((tier) => [tier.entryZoom, tier.interval]));
   for (const [zoom, interval] of intervalsByZoom) {
-    const label: ExpressionSpecification = ["concat", ["get", "ele"], " m"];
+    const label: ExpressionSpecification = ["concat", ["get", "ele"], ` ${elevationUnit}`];
     field.push(zoom, ["case", multipleOf(interval), label, ""]);
   }
   return field;
+}
+
+function centreLatitude(bbox: LayerContext["layer"]["grid"]["bbox"]) {
+  const [, south, , north] = bbox;
+  return (south + north) / 2;
+}
+
+function elevationMultiplier(elevationUnit: string) {
+  if (elevationUnit !== "ft") return {};
+
+  // The DEM holds metres, so feet contours scale elevations before tracing them.
+  return { multiplier: convertValue(1, "m", "ft") };
 }
 
 function multipleOf(interval: number): ExpressionSpecification {

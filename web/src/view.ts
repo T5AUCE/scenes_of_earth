@@ -9,6 +9,7 @@ import {
   loadStoredDensities,
   loadStoredInks,
   loadStoredPalettes,
+  loadStoredUnits,
   NO_TOKENS,
   resolveDisplay,
   type SceneDisplay,
@@ -60,13 +61,18 @@ export interface SceneSlots {
   display?: DisplayTokens;
   /** Receives the link parameters for the scene's display choices whenever they change. */
   onDisplay(params: string): void;
+  /**
+   * Receives the Terrain unit with the per-layer effective units and current map layer ids
+   * whenever units change, including the restored choices of the initial load.
+   */
+  onUnits?(elevationUnit: string, displayUnits: Record<string, string>, layerIds: string[]): void;
 }
 
 /** Mount a scene and its controls, removing partial mounts if setup fails. */
 export function mountScene(
   map: MapLibreMap,
   scene: Scene,
-  { cards, timeBar, onTime, display: linked = NO_TOKENS, onDisplay }: SceneSlots,
+  { cards, timeBar, onTime, display: linked = NO_TOKENS, onDisplay, onUnits }: SceneSlots,
 ) {
   const box = makeHtmlElement("div", "", cards);
   const mounted: MountedLayer[] = [];
@@ -87,7 +93,9 @@ export function mountScene(
     return () => note.remove();
   };
 
-  const removeScaleBar = showScaleBar(map);
+  let elevationUnit = "m";
+  let displayUnits: Record<string, string> = {};
+  let removeScaleBar = () => {};
 
   const unmount = () => {
     isMounted = false;
@@ -111,14 +119,40 @@ export function mountScene(
     loadStoredShowAs(),
     loadStoredInks(),
     loadStoredDensities(),
+    loadStoredUnits(),
   );
   if (dropped) addNote(DROPPED_NOTE);
+  elevationUnit = elevationUnitFrom(display, scene.layers);
+  displayUnits = displayUnitsFrom(display, scene.layers);
+  removeScaleBar = showScaleBar(map, elevationUnit);
   const changeDisplay = (layerId: string, change: LayerDisplay) => {
     const apply = (target: SceneDisplay) => {
       setLayerDisplay(target, layerId, { ...target.layers[layerId], ...change });
     };
     if (sceneStore) sceneStore.dispatch({ kind: "display", update: apply });
     else apply(display);
+  };
+
+  const currentLayerIds = () => {
+    const ids = views.flatMap((view) => view.parts.flatMap((part) => part.layerIds));
+    if (blend) ids.push(...blend.parts[0].layerIds);
+
+    return ids;
+  };
+
+  const notifyUnits = (nextDisplay: SceneDisplay, layerDocs: readonly LayerDoc[]) => {
+    const nextElevation = elevationUnitFrom(nextDisplay, layerDocs);
+    const nextUnits = displayUnitsFrom(nextDisplay, layerDocs);
+    if (nextElevation === elevationUnit && unitsEqual(nextUnits, displayUnits)) return;
+
+    const elevationChanged = nextElevation !== elevationUnit;
+    elevationUnit = nextElevation;
+    displayUnits = nextUnits;
+    if (elevationChanged) {
+      removeScaleBar();
+      removeScaleBar = showScaleBar(map, elevationUnit);
+    }
+    onUnits?.(elevationUnit, displayUnits, currentLayerIds());
   };
 
   try {
@@ -146,9 +180,12 @@ export function mountScene(
     });
     stopDrawing = subscribeDrawing(map, mounted, blend, store);
     stopLinking = store.subscribe(() => {
-      onDisplay(formatDisplayParams(store.getSnapshot().display, layerDocs));
+      const snapshot = store.getSnapshot();
+      onDisplay(formatDisplayParams(snapshot.display, layerDocs));
+      notifyUnits(snapshot.display, layerDocs);
     });
     onDisplay(formatDisplayParams(store.getSnapshot().display, layerDocs));
+    onUnits?.(elevationUnit, displayUnits, currentLayerIds());
 
     timeline = createSceneTimeline(blend ? [...views, blend] : views, scene.period, onTime);
     if (timeline) timeBar.append(timeline.element);
@@ -161,6 +198,26 @@ export function mountScene(
   if (blend) layerIds.push(...blend.parts[0].layerIds);
 
   return { unmount, addNote, timeline, layerIds };
+}
+
+function elevationUnitFrom(display: SceneDisplay, layers: readonly LayerDoc[]) {
+  const terrain = layers.find((layer) => layer.style.kind === "terrain");
+  if (!terrain) return "m";
+
+  return display.layers[terrain.id]?.units ?? terrain.units;
+}
+
+function displayUnitsFrom(display: SceneDisplay, layers: readonly LayerDoc[]) {
+  return Object.fromEntries(
+    layers.map((layer) => [layer.id, display.layers[layer.id]?.units ?? layer.units]),
+  );
+}
+
+function unitsEqual(first: Record<string, string>, second: Record<string, string>) {
+  const keys = Object.keys(first);
+
+  return keys.length === Object.keys(second).length
+    && keys.every((key) => first[key] === second[key]);
 }
 
 // Rasters past the antimeridian are drawn one world west, so the outline is shifted to match.
@@ -280,12 +337,16 @@ function mountBlend(
     const mountedLayer = mounted.find(({ layer }) => layer.id === id);
     return mountedLayer?.view.menu?.range?.value ?? null;
   };
+  const unitsOf = (id: string) => {
+    const mountedLayer = mounted.find(({ layer }) => layer.id === id);
+    return mountedLayer?.view.menu?.units?.value ?? mountedLayer?.layer.units ?? "";
+  };
   const report = (error: unknown) => addNote(`${BLEND_TITLE}: ${(error as Error).message}`);
 
   try {
     return createBlendView(
       [rain, temperature],
-      { map, store, shift, slots: SLOTS, report, rangeOf },
+      { map, store, shift, slots: SLOTS, report, rangeOf, unitsOf },
     );
   } catch (error) {
     report(error);

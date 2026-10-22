@@ -26,6 +26,7 @@ import {
   layerDraws,
 } from "./layers/allocate";
 import { formatShowAs, parseShowAs, showAsOptions } from "./show-as";
+import { displayUnitFor, isUnitFor, unitOptions } from "./units";
 import type {
   DisplayTokens,
   EdgeSettings,
@@ -38,11 +39,13 @@ const STORAGE_KEY = "soe.display.v1";
 const EDGES_STORAGE_KEY = "soe.edges.v1";
 const INK_STORAGE_KEY = "soe.ink.v1";
 const DENSITY_STORAGE_KEY = "soe.density.v1";
+const UNITS_STORAGE_KEY = "soe.units.v1";
 
 const PALETTE_FIELDS = 2;
 const INK_FIELDS = 2;
 const DENSITY_FIELDS = 2;
 const RANGE_FIELDS = 3;
+const UNITS_FIELDS = 2;
 const SIGNIFICANT_DIGITS = 3;
 // log10 of an exact power of ten can land a hair above the integer and add a spurious decimal.
 const LOG_ROUNDING_TOLERANCE = 1e-9;
@@ -58,6 +61,7 @@ export const NO_TOKENS: DisplayTokens = {
   as: "",
   ink: "",
   dens: "",
+  units: "",
 };
 
 /** Default class edges keep a one-pixel anti-aliased border and preserve isolated cells. */
@@ -228,6 +232,7 @@ export function resolveDisplay(
   storedShowAs: Record<string, Draw> = {},
   storedInks: Record<string, string> = {},
   storedDensities: Record<string, number> = {},
+  storedUnits: Record<string, string> = {},
 ): ResolvedDisplay {
   const display: SceneDisplay = { layers: {}, off: new Set(), showAs: {} };
   const byId = new Map(layers.map((layer) => [layer.id, layer]));
@@ -292,6 +297,28 @@ export function resolveDisplay(
     const range = fields.length === RANGE_FIELDS ? rangeOf(byId.get(id), low, high) : null;
     if (range) setLayerDisplay(display, id, { ...display.layers[id], range });
     else dropped = true;
+  }
+
+  const linkedUnits = new Map<string, string>();
+  for (const fields of tokenFields(tokens.units ?? "")) {
+    const [id, unit] = fields;
+    if (fields.length === UNITS_FIELDS && isUnitFor(byId.get(id)?.units ?? "", unit)) {
+      linkedUnits.set(id, unit);
+    } else {
+      dropped = true;
+    }
+  }
+
+  for (const layer of layers) {
+    const linked = linkedUnits.get(layer.id);
+    const remembered = storedUnits[layer.id];
+    const validRemembered = remembered !== undefined && isUnitFor(layer.units, remembered)
+      ? remembered
+      : null;
+    const chosen = linked ?? validRemembered;
+    if (chosen && chosen !== displayUnitFor(layer.units, undefined)) {
+      setLayerDisplay(display, layer.id, { ...display.layers[layer.id], units: chosen });
+    }
   }
 
   const units = new Set(layers.flatMap(layerUnits));
@@ -366,7 +393,8 @@ function addBlendHalves(off: Set<string>, pair: BlendPair | null) {
  * The link parameters, each starting with `&`. Every layer with a menu names its palette so that
  * the receiver sees the sender's colours whatever palettes their browser remembers. Ranges, inks
  * and off parts appear only when they differ from the defaults. Every dot layer names its effective
- * density, because an omitted default would let the receiver's stored density win.
+ * density and every convertible layer names its effective units, because an omitted default would
+ * let the receiver's stored choice win.
  */
 export function formatDisplayParams(display: SceneDisplay, layers: LayerDoc[]) {
   const units = layers.flatMap(layerUnits);
@@ -398,6 +426,12 @@ export function formatDisplayParams(display: SceneDisplay, layers: LayerDoc[]) {
       const density = quantiseDensity(display.layers[layer.id]?.density ?? DEFAULT_DENSITY_RATIO);
       return [`${layer.id}:${density}`];
     }),
+    units: layers.flatMap(({ id, units: native }) => {
+      if (!unitOptions(native)) return [];
+
+      const effective = display.layers[id]?.units ?? native;
+      return [`${id}:${effective}`];
+    }),
   };
 
   return Object.entries(parameters)
@@ -408,8 +442,8 @@ export function formatDisplayParams(display: SceneDisplay, layers: LayerDoc[]) {
 
 /** Replace a layer's overrides or remove its entry when no overrides remain. */
 export function setLayerDisplay(display: SceneDisplay, layerId: string, layer: LayerDisplay) {
-  const { palette, range, ink, density } = layer;
-  if (!palette && !range && !ink && !density) {
+  const { palette, range, ink, density, units } = layer;
+  if (!palette && !range && !ink && !density && !units) {
     delete display.layers[layerId];
     return;
   }
@@ -419,12 +453,13 @@ export function setLayerDisplay(display: SceneDisplay, layerId: string, layer: L
     ...(range && { range }),
     ...(ink && { ink }),
     ...(density && { density }),
+    ...(units && { units }),
   };
 }
 
 /**
- * Record a menu change in the scene's display. Palette and ink choices are remembered by this
- * browser, because a range belongs to the link and the visit.
+ * Record a menu change in the scene's display. Palette, ink and unit choices are remembered by
+ * this browser, because a range belongs to the link and the visit.
  */
 export function recordMenuChange(
   display: SceneDisplay,
@@ -434,19 +469,25 @@ export function recordMenuChange(
     defaultPalette: string;
     range?: { value: [number, number] | null };
     ink?: { value: string; defaultInk: string };
+    units?: { value: string; defaultUnit: string };
   },
-  changed: "palette" | "range" | "ink",
+  changed: "palette" | "range" | "ink" | "units",
 ) {
   const palette = menu.palette === menu.defaultPalette ? undefined : menu.palette;
   const ink = menu.ink && menu.ink.value !== menu.ink.defaultInk ? menu.ink.value : undefined;
+  const units = menu.units && menu.units.value !== menu.units.defaultUnit
+    ? menu.units.value
+    : undefined;
   setLayerDisplay(display, layerId, {
     ...display.layers[layerId],
     palette,
     range: menu.range?.value ?? undefined,
     ink,
+    units: units ?? (menu.units ? undefined : display.layers[layerId]?.units),
   });
   if (changed === "palette") storePalette(layerId, palette ?? null);
   if (changed === "ink") storeInk(layerId, ink ?? null);
+  if (changed === "units") storeUnits(layerId, units ?? null);
 }
 
 /** The palette names this browser remembers by layer id; empty when storage is unavailable. */
@@ -467,6 +508,16 @@ export function loadStoredInks(): Record<string, string> {
 /** Remember a layer's ink in this browser, or forget it when ink is null. */
 export function storeInk(layerId: string, ink: string | null) {
   storeName(INK_STORAGE_KEY, layerId, ink);
+}
+
+/** The display units this browser remembers by layer id; empty when storage is unavailable. */
+export function loadStoredUnits(): Record<string, string> {
+  return loadStoredNames(UNITS_STORAGE_KEY);
+}
+
+/** Remember a layer's display unit in this browser, or forget it when unit is null. */
+export function storeUnits(layerId: string, unit: string | null) {
+  storeName(UNITS_STORAGE_KEY, layerId, unit);
 }
 
 /** The dot densities this browser remembers by layer id; empty when storage is unavailable. */
@@ -556,13 +607,12 @@ function isPaletteOf(layer: LayerDoc | undefined, palette: string | undefined) {
   }
 }
 
-// Rounding field ranges to the data precision keeps links short.
+// Link ranges keep their full precision, so a display-unit edit round trips exactly.
 function rangeOf(layer: LayerDoc | undefined, lowText: string, highText: string) {
   if (layer?.style.kind !== "field" || !lowText || !highText) return null;
 
-  const decimals = rangeDecimals(layer);
-  const low = Number(Number(lowText).toFixed(decimals));
-  const high = Number(Number(highText).toFixed(decimals));
+  const low = Number(lowText);
+  const high = Number(highText);
   if (!Number.isFinite(low) || !Number.isFinite(high) || low >= high) return null;
 
   return [low, high] as [number, number];

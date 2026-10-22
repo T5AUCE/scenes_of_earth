@@ -56,6 +56,58 @@ test("the overlay follows the display range and retraces after a change", () => 
   assert.ok(changed.includes(10));
 });
 
+test("fahrenheit intervals stay round with native geometry", () => {
+  const { map, data } = fakeMap();
+  const layer = {
+    id: "temperature",
+    units: "°C",
+    grid: { bbox: [0, 0, 1, 1], nx: 2, ny: 2, res: 1 },
+    style: { stops: KENYA_STOPS },
+  };
+  const context = {
+    map,
+    layer,
+    shift: 0,
+    display: { range: [10, 30], units: "°F" },
+  } as unknown as LayerContext;
+  const overlay = createIsolineOverlay(context, inkPaint("charcoal"));
+
+  assert.equal(overlay.interval, 5);
+  overlay.setValues([0, 100, 100, 0], 0);
+  const levels = overlayLevels(data());
+  assert.ok(levels.length > 0);
+  assert.ok(new Set(levels).size <= 12);
+  assert.ok(levels.every((level) => level >= 50 && level <= 86 && level % 5 === 0));
+  assert.ok(levels.includes(50));
+});
+
+test("switching display units retraces with converted labels", () => {
+  const { map, data } = fakeMap();
+  const layer = {
+    id: "temperature",
+    units: "°C",
+    grid: { bbox: [0, 0, 1, 1], nx: 3, ny: 3, res: 1 },
+    style: { stops: KENYA_STOPS },
+  };
+  const context = {
+    map,
+    layer,
+    shift: 0,
+    display: { range: [20, 24] },
+  } as unknown as LayerContext;
+  const overlay = createIsolineOverlay(context, inkPaint("charcoal"));
+  const values = [0, 30, 0, 30, 0, 30, 0, 30, 0];
+
+  overlay.setValues(values, 0);
+  assert.equal(overlay.interval, 0.5);
+
+  overlay.setUnits("°F");
+  overlay.setValues(values, 0);
+  assert.equal(overlay.interval, 1);
+  const levels = overlayLevels(data());
+  assert.ok(levels.every((level) => level >= 68 && level <= 75.2));
+});
+
 test("the overlay defaults to smooth tracing and caches each step and mode", () => {
   const { map, data } = fakeMap();
   const grid = {

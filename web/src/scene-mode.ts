@@ -67,6 +67,7 @@ interface ActiveScene {
   id: string;
   panel: ReturnType<typeof createScenePanel>;
   clock: SceneClock;
+  syncLayers(layerIds: string[]): void;
   close(): void;
 }
 
@@ -85,6 +86,12 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
     const cards = openColumn(scene, entry);
     const clock = createSceneClock(scene.id);
+    // A list holds the deferred call because the checker keeps a narrowed let at null.
+    const pendingUnits: {
+      elevation: string;
+      displayUnits: Record<string, string>;
+      layerIds: string[];
+    }[] = [];
 
     const mounted = mountScene(map, scene, {
       cards,
@@ -94,6 +101,15 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       onTime: (_time, label) => {
         clock.update(label);
         current?.panel.setTimeLabel(label);
+      },
+      onUnits: (elevation, displayUnits, layerIds) => {
+        if (!current) {
+          pendingUnits.push({ elevation, displayUnits, layerIds });
+
+          return;
+        }
+        current.panel.updateUnits(elevation, displayUnits);
+        current.syncLayers(layerIds);
       },
     });
 
@@ -105,6 +121,11 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     clock.markEntered();
 
     current = startScene(scene, mounted, panel, clock);
+    const initialUnits = pendingUnits[0];
+    if (initialUnits) {
+      current.panel.updateUnits(initialUnits.elevation, initialUnits.displayUnits);
+      current.syncLayers(initialUnits.layerIds);
+    }
     panel.setTimeLabel(clock.label);
   }
 
@@ -205,6 +226,10 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       id: scene.id,
       panel,
       clock,
+      syncLayers(layerIds) {
+        sceneLayerIds = [...layerIds];
+        dataLayers.sync(layerIds);
+      },
       close() {
         maskLoad.abort();
         stopWatchingResize();
@@ -310,7 +335,7 @@ export function movePlaceLabels(
 /** Gate scene data until the mask is ready without changing visibility or native zoom bounds. */
 export class SceneDataLayers {
   private readonly map: MapLibreMap;
-  private readonly ranges;
+  private readonly ranges: { id: string; minzoom: number; maxzoom: number; ref: unknown }[];
   private isReady = false;
   private fittedZoom: number | undefined;
 
@@ -318,7 +343,12 @@ export class SceneDataLayers {
     this.map = map;
     this.ranges = layerIds.map((id) => {
       const layer = map.getLayer(id);
-      return { id, minzoom: layer?.minzoom ?? 0, maxzoom: layer?.maxzoom ?? MAX_ZOOM };
+      return {
+        id,
+        minzoom: layer?.minzoom ?? 0,
+        maxzoom: layer?.maxzoom ?? MAX_ZOOM,
+        ref: layer,
+      };
     });
     this.update(undefined);
   }
@@ -333,6 +363,28 @@ export class SceneDataLayers {
 
   show() {
     this.isReady = true;
+    this.update(this.fittedZoom);
+  }
+
+  /**
+   * Track recreated layers after a units change. Dropped ids leave the gate and new ids join
+   * with their native zooms. The current mask gate applies before the next paint.
+   */
+  sync(layerIds: string[]) {
+    const kept = new Map(this.ranges.map((range) => [range.id, range]));
+    this.ranges.length = 0;
+    for (const id of layerIds) {
+      const layer = this.map.getLayer(id);
+      const native = {
+        id,
+        minzoom: layer?.minzoom ?? 0,
+        maxzoom: layer?.maxzoom ?? MAX_ZOOM,
+        ref: layer,
+      };
+      const previous = kept.get(id);
+      // Recreated layers need fresh native zooms; unchanged layers retain their original ranges.
+      this.ranges.push(previous && previous.ref === layer ? previous : native);
+    }
     this.update(this.fittedZoom);
   }
 }

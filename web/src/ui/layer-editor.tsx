@@ -138,9 +138,8 @@ export function LayerEditor({
   const clearNotice = useCallback(() => onNotice(null), [onNotice]);
   const applyMenuChange = useCallback(
     (change: MenuChange) => {
+      // Reset restores values such as palette and range but keeps the current Show as choice.
       if (change === "reset") {
-        store.dispatch({ kind: "clear", unit });
-        storeShowAs(unit, null);
         onNotice(null);
         return;
       }
@@ -403,8 +402,43 @@ function MenuContent({
   return (
     <>
       <DomNode node={topHost} className="editor-menu" />
+      {menu.units && <UnitsSection units={menu.units} onChange={onChange} />}
       {menu.range && <RangeSection range={menu.range} onChange={onChange} />}
       <DomNode node={bottomHost} className="editor-menu-reset" />
     </>
+  );
+}
+
+/** A small Units choice for a convertible layer; other layers show nothing. */
+function UnitsSection({
+  units,
+  onChange,
+}: {
+  units: NonNullable<NonNullable<LayerView["menu"]>["units"]>;
+  onChange(changed: MenuChange): void;
+}): React.ReactElement {
+  const group = useId();
+
+  return (
+    <fieldset className="editor-units">
+      <legend>Units</legend>
+      <div className="units-options">
+        {units.options.map((option) => (
+          <label key={option}>
+            <input
+              type="radio"
+              name={group}
+              value={option}
+              checked={units.value === option}
+              onChange={() => {
+                units.set(option);
+                onChange("units");
+              }}
+            />
+            {option}
+          </label>
+        ))}
+      </div>
+    </fieldset>
   );
 }

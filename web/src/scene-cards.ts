@@ -93,7 +93,9 @@ function rangeKey(
 ): string {
   if (!pair) return "";
 
-  return pair.map((id) => JSON.stringify(layers[id]?.range ?? null)).join("|");
+  return pair
+    .map((id) => JSON.stringify([layers[id]?.range ?? null, layers[id]?.units ?? null]))
+    .join("|");
 }
 
 function setVisible(map: MapLibreMap, layerIds: string[], visible: boolean) {

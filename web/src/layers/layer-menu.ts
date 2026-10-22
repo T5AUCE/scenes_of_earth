@@ -17,8 +17,8 @@ export const CUSTOM_PALETTE_NOTE = "The map currently shows custom colours.";
 /** The note shown when Presets is open while the map still uses a custom ink. */
 export const CUSTOM_INK_NOTE = "The map currently shows a custom ink.";
 
-/** What a menu change touched, so the caller can remember a palette or ink but not a range. */
-export type MenuChange = "palette" | "range" | "ink" | "reset";
+/** What a menu change touched; the caller remembers a palette, ink or unit, not a range. */
+export type MenuChange = "palette" | "range" | "ink" | "units" | "reset";
 
 interface MenuModes {
   customPalette: boolean;
@@ -118,9 +118,11 @@ export function menuResetButton(
     menu.range?.set(null);
     menu.edges?.reset();
     if (menu.ink) menu.ink.set(menu.ink.defaultInk);
+    if (menu.units) menu.units.set(menu.units.defaultUnit);
     menu.resetDensity?.();
     onChange("palette");
     if (menu.ink) onChange("ink");
+    if (menu.units) onChange("units");
     onChange("reset");
     refill();
   };
@@ -129,6 +131,7 @@ export function menuResetButton(
       && !menu.range?.value
       && (menu.edges?.isDefault ?? true)
       && (menu.ink === undefined || menu.ink.value === menu.ink.defaultInk)
+      && (menu.units === undefined || menu.units.value === menu.units.defaultUnit)
       && (menu.isDensityDefault ?? true);
     if (isDefault) return resetLayer();
 

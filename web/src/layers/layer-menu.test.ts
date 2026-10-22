@@ -152,6 +152,28 @@ test("picking a preset clears the note about applied custom colours", () => {
   assert.ok(!descendants(presets).some((element) => element.textContent === CUSTOM_PALETTE_NOTE));
 });
 
+test("reset layer returns units to the bundle default", () => {
+  const { menu, changes } = fieldMenu(false);
+  const sets: string[] = [];
+  menu.units = {
+    options: ["mm/month", "in/month"],
+    defaultUnit: "mm/month",
+    get value() {
+      return "mm/month";
+    },
+    set: (next: string) => {
+      sets.push(next);
+    },
+  };
+  const reset = descendants(sectionsOf(menu, changes))
+    .find((element) => element.className === "menu-reset")!;
+
+  reset.onclick!();
+
+  assert.deepEqual(sets, ["mm/month"]);
+  assert.deepEqual(changes.slice(-2), ["units", "reset"]);
+});
+
 function fieldMenu(isDrawn: boolean, ink = "navy", palette = "ink-blue") {
   let isInk = isDrawn;
   let value = ink;

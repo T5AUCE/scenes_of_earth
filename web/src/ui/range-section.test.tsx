@@ -219,9 +219,202 @@ test("Enter followed by blur commits only once", async (context) => {
   await act(async () => root.unmount());
 });
 
-function testRange({ fitted = [0, 10], value = null }: {
+test("inches show converted stops and store millimetres", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { RangeSection } = await import("./range-section.tsx");
+  const { range, sets, changes } = testRange({ fitted: [0, 25.4], displayUnit: "in/month" });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+
+  await act(async () => root.render(<RangeSection range={range} onChange={onChange(changes)} />));
+
+  assert.equal(inputByLabel(container, "Low").value, "0");
+  assert.equal(inputByLabel(container, "High").value, "1");
+  assert.match(container.textContent ?? "", /in\/month/);
+
+  await act(async () => {
+    setNumber(container, "Low", "0");
+  });
+  await act(async () => {
+    setNumber(container, "High", "5");
+  });
+  await act(async () => {
+    commitWithEnter(container, "Low");
+  });
+
+  assert.deepEqual(sets, [[0, 127]]);
+  assert.deepEqual(changes, ["range"]);
+
+  await act(async () => root.unmount());
+});
+
+test("a fractional inch stores the exact millimetres and redisplays stably", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { RangeSection } = await import("./range-section.tsx");
+  const { range, sets } = testRange({ fitted: [0, 25.4], displayUnit: "in/month" });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+
+  await act(async () => root.render(<RangeSection range={range} onChange={() => {}} />));
+
+  await act(async () => {
+    setNumber(container, "Low", "0");
+  });
+  await act(async () => {
+    setNumber(container, "High", "0.1");
+  });
+  await act(async () => {
+    commitWithEnter(container, "Low");
+  });
+
+  assert.deepEqual(sets, [[0, 2.54]]);
+  assert.equal(inputByLabel(container, "High").value, "0.1");
+
+  await act(async () => root.unmount());
+});
+
+test("an untouched endpoint keeps its stored native through display rounding", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { RangeSection } = await import("./range-section.tsx");
+  const { range, sets } = testRange({
+    fitted: [0, 25.4],
+    value: [0, 2.54],
+    displayUnit: "in/month",
+  });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+
+  await act(async () => root.render(<RangeSection range={range} onChange={() => {}} />));
+
+  await act(async () => {
+    setNumber(container, "High", "5");
+  });
+  await act(async () => {
+    commitWithEnter(container, "High");
+  });
+
+  assert.deepEqual(sets, [[0, 127]]);
+
+  await act(async () => root.unmount());
+});
+
+test("an edited low beside a non-round high keeps the high native", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { RangeSection } = await import("./range-section.tsx");
+  const { convertValue } = await import("../units.ts");
+  const { range, sets } = testRange({ fitted: [0, 2.6], displayUnit: "in/month" });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+
+  await act(async () => root.render(<RangeSection range={range} onChange={() => {}} />));
+
+  assert.equal(inputByLabel(container, "Low").value, "0");
+  assert.equal(inputByLabel(container, "High").value, "0.102");
+
+  await act(async () => {
+    setNumber(container, "Low", "0.102");
+  });
+  await act(async () => {
+    commitWithEnter(container, "Low");
+  });
+
+  const expectedLow = convertValue(0.102, "in/month", "mm/month");
+  assert.deepEqual(sets, [[expectedLow, 2.6]]);
+
+  await act(async () => root.unmount());
+});
+
+test("a unit swap never shows more than the shown decimals", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { RangeSection } = await import("./range-section.tsx");
+  const { range } = testRange({ fitted: [0, 2.6], displayUnit: "in/month" });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+
+  await act(async () => root.render(<RangeSection range={range} onChange={() => {}} />));
+
+  for (const label of ["Low", "High"]) {
+    const text = inputByLabel(container, label).value;
+    const decimals = text.includes(".") ? text.split(".")[1].length : 0;
+
+    assert.ok(decimals <= 3, `${label} shows ${text}`);
+  }
+  assert.equal(inputByLabel(container, "High").value, "0.102");
+
+  await act(async () => root.unmount());
+});
+
+test("a Fahrenheit edit stores exact Celsius and redisplays stably", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { RangeSection } = await import("./range-section.tsx");
+  const { convertValue } = await import("../units.ts");
+  const { range, sets } = testRange({
+    fitted: [0, 30],
+    units: "°C",
+    decimals: 1,
+    displayUnit: "°F",
+  });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+
+  await act(async () => root.render(<RangeSection range={range} onChange={() => {}} />));
+
+  assert.equal(inputByLabel(container, "Low").value, "32");
+  assert.equal(inputByLabel(container, "High").value, "86");
+
+  await act(async () => {
+    setNumber(container, "Low", "32");
+  });
+  await act(async () => {
+    setNumber(container, "High", "100");
+  });
+  await act(async () => {
+    commitWithEnter(container, "Low");
+  });
+
+  const expectedHigh = convertValue(100, "°F", "°C");
+  assert.deepEqual(sets, [[0, expectedHigh]]);
+  assert.equal(inputByLabel(container, "High").value, "100");
+
+  await act(async () => root.unmount());
+});
+
+function testRange({ fitted = [0, 10], value = null, displayUnit, units, decimals }: {
   fitted?: [number, number];
   value?: [number, number] | null;
+  displayUnit?: string;
+  units?: string;
+  decimals?: number;
 }): {
   range: RangeMenu;
   sets: Array<[number, number] | null>;
@@ -230,11 +423,15 @@ function testRange({ fitted = [0, 10], value = null }: {
   let current = value;
   const sets: Array<[number, number] | null> = [];
   const changes: string[] = [];
+  const native = units ?? "mm/month";
   const range: RangeMenu = {
     fitted,
     bounds: [-10, 20],
-    decimals: 1,
-    units: "mm",
+    decimals: decimals ?? 1,
+    units: native,
+    get displayUnit() {
+      return displayUnit ?? native;
+    },
     get value() {
       return current;
     },

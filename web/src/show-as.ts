@@ -73,7 +73,7 @@ function chooseColour(
   return { showAs, off };
 }
 
-/** Forget a unit's explicit choice, which is what Reset layer does. */
+/** Forget a unit's explicit choice so the allocation decides its draw again. */
 export function clear(state: ShowAsState, unit: string): ShowAsState {
   const showAs = { ...state.showAs };
   delete showAs[unit];

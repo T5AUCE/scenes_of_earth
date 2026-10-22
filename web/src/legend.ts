@@ -55,7 +55,7 @@ export function contourLegendText(interval: number, boldInterval: number, units 
 }
 
 /** A dashed sample of the isotherm ink and its casing with the interval and bold step. */
-export function isothermLegend(interval: number, ink: InkPaint) {
+export function isothermLegend(interval: number, ink: InkPaint, units = "°C") {
   const element = document.createElement("div");
   const sample = document.createElement("span");
   sample.className = "legend-isotherm";
@@ -78,7 +78,7 @@ export function isothermLegend(interval: number, ink: InkPaint) {
 
   const boldInterval = interval * BOLD_ISOTHERM_MULTIPLE;
   const label = document.createElement("span");
-  label.textContent = `Isotherms every ${interval} °C (bold every ${boldInterval} °C)`;
+  label.textContent = `Isotherms every ${interval} ${units} (bold every ${boldInterval} ${units})`;
   element.append(sample, label);
   return element;
 }

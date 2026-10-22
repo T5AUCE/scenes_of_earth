@@ -14,6 +14,7 @@ import { areaFilter, type TileArea, WORLD_WIDTH_DEG } from "./label-filter";
 import { clampAround, nearestEquivalent, panLimit } from "./pan-lock";
 import { imageCorners } from "./render/mercator";
 import type { Bbox } from "./types";
+import { scaleUnitForElevation } from "./units";
 
 // OpenFreeMap needs no API key.
 const BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
@@ -61,9 +62,9 @@ export function createMap(container: string): MapLibreMap {
   return map;
 }
 
-/** Add a metric scale bar for reading dot spacing and return its removal callback. */
-export function showScaleBar(map: MapLibreMap) {
-  const control = new ScaleControl({ unit: "metric" });
+/** Add a scale bar for reading dot spacing and return its removal callback. */
+export function showScaleBar(map: MapLibreMap, elevationUnit = "m") {
+  const control = new ScaleControl({ unit: scaleUnitForElevation(elevationUnit) });
   map.addControl(control, "bottom-left");
   return () => map.removeControl(control);
 }

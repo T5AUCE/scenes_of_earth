@@ -26,7 +26,7 @@ test("a scene link reads the time and ignores a malformed one", () => {
     id,
     time: "2026-03",
     panel: null,
-    display: { pal: "", range: "", off: "", as: "", ink: "", dens: "" },
+    display: { pal: "", range: "", off: "", as: "", ink: "", dens: "", units: "" },
   });
 
   const timeOf = (label: string) =>
@@ -73,6 +73,7 @@ test("display params round trip through the address", () => {
     as: "",
     ink: "",
     dens: "",
+    units: "",
   });
 });
 
@@ -100,6 +101,13 @@ test("colons and commas are not percent encoded", () => {
   const url = sceneUrl(id, null, "&pal=a:b,c:custom-1a2b3c-88cc44&off=terrain.contours");
 
   assert.ok(!url.includes("%"));
+});
+
+test("the units param round trips through the address", () => {
+  const url = sceneUrl(id, null, "&units=chirps_monthly:in/month,era5land_temperature:°F");
+  const route = routeFor(url, null) as { display: { units: string } };
+
+  assert.equal(route.display.units, "chirps_monthly:in/month,era5land_temperature:°F");
 });
 
 test("repeated display parameters are joined in order", () => {

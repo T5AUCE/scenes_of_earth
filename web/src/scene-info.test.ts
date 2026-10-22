@@ -47,6 +47,11 @@ test("cell sizes show metres below a kilometre and kilometres above", () => {
   assert.equal(formatCellSize(0.05), "5.6 km");
 });
 
+test("cell sizes follow the elevation choice into feet and miles", () => {
+  assert.equal(formatCellSize(0.00135135, "ft"), "490 ft");
+  assert.equal(formatCellSize(0.05, "ft"), "3.5 mi");
+});
+
 test("a drawn polygon has no boundary credit", () => {
   assert.equal(creditEntries(makeScene()).length, 2);
 });

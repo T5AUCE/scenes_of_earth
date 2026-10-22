@@ -73,6 +73,9 @@ const dependencies = {
     export const createScenePanel = () => ({
       element: {},
       setTimeLabel() {},
+      updateUnits(elevation, displayUnits) {
+        globalThis.sceneModeTest.units.push([elevation, displayUnits]);
+      },
       destroy() {},
     });
   `,
@@ -82,10 +85,16 @@ const dependencies = {
   `,
   "./view": `
     export const OUTLINE_ID = "soe-area-outline";
-    export function mountScene(map) {
+    export function mountScene(map, scene, slots) {
+      globalThis.sceneModeTest.onUnits = slots.onUnits;
+      const layerIds = ["relief", "contours", "rain", "overview"];
+      if (slots.onUnits) {
+        const initial = globalThis.sceneModeTest.initialUnits ?? ["m", {}];
+        slots.onUnits(initial[0], initial[1], [...layerIds]);
+      }
       return {
         timeline: null,
-        layerIds: ["relief", "contours", "rain", "overview"],
+        layerIds,
         addNote: (note) => globalThis.sceneModeTest.notes.push(note),
         unmount() {
           for (const id of this.layerIds) map.removeLayer(id);
@@ -287,6 +296,46 @@ test("synchronous mask setup failure leaves data hidden and removes listeners", 
   assertListenersRemoved(harness.map);
 });
 
+test("restored units reach the panel on entry and follow later changes", () => {
+  const harness = createHarness();
+  harness.initialUnits = ["ft", { terrain: "ft" }];
+  harness.enter();
+
+  assert.deepEqual(harness.units, [["ft", { terrain: "ft" }]]);
+
+  harness.onUnits!("m", {}, ["relief", "contours", "rain", "overview"]);
+
+  assert.deepEqual(harness.units, [
+    ["ft", { terrain: "ft" }],
+    ["m", {}],
+  ]);
+});
+
+test("a units change refreshes the gate and drops removed contour ids", async () => {
+  const harness = createHarness();
+  harness.enter();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+  harness.map.finishMask();
+  await settle();
+
+  harness.map.layers.set("contours-ft", {
+    id: "contours-ft",
+    minzoom: 7,
+    maxzoom: 12,
+    layout: { visibility: "visible" },
+  });
+  harness.map.layers.delete("contours");
+  harness.onUnits!("ft", { terrain: "ft" }, ["relief", "contours-ft", "rain", "overview"]);
+
+  assert.deepEqual(harness.units.at(-1), ["ft", { terrain: "ft" }]);
+  assert.equal(harness.map.getLayer("contours-ft")!.minzoom, 7);
+  harness.flight.zoom = 8;
+  harness.resize();
+  assert.equal(harness.map.getLayer("contours-ft")!.minzoom, 7.75);
+  assert.equal(harness.map.getLayer("contours"), undefined);
+});
+
 function createHarness() {
   const map = new TestMap();
   const roots = { column: element(), timeBar: element(), dialog: element() };
@@ -294,6 +343,10 @@ function createHarness() {
     map,
     geometry: deferred(),
     notes: [] as string[],
+    units: [] as [string, Record<string, string>][],
+    onUnits: null as ((elevation: string, units: Record<string, string>, ids: string[]) => void)
+      | null,
+    initialUnits: null as [string, Record<string, string>] | null,
     labelMoves: 0,
     landImmediately: false,
     land: () => {},

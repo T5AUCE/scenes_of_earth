@@ -3,12 +3,14 @@ import type { Map as MapLibreMap } from "maplibre-gl";
 
 import { removeLayerAndSource } from "../map";
 import { CONTOUR_COLORS, contourColor, DEFAULT_CONTOUR_COLOR } from "../render/palettes";
+import { displayUnitFor, isUnitFor, unitOptions } from "../units";
 import type {
   LayerContext,
   LayerControl,
   LayerMenu,
   LayerView,
   TerrainStats,
+  UnitsMenu,
 } from "../types";
 import { ContourOverlay, sharedDemSource, terrainTileBounds } from "./contour-overlay";
 import { RELIEF_STRENGTH, reliefPaint } from "./relief";
@@ -88,6 +90,8 @@ export function createTerrainView(context: LayerContext): LayerView {
   );
 
   let palette = context.display?.palette ?? DEFAULT_CONTOUR_COLOR;
+  let elevationUnit = displayUnitFor(layer.units, context.display?.units);
+  const menuUpdates = new EventTarget();
   const menu: LayerMenu = {
     title: layer.title,
     heading: "Contour colour",
@@ -95,6 +99,7 @@ export function createTerrainView(context: LayerContext): LayerView {
     palettes: CONTOUR_COLORS.map(({ name, label, color }) => ({ name, label, colors: [color] })),
     defaultPalette: DEFAULT_CONTOUR_COLOR,
     custom: false,
+    updates: menuUpdates,
     get palette() {
       return palette;
     },
@@ -102,7 +107,28 @@ export function createTerrainView(context: LayerContext): LayerView {
       palette = name;
       contourOverlay.setColor(contourColor(name)!);
     },
+    units: createUnitsMenu(),
   };
+
+  function createUnitsMenu(): UnitsMenu | undefined {
+    const options = unitOptions(layer.units);
+    if (!options) return undefined;
+
+    return {
+      options,
+      defaultUnit: layer.units,
+      get value() {
+        return elevationUnit;
+      },
+      set: (unit) => {
+        if (!isUnitFor(layer.units, unit) || unit === elevationUnit) return;
+
+        elevationUnit = unit;
+        contourOverlay.setUnits(unit);
+        menuUpdates.dispatchEvent(new Event("change"));
+      },
+    };
+  }
 
   return {
     parts: [
@@ -117,7 +143,7 @@ export function createTerrainView(context: LayerContext): LayerView {
       isUnderColour = isUnder;
       applyStrength();
     },
-    legend: () => null,
+    legend: () => contourOverlay.legend,
     destroy: () => {
       stopWatchingTiles();
       contourOverlay.destroy();

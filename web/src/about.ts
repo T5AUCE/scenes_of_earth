@@ -9,6 +9,7 @@ import {
   type CreditEntry,
 } from "./scene-info";
 import { formatTime, scrubberTimes } from "./timeline";
+import { formatArea, formatLength } from "./units";
 import type { Scene } from "./types";
 
 /** Id of the notices heading; the docked panel scrolls the About tab to it. */
@@ -39,43 +40,18 @@ const DISPLAY_LINES = [
     + "gap is never taken for a low value.",
 ];
 
-const SMOOTHING_LINES = [
-  "Field layers show one colour block per cell by default. Smooth lets your graphics card blend "
-    + "the colours of neighbouring cells (linear interpolation), so edges look softer. It blends "
-    + "colours, not values, and it never adds data.",
-  "Field cells without data are see-through, so smoothing fades the colour out at their edges "
-    + "and at the border of the area instead of inventing values there.",
-  "Land-cover Smooth draws edges smoothly from per-cell classes while keeping class colours "
-    + "separate. Rounding can shrink small patches, but it adds no data. Edge softness blends "
-    + "colours at their borders over a distance measured in grid cells, so the blend widens on "
-    + "screen as you zoom in; 0 leaves a one-pixel anti-aliased border. Without WebGL drawing, "
-    + "an image provides smooth edges at a fixed resolution instead.",
-  "Terrain shading is drawn by your graphics card from Mapterhorn elevation tiles, so it gains "
-    + "detail as you zoom in. It is a picture only; the values in the files do not come from it.",
-  "Contour lines are drawn from elevation averaged into blocks of at most 1024 cells per side "
-    + "and then smoothly interpolated, so they are close to the real relief but not exact at "
-    + "very fine scale; zooming in recomputes them in finer blocks.",
-  "The values in the files are the cell values of the stored grid, never the smoothed picture; "
-    + "terrain may be stored in coarser cells than its 30 m or 90 m source. Bundles generated "
-    + "with version 0.5.1 or later keep every cell touched by the area. Area averages give each "
-    + "valid cell equal weight, including edge cells that extend outside the outline. Older "
-    + "bundles use cell centres, with touched cells only when no centre lies inside the area.",
-  "A hidden one-cell ring of real source data lets isotherms reach the outline but is excluded "
-    + "from area averages.",
-];
-
 /** Summarise the scene's area and period with its layer count on one line. */
-export function summaryText(scene: Scene) {
+export function summaryText(scene: Scene, elevationUnit = "m") {
   const layerCount = scene.layers.length;
   return [
-    areaText(scene),
+    areaText(scene, elevationUnit),
     periodText(scene),
     `${layerCount} ${layerCount === 1 ? "layer" : "layers"}`,
   ].join(" · ");
 }
 
-function areaText(scene: Scene) {
-  return `≈ ${Math.round(areaKm2(scene)).toLocaleString("en")} km²`;
+function areaText(scene: Scene, elevationUnit = "m") {
+  return `≈ ${formatArea(areaKm2(scene), elevationUnit)}`;
 }
 
 function periodText(scene: Scene) {
@@ -96,7 +72,11 @@ export const creditsLine = (scene: Scene) =>
   creditEntries(scene).map((entry) => entry.name).join(" · ");
 
 /** Render the About tab with scene metadata and explanations of the display. */
-export function renderAbout(scene: Scene) {
+export function renderAbout(
+  scene: Scene,
+  elevationUnit = "m",
+  displayUnits: Record<string, string> = {},
+) {
   const root = makeHtmlElement("div");
   makeHtmlElement("h3", scene.title, root);
 
@@ -104,7 +84,7 @@ export function renderAbout(scene: Scene) {
     definitionList([
       ["Area", scene.area.boundary?.name ?? "Drawn polygon"],
       ["Level", scene.area.boundary?.level ?? "custom"],
-      ["Size", areaText(scene)],
+      ["Size", areaText(scene, elevationUnit)],
       ["Period", periodText(scene)],
     ]),
   );
@@ -112,13 +92,14 @@ export function renderAbout(scene: Scene) {
   makeHtmlElement("h4", "Layers", root);
   const layers = makeHtmlElement("ul", "", root);
   for (const layer of scene.layers) {
-    const cell = formatCellSize(layer.grid.res);
-    makeHtmlElement("li", `${layer.title} (${layer.units}) — ${cell} cells`, layers);
+    const units = displayUnits[layer.id] ?? layer.units;
+    const cell = formatCellSize(layer.grid.res, elevationUnit);
+    makeHtmlElement("li", `${layer.title} (${units}) — ${cell} cells`, layers);
   }
 
   appendNotices(root, scene);
   appendDisplay(root);
-  appendSmoothing(root);
+  appendSmoothing(root, elevationUnit);
 
   makeHtmlElement("h4", "Versions", root);
   root.append(definitionList(versionRows(scene)));
@@ -141,9 +122,43 @@ function appendDisplay(root: HTMLElement) {
   for (const line of DISPLAY_LINES) makeHtmlElement("p", line, root);
 }
 
-function appendSmoothing(root: HTMLElement) {
+function appendSmoothing(root: HTMLElement, elevationUnit = "m") {
   makeHtmlElement("h4", "How the map is smoothed", root);
-  for (const line of SMOOTHING_LINES) makeHtmlElement("p", line, root);
+  for (const line of smoothingLines(elevationUnit)) makeHtmlElement("p", line, root);
+}
+
+function smoothingLines(elevationUnit: string) {
+  // The source resolutions stay readable because they use the scene's length choice.
+  const fine = formatLength(30, elevationUnit);
+  const coarse = formatLength(90, elevationUnit);
+  const storage = `The values in the files are the cell values of the stored grid, `
+    + `never the smoothed picture; terrain may be stored in coarser cells `
+    + `than its ${fine} or ${coarse} source. Bundles generated with version `
+    + `0.5.1 or later keep every cell touched by the area. Area averages give `
+    + `each valid cell equal weight, including edge cells that extend outside `
+    + `the outline. Older bundles use cell centres, with touched cells only `
+    + `when no centre lies inside the area.`;
+
+  return [
+    "Field layers show one colour block per cell by default. Smooth lets your graphics card blend "
+      + "the colours of neighbouring cells (linear interpolation), so edges look softer. It blends "
+      + "colours, not values, and it never adds data.",
+    "Field cells without data are see-through, so smoothing fades the colour out at their edges "
+      + "and at the border of the area instead of inventing values there.",
+    "Land-cover Smooth draws edges smoothly from per-cell classes while keeping class colours "
+      + "separate. Rounding can shrink small patches, but it adds no data. Edge softness blends "
+      + "colours at their borders over a distance measured in grid cells, so the blend widens on "
+      + "screen as you zoom in; 0 leaves a one-pixel anti-aliased border. Without WebGL drawing, "
+      + "an image provides smooth edges at a fixed resolution instead.",
+    "Terrain shading is drawn by your graphics card from Mapterhorn elevation tiles, so it gains "
+      + "detail as you zoom in. It is a picture only; the values in the files do not come from it.",
+    "Contour lines are drawn from elevation averaged into blocks of at most 1024 cells per side "
+      + "and then smoothly interpolated, so they are close to the real relief but not exact at "
+      + "very fine scale; zooming in recomputes them in finer blocks.",
+    storage,
+    "A hidden one-cell ring of real source data lets isotherms reach the outline but is excluded "
+      + "from area averages.",
+  ];
 }
 
 function versionRows(scene: Scene): [string, string][] {

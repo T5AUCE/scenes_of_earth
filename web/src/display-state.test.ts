@@ -24,6 +24,7 @@ const {
   loadStoredPalettes,
   loadStoredEdges,
   loadStoredDensities,
+  loadStoredUnits,
   NO_TOKENS,
   rangeDecimals,
   recordMenuChange,
@@ -33,6 +34,7 @@ const {
   storePalette,
   storeEdges,
   storeDensity,
+  storeUnits,
 } = await import("./display-state.ts");
 const { choose, loadStoredShowAs, storeShowAs, toggle } = await import("./show-as.ts");
 const {
@@ -282,7 +284,7 @@ test("a custom gradient needs two to five six-digit colours", () => {
   assert.equal(resolve("custom-1A2B3C-88CC44").dropped, true);
 });
 
-test("the last entry for a layer wins and ranges are rounded to the data's precision", () => {
+test("the last entry for a layer wins and ranges keep their link precision", () => {
   const tokens = {
     ...NO_TOKENS,
     pal: "chirps_monthly:batlow,chirps_monthly:cividis",
@@ -290,7 +292,19 @@ test("the last entry for a layer wins and ranges are rounded to the data's preci
   };
   const { display } = resolveDisplay(LAYERS, tokens, {});
 
-  assert.deepEqual(display.layers.chirps_monthly, { palette: "cividis", range: [0, 250.3] });
+  assert.deepEqual(display.layers.chirps_monthly, { palette: "cividis", range: [0.04, 250.26] });
+});
+
+test("converted ranges keep their exact native values through links", () => {
+  const layers = unitsLayers();
+  const { display } = resolveDisplay(
+    layers,
+    { ...NO_TOKENS, units: "rain:in/month,temp:°F", range: "rain:2.54:127" },
+    {},
+  );
+
+  assert.deepEqual(display.layers.rain, { units: "in/month", range: [2.54, 127] });
+  assert.ok(formatDisplayParams(display, layers).includes("rain:2.54:127"));
 });
 
 test("every layer with a menu names its palette but ranges and off parts only when set", () => {
@@ -807,6 +821,165 @@ test("a menu change keeps the layer's density", () => {
     density: MAX_DENSITY_RATIO,
   });
 });
+
+test("linked units beat stored units which beat the bundle default", () => {
+  const layers = unitsLayers();
+  const stored = { rain: "in/month" };
+
+  const linked = resolveDisplay(
+    layers,
+    { ...NO_TOKENS, units: "rain:in/month,temp:°F" },
+    {},
+    {},
+    {},
+    {},
+    stored,
+  );
+  assert.deepEqual(linked.display.layers.rain, { units: "in/month" });
+  assert.deepEqual(linked.display.layers.temp, { units: "°F" });
+
+  const remembered = resolveDisplay(layers, NO_TOKENS, {}, {}, {}, {}, stored);
+  assert.deepEqual(remembered.display.layers.rain, { units: "in/month" });
+  assert.equal(remembered.display.layers.temp, undefined);
+
+  const auto = resolveDisplay(layers, NO_TOKENS, {});
+  assert.deepEqual(auto.display.layers, {});
+});
+
+test("unknown units in links and storage are ignored with the note", () => {
+  const layers = unitsLayers();
+  const { display, dropped } = resolveDisplay(
+    layers,
+    { ...NO_TOKENS, units: "rain:°F,nowhere:in/month,temp:kelvin,x" },
+    {},
+    {},
+    {},
+    {},
+    { rain: "°F" },
+  );
+
+  assert.equal(dropped, true);
+  assert.deepEqual(display.layers, {});
+});
+
+test("every convertible layer rides the link, including its native default", () => {
+  const layers = unitsLayers();
+  const { display } = resolveDisplay(
+    layers,
+    { ...NO_TOKENS, units: "rain:in/month,temp:°C" },
+    {},
+  );
+
+  assert.ok(formatDisplayParams(display, layers).includes("&units=rain:in/month,temp:°C"));
+  const auto = formatDisplayParams(resolveDisplay(layers, NO_TOKENS, {}).display, layers);
+  assert.ok(auto.includes("&units=rain:mm/month,temp:°C"));
+});
+
+test("a linked native default beats a stored alternative", () => {
+  const layers = unitsLayers();
+  const { display } = resolveDisplay(
+    layers,
+    { ...NO_TOKENS, units: "rain:mm/month,temp:°C" },
+    {},
+    {},
+    {},
+    {},
+    { rain: "in/month", temp: "°F" },
+  );
+
+  assert.deepEqual(display.layers, {});
+  const relinked = formatDisplayParams(display, layers);
+  assert.ok(relinked.includes("rain:mm/month"));
+  assert.ok(relinked.includes("temp:°C"));
+
+  const again = resolveDisplay(
+    layers,
+    { ...NO_TOKENS, units: "rain:mm/month,temp:°C" },
+    {},
+    {},
+    {},
+    {},
+    { rain: "in/month" },
+  );
+  assert.deepEqual(again.display.layers, {});
+});
+
+test("a link after Reset layer still states the native default", () => {
+  useStorage();
+  const layers = unitsLayers();
+  const { display } = resolveDisplay(layers, NO_TOKENS, {});
+  const menu = {
+    palette: "ink-blue",
+    defaultPalette: "ink-blue",
+    units: { value: "in/month", defaultUnit: "mm/month" },
+  };
+  recordMenuChange(display, "rain", menu, "units");
+  assert.ok(formatDisplayParams(display, layers).includes("rain:in/month"));
+
+  const reset = { ...menu, units: { value: "mm/month", defaultUnit: "mm/month" } };
+  recordMenuChange(display, "rain", reset, "units");
+  const relinked = formatDisplayParams(display, layers);
+  assert.ok(relinked.includes("rain:mm/month"));
+
+  const receiver = resolveDisplay(
+    layers,
+    { ...NO_TOKENS, units: "rain:mm/month,temp:°C" },
+    {},
+    {},
+    {},
+    {},
+    { rain: "in/month" },
+  );
+  assert.deepEqual(receiver.display.layers, {});
+});
+
+test("a units change is remembered by layer and keeps the palette", () => {
+  useStorage();
+  const layers = unitsLayers();
+  const { display } = resolveDisplay(layers, NO_TOKENS, {});
+  const menu = {
+    palette: "ink-blue",
+    defaultPalette: "ink-blue",
+    units: { value: "in/month", defaultUnit: "mm/month" },
+  };
+
+  recordMenuChange(display, "rain", menu, "units");
+
+  assert.deepEqual(display.layers.rain, { units: "in/month" });
+  assert.deepEqual(loadStoredUnits(), { rain: "in/month" });
+
+  const reset = { ...menu, units: { value: "mm/month", defaultUnit: "mm/month" } };
+  recordMenuChange(display, "rain", reset, "units");
+
+  assert.deepEqual(loadStoredUnits(), {});
+  assert.deepEqual(display.layers, {});
+});
+
+test("a palette change keeps the chosen units", () => {
+  useStorage();
+  const layers = unitsLayers();
+  const { display } = resolveDisplay(
+    layers,
+    { ...NO_TOKENS, units: "rain:in/month" },
+    {},
+  );
+  const menu = {
+    palette: "batlow",
+    defaultPalette: "ink-blue",
+    units: { value: "in/month", defaultUnit: "mm/month" },
+  };
+
+  recordMenuChange(display, "rain", menu, "palette");
+
+  assert.deepEqual(display.layers.rain, { units: "in/month", palette: "batlow" });
+});
+
+function unitsLayers() {
+  return [
+    { id: "rain", units: "mm/month", style: { kind: "field", encodings: ["ramp"] } },
+    { id: "temp", units: "°C", style: { kind: "field", encodings: ["ramp"] } },
+  ] as unknown as LayerDoc[];
+}
 
 function useBlockedStorage() {
   const blocked = () => {

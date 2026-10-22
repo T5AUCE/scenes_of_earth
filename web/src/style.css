@@ -145,6 +145,11 @@ body.scene-mode #panel {
   color: #444;
 }
 
+.legend-contour {
+  font-size: 12px;
+  color: #444;
+}
+
 .notice {
   color: #444;
   font: 13px sans-serif;
@@ -334,6 +339,16 @@ body.scene-mode #panel {
 }
 
 .layer-editor .show-as-options label {
+  margin-bottom: 0;
+}
+
+.layer-editor .units-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.layer-editor .units-options label {
   margin-bottom: 0;
 }
 

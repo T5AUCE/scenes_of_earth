@@ -219,6 +219,7 @@ export interface DisplayTokens {
   as: string; // `unit:draw` entries, where the unit is a layer id or blend
   ink: string; // `layer:preset` or `layer:rrggbb` entries
   dens: string; // `layer:multiple` entries, the dot density as a multiple of the default
+  units: string; // `layer:unit` entries, the display unit for a convertible layer
 }
 
 /** A layer's display choices that differ from the bundle; a missing field means its default. */
@@ -229,6 +230,8 @@ export interface LayerDisplay {
   range?: [number, number];
   /** The dot density as a multiple of the default one. */
   density?: number;
+  /** The display unit for a convertible layer; absent means the bundle's native units. */
+  units?: string;
 }
 
 /** Ids of the hidden map layers that fix where each kind of drawing sits, from bottom to top. */
@@ -324,9 +327,21 @@ export interface RangeMenu {
   /** The number of decimals a link keeps. */
   decimals: number;
   units: string;
+  /** The chosen display unit, which defaults to the native units. */
+  readonly displayUnit?: string;
   /** The custom range, or null while the fitted one applies. */
   readonly value: [number, number] | null;
   set(range: [number, number] | null): void;
+}
+
+/** The display units a convertible layer offers, which its menu can change. */
+export interface UnitsMenu {
+  options: readonly string[];
+  /** The bundle's native units, which the layer shows until the viewer chooses another. */
+  defaultUnit: string;
+  /** The chosen display unit. */
+  readonly value: string;
+  set(unit: string): void;
 }
 
 /** What a layer's Edit menu offers; changes apply to the map immediately. */
@@ -343,6 +358,8 @@ export interface LayerMenu {
   readonly palette: string;
   setPalette(name: string): void;
   range?: RangeMenu;
+  /** Present for a convertible layer, such as rainfall or temperature. */
+  units?: UnitsMenu;
   /** Present for a layer with dots or isotherms, which replace the palettes while drawn. */
   ink?: InkMenu;
   readonly edges?: EdgesMenu;
