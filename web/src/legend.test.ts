@@ -215,14 +215,7 @@ test("the bivariate legend names both axes, their ends and its scale for assisti
 });
 
 test("the dot legend labels four stops over a swatch for each", () => {
-  const legend = dotLegend(
-    KENYA_RAINFALL_STOPS,
-    "mm/month",
-    KENYA_RAINFALL_GRID,
-    5,
-    1,
-    inkPaint("navy"),
-  ) as unknown as TestElement;
+  const legend = renderDotLegend();
   const [caption, boxes, labels] = legend.children;
 
   assert.equal(caption.textContent, "mm/month");
@@ -242,6 +235,22 @@ test("the dot legend labels four stops over a swatch for each", () => {
   assert.equal(legend.children.length, 3);
 });
 
+function renderDotLegend({
+  stops = KENYA_RAINFALL_STOPS,
+  zoom = 5,
+  density = 1,
+  ink = "navy",
+} = {}) {
+  return dotLegend(
+    stops,
+    "mm/month",
+    KENYA_RAINFALL_GRID,
+    zoom,
+    density,
+    inkPaint(ink),
+  ) as unknown as TestElement;
+}
+
 test("every swatch holds a clean grid of whole dots centred in their sites", () => {
   for (const [dotsPerSide, position] of [[2, 1], [3, 0.5]]) {
     const lattice = dotSwatchLattice(KENYA_RAINFALL_GRID, 11, 1, 1);
@@ -260,14 +269,7 @@ test("every swatch holds a clean grid of whole dots centred in their sites", () 
 
 test("a swatch keeps three dots a side only while its smallest dot stays readable", () => {
   const arcsPerSwatch = (stops: number[]) => {
-    const legend = dotLegend(
-      stops,
-      "mm/month",
-      KENYA_RAINFALL_GRID,
-      5,
-      1,
-      inkPaint("navy"),
-    ) as unknown as TestElement;
+    const legend = renderDotLegend({ stops });
     return legend.children[1].children[0].arcs.length;
   };
 
@@ -304,14 +306,7 @@ test("the dot swatch share does not change with the density but its dots shrink"
 
 test("the swatch grid scales with the density while its ink share stays put", () => {
   const dotsAt = (density: number, zoom: number) => {
-    const legend = dotLegend(
-      KENYA_RAINFALL_STOPS,
-      "mm/month",
-      KENYA_RAINFALL_GRID,
-      zoom,
-      density,
-      inkPaint("navy"),
-    ) as unknown as TestElement;
+    const legend = renderDotLegend({ zoom, density });
     return legend.children[1].children[0].arcs.length / 2;
   };
 
@@ -412,14 +407,7 @@ test("no swatch dot or halo crosses the box edge at any zoom or density", () => 
 });
 
 test("the dot swatches are empty at zoom 20 while their labels remain", () => {
-  const legend = dotLegend(
-    KENYA_RAINFALL_STOPS,
-    "mm/month",
-    KENYA_RAINFALL_GRID,
-    20,
-    1,
-    inkPaint("navy"),
-  ) as unknown as TestElement;
+  const legend = renderDotLegend({ zoom: 20 });
   const [, boxes, labels] = legend.children;
 
   assert.ok(boxes.children.every((swatch) => swatch.fills.length === 0));
@@ -431,14 +419,7 @@ test("the dot swatches are empty at zoom 20 while their labels remain", () => {
 });
 
 test("the dot swatches draw the current ink over its halo", () => {
-  const legend = dotLegend(
-    KENYA_RAINFALL_STOPS,
-    "mm/month",
-    KENYA_RAINFALL_GRID,
-    5,
-    1,
-    inkPaint("white"),
-  ) as unknown as TestElement;
+  const legend = renderDotLegend({ ink: "white" });
   const swatch = legend.children[1].children[0];
   const colors = new Set(swatch.fills.map((fill) => fill.color));
 
@@ -495,7 +476,7 @@ test("the zoom watch listens only while active and never twice", () => {
   assert.deepEqual(calls, ["on zoomend", "off zoomend", "on zoomend", "off zoomend"]);
 });
 
-test("Kenya rainfall keeps numeric ticks and shows its units once outside them", () => {
+test("Kenya rainfall keeps numeric ticks at palette positions with its units shown once", () => {
   const legend = renderLegend(KENYA_RAINFALL_STOPS, "mm/month");
   const [caption, bar, labels] = legend.children;
 
@@ -511,12 +492,6 @@ test("Kenya rainfall keeps numeric ticks and shows its units once outside them",
   );
   assert.equal(legend.textContent.split("mm/month").length - 1, 1);
   assert.ok(labels.children.every((label) => !label.textContent.includes("mm/month")));
-});
-
-test("Kenya rainfall keeps each tick at its original palette position", () => {
-  const legend = renderLegend(KENYA_RAINFALL_STOPS, "mm/month");
-  const labels = legend.children[2];
-
   assert.equal(labels.style.position, "relative");
   assert.equal(labels.style.height, "1.3em");
   assert.deepEqual(
@@ -535,12 +510,6 @@ test("Kenya rainfall keeps each tick at its original palette position", () => {
   );
   assert.ok(labels.children.every((label) => label.style.position === "absolute"));
   assert.ok(labels.children.every((label) => label.style.whiteSpace === "nowrap"));
-});
-
-test("the rainfall gradient uses the OKLCH ramp at its stop positions", () => {
-  const legend = renderLegend(KENYA_RAINFALL_STOPS, "mm/month");
-  const bar = legend.children[1];
-
   assert.equal(
     bar.style.background,
     "linear-gradient(to right, rgb(231, 244, 255) 0%, rgb(170, 196, 223) 25%, "
@@ -699,7 +668,7 @@ function inkShareOf(dots: { radiusPx: number; opacity: number }[]) {
   return inkPx / BOX_PX ** 2;
 }
 
-// Sums the dots of a block of cells as the shader draws them, so it checks the one-cell average.
+// A block average checks the shader's cell ownership through lattice fades.
 function mapInkShare(
   lattice: ReturnType<typeof dotSwatchLattice>,
   position: number,

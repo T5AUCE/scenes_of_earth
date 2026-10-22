@@ -38,12 +38,11 @@ from soe.sources import (
     terrain,
     terrain_tiles,
 )
-from soe.sources import remote
+from soe.sources import remote, worldcover
 from soe.sources.chirps import previous_month
 from soe.sources.fallback import read_bilinear
 from soe.sources.grid import block_mean
 from soe.sources.periods import add_duration
-from soe.sources import worldcover
 from soe.sources.terrain import (
     LATITUDE_DEGREE_M,
     TerrainProduct,
@@ -142,16 +141,12 @@ def test_temperature_grid_has_cell_centres_on_tenth_degrees():
     rows = np.arange(grid.rows)
     longitudes = grid.west_deg + (columns + 0.5) * grid.res
     latitudes = grid.north_deg - (rows + 0.5) * grid.res
+    _, _, _, last_row = grid.span((0, -60, 1, 60))
 
     assert np.allclose(longitudes * 10, np.round(longitudes * 10))
     assert np.allclose(latitudes * 10, np.round(latitudes * 10))
     assert (longitudes[0], latitudes[0], latitudes[-1]) == pytest.approx((-180, 60, -60))
-
-
-def test_temperature_grid_reaches_60_south_within_its_rows():
-    _, _, _, last_row = ERA5_LAND_TEMPERATURE_GRID.span((0, -60, 1, 60))
-
-    assert last_row == ERA5_LAND_TEMPERATURE_GRID.rows
+    assert last_row == grid.rows
 
 
 class FakeCubes:
@@ -180,19 +175,13 @@ def land_cube(cubes_dir: Path) -> MonthlyCube:
     return MonthlyCube(ERA5_LAND_TEMPERATURE_CUBE, cubes_dir)
 
 
-def test_temperature_revision_changes_when_a_preliminary_month_turns_final():
+def test_temperature_revision_changes_only_for_requested_months_that_turn_final():
     preliminary = temperature_over({"2026-07": "0001:aaaa", "2026-08": "0005:bbbb"})
     final = temperature_over({"2026-07": "0001:aaaa", "2026-08": "0001:cccc"})
     steps = ["2026-07-01", "2026-08-01"]
 
     assert preliminary.local_revision(steps) != final.local_revision(steps)
-
-
-def test_temperature_revision_ignores_months_outside_the_steps():
-    before = temperature_over({"2026-07": "0001:aaaa", "2026-08": "0005:bbbb"})
-    after = temperature_over({"2026-07": "0001:aaaa", "2026-08": "0001:cccc"})
-
-    assert before.local_revision(["2026-07-01"]) == after.local_revision(["2026-07-01"])
+    assert preliminary.local_revision(steps[:1]) == final.local_revision(steps[:1])
 
 
 def test_preliminary_steps_get_one_notice_per_run():
@@ -600,20 +589,18 @@ def test_glo30_gap_in_the_caucasus_falls_back_to_glo90():
     ]
 
 
-def test_terrain_sources_name_the_products_a_read_uses():
-    kenya = [36.5, -1.5, 36.8, -1.2]
-    gap_edge = [42.8, 40.0, 43.2, 40.3]
-    wide = [43, 38, 46, 41]
-
-    assert TERRAIN.sources_for(kenya) == [SOURCES["glo30"]]
-    assert TERRAIN.sources_for(gap_edge) == [SOURCES["glo30"], SOURCES["glo90"]]
-    assert TERRAIN.sources_for(wide) == [SOURCES["glo90"]]
-
-
-def test_box_ending_on_a_tile_edge_gets_no_fallback_credit():
-    edge = [42.8, 40.0, 43.0, 40.2]
-
-    assert TERRAIN.sources_for(edge) == [SOURCES["glo30"]]
+@pytest.mark.parametrize(
+    ("bbox", "products"),
+    [
+        ([36.5, -1.5, 36.8, -1.2], ["glo30"]),
+        ([42.8, 40.0, 43.2, 40.3], ["glo30", "glo90"]),
+        ([43, 38, 46, 41], ["glo90"]),
+        ([42.8, 40.0, 43.0, 40.2], ["glo30"]),
+    ],
+    ids=["fine", "gap-edge", "coarse", "tile-edge-without-fallback"],
+)
+def test_terrain_credits_only_the_products_a_read_uses(bbox, products):
+    assert TERRAIN.sources_for(bbox) == [SOURCES[product] for product in products]
 
 
 def test_terrain_blocks_equal_one_read():
@@ -887,29 +874,31 @@ def test_two_blocks_equal_one_block_exactly(fake_terrain):
     assert np.array_equal(two_blocks, one_block)
 
 
-def test_narrow_tiles_at_50_degrees_equal_the_area_mean(fake_terrain):
+@pytest.mark.parametrize(
+    ("south", "tile_locations", "missing_rows", "narrow_latitude"),
+    [
+        (49, [(10, 49), (11, 49), (10, 50)], slice(None, 19), 50),
+        (-51, [(10, -51), (10, -50), (11, -50)], slice(21, None), -51),
+    ],
+    ids=["north", "south"],
+)
+def test_narrow_tiles_at_50_degrees_equal_the_area_mean(
+    fake_terrain,
+    south,
+    tile_locations,
+    missing_rows,
+    narrow_latitude,
+):
     add_tile, tiles = fake_terrain
-    for lon, lat in ((10, 49), (11, 49), (10, 50)):  # (11, 50) is missing
+    for lon, lat in tile_locations:
         add_tile(lon, lat)
-    bounds = (10.0, 49.0, 12.0, 51.0)
+    bounds = (10.0, south, 12.0, south + 2)
 
     elevation, _ = RealSource().terrain(bounds, CELL_DEG)
 
-    assert tiles[(10, 50)].shape[1] == NARROW_TILE_PX
+    assert tiles[(10, narrow_latitude)].shape[1] == NARROW_TILE_PX
     assert np.abs(elevation - area_mean(tiles, bounds)).max() <= 0.51
-    assert (elevation[:19, 21:] == 0).all()  # the upper-right tile is missing
-
-
-def test_narrow_tiles_at_minus_50_degrees_equal_the_area_mean(fake_terrain):
-    add_tile, tiles = fake_terrain
-    for lon, lat in ((10, -51), (10, -50), (11, -50)):  # (11, -51) is missing
-        add_tile(lon, lat)
-    bounds = (10.0, -51.0, 12.0, -49.0)
-
-    elevation, _ = RealSource().terrain(bounds, CELL_DEG)
-
-    assert np.abs(elevation - area_mean(tiles, bounds)).max() <= 0.51
-    assert (elevation[21:, 21:] == 0).all()  # the lower-right tile is missing
+    assert (elevation[missing_rows, 21:] == 0).all()
 
 
 def test_block_without_tiles_is_none(fake_terrain):
@@ -946,47 +935,31 @@ def test_placed_tiles_west_of_180_keep_the_unwrapped_longitude():
     assert {tile.name.split("_")[6] for tile in placed if tile.lon == 180} == {"W180"}
 
 
-def test_stops_blend_an_even_stretch_with_the_quantiles():
-    rain = make_registry(SyntheticSource())["chirps_monthly"]
-    stats = {"min": 1.0, "max": 400.0, "mean": 50.0, "p98": 160.0}
-    quantiles = np.linspace(0, 80, 9).tolist()
+@pytest.mark.parametrize(
+    ("dataset", "statistics", "quantiles", "expected"),
+    [
+        (RAIN, (1, 400, 50, 160), np.linspace(0, 80, 9), [0, 20, 30, 40, 60, 80, 90, 100, 120]),
+        (
+            TERRAIN,
+            (288, 301, 295, 300),
+            np.linspace(288, 300, 9),
+            [288, 290, 291, 292, 294, 296, 297, 298, 300],
+        ),
+        (
+            TERRAIN,
+            (1234, 1262, 1250, 1260),
+            np.linspace(1234, 1260, 9),
+            [1234, 1237, 1240, 1244, 1247, 1250, 1254, 1257, 1260],
+        ),
+        (TERRAIN, (0, 120, 5, 100), [0] * 8 + [100], [0, 10, 20, 30, 40, 100]),
+        (TERRAIN, (5, 5, 5, 5), [5] * 9, [5, 5]),
+    ],
+    ids=["rain-blend", "narrow-offset", "wide-offset", "drop-repeats", "constant"],
+)
+def test_stops_blend_quantiles_and_round_to_field_span(dataset, statistics, quantiles, expected):
+    stats = dict(zip(("min", "max", "mean", "p98"), statistics))
 
-    stops = rain.stops(stats, quantiles)
-
-    assert stops == [0, 20, 30, 40, 60, 80, 90, 100, 120]
-
-
-def test_stops_keep_whole_degrees_on_a_narrow_field_far_from_zero():
-    terrain = make_registry(SyntheticSource())["terrain"]
-    stats = {"min": 288.0, "max": 301.0, "mean": 295.0, "p98": 300.0}
-
-    stops = terrain.stops(stats, np.linspace(288, 300, 9).tolist())
-
-    assert stops == [288, 290, 291, 292, 294, 296, 297, 298, 300]
-
-
-def test_stops_of_a_wide_field_far_from_zero_are_not_coarser_than_its_span():
-    terrain = make_registry(SyntheticSource())["terrain"]
-    stats = {"min": 1234.0, "max": 1262.0, "mean": 1250.0, "p98": 1260.0}
-
-    stops = terrain.stops(stats, np.linspace(1234, 1260, 9).tolist())
-
-    assert stops == [1234, 1237, 1240, 1244, 1247, 1250, 1254, 1257, 1260]
-
-
-def test_stops_round_to_the_span_and_drop_repeats():
-    terrain = make_registry(SyntheticSource())["terrain"]
-    stats = {"min": 0.0, "max": 120.0, "mean": 5.0, "p98": 100.0}
-    quantiles = [0, 0, 0, 0, 0, 0, 0, 0, 100]
-
-    assert terrain.stops(stats, quantiles) == [0, 10, 20, 30, 40, 100]
-
-
-def test_stops_of_a_constant_field_are_the_same_value_twice():
-    terrain = make_registry(SyntheticSource())["terrain"]
-    stats = {"min": 5.0, "max": 5.0, "mean": 5.0, "p98": 5.0}
-
-    assert terrain.stops(stats, [5.0] * 9) == [5, 5]
+    assert dataset.stops(stats, list(quantiles)) == expected
 
 
 def test_worldcover_tiles_are_named_by_their_south_west_corner():

@@ -94,19 +94,16 @@ test("the link beats storage and storage beats the bundle's defaults", () => {
   });
 });
 
-test("opening a link saves nothing", () => {
+test("opening display and colour links never writes or removes stored preferences", () => {
   const writes: string[] = [];
-  useStorage({ setItem: (key: string) => writes.push(key) });
+  useStorage({
+    setItem: (key: string) => writes.push(key),
+    removeItem: (key: string) => writes.push(key),
+  });
 
-  const tokens = {
-    pal: "chirps_monthly:batlow",
-    range: "",
-    off: "terrain",
-    colour: "",
-    ink: "",
-    dens: "",
-  };
+  const tokens = { ...NO_TOKENS, pal: "chirps_monthly:batlow", off: "terrain" };
   resolveDisplay(LAYERS, tokens, {});
+  resolveDisplay(COLOUR_LAYERS, { ...NO_TOKENS, colour: "chirps_monthly" }, {}, "nowhere");
 
   assert.deepEqual(writes, []);
 });
@@ -239,18 +236,6 @@ test("a blend link without a pair is dropped with the note", () => {
   assert.equal(display.colour, null);
 });
 
-test("opening a colour link saves no pick", () => {
-  const writes: string[] = [];
-  useStorage({
-    setItem: (key: string) => writes.push(key),
-    removeItem: (key: string) => writes.push(key),
-  });
-
-  resolveDisplay(COLOUR_LAYERS, { ...NO_TOKENS, colour: "chirps_monthly" }, {}, "nowhere");
-
-  assert.deepEqual(writes, []);
-});
-
 test("the colour pick is remembered by unit", () => {
   useStorage();
 
@@ -262,14 +247,7 @@ test("the colour pick is remembered by unit", () => {
 });
 
 test("storage errors fall back to the defaults", () => {
-  useStorage({
-    getItem: () => {
-      throw new Error("blocked");
-    },
-    setItem: () => {
-      throw new Error("blocked");
-    },
-  });
+  useBlockedStorage();
 
   assert.deepEqual(loadStoredPalettes(), {});
   assert.doesNotThrow(() => storePalette("chirps_monthly", "batlow"));
@@ -288,12 +266,10 @@ test("stored palettes are written and forgotten by layer", () => {
 
 test("unknown layers, palettes and reversed ranges are dropped", () => {
   const tokens: DisplayTokens = {
+    ...NO_TOKENS,
     pal: "nowhere:batlow,chirps_monthly:nope,chirps_monthly:custom-12345g-000000,terrain:batlow,x",
     range: "chirps_monthly:10:5,chirps_monthly:a:b,chirps_monthly::9,esa_worldcover:0:9,t:1:2",
     off: "chirps_monthly,terrain.nothing",
-    colour: "",
-    ink: "",
-    dens: "",
   };
   const { display, dropped } = resolveDisplay(LAYERS, tokens, {});
 
@@ -315,12 +291,9 @@ test("a custom gradient needs two to five six-digit colours", () => {
 
 test("the last entry for a layer wins and ranges are rounded to the data's precision", () => {
   const tokens = {
+    ...NO_TOKENS,
     pal: "chirps_monthly:batlow,chirps_monthly:cividis",
     range: "chirps_monthly:0.04:250.26",
-    off: "",
-    colour: "",
-    ink: "",
-    dens: "",
   };
   const { display } = resolveDisplay(LAYERS, tokens, {});
 
@@ -331,12 +304,8 @@ test("every layer with a menu names its palette but ranges and off parts only wh
   const { display } = resolveDisplay(
     LAYERS,
     {
+      ...NO_TOKENS,
       pal: "chirps_monthly:ink-blue,esa_worldcover:painted",
-      range: "",
-      off: "",
-      colour: "",
-      ink: "",
-      dens: "",
     },
     {},
   );
@@ -350,12 +319,10 @@ test("every layer with a menu names its palette but ranges and off parts only wh
 
 test("palettes, ranges and off parts round trip through the link text", () => {
   const tokens = {
+    ...NO_TOKENS,
     pal: "chirps_monthly:custom-1a2b3c-88cc44,esa_worldcover:esa,terrain:grey",
     range: "chirps_monthly:0:250",
     off: "terrain.contours,esa_worldcover",
-    colour: "",
-    ink: "",
-    dens: "",
   };
   const { display } = resolveDisplay(LAYERS, tokens, {});
   const text = formatDisplayParams(display, LAYERS);
@@ -511,14 +478,7 @@ test("invalid or blocked edge storage uses defaults without preventing changes",
   }
   items.set("soe.edges.v1", "broken JSON");
   assert.deepEqual(loadStoredEdges("esa_worldcover"), DEFAULT_EDGES);
-  useStorage({
-    getItem: () => {
-      throw new Error("blocked");
-    },
-    setItem: () => {
-      throw new Error("blocked");
-    },
-  });
+  useBlockedStorage();
   assert.deepEqual(loadStoredEdges("esa_worldcover"), DEFAULT_EDGES);
   assert.doesNotThrow(() => storeEdges("esa_worldcover", { ...DEFAULT_EDGES }));
 });
@@ -804,14 +764,7 @@ test("old stored densities clamp while invalid or blocked storage falls back to 
   items.set("soe.density.v1", JSON.stringify({ chirps_monthly: 1.23 }));
   assert.deepEqual(loadStoredDensities(), { chirps_monthly: 2 ** 0.25 });
 
-  useStorage({
-    getItem: () => {
-      throw new Error("blocked");
-    },
-    setItem: () => {
-      throw new Error("blocked");
-    },
-  });
+  useBlockedStorage();
   assert.deepEqual(loadStoredDensities(), {});
   assert.doesNotThrow(() => storeDensity("chirps_monthly", 1.5));
 });
@@ -861,6 +814,13 @@ test("a menu change keeps the layer's density", () => {
     density: MAX_DENSITY_RATIO,
   });
 });
+
+function useBlockedStorage() {
+  const blocked = () => {
+    throw new Error("blocked");
+  };
+  useStorage({ getItem: blocked, setItem: blocked });
+}
 
 function useStorage(overrides: object = {}) {
   const items = new Map<string, string>();

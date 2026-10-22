@@ -101,16 +101,13 @@ def test_terrain_cache_hit_builds_identical_arrays(tmp_path):
     assert "terrain/mask" in cold and cold == warm
 
 
-def test_progress_never_decreases_and_ends_at_one(tmp_path):
-    fractions = [fraction for fraction, _ in record_progress(tmp_path)]
+def test_progress_increases_to_one_with_terrain_then_rain_stages(tmp_path):
+    events = record_progress(tmp_path)
+    fractions = [fraction for fraction, _ in events]
+    stages = [stage for _, stage in events]
 
     assert fractions == sorted(fractions)
     assert fractions[-1] == 1.0 and fractions[-2] < 1.0
-
-
-def test_progress_stage_names_terrain_blocks_then_rain_months(tmp_path):
-    stages = [stage for _, stage in record_progress(tmp_path)]
-
     assert any(stage and stage.startswith(f"{TERRAIN.title} 1/") for stage in stages)
     assert any(stage and stage.startswith(RAIN.title) and "2015-0" in stage for stage in stages)
     assert stages[-1] is None
@@ -129,7 +126,7 @@ def test_terrain_reports_every_block_of_a_multi_block_area(tmp_path):
     assert counts == every_block + [f"{block_count}/{block_count}"]
 
 
-def test_terrain_cache_hit_gives_terrain_almost_no_share(tmp_path):
+def test_terrain_cache_hit_has_almost_no_progress_share_and_no_zero_block_stage(tmp_path):
     first = record_progress(tmp_path / "cold")
     shutil.copytree(tmp_path / "cold" / ".cache", tmp_path / "warm" / ".cache")
 
@@ -140,22 +137,21 @@ def test_terrain_cache_hit_gives_terrain_almost_no_share(tmp_path):
 
     assert terrain_end(first) > terrain_end(warm)
     assert terrain_end(warm) < 0.1
+    assert not any(stage and stage.startswith(f"{TERRAIN.title} 0/") for _, stage in warm)
 
 
-def test_terrain_cache_hit_never_shows_zero_blocks_read(tmp_path):
-    record_progress(tmp_path / "cold")
-    shutil.copytree(tmp_path / "cold" / ".cache", tmp_path / "warm" / ".cache")
+def test_build_stores_terrain_in_the_cache_folder(nairobi_bundle):
+    directory, _, _ = nairobi_bundle
 
-    stages = [stage for _, stage in record_progress(tmp_path / "warm")]
-
-    assert not any(stage and stage.startswith(f"{TERRAIN.title} 0/") for stage in stages)
+    assert any((directory / ".cache").glob("*.npz"))
+    assert not (directory / ".cache" / "scene.json").exists()
 
 
-def test_build_stores_terrain_in_the_cache_folder(tmp_path):
-    build_nairobi(tmp_path)
-
-    assert any((tmp_path / ".cache").glob("*.npz"))
-    assert not (tmp_path / ".cache" / "scene.json").exists()
+@pytest.fixture(scope="module")
+def nairobi_bundle(tmp_path_factory):
+    directory = tmp_path_factory.mktemp("nairobi")
+    document, root = build_nairobi(directory)
+    return directory, document, root
 
 
 def test_scene_over_a_glo30_gap_credits_the_glo90_fallback(tmp_path):
@@ -272,8 +268,8 @@ def test_synthetic_build_validates_and_opens(tmp_path):
     )
 
 
-def test_stops_increase_and_cover_all_steps(tmp_path):
-    doc, _ = build_nairobi(tmp_path)
+def test_rain_stops_start_at_zero_and_increase_to_cover_all_steps(nairobi_bundle):
+    _, doc, _ = nairobi_bundle
     rain = doc["layers"][-1]
     stops = rain["style"]["stops"]
 
@@ -281,13 +277,8 @@ def test_stops_increase_and_cover_all_steps(tmp_path):
     assert stops == sorted(set(stops))
     assert stops[-1] == pytest.approx(rain["stats"]["p98"], rel=0.05)
     assert "domain" not in rain["style"]
-
-
-def test_rain_stops_start_at_zero(tmp_path):
-    doc, _ = build_nairobi(tmp_path)
-
-    assert doc["layers"][-1]["stats"]["min"] > 0
-    assert doc["layers"][-1]["style"]["stops"][0] == 0
+    assert rain["stats"]["min"] > 0
+    assert stops[0] == 0
 
 
 def test_build_with_aggregation_factor_2(tmp_path):
@@ -373,18 +364,16 @@ def test_negative_values_survive_int16_encoding():
     assert encoded.tolist() == [-550, 0, 2000, -32768]
 
 
-def test_no_value_encodes_to_a_minimum_fill():
-    values = np.array([-1e9, -327.68, -327.67])
-
-    encoded = encode_values(values, "int16", 0.01, 0, -32768)
-
-    assert encoded.tolist() == [-32767, -32767, -32767]
-
-
-def test_no_value_encodes_to_a_maximum_fill():
-    encoded = encode_values(np.array([1e9, 6553.5]), "uint16", 0.1, 0, 65535)
-
-    assert encoded.tolist() == [65534, 65534]
+@pytest.mark.parametrize(
+    ("values", "dtype", "scale", "fill", "expected"),
+    [
+        ([-1e9, -327.68, -327.67], "int16", 0.01, -32768, [-32767] * 3),
+        ([1e9, 6553.5], "uint16", 0.1, 65535, [65534] * 2),
+    ],
+    ids=["minimum-fill", "maximum-fill"],
+)
+def test_finite_values_never_encode_to_fill(values, dtype, scale, fill, expected):
+    assert encode_values(np.array(values), dtype, scale, 0, fill).tolist() == expected
 
 
 def test_failed_build_leaves_no_partial_bundle(tmp_path):
@@ -401,8 +390,8 @@ def test_failed_build_leaves_no_partial_bundle(tmp_path):
     assert not (tmp_path / HASH_C).exists() and not (tmp_path / ".tmp" / HASH_C).exists()
 
 
-def test_rain_is_uint16_sharded_and_round_trips(tmp_path):
-    doc, root = build_nairobi(tmp_path)  # 14 months: two shards in time
+def test_rain_is_uint16_sharded_and_round_trips(nairobi_bundle):
+    _, doc, root = nairobi_bundle
     precip = root["chirps_monthly/precip"]
     rain = next(layer for layer in doc["layers"] if layer["id"] == "chirps_monthly")
 
@@ -431,8 +420,8 @@ def test_rain_is_uint16_sharded_and_round_trips(tmp_path):
     assert np.nanmax(np.abs(decoded - expected)) <= 0.051
 
 
-def test_static_layer_has_no_time_and_one_chunk(tmp_path):
-    doc, root = build_nairobi(tmp_path)
+def test_static_layer_has_no_time_and_one_chunk(nairobi_bundle):
+    _, doc, root = nairobi_bundle
     terrain = next(layer for layer in doc["layers"] if layer["id"] == "terrain")
 
     assert terrain["time"] is None and terrain["grid"]["res"] == pytest.approx(0.05 / 93, abs=1e-8)
@@ -442,10 +431,10 @@ def test_static_layer_has_no_time_and_one_chunk(tmp_path):
     assert root["terrain/mask"].shards is None
 
 
-def test_store_has_consolidated_metadata(tmp_path):
-    build_nairobi(tmp_path)
+def test_store_has_consolidated_metadata(nairobi_bundle):
+    directory, _, _ = nairobi_bundle
 
-    root_json = json.loads((tmp_path / HASH_A / "data.zarr" / "zarr.json").read_text())
+    root_json = json.loads((directory / HASH_A / "data.zarr" / "zarr.json").read_text())
     meta = root_json["consolidated_metadata"]["metadata"]
     expected = {"chirps_monthly/precip", "chirps_monthly/mask", "terrain/mask"}
 
@@ -617,18 +606,6 @@ class EmptyFallbackSource(SyntheticSource):
         return np.full((window[3], window[2]), np.nan, "float32")
 
 
-def test_area_statistics_follow_the_touched_cells(tmp_path):
-    marked = _rain_with_marked_boundary()
-    off_grid = box(36.54, -1.46, 37.46, -0.54)
-    build_scene(HASH_A, Area(off_grid, BOUNDARY), "2015-01", "2015-01", [marked], "Test", tmp_path)
-    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
-    width = 20
-    expected_mean = (50 + 10 * (width - 1)) / width
-
-    assert doc["layers"][0]["stats"]["max"] == 50
-    assert doc["layers"][0]["stats"]["mean"] == pytest.approx(expected_mean, abs=0.01)
-
-
 def test_real_ring_values_do_not_change_area_statistics_stops_or_counts(tmp_path):
     marked = _rain_with_marked_boundary()
     area = Area(box(36.54, -1.46, 37.46, -0.54), BOUNDARY)
@@ -700,8 +677,8 @@ def _rain_with_extreme_hole() -> SeriesDataset:
     return HoleRain(**vars(RAIN))
 
 
-def test_terrain_layer_writes_a_mask_and_no_elevation_arrays(tmp_path):
-    doc, root = build_nairobi(tmp_path)
+def test_terrain_layer_writes_a_mask_and_no_elevation_arrays(nairobi_bundle):
+    _, doc, root = nairobi_bundle
     terrain = next(layer for layer in doc["layers"] if layer["id"] == "terrain")
     stats = terrain["stats"]
 

@@ -142,41 +142,30 @@ def land_cube(cubes_dir: Path) -> MonthlyCube:
     return MonthlyCube(ERA5_LAND_TEMPERATURE_CUBE, cubes_dir)
 
 
-def test_expver_is_read_from_each_grib1_message(tmp_path):
+@pytest.mark.parametrize(
+    ("payload_bytes", "large", "first_expver"),
+    [
+        (9, False, "0001"),
+        (500, True, "0005"),
+        (9 * 1024 * 1024, False, "0001"),
+        (9 * 1024 * 1024 + 7, True, "0005"),
+    ],
+    ids=["plain", "large-code", "plain-over-8-mib", "large-over-8-mib"],
+)
+def test_expvers_follow_message_lengths_even_with_grib_bytes_in_the_data(
+    tmp_path,
+    payload_bytes,
+    large,
+    first_expver,
+):
     path = tmp_path / "months.grib"
-    path.write_bytes(grib1_message("0001") + grib1_message("0005"))
+    payload = b"xxGRIB\x02yy"
+    payload += bytes(payload_bytes - len(payload))
+    second_expver = "0005" if first_expver == "0001" else "0001"
+    message = grib1_message(first_expver, payload=payload, large=large)
+    path.write_bytes(message + grib1_message(second_expver))
 
-    assert grib_expvers(path) == ["0001", "0005"]
-
-
-def test_message_with_grib_bytes_in_its_data_is_one_message(tmp_path):
-    path = tmp_path / "months.grib"
-    path.write_bytes(grib1_message("0001", payload=b"xxGRIB\x02yy") + grib1_message("0005"))
-
-    assert grib_expvers(path) == ["0001", "0005"]
-
-
-def test_ecmwf_large_message_length_code_is_followed(tmp_path):
-    path = tmp_path / "months.grib"
-    large = grib1_message("0005", payload=bytes(500), large=True)
-    path.write_bytes(large + grib1_message("0001"))
-
-    assert grib_expvers(path) == ["0005", "0001"]
-
-
-def test_plain_message_over_8_mib_is_not_taken_for_a_large_one(tmp_path):
-    path = tmp_path / "months.grib"
-    path.write_bytes(grib1_message("0001", payload=bytes(9 * 1024 * 1024)) + grib1_message("0005"))
-
-    assert grib_expvers(path) == ["0001", "0005"]
-
-
-def test_genuine_ecmwf_large_message_is_walked(tmp_path):
-    path = tmp_path / "months.grib"
-    large = grib1_message("0005", payload=bytes(9 * 1024 * 1024 + 7), large=True)
-    path.write_bytes(large + grib1_message("0001"))
-
-    assert grib_expvers(path) == ["0005", "0001"]
+    assert grib_expvers(path) == [first_expver, second_expver]
 
 
 def test_impossible_section_bounds_are_refused(tmp_path):
@@ -228,19 +217,16 @@ def test_truncated_or_trailing_bytes_are_refused(tmp_path):
         grib_expvers(path)
 
 
-def test_grib2_message_is_refused(tmp_path):
+@pytest.mark.parametrize(
+    ("edition", "expver", "error"),
+    [(2, "0001", "edition 1"), (1, "0042", "experiment version")],
+    ids=["grib2", "unknown-expver"],
+)
+def test_unsupported_grib_metadata_is_refused(tmp_path, edition, expver, error):
     path = tmp_path / "months.grib"
-    path.write_bytes(grib1_message("0001", edition=2))
+    path.write_bytes(grib1_message(expver, edition=edition))
 
-    with pytest.raises(ValueError, match="edition 1"):
-        grib_expvers(path)
-
-
-def test_unknown_experiment_version_is_refused(tmp_path):
-    path = tmp_path / "months.grib"
-    path.write_bytes(grib1_message("0042"))
-
-    with pytest.raises(ValueError, match="experiment version"):
+    with pytest.raises(ValueError, match=error):
         grib_expvers(path)
 
 
@@ -340,11 +326,12 @@ def test_rewriting_an_unchanged_month_keeps_its_marker(tmp_path):
     assert changed != marker and changed.startswith("0001:")
 
 
-def test_gap_between_months_is_refused(tmp_path):
+@pytest.mark.parametrize("month", ["2015-11", "2016-03"], ids=["before", "after"])
+def test_gap_before_or_after_stored_months_is_refused(tmp_path, month):
     write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0001")])
 
     with pytest.raises(ValueError, match="gap"):
-        write_months(tmp_path, LAND, [("2016-03", celsius_field(20), "0001")])
+        write_months(tmp_path, LAND, [(month, celsius_field(20), "0001")])
 
     assert list(land_cube(tmp_path).months()) == ["2016-01"]
 
@@ -708,22 +695,31 @@ def test_era5land_month_with_missing_cells_is_still_accepted(tmp_path):
 @pytest.mark.parametrize(("seconds", "days"), [(JAN_2016_SECS, 31), (FEB_2016_SECS, 29)])
 def test_precipitation_in_metres_per_day_becomes_mm_for_the_whole_month(tmp_path, seconds, days):
     path = tmp_path / "field.tif"
-    write_raster(
-        path,
-        -180.125,
-        0.25,
-        1440,
-        ERA5_GRID.rows,
-        np.full(ERA5_SHAPE, 0.002),
-        [seconds],
-        ERA5_GRID.north_deg,
-        unit="[m]",
-    )
+    write_precipitation_raster(path, np.full(ERA5_SHAPE, 0.002), [seconds])
 
     with rasterio.open(path) as dataset:
         [(_, values, _)] = read_months(dataset, ["0001"], ERA5_PRECIPITATION)
 
     assert values[5, 5] == pytest.approx(2 * days, rel=1e-5)
+
+
+def write_precipitation_raster(
+    path: Path,
+    values: np.ndarray,
+    valid_seconds: list[int] | None = None,
+) -> None:
+    """Write GRIB-like precipitation bands on the ERA5 grid in metres per day."""
+    write_raster(
+        path,
+        ERA5_GRID.west_deg,
+        ERA5_GRID.res,
+        ERA5_GRID.columns,
+        ERA5_GRID.rows,
+        values,
+        valid_seconds,
+        ERA5_GRID.north_deg,
+        unit="[m]",
+    )
 
 
 @pytest.mark.parametrize(
@@ -742,17 +738,7 @@ def test_precipitation_stamped_before_month_uses_next_month_and_its_day_count(
 ):
     path = tmp_path / "field.tif"
     valid_seconds = int(datetime.fromisoformat(valid_time).timestamp())
-    write_raster(
-        path,
-        ERA5_GRID.west_deg,
-        ERA5_GRID.res,
-        ERA5_GRID.columns,
-        ERA5_GRID.rows,
-        np.full(ERA5_SHAPE, 0.002),
-        [valid_seconds],
-        ERA5_GRID.north_deg,
-        unit="[m]",
-    )
+    write_precipitation_raster(path, np.full(ERA5_SHAPE, 0.002), [valid_seconds])
     with rasterio.open(path) as dataset:
         write_months(
             tmp_path,
@@ -767,17 +753,7 @@ def test_precipitation_stamped_before_month_uses_next_month_and_its_day_count(
 
 def test_precipitation_packing_noise_below_zero_becomes_zero(tmp_path):
     path = tmp_path / "field.tif"
-    write_raster(
-        path,
-        -180.125,
-        0.25,
-        1440,
-        ERA5_GRID.rows,
-        np.full(ERA5_SHAPE, -1e-9),
-        None,
-        ERA5_GRID.north_deg,
-        unit="[m]",
-    )
+    write_precipitation_raster(path, np.full(ERA5_SHAPE, -1e-9))
 
     with rasterio.open(path) as dataset:
         [(_, values, _)] = read_months(dataset, ["0001"], ERA5_PRECIPITATION)
@@ -846,17 +822,7 @@ def test_precipitation_with_a_non_finite_cell_is_refused_when_read(tmp_path, bad
     path = tmp_path / "field.tif"
     field = np.full(ERA5_SHAPE, 0.002)
     field[7, 7] = bad
-    write_raster(
-        path,
-        -180.125,
-        0.25,
-        1440,
-        ERA5_GRID.rows,
-        field,
-        None,
-        ERA5_GRID.north_deg,
-        unit="[m]",
-    )
+    write_precipitation_raster(path, field)
 
     with rasterio.open(path) as dataset, pytest.raises(ValueError, match="no value in some cells"):
         list(read_months(dataset, ["0001"], ERA5_PRECIPITATION))
@@ -886,15 +852,6 @@ def test_earlier_months_extend_a_cube_backwards_and_leave_later_ones_alone(tmp_p
     assert cube.read("2015-11", (7, 7, 1, 1))[0, 0] == pytest.approx(5)
     assert cube.read("2016-01", (7, 7, 1, 1)) == pytest.approx(later)
     assert zarr.open_group(tmp_path / CUBE_NAME, mode="r")[CUBE_ARRAY].shape == shape_before
-
-
-def test_months_before_the_first_stored_one_must_still_be_consecutive(tmp_path):
-    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0001")])
-
-    with pytest.raises(ValueError, match="gap"):
-        write_months(tmp_path, LAND, [("2015-11", celsius_field(20), "0001")])
-
-    assert list(land_cube(tmp_path).months()) == ["2016-01"]
 
 
 def test_ingest_from_an_earlier_month_adds_the_earlier_years_newest_year_first(tmp_path, fake_grib):
