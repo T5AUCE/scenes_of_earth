@@ -23,24 +23,32 @@ LIB_PACKAGES=(
 )
 
 if [ -d "$LEGACY_DIR/browsers" ] && [ ! -d "$CACHE_DIR/browsers" ]; then
-  echo "Using $LEGACY_DIR; nothing to install."
-  exit 0
+  echo "Using $LEGACY_DIR as is; skipping installation."
+  SELECTED_DIR="$LEGACY_DIR"
+else
+  SELECTED_DIR="$CACHE_DIR"
 fi
 
 mkdir -p "$CACHE_DIR"
 CACHE_DIR="$(realpath "$CACHE_DIR")"
+SELECTED_DIR="$(realpath "$SELECTED_DIR")"
 mkdir -p "$CACHE_DIR/libs" "$CACHE_DIR/debs" "$CACHE_DIR/tmp"
 
-if ! ls "$CACHE_DIR"/browsers/chromium_headless_shell-* > /dev/null 2>&1; then
+if [ "$SELECTED_DIR" = "$CACHE_DIR" ] \
+  && ! ls "$CACHE_DIR"/browsers/chromium_headless_shell-* > /dev/null 2>&1; then
   PLAYWRIGHT_BROWSERS_PATH="$CACHE_DIR/browsers" \
     TMPDIR="$CACHE_DIR/tmp" \
     node "$WEB_DIR/node_modules/playwright-core/cli.js" install chromium-headless-shell
 fi
 
-EXECUTABLE="$(find "$CACHE_DIR/browsers" -name chrome-headless-shell -type f | head -n 1)"
-LIBS="$CACHE_DIR/libs/usr/lib/x86_64-linux-gnu"
+EXECUTABLE="$(find "$SELECTED_DIR/browsers" -name chrome-headless-shell -type f | head -n 1)"
+LIBS="$SELECTED_DIR/libs/usr/lib/x86_64-linux-gnu"
 
 if LD_LIBRARY_PATH="$LIBS" ldd "$EXECUTABLE" | grep -q "not found"; then
+  if [ "$SELECTED_DIR" != "$CACHE_DIR" ]; then
+    echo "Legacy browser libraries are missing; see above." >&2
+    exit 1
+  fi
   # apt-get download needs no root; the packages are unpacked here instead of installed.
   (cd "$CACHE_DIR/debs" && apt-get download "${LIB_PACKAGES[@]}")
   for package in "$CACHE_DIR"/debs/*.deb; do
@@ -53,4 +61,13 @@ if LD_LIBRARY_PATH="$LIBS" ldd "$EXECUTABLE" | grep "not found"; then
   exit 1
 fi
 
-echo "Chromium ready in $CACHE_DIR"
+# Headless SwiftShader needs no display, so the probe strips it before checking WebGL2.
+# The canonical directory is passed on because a relative override resolves from elsewhere.
+(cd "$WEB_DIR" && env -u DISPLAY -u WAYLAND_DISPLAY "SOE_TRIAL_BROWSER_DIR=$SELECTED_DIR" \
+  node --input-type=module -e "
+import('./scripts/visual-trial/browser.mjs').then(async ({ preflightWebGL }) => {
+  await preflightWebGL();
+});
+")
+
+echo "Chromium ready in $SELECTED_DIR"

@@ -9,7 +9,12 @@ import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 
 import { loadPlaces, parseArgs } from "./visual-trial/args.mjs";
-import { launchBrowser, newContext, trialSpot } from "./visual-trial/browser.mjs";
+import {
+  launchBrowser,
+  newContext,
+  preflightWebGL,
+  trialSpot,
+} from "./visual-trial/browser.mjs";
 import { installCache } from "./visual-trial/cache.mjs";
 import { layoutFailed } from "./visual-trial/layout.mjs";
 import { ensureScenes } from "./visual-trial/scenes.mjs";
@@ -41,6 +46,7 @@ if (invokedAsScript) {
 export async function runTrial(options, system = {}) {
   const {
     loadPlaces: readSpots = loadPlaces,
+    preflightWebGL: checkBrowser = preflightWebGL,
     startServers: bootServers = startServers,
     ensureScenes: resolveScenes = ensureScenes,
     launchBrowser: openBrowser = launchBrowser,
@@ -51,6 +57,7 @@ export async function runTrial(options, system = {}) {
 
   const records = [];
   const spots = readSpots(options.places);
+  await checkBrowser();
   const appUrl = options.start ? await bootServers() : options.app.replace(/\/$/, "");
   const sceneIds = await resolveScenes(appUrl, spots);
 

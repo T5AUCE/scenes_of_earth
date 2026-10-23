@@ -34,6 +34,9 @@ const TOOL_DIRS = [
 const BROWSER_NAME = "chrome-headless-shell";
 const LIBS_SUBDIR = "libs/usr/lib/x86_64-linux-gnu";
 
+// Headless SwiftShader fails when a display is set because it requests a display surface.
+const DISPLAY_ENV_VARS = ["DISPLAY", "WAYLAND_DISPLAY"];
+
 const VIEWPORT_PX = { width: 1280, height: 800 };
 const OUTLINE_LAYER_ID = "soe-area-outline";
 const SCENE_READY_TIMEOUT_MS = 90 * 1000;
@@ -48,25 +51,42 @@ const BLEND_HALVES = ["chirps_monthly", "era5land_temperature"];
 
 const ATTRIBUTION_SCOPE = ".maplibregl-ctrl-attrib";
 const HIT_TEXT_CHARS = 40; // Clipped element text keeps layout records to one short line.
+const BODY_TEXT_CHARS = 200; // Visible app status stays a short excerpt in setup errors.
 
 /** Launches Chromium from the first tool directory that has one. Throws a hint if none does. */
 export async function launchBrowser() {
+  const { executablePath, directory } = selectedBrowser();
+
+  return chromium.launch({
+    executablePath,
+    env: launchEnv(path.join(directory, LIBS_SUBDIR)),
+    args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"],
+  });
+}
+
+/** Returns the selected Chromium executable. Throws a hint when none is installed. */
+export function browserExecutable() {
+  return selectedBrowser().executablePath;
+}
+
+function selectedBrowser() {
   for (const directory of TOOL_DIRS.filter(Boolean)) {
     const executablePath = findExecutable(path.join(directory, "browsers"));
-    if (!executablePath) continue;
-
-    const libraries = path.join(directory, LIBS_SUBDIR);
-    const libraryPath = [
-      fs.existsSync(libraries) ? libraries : null,
-      process.env.LD_LIBRARY_PATH,
-    ];
-    return chromium.launch({
-      executablePath,
-      env: { ...process.env, LD_LIBRARY_PATH: libraryPath.filter(Boolean).join(":") },
-      args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"],
-    });
+    if (executablePath) return { executablePath, directory };
   }
   throw new Error("no Chromium found; run web/scripts/visual-trial/setup.sh");
+}
+
+function launchEnv(libraries) {
+  const env = { ...process.env };
+  for (const name of DISPLAY_ENV_VARS) delete env[name];
+  const libraryPath = [
+    fs.existsSync(libraries) ? libraries : null,
+    process.env.LD_LIBRARY_PATH,
+  ];
+  env.LD_LIBRARY_PATH = libraryPath.filter(Boolean).join(":");
+
+  return env;
 }
 
 function findExecutable(browsersDir) {
@@ -76,6 +96,58 @@ function findExecutable(browsersDir) {
   const match = entries.find((entry) => path.basename(entry) === BROWSER_NAME);
 
   return match ? path.join(browsersDir, match) : null;
+}
+
+/** Probes blank-page WebGL2 before scene work and reports the selected browser. */
+export async function preflightWebGL(system = {}) {
+  const {
+    findPath: find = browserExecutable,
+    openBrowser: open = launchBrowser,
+    openBlank: openBlank = (browser) => browser.newContext(),
+  } = system;
+  const executablePath = find();
+  const browser = await open();
+  try {
+    const context = await openBlank(browser);
+    try {
+      const page = await context.newPage();
+      try {
+        await page.goto("about:blank");
+        const probe = await page.evaluate(checkWebGL2);
+        const version = browserVersion(browser);
+        const probeLabel = probe.ok ? "ok" : "missing";
+        console.error(
+          "trial browser",
+          executablePath,
+          `Chromium ${version} WebGL2 ${probeLabel}`,
+        );
+        if (probe.ok) return { executablePath, version };
+
+        const hint = "reinstall with web/scripts/visual-trial/setup.sh";
+        throw new Error(`WebGL2 unavailable in ${executablePath} (Chromium ${version}); ${hint}`);
+      } finally {
+        await page.close();
+      }
+    } finally {
+      await context.close();
+    }
+  } finally {
+    await browser.close();
+  }
+}
+
+function browserVersion(browser) {
+  if (typeof browser.version === "function") return browser.version();
+
+  return "unknown";
+}
+
+function checkWebGL2() {
+  const canvas = document.createElement("canvas");
+  const gl = canvas.getContext("webgl2");
+  if (!gl) return { ok: false };
+
+  return { ok: true, version: gl.getParameter(gl.VERSION) };
 }
 
 /** Creates a context that exposes map diagnostics and scene readiness without app edits. */
@@ -175,6 +247,7 @@ async function layoutViewport(browser, appUrl, spot, sceneId, viewport, system =
   const {
     isolateViewport: isolate = (owner, size) => newContext(owner, size),
     warmViewport: warm = (isolated) => installCache(isolated, HTTP_CACHE_DIR),
+    watchViewport: watch = (page) => watchPage(page),
     loadViewport: load = (page) => openScene(page, appUrl, sceneId, spot),
     settleViewport: settle = (page) => settledSample(page),
   } = system;
@@ -182,6 +255,7 @@ async function layoutViewport(browser, appUrl, spot, sceneId, viewport, system =
   try {
     await warm(isolated);
     const page = await isolated.newPage();
+    const watcher = await watch(page);
     try {
       await load(page);
       await settle(page);
@@ -195,12 +269,47 @@ async function layoutViewport(browser, appUrl, spot, sceneId, viewport, system =
       }
       const open = await layoutState(page, viewport, "open");
       return [...closed, ...open];
+    } catch (error) {
+      throw await layoutSetupError(page, watcher, viewport, error);
     } finally {
       await page.close();
     }
   } finally {
     await isolated.close();
   }
+}
+
+async function layoutSetupError(page, watcher, viewport, error) {
+  const state = await viewportState(page);
+  const reason = error.message.split("\n")[0];
+  const lines = [
+    `layout ${viewportLabel(viewport)} failed to open: ${reason}`,
+    `requests ${JSON.stringify(watcher.failures)}`,
+    `console ${JSON.stringify(watcher.messages)}`,
+    `state ${JSON.stringify(state)}`,
+  ];
+  const enriched = new Error(lines.join("\n"));
+  enriched.cause = error;
+
+  return enriched;
+}
+
+async function viewportState(page) {
+  try {
+    return await page.evaluate(readViewportState, BODY_TEXT_CHARS);
+  } catch {
+    return null;
+  }
+}
+
+function readViewportState(limit) {
+  return {
+    hasMap: Boolean(window.__map),
+    maskReady: window.__trialMaskReady ?? null,
+    layersReady: window.__trialLayersReady ?? null,
+    mapErrors: window.__trialErrors ?? [],
+    bodyText: document.body?.innerText?.slice(0, limit) ?? null,
+  };
 }
 
 async function layoutState(page, viewport, editor) {
@@ -403,9 +512,18 @@ function watchPage(page) {
       watcher.messages.push(`${message.type()}: ${message.text()}`);
     }
   });
+  // Transport failures never produce a response, so the network reason is kept instead.
+  page.on("requestfailed", (request) => {
+    const url = request.url();
+    watcher.failures.push({ kind: classifyFailure(url), url, error: requestError(request) });
+  });
   page.on("pageerror", (error) => watcher.messages.push(`pageerror: ${error.message}`));
 
   return watcher;
+}
+
+function requestError(request) {
+  return request.failure()?.errorText ?? "unknown";
 }
 
 // The link carries the supported allocation, because the removed colour= never chose an owner.

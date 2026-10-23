@@ -22,9 +22,22 @@ Repeated shutdown signals wait for the same cleanup before exiting.
 
 Run `web/scripts/visual-trial/setup.sh` once per container. It downloads Chromium
 headless shell and the missing system libraries into `~/.cache/soe-visual-trial` (override with
-`SOE_TRIAL_BROWSER_DIR`) and needs no root. An existing `/tmp/opencode/m5-visual-tools` is used as
-is. The cache is lost when the container is rebuilt; adding the packages of `LIB_PACKAGES` to the
+`SOE_TRIAL_BROWSER_DIR`, resolved to an absolute path before probing) and needs no root. It then
+probes a blank page for WebGL2 and reports
+the selected executable with its Chromium version, so a broken software renderer fails at setup
+instead of timing out later. An existing `/tmp/opencode/m5-visual-tools` supplies the browser
+as is, while the same WebGL2 probe still checks it before reporting success. The cache is lost
+when the container is rebuilt; adding the packages of `LIB_PACKAGES` to the
 devcontainer image would make the libraries permanent.
+
+The trial launches headless Chromium with SwiftShader and strips `DISPLAY` and
+`WAYLAND_DISPLAY` from the browser environment. A set display makes SwiftShader request a
+display surface and WebGL2 creation fails, so headless runs without one. Every run starts with
+the same blank-page WebGL2 probe before servers start or scenes build; a missing context stops
+the trial with the executable path and version instead of waiting 90 s for the outline layer.
+Layout scene-load failures keep their console messages, failed requests including
+transport-level failures, and map readiness state
+in the thrown error before the page closes.
 
 The setup resolves the cache root to an absolute path. Browser download staging stays in its
 `tmp/` subdirectory, so Playwright does not use the system temporary directory.
@@ -112,7 +125,8 @@ their remaining budget expires, and `Retry-After` waits cannot extend the deadli
 - `line_features` counts the rendered contour line features.
 - `tiles_loaded` reports whether MapLibre loaded every tile. `timed_out` reports whether the view
   failed to settle within 60 s.
-- `failed_requests` counts HTTP errors other than DEM and glyph errors. `dem_404` and `glyph_404`
+- `failed_requests` counts failed requests other than DEM and glyph errors, including
+  transport-level failures that never produce an HTTP status. `dem_404` and `glyph_404`
   count failed DEM and glyph requests separately, including statuses other than 404. Mapterhorn
   has no ocean tiles and the basemap has a known font gap, so some of these failures are expected.
 - `errors` counts distinct console and MapLibre diagnostics. `error_samples` lists up to five.
