@@ -8,6 +8,7 @@ from rasterio.transform import Affine
 from shapely.geometry import box, mapping
 from shapely.geometry.base import BaseGeometry
 
+from .area_weights import area_weights
 from .areas import MAX_LONGITUDE_DEG, WORLD_WIDTH_DEG, Area, AreaError, unwrap
 from .sources import (
     CHIRPS_GRID,
@@ -37,7 +38,7 @@ MAX_RING_GRID_PASSES = 2
 
 @dataclass
 class LayerPlan:
-    """Grid, mask and time steps of one layer."""
+    """Grid, mask, outline and area weights of one layer."""
 
     dataset_id: str
     transform: Affine  # of this layer's grid
@@ -49,6 +50,8 @@ class LayerPlan:
     cells_inside: int
     steps: list[str]  # ISO dates; empty for static layers
     sources: list[dict]  # source dicts the layer reads, the main one first
+    geometry: BaseGeometry  # coverage-clipped outline in the layer grid frame
+    area_weights: np.ndarray  # float64 cosine times covered fraction
     notices: list[str] = field(default_factory=list)
 
 
@@ -488,6 +491,11 @@ def _layer_plan(
     if not (mask == MASK_INSIDE).any():
         raise AreaError(f"area does not cover any {dataset.title} cells")
 
+    weights = area_weights(geometry, transform, grid_shape, mask)
+    # Weights are planned before any source read, so empty overlap fails fast.
+    if not weights.sum() > 0:
+        raise AreaError(f"area has no positive overlap with {dataset.title} cells")
+
     notices += dataset.notices(bbox, steps)
 
     return LayerPlan(
@@ -501,6 +509,8 @@ def _layer_plan(
         int((mask == MASK_INSIDE).sum()),
         steps,
         dataset.sources_for(bbox),
+        geometry,
+        weights,
         notices,
     )
 

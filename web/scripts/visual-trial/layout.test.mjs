@@ -12,6 +12,7 @@ import {
   layoutViewports,
   parseViewportList,
   requiredInState,
+  spreadPoints,
   viewportLabel,
 } from "./layout.mjs";
 
@@ -47,6 +48,11 @@ test("the control list matches roles with names and scopes the slider", () => {
     assert.ok(roles.has(control.role), `unexpected role ${control.role}`);
     assert.ok(typeof control.name === "string" || control.name instanceof RegExp);
     assert.ok(control.when === undefined || ["open", "closed", "both"].includes(control.when));
+    assert.ok(control.scroll === undefined || typeof control.scroll === "string");
+    assert.ok(
+      control.samples === undefined
+        || (Number.isInteger(control.samples) && control.samples >= 2),
+    );
     assert.ok(control.optional === undefined || control.optional === true);
   }
   const slider = LAYOUT_CONTROLS.find((control) => control.role === "slider");
@@ -79,6 +85,48 @@ test("requiredInState expects editor-only entries while the editor is open", () 
   assert.equal(requiredInState(units, "open"), true);
   assert.equal(requiredInState(expand, "closed"), false);
   assert.equal(requiredInState(expand, "open"), false);
+});
+
+test("the scrollable controls name their container while fixed ones stay put", () => {
+  const scrolled = new Map();
+  for (const control of LAYOUT_CONTROLS) {
+    if (control.scroll !== undefined) scrolled.set(controlDisplay(control), control.scroll);
+  }
+
+  assert.equal(scrolled.get("Play"), undefined);
+  assert.equal(scrolled.get("Expand"), undefined);
+  assert.equal(scrolled.get("Close"), ".layer-editor");
+  assert.equal(scrolled.get("mm/month"), ".layer-editor");
+  assert.equal(scrolled.get("Reset layer"), ".layer-editor");
+  assert.equal(scrolled.get(controlDisplay(LAYOUT_EDITOR)), "#scene-column .cards");
+  const cards = LAYOUT_CONTROLS.filter((control) =>
+    control.role === "switch" && control.name !== "Show Area outline",
+  );
+  assert.ok(cards.length > 0);
+  for (const control of cards) assert.equal(control.scroll, "#scene-column .cards");
+});
+
+test("only the timeline slider samples its endpoints", () => {
+  const sampled = LAYOUT_CONTROLS.filter((control) => control.samples !== undefined);
+
+  assert.equal(sampled.length, 1);
+  assert.equal(sampled[0].scope, "#time-bar");
+  assert.equal(sampled[0].samples, 5);
+});
+
+test("spreadPoints samples each end with its center on the control", () => {
+  const points = spreadPoints({ x: 60, y: 750, width: 200, height: 8 }, 5);
+
+  assert.equal(points.length, 5);
+  assert.deepEqual(points[0], [63, 754]);
+  assert.deepEqual(points[2], [160, 754]);
+  assert.deepEqual(points[4], [257, 754]);
+});
+
+test("the default viewports cover the release desktop sizes", () => {
+  const labels = DEFAULT_LAYOUT_VIEWPORTS_PX.map(viewportLabel);
+
+  assert.deepEqual(labels, ["1024x768", "1280x800"]);
 });
 
 test("controlDisplay keeps strings and unwraps patterns", () => {

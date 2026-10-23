@@ -85,8 +85,10 @@ ever deleted.
 
 ## Layout mode
 
-`npm run trial -- layout --start` hit-tests the controls that must stay clickable at 320×800,
-320×560 and 1280×800, with the layer editor closed and open. Run it after every UI change.
+`npm run trial -- layout --start` hit-tests the controls that must stay clickable at 1024×768
+and 1280×800, with the editor closed and open, and is the mouse/keyboard release baseline.
+Run it after every UI change. Mobile stays optional and nonblocking:
+`SOE_LAYOUT_VIEWPORTS="320x800,320x560,320x320,641x560" npm run trial -- layout --start`.
 `SOE_LAYOUT_VIEWPORTS="320x800"` checks another comma-separated `WxH` list.
 
 The mode builds one fixed Kenya scene with four layers over a period, so Play, the timeline
@@ -97,15 +99,23 @@ has `"pass": false` with `hit` naming the covering element, such as the time bar
 attribution links at 320 px or the editor over the basemap credit on desktop. A missing or
 hidden required control fails the same way, as does an empty attribution bar. Units, both
 Resets and Close are only required while the editor is open, so they skip when it is closed,
-and Expand stays optional until the chip UI arrives. Every basemap link under the
-attribution control is hit-tested by its own text, and two page lines per state check that the
-page has no horizontal overflow and the attribution stays visible. The command exits 1 when any
+and Expand stays optional until the chip UI arrives. The command exits 1 when any
 required check fails, including a missing required control.
 
 The controls come from `LAYOUT_CONTROLS` in `layout.mjs`, matched by accessible role and name,
-so a new control is one appended line. The trial opens `LAYOUT_EDITOR` (Rainfall, which has
-Units and Reset) for the open half. Pure helpers (`parseViewportList`, record shaping) are
-unit-tested in `layout.test.mjs`.
+so a new control is one appended line. Card switches and Edit buttons carry the card column
+as their scroll container, while Units radios, both Resets and Close carry the editor, so the trial
+centres each one in its own container before hit-testing; a control below the fold is checked
+where scrolling would take it. The time bar, the panel footer, the attribution links and the
+Expand button are never scrolled, so an overlap with those fixed regions still fails.
+The timeline slider samples five points across its width, so a fixed editor covering one end
+fails even while the center stays clickable.
+The trial opens `LAYOUT_EDITOR` (Rainfall, which has
+Units and Reset) for the open half. Every basemap link under the
+attribution control is hit-tested by its own text, and three page lines per state check that
+the page has no horizontal overflow, the attribution stays visible and the scale bar stays
+inside the viewport. The command exits 1 when any
+required check fails, including a missing required control.
 
 Set `SOE_TRIAL_EXISTING_ONLY=1` to use local bundles without any scene POST or build. The tool
 chooses a bundle containing the requested layers for each area and requested period, preferring

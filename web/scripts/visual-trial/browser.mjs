@@ -13,6 +13,7 @@ import {
   layoutRecord,
   layoutViewports,
   requiredInState,
+  spreadPoints,
   viewportLabel,
 } from "./layout.mjs";
 import {
@@ -50,6 +51,7 @@ const BLEND_UNIT = "blend";
 const BLEND_HALVES = ["chirps_monthly", "era5land_temperature"];
 
 const ATTRIBUTION_SCOPE = ".maplibregl-ctrl-attrib";
+const SCALE_SCOPE = ".maplibregl-ctrl-scale";
 const HIT_TEXT_CHARS = 40; // Clipped element text keeps layout records to one short line.
 const BODY_TEXT_CHARS = 200; // Visible app status stays a short excerpt in setup errors.
 
@@ -243,13 +245,14 @@ export async function trialLayout(context, appUrl, spot, sceneId, options, syste
   return records;
 }
 
-async function layoutViewport(browser, appUrl, spot, sceneId, viewport, system = {}) {
+export async function layoutViewport(browser, appUrl, spot, sceneId, viewport, system = {}) {
   const {
     isolateViewport: isolate = (owner, size) => newContext(owner, size),
     warmViewport: warm = (isolated) => installCache(isolated, HTTP_CACHE_DIR),
     watchViewport: watch = (page) => watchPage(page),
     loadViewport: load = (page) => openScene(page, appUrl, sceneId, spot),
     settleViewport: settle = (page) => settledSample(page),
+    openEditor: edit = (page) => openLayoutEditor(page),
   } = system;
   const isolated = await isolate(browser, viewport);
   try {
@@ -260,12 +263,19 @@ async function layoutViewport(browser, appUrl, spot, sceneId, viewport, system =
       await load(page);
       await settle(page);
       const closed = await layoutState(page, viewport, "closed");
+      // The shortest viewport opens tall and resizes down, modelling open-then-resize.
+      if (viewport.openHeight !== undefined) {
+        await page.setViewportSize({ width: viewport.width, height: viewport.openHeight });
+      }
       try {
-        await openLayoutEditor(page);
+        await edit(page);
       } catch (error) {
         const reason = error.message.split("\n")[0];
         console.error(`layout ${viewportLabel(viewport)} editor failed to open: ${reason}`);
         return [...closed, editorOpeningRecord(viewport)];
+      }
+      if (viewport.openHeight !== undefined) {
+        await page.setViewportSize({ width: viewport.width, height: viewport.height });
       }
       const open = await layoutState(page, viewport, "open");
       return [...closed, ...open];
@@ -328,8 +338,11 @@ export async function hitTestControl(page, viewport, editor, control) {
   const required = requiredInState(control, editor);
   if (await target.count() === 0) return absentRecord(viewport, editor, control, required);
 
+  if (control.scroll) await target.evaluate(scrollCentre, control.scroll);
   const box = await target.boundingBox();
   if (!box) return absentRecord(viewport, editor, control, required);
+
+  if (control.samples !== undefined) return sampleHitTest(target, viewport, editor, control, box);
 
   const { pass, hit } = await target.evaluate(containsPoint, [centreOf(box), HIT_TEXT_CHARS]);
   return layoutRecord({
@@ -339,6 +352,35 @@ export async function hitTestControl(page, viewport, editor, control) {
     name: controlDisplay(control),
     present: true,
     pass,
+    hit,
+  });
+}
+
+// One covered endpoint fails the control even while its center stays clickable.
+async function sampleHitTest(target, viewport, editor, control, box) {
+  const name = controlDisplay(control);
+  for (const point of spreadPoints(box, control.samples)) {
+    const { pass, hit } = await target.evaluate(containsPoint, [point, HIT_TEXT_CHARS]);
+    if (!pass) {
+      return layoutRecord({
+        viewport,
+        editor,
+        role: control.role,
+        name,
+        present: true,
+        pass,
+        hit,
+      });
+    }
+  }
+  const { hit } = await target.evaluate(containsPoint, [centreOf(box), HIT_TEXT_CHARS]);
+  return layoutRecord({
+    viewport,
+    editor,
+    role: control.role,
+    name,
+    present: true,
+    pass: true,
     hit,
   });
 }
@@ -382,13 +424,26 @@ async function hitTestLink(viewport, editor, link) {
     });
   }
 
-  const { pass, hit } = await link.evaluate(containsPoint, [centreOf(box), HIT_TEXT_CHARS]);
+  // Probe the first rendered line, because a wrapped link leaves its box center empty.
+  const firstLine = await link.evaluate(firstLineCentre);
+  const { pass, hit } = await link.evaluate(containsPoint, [
+    firstLine ?? centreOf(box),
+    HIT_TEXT_CHARS,
+  ]);
   return layoutRecord({ viewport, editor, role: "link", name, present: true, pass, hit });
 }
 
-async function layoutPageChecks(page, viewport, editor) {
+function firstLineCentre(link) {
+  const first = link.getClientRects()[0];
+  if (!first) return null;
+
+  return [first.x + first.width / 2, first.y + first.height / 2];
+}
+
+export async function layoutPageChecks(page, viewport, editor) {
   const overflow = await page.evaluate(hasHorizontalOverflow);
   const attribution = await page.evaluate(seesAttribution, ATTRIBUTION_SCOPE);
+  const scale = await page.evaluate(scaleInsideViewport, SCALE_SCOPE);
 
   return [
     layoutRecord({
@@ -409,6 +464,15 @@ async function layoutPageChecks(page, viewport, editor) {
       pass: attribution,
       hit: null,
     }),
+    layoutRecord({
+      viewport,
+      editor,
+      role: "page",
+      name: "scale inside viewport",
+      present: scale !== null,
+      pass: scale ?? false,
+      hit: null,
+    }),
   ];
 }
 
@@ -421,6 +485,25 @@ function controlLocator(page, control) {
 
 function centreOf(box) {
   return [box.x + box.width / 2, box.y + box.height / 2];
+}
+
+// Scrolling only the owning container preserves fixed-region collision checks.
+function scrollCentre(control, selector) {
+  let container = control.closest(selector);
+  // An in-flow editor does not scroll itself, so the scroll goes to the cards instead.
+  while (container && container.scrollHeight <= container.clientHeight) {
+    const parent = container.parentElement;
+    container = parent === document.documentElement ? null : parent;
+  }
+  if (!container) {
+    control.scrollIntoView({ block: "center" });
+
+    return;
+  }
+  const outer = container.getBoundingClientRect();
+  const inner = control.getBoundingClientRect();
+  const middle = inner.top + inner.height / 2 - outer.top;
+  container.scrollTop += middle - container.clientHeight / 2;
 }
 
 function absentRecord(viewport, editor, control, required) {
@@ -966,4 +1049,13 @@ function seesAttribution(scope) {
 
   const box = bar.getBoundingClientRect();
   return box.width > 0 && box.height > 0 && box.bottom > 0 && box.top < window.innerHeight;
+}
+
+function scaleInsideViewport(scope) {
+  const scale = document.querySelector(scope);
+  if (!scale) return null;
+  const box = scale.getBoundingClientRect();
+
+  return box.x >= 0 && box.y >= 0 && box.right <= window.innerWidth
+    && box.bottom <= window.innerHeight;
 }

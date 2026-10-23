@@ -4,10 +4,12 @@ const VIEWPORT_PATTERN = /^(\d+)x(\d+)$/;
 /** Caps accepted viewport dimensions far above any real screen so typos fail fast. */
 const MAX_VIEWPORT_PX = 4096;
 
-/** Lists the default layout viewports, with narrow phones first so they fail first. */
+/** Samples each slider endpoint, inset so rounding cannot miss the control itself. */
+const SLIDER_EDGE_INSET_PX = 3;
+
+/** Lists the desktop release viewports, with the minimum supported size first. */
 export const DEFAULT_LAYOUT_VIEWPORTS_PX = [
-  { width: 320, height: 800 },
-  { width: 320, height: 560 },
+  { width: 1024, height: 768 },
   { width: 1280, height: 800 },
 ];
 
@@ -15,35 +17,55 @@ export const DEFAULT_LAYOUT_VIEWPORTS_PX = [
  * Selects the editor the trial opens. Rainfall configures Units and Reset, so it stands in
  * for every editor.
  */
-export const LAYOUT_EDITOR = { role: "button", name: /^Edit Rainfall(?: ·|$)/ };
+export const LAYOUT_EDITOR = {
+  role: "button",
+  name: /^Edit Rainfall(?: ·|$)/,
+  scroll: "#scene-column .cards",
+};
 
 /**
  * Lists the controls that must stay clickable, matched by accessible role and name.
  * Plain names match a substring while the layer entries anchor on the draw
  * separator, because the blend card shares the Rainfall prefix. The slider
- * stays scoped to the time bar, because editors add their own sliders.
+ * stays scoped to the time bar and samples five points across it, because a fixed
+ * editor can cover one end while the center stays clickable. Editors add their own
+ * sliders, so the scope matters twice.
  * Editor-only entries carry when "open" so a closed editor skips them instead
- * of failing, while Expand stays optional until the chip UI arrives.
+ * of failing, while Expand stays optional until the chip UI arrives. Entries
+ * with a scroll selector live in that scrollable container, so the trial
+ * centres them there before hit-testing; fixed regions are never scrolled,
+ * so an overlap with the time bar, the panel footer or the editor still fails.
  */
 export const LAYOUT_CONTROLS = [
   { role: "button", name: "Play" },
-  { role: "slider", name: "", scope: "#time-bar" },
-  { role: "switch", name: /^Show Terrain(?: ·|$)/ },
-  { role: "switch", name: /^Show Rainfall(?: ·|$)/ },
-  { role: "switch", name: /^Show Temperature(?: ·|$)/ },
-  { role: "switch", name: /^Show Land cover(?: ·|$)/ },
-  { role: "switch", name: "Show Area outline" },
-  { role: "button", name: /^Edit Terrain(?: ·|$)/ },
+  { role: "slider", name: "", scope: "#time-bar", samples: 5 },
+  { role: "switch", name: /^Show Terrain(?: ·|$)/, scroll: "#scene-column .cards" },
+  { role: "switch", name: /^Show Rainfall(?: ·|$)/, scroll: "#scene-column .cards" },
+  { role: "switch", name: /^Show Temperature(?: ·|$)/, scroll: "#scene-column .cards" },
+  { role: "switch", name: /^Show Land cover(?: ·|$)/, scroll: "#scene-column .cards" },
+  { role: "switch", name: "Show Area outline", scroll: "#scene-column .cards" },
+  { role: "button", name: /^Edit Terrain(?: ·|$)/, scroll: "#scene-column .cards" },
   LAYOUT_EDITOR,
-  { role: "button", name: /^Edit Temperature(?: ·|$)/ },
-  { role: "button", name: /^Edit Land cover(?: ·|$)/ },
-  { role: "radio", name: "mm/month", when: "open" },
-  { role: "radio", name: "in/month", when: "open" },
-  { role: "button", name: "Reset layer", when: "open" },
-  { role: "button", name: "Reset to this area's range", when: "open" },
-  { role: "button", name: "Close", when: "open" },
+  { role: "button", name: /^Edit Temperature(?: ·|$)/, scroll: "#scene-column .cards" },
+  { role: "button", name: /^Edit Land cover(?: ·|$)/, scroll: "#scene-column .cards" },
+  { role: "radio", name: "mm/month", when: "open", scroll: ".layer-editor" },
+  { role: "radio", name: "in/month", when: "open", scroll: ".layer-editor" },
+  { role: "button", name: "Reset layer", when: "open", scroll: ".layer-editor" },
+  { role: "button", name: "Reset to this area's range", when: "open", scroll: ".layer-editor" },
+  { role: "button", name: "Close", when: "open", scroll: ".layer-editor" },
   { role: "button", name: "Expand", optional: true },
 ];
+
+/** Spreads count sample points across a control box for endpoint hit-testing. */
+export function spreadPoints(box, count) {
+  const span = box.width - 2 * SLIDER_EDGE_INSET_PX;
+  return Array.from({ length: count }, (_, index) => {
+    const fraction = index / (count - 1);
+    const x = box.x + SLIDER_EDGE_INSET_PX + span * fraction;
+
+    return [x, box.y + box.height / 2];
+  });
+}
 
 /**
  * Parses a comma-separated viewport list such as "320x800,1280x800".

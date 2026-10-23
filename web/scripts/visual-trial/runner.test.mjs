@@ -11,6 +11,8 @@ import { runTrial } from "../visual-trial.mjs";
 import {
   hitTestAttribution,
   hitTestControl,
+  layoutPageChecks,
+  layoutViewport,
   openLayoutEditor,
   preflightWebGL,
   trialLayout,
@@ -289,6 +291,112 @@ test("a covering element fails the hit-test with its selector", async () => {
   assert.equal(record.hit, "a.time-bar \"OpenFreeMap\"");
 });
 
+test("a card control scrolls its container before the hit-test", async () => {
+  const container = {
+    clientHeight: 136,
+    scrollTop: 0,
+    getBoundingClientRect: () => ({ top: 453 }),
+  };
+  const element = {
+    closest: (selector) => selector === "#scene-column .cards" ? container : null,
+    getBoundingClientRect: () => ({ top: 644, height: 18 }),
+    scrollIntoView: () => { throw new Error("must not scroll the page"); },
+    contains: (found) => found.tagName === "INPUT",
+  };
+  const seen = [];
+  const control = LAYOUT_CONTROLS.find((entry) =>
+    controlDisplay(entry).startsWith("^Show Terrain"),
+  );
+  const record = await hitTestControl(
+    pageWithScroll(element, seen),
+    VIEWPORT_PX,
+    "closed",
+    control,
+  );
+
+  assert.equal(container.scrollTop, 644 + 18 / 2 - 453 - 136 / 2);
+  assert.equal(record.pass, true);
+  assert.deepEqual(seen, ["#scene-column .cards"]);
+});
+
+test("an in-flow editor control scrolls the cards instead", async () => {
+  const cards = {
+    clientHeight: 32,
+    scrollTop: 0,
+    scrollHeight: 600,
+    getBoundingClientRect: () => ({ top: 155 }),
+  };
+  const editor = {
+    clientHeight: 500,
+    scrollHeight: 500,
+    parentElement: cards,
+    getBoundingClientRect: () => ({ top: 155 }),
+  };
+  const element = {
+    closest: () => editor,
+    getBoundingClientRect: () => ({ top: 400, height: 21 }),
+    scrollIntoView: () => { throw new Error("must not scroll the page"); },
+    contains: (found) => found.tagName === "INPUT",
+  };
+  const seen = [];
+  const control = LAYOUT_CONTROLS.find((entry) => entry.name === "mm/month");
+  const record = await hitTestControl(
+    pageWithScroll(element, seen, { documentElement: {} }),
+    VIEWPORT_PX,
+    "open",
+    control,
+  );
+
+  assert.equal(cards.scrollTop, 400 + 21 / 2 - 155 - 32 / 2);
+  assert.equal(record.pass, true);
+  assert.deepEqual(seen, [".layer-editor"]);
+});
+
+test("a fixed control hit-tests without scrolling", async () => {
+  const seen = [];
+  const record = await hitTestControl(
+    pageWithScroll({ contains: (found) => found.tagName === "INPUT" }, seen),
+    VIEWPORT_PX,
+    "closed",
+    controlNamed("Play"),
+  );
+
+  assert.equal(record.pass, true);
+  assert.deepEqual(seen, []);
+});
+
+test("a sampled slider passes when every point hits itself", async () => {
+  const seen = [];
+  const slider = LAYOUT_CONTROLS.find((control) => control.role === "slider");
+  const record = await hitTestControl(
+    pageSampling(["input", "input", "input", "input", "input", "input"], seen),
+    VIEWPORT_PX,
+    "open",
+    slider,
+  );
+
+  assert.equal(record.present, true);
+  assert.equal(record.pass, true);
+  assert.equal(record.hit, "input \"input\"");
+  assert.deepEqual(seen, []);
+});
+
+test("a sampled slider fails on its covered end with the interceptor", async () => {
+  const seen = [];
+  const slider = LAYOUT_CONTROLS.find((control) => control.role === "slider");
+  const record = await hitTestControl(
+    pageSampling(["input", "input", "input", "input", "aside"], seen),
+    VIEWPORT_PX,
+    "open",
+    slider,
+  );
+
+  assert.equal(record.present, true);
+  assert.equal(record.pass, false);
+  assert.equal(record.hit, "aside.layer-editor \"Cover\"");
+  assert.deepEqual(seen, []);
+});
+
 test("a missing Play fails the trial", async () => {
   const record = await hitTestControl(missingPage(), VIEWPORT_PX, "closed", controlNamed("Play"));
 
@@ -348,6 +456,57 @@ test("opening the editor clicks the first Edit match and waits for Close", async
   assert.deepEqual(calls, ["click", "wait"]);
 });
 
+test("the scale check fails outside the viewport and passes inside", async () => {
+  const inside = await layoutPageChecks(
+    scalePage({ x: 223, y: 8, w: 89, h: 22 }),
+    VIEWPORT_PX,
+    "closed",
+  );
+  const outside = await layoutPageChecks(
+    scalePage({ x: 226, y: -44, w: 86, h: 22 }),
+    VIEWPORT_PX,
+    "closed",
+  );
+  const missing = await layoutPageChecks(scalePage(null), VIEWPORT_PX, "closed");
+
+  assert.equal(inside.at(-1).name, "scale inside viewport");
+  assert.equal(inside.at(-1).pass, true);
+  assert.equal(outside.at(-1).pass, false);
+  assert.equal(missing.at(-1).present, false);
+  assert.equal(missing.at(-1).pass, false);
+});
+
+test("a short viewport opens tall and resizes down for its open checks", async () => {
+  const sizes = [];
+  const opened = [];
+  const viewport = { width: 320, height: 320, openHeight: 560 };
+  const system = {
+    isolateViewport: async () => ({
+      newPage: async () => resizePage(sizes),
+      close: async () => {},
+    }),
+    warmViewport: async () => {},
+    watchViewport: async () => ({ failures: [], messages: [] }),
+    loadViewport: async () => {},
+    settleViewport: async () => {},
+    openEditor: async () => { opened.push("editor"); },
+  };
+
+  const records = await layoutViewport(
+    {},
+    "http://example.test",
+    { name: "Layout" },
+    "id",
+    viewport,
+    system,
+  );
+
+  assert.deepEqual(sizes, [{ width: 320, height: 560 }, { width: 320, height: 320 }]);
+  assert.deepEqual(opened, ["editor"]);
+  assert.ok(records.length > 0);
+  assert.ok(records.every((record) => record.viewport === "320x320"));
+});
+
 test("a hidden attribution link fails the record", async () => {
   const link = { boundingBox: async () => null, textContent: async () => "© OpenStreetMap" };
   const [record] = await hitTestAttribution(attributionPage([link]), VIEWPORT_PX, "closed");
@@ -358,12 +517,57 @@ test("a hidden attribution link fails the record", async () => {
   assert.equal(record.name, "© OpenStreetMap");
 });
 
+test("a wrapped link probes its first rendered line", async () => {
+  const link = wrappedLink("© OpenMapTiles", true);
+  const [record] = await hitTestAttribution(attributionPage([link]), VIEWPORT_PX, "closed");
+
+  assert.equal(record.present, true);
+  assert.equal(record.pass, true);
+  assert.equal(record.hit, "a \"© OpenMapTiles\"");
+});
+
+test("a covered first line fails the link with its interceptor", async () => {
+  const link = wrappedLink("© OpenMapTiles", false);
+  const [record] = await hitTestAttribution(attributionPage([link]), VIEWPORT_PX, "open");
+
+  assert.equal(record.present, true);
+  assert.equal(record.pass, false);
+  assert.equal(record.hit, "div.maplibregl-ctrl-attrib-inner \"Terrain\"");
+});
+
 test("an empty attribution bar fails the trial", async () => {
   const [record] = await hitTestAttribution(attributionPage([]), VIEWPORT_PX, "open");
 
   assert.equal(record.present, false);
   assert.equal(record.pass, false);
 });
+
+// A link wrapped across two lines renders nothing at its box center.
+function wrappedLink(name, reachable) {
+  const hit = reachable
+    ? { tagName: "A", id: "", classList: [], textContent: name }
+    : {
+      tagName: "DIV",
+      id: "",
+      classList: ["maplibregl-ctrl-attrib-inner"],
+      textContent: "Terrain",
+    };
+  return {
+    boundingBox: async () => ({ x: 90, y: 520, width: 120, height: 28 }),
+    textContent: async () => name,
+    evaluate: async (source, args) => runInNewContext(`(${source})(control, args)`, {
+      control: {
+        getClientRects: () => [
+          { x: 90, y: 520, width: 100, height: 14 },
+          { x: 5, y: 534, width: 20, height: 14 },
+        ],
+        contains: () => reachable,
+      },
+      args,
+      document: { elementFromPoint: () => hit },
+    }),
+  };
+}
 
 const VIEWPORT_PX = { width: 320, height: 800 };
 
@@ -582,6 +786,98 @@ function loadingViewportState() {
     layersReady: false,
     mapErrors: [],
     bodyText: "loading",
+  };
+}
+
+// Serves each sampled point the next tag, so endpoint coverage is testable.
+function pageSampling(tags, seen) {
+  const queue = [...tags];
+  const byRole = () => ({
+    first: () => ({
+      count: async () => 1,
+      boundingBox: async () => ({ x: 60, y: 750, width: 200, height: 8 }),
+      evaluate: async (source, args) => {
+        if (typeof args === "string") {
+          seen.push(args);
+
+          return undefined;
+        }
+        const tag = queue.shift() ?? "input";
+        const hit = {
+          tagName: tag.toUpperCase(),
+          id: "",
+          classList: tag === "input" ? [] : ["layer-editor"],
+          textContent: tag === "input" ? "input" : "Cover",
+        };
+        return runInNewContext(`(${source})(control, args)`, {
+          control: { contains: (found) => found.tagName === "INPUT" },
+          args,
+          document: { elementFromPoint: () => hit },
+        });
+      },
+    }),
+  });
+  return { getByRole: byRole, locator: () => ({ getByRole: byRole }) };
+}
+
+function pageWithScroll(element, seen, sandboxDocument = undefined) {
+  const hit = { tagName: "INPUT", id: "", classList: [], textContent: "" };
+  const byRole = () => ({
+    first: () => ({
+      count: async () => 1,
+      boundingBox: async () => ({ x: 0, y: 600, width: 20, height: 10 }),
+      evaluate: async (source, args) => {
+        if (typeof args === "string") {
+          seen.push(args);
+          return runInNewContext(`(${source})(control, args)`, {
+            control: element,
+            args,
+            document: sandboxDocument,
+          });
+        }
+        return runInNewContext(`(${source})(control, args)`, {
+          control: { contains: (found) => element.contains(found) },
+          args,
+          document: { elementFromPoint: () => hit },
+        });
+      },
+    }),
+  });
+  return { getByRole: byRole, locator: () => ({ getByRole: byRole }) };
+}
+
+// Runs the real page probes against a fake scale box in a fixed viewport.
+function scalePage(box) {
+  return {
+    evaluate: async (source, args) => runInNewContext(`(${source})(args)`, {
+      args,
+      document: {
+        querySelector: () => (box === null ? null : {
+          getBoundingClientRect: () => ({
+            x: box.x,
+            y: box.y,
+            width: box.w,
+            height: box.h,
+            right: box.x + box.w,
+            bottom: box.y + box.h,
+          }),
+        }),
+        documentElement: { scrollWidth: 320 },
+      },
+      window: { innerWidth: 320, innerHeight: 800 },
+    }),
+  };
+}
+
+// Records resizes while every control stays absent, isolating the resize wiring.
+function resizePage(sizes) {
+  const missing = { count: async () => 0 };
+  return {
+    setViewportSize: async (size) => { sizes.push(size); },
+    close: async () => {},
+    getByRole: () => ({ first: () => missing }),
+    locator: () => ({ count: async () => 0, getByRole: () => ({ first: () => missing }) }),
+    evaluate: async (probe) => probe.name === "scaleInsideViewport",
   };
 }
 
