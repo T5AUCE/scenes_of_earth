@@ -73,6 +73,7 @@ class SyntheticSource:
         res: float,
         on_block: Callable[[], None] = lambda: None,
     ) -> tuple[np.ndarray, Affine]:
+        """Fractional float64 elevation on bounds at res with its transform."""
         west, south, east, north = bounds
         width, height = round((east - west) / res), round((north - south) / res)
         transform = from_origin(west, north, res, res)
@@ -82,7 +83,7 @@ class SyntheticSource:
         elevation = 1000 + 800 * np.sin(lon * 20) * np.cos(lat * 20)
         for _ in range(terrain_block_count(bounds)):
             on_block()
-        return elevation.astype("int16"), transform
+        return elevation.astype("float64"), transform
 
     def land_cover(
         self,

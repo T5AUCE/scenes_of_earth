@@ -16,7 +16,7 @@ from rasterio.errors import NotGeoreferencedWarning
 from rasterio.transform import Affine, from_origin
 from rasterio.warp import reproject
 
-from ..areas import WORLD_WIDTH_DEG
+from ..areas import AreaError, WORLD_WIDTH_DEG
 from .datasets import StaticDataset
 from .grid import (
     MAX_STATIC_DIVISIONS,
@@ -34,8 +34,6 @@ warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
 GLO30_RES_DEG = 1 / 3600
 GLO90_RES_DEG = 1 / 1200
 NATIVE_RES_TOLERANCE = 1e-9  # relative tolerance when choosing the source product
-
-ELEVATION_FILL = -32768  # the int16 minimum, below any real ground
 
 LONGITUDE_DEGREE_AT_EQUATOR_M = 111_320
 LATITUDE_DEGREE_M = 110_574
@@ -64,7 +62,6 @@ ELEVATION_LOW_PERCENTILE = 2
 ELEVATION_HIGH_PERCENTILE = 98
 MEDIAN_PERCENTILE = 50
 STEEP_PERCENTILE = 90
-STATS_DECIMALS = 2
 
 GLO30_URL = "https://copernicus-dem-30m.s3.amazonaws.com/{n}/{n}.tif"
 GLO90_URL = "https://copernicus-dem-90m.s3.amazonaws.com/{n}/{n}.tif"
@@ -174,6 +171,7 @@ def with_margin(bounds: Bbox, res: float) -> Bbox:
 
 def slope_degrees(elevation: np.ndarray, res_deg: float, lat_top: float) -> np.ndarray:
     """Return Horn slopes for a north-up elevation grid with degree-sized cells."""
+    # NaNs propagate through the stencil so a gap never becomes a cliff.
     elevation = np.pad(elevation.astype("float64"), 1, mode="edge")
 
     height = elevation.shape[0] - 2
@@ -231,8 +229,8 @@ def terrain_by_blocks(
 ) -> tuple[np.ndarray, Affine]:
     """Terrain on bounds, read in parallel in blocks of whole degrees.
 
-    read_block(block_bounds, res) returns an array, or None for a block without terrain (left at 0).
-    on_block() is called in the calling thread each time a block has been read.
+    read_block returns float64 with NaN where the source has no data, or None for
+    a block without terrain (left missing). on_block runs after each block read.
     """
     west, south, east, north = bounds
     height, width = round((north - south) / res), round((east - west) / res)
@@ -244,7 +242,7 @@ def terrain_by_blocks(
             on_block()
     parts = [future.result() for future in futures]
 
-    elevation = np.zeros((height, width), "int16")
+    elevation = np.full((height, width), np.nan, "float64")
     for (x0, y0, _, y1), part in zip(blocks, parts):
         if part is not None:
             row, col = round((north - y1) / res), round((x0 - west) / res)
@@ -283,15 +281,15 @@ class CopernicusDemReader:
         res: float,
         on_block: Callable[[], None] = lambda: None,
     ) -> tuple[np.ndarray, Affine]:
-        """Elevation (int16) on bounds at res; ocean (no tile) is 0. Returns (array, transform).
+        """Float64 elevation on bounds at res, NaN where no tile covers the cell.
 
-        on_block() is called each time one of terrain_block_count(bounds) blocks has been read.
+        on_block runs after each of terrain_block_count(bounds) blocks.
         """
         return terrain_by_blocks(bounds, res, _warp_block, on_block)
 
 
 def _warp_block(bounds: Bbox, res: float) -> np.ndarray | None:
-    """One block: elevation area-averaged onto its grid, or None if no tile exists there."""
+    """One block of float64 elevation with NaN for gaps, or None with no tile."""
     product = terrain_product(res)
     tiles = placed_terrain_tiles(with_margin(bounds, res), product)
     if not tiles:
@@ -322,11 +320,13 @@ def _mosaic_xml(tiles: list[PlacedTile], bounds: Bbox, product: str) -> str:
     sources = "".join(
         _tile_source_xml(tile, left, top, pixel_width, pixel_height) for tile in tiles
     )
+    # Gaps have no tile, so they stay missing instead of becoming zero.
     return (
         f'<VRTDataset rasterXSize="{width}" rasterYSize="{height}">'
         "<SRS>EPSG:4326</SRS>"
         f"<GeoTransform>{left}, {pixel_width}, 0, {top}, 0, {-pixel_height}</GeoTransform>"
-        f'<VRTRasterBand dataType="Float32" band="1">{sources}</VRTRasterBand>'
+        '<VRTRasterBand dataType="Float32" band="1"><NoDataValue>nan</NoDataValue>'
+        f"{sources}</VRTRasterBand>"
         "</VRTDataset>"
     )
 
@@ -372,27 +372,28 @@ def _tile_source_xml(
     pixel_width: float,
     pixel_height: float,
 ) -> str:
-    """VRT SimpleSource that draws one tile at its footprint on the canvas."""
+    """VRT ComplexSource that draws one tile at its footprint on the canvas."""
     tile_px = TERRAIN_PRODUCTS[tile.product].tile_px
     narrow = _is_narrow_tile(tile)
     width_px = round(tile_px / NARROW_PIXEL_WIDTH_RATIO) if narrow else tile_px
     url = "/vsicurl/" + TERRAIN_PRODUCTS[tile.product].url.format(n=tile.name)
     column = (tile.lon - 0.5 / width_px - left) / pixel_width
     row = (top - (tile.lat + 1 + 0.5 / tile_px)) / pixel_height
+    # SimpleSource ignores the source mask so masked heights would leak into the average.
     return (
-        f'<SimpleSource><SourceFilename relativeToVRT="0">{url}</SourceFilename>'
+        f'<ComplexSource><SourceFilename relativeToVRT="0">{url}</SourceFilename>'
         "<SourceBand>1</SourceBand>"
         f'<SrcRect xOff="0" yOff="0" xSize="{width_px}" ySize="{tile_px}"/>'
         f'<DstRect xOff="{column}" yOff="{row}" xSize="{1 / pixel_width}" '
-        f'ySize="{1 / pixel_height}"/></SimpleSource>'
+        f'ySize="{1 / pixel_height}"/><UseMaskBand>true</UseMaskBand></ComplexSource>'
     )
 
 
 def _average_onto_grid(mosaic: str, bounds: Bbox, res: float) -> np.ndarray:
-    """Area-average the mosaic VRT onto the output grid of bounds."""
+    """Area-average the mosaic VRT onto the output grid, keeping gaps as NaN."""
     west, south, east, north = bounds
     height, width = round((north - south) / res), round((east - west) / res)
-    elevation = np.zeros((height, width), "float32")
+    elevation = np.full((height, width), np.nan, "float64")
     with rasterio.Env(**GDAL_OPTS), rasterio.open(mosaic) as source:
         reproject(
             rasterio.band(source, 1),
@@ -400,8 +401,10 @@ def _average_onto_grid(mosaic: str, bounds: Bbox, res: float) -> np.ndarray:
             dst_transform=from_origin(west, north, res, res),
             dst_crs="EPSG:4326",
             resampling=Resampling.average,
+            src_nodata=np.nan,
+            dst_nodata=np.nan,
         )
-    return np.rint(elevation).clip(-32768, 32767).astype("int16")
+    return elevation
 
 
 class TerrainDataset(StaticDataset):
@@ -430,7 +433,7 @@ class TerrainDataset(StaticDataset):
         res: float,
         on_block: Callable[[], None] | None = None,
     ) -> tuple[dict[str, np.ndarray], Affine]:
-        """Return int16 elevation over bbox at cell size `res`."""
+        """Return float64 elevation over bbox at cell size `res`, NaN where missing."""
         if on_block is None:
             elevation, transform = self.backend.terrain(tuple(bbox), res)
         else:
@@ -443,14 +446,26 @@ class TerrainDataset(StaticDataset):
         mask: np.ndarray,
         transform: Affine,
     ) -> dict[str, float]:
-        """Return in-mask elevation and slope statistics that seed the contour ladder."""
-        inside = mask.astype(bool)
+        """Return unrounded in-mask elevation and slope statistics for the ladder."""
+        # Only mask 1 carries weight, so the ring never enters the statistics.
+        inside = mask == 1
         res_deg = abs(transform.a)
-        heights = arrays["elevation"][inside]
+        centres = arrays["elevation"][inside]
+        heights = centres[np.isfinite(centres)]
+        if heights.size == 0:
+            raise AreaError("Terrain has no valid elevation inside the area")
         slopes = slope_degrees(arrays["elevation"], res_deg, transform.f)[inside]
-
+        finite_slopes = slopes[np.isfinite(slopes) & np.isfinite(centres)]
+        if finite_slopes.size == 0:
+            # No complete stencil exists, so keep a legacy spacing hint, not flatness.
+            median_slope = 0.0
+            steep_slope = 0.0
+        else:
+            median_slope, steep_slope = np.percentile(
+                finite_slopes,
+                [MEDIAN_PERCENTILE, STEEP_PERCENTILE],
+            )
         low, high = np.percentile(heights, [ELEVATION_LOW_PERCENTILE, ELEVATION_HIGH_PERCENTILE])
-        median_slope, steep_slope = np.percentile(slopes, [MEDIAN_PERCENTILE, STEEP_PERCENTILE])
         centre_latitude = transform.f + arrays["elevation"].shape[0] * transform.e / 2
         cell_m = res_deg * LONGITUDE_DEGREE_AT_EQUATOR_M * math.cos(math.radians(centre_latitude))
         stats = {
@@ -463,7 +478,7 @@ class TerrainDataset(StaticDataset):
             "slope_p90_deg": steep_slope,
             "cell_m": cell_m,
         }
-        return {key: round(float(value), STATS_DECIMALS) for key, value in stats.items()}
+        return {key: float(value) for key, value in stats.items()}
 
     def _tiles(self, bbox: Bbox) -> list[tuple[str, str]]:
         return terrain_tiles(bbox, terrain_product(terrain_res(bbox)))

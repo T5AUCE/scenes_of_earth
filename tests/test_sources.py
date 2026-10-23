@@ -13,6 +13,7 @@ import rasterio
 import zarr
 from rasterio.transform import Affine, from_origin
 
+from soe.areas import AreaError
 from soe.sources import (
     CHIRPS_GRID,
     ERA5_GRID,
@@ -614,7 +615,8 @@ def test_terrain_blocks_equal_one_read():
             lambda block, block_res: synthetic.terrain(block, block_res)[0],
         )
 
-        assert np.abs(whole.astype(int) - blocks).max() <= 1  # float rounding at block edges only
+        assert whole.dtype == np.float64 and blocks.dtype == np.float64
+        assert np.nanmax(np.abs(whole - blocks)) <= 1e-9
         assert transform.c == bounds[0] and transform.f == bounds[3]
 
 
@@ -709,7 +711,7 @@ def test_terrain_read_returns_elevation_only():
     arrays, _ = TERRAIN.read(NAIROBI.bounds, 0.01)
 
     assert arrays.keys() == {"elevation"}
-    assert arrays["elevation"].dtype == np.int16
+    assert arrays["elevation"].dtype == np.float64
 
 
 def test_slope_of_a_plane_with_a_ten_percent_grade():
@@ -727,7 +729,7 @@ def test_slope_of_flat_ground_is_zero():
 
 
 def test_terrain_elevation_statistics_exclude_values_outside_the_mask():
-    elevation = np.arange(25, dtype="int16").reshape(5, 5)
+    elevation = np.arange(25, dtype="float64").reshape(5, 5)
     mask = np.zeros((5, 5), dtype="uint8")
     mask[1:-1, 1:-1] = 1
     elevation[mask == 0] = 10_000
@@ -736,8 +738,108 @@ def test_terrain_elevation_statistics_exclude_values_outside_the_mask():
 
     assert summary["min"] == 6 and summary["max"] == 18
     assert summary["mean"] == 12
-    assert summary["p2"] == 6.16 and summary["p98"] == 17.84
+    assert summary["p2"] == pytest.approx(6.16) and summary["p98"] == pytest.approx(17.84)
     assert summary["cell_m"] == pytest.approx(111_320 * np.cos(np.radians(2.5)), abs=0.01)
+
+
+def test_terrain_summary_keeps_zero_and_excludes_nan_and_ring():
+    elevation = np.full((5, 5), 10.0)
+    elevation[2, 2] = 0.0
+    elevation[1, 1] = np.nan
+    elevation[0, 0] = 5_000.0
+    mask = np.zeros((5, 5), dtype="uint8")
+    mask[1:-1, 1:-1] = 1
+    mask[0, 0] = 2
+
+    summary = TERRAIN.summary({"elevation": elevation}, mask, from_origin(0, 5, 1, 1))
+
+    assert summary["min"] == 0.0
+    assert summary["mean"] == pytest.approx((10.0 * 7 + 0.0) / 8)
+    assert summary["max"] == 10.0
+
+
+def test_terrain_summary_mean_keeps_full_precision():
+    elevation = np.full((3, 3), 10.123456789)
+    mask = np.ones((3, 3), dtype="uint8")
+
+    summary = TERRAIN.summary({"elevation": elevation}, mask, from_origin(0, 3, 1, 1))
+
+    assert summary["mean"] == pytest.approx(10.123456789, abs=1e-9)
+    assert round(summary["mean"], 2) != summary["mean"]
+
+
+def test_terrain_summary_without_a_complete_stencil_falls_back_to_zero_hints():
+    elevation = np.full((5, 5), np.nan)
+    elevation[2, 2] = 100.0
+    mask = np.ones((5, 5), dtype="uint8")
+
+    summary = TERRAIN.summary({"elevation": elevation}, mask, from_origin(0, 5, 0.01, 0.01))
+
+    assert summary["slope_p50_deg"] == 0.0
+    assert summary["slope_p90_deg"] == 0.0
+
+
+def test_terrain_summary_slope_hints_measure_a_complete_stencil():
+    res_deg = 0.01
+    rise_per_row_m = 0.1 * res_deg * LATITUDE_DEGREE_M
+    elevation = np.tile(np.arange(8)[:, None] * rise_per_row_m, (1, 8))
+    mask = np.ones((8, 8), dtype="uint8")
+
+    summary = TERRAIN.summary(
+        {"elevation": elevation},
+        mask,
+        from_origin(0, 8, res_deg, res_deg),
+    )
+
+    assert summary["slope_p50_deg"] == pytest.approx(5.71, abs=0.05)
+    assert summary["slope_p90_deg"] == pytest.approx(5.71, abs=0.05)
+
+
+def test_terrain_summary_slope_hints_exclude_missing_centres():
+    res_deg = 0.01
+    rise_per_row_m = 0.1 * res_deg * LATITUDE_DEGREE_M
+    elevation = np.full((5, 5), np.nan)
+    for row in range(3):
+        elevation[row, :3] = 100.0 + row * rise_per_row_m
+    mask = np.ones((5, 5), dtype="uint8")
+
+    valid_summary = TERRAIN.summary(
+        {"elevation": elevation},
+        mask,
+        from_origin(0, 5, res_deg, res_deg),
+    )
+
+    assert valid_summary["slope_p50_deg"] > 0.0
+    assert valid_summary["slope_p90_deg"] > 0.0
+
+    elevation[1, 1] = np.nan
+    missing_summary = TERRAIN.summary(
+        {"elevation": elevation},
+        mask,
+        from_origin(0, 5, res_deg, res_deg),
+    )
+
+    assert missing_summary["slope_p50_deg"] == 0.0
+    assert missing_summary["slope_p90_deg"] == 0.0
+
+
+def test_terrain_summary_without_valid_heights_is_refused():
+    elevation = np.full((3, 3), np.nan)
+    mask = np.ones((3, 3), dtype="uint8")
+
+    with pytest.raises(AreaError, match="no valid elevation"):
+        TERRAIN.summary({"elevation": elevation}, mask, from_origin(0, 3, 1, 1))
+
+
+def test_slope_with_a_nan_neighbour_stays_nan_without_a_cliff():
+    elevation = np.full((5, 5), 100.0)
+    elevation[2, 2] = np.nan
+
+    slopes = slope_degrees(elevation, 0.01, 10.0)
+
+    assert np.isnan(slopes[1, 2])
+    assert slopes[0, 0] == 0
+    assert np.nanmax(slopes) < 5
 
 
 def test_terrain_layer_names_its_tiles_from_the_environment(monkeypatch):
@@ -766,7 +868,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
 
 @pytest.fixture
 def fake_terrain(tmp_path, monkeypatch):
-    """Serve small GLO-90-shaped tiles from localhost; add_tile(lon, lat) creates each existing one.
+    """Serve small GLO-90-shaped tiles from localhost; add_tile creates each existing one.
 
     Returns (add_tile, tiles) where tiles maps (lon, lat) to its pixel values. The tile index lists
     exactly the added tiles.
@@ -787,13 +889,21 @@ def fake_terrain(tmp_path, monkeypatch):
     tiles = {}
     random = np.random.default_rng(1)
 
-    def add_tile(lon: int, lat: int) -> None:
-        width = NARROW_TILE_PX if abs(lat + 0.5) >= 50 else TILE_PX
-        values = random.integers(0, 3000, (TILE_PX, width)).astype("float32")
-        # Random pixels would exaggerate the stretch of the narrow tiles.
-        if width == NARROW_TILE_PX:
-            ramp = np.add.outer(np.arange(TILE_PX) * 5.0, np.arange(width) * 7.0)
-            values = ramp.astype("float32")
+    def add_tile(
+        lon: int,
+        lat: int,
+        values: np.ndarray | None = None,
+        nodata: float = float("nan"),
+    ) -> None:
+        if values is None:
+            width = NARROW_TILE_PX if abs(lat + 0.5) >= 50 else TILE_PX
+            values = random.integers(0, 3000, (TILE_PX, width)).astype("float32")
+            # Random pixels would exaggerate the stretch of the narrow tiles.
+            if width == NARROW_TILE_PX:
+                ramp = np.add.outer(np.arange(TILE_PX) * 5.0, np.arange(width) * 7.0)
+                values = ramp.astype("float32")
+        else:
+            width = values.shape[1]
         wrapped_lon = (lon + 180) % 360 - 180
         profile = {
             "driver": "GTiff",
@@ -801,6 +911,7 @@ def fake_terrain(tmp_path, monkeypatch):
             "height": TILE_PX,
             "count": 1,
             "dtype": "float32",
+            "nodata": nodata,
             "crs": "EPSG:4326",
             # Copernicus tiles have pixel centres on whole degrees, so the edge is half a pixel out.
             "transform": Affine(
@@ -826,19 +937,25 @@ def area_mean(
     tiles: dict[tuple[int, int], np.ndarray],
     bounds: tuple[float, float, float, float],
 ) -> np.ndarray:
-    """Exact area-weighted mean of the tile pixels in every cell of bounds; no tile counts as 0."""
+    """Exact area-weighted mean of the tile pixels in each cell, NaN where uncovered."""
     west, south, east, north = bounds
     x_out = west + np.arange(round((east - west) / CELL_DEG) + 1) * CELL_DEG
     y_out = north - np.arange(round((north - south) / CELL_DEG) + 1) * CELL_DEG
     total = np.zeros((len(y_out) - 1, len(x_out) - 1))
+    valid = np.zeros((len(y_out) - 1, len(x_out) - 1))
     for (lon, lat), values in tiles.items():
         height, width = values.shape
         x_in = lon - 0.5 / width + np.arange(width + 1) / width
         y_in = lat + 1 + 0.5 / height - np.arange(height + 1) / height
         weights_x = overlap_lengths(x_out, x_in)
         weights_y = overlap_lengths(-y_out, -y_in)
-        total += weights_y @ values @ weights_x.T
-    return total / CELL_DEG**2
+        finite = np.isfinite(values)
+        total += weights_y @ np.where(finite, values, 0.0) @ weights_x.T
+        valid += weights_y @ finite.astype("float64") @ weights_x.T
+    mean = np.full(total.shape, np.nan)
+    covered = valid > 0
+    mean[covered] = total[covered] / valid[covered]
+    return mean
 
 
 def overlap_lengths(out_edges: np.ndarray, in_edges: np.ndarray) -> np.ndarray:
@@ -855,10 +972,29 @@ def test_terrain_across_180_with_a_missing_tile_equals_the_area_mean(fake_terrai
     bounds = (179.0, -19.0, 181.0, -17.0)
 
     elevation, transform = RealSource().terrain(bounds, CELL_DEG)
+    expected = area_mean(tiles, bounds)
 
-    assert np.abs(elevation - area_mean(tiles, bounds)).max() <= 0.51  # int16 rounding
+    assert elevation.dtype == np.float64
+    assert np.array_equal(np.isnan(elevation), np.isnan(expected))
+    assert np.nanmax(np.abs(elevation - expected)) <= 1e-6
     assert (transform.c, transform.f) == (179.0, -17.0)
-    assert (elevation[20:, :19] == 0).all()  # the lower-left tile is missing
+    assert np.isnan(elevation[20:, :19]).all()
+
+
+def test_terrain_across_minus_180_with_a_missing_tile_stays_nan(fake_terrain):
+    add_tile, tiles = fake_terrain
+    for lon, lat in ((-181, -18), (-180, -18), (-180, -19)):  # (-181, -19) is missing
+        add_tile(lon, lat)
+    bounds = (-181.0, -19.0, -179.0, -17.0)
+
+    elevation, transform = RealSource().terrain(bounds, CELL_DEG)
+    expected = area_mean(tiles, bounds)
+
+    assert elevation.dtype == np.float64
+    assert np.array_equal(np.isnan(elevation), np.isnan(expected))
+    assert np.nanmax(np.abs(elevation - expected)) <= 1e-6
+    assert (transform.c, transform.f) == (-181.0, -17.0)
+    assert np.isnan(elevation[20:, :19]).all()
 
 
 def test_two_blocks_equal_one_block_exactly(fake_terrain):
@@ -871,7 +1007,7 @@ def test_two_blocks_equal_one_block_exactly(fake_terrain):
     one_block = _warp_block(bounds, CELL_DEG)
 
     assert terrain._block_edges(179.0, 181.0) == [179.0, 180, 181.0]
-    assert np.array_equal(two_blocks, one_block)
+    assert np.array_equal(two_blocks, one_block, equal_nan=True)
 
 
 @pytest.mark.parametrize(
@@ -895,10 +1031,88 @@ def test_narrow_tiles_at_50_degrees_equal_the_area_mean(
     bounds = (10.0, south, 12.0, south + 2)
 
     elevation, _ = RealSource().terrain(bounds, CELL_DEG)
+    expected = area_mean(tiles, bounds)
 
     assert tiles[(10, narrow_latitude)].shape[1] == NARROW_TILE_PX
-    assert np.abs(elevation - area_mean(tiles, bounds)).max() <= 0.51
-    assert (elevation[missing_rows, 21:] == 0).all()
+    assert elevation.dtype == np.float64
+    assert np.array_equal(np.isnan(elevation), np.isnan(expected))
+    assert np.nanmax(np.abs(elevation - expected)) <= 1e-6
+    assert np.isnan(elevation[missing_rows, 21:]).all()
+
+
+def test_real_zero_elevation_survives_while_a_missing_tile_stays_nan(fake_terrain):
+    add_tile, _ = fake_terrain
+    add_tile(10, 0, np.zeros((TILE_PX, TILE_PX), "float32"))
+    bounds = (10.0, 0.0, 12.0, 1.0)
+
+    elevation, _ = RealSource().terrain(bounds, CELL_DEG)
+
+    assert elevation[:, :20][np.isfinite(elevation[:, :20])].tolist() == [0.0] * 400
+    assert np.isnan(elevation[:, 20:]).all()
+
+
+def test_negative_and_fractional_elevations_survive_without_rounding(fake_terrain):
+    add_tile, _ = fake_terrain
+    fractional = np.full((TILE_PX, TILE_PX), 0.123456789, "float32")
+    add_tile(10, 0, fractional)
+    bounds = (10.0, 0.0, 11.0, 1.0)
+
+    elevation, _ = RealSource().terrain(bounds, CELL_DEG)
+
+    assert elevation == pytest.approx(0.123456789, abs=1e-6)
+
+    add_tile(11, 0, np.full((TILE_PX, TILE_PX), -123.456, "float32"))
+    bounds = (11.0, 0.0, 12.0, 1.0)
+
+    elevation, _ = RealSource().terrain(bounds, CELL_DEG)
+
+    assert elevation == pytest.approx(-123.456, abs=1e-4)
+
+
+def test_tile_nodata_is_excluded_from_the_mean(fake_terrain):
+    add_tile, tiles = fake_terrain
+    values = np.full((TILE_PX, TILE_PX), 100.0, "float32")
+    values[:30, :] = np.nan
+    add_tile(10, 0, values)
+    bounds = (10.0, 0.0, 11.0, 1.0)
+
+    elevation, _ = RealSource().terrain(bounds, CELL_DEG)
+    expected = area_mean(tiles, bounds)
+
+    assert np.array_equal(np.isnan(elevation), np.isnan(expected))
+    assert np.isnan(elevation[:9, :]).all()
+    assert elevation[9:, :] == pytest.approx(100.0)
+
+
+def test_masked_finite_pixel_is_excluded_from_the_mean(fake_terrain, tmp_path):
+    add_tile, _ = fake_terrain
+    values = np.full((TILE_PX, TILE_PX), 100.0, "float32")
+    values[:30, :] = 5_000.0
+    add_tile(10, 0, values)
+    path = tmp_path / f"{_tile_name('glo90', 0, 10)}.tif"
+    with rasterio.open(path, "r+") as tile:
+        mask = np.full((TILE_PX, TILE_PX), 255, "uint8")
+        mask[:30, :] = 0
+        tile.write_mask(mask)
+    bounds = (10.0, 0.0, 11.0, 1.0)
+
+    elevation, _ = RealSource().terrain(bounds, CELL_DEG)
+
+    assert np.isnan(elevation[:9, :]).all()
+    assert elevation[9:, :] == pytest.approx(100.0)
+
+
+def test_finite_nodata_sentinel_is_excluded_from_the_mean(fake_terrain):
+    add_tile, _ = fake_terrain
+    values = np.full((TILE_PX, TILE_PX), 100.0, "float32")
+    values[:30, :] = -9_999.0
+    add_tile(10, 0, values, nodata=-9_999.0)
+    bounds = (10.0, 0.0, 11.0, 1.0)
+
+    elevation, _ = RealSource().terrain(bounds, CELL_DEG)
+
+    assert np.isnan(elevation[:9, :]).all()
+    assert elevation[9:, :] == pytest.approx(100.0)
 
 
 def test_block_without_tiles_is_none(fake_terrain):

@@ -1,4 +1,5 @@
 """Offline tests: the terrain cache returns what a read would, and its key tracks every input."""
+from collections.abc import Callable
 from dataclasses import replace
 
 import numpy as np
@@ -17,9 +18,14 @@ class CountingSource(SyntheticSource):
     def __init__(self) -> None:
         self.reads = 0
 
-    def terrain(self, bounds: tuple, res: float) -> tuple[np.ndarray, object]:
+    def terrain(
+        self,
+        bounds: tuple,
+        res: float,
+        on_block: Callable[[], None] | None = None,
+    ) -> tuple[np.ndarray, object]:
         self.reads += 1
-        return super().terrain(bounds, res)
+        return super().terrain(bounds, res, on_block or (lambda: None))
 
 
 def test_cache_hit_equals_the_miss_byte_for_byte(tmp_path):
@@ -32,10 +38,36 @@ def test_cache_hit_equals_the_miss_byte_for_byte(tmp_path):
     assert source.reads == 1
     assert dataset.roles == {}
     assert hit_arrays.keys() == miss_arrays.keys() == {"elevation"}
-    assert hit_arrays["elevation"].dtype == np.int16
+    assert hit_arrays["elevation"].dtype == np.float64
     assert hit_arrays["elevation"].tobytes() == miss_arrays["elevation"].tobytes()
     assert hit_arrays["elevation"] is not miss_arrays["elevation"]
     assert hit_transform == miss_transform
+
+
+def test_floating_nans_round_trip_through_the_cache(tmp_path):
+    class NanSource(SyntheticSource):
+        def terrain(
+            self,
+            bounds: tuple,
+            res: float,
+            on_block: Callable[[], None] | None = None,
+        ) -> tuple[np.ndarray, object]:
+            elevation, transform = super().terrain(
+                bounds,
+                res,
+                on_block or (lambda: None),
+            )
+            elevation[:2, :2] = np.nan
+            return elevation, transform
+
+    dataset = make_registry(NanSource())["terrain"]
+
+    miss_arrays, _ = read_cached(dataset, BBOX, RES, tmp_path)
+    hit_arrays, _ = read_cached(dataset, BBOX, RES, tmp_path)
+
+    assert np.isnan(miss_arrays["elevation"][:2, :2]).all()
+    assert hit_arrays["elevation"].tobytes() == miss_arrays["elevation"].tobytes()
+    assert np.array_equal(hit_arrays["elevation"], miss_arrays["elevation"], equal_nan=True)
 
 
 def test_cache_hit_gives_a_fresh_array_the_caller_may_change(tmp_path):
@@ -74,7 +106,12 @@ def test_version_bump_does_not_reuse_the_old_cache(tmp_path, monkeypatch):
 
 def test_failed_read_leaves_nothing_in_the_cache(tmp_path):
     class Boom(SyntheticSource):
-        def terrain(self, bounds: tuple, res: float) -> tuple[np.ndarray, object]:
+        def terrain(
+            self,
+            bounds: tuple,
+            res: float,
+            on_block: Callable[[], None] | None = None,
+        ) -> tuple[np.ndarray, object]:
             raise RuntimeError("boom")
 
     dataset = make_registry(Boom())["terrain"]
