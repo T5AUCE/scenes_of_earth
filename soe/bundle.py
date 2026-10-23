@@ -143,6 +143,8 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
 
     if "stats" in result:
         layer["stats"] = result["stats"]
+    if "area_series" in result:
+        layer["area_series"] = result["area_series"]
     if dataset.tiles:
         layer["tiles"] = dict(dataset.tiles)
     return layer

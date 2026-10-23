@@ -20,6 +20,7 @@ from soe.sources import (
     Bbox,
     CellWindow,
     CubeSpec,
+    FilledStep,
     Role,
     SeriesDataset,
     StaticDataset,
@@ -1128,3 +1129,265 @@ def test_land_cover_across_180_has_the_same_classes_on_both_sides(tmp_path):
         assert (mask[:, side] == 1).any()
         assert (mask[:, side] == 2).any()
         assert (classes[:, side][mask[:, side] != 0] > 0).all()
+
+
+def test_area_series_matches_hand_computed_weighted_means(tmp_path):
+    off_grid_outline = box(36.53, -1.47, 37.47, -0.53)
+    area = Area(off_grid_outline, BOUNDARY)
+    missing_cells = [(11, 10), (11, 11), (10, 11)]
+    filled_cells = {"2015-01-01": (10, 10), "2015-02-01": (12, 12)}
+
+    class FractionalRain(type(RAIN)):
+        def read_step(self, step: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
+            """Return a gradient with NaNs where the step has gaps."""
+            res = self.grid.res * factor
+            height = round((bbox[3] - bbox[1]) / res)
+            width = round((bbox[2] - bbox[0]) / res)
+            rows = np.arange(height)[:, None]
+            columns = np.arange(width)[None, :]
+            # Vary values across the grid, so weighting shapes the mean.
+            raster = (10 + rows * 0.2 + columns * 0.05).astype("float32")
+            for row, column in [filled_cells[step], *missing_cells]:
+                raster[row, column] = np.nan
+            return raster
+
+        def _read_fallback(self, step: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
+            """Return 60 mm everywhere except the cells that stay missing."""
+            res = self.grid.res * factor
+            height = round((bbox[3] - bbox[1]) / res)
+            width = round((bbox[2] - bbox[0]) / res)
+            fallback = np.full((height, width), 60, "float32")
+            for row, column in missing_cells:
+                fallback[row, column] = np.nan
+            return fallback
+
+    rain = FractionalRain(**{**vars(RAIN), "backend": SyntheticSource()})
+    build_scene(HASH_A, area, "2015-01", "2015-02", [rain], "Test", tmp_path)
+    document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    layer = document["layers"][0]
+    block = layer["area_series"]
+    scene_plan = plan(area, [rain], "2015-01", "2015-02")
+    layer_plan = scene_plan.layers["chirps_monthly"]
+    weights = layer_plan.area_weights
+    total = float(weights.sum())
+    expected_values = []
+    expected_valid = []
+    expected_fallback = []
+    for step in layer_plan.steps:
+        filled_step = rain.read_step_filled(step, layer_plan.bbox, layer_plan.factor)
+        grid = np.asarray(filled_step.values, dtype="float64")
+        filled = np.asarray(filled_step.filled, dtype=bool)
+        valid = np.isfinite(grid) & (weights > 0)
+        valid_weight = float(weights[valid].sum())
+        expected_values.append(float((grid[valid] * weights[valid]).sum()) / valid_weight)
+        expected_valid.append(valid_weight / total)
+        expected_fallback.append(float(weights[valid & filled].sum()) / total)
+
+    # Edge cells are only partly covered, so a one percent drop cannot come from latitude alone.
+    assert ((weights > 0) & (weights < weights.max() * 0.99)).any()
+    assert layer["time"]["values"] == layer_plan.steps
+    assert layer["time"]["count"] == len(layer_plan.steps) == len(block["values"])
+    assert block["statistic"] == "mean"
+    assert block["weights"] == "cell_area_inside_outline"
+    assert block["values"] == expected_values
+    assert block["valid_fraction"] == expected_valid
+    assert block["fallback_fraction"] == expected_fallback
+    assert 0 < block["fallback_fraction"][0] < block["valid_fraction"][0] < 1.0
+    assert 0 < block["fallback_fraction"][1] < block["valid_fraction"][1] < 1.0
+    assert block["values"][0] != block["values"][1]
+    assert validate(document) == []
+
+
+def test_area_series_leaves_packed_arrays_unchanged(tmp_path):
+    rain = rain_with_gaps(lambda step: [(3, 4)])
+    area = Area(NAIROBI, BOUNDARY)
+    build_scene(HASH_A, area, "2015-01", "2015-02", [rain], "Test", tmp_path)
+
+    document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    root = zarr.open_group(tmp_path / HASH_A / "data.zarr", mode="r")
+    layer = document["layers"][0]
+    scene_plan = plan(area, [rain], "2015-01", "2015-02")
+    layer_plan = scene_plan.layers["chirps_monthly"]
+    stored = root["chirps_monthly/mask"][...] != 0
+    for index, step in enumerate(layer_plan.steps):
+        filled_step = rain.read_step_filled(step, layer_plan.bbox, layer_plan.factor)
+        raw = root["chirps_monthly/precip"][index]
+        decoded = np.where(raw == 65535, np.nan, raw * 0.1)
+
+        assert np.allclose(decoded[stored], filled_step.values[stored], atol=0.051)
+        assert validate(document) == []
+
+
+def test_area_series_is_omitted_without_a_fallback_and_on_static_layers(tmp_path):
+    rain = _scripted_series(
+        lambda step, height, width: np.full(
+            (height, width),
+            10.0 if step == "2015-01-01" else 10.04,
+            "float32",
+        ),
+    )
+    build_scene(
+        HASH_A,
+        Area(NAIROBI, BOUNDARY),
+        "2015-01",
+        "2015-02",
+        [TERRAIN, rain],
+        "Test",
+        tmp_path,
+    )
+
+    document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    layers = {layer["id"]: layer for layer in document["layers"]}
+    block = layers["constant_monthly"]["area_series"]
+
+    assert "fallback_fraction" not in block
+    assert block["values"] == [10.0, float(np.float32(10.04))]
+    assert block["valid_fraction"] == [1.0, 1.0]
+    assert "area_series" not in layers["terrain"]
+    assert validate(document) == []
+
+
+def test_all_missing_step_yields_null_and_zero_shares(tmp_path):
+    area = Area(NAIROBI, BOUNDARY)
+    probe = rain_with_gaps(lambda step: [], EmptyFallbackSource())
+    inside = plan(area, [probe], "2015-01", "2015-02").layers["chirps_monthly"].mask == 1
+    rows, columns = np.where(inside)
+    missing = list(zip(rows.tolist(), columns.tolist()))
+    rain = rain_with_gaps(
+        lambda step: missing if step == "2015-01-01" else [(3, 4)],
+        EmptyFallbackSource(),
+    )
+
+    document, _ = build_rain(tmp_path, rain)
+    block = document["layers"][0]["area_series"]
+
+    assert block["values"][0] is None
+    assert block["valid_fraction"][0] == 0.0
+    assert block["fallback_fraction"] == [0.0, 0.0]
+    assert block["values"][1] is not None
+    assert 0.0 < block["valid_fraction"][1] < 1.0
+    assert validate(document) == []
+
+
+def test_ring_only_fallback_has_zero_share_but_is_credited(tmp_path):
+    rain = rain_with_gaps(lambda step: [(0, 1)])
+    build_scene(HASH_A, Area(NAIROBI, BOUNDARY), "2026-07", "2026-08", [rain], "T", tmp_path)
+
+    document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    layer = document["layers"][0]
+    block = layer["area_series"]
+
+    assert block["values"] == [10.0, 10.0]
+    assert block["valid_fraction"] == [1.0, 1.0]
+    assert block["fallback_fraction"] == [0.0, 0.0]
+    assert layer["fallback_sources"] == [SOURCES["era5"]]
+    assert validate(document) == []
+
+
+def test_sub_packing_differences_survive_serialization(tmp_path):
+    rain = _scripted_series(
+        lambda step, height, width: np.full(
+            (height, width),
+            10.0 if step == "2015-01-01" else 10.04,
+            "float32",
+        ),
+    )
+    build_scene(HASH_A, Area(NAIROBI, BOUNDARY), "2015-01", "2015-02", [rain], "T", tmp_path)
+
+    document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    block = document["layers"][0]["area_series"]
+    root = zarr.open_group(tmp_path / HASH_A / "data.zarr", mode="r")
+    raw = root["constant_monthly/precip"][...]
+
+    assert block["values"][0] != block["values"][1]
+    assert block["values"] == json.loads(json.dumps(block))["values"]
+    assert raw.shape[0] == 2 and (raw[0] == raw[1]).all()
+    assert validate(document) == []
+
+
+def test_batch_boundaries_do_not_change_area_series(tmp_path, monkeypatch):
+    rain = rain_with_gaps(lambda step: [(3, 4)])
+    area = Area(NAIROBI, BOUNDARY)
+    monkeypatch.setattr("soe.build.BATCH_SIZE", 1)
+    build_scene(HASH_A, area, "2015-01", "2015-03", [rain], "Test", tmp_path / "split")
+    monkeypatch.setattr("soe.build.BATCH_SIZE", 12)
+    build_scene(HASH_A, area, "2015-01", "2015-03", [rain], "Test", tmp_path / "whole")
+
+    split = json.loads((tmp_path / "split" / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    whole = json.loads((tmp_path / "whole" / HASH_A / "scene.json").read_text(encoding="utf-8"))
+
+    assert split["layers"][0]["area_series"] == whole["layers"][0]["area_series"]
+    assert array_bytes(tmp_path / "split" / HASH_A) == array_bytes(tmp_path / "whole" / HASH_A)
+
+
+def test_series_build_reads_each_step_once(tmp_path, monkeypatch):
+    rain = rain_with_gaps(lambda step: [(3, 4)])
+    calls = []
+    original = rain.read_step_filled
+
+    def counting(step: str, bbox: Bbox, factor: int = 1) -> FilledStep:
+        """Record the step, then read it exactly as the dataset would."""
+        calls.append(step)
+        return original(step, bbox, factor)
+
+    monkeypatch.setattr(rain, "read_step_filled", counting)
+    build_scene(HASH_A, Area(NAIROBI, BOUNDARY), "2015-01", "2015-03", [rain], "T", tmp_path)
+
+    assert sorted(calls) == ["2015-01-01", "2015-02-01", "2015-03-01"]
+
+
+def test_legacy_stats_keep_full_precision_without_becoming_area_means(tmp_path):
+    def values_for(step: str, height: int, width: int) -> np.ndarray:
+        """Return ones with a single raised cell in January, to defeat rounding."""
+        raster = np.full((height, width), 1.0, "float32")
+        if step == "2015-01-01":
+            raster[5, 5] = np.float32(1.001)
+        return raster
+
+    rain = _scripted_series(values_for)
+    build_scene(HASH_A, Area(NAIROBI, BOUNDARY), "2015-01", "2015-02", [rain], "T", tmp_path)
+
+    document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    layer = document["layers"][0]
+    stats = layer["stats"]
+    block = layer["area_series"]
+
+    assert set(stats) == {"min", "max", "mean", "p98"}
+    assert stats["min"] == 1.0
+    assert stats["max"] == float(np.float32(1.001))
+    assert stats["mean"] != round(stats["mean"], 2)
+    assert len(block["values"]) == 2 and isinstance(stats["mean"], float)
+    assert block["values"][0] != block["values"][1]
+    assert validate(document) == []
+
+
+def _scripted_series(values_for: Callable[[str, int, int], np.ndarray]) -> SeriesDataset:
+    """Return a fallback-free two-month series whose grids come from `values_for`."""
+
+    class ScriptedSeries(SeriesDataset):
+        def first(self) -> str:
+            return "2015-01-01"
+
+        def latest(self) -> str:
+            return "2015-02-01"
+
+        def read_step(self, step: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
+            """Return the scripted grid matching bbox and the aggregation factor."""
+            res = self.grid.res * factor
+            height = round((bbox[3] - bbox[1]) / res)
+            width = round((bbox[2] - bbox[0]) / res)
+            return values_for(step, height, width)
+
+    return ScriptedSeries(
+        id="constant_monthly",
+        title="Constant",
+        units="mm/month",
+        resolution_deg=RAIN.resolution_deg,
+        source=dict(SOURCES["chirps"]),
+        roles=dict(RAIN.roles),
+        style=dict(RAIN.style),
+        backend=SyntheticSource(),
+        grid=RAIN.grid,
+        step="P1M",
+        cell_method="sum",
+    )

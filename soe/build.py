@@ -31,6 +31,7 @@ from .sources import (
     SeriesDataset,
     StaticDataset,
 )
+from .statistics import AreaSeriesAccumulator
 from .terrain_cache import is_cached, read_cached
 
 ProgressCallback = Callable[[float, str | None], None]  # build fraction done 0-1, stage text
@@ -341,7 +342,7 @@ def _write_time_series(
     layer_plan: LayerPlan,
     progress: LayerProgress,
 ) -> JsonObject:
-    """Write a time series in batches and return its display statistics."""
+    """Write a time series in batches and return its display and area statistics."""
     steps = layer_plan.steps
     step_count = len(steps)
     spec = dataset.roles["value"]
@@ -351,6 +352,10 @@ def _write_time_series(
     _write_time_coordinate(layer_group, steps)
     series = _create_time_array(layer_group, dataset, spec, layer_plan)
     statistics = _StatisticsAccumulator()
+    area_accumulator = AreaSeriesAccumulator(
+        layer_plan.area_weights,
+        dataset.fallback is not None,
+    )
     provenance = _Provenance(area_mask, stored_mask, step_count)
     worker_count = _choose_worker_count(layer_plan)
 
@@ -364,6 +369,8 @@ def _write_time_series(
                 batch_steps,
             )
             statistics.add(raster_batch, area_mask)
+            # Area means use decoded values before packing, so quantizing never shapes them.
+            area_accumulator.add(raster_batch, filled_batch)
             provenance.add(batch_start, raster_batch, filled_batch)
             encoded_batch = encode_values(
                 np.where(stored_mask, raster_batch, np.nan),
@@ -381,6 +388,7 @@ def _write_time_series(
     return {
         "stops": dataset.stops(value_stats, statistics.quantiles(STOP_COUNT)),
         "stats": value_stats,
+        "area_series": area_accumulator.finish(),
         **_write_provenance(layer_group, dataset, steps, provenance),
     }
 
@@ -535,7 +543,7 @@ def _series_attributes(dataset: SeriesDataset, spec: Role) -> JsonObject:
 
 
 class _StatisticsAccumulator:
-    """Accumulate exact basic statistics and an approximate 98th percentile."""
+    """Accumulate unweighted display statistics and an approximate 98th percentile."""
 
     def __init__(self) -> None:
         self._random = np.random.default_rng(0)
@@ -568,7 +576,7 @@ class _StatisticsAccumulator:
         )
 
     def finish(self) -> dict[str, float]:
-        """Return rounded statistics or raise when no valid data exists."""
+        """Return unrounded display statistics or raise when no valid data exists."""
         if self._value_count == 0:
             raise AreaError("No valid data inside the area")
 
@@ -576,10 +584,10 @@ class _StatisticsAccumulator:
         mean = self._value_sum / self._value_count
 
         return {
-            "min": round(float(self._minimum), 2),
-            "max": round(float(self._maximum), 2),
-            "mean": round(mean, 2),
-            "p98": round(float(percentile_98), 2),
+            "min": float(self._minimum),
+            "max": float(self._maximum),
+            "mean": float(mean),
+            "p98": float(percentile_98),
         }
 
     def quantiles(self, count: int) -> list[float]:
