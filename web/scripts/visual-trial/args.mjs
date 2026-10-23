@@ -5,6 +5,25 @@ import { fileURLToPath } from "node:url";
 
 const PLACES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "places");
 const DEFAULT_PARALLEL_VIEWS = 3;
+const LAYOUT_PRESET = "layout";
+
+/**
+ * The layout command checks one fixed scene. It bundles four layers over a period, so Play,
+ * the timeline slider, every card switch, Units radios and Reset all exist on one bundle.
+ */
+const LAYOUT_PLACES = {
+  spots: [
+    {
+      name: "Layout",
+      area: "sample:kenya",
+      centre: [37.0, 0.5],
+      layers: ["terrain", "chirps_monthly", "era5land_temperature", "esa_worldcover"],
+      start: "2026-04",
+      end: "2026-09",
+      layout: true,
+    },
+  ],
+};
 
 export const USAGE =
   "usage: npm run trial -- <places.json|preset> [--start | --app <url>] [--out dir] [--screens]"
@@ -51,6 +70,8 @@ function valueAfter(argv, index, flag) {
 
 /** Reads a places file given by path or by preset name and checks its shape. */
 export function loadPlaces(text) {
+  if (text === LAYOUT_PRESET) return checkPlaces(LAYOUT_PLACES, LAYOUT_PRESET);
+
   const direct = path.resolve(text);
   const preset = path.join(PLACES_DIR, text.endsWith(".json") ? text : `${text}.json`);
   const file = [direct, preset].find((candidate) => fs.existsSync(candidate));
@@ -81,6 +102,9 @@ export function checkPlaces(data, file = "places") {
     if (spot.colour !== undefined && (typeof spot.colour !== "string" || !spot.colour)) {
       throw new Error(`${where} "colour" must be a non-empty string`);
     }
+    if (spot.layout !== undefined && typeof spot.layout !== "boolean") {
+      throw new Error(`${where} "layout" must be a boolean`);
+    }
 
     return {
       name: spot.name,
@@ -93,6 +117,7 @@ export function checkPlaces(data, file = "places") {
       landcover: spot.landcover === true,
       start: spot.start,
       end: spot.end,
+      layout: spot.layout === true,
     };
   });
 }

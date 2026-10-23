@@ -75,3 +75,30 @@ test("the colour preset covers both places with every colour pick", () => {
     "blend",
   ]);
 });
+
+test("the layout preset checks four layers over a period without a file", () => {
+  const [spot] = loadPlaces("layout");
+
+  assert.equal(spot.layout, true);
+  assert.deepEqual(spot.layers, [
+    "terrain",
+    "chirps_monthly",
+    "era5land_temperature",
+    "esa_worldcover",
+  ]);
+  assert.ok(spot.start && spot.end);
+  assert.deepEqual(spot.zooms, ["fitted"]);
+});
+
+test("checkPlaces keeps the layout flag and rejects a non-boolean", () => {
+  const [spot] = checkPlaces({
+    spots: [{ name: "A", area: "x", centre: [1, 2], layout: true }],
+  });
+
+  assert.equal(spot.layout, true);
+  assert.equal(checkPlaces({ spots: [{ name: "B", area: "x", centre: [1, 2] }] })[0].layout, false);
+  assert.throws(
+    () => checkPlaces({ spots: [{ name: "C", area: "x", centre: [1, 2], layout: "yes" }] }),
+    /layout/,
+  );
+});

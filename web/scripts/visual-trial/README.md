@@ -5,6 +5,7 @@ Measures the map of built scenes in headless Chromium, so a browser check takes 
 ```
 cd web
 npm run trial -- contours --start
+npm run trial -- layout --start
 SOE_TRIAL_EXISTING_ONLY=1 npm run trial -- landcover --start --screens
 npm run trial -- colour --start --screens
 npm run trial -- places.json --app http://127.0.0.1:5173 --screens --out /tmp/x
@@ -68,6 +69,30 @@ The landcover preset covers Nairobi through z18, Taveuni at 180° and the Kenya 
 
 Scenes come from `POST /api/scenes`, so a bundle that matches the request is reused and nothing is
 ever deleted.
+
+## Layout mode
+
+`npm run trial -- layout --start` hit-tests the controls that must stay clickable at 320×800,
+320×560 and 1280×800, with the layer editor closed and open. Run it after every UI change.
+`SOE_LAYOUT_VIEWPORTS="320x800"` checks another comma-separated `WxH` list.
+
+The mode builds one fixed Kenya scene with four layers over a period, so Play, the timeline
+slider, every card switch, the Rainfall Units radios and both Resets all exist on one bundle.
+Each viewport runs in an isolated context: the trial records one JSON line per control with
+`viewport`, `editor` (`closed` or `open`), `role`, `name`, `present`, `pass` and `hit`. A failure
+has `"pass": false` with `hit` naming the covering element, such as the time bar under the
+attribution links at 320 px or the editor over the basemap credit on desktop. A missing or
+hidden required control fails the same way, as does an empty attribution bar. Units, both
+Resets and Close are only required while the editor is open, so they skip when it is closed,
+and Expand stays optional until the chip UI arrives. Every basemap link under the
+attribution control is hit-tested by its own text, and two page lines per state check that the
+page has no horizontal overflow and the attribution stays visible. The command exits 1 when any
+required check fails, including a missing required control.
+
+The controls come from `LAYOUT_CONTROLS` in `layout.mjs`, matched by accessible role and name,
+so a new control is one appended line. The trial opens `LAYOUT_EDITOR` (Rainfall, which has
+Units and Reset) for the open half. Pure helpers (`parseViewportList`, record shaping) are
+unit-tested in `layout.test.mjs`.
 
 Set `SOE_TRIAL_EXISTING_ONLY=1` to use local bundles without any scene POST or build. The tool
 chooses a bundle containing the requested layers for each area and requested period, preferring

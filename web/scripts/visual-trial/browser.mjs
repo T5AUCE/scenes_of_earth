@@ -7,6 +7,15 @@ import { chromium } from "playwright-core";
 
 import { installCache } from "./cache.mjs";
 import {
+  controlDisplay,
+  LAYOUT_CONTROLS,
+  LAYOUT_EDITOR,
+  layoutRecord,
+  layoutViewports,
+  requiredInState,
+  viewportLabel,
+} from "./layout.mjs";
+import {
   CONTOUR_LABEL_PATTERN,
   CONTOUR_LINE_PATTERN,
   classifyFailure,
@@ -36,6 +45,9 @@ export const VIEW_TIMEOUT_MS = 60 * 1000;
 const LANDCOVER_COLOUR = "esa_worldcover";
 const BLEND_UNIT = "blend";
 const BLEND_HALVES = ["chirps_monthly", "era5land_temperature"];
+
+const ATTRIBUTION_SCOPE = ".maplibregl-ctrl-attrib";
+const HIT_TEXT_CHARS = 40; // Clipped element text keeps layout records to one short line.
 
 /** Launches Chromium from the first tool directory that has one. Throws a hint if none does. */
 export async function launchBrowser() {
@@ -67,8 +79,8 @@ function findExecutable(browsersDir) {
 }
 
 /** Creates a context that exposes map diagnostics and scene readiness without app edits. */
-export async function newContext(browser) {
-  const context = await browser.newContext({ viewport: VIEWPORT_PX });
+export async function newContext(browser, viewport = VIEWPORT_PX) {
+  const context = await browser.newContext({ viewport });
   await context.addInitScript(exposeMap);
   await exposeMapModule(context);
   await exposeMaskReadiness(context);
@@ -122,6 +134,7 @@ async function exposeLayerReadiness(context) {
 
 /** Measures every zoom of the spot in a new page of the context; returns one record per zoom. */
 export async function trialSpot(context, appUrl, spot, sceneId, options) {
+  if (spot.layout) return trialLayout(context, appUrl, spot, sceneId, options);
   if (spot.landcover) return trialLandcover(context, appUrl, spot, sceneId, options);
 
   return trialPage(context, appUrl, spot, sceneId, options);
@@ -146,6 +159,190 @@ async function trialLandcover(context, appUrl, spot, sceneId, options) {
     }
   }
   return records;
+}
+
+/** Hit-tests every layout control at each viewport with the editor closed and open. */
+export async function trialLayout(context, appUrl, spot, sceneId, options, system = {}) {
+  const browser = context.browser();
+  const records = [];
+  for (const viewport of layoutViewports()) {
+    records.push(...await layoutViewport(browser, appUrl, spot, sceneId, viewport, system));
+  }
+  return records;
+}
+
+async function layoutViewport(browser, appUrl, spot, sceneId, viewport, system = {}) {
+  const {
+    isolateViewport: isolate = (owner, size) => newContext(owner, size),
+    warmViewport: warm = (isolated) => installCache(isolated, HTTP_CACHE_DIR),
+    loadViewport: load = (page) => openScene(page, appUrl, sceneId, spot),
+    settleViewport: settle = (page) => settledSample(page),
+  } = system;
+  const isolated = await isolate(browser, viewport);
+  try {
+    await warm(isolated);
+    const page = await isolated.newPage();
+    try {
+      await load(page);
+      await settle(page);
+      const closed = await layoutState(page, viewport, "closed");
+      try {
+        await openLayoutEditor(page);
+      } catch (error) {
+        const reason = error.message.split("\n")[0];
+        console.error(`layout ${viewportLabel(viewport)} editor failed to open: ${reason}`);
+        return [...closed, editorOpeningRecord(viewport)];
+      }
+      const open = await layoutState(page, viewport, "open");
+      return [...closed, ...open];
+    } finally {
+      await page.close();
+    }
+  } finally {
+    await isolated.close();
+  }
+}
+
+async function layoutState(page, viewport, editor) {
+  const records = [];
+  for (const control of LAYOUT_CONTROLS) {
+    records.push(await hitTestControl(page, viewport, editor, control));
+  }
+  records.push(...await hitTestAttribution(page, viewport, editor));
+  records.push(...await layoutPageChecks(page, viewport, editor));
+
+  return records;
+}
+
+export async function hitTestControl(page, viewport, editor, control) {
+  const target = controlLocator(page, control).first();
+  const required = requiredInState(control, editor);
+  if (await target.count() === 0) return absentRecord(viewport, editor, control, required);
+
+  const box = await target.boundingBox();
+  if (!box) return absentRecord(viewport, editor, control, required);
+
+  const { pass, hit } = await target.evaluate(containsPoint, [centreOf(box), HIT_TEXT_CHARS]);
+  return layoutRecord({
+    viewport,
+    editor,
+    role: control.role,
+    name: controlDisplay(control),
+    present: true,
+    pass,
+    hit,
+  });
+}
+
+export async function hitTestAttribution(page, viewport, editor) {
+  const links = page.locator(`${ATTRIBUTION_SCOPE} a`);
+  const count = await links.count();
+  if (count === 0) {
+    return [
+      layoutRecord({
+        viewport,
+        editor,
+        role: "link",
+        name: "attribution",
+        present: false,
+        pass: false,
+        hit: null,
+      }),
+    ];
+  }
+  const records = [];
+  for (let index = 0; index < count; index += 1) {
+    records.push(await hitTestLink(viewport, editor, links.nth(index)));
+  }
+
+  return records;
+}
+
+async function hitTestLink(viewport, editor, link) {
+  const box = await link.boundingBox();
+  const name = ((await link.textContent()) ?? "").trim().replace(/\s+/g, " ");
+  if (!box) {
+    return layoutRecord({
+      viewport,
+      editor,
+      role: "link",
+      name,
+      present: false,
+      pass: false,
+      hit: null,
+    });
+  }
+
+  const { pass, hit } = await link.evaluate(containsPoint, [centreOf(box), HIT_TEXT_CHARS]);
+  return layoutRecord({ viewport, editor, role: "link", name, present: true, pass, hit });
+}
+
+async function layoutPageChecks(page, viewport, editor) {
+  const overflow = await page.evaluate(hasHorizontalOverflow);
+  const attribution = await page.evaluate(seesAttribution, ATTRIBUTION_SCOPE);
+
+  return [
+    layoutRecord({
+      viewport,
+      editor,
+      role: "page",
+      name: "no horizontal overflow",
+      present: true,
+      pass: !overflow,
+      hit: null,
+    }),
+    layoutRecord({
+      viewport,
+      editor,
+      role: "page",
+      name: "attribution visible",
+      present: true,
+      pass: attribution,
+      hit: null,
+    }),
+  ];
+}
+
+function controlLocator(page, control) {
+  const scope = control.scope ? page.locator(control.scope) : page;
+  if (control.name === "") return scope.getByRole(control.role);
+
+  return scope.getByRole(control.role, { name: control.name });
+}
+
+function centreOf(box) {
+  return [box.x + box.width / 2, box.y + box.height / 2];
+}
+
+function absentRecord(viewport, editor, control, required) {
+  return layoutRecord({
+    viewport,
+    editor,
+    role: control.role,
+    name: controlDisplay(control),
+    present: false,
+    pass: required ? false : null,
+    hit: null,
+  });
+}
+
+// The closed editor cannot supply open-state records, so the opening itself is the failed check.
+function editorOpeningRecord(viewport) {
+  return layoutRecord({
+    viewport,
+    editor: "open",
+    role: "page",
+    name: "editor opens",
+    present: false,
+    pass: false,
+    hit: null,
+  });
+}
+
+// Rainfall configures Units and Reset, so its editor stands in for every editor.
+export async function openLayoutEditor(page) {
+  await controlLocator(page, LAYOUT_EDITOR).first().click();
+  await page.getByRole("button", { name: "Close" }).first().waitFor();
 }
 
 async function trialPage(context, appUrl, spot, sceneId, options) {
@@ -622,4 +819,33 @@ function takeSample([linePattern, labelPattern]) {
     ),
     colourOwner,
   };
+}
+
+function containsPoint(control, [point, limit]) {
+  const [pointX, pointY] = point;
+  const hit = document.elementFromPoint(pointX, pointY);
+  if (!hit) return { pass: false, hit: null };
+
+  const text = (hit.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, limit);
+  return {
+    pass: control.contains(hit),
+    hit: {
+      tag: hit.tagName.toLowerCase(),
+      id: hit.id || null,
+      classes: [...hit.classList],
+      text,
+    },
+  };
+}
+
+function hasHorizontalOverflow() {
+  return document.documentElement.scrollWidth > window.innerWidth;
+}
+
+function seesAttribution(scope) {
+  const bar = document.querySelector(scope);
+  if (!bar) return false;
+
+  const box = bar.getBoundingClientRect();
+  return box.width > 0 && box.height > 0 && box.bottom > 0 && box.top < window.innerHeight;
 }
