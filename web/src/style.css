@@ -157,11 +157,11 @@ body.scene-mode #panel {
 }
 
 #scene-column {
+  /* No z-index, so the fixed editor keeps its own level above the map controls. */
   position: absolute;
   top: 8px;
   right: 8px;
   bottom: 8px;
-  z-index: 1;
   width: 300px;
   display: flex;
   flex-direction: column;
@@ -677,10 +677,11 @@ body.scene-mode #panel {
   }
 
   .layer-editor {
+    /* Wrapped attribution plus the time bar fills the bottom ~80 px. */
     top: auto;
     left: 8px;
     right: 8px;
-    bottom: 8px;
+    bottom: 96px;
     width: auto;
     max-height: 60dvh;
   }

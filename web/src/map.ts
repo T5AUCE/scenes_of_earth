@@ -39,6 +39,9 @@ const PICKED_ID = "soe-picked-area";
 const PICKED_COLOR_PROPERTY = "--pick-outline";
 const PICKED_LINE_WIDTH_PX = 3;
 
+// An imageless source never reports loaded, so dormant renderers seed this pixel.
+const PLACEHOLDER_SIZE_PX = 1;
+
 const AREA_LABEL_SUFFIX = "-in-area";
 
 // Projection round-off must not trigger another synchronous move event at the pan limit.
@@ -177,7 +180,7 @@ export function firstSymbolId(map: MapLibreMap) {
   return map.getStyle().layers.find((layer) => layer.type === "symbol")?.id;
 }
 
-/** Adds an image layer over the bbox moved east by `shift`; its source is empty until setImage. */
+/** Adds an image layer over the bbox moved east by `shift`, seeded transparent until setImage. */
 export function addImageLayer(
   map: MapLibreMap,
   id: string,
@@ -187,6 +190,7 @@ export function addImageLayer(
   paint: Record<string, string | number>,
 ) {
   map.addSource(id, { type: "image", coordinates: imageCorners(bbox, shift) });
+  setImage(map, id, new ImageData(PLACEHOLDER_SIZE_PX, PLACEHOLDER_SIZE_PX));
   map.addLayer(
     { id, type: "raster", source: id, paint: { "raster-fade-duration": 0, ...paint } },
     beforeId,

@@ -239,7 +239,7 @@ test("a colour spot sets the pick through the scene link", async () => {
     { screens: false },
   );
 
-  assert.equal(url, "https://example.test/?scene=8db2b3434ee7cf729daf&colour=era5land_temperature");
+  assert.equal(url, "https://example.test/?scene=8db2b3434ee7cf729daf&as=era5land_temperature:colour");
   assert.equal(records[0].colour_owner, "era5land_temperature");
   assert.equal(records[0].marks_frame_ms_p95, 10);
 });

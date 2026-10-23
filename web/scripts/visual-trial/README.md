@@ -48,13 +48,18 @@ The setup resolves the cache root to an absolute path. Browser download staging 
 
 `area` is a boundary id or a name the area search accepts. `layers` are the backend layers to
 build (default `["terrain"]`; `start` and `end` may be added for time-varying layers). `enable`
-lists checkbox labels in the scene panel to switch on. Presets live in `places/`.
+lists editor options to switch on: a `"Smooth"` label uses the first editor offering it,
+while a `{"layer": "Land cover", "option": "Smooth"}` object pins the layer down.
+Several editors offer Smooth, so prefer the object form. Presets live in `places/`.
 
-`colour` sets the link's `colour=` parameter to the layer that holds the map's colour, so the
-trial never has to click the picker. A layer id holds that layer's colours, while `blend` picks the
-combined rainfall and temperature layer. The `colour` preset opens Kenya and Fiji with all four
-layers. Each spot picks temperature or rainfall, land cover or the blend. If both halves of the
-blend are present, picking the blend also switches them off in the link.
+`colour` names the layer that holds the map's colour through the link's `as=<layer>:colour`
+entry, so the trial never has to click the picker. A layer id holds that layer's colours, while
+`blend` picks the combined rainfall and temperature layer and switches its halves off through
+`off=` when they are present. The `colour` preset opens Kenya and Fiji with all four layers.
+Each spot picks temperature or rainfall, land cover or the blend. A `landcover` spot without an
+explicit `colour` requests `esa_worldcover`, so Land cover owns the map's colour while its repaint
+checks run. A view whose sampled owner differs from the requested one fails its record, as does
+any false repaint check.
 
 `landcover: true` runs each spot twice in isolated browser contexts, first with the GPU enabled
 and then with `soe.debug.gpu=off`. Screenshots have `-gpu` and `-image` suffixes. The GPU also

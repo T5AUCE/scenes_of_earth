@@ -207,7 +207,7 @@ export interface Part {
   onToggle?(visible: boolean): void;
   /** Sliders shown under the part's checkbox while the part is on. */
   controls?: LayerControl[];
-  /** A small note under the checkbox, such as the contour interval. */
+  /** A small note under the checkbox. */
   note?: HTMLElement;
 }
 

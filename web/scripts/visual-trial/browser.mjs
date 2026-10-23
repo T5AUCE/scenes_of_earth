@@ -33,6 +33,10 @@ const PAN_DISTANCE_PX = 160;
 const HTTP_CACHE_DIR = path.resolve(import.meta.dirname, "../../.trial-cache/http");
 export const VIEW_TIMEOUT_MS = 60 * 1000;
 
+const LANDCOVER_COLOUR = "esa_worldcover";
+const BLEND_UNIT = "blend";
+const BLEND_HALVES = ["chirps_monthly", "era5land_temperature"];
+
 /** Launches Chromium from the first tool directory that has one. Throws a hint if none does. */
 export async function launchBrowser() {
   for (const directory of TOOL_DIRS.filter(Boolean)) {
@@ -148,7 +152,7 @@ async function trialPage(context, appUrl, spot, sceneId, options) {
   const page = await context.newPage();
   const watcher = watchPage(page);
   try {
-    await openScene(page, appUrl, sceneId, spot.enable, spot.colour);
+    await openScene(page, appUrl, sceneId, spot);
     const records = [];
     for (const [index, zoom] of spot.zooms.entries()) {
       records.push(await trialView(page, watcher, spot, sceneId, zoom, {
@@ -207,15 +211,74 @@ function watchPage(page) {
   return watcher;
 }
 
-async function openScene(page, appUrl, sceneId, enable, colour) {
-  const pick = colour ? `&colour=${encodeURIComponent(colour)}` : "";
-  await page.goto(`${appUrl}/?scene=${sceneId}${pick}`);
+// The link carries the supported allocation, because the removed colour= never chose an owner.
+async function openScene(page, appUrl, sceneId, spot) {
+  await page.goto(`${appUrl}/?scene=${sceneId}${allocationQuery(spot)}`);
   await page.waitForFunction(
     (layerId) => window.__map?.getLayer(layerId),
     OUTLINE_LAYER_ID,
     { timeout: SCENE_READY_TIMEOUT_MS },
   );
-  for (const label of enable) await page.evaluate(enableCheckbox, label);
+  for (const entry of spot.enable) await enableOption(page, entry);
+}
+
+// A layer id owns the map's colour through as, while the blend also switches its halves off.
+function allocationQuery(spot) {
+  const colour = effectiveColour(spot);
+  if (colour === null) return "";
+  if (colour !== BLEND_UNIT) return `&as=${colour}:colour`;
+
+  const halves = BLEND_HALVES.filter((half) => (spot.layers ?? []).includes(half));
+  if (halves.length === 0) return `&as=${BLEND_UNIT}:colour`;
+
+  return `&as=${BLEND_UNIT}:colour&off=${halves.join(",")}`;
+}
+
+// Land-cover spots leave Temperature owning colour by default, so they request esa_worldcover.
+function effectiveColour(spot) {
+  return spot.colour ?? (spot.landcover ? LANDCOVER_COLOUR : null);
+}
+
+// Options now live in each layer's editor, so enabling opens that editor first.
+async function enableOption(page, entry) {
+  const target = typeof entry === "string" ? { option: entry } : entry;
+  if (target.layer) {
+    await checkEditorOption(page, target.layer, target.option);
+    return;
+  }
+  await checkFirstOption(page, target.option);
+}
+
+async function checkEditorOption(page, layer, option) {
+  await page.getByRole("button", { name: editButtonName(layer) }).click();
+  const menu = page.getByRole("complementary", { name: `Edit ${layer}`, exact: true });
+  await menu.getByRole("checkbox", { name: option, exact: true }).check();
+  await menu.getByRole("button", { name: "Close", exact: true }).click();
+}
+
+async function checkFirstOption(page, option) {
+  const edits = page.getByRole("button", { name: /^Edit / });
+  const count = await edits.count();
+  for (let index = 0; index < count; index += 1) {
+    await edits.nth(index).click();
+    const menu = page.getByRole("complementary", { name: /^Edit / });
+    const box = menu.getByRole("checkbox", { name: option, exact: true });
+    if (await box.count() > 0) {
+      await box.check();
+      await menu.getByRole("button", { name: "Close", exact: true }).click();
+      return;
+    }
+    await menu.getByRole("button", { name: "Close", exact: true }).click();
+  }
+  throw new Error(`no checkbox labelled "${option}"`);
+}
+
+function editButtonName(layer) {
+  return new RegExp(`^Edit ${escapeRegExp(layer)}(?: ·|$)`);
+}
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function trialView(page, watcher, spot, sceneId, zoom, options) {
@@ -224,6 +287,12 @@ async function trialView(page, watcher, spot, sceneId, zoom, options) {
   try {
     if (zoom !== "fitted") await page.evaluate(jumpTo, [spot.centre, zoom]);
     ({ sample, timedOut } = await settledSample(page));
+    const ownerFailure = ownerMismatch(spot, sample);
+    if (ownerFailure !== null) {
+      watcher.messages.push(ownerFailure);
+      timedOut = true;
+    }
+
     if (spot.landcover && sample) {
       await landcoverScreens(page, spot, zoom, options);
       const frameDeltas = await page.evaluate(panFrames, [PAN_DURATION_MS, PAN_DISTANCE_PX]);
@@ -237,6 +306,9 @@ async function trialView(page, watcher, spot, sceneId, zoom, options) {
         };
       });
       sample = { ...sample, ...diagnostics, frameDeltas, displayChecks, contextRestored };
+      const failures = displayFailures(displayChecks, options.renderer);
+      if (failures.length > 0) timedOut = true;
+      watcher.messages.push(...failures);
     }
     if (spot.colour && sample) {
       const marksFrameDeltas = await page.evaluate(panFrames, [PAN_DURATION_MS, PAN_DISTANCE_PX]);
@@ -265,6 +337,30 @@ async function trialView(page, watcher, spot, sceneId, zoom, options) {
   return record;
 }
 
+// The sampled owner must equal the requested one, or the view measured the wrong layer.
+function ownerMismatch(spot, sample) {
+  const wanted = effectiveColour(spot);
+  if (wanted === null || !sample) return null;
+  if (sample.colourOwner === wanted) return null;
+
+  return `colour owner ${sample.colourOwner ?? "none"} is not the requested ${wanted}`;
+}
+
+// False repaint readings fail the record, because a hidden layer repaints nothing.
+function displayFailures(checks, renderer) {
+  const failures = [];
+  if (!checks.visibility) failures.push("land cover visibility check did not repaint");
+  if (!checks.palette_repaints) failures.push("land cover palette check did not repaint");
+  if (renderer === "gpu" && checks.edges_available && !checks.edges_repaint) {
+    failures.push("land cover edges check did not repaint");
+  }
+  if (renderer === "image" && !checks.fallback_note) {
+    failures.push("land cover image fallback note is missing");
+  }
+
+  return failures;
+}
+
 async function landcoverScreens(page, spot, zoom, options) {
   if (!options.screens) return;
 
@@ -272,14 +368,14 @@ async function landcoverScreens(page, spot, zoom, options) {
   await page.screenshot({ path: path.join(options.out, `${prefix}-${options.renderer}.png`) });
   if (options.renderer !== "gpu") return;
 
-  await page.getByRole("button", { name: "Edit Land cover display" }).click();
+  await page.getByRole("button", { name: /^Edit Land cover(?: ·|$)/ }).click();
   const rounding = page.getByRole("slider", { name: "Rounding", exact: true });
   if (await rounding.count()) {
     await rounding.fill("0");
     await page.getByRole("button", { name: "Close", exact: true }).click();
     await page.evaluate(nextFrame);
     await page.screenshot({ path: path.join(options.out, `${prefix}-gpu-rounding-0.png`) });
-    await page.getByRole("button", { name: "Edit Land cover display" }).click();
+    await page.getByRole("button", { name: /^Edit Land cover(?: ·|$)/ }).click();
     await rounding.fill("0.25");
   }
   await page.getByRole("button", { name: "Close", exact: true }).click();
@@ -287,18 +383,18 @@ async function landcoverScreens(page, spot, zoom, options) {
 
 async function checkDisplay(page, renderer) {
   const card = page.locator("section.card").filter({ hasText: "Land cover" });
-  const checkbox = card.getByRole("checkbox", { name: "Land cover", exact: true });
+  const master = card.getByRole("switch", { name: /^Show Land cover(?: ·|$)/ });
   const before = await page.evaluate(frameHash);
-  await checkbox.uncheck();
+  await master.uncheck();
   const hidden = await page.evaluate(frameHash);
-  await checkbox.check();
+  await master.check();
   const shown = await page.evaluate(frameHash);
-  await page.getByRole("button", { name: "Edit Land cover display" }).click();
-  const menu = page.locator(".layer-menu:popover-open");
-  const original = await menu.locator("input[type=radio]:checked").inputValue();
+  await page.getByRole("button", { name: /^Edit Land cover(?: ·|$)/ }).click();
+  const menu = page.getByRole("complementary", { name: "Edit Land cover", exact: true });
+  const original = await menu.locator(".palette-choice input[type=radio]:checked").inputValue();
   await menu.getByRole("radio", { name: "ESA", exact: false }).check();
   const recoloured = await page.evaluate(frameHash);
-  await menu.locator(`input[type=radio][value="${original}"]`).check();
+  await menu.locator(`.palette-choice input[type=radio][value="${original}"]`).check();
   const rounding = menu.getByRole("slider", { name: "Rounding", exact: true });
   const hasEdges = await rounding.count() > 0;
   let edgesRepaint = null;
@@ -451,13 +547,6 @@ function jumpTo([centre, zoom]) {
   window.__map.jumpTo({ center: centre, zoom });
 }
 
-function enableCheckbox(label) {
-  const rows = [...document.querySelectorAll("section.card label")];
-  const row = rows.find((candidate) => candidate.textContent.trim() === label);
-  if (!row) throw new Error(`no checkbox labelled "${label}"`);
-  if (!row.querySelector("input").checked) row.querySelector("input").click();
-}
-
 function waitForIdle(timeoutMs) {
   const map = window.__map;
   return new Promise((resolve) => {
@@ -505,6 +594,17 @@ function takeSample([linePattern, labelPattern]) {
   const labels = rendered(idsOf("symbol", labelPattern));
   const canvas = map.getCanvas();
   const cards = [...document.querySelectorAll("section.card")];
+  // The link carries the normalized allocation, so its as entries name the colour owner.
+  const search = window.location?.search ?? "";
+  // URLSearchParams is missing from the trial's sandbox, so the query is read by hand.
+  const queryParam = (name) => new RegExp(`[?&]${name}=([^&]*)`).exec(search)?.[1] ?? "";
+  const off = new Set(queryParam("off").split(",").filter(Boolean));
+  let colourOwner = null;
+  for (const entry of queryParam("as").split(",").filter(Boolean)) {
+    const [unit, draw] = entry.split(":");
+    if (draw === "colour" && !off.has(unit)) colourOwner = unit;
+    else if (colourOwner === unit) colourOwner = null;
+  }
 
   return {
     zoom: map.getZoom(),
@@ -520,6 +620,6 @@ function takeSample([linePattern, labelPattern]) {
         .filter((label) => label.checkVisibility({ visibilityProperty: true }))
         .map((label) => label.innerText.trim()),
     ),
-    colourOwner: document.querySelector(".colour-picker select")?.value || null,
+    colourOwner,
   };
 }
