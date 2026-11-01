@@ -15,8 +15,11 @@ from rasterio.enums import Resampling
 from rasterio.errors import NotGeoreferencedWarning
 from rasterio.transform import Affine, from_origin
 from rasterio.warp import reproject
+from shapely.geometry import box
+from shapely.geometry.base import BaseGeometry
 
-from ..areas import AreaError, WORLD_WIDTH_DEG
+from ..areas import WORLD_WIDTH_DEG
+from ..statistics import weighted_distribution
 from .datasets import StaticDataset
 from .grid import (
     MAX_STATIC_DIVISIONS,
@@ -58,8 +61,6 @@ TERRAIN_TILES_URL = "https://tiles.mapterhorn.com/{z}/{x}/{y}.webp"
 TERRAIN_TILE_SIZE_PX = 512
 TERRAIN_TILE_MAX_ZOOM = 11
 
-ELEVATION_LOW_PERCENTILE = 2
-ELEVATION_HIGH_PERCENTILE = 98
 MEDIAN_PERCENTILE = 50
 STEEP_PERCENTILE = 90
 
@@ -427,6 +428,9 @@ class TerrainDataset(StaticDataset):
     def block_count(self, bbox: Bbox) -> int:
         return terrain_block_count(tuple(bbox))
 
+    def _tiles(self, bbox: Bbox) -> list[tuple[str, str]]:
+        return terrain_tiles(bbox, terrain_product(terrain_res(bbox)))
+
     def read(
         self,
         bbox: Bbox,
@@ -443,42 +447,132 @@ class TerrainDataset(StaticDataset):
     def summary(
         self,
         arrays: dict[str, np.ndarray],
-        mask: np.ndarray,
+        weights: np.ndarray,
         transform: Affine,
-    ) -> dict[str, float]:
-        """Return unrounded in-mask elevation and slope statistics for the ladder."""
-        # Only mask 1 carries weight, so the ring never enters the statistics.
-        inside = mask == 1
+        geometry: BaseGeometry,
+    ) -> dict[str, object]:
+        """Return weighted elevation statistics and their distribution."""
+        elevation = arrays["elevation"]
         res_deg = abs(transform.a)
-        centres = arrays["elevation"][inside]
-        heights = centres[np.isfinite(centres)]
-        if heights.size == 0:
-            raise AreaError("Terrain has no valid elevation inside the area")
-        slopes = slope_degrees(arrays["elevation"], res_deg, transform.f)[inside]
-        finite_slopes = slopes[np.isfinite(slopes) & np.isfinite(centres)]
-        if finite_slopes.size == 0:
-            # No complete stencil exists, so keep a legacy spacing hint, not flatness.
-            median_slope = 0.0
-            steep_slope = 0.0
-        else:
-            median_slope, steep_slope = np.percentile(
-                finite_slopes,
-                [MEDIAN_PERCENTILE, STEEP_PERCENTILE],
-            )
-        low, high = np.percentile(heights, [ELEVATION_LOW_PERCENTILE, ELEVATION_HIGH_PERCENTILE])
-        centre_latitude = transform.f + arrays["elevation"].shape[0] * transform.e / 2
-        cell_m = res_deg * LONGITUDE_DEGREE_AT_EQUATOR_M * math.cos(math.radians(centre_latitude))
-        stats = {
-            "min": heights.min(),
-            "max": heights.max(),
-            "mean": heights.mean(),
-            "p2": low,
-            "p98": high,
-            "slope_p50_deg": median_slope,
-            "slope_p90_deg": steep_slope,
-            "cell_m": cell_m,
-        }
-        return {key: float(value) for key, value in stats.items()}
+        references = _sea_level_references(elevation, weights, geometry)
+        distribution = weighted_distribution(elevation, weights, references)
+        slopes = _weighted_slope_hints(elevation, weights, res_deg, transform.f)
+        cell_m = _cell_size_m(elevation.shape[0], res_deg, transform.f)
+        stats = _terrain_stats(distribution, slopes, cell_m)
+        return {"stats": stats, "distribution": distribution}
 
-    def _tiles(self, bbox: Bbox) -> list[tuple[str, str]]:
-        return terrain_tiles(bbox, terrain_product(terrain_res(bbox)))
+
+def _sea_level_references(
+    elevation: np.ndarray,
+    weights: np.ndarray,
+    geometry: BaseGeometry,
+) -> list[dict]:
+    """Return a sea-level marker when valid heights span zero or meet ocean squares."""
+    valid = np.isfinite(elevation) & (weights > 0)
+    if not valid.any():
+        return []
+    lowest = float(np.min(elevation[valid]))
+    highest = float(np.max(elevation[valid]))
+    if lowest <= 0 <= highest:
+        return [{"id": "sea_level", "value": 0}]
+    if _overlaps_ocean_square(geometry):
+        return [{"id": "sea_level", "value": 0}]
+    return []
+
+
+def _overlaps_ocean_square(geometry: BaseGeometry) -> bool:
+    """Return whether the outline overlaps a square missing from both indexes."""
+    if geometry.is_empty:
+        return False
+    west, south, east, north = geometry.bounds
+    for lat in range(math.floor(south), math.ceil(north)):
+        for lon in range(math.floor(west), math.ceil(east)):
+            if _is_missing_ocean_square(lat, lon):
+                if _square_overlaps(geometry, lon, lat):
+                    return True
+    return False
+
+
+def _is_missing_ocean_square(lat: int, lon: int) -> bool:
+    """Return whether a degree square has no tile in either product, so it is likely ocean."""
+    wrapped = (lon + TILE_COL_OFFSET_DEG) % WORLD_WIDTH_DEG - TILE_COL_OFFSET_DEG
+    if not -TILE_ROW_OFFSET_DEG <= lat < TILE_ROW_OFFSET_DEG:
+        return False
+    row = lat + TILE_ROW_OFFSET_DEG
+    column = wrapped + TILE_COL_OFFSET_DEG
+    return not _tile_index("glo30")[row, column] and not _tile_index("glo90")[row, column]
+
+
+def _square_overlaps(geometry: BaseGeometry, lon: int, lat: int) -> bool:
+    """Return whether the square overlaps the outline with positive area rather than an edge."""
+    return geometry.intersection(box(lon, lat, lon + 1, lat + 1)).area > 0
+
+
+def _weighted_slope_hints(
+    elevation: np.ndarray,
+    weights: np.ndarray,
+    res_deg: float,
+    lat_top: float,
+) -> tuple[float, float]:
+    """Return the median and steep slope percentiles weighted by centre area.
+
+    Return zeros when no complete stencil exists.
+    """
+    slopes = slope_degrees(elevation, res_deg, lat_top)
+    valid = np.isfinite(slopes) & np.isfinite(elevation) & (weights > 0)
+    if not valid.any():
+        # No complete stencil exists, so keep a legacy spacing hint, not flatness.
+        return 0.0, 0.0
+    retained_slopes = slopes[valid]
+    retained_weights = weights[valid]
+    return _weighted_percentiles(
+        retained_slopes,
+        retained_weights,
+        MEDIAN_PERCENTILE,
+        STEEP_PERCENTILE,
+    )
+
+
+def _weighted_percentiles(
+    values: np.ndarray,
+    sample_weights: np.ndarray,
+    first_percent: float,
+    second_percent: float,
+) -> tuple[float, float]:
+    """Return two inverse-ECDF percentiles from one stable ordering of the samples."""
+    order = np.argsort(values, kind="stable")
+    ordered = values[order]
+    cumulative = np.cumsum(sample_weights[order], dtype="float64")
+    total = float(np.sum(sample_weights, dtype="float64"))
+    first_threshold = first_percent / 100 * total
+    second_threshold = second_percent / 100 * total
+    last = ordered.size - 1
+    first_index = int(np.searchsorted(cumulative, first_threshold, side="left"))
+    second_index = int(np.searchsorted(cumulative, second_threshold, side="left"))
+    return float(ordered[min(first_index, last)]), float(ordered[min(second_index, last)])
+
+
+def _cell_size_m(height: int, res_deg: float, lat_top: float) -> float:
+    """Return the east-west metres of a cell at the grid centre latitude."""
+    centre_latitude = lat_top - height * res_deg / 2
+    return res_deg * LONGITUDE_DEGREE_AT_EQUATOR_M * math.cos(math.radians(centre_latitude))
+
+
+def _terrain_stats(
+    distribution: dict,
+    slopes: tuple[float, float],
+    cell_m: float,
+) -> dict[str, float]:
+    """Return legacy contour stats built from the distribution result."""
+    median_slope, steep_slope = slopes
+    stats = {
+        "min": distribution["min"],
+        "max": distribution["max"],
+        "mean": distribution["mean"],
+        "p2": distribution["values"][2],
+        "p98": distribution["values"][98],
+        "slope_p50_deg": median_slope,
+        "slope_p90_deg": steep_slope,
+        "cell_m": cell_m,
+    }
+    return {key: float(value) for key, value in stats.items()}

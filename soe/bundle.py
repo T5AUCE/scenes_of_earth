@@ -101,7 +101,7 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
     grid = {
         "crs": "EPSG:4326",
         "bbox": layer_plan.bbox,
-        "res": round(layer_plan.res, 8),
+        "res": layer_plan.res,
         "nx": layer_plan.shape[1],
         "ny": layer_plan.shape[0],
     }
@@ -145,6 +145,8 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
         layer["stats"] = result["stats"]
     if "area_series" in result:
         layer["area_series"] = result["area_series"]
+    if "distribution" in result:
+        layer["distribution"] = result["distribution"]
     if dataset.tiles:
         layer["tiles"] = dict(dataset.tiles)
     return layer

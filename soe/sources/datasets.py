@@ -8,6 +8,7 @@ from typing import ClassVar, NamedTuple
 
 import numpy as np
 from rasterio.transform import Affine
+from shapely.geometry.base import BaseGeometry
 
 from .cubes import CubeSpec
 from .fallback import read_bilinear
@@ -157,10 +158,11 @@ class StaticDataset(Dataset):
     def summary(
         self,
         arrays: dict[str, np.ndarray],
-        mask: np.ndarray,
+        weights: np.ndarray,
         transform: Affine,
-    ) -> dict[str, float]:
-        """Return in-area summary statistics, or none for datasets that do not publish them."""
+        geometry: BaseGeometry,
+    ) -> dict[str, object]:
+        """Return build-result blocks with none by default for datasets without statistics."""
         return {}
 
     def block_count(self, bbox: Bbox) -> int:

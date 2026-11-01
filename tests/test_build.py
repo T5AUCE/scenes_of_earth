@@ -710,7 +710,147 @@ def test_terrain_statistics_cover_only_the_cells_inside_the_area(tmp_path):
 
     assert not inside.all()
     assert terrain["stats"]["max"] == arrays["elevation"][inside].max()
-    assert terrain["stats"] == TERRAIN.summary(arrays, inside, transform)
+    expected = TERRAIN.summary(
+        arrays,
+        layer_plan.area_weights,
+        transform,
+        layer_plan.geometry,
+    )
+
+    assert terrain["stats"] == expected["stats"]
+    assert terrain["distribution"] == expected["distribution"]
+
+
+def test_terrain_distribution_mirrors_stats_with_101_quantiles(nairobi_bundle):
+    _, doc, _ = nairobi_bundle
+    terrain = next(layer for layer in doc["layers"] if layer["id"] == "terrain")
+    stats = terrain["stats"]
+    distribution = terrain["distribution"]
+    values = distribution["values"]
+
+    assert distribution["statistic"] == "quantiles"
+    assert distribution["weights"] == "cell_area_inside_outline"
+    assert distribution["percent"] == 1
+    assert len(values) == 101
+    assert all(later >= earlier for earlier, later in zip(values, values[1:]))
+    assert distribution["min"] == values[0]
+    assert distribution["max"] == values[-1]
+    assert distribution["min"] <= distribution["mean"] <= distribution["max"]
+    assert stats["min"] == distribution["min"]
+    assert stats["max"] == distribution["max"]
+    assert stats["mean"] == distribution["mean"]
+    assert stats["p2"] == values[2]
+    assert stats["p98"] == values[98]
+    assert 0 < distribution["valid_fraction"] <= 1.0
+    assert isinstance(distribution["reference_values"], list)
+    assert validate(doc) == []
+
+
+def test_terrain_grid_res_is_exact_unrounded(tmp_path):
+    area = Area(NAIROBI, BOUNDARY)
+    layer_plan = plan(area, [TERRAIN], None, None).layers["terrain"]
+    build_scene(HASH_A, area, None, None, [TERRAIN], "Test", tmp_path)
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+
+    assert doc["layers"][0]["grid"]["res"] == layer_plan.res
+
+
+def test_worldcover_builds_without_distribution_and_keeps_contour_hints(tmp_path):
+    build_scene(HASH_A, Area(NAIROBI, BOUNDARY), None, None, [LAND_COVER], "Test", tmp_path)
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    cover = doc["layers"][0]
+
+    assert "distribution" not in cover
+    assert "stats" not in cover
+    assert validate(doc) == []
+
+    build_scene(HASH_B, Area(NAIROBI, BOUNDARY), None, None, [TERRAIN], "Test", tmp_path)
+    terrain_doc = json.loads((tmp_path / HASH_B / "scene.json").read_text(encoding="utf-8"))
+    stats = terrain_doc["layers"][0]["stats"]
+
+    assert set(stats) == {
+        "min",
+        "max",
+        "mean",
+        "p2",
+        "p98",
+        "slope_p50_deg",
+        "slope_p90_deg",
+        "cell_m",
+    }
+    assert "distribution" in terrain_doc["layers"][0]
+
+
+def test_empty_terrain_fails_before_any_bundle_writer_and_reads_once(tmp_path, monkeypatch):
+    class AllMissingTerrain(SyntheticSource):
+        def __init__(self) -> None:
+            super().__init__()
+            self.terrain_reads = 0
+
+        def terrain(
+            self,
+            bounds: Bbox,
+            res: float,
+            on_block: Callable[[], None] = lambda: None,
+        ) -> tuple[np.ndarray, Affine]:
+            """Return all-NaN elevation to trigger the empty-terrain guard."""
+            self.terrain_reads += 1
+            west, south, east, north = bounds
+            height = round((north - south) / res)
+            width = round((east - west) / res)
+            transform = Affine(res, 0, west, 0, -res, north)
+            return np.full((height, width), np.nan, "float64"), transform
+
+    source = AllMissingTerrain()
+    terrain = make_registry(source)["terrain"]
+    writes: list[str] = []
+    opens: list[str] = []
+
+    def record_write(*args: object, **kwargs: object) -> None:
+        """Record a bundle write without writing it."""
+        writes.append("write")
+
+    original_open = zarr.open_group
+
+    def record_open(*args: object, **kwargs: object) -> zarr.Group:
+        """Record a store opening and open it as usual."""
+        opens.append("open")
+        return original_open(*args, **kwargs)
+
+    monkeypatch.setattr("soe.build._write_array", record_write)
+    monkeypatch.setattr(zarr, "open_group", record_open)
+
+    with pytest.raises(AreaError):
+        build_scene(HASH_A, Area(NAIROBI, BOUNDARY), None, None, [terrain], "Test", tmp_path)
+
+    assert source.terrain_reads == 1
+    assert writes == []
+    assert opens == []
+    assert not (tmp_path / HASH_A).exists()
+
+
+def test_terrain_build_reads_each_static_once(tmp_path):
+    class CountingTerrain(SyntheticSource):
+        def __init__(self) -> None:
+            super().__init__()
+            self.terrain_reads = 0
+
+        def terrain(
+            self,
+            bounds: Bbox,
+            res: float,
+            on_block: Callable[[], None] = lambda: None,
+        ) -> tuple[np.ndarray, Affine]:
+            """Count terrain reads and return synthetic elevation."""
+            self.terrain_reads += 1
+            return super().terrain(bounds, res, on_block)
+
+    source = CountingTerrain()
+    terrain = make_registry(source)["terrain"]
+    build_scene(HASH_A, Area(NAIROBI, BOUNDARY), None, None, [terrain], "Test", tmp_path)
+
+    assert source.terrain_reads == 1
+    assert (tmp_path / HASH_A / "scene.json").exists()
 
 
 def test_layer_notices_see_the_planned_steps():

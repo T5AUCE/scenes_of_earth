@@ -12,6 +12,8 @@ import pytest
 import rasterio
 import zarr
 from rasterio.transform import Affine, from_origin
+from shapely.geometry import MultiPolygon, Polygon, box
+from shapely.geometry.base import BaseGeometry
 
 from soe.areas import AreaError
 from soe.sources import (
@@ -50,6 +52,7 @@ from soe.sources.terrain import (
     _tile_index,
     _tile_name,
     _warp_block,
+    _weighted_percentiles,
     placed_terrain_tiles,
     slope_degrees,
     terrain_by_blocks,
@@ -62,7 +65,7 @@ from soe.sources.worldcover import (
     overview_factor,
     worldcover_tiles,
 )
-from tests.helpers import NAIROBI, RAIN, TERRAIN, write_cube
+from tests.helpers import LAND_COVER, NAIROBI, RAIN, TERRAIN, write_cube
 
 TILE_PX = 60  # the fake terrain tiles are small, 1 / 60 degree per pixel
 NARROW_TILE_PX = 40  # tiles from 50 degrees poleward have 2/3 of the pixels in x
@@ -733,13 +736,28 @@ def test_terrain_elevation_statistics_exclude_values_outside_the_mask():
     mask = np.zeros((5, 5), dtype="uint8")
     mask[1:-1, 1:-1] = 1
     elevation[mask == 0] = 10_000
+    weights = (mask == 1).astype("float64")
+    geometry = box(36.5, -1.5, 37.5, -0.5)
 
-    summary = TERRAIN.summary({"elevation": elevation}, mask, from_origin(0, 5, 1, 1))
+    result = TERRAIN.summary(
+        {"elevation": elevation},
+        weights,
+        from_origin(0, 5, 1, 1),
+        geometry,
+    )
+    stats = result["stats"]
+    distribution = result["distribution"]
 
-    assert summary["min"] == 6 and summary["max"] == 18
-    assert summary["mean"] == 12
-    assert summary["p2"] == pytest.approx(6.16) and summary["p98"] == pytest.approx(17.84)
-    assert summary["cell_m"] == pytest.approx(111_320 * np.cos(np.radians(2.5)), abs=0.01)
+    assert stats["min"] == 6 and stats["max"] == 18
+    assert stats["mean"] == 12
+    assert stats["p2"] == 6 and stats["p98"] == 18
+    assert stats["p2"] == distribution["values"][2]
+    assert stats["p98"] == distribution["values"][98]
+    assert distribution["min"] == 6 and distribution["max"] == 18
+    assert distribution["mean"] == 12
+    assert len(distribution["values"]) == 101
+    assert distribution["values"][0] == 6 and distribution["values"][-1] == 18
+    assert stats["cell_m"] == pytest.approx(111_320 * np.cos(np.radians(2.5)), abs=0.01)
 
 
 def test_terrain_summary_keeps_zero_and_excludes_nan_and_ring():
@@ -750,49 +768,78 @@ def test_terrain_summary_keeps_zero_and_excludes_nan_and_ring():
     mask = np.zeros((5, 5), dtype="uint8")
     mask[1:-1, 1:-1] = 1
     mask[0, 0] = 2
+    weights = (mask == 1).astype("float64")
+    geometry = box(36.5, -1.5, 37.5, -0.5)
 
-    summary = TERRAIN.summary({"elevation": elevation}, mask, from_origin(0, 5, 1, 1))
+    result = TERRAIN.summary(
+        {"elevation": elevation},
+        weights,
+        from_origin(0, 5, 1, 1),
+        geometry,
+    )
+    stats = result["stats"]
+    distribution = result["distribution"]
 
-    assert summary["min"] == 0.0
-    assert summary["mean"] == pytest.approx((10.0 * 7 + 0.0) / 8)
-    assert summary["max"] == 10.0
+    assert stats["min"] == 0.0
+    assert stats["mean"] == pytest.approx((10.0 * 7 + 0.0) / 8)
+    assert stats["max"] == 10.0
+    assert stats["mean"] == distribution["mean"]
+    assert distribution["reference_values"] == [{"id": "sea_level", "value": 0}]
 
 
 def test_terrain_summary_mean_keeps_full_precision():
     elevation = np.full((3, 3), 10.123456789)
-    mask = np.ones((3, 3), dtype="uint8")
+    weights = np.ones((3, 3), dtype="float64")
+    geometry = box(36.5, -1.5, 37.5, -0.5)
 
-    summary = TERRAIN.summary({"elevation": elevation}, mask, from_origin(0, 3, 1, 1))
+    result = TERRAIN.summary(
+        {"elevation": elevation},
+        weights,
+        from_origin(0, 3, 1, 1),
+        geometry,
+    )
 
-    assert summary["mean"] == pytest.approx(10.123456789, abs=1e-9)
-    assert round(summary["mean"], 2) != summary["mean"]
+    assert result["stats"]["mean"] == pytest.approx(10.123456789, abs=1e-9)
+    assert result["distribution"]["mean"] == pytest.approx(10.123456789, abs=1e-9)
+    assert result["distribution"]["values"] == [pytest.approx(10.123456789)] * 101
+    assert round(result["stats"]["mean"], 2) != result["stats"]["mean"]
 
 
 def test_terrain_summary_without_a_complete_stencil_falls_back_to_zero_hints():
     elevation = np.full((5, 5), np.nan)
     elevation[2, 2] = 100.0
-    mask = np.ones((5, 5), dtype="uint8")
+    weights = np.ones((5, 5), dtype="float64")
+    geometry = box(36.5, -1.5, 37.5, -0.5)
 
-    summary = TERRAIN.summary({"elevation": elevation}, mask, from_origin(0, 5, 0.01, 0.01))
+    result = TERRAIN.summary(
+        {"elevation": elevation},
+        weights,
+        from_origin(0, 5, 0.01, 0.01),
+        geometry,
+    )
 
-    assert summary["slope_p50_deg"] == 0.0
-    assert summary["slope_p90_deg"] == 0.0
+    assert result["stats"]["slope_p50_deg"] == 0.0
+    assert result["stats"]["slope_p90_deg"] == 0.0
+    assert result["stats"]["min"] == 100.0 and result["stats"]["max"] == 100.0
+    assert result["distribution"]["valid_fraction"] == pytest.approx(1 / 25)
 
 
 def test_terrain_summary_slope_hints_measure_a_complete_stencil():
     res_deg = 0.01
     rise_per_row_m = 0.1 * res_deg * LATITUDE_DEGREE_M
     elevation = np.tile(np.arange(8)[:, None] * rise_per_row_m, (1, 8))
-    mask = np.ones((8, 8), dtype="uint8")
+    weights = np.ones((8, 8), dtype="float64")
+    geometry = box(36.5, -1.5, 37.5, -0.5)
 
-    summary = TERRAIN.summary(
+    result = TERRAIN.summary(
         {"elevation": elevation},
-        mask,
+        weights,
         from_origin(0, 8, res_deg, res_deg),
+        geometry,
     )
 
-    assert summary["slope_p50_deg"] == pytest.approx(5.71, abs=0.05)
-    assert summary["slope_p90_deg"] == pytest.approx(5.71, abs=0.05)
+    assert result["stats"]["slope_p50_deg"] == pytest.approx(5.71, abs=0.05)
+    assert result["stats"]["slope_p90_deg"] == pytest.approx(5.71, abs=0.05)
 
 
 def test_terrain_summary_slope_hints_exclude_missing_centres():
@@ -801,34 +848,316 @@ def test_terrain_summary_slope_hints_exclude_missing_centres():
     elevation = np.full((5, 5), np.nan)
     for row in range(3):
         elevation[row, :3] = 100.0 + row * rise_per_row_m
-    mask = np.ones((5, 5), dtype="uint8")
+    weights = np.ones((5, 5), dtype="float64")
+    geometry = box(36.5, -1.5, 37.5, -0.5)
 
-    valid_summary = TERRAIN.summary(
+    valid_result = TERRAIN.summary(
         {"elevation": elevation},
-        mask,
+        weights,
         from_origin(0, 5, res_deg, res_deg),
+        geometry,
     )
 
-    assert valid_summary["slope_p50_deg"] > 0.0
-    assert valid_summary["slope_p90_deg"] > 0.0
+    assert valid_result["stats"]["slope_p50_deg"] > 0.0
+    assert valid_result["stats"]["slope_p90_deg"] > 0.0
 
     elevation[1, 1] = np.nan
-    missing_summary = TERRAIN.summary(
+    missing_result = TERRAIN.summary(
         {"elevation": elevation},
-        mask,
+        weights,
         from_origin(0, 5, res_deg, res_deg),
+        geometry,
     )
 
-    assert missing_summary["slope_p50_deg"] == 0.0
-    assert missing_summary["slope_p90_deg"] == 0.0
+    assert missing_result["stats"]["slope_p50_deg"] == 0.0
+    assert missing_result["stats"]["slope_p90_deg"] == 0.0
 
 
 def test_terrain_summary_without_valid_heights_is_refused():
     elevation = np.full((3, 3), np.nan)
-    mask = np.ones((3, 3), dtype="uint8")
+    weights = np.ones((3, 3), dtype="float64")
+    geometry = box(36.5, -1.5, 37.5, -0.5)
 
-    with pytest.raises(AreaError, match="no valid elevation"):
-        TERRAIN.summary({"elevation": elevation}, mask, from_origin(0, 3, 1, 1))
+    with pytest.raises(AreaError, match="no valid values"):
+        TERRAIN.summary(
+            {"elevation": elevation},
+            weights,
+            from_origin(0, 3, 1, 1),
+            geometry,
+        )
+
+
+def test_terrain_distribution_matches_hand_computed_weighted_mean():
+    elevation = np.array([[0.5, -2.5, 3.25]])
+    weights = np.array([[1.0, 2.0, 3.0]])
+    geometry = box(36.5, -1.5, 37.5, -0.5)
+
+    result = TERRAIN.summary(
+        {"elevation": elevation},
+        weights,
+        from_origin(0, 1, 1, 1),
+        geometry,
+    )
+    distribution = result["distribution"]
+    stats = result["stats"]
+
+    assert distribution["statistic"] == "quantiles"
+    assert distribution["weights"] == "cell_area_inside_outline"
+    assert distribution["percent"] == 1
+    assert len(distribution["values"]) == 101
+    assert distribution["min"] == -2.5
+    assert distribution["max"] == 3.25
+    assert distribution["mean"] == pytest.approx(0.875)
+    assert distribution["values"][50] == 0.5
+    assert distribution["values"][0] == -2.5
+    assert distribution["values"][-1] == 3.25
+    assert all(
+        later >= earlier
+        for earlier, later in zip(distribution["values"], distribution["values"][1:])
+    )
+    assert stats["min"] == distribution["min"]
+    assert stats["max"] == distribution["max"]
+    assert stats["mean"] == distribution["mean"]
+    assert stats["p2"] == distribution["values"][2]
+    assert stats["p98"] == distribution["values"][98]
+    assert distribution["reference_values"] == [{"id": "sea_level", "value": 0}]
+
+
+def test_terrain_tied_values_combine_weights_and_stay_ordered():
+    elevation = np.array([[2.0, 1.0, 1.0, 3.0]])
+    weights = np.ones((1, 4), dtype="float64")
+    geometry = box(36.5, -1.5, 37.5, -0.5)
+
+    result = TERRAIN.summary(
+        {"elevation": elevation},
+        weights,
+        from_origin(0, 1, 1, 1),
+        geometry,
+    )
+    values = result["distribution"]["values"]
+
+    assert values[50] == 1.0
+    assert values[25] == 1.0
+    assert values[75] == 2.0
+    assert all(later >= earlier for earlier, later in zip(values, values[1:]))
+
+
+def test_terrain_constant_grid_gives_flat_quantiles():
+    elevation = np.full((2, 2), 7.5)
+    weights = np.array([[1.0, 2.0], [3.0, 4.0]])
+    geometry = box(36.5, -1.5, 37.5, -0.5)
+
+    result = TERRAIN.summary(
+        {"elevation": elevation},
+        weights,
+        from_origin(0, 2, 1, 1),
+        geometry,
+    )
+    distribution = result["distribution"]
+
+    assert distribution["min"] == 7.5
+    assert distribution["max"] == 7.5
+    assert distribution["mean"] == 7.5
+    assert distribution["values"] == [7.5] * 101
+    assert result["stats"]["p2"] == 7.5 and result["stats"]["p98"] == 7.5
+    assert distribution["reference_values"] == []
+
+
+def test_terrain_distribution_ignores_zero_weight_ring_extremes():
+    elevation = np.array([[-2.5, 3.25, -1e9, 1e9]])
+    weights = np.array([[1.0, 3.0, 0.0, 0.0]])
+    geometry = box(36.5, -1.5, 37.5, -0.5)
+
+    result = TERRAIN.summary(
+        {"elevation": elevation},
+        weights,
+        from_origin(0, 1, 1, 1),
+        geometry,
+    )
+    distribution = result["distribution"]
+
+    assert distribution["min"] == -2.5
+    assert distribution["max"] == 3.25
+    assert distribution["mean"] == 1.8125
+    assert distribution["valid_fraction"] == 1.0
+    assert distribution["values"] == [-2.5] * 26 + [3.25] * 75
+
+
+def test_terrain_negative_heights_stay_valid_without_rounding():
+    elevation = np.array([[-123.456, -2.5, -0.5]])
+    weights = np.ones((1, 3), dtype="float64")
+    geometry = box(36.5, -1.5, 37.5, -0.5)
+
+    result = TERRAIN.summary(
+        {"elevation": elevation},
+        weights,
+        from_origin(0, 1, 1, 1),
+        geometry,
+    )
+
+    assert result["stats"]["min"] == pytest.approx(-123.456)
+    assert result["stats"]["max"] == -0.5
+    assert result["distribution"]["reference_values"] == []
+
+
+def test_terrain_sea_level_when_valid_heights_span_zero():
+    elevation = np.array([[-5.0, 5.0]])
+    weights = np.ones((1, 2), dtype="float64")
+    geometry = box(36.5, -1.5, 37.5, -0.5)
+
+    result = TERRAIN.summary(
+        {"elevation": elevation},
+        weights,
+        from_origin(0, 1, 1, 1),
+        geometry,
+    )
+
+    assert result["distribution"]["reference_values"] == [{"id": "sea_level", "value": 0}]
+
+
+def test_terrain_sea_level_when_outline_meets_missing_ocean_squares():
+    elevation = np.full((2, 2), 100.0)
+    weights = np.ones((2, 2), dtype="float64")
+    geometry = box(-130, -10, -129, -9)
+
+    result = TERRAIN.summary(
+        {"elevation": elevation},
+        weights,
+        from_origin(-130, -9, 1, 1),
+        geometry,
+    )
+
+    assert result["distribution"]["reference_values"] == [{"id": "sea_level", "value": 0}]
+
+
+def test_terrain_no_sea_level_for_land_without_zero_crossing():
+    elevation = np.full((2, 2), 100.0)
+    elevation[0, 0] = np.nan
+    weights = np.ones((2, 2), dtype="float64")
+    geometry = box(36.5, -1.5, 37.5, -0.5)
+
+    result = TERRAIN.summary(
+        {"elevation": elevation},
+        weights,
+        from_origin(0, 2, 1, 1),
+        geometry,
+    )
+
+    assert result["distribution"]["reference_values"] == []
+    assert result["distribution"]["valid_fraction"] == pytest.approx(3 / 4)
+
+
+def test_terrain_sea_level_needs_absence_from_both_indexes(monkeypatch):
+    _install_tile_indexes(
+        monkeypatch,
+        {(0, 10), (0, 12)},
+        {(0, 10), (0, 11)},
+    )
+    sea_level = [{"id": "sea_level", "value": 0}]
+
+    assert _references_for_geometry(box(10.2, 0.2, 10.8, 0.8)) == sea_level
+    assert _references_for_geometry(box(11.2, 0.2, 11.8, 0.8)) == []
+    assert _references_for_geometry(box(12.2, 0.2, 12.8, 0.8)) == []
+    assert _references_for_geometry(box(13.2, 0.2, 13.8, 0.8)) == []
+
+
+def test_terrain_sea_level_geometry_edge_cases(monkeypatch):
+    _install_tile_indexes(monkeypatch, {(0, 10)}, {(0, 10)})
+    sea_level = [{"id": "sea_level", "value": 0}]
+    holed_outline = Polygon(
+        [(9, -1), (12, -1), (12, 2), (9, 2)],
+        [[(10, 0), (11, 0), (11, 1), (10, 1)]],
+    )
+    split_outline = MultiPolygon([box(9, 0, 9.5, 1), box(11.5, 0, 12, 1)])
+
+    assert _references_for_geometry(box(10.2, 0.2, 10.8, 0.8)) == sea_level
+    assert _references_for_geometry(box(10.9, 0.2, 11.5, 0.8)) == sea_level
+    assert _references_for_geometry(box(11.0, 0.2, 11.8, 0.8)) == []
+    assert _references_for_geometry(holed_outline) == []
+    assert _references_for_geometry(split_outline) == []
+
+
+def test_terrain_sea_level_matches_across_antimeridian_frames(monkeypatch):
+    _install_tile_indexes(monkeypatch, {(0, -179)}, {(0, -179)})
+    sea_level = [{"id": "sea_level", "value": 0}]
+
+    assert _references_for_geometry(box(180.2, 0.2, 181.8, 0.8)) == sea_level
+    assert _references_for_geometry(box(-179.8, 0.2, -178.2, 0.8)) == sea_level
+
+
+def test_terrain_summary_slope_hints_use_nonuniform_weights():
+    res_deg = 0.01
+    lat_top = 5.0
+    columns = np.arange(5, dtype="float64") ** 2
+    elevation = 1000.0 + 100.0 * np.tile(columns, (5, 1))
+    weights = np.zeros((5, 5), dtype="float64")
+    weights[1, 1] = 99.0
+    weights[3, 3] = 1.0
+    geometry = box(36.5, -1.5, 37.5, -0.5)
+    result = TERRAIN.summary(
+        {"elevation": elevation},
+        weights,
+        from_origin(0, 5, res_deg, res_deg),
+        geometry,
+    )
+    slopes = slope_degrees(elevation, res_deg, lat_top)
+    valid = np.isfinite(slopes) & np.isfinite(elevation) & (weights > 0)
+    retained_slopes = slopes[valid]
+    retained_weights = weights[valid]
+    order = np.argsort(retained_slopes, kind="stable")
+    ordered = retained_slopes[order]
+    cumulative = np.cumsum(retained_weights[order], dtype="float64")
+    total = float(np.sum(retained_weights, dtype="float64"))
+    median_index = int(np.searchsorted(cumulative, 50 / 100 * total, side="left"))
+    steep_index = int(np.searchsorted(cumulative, 90 / 100 * total, side="left"))
+    expected_median = float(ordered[min(median_index, ordered.size - 1)])
+    expected_steep = float(ordered[min(steep_index, ordered.size - 1)])
+
+    assert result["stats"]["slope_p50_deg"] == pytest.approx(expected_median)
+    assert result["stats"]["slope_p90_deg"] == pytest.approx(expected_steep)
+    assert result["stats"]["slope_p50_deg"] == pytest.approx(10.223085468451293)
+    assert result["stats"]["slope_p90_deg"] == pytest.approx(10.223085468451293)
+    assert float(np.max(slopes[weights == 0])) > expected_steep
+
+
+def test_weighted_slope_percentiles_use_weights():
+    values = np.array([0.0, 10.0, 20.0])
+    weights = np.array([1.0, 1.0, 8.0])
+
+    assert _weighted_percentiles(values, weights, 50, 90) == (20.0, 20.0)
+    assert _weighted_percentiles(values, weights, 10, 20) == (0.0, 10.0)
+
+
+def test_static_summary_contract_for_terrain_and_land_cover():
+    elevation = np.array([[1.0, 3.0]])
+    weights = np.ones((1, 2), dtype="float64")
+    geometry = box(36.5, -1.5, 37.5, -0.5)
+
+    terrain_result = TERRAIN.summary(
+        {"elevation": elevation},
+        weights,
+        from_origin(0, 1, 1, 1),
+        geometry,
+    )
+    cover_result = LAND_COVER.summary(
+        {"value": np.ones((1, 2), "uint8")},
+        weights,
+        from_origin(0, 1, 1, 1),
+        geometry,
+    )
+
+    assert set(terrain_result) == {"stats", "distribution"}
+    assert set(terrain_result["stats"]) == {
+        "min",
+        "max",
+        "mean",
+        "p2",
+        "p98",
+        "slope_p50_deg",
+        "slope_p90_deg",
+        "cell_m",
+    }
+    assert cover_result == {}
 
 
 def test_slope_with_a_nan_neighbour_stays_nan_without_a_cliff():
@@ -1298,3 +1627,37 @@ def _write_class_tile(path: Path, classes: np.ndarray) -> None:
     with rasterio.open(path, "w", **profile) as tile:
         tile.write(classes, 1)
         tile.build_overviews([2], rasterio.enums.Resampling.mode)
+
+
+def _install_tile_indexes(
+    monkeypatch: pytest.MonkeyPatch,
+    glo30_missing: set[tuple[int, int]],
+    glo90_missing: set[tuple[int, int]],
+) -> None:
+    """Point both product indexes at controlled grids with the given missing squares."""
+    glo30 = np.ones((180, 360), dtype=bool)
+    glo90 = np.ones((180, 360), dtype=bool)
+    for lat, lon in glo30_missing:
+        wrapped = (lon + 180) % 360 - 180
+        glo30[lat + 90, wrapped + 180] = False
+    for lat, lon in glo90_missing:
+        wrapped = (lon + 180) % 360 - 180
+        glo90[lat + 90, wrapped + 180] = False
+    monkeypatch.setattr(
+        terrain,
+        "_tile_index",
+        lambda product: glo30 if product == "glo30" else glo90,
+    )
+
+
+def _references_for_geometry(geometry: BaseGeometry) -> list[dict]:
+    """Return the sea-level references for strictly positive heights at the geometry."""
+    elevation = np.full((2, 2), 100.0)
+    weights = np.ones((2, 2), dtype="float64")
+    result = TERRAIN.summary(
+        {"elevation": elevation},
+        weights,
+        from_origin(0, 2, 1, 1),
+        geometry,
+    )
+    return result["distribution"]["reference_values"]

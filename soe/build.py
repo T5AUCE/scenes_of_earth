@@ -91,14 +91,8 @@ def build_scene(
     _check_local_revisions(datasets, scene_plan, local_revisions)
 
     with _temporary_scene_directory(scenes_dir, scene_id) as temp_dir:
-        root = zarr.open_group(
-            str(temp_dir / "data.zarr"),
-            mode="w",
-            zarr_format=3,
-        )
-
-        layer_metadata = _write_layers(
-            root,
+        layer_metadata, root = _write_layers(
+            temp_dir,
             scene_plan,
             datasets,
             scenes_dir / CACHE_DIR_NAME,
@@ -161,28 +155,42 @@ def _temporary_scene_directory(scenes_dir: Path | str, scene_id: str) -> Iterato
 
 
 def _write_layers(
-    root: zarr.Group,
+    temp_dir: Path,
     scene_plan: Plan,
     datasets: list[Dataset],
     cache_dir: Path,
     progress: ProgressCallback,
-) -> dict[str, JsonObject]:
-    ordered_datasets = sorted(datasets, key=lambda dataset: dataset.time_varying)
+) -> tuple[dict[str, JsonObject], zarr.Group]:
+    """Validate statics before any bundle writer and write every layer reusing them."""
+    ordered = sorted(datasets, key=lambda dataset: dataset.time_varying)
     costs = {
         dataset.id: _layer_cost(dataset, scene_plan.layers[dataset.id], cache_dir)
-        for dataset in ordered_datasets
+        for dataset in ordered
     }
-    progress_shares = _ProgressShares(progress, costs)
-    layer_metadata = {}
-    for dataset in ordered_datasets:
-        layer_metadata[dataset.id] = _write_layer(
-            root.create_group(dataset.id),
-            dataset,
-            scene_plan.layers[dataset.id],
-            cache_dir,
-            progress_shares.for_layer(dataset.id),
-        )
-    return layer_metadata
+    shares = _ProgressShares(progress, costs)
+    prefetched = _prefetch_statics(ordered, scene_plan, cache_dir, shares)
+    root = zarr.open_group(str(temp_dir / "data.zarr"), mode="w", zarr_format=3)
+    metadata = {}
+    for dataset in ordered:
+        layer_plan = scene_plan.layers[dataset.id]
+        layer_group = root.create_group(dataset.id)
+        _write_coordinates_and_mask(layer_group, layer_plan)
+        if dataset.id in prefetched:
+            arrays, _, result = prefetched[dataset.id]
+            if not isinstance(dataset, StaticDataset):
+                raise TypeError(f"{dataset.id}: prefetched a non-static layer")
+            _write_static_arrays(layer_group, dataset, layer_plan, arrays)
+            metadata[dataset.id] = result
+        elif isinstance(dataset, SeriesDataset):
+            metadata[dataset.id] = _write_time_series(
+                layer_group,
+                dataset,
+                layer_plan,
+                shares.for_layer(dataset.id),
+            )
+        else:
+            raise TypeError(f"{dataset.id}: unknown dataset kind {type(dataset).__name__}")
+    return metadata, root
 
 
 def _layer_cost(dataset: Dataset, layer_plan: LayerPlan, cache_dir: Path) -> float:
@@ -224,20 +232,60 @@ class _ProgressShares:
         return report
 
 
-def _write_layer(
-    layer_group: zarr.Group,
-    dataset: Dataset,
+def _prefetch_statics(
+    ordered: list[Dataset],
+    scene_plan: Plan,
+    cache_dir: Path,
+    shares: _ProgressShares,
+) -> dict[str, tuple[dict[str, np.ndarray], Affine, JsonObject]]:
+    """Read static rasters and validate their summaries before any bundle writer runs."""
+    prefetched = {}
+    for dataset in ordered:
+        if not isinstance(dataset, StaticDataset):
+            continue
+        layer_plan = scene_plan.layers[dataset.id]
+        arrays, transform, result = _read_static_dataset(
+            dataset,
+            layer_plan,
+            cache_dir,
+            shares.for_layer(dataset.id),
+        )
+        prefetched[dataset.id] = (arrays, transform, result)
+    return prefetched
+
+
+def _read_static_dataset(
+    dataset: StaticDataset,
     layer_plan: LayerPlan,
     cache_dir: Path,
     progress: LayerProgress,
-) -> JsonObject:
-    """Write one layer's coordinates, mask and data arrays; return its build result."""
-    _write_coordinates_and_mask(layer_group, layer_plan)
-    if isinstance(dataset, SeriesDataset):
-        return _write_time_series(layer_group, dataset, layer_plan, progress)
-    if isinstance(dataset, StaticDataset):
-        return _write_static_layer(layer_group, dataset, layer_plan, cache_dir, progress)
-    raise TypeError(f"{dataset.id}: unknown dataset kind {type(dataset).__name__}")
+) -> tuple[dict[str, np.ndarray], Affine, JsonObject]:
+    """Return the cached static read with its validated summary result."""
+    block_count = dataset.block_count(layer_plan.bbox)
+    blocks_read = 0
+
+    def block_read() -> None:
+        nonlocal blocks_read
+        blocks_read += 1
+        progress(blocks_read / block_count, f"{dataset.title} {blocks_read}/{block_count}")
+
+    if not is_cached(dataset, layer_plan.bbox, layer_plan.res, cache_dir):
+        progress(0, f"{dataset.title} 0/{block_count}")
+    arrays, transform = read_cached(
+        dataset,
+        layer_plan.bbox,
+        layer_plan.res,
+        cache_dir,
+        block_read,
+    )
+    progress(1, f"{dataset.title} {block_count}/{block_count}")
+    result = dataset.summary(
+        arrays,
+        layer_plan.area_weights,
+        transform,
+        layer_plan.geometry,
+    )
+    return arrays, transform, result
 
 
 def _write_coordinates_and_mask(layer_group: zarr.Group, layer_plan: LayerPlan) -> None:
@@ -275,34 +323,13 @@ def _coordinates(transform: Affine, height: int, width: int) -> tuple[np.ndarray
     return longitude, latitude
 
 
-def _write_static_layer(
+def _write_static_arrays(
     layer_group: zarr.Group,
     dataset: StaticDataset,
     layer_plan: LayerPlan,
-    cache_dir: Path,
-    progress: LayerProgress,
-) -> JsonObject:
-    """Write every role of a static dataset and return its statistics, if it has any."""
-    block_count = dataset.block_count(layer_plan.bbox)
-    blocks_read = 0
-
-    def block_read() -> None:
-        nonlocal blocks_read
-        blocks_read += 1
-        progress(blocks_read / block_count, f"{dataset.title} {blocks_read}/{block_count}")
-
-    if not is_cached(dataset, layer_plan.bbox, layer_plan.res, cache_dir):
-        progress(0, f"{dataset.title} 0/{block_count}")
-
-    arrays, transform = read_cached(
-        dataset,
-        layer_plan.bbox,
-        layer_plan.res,
-        cache_dir,
-        block_read,
-    )
-    progress(1, f"{dataset.title} {block_count}/{block_count}")
-
+    arrays: dict[str, np.ndarray],
+) -> None:
+    """Write every role of prefetched static arrays because the summary was already validated."""
     for role, spec in dataset.roles.items():
         _write_array(
             layer_group,
@@ -312,9 +339,6 @@ def _write_static_layer(
             _attributes(spec),
             spec.fill,
         )
-
-    stats = dataset.summary(arrays, layer_plan.mask == MASK_INSIDE, transform)
-    return {"stats": stats} if stats else {}
 
 
 def _fill_outside(data: np.ndarray, mask: np.ndarray, spec: Role) -> np.ndarray:
