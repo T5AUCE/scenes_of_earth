@@ -1,5 +1,7 @@
 # Scenes of Earth
 
+<img src="https://github.com/T5AUCE/scenes_of_earth/blob/main/docs/sample_kenya_custom_temp.png" alt="Example Image of Kenya With Custom Temperature Colors" width="1100" height="600">
+
 A small FastAPI + SQLite service that turns an area (a country, state, county or large city, or a drawn polygon) and a
 month range into a static scene bundle: `scene.json`, `area.geojson` and a Zarr v3 store (`data.zarr`, gzip) with monthly
 rain and the statistics of the terrain. The browser reads the finished bundle directly. Bundles live at
@@ -269,3 +271,11 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
   (World Bank). Same citation as above; simplified.
 - **Cities: GHSL Urban Centre Database R2024A**, CC BY 4.0, © European Union, 1995-2026. Reprojected from Mollweide
   and simplified.
+
+## Images
+
+<img src="https://github.com/T5AUCE/scenes_of_earth/blob/main/docs/sample_selector.png" alt="Example Image of Kenya With Custom Temperature Colors" width="1100" height="600">
+
+<img src="https://github.com/T5AUCE/scenes_of_earth/blob/main/docs/sample_fiji_landcover.png" alt="Example Image of Kenya With Custom Temperature Colors" width="1100" height="600">
+
+<img src="https://github.com/T5AUCE/scenes_of_earth/blob/main/docs/sample_kenya_rain_color.png" alt="Example Image of Kenya With Custom Temperature Colors" width="1100" height="600">
