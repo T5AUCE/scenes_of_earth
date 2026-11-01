@@ -5,6 +5,7 @@ import { loadAreaFeature } from "./api";
 import { openStore, type Store } from "./data";
 import {
   DROPPED_NOTE,
+  elevationUnitFrom,
   formatDisplayParams,
   loadStoredDensities,
   loadStoredInks,
@@ -197,14 +198,8 @@ export function mountScene(
   const layerIds = views.flatMap((view) => view.parts.flatMap((part) => part.layerIds));
   if (blend) layerIds.push(...blend.parts[0].layerIds);
 
-  return { unmount, addNote, timeline, layerIds };
-}
-
-function elevationUnitFrom(display: SceneDisplay, layers: readonly LayerDoc[]) {
-  const terrain = layers.find((layer) => layer.style.kind === "terrain");
-  if (!terrain) return "m";
-
-  return display.layers[terrain.id]?.units ?? terrain.units;
+  // The try block assigns the store, so reaching here means it exists.
+  return { unmount, addNote, timeline, layerIds, store: sceneStore as SceneStore };
 }
 
 function displayUnitsFrom(display: SceneDisplay, layers: readonly LayerDoc[]) {

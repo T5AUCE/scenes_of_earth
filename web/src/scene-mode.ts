@@ -19,9 +19,15 @@ import {
 } from "./map";
 import { shiftLongitudes, worldShift } from "./render/mercator";
 import { flightDuration, flyIn, watchResize } from "./scene-camera";
-import { createScenePanel, PANEL_TABS, type PanelTab } from "./scene-panel";
+import type { SceneStore } from "./scene-store";
 import { sceneUrl, timeForPrefix } from "./scene-url";
 import type { AreaFeature, Bbox, DisplayTokens, Scene } from "./types";
+import {
+  createScenePanel,
+  PANEL_TABS,
+  type FullOpenOptions,
+  type PanelTab,
+} from "./ui/scene-panel";
 import { mountScene, OUTLINE_ID } from "./view";
 
 type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
@@ -37,6 +43,8 @@ const PAGE_BACKGROUND_PROPERTY = "--page-background";
 const HALF_WORLD_DEG = 180;
 // Mercator has no poles.
 const MAX_LATITUDE_DEG = 85;
+
+const DOCK_GAP_PX = 8;
 
 /**
  * How entering a scene treats history. push: a new entry; replace: the entry the page was opened
@@ -87,46 +95,38 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     const cards = openColumn(scene, entry);
     const clock = createSceneClock(scene.id);
     // A list holds the deferred call because the checker keeps a narrowed let at null.
-    const pendingUnits: {
-      elevation: string;
-      displayUnits: Record<string, string>;
-      layerIds: string[];
-    }[] = [];
+    const pendingLayerIds: string[][] = [];
 
     const mounted = mountScene(map, scene, {
       cards,
       timeBar: roots.timeBar,
       display,
       onDisplay: (params) => clock.setDisplay(params),
-      onTime: (_time, label) => {
-        clock.update(label);
-        current?.panel.setTimeLabel(label);
+      onTime: (time, label) => {
+        clock.update(time, label);
+        current?.panel.setTime(time, label);
       },
-      onUnits: (elevation, displayUnits, layerIds) => {
+      onUnits: (_elevation, _displayUnits, layerIds) => {
         if (!current) {
-          pendingUnits.push({ elevation, displayUnits, layerIds });
+          pendingLayerIds.push(layerIds);
 
           return;
         }
-        current.panel.updateUnits(elevation, displayUnits);
         current.syncLayers(layerIds);
       },
     });
 
     restoreTime(mounted.timeline, linkedTime);
     sceneLayerIds = mounted.layerIds;
-    const panel = mountPanel(scene, mounted.timeline, clock);
+    const panel = mountPanel(scene, mounted.timeline, clock, mounted.store);
 
     recordEntry(scene.id, clock, entry);
     clock.markEntered();
 
     current = startScene(scene, mounted, panel, clock);
-    const initialUnits = pendingUnits[0];
-    if (initialUnits) {
-      current.panel.updateUnits(initialUnits.elevation, initialUnits.displayUnits);
-      current.syncLayers(initialUnits.layerIds);
-    }
-    panel.setTimeLabel(clock.label);
+    const initialIds = pendingLayerIds[0];
+    if (initialIds) current.syncLayers(initialIds);
+    panel.setTime(clock.time, clock.label);
   }
 
   function exit() {
@@ -169,11 +169,16 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     return makeColumn(scene, roots.column, () => leave(entry !== "replace"));
   }
 
-  function mountPanel(scene: Scene, timeline: SceneTimeline, clock: SceneClock) {
-    const panel = createScenePanel(scene, roots.dialog, {
-      requestOpen(tab: PanelTab) {
+  function mountPanel(
+    scene: Scene,
+    timeline: SceneTimeline,
+    clock: SceneClock,
+    store: SceneStore,
+  ) {
+    const panel = createScenePanel(scene, roots.dialog, store, {
+      requestOpen(tab: PanelTab, options?: FullOpenOptions) {
         history.pushState({ panel: tab }, "", sceneUrl(scene.id, clock.label, clock.display));
-        panel.openFull(tab);
+        panel.openFull(tab, options);
       },
       requestClose() {
         if (history.state?.panel) return history.back();
@@ -221,6 +226,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       dataLayers.update(fadeZoom());
       refreshMaskAndLabels(fadeZoom());
     });
+    const stopDocking = watchDocking(roots.timeBar);
 
     return {
       id: scene.id,
@@ -233,6 +239,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       close() {
         maskLoad.abort();
         stopWatchingResize();
+        stopDocking();
         flight.stopClamp();
         labelArea = null;
         restoreLabels();
@@ -293,6 +300,48 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     restoreLabels = movePlaceLabels(map, labelArea, dataMinZoom(fadeZoom()), sceneLayerIds);
     return true;
   }
+}
+
+/** Keep the docked column above the attribution and time bar. */
+function watchDocking(timeBar: HTMLElement): () => void {
+  if (typeof ResizeObserver === "undefined") return () => {};
+
+  try {
+    const root = document.documentElement;
+    if (!root || !root.style) return () => {};
+
+    const updateDocking = () => {
+      const footer = document.querySelector(".maplibregl-ctrl-bottom-left");
+      // The column keeps a gap above the taller footer, matching its side margins.
+      const dockBottom = Math.max(
+        DOCK_GAP_PX,
+        bottomExtent(footer) + DOCK_GAP_PX,
+        bottomExtent(timeBar) + DOCK_GAP_PX,
+      );
+      root.style.setProperty("--scene-dock-bottom", `${dockBottom}px`);
+    };
+    const observer = new ResizeObserver(updateDocking);
+    if (timeBar instanceof Element) observer.observe(timeBar);
+    const footer = document.querySelector(".maplibregl-ctrl-bottom-left");
+    if (footer instanceof Element) observer.observe(footer);
+    updateDocking();
+
+    return () => observer.disconnect();
+  } catch {
+    return () => {};
+  }
+}
+
+function bottomExtent(element: Element | null): number {
+  if (!(element instanceof HTMLElement)) return 0;
+
+  const rect = element.getBoundingClientRect();
+  if (rect.height === 0) return 0;
+  if (typeof window === "undefined" || typeof window.innerHeight !== "number") {
+    return rect.height;
+  }
+
+  return Math.max(0, window.innerHeight - rect.top);
 }
 
 /** Move only basemap labels above the mask so scene labels keep their native visibility. */
@@ -390,11 +439,16 @@ export class SceneDataLayers {
 }
 
 function createSceneClock(sceneId: string) {
+  let time: string | null = null;
   let label: string | null = null;
   let display = "";
   let isEntered = false;
 
   return {
+    get time() {
+      return time;
+    },
+
     get label() {
       return label;
     },
@@ -403,7 +457,8 @@ function createSceneClock(sceneId: string) {
       return display;
     },
 
-    update(newLabel: string) {
+    update(newTime: string | null, newLabel: string | null) {
+      time = newTime;
       label = newLabel;
       if (isEntered) this.syncUrl();
     },

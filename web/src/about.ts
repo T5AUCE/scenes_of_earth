@@ -132,12 +132,18 @@ function smoothingLines(elevationUnit: string) {
   const fine = formatLength(30, elevationUnit);
   const coarse = formatLength(90, elevationUnit);
   const storage = `The values in the files are the cell values of the stored grid, `
-    + `never the smoothed picture; terrain may be stored in coarser cells `
-    + `than its ${fine} or ${coarse} source. Bundles generated with version `
-    + `0.5.1 or later keep every cell touched by the area. Area averages give `
-    + `each valid cell equal weight, including edge cells that extend outside `
-    + `the outline. Older bundles use cell centres, with touched cells only `
-    + `when no centre lies inside the area.`;
+    + `never the smoothed picture; terrain statistics may come from coarser cells `
+    + `than their ${fine} or ${coarse} source. Bundles keep every cell touched by the area.`;
+  const weighting = `Area means weight each valid cell by its area inside the outline, `
+    + `adjusted for latitude, so partly covered edge cells count only partly. `
+    + `The valid share is the weighted share of the outline with data and the fallback share `
+    + `is the weighted share filled from a credited fallback, while the one-cell support ring `
+    + `around the area carries zero weight. The shares describe the build analysis grid at its `
+    + `stored resolution and cannot recover variation within one coarse cell.`;
+  const terrain = `Terrain summaries and the distribution are weighted reductions of the stored `
+    + `analysis grid at its stored resolution, never a summit survey or the live display tiles. `
+    + `The stored 1% quantiles approximate the curve between knots, while the mean comes from `
+    + `the weighted cells directly.`;
 
   return [
     "Field layers show one colour block per cell by default. Smooth lets your graphics card blend "
@@ -150,14 +156,17 @@ function smoothingLines(elevationUnit: string) {
       + "colours at their borders over a distance measured in grid cells, so the blend widens on "
       + "screen as you zoom in; 0 leaves a one-pixel anti-aliased border. Without WebGL drawing, "
       + "an image provides smooth edges at a fixed resolution instead.",
-    "Terrain shading is drawn by your graphics card from Mapterhorn elevation tiles, so it gains "
-      + "detail as you zoom in. It is a picture only; the values in the files do not come from it.",
-    "Contour lines are drawn from elevation averaged into blocks of at most 1024 cells per side "
-      + "and then smoothly interpolated, so they are close to the real relief but not exact at "
-      + "very fine scale; zooming in recomputes them in finer blocks.",
+    "Terrain shading is a live picture drawn by your graphics card from Mapterhorn elevation "
+      + "tiles, so it gains detail as you zoom in and may show finer relief than the stored "
+      + "summaries.",
+    "Contour lines are traced from the same live elevation tiles, with height steps chosen from "
+      + "the stored terrain statistics for readability, so they may show different detail than "
+      + "the summaries.",
     storage,
-    "A hidden one-cell ring of real source data lets isotherms reach the outline but is excluded "
-      + "from area averages.",
+    weighting,
+    terrain,
+    "A hidden one-cell ring of real source data lets isotherms reach the outline but carries "
+      + "zero weight in the statistics.",
   ];
 }
 

@@ -19,6 +19,7 @@ const hooks = registerHooks({
 const {
   DEFAULT_EDGES,
   densityControl,
+  elevationUnitFrom,
   formatDisplayParams,
   loadStoredInks,
   loadStoredPalettes,
@@ -972,6 +973,32 @@ test("a palette change keeps the chosen units", () => {
   recordMenuChange(display, "rain", menu, "palette");
 
   assert.deepEqual(display.layers.rain, { units: "in/month", palette: "batlow" });
+});
+
+test("elevation units follow the terrain override and default to metres", () => {
+  const terrain = {
+    id: "terrain",
+    units: "m",
+    style: { kind: "terrain", encodings: ["shade"] },
+  } as unknown as LayerDoc;
+  const field = {
+    id: "rain",
+    units: "mm/month",
+    style: { kind: "field", encodings: ["ramp"] },
+  } as unknown as LayerDoc;
+
+  assert.equal(elevationUnitFrom({ layers: {}, off: new Set(), showAs: {} }, [field]), "m");
+  assert.equal(
+    elevationUnitFrom({ layers: {}, off: new Set(), showAs: {} }, [field, terrain]),
+    "m",
+  );
+  assert.equal(
+    elevationUnitFrom(
+      { layers: { terrain: { units: "ft" } }, off: new Set(), showAs: {} },
+      [field, terrain],
+    ),
+    "ft",
+  );
 });
 
 function unitsLayers() {

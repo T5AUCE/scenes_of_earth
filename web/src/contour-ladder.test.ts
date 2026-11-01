@@ -162,7 +162,7 @@ const mockModules = {
   `,
   "./scene-camera": `export const flightDuration = () => {};
     export const flyIn = () => {}; export const watchResize = () => {};`,
-  "./scene-panel": `export const createScenePanel = () => {}; export const PANEL_TABS = [];`,
+  "./ui/scene-panel": `export const createScenePanel = () => {}; export const PANEL_TABS = [];`,
   "./view": `export const mountScene = () => {}; export const OUTLINE_ID = "outline";`,
 };
 

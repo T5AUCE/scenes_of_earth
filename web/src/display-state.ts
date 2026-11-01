@@ -179,6 +179,14 @@ export function defaultInk(layer: LayerDoc) {
   return fallback === "isolines" ? DEFAULT_ISOTHERM_INK : undefined;
 }
 
+/** The terrain unit the scene shows, or metres when the scene has no terrain. */
+export function elevationUnitFrom(display: SceneDisplay, layers: readonly LayerDoc[]): string {
+  const terrain = layers.find((layer) => layer.style.kind === "terrain");
+  if (!terrain) return "m";
+
+  return display.layers[terrain.id]?.units ?? terrain.units;
+}
+
 /** A dot-density slider whose value uses the same normalisation as a density in a link. */
 export function densityControl(
   readDensity: () => number,

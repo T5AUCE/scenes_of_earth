@@ -3,6 +3,7 @@
   --pick-outline: #d92d20;
   --panel-background: #fff;
   --panel-outline: 0 0 0 1px rgba(0, 0, 0, 0.2);
+  --scene-dock-bottom: 8px;
 }
 
 html,
@@ -161,7 +162,8 @@ body.scene-mode #panel {
   position: absolute;
   top: 8px;
   right: 8px;
-  bottom: 8px;
+  /* The measured footer extent keeps the docked column above the attribution and time bar. */
+  bottom: var(--scene-dock-bottom, 8px);
   width: 300px;
   display: flex;
   flex-direction: column;
