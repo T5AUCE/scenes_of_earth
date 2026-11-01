@@ -144,6 +144,28 @@ export interface ClassDoc {
   color: string; // #rrggbb
 }
 
+/** Per-step area means of a time-varying continuous layer, in layer units. */
+export interface AreaSeriesDoc {
+  statistic: "mean";
+  weights: "cell_area_inside_outline";
+  values: (number | null)[];
+  valid_fraction: number[];
+  fallback_fraction?: number[]; // present when a fallback is configured
+}
+
+/** Weighted quantiles of a static continuous layer, in layer units. */
+export interface DistributionDoc {
+  statistic: "quantiles";
+  weights: "cell_area_inside_outline";
+  percent: 1;
+  values: number[]; // 101 nondecreasing quantiles, endpoints equal min and max
+  min: number;
+  max: number;
+  mean: number;
+  valid_fraction: number;
+  reference_values: { id: string; value: number }[]; // markers only, never samples
+}
+
 /** A built layer's metadata and storage contract. */
 export interface LayerDoc {
   id: string;
@@ -161,10 +183,12 @@ export interface LayerDoc {
   };
   grid: GridDoc;
   mask: { path: string; cells_inside: number };
-  time: TimeDoc | null;
+  time: TimeDoc | null; // presence marks a series, so no time_varying flag is needed here
   arrays: Record<string, ArrayDoc>; // by role, e.g. value or source; empty for tiled terrain
   tiles?: TerrainTiles;
   stats?: TerrainStats | Record<string, number | number[]>;
+  area_series?: AreaSeriesDoc; // required on time-varying continuous layers
+  distribution?: DistributionDoc; // required for terrain and optional for future static layers
 }
 
 /** The area.geojson file, which is one Feature holding the area's outline. */
@@ -195,6 +219,7 @@ export interface Scene {
     lines: string[];
     disclaimers: string[];
     endorsement: string;
+    terms_passthrough: string; // reuse terms that bind later users of the bundle
   };
 }
 

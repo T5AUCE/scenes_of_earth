@@ -16,7 +16,7 @@ from .bundle_validation import (
 from .plan import LayerPlan, Plan
 from .sources import REQUEST_STEP, SOURCE_ROLE, SOURCES, STOP_COUNT, Dataset
 
-VERSION = "0.6"
+VERSION = "0.7"
 
 BOUNDARY_SOURCE_FIELDS = ("licence_url", "attribution", "citation", "modified")
 SYNTHETIC_DATA_CREDIT = "Data: synthetically generated, not real measurements"

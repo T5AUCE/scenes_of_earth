@@ -1,3 +1,3 @@
 """The Scenes of Earth backend builds static Zarr scene bundles from open data."""
 
-__version__ = "0.8.1"
+__version__ = "0.9.0"

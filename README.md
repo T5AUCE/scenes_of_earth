@@ -145,12 +145,13 @@ python -m soe.cli worldcover-index
 
 - `area.bbox` is `[W, S, E, N]` with W < E always. A shape across the antimeridian is unwrapped into one frame, so E may be
   above 180 (up to 360) and `lon` arrays rise past 180, as MapLibre's `LngLatBounds` does. `area.geojson` is in the same frame.
-- `scene.json` is version 0.6. The top-level `period` (`start`, `end` exclusive, `step`; ISO dates) is the requested range,
+- `scene.json` is version 0.7 and the generator is 0.9.0. The top-level `period` (`start`, `end` exclusive, `step`; ISO dates) is the requested range,
   or `null` for a scene without series. Each layer has its own `grid` (crs, bbox, res, nx, ny; `aggregation` for series), `mask`,
   `coverage`, `time` (`step` as an ISO 8601 duration, `end` = the day after the last step's period, `method` = how a step summarises
   its period (`sum`, `mean`, `point`, `max`), `count`, explicit `values`, or `null` for static layers) and
   `arrays` keyed by role (`value`, ...) with `dtype`, `scale_factor`, `add_offset` and `fill`. A static layer drawn from tiles has
-  `arrays` `{}` and instead a `tiles` block (`url`, `encoding`, `tile_size`, `maxzoom`, `source`) plus `stats`.
+  `arrays` `{}` and instead a `tiles` block (`url`, `encoding`, `tile_size`, `maxzoom`, `source`) plus `stats` and, for terrain, `distribution`.
+  Time-varying continuous layers also carry `area_series`, and `credits` carries `terms_passthrough` with the reuse terms.
   Each layer's `style` has `kind` (`field` for a continuous grid, `categorical` with `style.classes` `[{value, label, color}]`, `terrain`), `encodings` (the display types it offers, best
   first; a viewer skips names it does not know) and optional `parts` (extra display types drawn alongside, e.g. terrain's
   `contours`). A series layer also has `palette` (default colours) and `style.stops`: 2-9 increasing values fitted to the
@@ -164,6 +165,31 @@ python -m soe.cli worldcover-index
   isotherms use the hidden ring to reach the outline and are clipped by the area geometry.
   Statistics, style stops, notices, provenance codes and `cells_inside` count only mask 1.
   Ring-only fallback values still credit their source but add no area fallback count or notice.
+- Layer `units` stay as the source values (`mm/month`, `°C`, `m`). A monthly area mean is the mean for that month
+  and temporal accumulation stays separate from spatial averaging, so monthly rainfall is not an area total.
+  Means describe the build analysis grid including any `aggregation` and cannot recover variation within a coarse cell.
+  `grid.res` is the unrounded grid spacing in degrees with the bbox and dimensions, not a product name or live tile resolution.
+- Time-varying continuous layers carry inline `area_series` with `statistic` `mean`, `weights` `cell_area_inside_outline`
+  and per-step `values`, `valid_fraction` and `fallback_fraction` when a fallback is configured. Each cell contributes
+  with cosine latitude correction times its overlap with the outline, so boundary cells count only partly. Shares divide
+  by outlined area rather than by cell count, so `valid_fraction` is valid area over outlined area and `fallback_fraction`
+  is fallback area over outlined area. This is a grid approximation rather than an ellipsoidal survey. Each array has
+  `time.count` entries aligned with `time.values`. Means accumulate in float64 from finite decoded source values before
+  packing and keep full precision, so values that differ only below packing precision stay different after serialization.
+  A 480-step rainfall plus temperature `scene.json` is about 86 kB. A later daily-scale table would live beside the bundle
+  with bundle-relative paths and no new API or database. Bundles are published atomically with `scene.json` last.
+- Terrain carries `distribution` with `statistic` `quantiles`, the same weights, `percent` 1, 101 nondecreasing `values`,
+  exact `min`/`max`/`mean`, `valid_fraction` and `reference_values`. Quantiles follow the inverse empirical curve with exact
+  endpoints and no interpolation, so the median is `values[50]` and `stats` mirrors the distribution with `p2` as `values[2]`
+  and `p98` as `values[98]`. Elevations keep source units and full precision. Absent tiles and nodata are excluded, while
+  sea encoded inside published coastal tiles is still included because no water mask exists yet. Genuine zero-height land
+  is preserved, so coastal means are not land-only. `reference_values` may hold sea level 0 only when valid heights span
+  zero or the outline overlaps an ocean square missing from both GLO indexes, which is a coarse test, and markers never
+  enter the samples. `categorical_shares` and any `path` in `area_series` or `distribution` are reserved for later
+  and rejected in v1, as are other statistics or weights.
+- `credits` carries `terms_passthrough` with the reuse terms that bind later users, alongside `lines`, `disclaimers` and
+  `endorsement`. Positive `fallback_fraction` shares need credited `fallback_sources`, while all-zero shares may appear without
+  them. Ring-only fallback still needs attribution though its share is zero.
 - Rain is stored as uint16 at 0.1 mm (fill 65535, values above 6553.4 mm are clipped). Series are chunked one step per
   chunk and sharded 12 steps per shard; static arrays are one chunk each. The root `zarr.json` has consolidated metadata.
 - Budgets: the raw size of all layers' arrays together is capped at 50 MB, and the source cells x steps read for all
@@ -174,10 +200,11 @@ python -m soe.cli worldcover-index
 - Rain and terrain are anchored to the 60S-60N grid of 0.05 degree cells that starts at 180W. `area.geojson` is the area
   clipped to the coverage of all selected layers, so one layer's mask can reach slightly beyond the outline.
 - The terrain layer holds no elevation array. The viewer draws shading and contours from the elevation tiles named by
-  `layers[].tiles` (Terrarium encoding, 512 px, Mapterhorn by default), and the build keeps only `stats` (`min`, `max`, `mean`,
-  `p2`, `p98`, `slope_p50_deg`, `slope_p90_deg`, `cell_m`), taken on mask 1, which choose the contour intervals. The tile
-  URL is part of the scene id, so pointing `SOE_TERRAIN_TILES` at another copy renames the scenes. With `SOE_SYNTHETIC=1` the
-  statistics are fake while the tiles are still the real hosted ones.
+  `layers[].tiles` (Terrarium encoding, 512 px, Mapterhorn by default), and the build keeps `stats` (`min`, `max`, `mean`,
+  `p2`, `p98`, `slope_p50_deg`, `slope_p90_deg`, `cell_m`) with `distribution`, both taken on mask 1, which choose the
+  contour intervals. Absent tiles and nodata are excluded, while in-tile sea is still included until a water mask exists.
+  Genuine zero-height land is preserved. The tile URL is part of the scene id, so pointing `SOE_TERRAIN_TILES` at another
+  copy renames the scenes. With `SOE_SYNTHETIC=1` the statistics are fake while the tiles are still the real hosted ones.
 - Land cover (`esa_worldcover`, not a default layer) is a static `categorical` layer with a uint8
   `value` array (0 = no data or outside the stored area and ring) on cells of 0.05/k degrees
   (the same budget as terrain), holding the most common ESA WorldCover class
@@ -191,9 +218,9 @@ python -m soe.cli worldcover-index
 - Terrain reads are cached in `SCENES_DIR/.cache/` (keyed by dataset, source versions, bbox, res and soe version), so
   rebuilding an area with other layers or dates does not read the tiles again. Deleting the folder is always safe, and it
   is the way to clear files that older versions left behind.
-- Format 0.6 adds the real-data ring. Generator 0.8.0 and the bundle format both enter the scene
-  id, so new requests cannot reuse older bundles. Build a new scene rather than replacing an
-  immutable bundle in place. The viewer rejects older formats with a prompt to pick the area again.
+- Format 0.7 keeps the real-data ring and adds `area_series` with `distribution`. Generator 0.9.0 and the bundle format
+  both enter the scene id, so new requests cannot reuse older bundles and old terrain caches are not reused. Build a new scene
+  rather than replacing an immutable bundle in place. The viewer rejects older formats with a prompt to pick the area again.
 - Contours use `maplibre-contour` (BSD-3-Clause) with a scene-seeded nested 10–2000 m ladder. New tiers fade in over
   0.75 zoom levels and are traced one zoom early. Geometry stops refining at z12; bold heights never change on zoom.
   Labels are bold-only until the Kenya/Fiji/flat-area trial establishes whether the sparse-label fallback is needed.

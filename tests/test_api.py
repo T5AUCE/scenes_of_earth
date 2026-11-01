@@ -13,7 +13,7 @@ from shapely.geometry import box, mapping, shape
 
 from soe import db
 from soe.api import QUEUE_RETRY_AFTER_SECS, SOURCE_RETRY_AFTER_SECS, create_app
-from soe.bundle import SYNTHETIC_DATA_CREDIT, JsonObject
+from soe.bundle import SYNTHETIC_DATA_CREDIT, JsonObject, validate
 from soe.scene_request import ID_CHARS
 from soe.sources import (
     CellWindow,
@@ -83,8 +83,16 @@ def test_post_poll_and_serve(env):
     assert scene["credits"]["lines"] and scene["id"] == scene_id
     assert [layer["id"] for layer in scene["layers"]] == ["terrain", "chirps_monthly"]
     terrain = scene["layers"][0]
-    assert scene["version"] == "0.6" and terrain["arrays"] == {} and terrain["stats"]["p98"] > 0
+    assert scene["version"] == "0.7" and terrain["arrays"] == {} and terrain["stats"]["p98"] > 0
     assert terrain["tiles"]["source"]["attribution"] in scene["credits"]["lines"]
+    assert scene["credits"]["terms_passthrough"]
+    assert scene["generator"]["version"] == "0.9.0"
+    rain = scene["layers"][1]
+    assert rain["area_series"]["statistic"] == "mean"
+    assert len(rain["area_series"]["values"]) == rain["time"]["count"]
+    assert terrain["distribution"]["statistic"] == "quantiles"
+    assert len(terrain["distribution"]["values"]) == 101
+    assert validate(scene) == []
     assert client.get(f"/scenes/{scene_id}/scene.json").json()["id"] == scene_id
 
     assert client.get(f"/scenes/{scene_id}/data.zarr/zarr.json").status_code == 200

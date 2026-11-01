@@ -30,7 +30,7 @@ from tests.helpers import RAIN, write_cube
 
 SQUARE = mapping(box(36.5, -1.5, 37.5, -0.5))
 PINNED_REVISION = "Tue, 01 Sep 2015 00:00:00 GMT"
-PINNED_SCENE_ID = "2990cb0a9c9806889f9b"  # Computed for soe 0.8.1 and scene format 0.6.
+PINNED_SCENE_ID = "51c67b0430f967920733"  # Computed for soe 0.9.0 and scene format 0.7.
 
 
 def request_body(**overrides: object) -> str:
@@ -143,6 +143,16 @@ def test_changing_the_bundle_format_renames_the_scene(monkeypatch):
 
     current = scene_id()
     monkeypatch.setattr("soe.scene_request.VERSION", "next-format")
+
+    assert scene_id() != current
+
+
+def test_changing_the_generator_renames_the_scene(monkeypatch):
+    def scene_id() -> str:
+        return compute_scene_id("g", ["chirps_monthly"], None, [RAIN], {})
+
+    current = scene_id()
+    monkeypatch.setattr("soe.scene_request.__version__", "next-generator")
 
     assert scene_id() != current
 

@@ -104,6 +104,19 @@ def test_version_bump_does_not_reuse_the_old_cache(tmp_path, monkeypatch):
     assert source.reads == 2
 
 
+def test_previous_release_cache_is_left_alone_not_reused(tmp_path, monkeypatch):
+    source = CountingSource()
+    dataset = make_registry(source)["terrain"]
+    read_cached(dataset, BBOX, RES, tmp_path)
+    old_files = list(tmp_path.iterdir())
+
+    monkeypatch.setattr(terrain_cache, "__version__", "0.8.1")
+    read_cached(dataset, BBOX, RES, tmp_path)
+
+    assert source.reads == 2
+    assert old_files and all(path.is_file() for path in old_files)
+
+
 def test_failed_read_leaves_nothing_in_the_cache(tmp_path):
     class Boom(SyntheticSource):
         def terrain(

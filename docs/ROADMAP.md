@@ -7,7 +7,8 @@ stays cheap and simple. Each feature is checked for extensibility before users g
 
 - Hosting budget: up to $10 a month for now; it scales with users and funding.
 - Fast load times come first, while staying cheap. Bundles may be evicted and rebuilt on request.
-- v1 covers 60°S to 60°N (no high latitudes). Elevation is land only (no seafloor).
+- v1 covers 60°S to 60°N (no high latitudes). Elevation aims for land only with no seafloor. Coastal tiles may still
+  include in-tile sea until a water mask exists.
 - Countries that cross the antimeridian must work. Terrain display is full detail everywhere,
   from shared tiles.
 
@@ -44,13 +45,16 @@ stays cheap and simple. Each feature is checked for extensibility before users g
    bivariate display land. The backfill on the VPS at deploy starts at 1981-01, matching CHIRPS, and is followed by
    a monthly refresh.
 4. **M5: relief tiles → contours → land cover.** Relief shading and contours now share Mapterhorn
-   tiles with a stable nested ladder and scene format 0.5. The three-view contour trial remains.
+   tiles with a stable nested ladder and scene format 0.7. The three-view contour trial remains.
    ESA WorldCover (10 m) is now a static categorical layer (opt-in, drawn below fields),
    resampled by the most common class in each cell, with a softened default palette, an "ESA
    colours" option and a legend of the classes present.
 5. **Scene view B:** app UI moves to React (MapLibre stays outside React's control). A panel at
    the bottom right, under the legend, expands to full screen with Charts and About tabs. Charts:
-   area-mean rain and temperature, climatology, hypsometry; per-step area means in `scene.json`.
+   area-mean rain and temperature, climatology, hypsometry; per-step area means in `scene.json` as
+   `area_series` with terrain `distribution` under contract 0.7 and generator 0.9.0. Layer units stay as
+   source values and means describe the build analysis grid, with monthly arrays inline and `scene.json` last
+   on publish while a later daily table would use bundle-relative paths.
 6. **Credits and notices (M4):** credits, limits and clipping notices in the About tab; basemap
    attribution.
 
