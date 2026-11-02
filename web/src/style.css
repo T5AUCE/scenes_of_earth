@@ -281,8 +281,8 @@ body.scene-mode #panel {
   position: fixed;
   top: 8px;
   right: 316px;
-  /* The editor ends above the time bar and the wrapped attribution, so both keep clicks. */
-  bottom: 73px;
+  /* Short editors shrink while long ones still clear the time bar and attribution. */
+  max-height: calc(100% - 81px);
   z-index: 3;
   width: 280px;
   box-sizing: border-box;
