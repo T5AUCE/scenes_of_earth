@@ -4,6 +4,10 @@
   --panel-background: #fff;
   --panel-outline: 0 0 0 1px rgba(0, 0, 0, 0.2);
   --scene-dock-bottom: 8px;
+  --chart-axis: #444;
+  --chart-grid: #ddd;
+  --chart-ink: #1a3658;
+  --chart-muted: #888;
 }
 
 html,
@@ -844,4 +848,212 @@ body.scene-mode .maplibregl-ctrl-scale {
 .legend-dot-box {
   display: block;
   box-shadow: inset 0 0 0 1px #999;
+}
+
+.svg-chart {
+  width: 100%;
+  overflow: hidden;
+}
+
+.svg-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.svg-chart svg:focus-visible {
+  outline: 2px solid #124;
+  outline-offset: 2px;
+}
+
+.chart-tooltip {
+  font-size: 12px;
+  color: var(--chart-axis);
+  margin-top: 4px;
+}
+
+.series-chart,
+.hypsometry-chart {
+  margin: 0;
+}
+
+.series-chart figcaption,
+.hypsometry-chart figcaption {
+  font-size: 12px;
+  color: var(--chart-axis);
+  margin-bottom: 4px;
+}
+
+.chart-hint,
+.chart-note {
+  font-size: 12px;
+  color: var(--chart-axis);
+  margin: 4px 0;
+}
+
+.chart-error {
+  font-size: 12px;
+  color: #b42318;
+  margin: 4px 0;
+}
+
+.chart-table-scroll {
+  overflow: auto;
+  max-height: 280px;
+}
+
+.chart-table table {
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-table th,
+.chart-table td {
+  border: 1px solid #ddd;
+  padding: 2px 6px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.chart-chip {
+  display: block;
+}
+
+.chart-chip .chip-title {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+
+.chart-gallery .gallery-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.chart-gallery .gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.gallery-card {
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 8px;
+  background: #fff;
+}
+
+.gallery-card h4 {
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+
+.chart-main-badge {
+  margin-left: 6px;
+  font-size: 11px;
+  color: #246b4a;
+}
+
+.gallery-preview {
+  cursor: pointer;
+}
+
+.gallery-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.chart-unavailable {
+  border: 1px dashed #999;
+  border-radius: 4px;
+  padding: 8px;
+  background: #fafafa;
+}
+
+.chart-detail .detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.chart-detail .detail-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.chart-editor .editor-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.chart-editor .editor-controls {
+  flex: 1 1 280px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chart-editor .editor-preview {
+  flex: 2 1 320px;
+  min-width: 0;
+}
+
+.chart-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+
+.chart-editor fieldset {
+  border: 1px solid #ddd;
+  padding: 6px;
+}
+
+.chart-editor .editor-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.chart-editor .editor-attribution {
+  margin-left: auto;
+  font-size: 11px;
+  color: #666;
+}
+
+.chart-confirm {
+  border: 1px solid #e6a000;
+  background: rgba(230, 160, 0, 0.15);
+  border-radius: 4px;
+  padding: 8px;
+  margin-top: 8px;
+}
+
+.editor-confirm {
+  border: 1px solid #e6a000;
+  background: rgba(230, 160, 0, 0.15);
+  border-radius: 4px;
+  padding: 8px;
+  margin-top: 8px;
+}
+
+.chart-y-ticks text,
+.chart-x-ticks text {
+  font-size: 11px;
+  fill: var(--chart-axis);
+}
+
+.chart-points circle:focus-visible {
+  outline: 2px solid #124;
+  outline-offset: 2px;
 }

@@ -50,14 +50,20 @@ export interface SceneStore {
   dispatch(action: SceneStoreAction): void;
 }
 
-/** Build a store for a scene's layers and resolved display state. */
+/**
+ * Build a store for a scene's layers and resolved display state. Draw layers drive colour
+ * allocation while chart layers validate saved definitions, so a failed renderer keeps its
+ * charts without claiming map colours.
+ */
 export function createSceneStore(
   layers: readonly LayerDoc[],
   display: SceneDisplay,
   initialCharts?: ChartSlice | null,
+  chartLayers?: readonly LayerDoc[],
 ): SceneStore {
   const listeners = new Set<() => void>();
-  let snapshot = initialSnapshot(layers, display, initialCharts ?? null);
+  const validationLayers = chartLayers ?? layers;
+  let snapshot = initialSnapshot(layers, display, initialCharts ?? null, validationLayers);
 
   function getSnapshot(): SceneStoreSnapshot {
     return snapshot;
@@ -72,8 +78,9 @@ export function createSceneStore(
   }
 
   function dispatch(action: SceneStoreAction): void {
-    if (isChartAction(action)) snapshot = applyChartAction(layers, snapshot, action);
-    else snapshot = applyDisplayAction(layers, snapshot, action);
+    if (isChartAction(action)) {
+      snapshot = applyChartAction(validationLayers, snapshot, action);
+    } else snapshot = applyDisplayAction(layers, snapshot, action);
     for (const listener of [...listeners]) listener();
   }
 
@@ -122,12 +129,13 @@ function initialSnapshot(
   layers: readonly LayerDoc[],
   display: SceneDisplay,
   initialCharts: ChartSlice | null,
+  validationLayers: readonly LayerDoc[],
 ): SceneStoreSnapshot {
   const copied = copyDisplay(display);
   const on = new Set(layers.flatMap(layerUnits).filter((unit) => !copied.off.has(unit)));
-  const charts = initialCharts && isValidSlice(initialCharts, layers)
+  const charts = initialCharts && isValidSlice(initialCharts, validationLayers)
     ? copySlice(initialCharts)
-    : defaultSlice(layers);
+    : defaultSlice(validationLayers);
 
   return { display: copied, allocation: allocate(layers, on, copied.showAs), on, charts };
 }
@@ -150,15 +158,15 @@ function applyChartAction(
 }
 
 function nextCharts(
-  layers: readonly LayerDoc[],
+  validationLayers: readonly LayerDoc[],
   charts: ChartSlice,
   action: ChartStoreAction,
 ): ChartSlice {
-  if (action.kind === "resetCharts") return defaultSlice(layers);
+  if (action.kind === "resetCharts") return defaultSlice(validationLayers);
   if (action.kind === "setMain") return setMainChart(charts, action.id);
-  if (action.kind === "deleteChart") return deleteChart(layers, charts, action.id);
+  if (action.kind === "deleteChart") return deleteChart(validationLayers, charts, action.id);
 
-  return saveChart(layers, charts, action.definition, action.makeMain ?? false);
+  return saveChart(validationLayers, charts, action.definition, action.makeMain ?? false);
 }
 
 function saveChart(

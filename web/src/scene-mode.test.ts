@@ -86,6 +86,9 @@ const dependencies = {
         setTime(time, label) {
           globalThis.sceneModeTest.times.push([time, label]);
         },
+        setSyncNotice(notice) {
+          (globalThis.sceneModeTest.syncNotices ??= []).push(notice);
+        },
         openFull(tab, options) {
           calls.push(["open", tab, options]);
           state.open = true;
@@ -95,37 +98,53 @@ const dependencies = {
           state.open = false;
         },
         get isOpen() { return state.open; },
+        isEditorDirty() {
+          return !!globalThis.sceneModeTest.editorDirty;
+        },
+        showCloseConfirm() {
+          (globalThis.sceneModeTest.confirmCalls ??= []).push("confirm");
+        },
         destroy() {},
       };
     };
-  `,
-  "./scene-url": `
-    export const sceneUrl = () => "/?scene=test";
-    export const timeForPrefix = () => null;
   `,
   "./view": `
     export const OUTLINE_ID = "soe-area-outline";
     export function mountScene(map, scene, slots) {
       globalThis.sceneModeTest.onUnits = slots.onUnits;
       globalThis.sceneModeTest.onTime = slots.onTime;
+      globalThis.sceneModeTest.onCharts = slots.onCharts;
+      globalThis.sceneModeTest.onDisplay = slots.onDisplay;
+      globalThis.sceneModeTest.onChartSync = slots.onChartSync;
       const layerIds = ["relief", "contours", "rain", "overview"];
       if (slots.onUnits) {
         const initial = globalThis.sceneModeTest.initialUnits ?? ["m", {}];
         slots.onUnits(initial[0], initial[1], [...layerIds]);
+      }
+      if (globalThis.sceneModeTest.initialCharts != null && slots.onCharts) {
+        slots.onCharts(globalThis.sceneModeTest.initialCharts);
       }
       const snapshot = {
         display: { layers: {}, off: new Set(), showAs: {} },
         allocation: { owner: null, draws: new Map(), as: new Map() },
         on: new Set(),
       };
-      const mountStore = {
+      const mountStore = globalThis.sceneModeTest.mountStore ?? {
         getSnapshot: () => snapshot,
         subscribe: () => () => {},
         dispatch: () => {},
       };
       globalThis.sceneModeTest.mountStore = mountStore;
       return {
-        timeline: null,
+        timeline: {
+          times: ["2020-01-01", "2020-02-01"],
+          goTo(time) {
+            (globalThis.sceneModeTest.restoredTimes ??= []).push(time);
+            // The real timeline notifies the owner, so the stub delivers the month label.
+            slots.onTime?.(time, time.slice(0, 7));
+          },
+          move() {},
+        },
         layerIds,
         store: mountStore,
         addNote: (note) => globalThis.sceneModeTest.notes.push(note),
@@ -155,12 +174,14 @@ const originalGlobals = {
   document: globalThis.document,
   history: globalThis.history,
   getComputedStyle: globalThis.getComputedStyle,
+  location: (globalThis as Record<string, unknown>).location,
 };
 
 afterEach(() => {
   active?.mode.exit();
   active = undefined;
   Object.assign(globalThis, originalGlobals);
+  if (originalGlobals.location === undefined) Reflect.deleteProperty(globalThis, "location");
   Reflect.deleteProperty(globalThis, "sceneModeTest");
 });
 
@@ -378,7 +399,7 @@ test("the panel owner pushes history and forwards notice options to reopen", () 
 
   hooks.requestOpen("about", { scrollToNotices: true });
 
-  assert.deepEqual(pushedEntries.at(-1), [{ panel: "about" }, "/?scene=test"]);
+  assert.deepEqual(pushedEntries.at(-1), [{ panel: "about" }, "?scene=test"]);
   assert.deepEqual(recorded.panelCalls.at(-1), [
     "open",
     "about",
@@ -388,7 +409,7 @@ test("the panel owner pushes history and forwards notice options to reopen", () 
 
   hooks.requestOpen("credits");
 
-  assert.deepEqual(pushedEntries.at(-1), [{ panel: "credits" }, "/?scene=test"]);
+  assert.deepEqual(pushedEntries.at(-1), [{ panel: "credits" }, "?scene=test"]);
   assert.deepEqual(recorded.panelCalls.at(-1), ["open", "credits", undefined]);
 
   const callsBeforeBack = recorded.panelCalls.length;
@@ -432,6 +453,7 @@ test("the owner and real panel keep history through Back and Forward", async (co
   context.after(() => window.happyDOM.abort());
   const harness = createHarness();
   installBrowser(context, window);
+  (globalThis as Record<string, unknown>).location = window.location;
   const previousHistory = (globalThis as Record<string, unknown>).history;
   (globalThis as Record<string, unknown>).history = window.history;
   context.after(() => {
@@ -460,7 +482,8 @@ test("the owner and real panel keep history through Back and Forward", async (co
   const originalReplace = window.history.replaceState.bind(window.history);
   window.history.replaceState = (next: unknown, title: string, url: string) => {
     // Happy-dom drops forward entries on a no-op replace while real browsers keep them.
-    if (next === history.state && url === "/?scene=test") return;
+    const candidate = new URL(url, window.location.href).href;
+    if (candidate === window.location.href && next === window.history.state) return;
     return (originalReplace as (...replaceArgs: [unknown, string, string]) => void)(
       next,
       title,
@@ -507,9 +530,7 @@ test("the owner and real panel keep history through Back and Forward", async (co
   assert.ok(scrolled.includes("notices-heading"));
 
   main.scrollTop = 123;
-  const closed = new Promise((resolve) => {
-    window.addEventListener("popstate", () => resolve(null), { once: true });
-  });
+  const closed = waitForPopstate(window, "closing the dialog did not navigate");
   await act(async () => {
     const event = new window.Event("cancel", { bubbles: true, cancelable: true });
     dialog.dispatchEvent(event);
@@ -523,9 +544,7 @@ test("the owner and real panel keep history through Back and Forward", async (co
 
   main.scrollTop = 123;
   scrolled.length = 0;
-  const reopened = new Promise((resolve) => {
-    window.addEventListener("popstate", () => resolve(null), { once: true });
-  });
+  const reopened = waitForPopstate(window, "forward did not reopen the dialog");
   await act(async () => {
     history.forward();
   });
@@ -630,6 +649,640 @@ test("docking disconnects on exit and re-observes on re-entry", (context) => {
   assert.equal(docking.disconnects, 2);
 });
 
+test("chart commits update the share link without clobbering display or history", () => {
+  const harness = createHarness();
+  const replaced: [unknown, string][] = [];
+  let historyState: { panel?: string } | null = null;
+  Object.assign(globalThis, {
+    history: {
+      get state() {
+        return historyState;
+      },
+      pushState(next: unknown, _title: string, url: string) {
+        historyState = next as { panel?: string } | null;
+        replaced.push([next, url]);
+      },
+      replaceState(next: unknown, _title: string, url: string) {
+        historyState = next;
+        replaced.push([next, url]);
+      },
+      back() {},
+    },
+  });
+  harness.enter();
+  replaced.length = 0;
+  historyState = { panel: "charts" };
+
+  harness.onCharts!("token123");
+
+  assert.equal(replaced.length, 1);
+  assert.equal(replaced[0][0], historyState);
+  assert.match(replaced[0][1] as string, /charts=token123/);
+  assert.match(replaced[0][1] as string, /scene=test/);
+});
+
+test("oversized chart commits keep a safe URL and recover through the owner", () => {
+  const harness = createHarness();
+  (globalThis as Record<string, unknown>).location = new URL("https://example.test/a-path/");
+  const replaced: string[] = [];
+  Object.assign(globalThis, {
+    history: {
+      get state() {
+        return null;
+      },
+      pushState() {},
+      replaceState(_next: unknown, _title: string, url: string) {
+        replaced.push(url);
+      },
+      back() {},
+    },
+  });
+  harness.enter();
+  replaced.length = 0;
+
+  harness.onCharts!("token123");
+  assert.equal(replaced.length, 1);
+  assert.match(replaced[0], /charts=token123/);
+  const fittingUrl = replaced[0];
+  assert.ok(fittingUrl.length <= 8192);
+  assert.equal(harness.syncNotices.at(-1), undefined);
+
+  harness.onCharts!("a".repeat(9000));
+
+  assert.equal(replaced.length, 2);
+  assert.equal(replaced[1], fittingUrl);
+  assert.ok(replaced[1].length <= 8192);
+  assert.match(replaced[1], /charts=token123/);
+  assert.equal(
+    harness.syncNotices.at(-1),
+    "The share link is too long to include these charts.",
+  );
+
+  harness.onCharts!("token123");
+
+  assert.equal(replaced.length, 3);
+  assert.match(replaced[2], /charts=token123/);
+  assert.equal(replaced[2], fittingUrl);
+  assert.equal(harness.syncNotices.at(-1), null);
+});
+
+test("a dirty editor holds the entry on browser back", () => {
+  const harness = createHarness();
+  Object.assign(globalThis, {
+    history: {
+      get state() {
+        return null;
+      },
+      pushState(next: unknown) {
+        (globalThis.sceneModeTest as Record<string, unknown>).pushed = next;
+      },
+      replaceState() {},
+      back() {},
+    },
+  });
+  harness.enter();
+  (globalThis.sceneModeTest as Record<string, unknown>).editorDirty = true;
+  const recorded = harness as unknown as { confirmCalls?: string[] };
+
+  harness.mode.showFullscreen(null);
+
+  assert.deepEqual(recorded.confirmCalls, ["confirm"]);
+  assert.deepEqual(
+    (globalThis.sceneModeTest as Record<string, unknown>).pushed,
+    { panel: "charts" },
+  );
+});
+
+test("complete urls keep time display and panel at the exact boundary", async () => {
+  const { isCompleteUrlOversized } = await import("./charts/state.ts");
+  const { sceneUrl, withChartsToken } = await import("./scene-url.ts");
+  const base = "https://example.test/a-long-application-path/?scene=test";
+  const display = "&units=rain%3A%C2%B0F";
+  const timeLabel = "2020-02";
+  const relative = sceneUrl("test", timeLabel, display);
+  const emptyAbsolute = new URL(withChartsToken(relative, ""), base).href;
+  const tokenLength = 8192 - emptyAbsolute.length;
+  assert.ok(tokenLength > 0);
+  const token8192 = "a".repeat(tokenLength);
+  const absolute8192 = new URL(withChartsToken(relative, token8192), base).href;
+  assert.equal(absolute8192.length, 8192);
+  assert.equal(isCompleteUrlOversized(absolute8192), false);
+  assert.ok(absolute8192.includes("/a-long-application-path/"));
+  assert.ok(absolute8192.includes("%C2%B0"));
+  assert.ok(absolute8192.includes(timeLabel));
+  const absolute8193 = new URL(withChartsToken(relative, `${token8192}a`), base).href;
+  assert.equal(absolute8193.length, 8193);
+  assert.equal(isCompleteUrlOversized(absolute8193), true);
+});
+
+test("exact-boundary chart tokens keep display and time in controller history", async () => {
+  const { isCompleteUrlOversized } = await import("./charts/state.ts");
+  const { sceneUrl } = await import("./scene-url.ts");
+  const page = "https://example.test/a-long-application-path/?scene=test";
+  (globalThis as Record<string, unknown>).location = new URL(page);
+  const display = "&units=rain%3A%C2%B0F";
+  const emptyComplete = new URL(sceneUrl("test", "2020-02", display), page).href;
+  const fittingLength = 8192 - emptyComplete.length - "&charts=".length;
+  assert.ok(fittingLength > 0);
+  const harness = createHarness();
+  const replaced: { state: unknown; url: string }[] = [];
+  let historyState: { panel?: string } | null = null;
+  Object.assign(globalThis, {
+    history: {
+      get state() {
+        return historyState;
+      },
+      pushState() {},
+      replaceState(next: unknown, _title: string, url: string) {
+        historyState = next as { panel?: string } | null;
+        replaced.push({ state: next, url });
+      },
+      back() {},
+    },
+  });
+  harness.enter("2020-02");
+  assert.deepEqual(harness.restoredTimes, ["2020-02-01"]);
+  harness.onDisplay!(display);
+  harness.onTime!("2020-02-01", "2020-02");
+  historyState = { panel: "charts" };
+  replaced.length = 0;
+
+  const fitting = "c".repeat(fittingLength);
+  harness.onCharts!(fitting);
+
+  assert.equal(replaced.length, 1);
+  assert.equal(replaced[0].url.length, 8192);
+  assert.equal(isCompleteUrlOversized(replaced[0].url), false);
+  assert.ok(replaced[0].url.includes("/a-long-application-path/"));
+  assert.ok(replaced[0].url.includes("%C2%B0"));
+  assert.ok(replaced[0].url.includes("t=2020-02"));
+  assert.deepEqual(replaced[0].state, { panel: "charts" });
+
+  harness.onCharts!(`${fitting}d`);
+
+  assert.equal(replaced.length, 2);
+  assert.equal(replaced[1].url, replaced[0].url);
+  assert.ok(replaced[1].url.length <= 8192);
+  assert.match(replaced[1].url, /charts=c+/);
+  assert.deepEqual(replaced[1].state, { panel: "charts" });
+  assert.equal(
+    harness.syncNotices.at(-1),
+    "The share link is too long to include these charts.",
+  );
+
+  harness.onDisplay!("");
+
+  assert.equal(replaced.length, 3);
+  assert.ok(replaced[2].url.length <= 8192);
+  assert.equal(isCompleteUrlOversized(replaced[2].url), false);
+  assert.match(replaced[2].url, /charts=c+d/);
+  assert.ok(replaced[2].url.includes("t=2020-02"));
+  assert.equal(replaced[2].url.includes("%C2%B0"), false);
+  assert.deepEqual(replaced[2].state, { panel: "charts" });
+  assert.equal(harness.syncNotices.at(-1), null);
+
+  harness.onDisplay!(display);
+
+  assert.equal(replaced.length, 4);
+  assert.equal(replaced[3].url, replaced[2].url);
+  assert.ok(replaced[3].url.length <= 8192);
+  assert.deepEqual(replaced[3].state, { panel: "charts" });
+  assert.equal(
+    harness.syncNotices.at(-1),
+    "The share link is too long to include these charts.",
+  );
+
+  harness.onTime!(null as unknown as string, null as unknown as string);
+
+  assert.equal(replaced.length, 5);
+  assert.ok(replaced[4].url.length <= 8192);
+  assert.equal(isCompleteUrlOversized(replaced[4].url), false);
+  assert.match(replaced[4].url, /charts=c+d/);
+  assert.ok(replaced[4].url.includes("%C2%B0"));
+  assert.equal(replaced[4].url.includes("t=2020-02"), false);
+  assert.deepEqual(replaced[4].state, { panel: "charts" });
+  assert.equal(harness.syncNotices.at(-1), null);
+
+  harness.onCharts!(fitting);
+
+  assert.equal(replaced.length, 6);
+  assert.ok(replaced[5].url.length <= 8192);
+  assert.match(replaced[5].url, /charts=c+/);
+  assert.equal(harness.syncNotices.at(-1), null);
+  for (const entry of replaced) assert.ok(entry.url.length <= 8192);
+});
+
+test("a throwing renderer keeps charts while the working layer keeps colour", async (context) => {
+  const window = new Window({ url: "https://example.test/?scene=test" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(context, window);
+  const mountScene = await importViewWithStubs(THROWING_REGISTRY_STUB);
+  const { defaultSlice, encodeSlice } = await import("./charts/state.ts");
+  const { NO_TOKENS } = await import("./display-state.ts");
+  const rain = {
+    id: "rain",
+    title: "Rainfall",
+    units: "mm/month",
+    style: { kind: "field", encodings: ["ramp"], palette: "batlow" },
+    time: { step: "P1M", values: ["2020-01-01", "2020-02-01"], end: "2020-03-01", method: "sum" },
+    area_series: {
+      statistic: "mean",
+      weights: "cell_area_inside_outline",
+      values: [1, 2],
+      valid_fraction: [1, 1],
+    },
+    arrays: {},
+  } as unknown as Scene;
+  const temp = {
+    ...(rain as unknown as Record<string, unknown>),
+    id: "temp",
+    title: "Temperature",
+    units: "°C",
+    style: { kind: "field", encodings: ["ramp", "isolines"] },
+    time: { step: "P1M", values: ["2020-01-01", "2020-02-01"], end: "2020-03-01", method: "mean" },
+  } as unknown as Scene;
+  const scene = {
+    id: "test",
+    layers: [rain, temp],
+    area: { bbox: [0, -1, 1, 1], geometry_href: "area.geojson" },
+    data: { href: "data.zarr" },
+    period: { start: "2020-01-01", end: "2020-03-01", step: "P1M" },
+  } as unknown as Scene;
+  const slice = defaultSlice((scene as unknown as { layers: never[] }).layers as never[]);
+  (slice.definitions[0] as { title: string }).title = "Custom retained source";
+  const map = {
+    addSource() {},
+    addLayer() {},
+    setLayoutProperty() {},
+    addControl() {},
+    removeControl() {},
+    getSource() {},
+    getLayer() {},
+    removeLayer() {},
+    removeSource() {},
+  };
+  const cards = document.createElement("div");
+  const timeBar = document.createElement("div");
+  const mounted = mountScene(map as never, scene, {
+    cards,
+    timeBar,
+    display: { ...NO_TOKENS, charts: encodeSlice(slice) },
+    onDisplay() {},
+    onCharts() {},
+    onTime() {},
+  });
+  assert.ok(
+    mounted.store.getSnapshot().charts.definitions.some(
+      (entry) => entry.title === "Custom retained source",
+    ),
+  );
+  assert.equal(mounted.store.getSnapshot().charts.definitions.length, slice.definitions.length);
+  assert.equal(mounted.store.getSnapshot().allocation.owner, "rain");
+  assert.equal(mounted.store.getSnapshot().allocation.draws.get("rain"), "colour");
+  mounted.unmount();
+});
+
+test("a denied storage write stays visible until the retry succeeds", async (context) => {
+  const window = new Window({ url: "https://example.test/a/?scene=test" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(context, window);
+  const mountScene = await importViewWithStubs(FIELD_REGISTRY_STUB);
+  const { NO_TOKENS } = await import("./display-state.ts");
+  const { STORAGE_DENIED_NOTICE, encodeSlice } = await import("./charts/state.ts");
+  const { formatDisplayParams } = await import("./display-state.ts");
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./ui/scene-panel.tsx");
+  const scene = makeChartableIntegrationScene();
+  scene.id = "test-storage";
+  const previousStorage = (globalThis as Record<string, unknown>).localStorage;
+  const deniedStorage = {
+    getItem: (() => null) as () => null,
+    setItem: (() => {
+      throw new Error("storage unavailable");
+    }) as () => void,
+    removeItem: (() => {}) as () => void,
+    clear: (() => {}) as () => void,
+    key: (() => null) as () => null,
+    get length() {
+      return 0;
+    },
+  };
+  Object.defineProperty(globalThis, "localStorage", {
+    value: deniedStorage,
+    configurable: true,
+    writable: true,
+  });
+  const notices: (string | null)[] = [];
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  let mounted: ReturnType<typeof mountScene> | null = null;
+  context.after(() => {
+    try {
+      panel?.destroy();
+    } catch {
+    }
+    try {
+      mounted?.unmount();
+    } catch {
+    }
+  });
+  const map = {
+    addSource() {},
+    addLayer() {},
+    setLayoutProperty() {},
+    addControl() {},
+    removeControl() {},
+    getSource() {},
+    getLayer() {},
+    removeLayer() {},
+    removeSource() {},
+  };
+  const cards = document.createElement("div");
+  const timeBar = document.createElement("div");
+  let lastCharts: string | null = null;
+  let lastDisplay = "";
+  mounted = mountScene(map as never, scene, {
+    cards,
+    timeBar,
+    display: NO_TOKENS,
+    onDisplay: (params) => {
+      lastDisplay = params;
+    },
+    onCharts: (token) => {
+      lastCharts = token;
+    },
+    onTime() {},
+    onChartSync: (notice) => {
+      notices.push(notice);
+      panel?.setSyncNotice(notice);
+    },
+  });
+  assert.equal(lastCharts, encodeSlice(mounted.store.getSnapshot().charts));
+  assert.equal(
+    lastDisplay,
+    formatDisplayParams(mounted.store.getSnapshot().display, scene.layers),
+  );
+  const dialog = makeIntegrationDialog();
+  document.body.append(dialog);
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, mounted.store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+    panel.openFull("charts");
+  });
+  const definition = {
+    id: "denied-chart",
+    title: "Denied chart",
+    source: { layerId: "rain", shape: "time_series" },
+    chartType: "line",
+    options: {},
+  } as never;
+  await act(async () => {
+    mounted!.store.dispatch({ kind: "saveChart", definition });
+  });
+  assert.ok(notices.length >= 1);
+  assert.equal(notices.at(-1), STORAGE_DENIED_NOTICE);
+  assert.equal(lastCharts, encodeSlice(mounted!.store.getSnapshot().charts));
+  assert.match(dialog.textContent ?? "", /kept for this visit/);
+  const edit = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Edit",
+  )!;
+  await act(async () => {
+    edit.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.ok(dialog.querySelector(".chart-editor"));
+  assert.match(dialog.textContent ?? "", /kept for this visit/);
+  assert.equal(
+    [...dialog.textContent!.matchAll(/kept for this visit/g)].length,
+    1,
+  );
+  await act(async () => {
+    mounted!.store.dispatch({
+      kind: "display",
+      update: (next) => {
+        next.layers.rain = { palette: "cividis" };
+      },
+    });
+  });
+  assert.equal(notices.at(-1), STORAGE_DENIED_NOTICE);
+  assert.equal(
+    lastDisplay,
+    formatDisplayParams(mounted!.store.getSnapshot().display, scene.layers),
+  );
+  assert.ok(lastDisplay.includes("cividis"));
+  assert.match(dialog.textContent ?? "", /kept for this visit/);
+  Object.defineProperty(globalThis, "localStorage", {
+    value: previousStorage,
+    configurable: true,
+    writable: true,
+  });
+  const recovery = {
+    ...(definition as unknown as Record<string, unknown>),
+    title: "Recovered chart",
+  } as never;
+  await act(async () => {
+    mounted!.store.dispatch({ kind: "saveChart", definition: recovery });
+  });
+  assert.equal(notices.at(-1), null);
+  assert.equal(lastCharts, encodeSlice(mounted!.store.getSnapshot().charts));
+  assert.equal((dialog.textContent ?? "").includes("kept for this visit"), false);
+  await act(async () => {
+    panel!.destroy();
+  });
+  mounted!.unmount();
+  panel = null;
+  mounted = null;
+});
+
+test("oversized charts keep the dirty Back entry through Keep editing", async (context) => {
+  const pending = await openOversizedPendingClose(context, "Oversized draft");
+  const { window, dialog, act, urls, input, store } = pending;
+  const keep = [...dialog.querySelectorAll(".chart-confirm button")].find(
+    (button) => button.textContent === "Keep editing",
+  )!;
+  await act(async () => {
+    keep.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.ok(dialog.querySelector(".chart-editor"));
+  assert.equal(input.value, "Oversized draft");
+  assert.ok(document.activeElement === input, "Keep editing restores focus to the invoker");
+  assert.deepEqual(window.history.state, { panel: "charts" });
+  assert.equal(window.history.length, 2);
+  assert.match(dialog.textContent ?? "", /too long to include these charts/);
+  for (const url of urls) assert.ok(url.length <= 8192);
+  const retainedUrl = window.location.href;
+
+  const secondPopped = waitForPopstate(window, "second Back did not navigate");
+  await act(async () => {
+    window.history.back();
+  });
+  await secondPopped;
+  await act(async () => {});
+  assert.deepEqual(window.history.state, { panel: "charts" });
+  assert.equal(window.history.length, 2);
+  assert.ok(dialog.querySelector(".chart-confirm"));
+  assert.equal(window.location.href, retainedUrl);
+  for (const url of urls) assert.ok(url.length <= 8192);
+
+  const secondSave = [...dialog.querySelectorAll(".chart-confirm button")].find(
+    (button) => button.textContent === "Save",
+  ) as HTMLButtonElement;
+  const secondClosed = waitForPopstate(window, "second Save did not navigate back");
+  await act(async () => {
+    secondSave.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  await secondClosed;
+  await act(async () => {});
+  assert.equal(dialog.open, false);
+  assert.equal(window.history.state, null);
+  assert.equal(pending.pushedUrls.length, 3);
+  assert.equal(window.location.href, pending.retainedUrl);
+  const savedTitles = store.getSnapshot().charts.definitions.map((entry) => entry.title);
+  assert.ok(savedTitles.includes("Oversized draft"));
+  assert.ok(window.location.href.length <= 8192);
+  for (const url of urls) assert.ok(url.length <= 8192);
+});
+
+test("oversized pending close completes through Discard", async (context) => {
+  const pending = await openOversizedPendingClose(context, "Discarded draft");
+  const { window, dialog, column, act, urls, store, before } = pending;
+  assert.equal(window.history.length, 2);
+  assert.deepEqual(window.history.state, { panel: "charts" });
+  const discard = [...dialog.querySelectorAll(".chart-confirm button")].find(
+    (button) => button.textContent === "Discard",
+  )!;
+  const closed = waitForPopstate(window, "discard did not navigate back");
+  await act(async () => {
+    discard.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  await closed;
+  await act(async () => {});
+  assert.equal(dialog.open, false);
+  assert.ok(dialog.querySelector(".chart-gallery"));
+  assert.equal(JSON.stringify(store.getSnapshot().charts), before);
+  assert.equal(window.history.state, null);
+  assert.equal(pending.pushedUrls.length, 2);
+  assert.equal(window.location.href, pending.retainedUrl);
+  assert.ok(window.location.href.length <= 8192);
+  assert.equal(window.location.href.includes("charts="), false);
+  const expand = column.querySelector(".expand") as HTMLButtonElement;
+  assert.ok(document.activeElement === expand, "closing returns focus to Expand");
+  for (const url of urls) assert.ok(url.length <= 8192);
+});
+
+test("oversized pending close completes through Save", async (context) => {
+  const pending = await openOversizedPendingClose(context, "Pending save draft");
+  const { window, dialog, column, act, urls, store } = pending;
+  const save = pending.save;
+  assert.equal(window.history.length, 2);
+  assert.deepEqual(window.history.state, { panel: "charts" });
+  assert.match(dialog.textContent ?? "", /too long to include these charts/);
+  const closed = waitForPopstate(window, "save did not navigate back");
+  await act(async () => {
+    save.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  await closed;
+  await act(async () => {});
+  assert.equal(dialog.open, false);
+  const savedTitles = store.getSnapshot().charts.definitions.map((entry) => entry.title);
+  assert.ok(savedTitles.includes("Pending save draft"));
+  assert.equal(store.getSnapshot().charts.definitions.length, 32);
+  assert.equal(window.history.state, null);
+  assert.equal(pending.pushedUrls.length, 2);
+  assert.equal(window.location.href, pending.retainedUrl);
+  assert.ok(window.location.href.length <= 8192);
+  assert.equal(window.location.href.includes("charts="), false);
+  const expand = column.querySelector(".expand") as HTMLButtonElement;
+  assert.ok(document.activeElement === expand, "closing returns focus to Expand");
+  for (const url of urls) assert.ok(url.length <= 8192);
+});
+
+test("initial oversized entry clears its warning on a fitting edit", async (context) => {
+  const scene = makeChartableIntegrationScene();
+  const oversized = await oversizedSlice(scene.layers);
+  const { createSceneStore } = await import("./scene-store.ts");
+  const { encodeSlice, STORAGE_DENIED_NOTICE } = await import("./charts/state.ts");
+  const store = createSceneStore(
+    scene.layers,
+    { layers: {}, off: new Set(), showAs: {} },
+    oversized,
+  );
+  const huge = encodeSlice(oversized);
+  const setup = await enterOwnerPanel(context, { chartsToken: huge, mountStore: store, scene });
+  const { window, harness, dialog, column, act, urls } = setup;
+  assert.equal(window.location.href.includes("charts="), false);
+  assert.equal(window.history.length, 1);
+  assert.equal(window.history.state, null);
+
+  const chartsTab = [...column.querySelectorAll("button")].find(
+    (button) => button.textContent === "Charts",
+  )!;
+  await act(async () => {
+    chartsTab.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  const expand = column.querySelector(".expand") as HTMLButtonElement;
+  await act(async () => {
+    expand.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.deepEqual(window.history.state, { panel: "charts" });
+  assert.equal(window.history.length, 2);
+  assert.match(dialog.textContent ?? "", /too long to include these charts/);
+  const entryUrl = window.location.href;
+  assert.ok(entryUrl.length <= 8192);
+  assert.equal(entryUrl.includes("charts="), false);
+
+  await act(async () => {
+    harness.onChartSync!(STORAGE_DENIED_NOTICE);
+  });
+  assert.match(dialog.textContent ?? "", /kept for this visit/);
+  await act(async () => {
+    harness.onChartSync!(null);
+  });
+  assert.match(dialog.textContent ?? "", /too long to include these charts/);
+  assert.equal((dialog.textContent ?? "").includes("kept for this visit"), false);
+
+  await act(async () => {
+    store.dispatch({
+      kind: "display",
+      update: (next) => {
+        next.layers.rain = { palette: "cividis" };
+      },
+    });
+  });
+  assert.equal(window.location.href, entryUrl);
+  assert.deepEqual(window.history.state, { panel: "charts" });
+  assert.equal(window.history.length, 2);
+  assert.match(dialog.textContent ?? "", /too long to include these charts/);
+
+  await act(async () => {
+    (harness.onTime as (time: string | null, label: string | null) => void)(
+      "2020-02-01",
+      "2020-02",
+    );
+  });
+  assert.equal(window.location.href, entryUrl);
+  assert.deepEqual(window.history.state, { panel: "charts" });
+  assert.equal(window.history.length, 2);
+
+  await act(async () => {
+    store.dispatch({ kind: "resetCharts" });
+  });
+  assert.match(window.location.href, /charts=/);
+  assert.ok(window.location.href.includes("cividis"));
+  assert.ok(window.location.href.includes("t=2020-02"));
+  assert.ok(window.location.href.length <= 8192);
+  assert.equal(
+    (dialog.textContent ?? "").includes("too long to include these charts"),
+    false,
+  );
+  assert.ok(dialog.querySelector(".chart-gallery"));
+  assert.deepEqual(window.history.state, { panel: "charts" });
+  assert.equal(window.history.length, 2);
+  for (const url of urls) assert.ok(url.length <= 8192);
+});
+
 function createHarness() {
   const map = new TestMap();
   const roots = { column: element(), timeBar: element(), dialog: element() };
@@ -645,14 +1298,22 @@ function createHarness() {
     onUnits: null as ((elevation: string, units: Record<string, string>, ids: string[]) => void)
       | null,
     onTime: null as ((time: string, label: string) => void) | null,
+    onCharts: null as ((token: string | null) => void) | null,
+    onDisplay: null as ((params: string) => void) | null,
+    onChartSync: null as ((notice: string | null) => void) | null,
     initialUnits: null as [string, Record<string, string>] | null,
+    initialCharts: null as string | null,
+    restoredTimes: [] as string[],
+    syncNotices: [] as (string | null)[],
     labelMoves: 0,
     landImmediately: false,
     land: () => {},
     resize: () => {},
     flight: { zoom: 5, refit() {}, stopClamp() {} },
     mode: createSceneMode(map as unknown as MapLibreMap, roots as unknown as SceneRoots),
-    enter() { this.mode.enter(SCENE, { time: null, entry: "replace" }); },
+    enter(time: string | null = null) {
+      this.mode.enter(SCENE, { time, entry: "replace" });
+    },
   };
   Object.assign(globalThis, {
     sceneModeTest: harness,
@@ -1057,4 +1718,298 @@ function makeIntegrationScene(): Scene {
       terms_passthrough: "Terms.",
     },
   } as unknown as Scene;
+}
+
+const THROWING_REGISTRY_STUB = "export const LAYER_KINDS=new Map([['field',{stack:0,"
+  + "create:({layer})=>{if(layer.id==='temp')throw new Error('renderer failed');"
+  + "return{parts:[{id:layer.id,label:layer.id,layerIds:[layer.id]}],"
+  + "show(){},destroy(){},setTime(){},legend:()=>null};}}]]);";
+const FIELD_REGISTRY_STUB = "export const LAYER_KINDS=new Map([['field',{stack:0,"
+  + "create:()=>({parts:[{id:'rain',label:'rain',layerIds:['rain']}],"
+  + "show(){},destroy(){},setTime(){},legend:()=>null})}]]);";
+
+async function importViewWithStubs(registryStub: string) {
+  const { registerHooks: registerInner } = await import("node:module");
+  const viewUrl = new URL("./view.ts", import.meta.url).href;
+  const viewHooks = registerInner({
+    resolve(specifier, context, next) {
+      if (typeof specifier === "string" && specifier.endsWith(".css")) {
+        return { url: "data:text/javascript,export default {}", shortCircuit: true };
+      }
+      if (context?.parentURL === viewUrl) {
+        if (specifier === "./map") {
+          const stub = "export const firstSymbolId=()=>undefined;"
+            + "export const removeLayerAndSource=()=>{};"
+            + "export const showScaleBar=()=>()=>{};";
+          return {
+            url: `data:text/javascript,${stub}`,
+            shortCircuit: true,
+          };
+        }
+        if (specifier === "./data") {
+          return {
+            url: "data:text/javascript,export const openStore=async()=>({});",
+            shortCircuit: true,
+          };
+        }
+        if (specifier === "./api") {
+          return {
+            url: "data:text/javascript,export const loadAreaFeature=async()=>({});",
+            shortCircuit: true,
+          };
+        }
+        if (specifier === "./layers/blend") {
+          const stub = "export const BLEND_TITLE='Blend';"
+            + "export const createBlendView=()=>null;";
+          return {
+            url: `data:text/javascript,${stub}`,
+            shortCircuit: true,
+          };
+        }
+        if (specifier === "./layers/registry") {
+          return { url: `data:text/javascript,${registryStub}`, shortCircuit: true };
+        }
+        if (specifier === "./ui/scene-column") {
+          return {
+            url: "data:text/javascript,export const mountSceneColumn=()=>({unmount(){}});",
+            shortCircuit: true,
+          };
+        }
+      }
+      return next(specifier, context);
+    },
+  });
+  const { mountScene } = await import("./view.ts");
+  viewHooks.deregister();
+
+  return mountScene;
+}
+
+async function enterOwnerPanel(
+  context: { after(hook: () => void): void },
+  options: { chartsToken?: string; mountStore?: unknown; scene?: Scene } = {},
+) {
+  const window = new Window({ url: "https://example.test/a/?scene=test" });
+  context.after(() => window.happyDOM.abort());
+  const harness = createHarness();
+  installBrowser(context, window);
+  (globalThis as Record<string, unknown>).location = window.location;
+  const previousHistory = (globalThis as Record<string, unknown>).history;
+  (globalThis as Record<string, unknown>).history = window.history;
+  context.after(() => {
+    (globalThis as Record<string, unknown>).history = previousHistory;
+  });
+  const { act } = await import("react");
+  const { createScenePanel: realCreate } = await import("./ui/scene-panel.tsx");
+  const testState = harness as unknown as Record<string, unknown>;
+  testState.useRealPanel = true;
+  testState.realCreateScenePanel = realCreate;
+  if (options.chartsToken !== undefined) testState.initialCharts = options.chartsToken;
+  if (options.mountStore !== undefined) testState.mountStore = options.mountStore;
+  const column = document.createElement("div");
+  const timeBar = document.createElement("div");
+  const dialog = makeIntegrationDialog();
+  document.body.append(column, timeBar, dialog);
+  const roots = harness.roots as unknown as Record<string, unknown>;
+  roots.column = column;
+  roots.timeBar = timeBar;
+  roots.dialog = dialog;
+  const urls: string[] = [];
+  // Count pushes because happy-dom truncates forward entries on replaceState after Back.
+  const pushedUrls: string[] = [];
+  const originalPush = window.history.pushState.bind(window.history);
+  window.history.pushState = (next: unknown, title: string, url: string) => {
+    urls.push(url);
+    pushedUrls.push(url);
+    return (originalPush as (...pushArgs: [unknown, string, string]) => void)(
+      next,
+      title,
+      url,
+    );
+  };
+  const originalReplace = window.history.replaceState.bind(window.history);
+  window.history.replaceState = (next: unknown, title: string, url: string) => {
+    urls.push(url);
+    return (originalReplace as (...replaceArgs: [unknown, string, string]) => void)(
+      next,
+      title,
+      url,
+    );
+  };
+  window.addEventListener("popstate", () => {
+    const tab = (window.history.state as { panel?: string } | null)?.panel ?? null;
+    // Browser popstate arrives async, so routing waits past the committing act.
+    queueMicrotask(() => harness.mode.showFullscreen(tab));
+  });
+  const scene = options.scene ?? makeIntegrationScene();
+  await act(async () => {
+    harness.mode.enter(scene, { time: null, entry: "replace" });
+  });
+  // Committed store actions reach the owner like the real mount's subscription does.
+  const wired = (options.mountStore ?? harness.mountStore) as {
+    getSnapshot(): { charts: unknown; display: unknown };
+    subscribe(listener: () => void): () => void;
+  };
+  if (wired && typeof wired.subscribe === "function") {
+    const { encodeSlice } = await import("./charts/state.ts");
+    const { formatDisplayParams } = await import("./display-state.ts");
+    let previousCharts = wired.getSnapshot().charts;
+    let previousDisplay = wired.getSnapshot().display;
+    wired.subscribe(() => {
+      const snapshot = wired.getSnapshot() as {
+        charts: Parameters<typeof encodeSlice>[0];
+        display: Parameters<typeof formatDisplayParams>[0];
+      };
+      if (snapshot.charts !== previousCharts) {
+        previousCharts = snapshot.charts;
+        harness.onCharts?.(encodeSlice(snapshot.charts));
+      }
+      if (snapshot.display !== previousDisplay) {
+        previousDisplay = snapshot.display;
+        harness.onDisplay?.(formatDisplayParams(snapshot.display, scene.layers));
+      }
+    });
+  }
+
+  return { window, harness, dialog, column, act, urls, pushedUrls, store: wired };
+}
+
+async function dirtyOwnerEditor(
+  setup: Awaited<ReturnType<typeof enterOwnerPanel>>,
+  title: string,
+) {
+  const { window, dialog, act } = setup;
+  const edit = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Edit",
+  )!;
+  await act(async () => {
+    edit.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  const input = dialog.querySelector('.chart-editor input[type="text"]') as HTMLInputElement;
+  await act(async () => {
+    input.focus();
+    const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+    native?.set?.call(input, title);
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+  });
+
+  return input;
+}
+
+async function openOversizedPendingClose(
+  context: { after(hook: () => void): void },
+  title: string,
+) {
+  const scene = makeChartableIntegrationScene();
+  const oversized = await oversizedSlice(scene.layers);
+  const { createSceneStore } = await import("./scene-store.ts");
+  const { encodeSlice } = await import("./charts/state.ts");
+  const store = createSceneStore(
+    scene.layers,
+    { layers: {}, off: new Set(), showAs: {} },
+    oversized,
+  );
+  const before = JSON.stringify(store.getSnapshot().charts);
+  const huge = encodeSlice(oversized);
+  const setup = await enterOwnerPanel(context, { chartsToken: huge, mountStore: store, scene });
+  const { window, dialog, column, act } = setup;
+  assert.equal(window.history.state, null);
+  assert.equal(window.location.href.includes("charts="), false);
+  const retainedUrl = window.location.href;
+
+  const chartsTab = [...column.querySelectorAll("button")].find(
+    (button) => button.textContent === "Charts",
+  )!;
+  await act(async () => {
+    chartsTab.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  const expand = column.querySelector(".expand") as HTMLButtonElement;
+  await act(async () => {
+    expand.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.deepEqual(window.history.state, { panel: "charts" });
+  assert.match(dialog.textContent ?? "", /too long to include these charts/);
+
+  const input = await dirtyOwnerEditor(setup, title);
+  const popped = waitForPopstate(window, "browser Back did not navigate");
+  await act(async () => {
+    window.history.back();
+  });
+  await popped;
+  await act(async () => {});
+  assert.deepEqual(window.history.state, { panel: "charts" });
+  assert.ok(dialog.querySelector(".chart-confirm"));
+  const save = [...dialog.querySelectorAll(".chart-confirm button")].find(
+    (button) => button.textContent === "Save",
+  ) as HTMLButtonElement;
+  assert.ok(
+    document.activeElement === save,
+    "outer confirmation moves focus to its Save control",
+  );
+
+  return { ...setup, store, before, input, save, retainedUrl };
+}
+
+async function oversizedSlice(layers: unknown) {
+  const { defaultSlice, isValidSlice } = await import("./charts/state.ts");
+  const seed = defaultSlice(layers as never[]);
+  const first = seed.definitions[0];
+  const definitions = Array.from({ length: 32 }, (_, index) => ({
+    ...first,
+    id: `oversized-${index}`,
+    title: `Oversized ${String(index)} ${"T".repeat(100)}`.slice(0, 120),
+  }));
+  const slice = { version: 1 as const, definitions, mainChartId: "oversized-0" };
+  assert.ok(isValidSlice(slice, layers as never[]));
+
+  return slice;
+}
+
+async function oversizedSliceToken(layers: unknown) {
+  const { encodeSlice } = await import("./charts/state.ts");
+
+  return encodeSlice(await oversizedSlice(layers));
+}
+
+function makeChartableIntegrationScene(): Scene {
+  const scene = makeIntegrationScene();
+  const layers = JSON.parse(JSON.stringify(scene.layers)) as unknown[];
+  const rain = layers[0] as Record<string, unknown>;
+  rain.time = {
+    step: "P1M",
+    values: ["2020-01-01", "2020-02-01"],
+    end: "2020-03-01",
+    method: "sum",
+  };
+  rain.area_series = {
+    statistic: "mean",
+    weights: "cell_area_inside_outline",
+    values: [10, 12],
+    valid_fraction: [1, 1],
+  };
+  const terrain = layers[1] as Record<string, unknown>;
+  terrain.distribution = {
+    statistic: "quantiles",
+    weights: "cell_area_inside_outline",
+    percent: 1,
+    values: Array.from({ length: 101 }, (_, index) => index * 10),
+    min: 0,
+    max: 1000,
+    mean: 500,
+    valid_fraction: 0.9,
+    reference_values: [],
+  };
+
+  return { ...scene, layers } as unknown as Scene;
+}
+
+async function waitForPopstate(window: Window, label: string) {
+  await Promise.race([
+    new Promise((resolve) => {
+      window.addEventListener("popstate", () => resolve(null), { once: true });
+    }),
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(label)), 5 * 1000);
+    }),
+  ]);
 }

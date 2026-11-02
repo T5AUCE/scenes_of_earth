@@ -18,9 +18,10 @@ import {
   WORLD_VIEW,
 } from "./map";
 import { shiftLongitudes, worldShift } from "./render/mercator";
+import { UNSYNCED_CHARTS_NOTICE, isCompleteUrlOversized } from "./charts/state";
 import { flightDuration, flyIn, watchResize } from "./scene-camera";
 import type { SceneStore } from "./scene-store";
-import { sceneUrl, timeForPrefix } from "./scene-url";
+import { sceneUrl, timeForPrefix, withChartsToken } from "./scene-url";
 import type { AreaFeature, Bbox, DisplayTokens, Scene } from "./types";
 import {
   createScenePanel,
@@ -96,12 +97,31 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     const clock = createSceneClock(scene.id);
     // A list holds the deferred call because the checker keeps a narrowed let at null.
     const pendingLayerIds: string[][] = [];
+    let panelRef: ReturnType<typeof createScenePanel> | null = null;
+    let viewSync: string | null = null;
+    let clockSync: string | null = null;
+    let initialSync: string | null = null;
+    const updatePanelSync = () => {
+      const combined = viewSync ?? clockSync;
+      if (panelRef) panelRef.setSyncNotice(combined);
+      else initialSync = combined;
+    };
+    const syncFromClock = (notice: string | null) => {
+      clockSync = notice;
+      updatePanelSync();
+    };
+    clock.setSyncHandler(syncFromClock);
 
     const mounted = mountScene(map, scene, {
       cards,
       timeBar: roots.timeBar,
       display,
       onDisplay: (params) => clock.setDisplay(params),
+      onCharts: (token) => clock.setCharts(token),
+      onChartSync: (notice) => {
+        viewSync = notice;
+        updatePanelSync();
+      },
       onTime: (time, label) => {
         clock.update(time, label);
         current?.panel.setTime(time, label);
@@ -119,8 +139,10 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     restoreTime(mounted.timeline, linkedTime);
     sceneLayerIds = mounted.layerIds;
     const panel = mountPanel(scene, mounted.timeline, clock, mounted.store);
+    panelRef = panel;
+    if (initialSync) panel.setSyncNotice(initialSync);
 
-    recordEntry(scene.id, clock, entry);
+    clock.publishEntry(entry);
     clock.markEntered();
 
     current = startScene(scene, mounted, panel, clock);
@@ -142,6 +164,12 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     if (!current) return;
 
     if (tab === null) {
+      if (current.panel.isEditorDirty?.()) {
+        current.clock.pushPanel({ panel: "charts" });
+        current.panel.showCloseConfirm?.();
+
+        return;
+      }
       current.panel.closeFull();
       current.clock.syncUrl();
       return;
@@ -177,7 +205,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   ) {
     const panel = createScenePanel(scene, roots.dialog, store, {
       requestOpen(tab: PanelTab, options?: FullOpenOptions) {
-        history.pushState({ panel: tab }, "", sceneUrl(scene.id, clock.label, clock.display));
+        clock.pushPanel({ panel: tab });
         panel.openFull(tab, options);
       },
       requestClose() {
@@ -261,15 +289,6 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
     history.replaceState(null, "", location.pathname);
     exit();
-  }
-
-  function recordEntry(id: string, clock: SceneClock, entry: SceneEntry) {
-    const url = sceneUrl(id, clock.label, clock.display);
-    if (entry === "push") history.pushState(null, "", url);
-    if (entry === "replace") history.replaceState(null, "", url);
-
-    // The dialog is closed on entry, so a stale full-view state is dropped.
-    if (entry === "keep" && history.state?.panel) history.replaceState(null, "", url);
   }
 
   function refreshMaskAndLabels(fittedZoom: number | undefined) {
@@ -442,7 +461,11 @@ function createSceneClock(sceneId: string) {
   let time: string | null = null;
   let label: string | null = null;
   let display = "";
+  let chartsToken: string | null = null;
   let isEntered = false;
+  let syncNotice: string | null = null;
+  let lastSafeComplete: string | null = null;
+  let onSync: ((notice: string | null) => void) | null = null;
 
   return {
     get time() {
@@ -453,8 +476,19 @@ function createSceneClock(sceneId: string) {
       return label;
     },
 
-    get display() {
-      return display;
+    setSyncHandler(handler: (notice: string | null) => void) {
+      onSync = handler;
+    },
+
+    baseUrl() {
+      return sceneUrl(sceneId, label, display);
+    },
+
+    fullUrl() {
+      const base = sceneUrl(sceneId, label, display);
+      if (!chartsToken) return base;
+
+      return withChartsToken(base, chartsToken);
     },
 
     update(newTime: string | null, newLabel: string | null) {
@@ -468,13 +502,70 @@ function createSceneClock(sceneId: string) {
       if (isEntered) this.syncUrl();
     },
 
+    setCharts(token: string | null) {
+      chartsToken = token;
+      if (isEntered) this.syncUrl();
+    },
+
     // Scrubbing replaces the entry, so Back is never flooded with months.
     syncUrl() {
       try {
-        history.replaceState(history.state, "", sceneUrl(sceneId, label, display));
+        const published = this.publishCandidate(this.fullUrl());
+        history.replaceState(history.state, "", published.url);
       } catch {
         // Rapid replaceState calls can throw a SecurityError, and the next change retries.
       }
+    },
+
+    publishEntry(entry: SceneEntry) {
+      const published = this.publishCandidate(this.fullUrl());
+      if (entry === "push") history.pushState(null, "", published.url);
+      if (entry === "replace") history.replaceState(null, "", published.url);
+
+      // The dialog is closed on entry, so a stale full-view state is dropped.
+      if (entry === "keep" && history.state?.panel) {
+        history.replaceState(null, "", published.url);
+      }
+
+      return published.outcome;
+    },
+
+    // Panel pushes always record history so dirty Back returns to the pending decision.
+    pushPanel(state: { panel: string } | null) {
+      const published = this.publishCandidate(this.fullUrl());
+      history.pushState(state, "", published.url);
+
+      return published.outcome;
+    },
+
+    // One owner publishes share URLs and reports oversized outcomes through the sync handler.
+    publishCandidate(relative: string) {
+      const complete = completeUrl(relative);
+      if (!isCompleteUrlOversized(complete)) {
+        if (syncNotice !== null) {
+          syncNotice = null;
+          onSync?.(null);
+        }
+        lastSafeComplete = complete;
+
+        return { url: complete, outcome: "installed" as const };
+      }
+      if (syncNotice === null) {
+        syncNotice = UNSYNCED_CHARTS_NOTICE;
+        onSync?.(syncNotice);
+      }
+      // An oversized replacement keeps the newest token while the address stays safe.
+      if (lastSafeComplete !== null && !isCompleteUrlOversized(lastSafeComplete)) {
+        return { url: lastSafeComplete, outcome: "safe-fallback" as const };
+      }
+      const fallback = completeUrl(this.baseUrl());
+      if (!isCompleteUrlOversized(fallback)) {
+        lastSafeComplete = fallback;
+
+        return { url: fallback, outcome: "safe-fallback" as const };
+      }
+
+      return { url: currentAddress(fallback), outcome: "oversized" as const };
     },
 
     markEntered() {
@@ -628,4 +719,24 @@ function maskOpacity(fittedZoom?: number): number | ExpressionSpecification {
     fittedZoom - MASK_FADE_END_ZOOM,
     MASK_OPACITY,
   ];
+}
+
+// Relative scene links resolve against the page, so history always holds complete URLs.
+function completeUrl(relative: string) {
+  try {
+    return new URL(relative, location.href).href;
+  } catch {
+    return relative;
+  }
+}
+
+// The current address is already in history, so it never introduces a new oversized URL.
+function currentAddress(fallback: string) {
+  try {
+    if (typeof location !== "undefined" && typeof location.href === "string") {
+      if (!isCompleteUrlOversized(location.href)) return location.href;
+    }
+  } catch {
+  }
+  return fallback;
 }

@@ -39,7 +39,7 @@ test("the collapsed panel keeps its label and switches its preview", async (cont
   await act(async () => {
     charts.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
-  assert.match(region.textContent ?? "", /not available yet/);
+  assert.match(region.textContent ?? "", /No charts for this scene/);
 
   const about = [...region.querySelectorAll("button")].find(
     (button) => button.textContent === "About",
@@ -304,7 +304,8 @@ test("an immediate Charts open wins before the first commit", async (context) =>
   });
 
   assert.equal(panel!.isOpen, true);
-  assert.match(dialog.textContent ?? "", /not available yet/);
+  assert.match(dialog.textContent ?? "", /Charts/);
+  assert.match(dialog.textContent ?? "", /No rainfall accumulation|No charts/);
   const chartsTab = [...dialog.querySelectorAll('[role="tab"]')].find(
     (button) => button.textContent === "Charts",
   ) as HTMLButtonElement;
@@ -604,6 +605,861 @@ test("cancel is prevented and delegated while close returns to Expand", async (c
   await act(async () => panel!.destroy());
 });
 
+test("the chip previews the main chart and follows time and units", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+  });
+  const chartsTab = [...panel!.element.querySelectorAll("button")].find(
+    (button) => button.textContent === "Charts",
+  )!;
+  await act(async () => {
+    chartsTab.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.match(panel!.element.textContent ?? "", /Rain over time|Rain/);
+  assert.ok(panel!.element.querySelector("svg"));
+
+  await act(async () => {
+    panel!.setTime("2019-02-01", "2019-02");
+  });
+  assert.match(panel!.element.textContent ?? "", /2019|10/);
+
+  await act(async () => {
+    store.dispatch({
+      kind: "display",
+      update: (display) => {
+        display.layers.rain = { units: "in/month" };
+      },
+    });
+  });
+  assert.match(panel!.element.textContent ?? "", /in\/month/);
+
+  await act(async () => panel!.destroy());
+});
+
+test("gallery opens detail and edit with focus restoration", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+    document.body.append(dialog);
+    panel.openFull("charts");
+  });
+  assert.ok(dialog.querySelector(".chart-gallery"));
+  const open = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Open",
+  )!;
+  await act(async () => {
+    open.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.ok(dialog.querySelector(".chart-detail"));
+  assert.ok(dialog.querySelector("details"));
+
+  const back = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Back to charts",
+  )!;
+  await act(async () => {
+    back.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.ok(dialog.querySelector(".chart-gallery"));
+  assert.equal(
+    document.activeElement,
+    dialog.querySelector('[data-chart-id] button'),
+  );
+
+  const edit = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Edit",
+  )!;
+  await act(async () => {
+    edit.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.ok(dialog.querySelector(".chart-editor"));
+  assert.ok(dialog.querySelector(".editor-preview svg"));
+  const tabs = [...dialog.querySelectorAll('[role="tab"]')] as HTMLButtonElement[];
+  assert.ok(tabs.every((tab) => tab.disabled || tab.getAttribute("aria-selected") === "true"));
+
+  await act(async () => panel!.destroy());
+});
+
+test("new chart saves to its close-up while cancel keeps the store untouched", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const before = JSON.stringify(store.getSnapshot().charts);
+  const dialog = makeDialog();
+  const openings: string[] = [];
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: (tab) => openings.push(tab),
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+    document.body.append(dialog);
+    panel.openFull("charts");
+  });
+  const creation = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "+ New chart",
+  )!;
+  await act(async () => {
+    creation.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.ok(dialog.querySelector(".chart-editor"));
+  assert.equal(openings.length, 0);
+
+  const cancel = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Cancel",
+  )!;
+  await act(async () => {
+    cancel.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.equal(JSON.stringify(store.getSnapshot().charts), before);
+  assert.ok(dialog.querySelector(".chart-gallery"));
+
+  await act(async () => {
+    const second = [...dialog.querySelectorAll("button")].find(
+      (button) => button.textContent === "+ New chart",
+    )!;
+    second.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  const save = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Save",
+  )!;
+  await act(async () => {
+    save.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.notEqual(JSON.stringify(store.getSnapshot().charts), before);
+  assert.ok(dialog.querySelector(".chart-detail"));
+
+  await act(async () => panel!.destroy());
+});
+
+test("dirty editor back asks to save, discard or keep editing", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  const openings: string[] = [];
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: (tab) => openings.push(tab),
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+    document.body.append(dialog);
+    panel.openFull("charts");
+  });
+  const edit = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Edit",
+  )!;
+  await act(async () => {
+    edit.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  const title = dialog.querySelector('.chart-editor input[type="text"]') as HTMLInputElement;
+  await act(async () => {
+    const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+    native?.set?.call(title, "Dirty title");
+    title.dispatchEvent(new window.Event("input", { bubbles: true }));
+  });
+  assert.equal(panel!.isEditorDirty(), true);
+
+  const back = [...dialog.querySelectorAll(".chart-editor button")].find(
+    (button) => button.textContent === "Back to charts",
+  )!;
+  await act(async () => {
+    back.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.match(dialog.textContent ?? "", /unsaved changes/);
+  assert.equal(openings.length, 0);
+
+  const keep = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Keep editing",
+  )!;
+  await act(async () => {
+    keep.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.ok(dialog.querySelector(".chart-editor"));
+  assert.equal(panel!.isEditorDirty(), true);
+
+  await act(async () => {
+    back.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  const discard = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Discard",
+  )!;
+  await act(async () => {
+    discard.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.ok(dialog.querySelector(".chart-gallery"));
+  assert.equal(panel!.isEditorDirty(), false);
+
+  await act(async () => panel!.destroy());
+});
+
+test("escape with a dirty draft holds the dialog and restores focus", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  const closings: string[] = [];
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => closings.push("close"),
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+    document.body.append(dialog);
+    panel.openFull("charts");
+  });
+  const edit = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Edit",
+  )!;
+  await act(async () => {
+    edit.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  const title = dialog.querySelector('.chart-editor input[type="text"]') as HTMLInputElement;
+  await act(async () => {
+    const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+    native?.set?.call(title, "Dirty title");
+    title.dispatchEvent(new window.Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    const event = new window.Event("cancel", { bubbles: true, cancelable: true });
+    dialog.dispatchEvent(event);
+    assert.equal(event.defaultPrevented, true);
+  });
+  assert.deepEqual(closings, []);
+  assert.match(dialog.textContent ?? "", /unsaved changes/);
+  assert.equal(panel!.isOpen, true);
+
+  const discard = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Discard",
+  )!;
+  await act(async () => {
+    discard.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.deepEqual(closings, ["close"]);
+
+  await act(async () => panel!.destroy());
+});
+
+test("dirty tabs stay blocked while preserving the draft", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+    document.body.append(dialog);
+    panel.openFull("charts");
+  });
+  const edit = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Edit",
+  )!;
+  await act(async () => {
+    edit.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  const title = dialog.querySelector('.chart-editor input[type="text"]') as HTMLInputElement;
+  await act(async () => {
+    const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+    native?.set?.call(title, "Unsaved keyboard draft");
+    title.dispatchEvent(new window.Event("input", { bubbles: true }));
+  });
+  for (const key of ["ArrowRight", "ArrowLeft", "Home", "End"]) {
+    const chartsTab = [...dialog.querySelectorAll('[role="tab"]')].find(
+      (button) => button.textContent === "Charts",
+    ) as HTMLButtonElement;
+    await act(async () => {
+      chartsTab.focus();
+      const event = new window.KeyboardEvent("keydown", { key, bubbles: true });
+      chartsTab.dispatchEvent(event);
+    });
+    assert.equal(
+      dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
+      "Charts",
+    );
+    assert.ok(dialog.querySelector(".chart-editor"));
+  }
+  assert.equal(panel!.isEditorDirty(), true);
+  assert.equal(
+    (dialog.querySelector('.chart-editor input[type="text"]') as HTMLInputElement).value,
+    "Unsaved keyboard draft",
+  );
+  const aboutTab = [...dialog.querySelectorAll('[role="tab"]')].find(
+    (button) => button.textContent === "About",
+  ) as HTMLButtonElement;
+  assert.equal(aboutTab.disabled, true);
+  await act(async () => panel!.destroy());
+});
+
+test("clean editor tabs stay blocked for every navigation key", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+    document.body.append(dialog);
+    panel.openFull("charts");
+  });
+  const edit = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Edit",
+  )!;
+  await act(async () => {
+    edit.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.equal(panel!.isEditorDirty(), false);
+  for (const key of ["ArrowRight", "ArrowLeft", "Home", "End"]) {
+    const chartsTab = [...dialog.querySelectorAll('[role="tab"]')].find(
+      (button) => button.textContent === "Charts",
+    ) as HTMLButtonElement;
+    await act(async () => {
+      chartsTab.focus();
+      const event = new window.KeyboardEvent("keydown", { key, bubbles: true });
+      chartsTab.dispatchEvent(event);
+    });
+    assert.equal(
+      dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
+      "Charts",
+    );
+    assert.ok(dialog.querySelector(".chart-editor"));
+  }
+  const aboutTab = [...dialog.querySelectorAll('[role="tab"]')].find(
+    (button) => button.textContent === "About",
+  ) as HTMLButtonElement;
+  assert.equal(aboutTab.disabled, true);
+  await act(async () => panel!.destroy());
+});
+
+test("close confirm save completes pending close and keep restores focus", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  const closings: string[] = [];
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => closings.push("close"),
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+    document.body.append(dialog);
+    panel.openFull("charts");
+  });
+  const edit = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Edit",
+  )!;
+  await act(async () => {
+    edit.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  const title = dialog.querySelector('.chart-editor input[type="text"]') as HTMLInputElement;
+  await act(async () => {
+    const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+    native?.set?.call(title, "Saved from close confirmation");
+    title.dispatchEvent(new window.Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    const event = new window.Event("cancel", { bubbles: true, cancelable: true });
+    dialog.dispatchEvent(event);
+  });
+  const save = [...dialog.querySelector(".chart-confirm")!.querySelectorAll("button")].find(
+    (button) => button.textContent === "Save",
+  )!;
+  await act(async () => {
+    save.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.deepEqual(closings, ["close"]);
+  assert.equal(dialog.querySelector(".chart-detail"), null);
+  await act(async () => panel!.destroy());
+});
+
+test("gallery detail editor focus lands on exact controls", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+    document.body.append(dialog);
+    panel.openFull("charts");
+  });
+  const open = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Open",
+  )! as HTMLButtonElement;
+  await act(async () => {
+    open.focus();
+    open.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.equal(document.activeElement, dialog.querySelector("[data-detail-back]"));
+  const editDetail = dialog.querySelector("[data-detail-edit]") as HTMLButtonElement;
+  await act(async () => {
+    editDetail.focus();
+    editDetail.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.equal(
+    document.activeElement,
+    dialog.querySelector(".chart-editor .editor-head button"),
+  );
+  const cancel = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Cancel",
+  )! as HTMLButtonElement;
+  await act(async () => {
+    cancel.focus();
+    cancel.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.equal(document.activeElement, dialog.querySelector("[data-detail-back]"));
+  const back = dialog.querySelector("[data-detail-back]") as HTMLButtonElement;
+  await act(async () => {
+    back.focus();
+    back.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  const cardButton = dialog.querySelector('[data-chart-id] button') as HTMLButtonElement;
+  assert.equal(document.activeElement, cardButton);
+  await act(async () => panel!.destroy());
+});
+
+test("arbitrary chart ids focus without selector failure", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createSceneStore } = await import("../scene-store.ts");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const current = store.getSnapshot().charts.definitions[0];
+  store.dispatch({
+    kind: "saveChart",
+    definition: { ...current, id: 'a"b', title: "Quoted" },
+  });
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+    document.body.append(dialog);
+    panel.openFull("charts");
+  });
+  const quotedCard = [...dialog.querySelectorAll("[data-chart-id]")].find(
+    (element) => (element as HTMLElement).dataset.chartId === 'a"b',
+  ) as HTMLElement;
+  assert.ok(quotedCard);
+  const open = [...quotedCard.querySelectorAll("button")].find(
+    (button) => button.textContent === "Open",
+  )!;
+  await act(async () => {
+    open.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.match(dialog.textContent ?? "", /Quoted/);
+  const back = dialog.querySelector("[data-detail-back]") as HTMLButtonElement;
+  await act(async () => {
+    back.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  const currentCard = [...dialog.querySelectorAll("[data-chart-id]")].find(
+    (element) => (element as HTMLElement).dataset.chartId === 'a"b',
+  ) as HTMLElement;
+  assert.ok(currentCard, "quoted card stays in the gallery after Back");
+  const quotedButton = currentCard.querySelector("button") as HTMLButtonElement;
+  assert.ok(document.activeElement === quotedButton, "focus returns to the quoted card button");
+  await act(async () => panel!.destroy());
+});
+
+test("chip uses one covering row and unavailable outside coverage", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeDistinctScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+  });
+  const chartsTab = [...panel!.element.querySelectorAll("button")].find(
+    (button) => button.textContent === "Charts",
+  )!;
+  await act(async () => {
+    chartsTab.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  await act(async () => {
+    panel!.setTime("2020-01-01", "2020-01");
+  });
+  const caption = panel!.element.querySelector("figcaption")?.textContent ?? "";
+  const tooltip = panel!.element.querySelector(".chart-tooltip")?.textContent ?? "";
+  assert.ok(caption.includes("1 mm/month"));
+  assert.ok(tooltip.includes("1 mm/month"));
+  assert.equal(panel!.element.querySelectorAll(".chart-cursor").length, 1);
+  await act(async () => {
+    panel!.setTime("2019-01-01", "2019-01");
+  });
+  assert.match(panel!.element.textContent ?? "", /unavailable/);
+  assert.match(panel!.element.querySelector(".chart-tooltip")?.textContent ?? "", /No observation/);
+  await act(async () => panel!.destroy());
+});
+
+test("chip follows effective palette and collapse preserves preview", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+  });
+  const chartsTab = [...panel!.element.querySelectorAll("button")].find(
+    (button) => button.textContent === "Charts",
+  )!;
+  await act(async () => {
+    chartsTab.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  const before = panel!.element.querySelector("polyline, polygon")?.getAttribute("stroke");
+  await act(async () => {
+    store.dispatch({
+      kind: "display",
+      update: (display) => {
+        display.layers.rain = { palette: "cividis" };
+      },
+    });
+  });
+  const after = panel!.element.querySelector("polyline, polygon")?.getAttribute("stroke");
+  assert.notEqual(before, after);
+  const collapse = [...panel!.element.querySelectorAll("button")].find(
+    (button) => button.textContent === "Collapse",
+  )! as HTMLButtonElement;
+  await act(async () => {
+    collapse.focus();
+    collapse.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.match(panel!.element.textContent ?? "", /Show details/);
+  const shown = [...panel!.element.querySelectorAll("button")].find(
+    (button) => button.textContent === "Show details",
+  )! as HTMLButtonElement;
+  assert.equal(document.activeElement, shown);
+  assert.match(panel!.element.textContent ?? "", /note/);
+  await act(async () => {
+    shown.focus();
+    shown.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.ok(panel!.element.querySelector("svg"));
+  assert.match(panel!.element.textContent ?? "", /Rain/);
+  const restored = [...panel!.element.querySelectorAll("button")].find(
+    (button) => button.textContent === "Collapse",
+  )! as HTMLButtonElement;
+  assert.equal(document.activeElement, restored);
+  await act(async () => panel!.destroy());
+});
+
+test("sync notice appears inside gallery and clears on recovery", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+    document.body.append(dialog);
+    panel.openFull("charts");
+  });
+  await act(async () => {
+    panel!.setSyncNotice("Charts are kept for this visit only.");
+  });
+  assert.match(dialog.textContent ?? "", /kept for this visit/);
+  await act(async () => {
+    panel!.setSyncNotice("Charts are kept for this visit only.");
+  });
+  assert.equal(
+    [...dialog.textContent!.matchAll(/kept for this visit/g)].length,
+    1,
+  );
+  await act(async () => {
+    panel!.setSyncNotice(null);
+  });
+  assert.equal((dialog.textContent ?? "").includes("kept for this visit"), false);
+  await act(async () => panel!.destroy());
+});
+
+test("outer confirmation focuses Save and Keep editing restores the invoker", async (context) => {
+  const pending = await openDirtyEditor(context, "Focus draft");
+  const { dialog, panel, input, act } = pending;
+  const buttons = await openOuterConfirm(pending);
+  const save = buttons.find((button) => button.textContent === "Save") as HTMLButtonElement;
+  assert.ok(document.activeElement === save, "outer confirmation focuses its Save control");
+
+  const keep = buttons.find((button) => button.textContent === "Keep editing")!;
+  await act(async () => {
+    keep.dispatchEvent(new pending.window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.ok(dialog.querySelector(".chart-editor"));
+  assert.equal(input.value, "Focus draft");
+  assert.ok(document.activeElement === input, "Keep editing restores focus to the invoker");
+
+  await act(async () => panel.destroy());
+});
+
+test("sync notice stays visible while editing until recovery", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+    document.body.append(dialog);
+    panel.openFull("charts");
+  });
+  await act(async () => {
+    panel!.setSyncNotice("Charts are kept for this visit only.");
+  });
+  assert.match(dialog.textContent ?? "", /kept for this visit/);
+
+  const edit = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Edit",
+  )!;
+  await act(async () => {
+    edit.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.ok(dialog.querySelector(".chart-editor"));
+  assert.match(dialog.textContent ?? "", /kept for this visit/);
+  assert.equal(
+    [...dialog.textContent!.matchAll(/kept for this visit/g)].length,
+    1,
+  );
+
+  await act(async () => {
+    panel!.setSyncNotice(null);
+  });
+  assert.equal((dialog.textContent ?? "").includes("kept for this visit"), false);
+
+  await act(async () => panel!.destroy());
+});
+
+test("pending close Keep editing keeps the draft and history", async (context) => {
+  const pending = await openDirtyEditor(context, "Pending history draft");
+  const { window, dialog, panel, input, act } = pending;
+  const buttons = await openOuterConfirm(pending);
+  const keep = buttons.find((button) => button.textContent === "Keep editing")!;
+  await act(async () => {
+    keep.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.ok(dialog.querySelector(".chart-editor"));
+  assert.equal(input.value, "Pending history draft");
+  assert.deepEqual(window.history.state, { panel: "charts" });
+
+  await act(async () => panel.destroy());
+});
+
+test("pending close Discard completes the close through history", async (context) => {
+  const pending = await openDirtyEditor(context, "Pending discard draft");
+  const { dialog, panel, store, backs, act } = pending;
+  const buttons = await openOuterConfirm(pending);
+  const beforeDiscard = JSON.stringify(store.getSnapshot().charts);
+  const discard = buttons.find((button) => button.textContent === "Discard")!;
+  await act(async () => {
+    discard.dispatchEvent(new pending.window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.deepEqual(backs, ["back"]);
+  assert.ok(dialog.querySelector(".chart-gallery"));
+  assert.equal(JSON.stringify(store.getSnapshot().charts), beforeDiscard);
+  await act(async () => {
+    panel.closeFull();
+  });
+  assert.equal(panel.isOpen, false);
+  assert.ok(
+    document.activeElement === panel.element.querySelector(".expand"),
+    "closing returns focus to Expand",
+  );
+
+  await act(async () => panel.destroy());
+});
+
+test("pending close Save persists the draft and closes", async (context) => {
+  const pending = await openDirtyEditor(context, "Pending save draft");
+  const { dialog, panel, store, backs, act } = pending;
+  const buttons = await openOuterConfirm(pending);
+  const save = buttons.find((button) => button.textContent === "Save")!;
+  await act(async () => {
+    save.dispatchEvent(new pending.window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.deepEqual(backs, ["back"]);
+  assert.ok(dialog.querySelector(".chart-gallery"));
+  const savedTitles = store.getSnapshot().charts.definitions.map((entry) => entry.title);
+  assert.ok(savedTitles.includes("Pending save draft"));
+  await act(async () => {
+    panel.closeFull();
+  });
+  assert.equal(panel.isOpen, false);
+
+  await act(async () => panel.destroy());
+});
+
+test("invalid pending Save keeps the draft, decision focus and history", async (context) => {
+  const pending = await openDirtyEditor(context, "Invalid draft");
+  const { window, dialog, panel, store, act } = pending;
+  const rangeFieldset = [...dialog.querySelectorAll("fieldset")].find(
+    (fieldset) => (fieldset.querySelector("legend")?.textContent ?? "").includes("Y range"),
+  )!;
+  const autoBox = rangeFieldset.querySelector('input[type="checkbox"]') as HTMLInputElement;
+  await act(async () => {
+    autoBox.click();
+  });
+  const numbers = [...dialog.querySelectorAll('input[type="number"]')] as HTMLInputElement[];
+  await act(async () => {
+    const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+    native?.set?.call(numbers[0], "11");
+    numbers[0].dispatchEvent(new window.Event("input", { bubbles: true }));
+    numbers[0].dispatchEvent(new window.Event("change", { bubbles: true }));
+  });
+  await act(async () => {
+    const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+    native?.set?.call(numbers[1], "12");
+    numbers[1].dispatchEvent(new window.Event("input", { bubbles: true }));
+    numbers[1].dispatchEvent(new window.Event("change", { bubbles: true }));
+  });
+  const beforeInvalid = JSON.stringify(store.getSnapshot().charts);
+  const buttons = await openOuterConfirm(pending);
+  const invalidSave = buttons.find(
+    (button) => button.textContent === "Save",
+  ) as HTMLButtonElement;
+  assert.ok(
+    document.activeElement === invalidSave,
+    "outer confirmation focuses its Save control",
+  );
+  await act(async () => {
+    invalidSave.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.match(dialog.textContent ?? "", /observed|baseline/);
+  assert.ok(dialog.querySelector(".chart-editor"));
+  assert.ok(dialog.querySelector(".chart-confirm"));
+  assert.ok(
+    document.activeElement === invalidSave,
+    "rejected Save keeps focus on the decision control",
+  );
+  assert.equal(
+    (dialog.querySelector('.chart-editor input[type="text"]') as HTMLInputElement).value,
+    "Invalid draft",
+  );
+  assert.equal(JSON.stringify(store.getSnapshot().charts), beforeInvalid);
+  assert.deepEqual(window.history.state, { panel: "charts" });
+
+  await act(async () => panel.destroy());
+});
+
 function installScrollSpy(context: { after: (hook: () => void) => void }): string[] {
   const scrolled: string[] = [];
   const prototype = globalThis.Element.prototype as unknown as {
@@ -656,6 +1512,93 @@ function makeLayers(): LayerDoc[] {
       style: { kind: "terrain", encodings: ["shade"] },
     },
   ] as unknown as LayerDoc[];
+}
+
+function makeChartableScene(): Scene {
+  const base = makeScene();
+  const values = monthlyValues(30);
+
+  return {
+    ...base,
+    period: { start: "2019-01-01", end: "2021-07-01", step: "P1M" },
+    layers: [
+      {
+        id: "rain",
+        title: "Rain",
+        units: "mm/month",
+        source: { name: "Rain", licence: "CC BY 4.0", attribution: "Rain credit" },
+        style: { kind: "field", encodings: ["ramp"] },
+        grid: { bbox: [0, -1, 1, 1], res: 0.01, nx: 10, ny: 10 },
+        mask: { path: "mask.zarr", cells_inside: 100 },
+        time: { step: "P1M", values, end: "2021-07-01", method: "sum" },
+        area_series: {
+          statistic: "mean",
+          weights: "cell_area_inside_outline",
+          values: values.map(() => 10),
+          valid_fraction: values.map(() => 1),
+        },
+        arrays: {},
+      },
+      {
+        id: "terrain",
+        title: "Terrain",
+        units: "m",
+        source: { name: "DEM", licence: "open", attribution: "DEM credit" },
+        style: { kind: "terrain", encodings: ["shade"] },
+        grid: { bbox: [0, -1, 1, 1], res: 0.01, nx: 10, ny: 10 },
+        mask: { path: "mask.zarr", cells_inside: 100 },
+        time: null,
+        distribution: {
+          statistic: "quantiles",
+          weights: "cell_area_inside_outline",
+          percent: 1,
+          values: Array.from({ length: 101 }, (_, index) => index * 10),
+          min: 0,
+          max: 1000,
+          mean: 500,
+          valid_fraction: 0.9,
+          reference_values: [],
+        },
+        arrays: {},
+      },
+    ],
+  } as unknown as Scene;
+}
+
+function makeDistinctScene(): Scene {
+  const base = makeScene();
+  const values = ["2020-01-01", "2020-02-01", "2020-03-01"];
+
+  return {
+    ...base,
+    period: { start: values[0], end: "2020-04-01", step: "P1M" },
+    layers: [
+      {
+        id: "rain",
+        title: "Rainfall",
+        units: "mm/month",
+        source: { name: "Rain", licence: "CC BY 4.0", attribution: "Rain credit" },
+        style: { kind: "field", encodings: ["ramp"], palette: "batlow" },
+        grid: { bbox: [0, -1, 1, 1], res: 0.01, nx: 10, ny: 10 },
+        mask: { path: "mask.zarr", cells_inside: 100 },
+        time: { step: "P1M", values, end: "2020-04-01", method: "sum" },
+        area_series: {
+          statistic: "mean",
+          weights: "cell_area_inside_outline",
+          values: [1, 100, null],
+          valid_fraction: [1, 1, 0],
+        },
+        arrays: {},
+      },
+    ],
+  } as unknown as Scene;
+}
+
+function monthlyValues(count: number) {
+  return Array.from({ length: count }, (_, index) => {
+    const date = new Date(Date.UTC(2019, index, 1));
+    return date.toISOString().slice(0, 10);
+  });
 }
 
 function makeScene(): Scene {
@@ -721,6 +1664,9 @@ function installBrowser(window: Window): void {
     "Element",
     "HTMLElement",
     "HTMLDialogElement",
+    "HTMLDivElement",
+    "HTMLSelectElement",
+    "HTMLInputElement",
     "SVGElement",
     "DocumentFragment",
     "Event",
@@ -734,6 +1680,78 @@ function installBrowser(window: Window): void {
   defineGlobal("navigator", window.navigator);
   defineGlobal("localStorage", window.localStorage);
   defineGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+}
+
+async function openDirtyEditor(
+  context: { after(hook: () => void): void },
+  title: string,
+) {
+  const window = new Window({ url: "https://example.test/a/?scene=test" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const previousHistory = (globalThis as Record<string, unknown>).history;
+  (globalThis as Record<string, unknown>).history = window.history;
+  context.after(() => {
+    (globalThis as Record<string, unknown>).history = previousHistory;
+  });
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  document.body.append(dialog);
+  const backs: string[] = [];
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen(tab) {
+        window.history.pushState({ panel: tab }, "", "/a/?scene=test");
+        panel!.openFull(tab);
+      },
+      requestClose() {
+        if (window.history.state?.panel) {
+          backs.push("back");
+          window.history.back();
+        } else {
+          panel!.closeFull();
+        }
+      },
+      stepTime() {},
+    });
+    document.body.append(panel.element);
+    panel.openFull("charts");
+  });
+  await act(async () => {
+    window.history.pushState({ panel: "charts" }, "", "/a/?scene=test");
+  });
+  const edit = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Edit",
+  )!;
+  await act(async () => {
+    edit.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  const input = dialog.querySelector('.chart-editor input[type="text"]') as HTMLInputElement;
+  await act(async () => {
+    input.focus();
+    const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+    native?.set?.call(input, title);
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+  });
+  assert.equal(panel!.isEditorDirty(), true);
+
+  return { window, dialog, panel: panel!, store, backs, input, act };
+}
+
+async function openOuterConfirm(pending: Awaited<ReturnType<typeof openDirtyEditor>>) {
+  const { window, dialog, act } = pending;
+  await act(async () => {
+    const event = new window.Event("cancel", { bubbles: true, cancelable: true });
+    dialog.dispatchEvent(event);
+  });
+  assert.ok(dialog.querySelector(".chart-confirm"));
+  assert.deepEqual(window.history.state, { panel: "charts" });
+
+  return [...dialog.querySelectorAll(".chart-confirm button")];
 }
 
 function defineGlobal(name: string, value: unknown): void {

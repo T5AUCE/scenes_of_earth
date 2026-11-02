@@ -183,8 +183,68 @@ test("the blend restyles when a half's display units change", () => {
   assert.equal(restyles, 1);
 });
 
+test("chart-only changes keep map identity and skip redraws", () => {
+  const layers = chartLayers();
+  const store = createSceneStore(layers, display());
+  const rain = view("chirps");
+  const temperature = view("era5");
+  let restyles = 0;
+  const blend = { ...blendView(), restyle: () => restyles++ };
+  const changes: string[] = [];
+  const map = fakeMap((id, value) => changes.push(`${id}:${value}`));
+
+  subscribeDrawing(
+    map,
+    [
+      { layer: layers[0], view: rain },
+      { layer: layers[1], view: temperature },
+    ],
+    blend,
+    store,
+  );
+  changes.length = 0;
+  restyles = 0;
+
+  store.dispatch({
+    kind: "saveChart",
+    definition: {
+      id: "extra",
+      title: "Extra",
+      source: { layerId: "chirps", shape: "time_series" },
+      chartType: "line",
+      options: {},
+    },
+  });
+
+  assert.equal(changes.length, 0);
+  assert.equal(restyles, 0);
+});
+
 function display() {
   return { layers: {}, off: new Set<string>(), showAs: {} };
+}
+
+function chartLayers(): LayerDoc[] {
+  const monthly = (id: string, method: string) => {
+    const values = Array.from({ length: 30 }, (_, index) => {
+      const date = new Date(Date.UTC(2019, index, 1));
+      return date.toISOString().slice(0, 10);
+    });
+    return {
+      id,
+      title: id,
+      units: id === "era5" ? "°C" : "mm/month",
+      style: { kind: "field", encodings: ["ramp"] },
+      time: { step: "P1M", values, end: "2021-07-01", method },
+      area_series: {
+        statistic: "mean",
+        weights: "cell_area_inside_outline",
+        values: values.map(() => 10),
+        valid_fraction: values.map(() => 1),
+      },
+    } as unknown as LayerDoc;
+  };
+  return [monthly("chirps", "sum"), monthly("era5", "mean")];
 }
 
 function layer(

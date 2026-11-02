@@ -25,9 +25,18 @@ export function subscribeDrawing(
   let isUnderColour: boolean | null = null;
   const pair = blendPair(mounted.map(({ layer }) => layer));
   let previousRanges: string | undefined;
+  let previousDisplay: unknown = null;
+  let previousAllocation: unknown = null;
+  let previousOn: unknown = null;
 
   const apply = () => {
     const { allocation, display, on } = store.getSnapshot();
+    if (display === previousDisplay && allocation === previousAllocation && on === previousOn) {
+      return;
+    }
+    previousDisplay = display;
+    previousAllocation = allocation;
+    previousOn = on;
     mounted.forEach(({ view }) => drawView(map, view, on, allocation.draws, shown));
     if (blend) drawBlend(blend, allocation.draws, shown);
 

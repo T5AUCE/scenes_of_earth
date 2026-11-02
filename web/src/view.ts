@@ -2,6 +2,13 @@
 import type { GeoJSONSource, Map as MapLibreMap } from "maplibre-gl";
 
 import { loadAreaFeature } from "./api";
+import {
+  encodeSlice,
+  loadStoredSlice,
+  resolveCharts,
+  storeSlice,
+  type ChartSlice,
+} from "./charts/state";
 import { openStore, type Store } from "./data";
 import {
   DROPPED_NOTE,
@@ -62,6 +69,10 @@ export interface SceneSlots {
   display?: DisplayTokens;
   /** Receives the link parameters for the scene's display choices whenever they change. */
   onDisplay(params: string): void;
+  /** Receives the committed chart token for the share link whenever it changes. */
+  onCharts?(token: string | null): void;
+  /** Receives sync failure notices for chart persistence or sharing, null when synced. */
+  onChartSync?(notice: string | null): void;
   /**
    * Receives the Terrain unit with the per-layer effective units and current map layer ids
    * whenever units change, including the restored choices of the initial load.
@@ -73,7 +84,16 @@ export interface SceneSlots {
 export function mountScene(
   map: MapLibreMap,
   scene: Scene,
-  { cards, timeBar, onTime, display: linked = NO_TOKENS, onDisplay, onUnits }: SceneSlots,
+  {
+    cards,
+    timeBar,
+    onTime,
+    display: linked = NO_TOKENS,
+    onDisplay,
+    onCharts,
+    onChartSync,
+    onUnits,
+  }: SceneSlots,
 ) {
   const box = makeHtmlElement("div", "", cards);
   const mounted: MountedLayer[] = [];
@@ -156,6 +176,17 @@ export function mountScene(
     onUnits?.(elevationUnit, displayUnits, currentLayerIds());
   };
 
+  const linkToken = linked.charts ? linked.charts : null;
+  const storedLoaded = loadStoredSlice(scene.id, scene.layers);
+  const storedForResolve = storedLoaded.stored ? storedLoaded.slice : null;
+  const resolved = resolveCharts(scene.layers, linkToken, storedForResolve);
+  if (linkToken) {
+    if (resolved.notice) addNote(resolved.notice);
+  } else if (storedLoaded.notice) {
+    addNote(storedLoaded.notice);
+  }
+  const chartsSessionOnly = resolved.sessionOnly;
+
   try {
     const dataStore = openStore(scene.data.href);
     dataStore.catch((error) => addNote(`Cannot open the data: ${error.message}`));
@@ -170,9 +201,10 @@ export function mountScene(
 
     blend = mountBlend(map, mounted, dataStore, shift, addNote);
 
-    const store = createSceneStore(mounted.map(({ layer }) => layer), display);
+    const drawLayers = mounted.map(({ layer }) => layer);
+    const store = createSceneStore(drawLayers, display, resolved.slice, scene.layers);
     sceneStore = store;
-    const layerDocs = mounted.map(({ layer }) => layer);
+    const layerDocs = scene.layers;
     column = mountSceneColumn(host, {
       mounted,
       blend,
@@ -180,13 +212,49 @@ export function mountScene(
       onOutline: (on) => setOutline(map, OUTLINE_ID, on),
     });
     stopDrawing = subscribeDrawing(map, mounted, blend, store);
+    let previousDisplay = store.getSnapshot().display;
+    let previousCharts = store.getSnapshot().charts;
+    let lastSyncNotice: string | null = null;
+    let removeSyncNote: (() => void) | null = null;
+    let storageNotice: string | null = null;
+    const reportSync = (notice: string | null) => {
+      if (notice === lastSyncNotice) return;
+      if (removeSyncNote) {
+        removeSyncNote();
+        removeSyncNote = null;
+      }
+      lastSyncNotice = notice;
+      if (notice) removeSyncNote = addNote(notice);
+      onChartSync?.(notice);
+    };
+    const handleCharts = (chartsSlice: ChartSlice) => {
+      if (!chartsSessionOnly) {
+        const result = storeSlice(scene.id, chartsSlice);
+        if (!result.saved && result.notice) {
+          storageNotice = result.notice;
+          reportSync(storageNotice);
+        } else if (storageNotice !== null) {
+          storageNotice = null;
+          reportSync(storageNotice);
+        }
+      }
+      onCharts?.(encodeSlice(chartsSlice));
+    };
     stopLinking = store.subscribe(() => {
       const snapshot = store.getSnapshot();
-      onDisplay(formatDisplayParams(snapshot.display, layerDocs));
-      notifyUnits(snapshot.display, layerDocs);
+      if (snapshot.display !== previousDisplay) {
+        previousDisplay = snapshot.display;
+        onDisplay(formatDisplayParams(snapshot.display, layerDocs));
+        notifyUnits(snapshot.display, layerDocs);
+      }
+      if (snapshot.charts !== previousCharts) {
+        previousCharts = snapshot.charts;
+        handleCharts(snapshot.charts);
+      }
     });
     onDisplay(formatDisplayParams(store.getSnapshot().display, layerDocs));
     onUnits?.(elevationUnit, displayUnits, currentLayerIds());
+    onCharts?.(encodeSlice(store.getSnapshot().charts));
 
     timeline = createSceneTimeline(blend ? [...views, blend] : views, scene.period, onTime);
     if (timeline) timeBar.append(timeline.element);

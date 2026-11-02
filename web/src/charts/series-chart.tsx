@@ -1,0 +1,183 @@
+/** Prepare time and seasonal tables for the shared SVG renderer. */
+import { contourColor, fieldGradient, inkColor, rgbToHex } from "../render/palettes";
+import type { LayerDoc } from "../types";
+import { convertValue, displayUnitFor } from "../units";
+import { hintFor, type ChartOptions } from "./definitions";
+import { buildSeasonalCycle, buildTimeSeries, rowAtTime } from "./series";
+import { SvgChart } from "./svg-chart";
+import { finiteValues, toDisplayTable, type ChartType } from "./table";
+import { baselineFor } from "./ticks";
+
+/** Props of a time or seasonal chart; the table stays derived from the layer. */
+export interface SeriesChartProps {
+  layer: LayerDoc;
+  shape: "time_series" | "seasonal_cycle";
+  chartType: ChartType;
+  options: ChartOptions;
+  currentTime?: string | null;
+  compact?: boolean;
+  height_PX?: number;
+  xDomain?: [number, number] | null;
+  showTable?: boolean;
+  viewerUnit?: string | null;
+  effectivePalette?: string | null;
+  effectiveInk?: string | null;
+}
+
+/**
+ * Draw a time or seasonal chart with selected units, ink and options. The canonical table
+ * never changes; conversions only affect the displayed copy.
+ */
+export function SeriesChart({
+  layer,
+  shape,
+  chartType,
+  options,
+  currentTime = null,
+  compact = false,
+  height_PX,
+  xDomain = null,
+  showTable,
+  viewerUnit = null,
+  effectivePalette = null,
+  effectiveInk = null,
+}: SeriesChartProps): React.ReactElement {
+  const canonical = shape === "time_series"
+    ? buildTimeSeries(layer)
+    : buildSeasonalCycle(layer);
+  const displayUnit = displayUnitFor(layer.units, options.displayUnit ?? viewerUnit);
+  const converted = toDisplayTable(canonical, displayUnit, options.yTitle);
+  const display = { ...converted, xTitle: options.xTitle ?? converted.xTitle };
+  const hint = hintFor(shape, chartType, layer.units, display.rows.length);
+  const current = currentText(layer, shape, currentTime, displayUnit);
+  const baseline = convertedBaseline(canonical, chartType, layer.units, displayUnit);
+
+  return (
+    <figure className="series-chart">
+      <figcaption>{`${layer.title} · ${shapeLabel(shape)}${current}`}</figcaption>
+      <SvgChart
+        table={display}
+        chartType={chartType}
+        ink={seriesInkFor(layer, options.ink, effectivePalette, effectiveInk)}
+        showGrid={options.showGrid ?? true}
+        showPoints={options.showPoints ?? false}
+        showCurrentTime={options.showCurrentTime ?? true}
+        showReferences={options.showReferences ?? true}
+        currentTime={currentTime}
+        yRange={displayRange(options.yRange, layer.units, displayUnit)}
+        xDomain={xDomain}
+        height_PX={height_PX}
+        compact={compact}
+        showTable={showTable ?? !compact}
+        fallbackNames={fallbackNamesFor(layer)}
+        baseline={baseline}
+      />
+      {hint && <p className="chart-hint">{hint}</p>}
+      {seasonalNote(shape, display) && <p className="chart-note">{seasonalNote(shape, display)}</p>}
+      {coverageNote(display) && <p className="chart-note">{coverageNote(display)}</p>}
+    </figure>
+  );
+}
+
+// Validation and drawing must share one baseline, so convert the canonical requirement.
+function convertedBaseline(
+  table: ReturnType<typeof buildTimeSeries> | ReturnType<typeof buildSeasonalCycle>,
+  chartType: ChartType,
+  nativeUnits: string,
+  displayUnit: string,
+) {
+  const values = finiteValues(table);
+  const minimum = values.length > 0 ? Math.min(...values) : null;
+  const canonical = baselineFor(chartType, minimum);
+  if (canonical === null) return null;
+
+  return convertValue(canonical, nativeUnits, displayUnit);
+}
+
+function shapeLabel(shape: "time_series" | "seasonal_cycle") {
+  return shape === "time_series" ? "Over time" : "By month";
+}
+
+function currentText(
+  layer: LayerDoc,
+  shape: "time_series" | "seasonal_cycle",
+  currentTime: string | null,
+  displayUnit: string,
+) {
+  if (!currentTime) return "";
+  if (shape === "time_series") {
+    const table = buildTimeSeries(layer);
+    const row = rowAtTime(table, currentTime);
+    if (!row || typeof row.value !== "number") return " · unavailable for current time";
+
+    return ` · ${String(convertValue(row.value, table.units, displayUnit))} ${displayUnit}`;
+  }
+  const table = buildSeasonalCycle(layer);
+  const month = Number(currentTime.slice(5, 7));
+  const row = table.rows.find((entry) => entry.x === month);
+  if (!row || typeof row.value !== "number") return " · unavailable for current time";
+
+  return ` · ${String(convertValue(row.value, table.units, displayUnit))} ${displayUnit}`;
+}
+
+/** Palette-derived ink keeps series colours with the map until the viewer overrides them. */
+export function seriesInkFor(
+  layer: LayerDoc,
+  ink: string | undefined,
+  effectivePalette?: string | null,
+  effectiveInk?: string | null,
+) {
+  if (ink !== undefined) return inkColor(ink) ?? "#1a3658";
+  if (effectiveInk) return inkColor(effectiveInk) ?? "#1a3658";
+  const palette = effectivePalette ?? layer.style.palette;
+  if (palette) {
+    const contour = contourColor(palette);
+    if (contour) return contour;
+    const gradient = fieldGradient(palette);
+    if (gradient && gradient.length > 0) return rgbToHex(gradient[Math.floor(gradient.length / 2)]);
+  }
+
+  return "#1a3658";
+}
+
+function fallbackNamesFor(layer: LayerDoc) {
+  const names = (layer.fallback_sources ?? []).map((source) => source.name);
+
+  return names.length ? names.join(", ") : null;
+}
+
+function displayRange(
+  range: [number, number] | null | undefined,
+  nativeUnits: string,
+  displayUnit: string,
+): [number, number] | null {
+  if (!range) return null;
+
+  return [
+    convertValue(range[0], nativeUnits, displayUnit),
+    convertValue(range[1], nativeUnits, displayUnit),
+  ];
+}
+
+function seasonalNote(
+  shape: "time_series" | "seasonal_cycle",
+  table: ReturnType<typeof toDisplayTable>,
+) {
+  if (shape !== "seasonal_cycle" || table.shape !== "seasonal_cycle") return null;
+  const counts = table.rows.map((row) => row.sampleCount);
+  const smallest = Math.min(...counts);
+  const largest = Math.max(...counts);
+
+  return `By month averages each available January together; `
+    + `the Sample count column shows how many years contributed `
+    + `(${String(smallest)}-${String(largest)}).`;
+}
+
+function coverageNote(table: ReturnType<typeof toDisplayTable>) {
+  if (table.shape !== "time_series" && table.shape !== "seasonal_cycle") return null;
+  if (table.rows.some((row) => row.validFraction < 0.95)) {
+    return "Hollow marks cover less than 95% of the outline.";
+  }
+
+  return null;
+}

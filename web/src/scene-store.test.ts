@@ -382,6 +382,29 @@ test("display edits keep the chart slice identity for link subscribers", () => {
   assert.notEqual(store.getSnapshot().display, before.display);
 });
 
+test("draw layers drive allocation while validation layers keep failed charts", () => {
+  const layers = chartLayers();
+  const store = createSceneStore([layers[0]], display(), null, layers);
+  const before = store.getSnapshot();
+
+  assert.deepEqual([...before.on], ["chirps"]);
+  assert.equal(before.allocation.owner, "chirps");
+  assert.equal(before.charts.definitions.length, 3);
+  const extra = {
+    id: "extra",
+    title: "Extra",
+    source: { layerId: "era5", shape: "time_series" as const },
+    chartType: "line" as const,
+    options: {},
+  };
+
+  store.dispatch({ kind: "saveChart", definition: extra });
+
+  assert.equal(store.getSnapshot().charts.definitions.length, 4);
+  assert.equal(store.getSnapshot().allocation, before.allocation);
+  assert.deepEqual([...store.getSnapshot().on], ["chirps"]);
+});
+
 function display(): SceneDisplay {
   return { layers: {}, off: new Set(), showAs: {} };
 }
