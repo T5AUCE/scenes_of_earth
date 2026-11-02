@@ -4,6 +4,9 @@ import type { DisplayTokens } from "./types";
 // The finest step decides whether a link keeps a year, month or day.
 const TIME_PATTERN = /^\d{4}(-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?)?$/;
 
+/** The query parameter that carries the complete chart slice. */
+export const CHARTS_PARAM = "charts";
+
 /** A world or scene destination with optional time and panel state. */
 export type Route =
   | { kind: "world" }
@@ -53,7 +56,29 @@ function displayTokens(parameters: URLSearchParams): DisplayTokens {
     ink: joined("ink"),
     dens: joined("dens"),
     units: joined("units"),
+    charts: parameters.get(CHARTS_PARAM) ?? "",
   };
+}
+
+/** The raw charts token of a search string, or null when the link carries none. */
+export function chartsTokenFor(search: string) {
+  const token = new URLSearchParams(search).get(CHARTS_PARAM);
+
+  return token === null || token === "" ? null : token;
+}
+
+/**
+ * Return a search string with the charts token set or removed, preserving the other
+ * parameters through URLSearchParams instead of raw query concatenation.
+ */
+export function withChartsToken(search: string, token: string | null) {
+  const parameters = new URLSearchParams(search);
+  if (token === null) parameters.delete(CHARTS_PARAM);
+  else parameters.set(CHARTS_PARAM, token);
+
+  const query = parameters.toString();
+
+  return query ? `?${query}` : "";
 }
 
 /** A year, month or day in the link selects the first step that starts in it. */

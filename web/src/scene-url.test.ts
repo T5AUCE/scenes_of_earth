@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { routeFor, sceneUrl, timeForPrefix } from "./scene-url.ts";
+import {
+  CHARTS_PARAM,
+  chartsTokenFor,
+  routeFor,
+  sceneUrl,
+  timeForPrefix,
+  withChartsToken,
+} from "./scene-url.ts";
 import { formatTime } from "./timeline.ts";
 
 const id = "0123456789abcdef0123";
@@ -26,7 +33,7 @@ test("a scene link reads the time and ignores a malformed one", () => {
     id,
     time: "2026-03",
     panel: null,
-    display: { pal: "", range: "", off: "", as: "", ink: "", dens: "", units: "" },
+    display: { pal: "", range: "", off: "", as: "", ink: "", dens: "", units: "", charts: "" },
   });
 
   const timeOf = (label: string) =>
@@ -74,6 +81,7 @@ test("display params round trip through the address", () => {
     ink: "",
     dens: "",
     units: "",
+    charts: "",
   });
 });
 
@@ -126,4 +134,37 @@ test("repeated display parameters are joined in order", () => {
 test("a link without display params is unchanged", () => {
   assert.equal(sceneUrl(id, "2019-03"), `?scene=${id}&t=2019-03`);
   assert.equal(sceneUrl(id, null, ""), `?scene=${id}`);
+});
+
+test("the chart token stays optional for old fixture callers", () => {
+  const bare = routeFor(`?scene=${id}`, null) as { display: { charts?: string } };
+
+  assert.equal(bare.display.charts, "");
+  assert.equal(chartsTokenFor(`?scene=${id}`), null);
+  assert.equal(CHARTS_PARAM, "charts");
+});
+
+test("a chart token round trips without touching display params", () => {
+  const token = "eyJ2ZXJzaW9uIjoxfQ";
+  const url = withChartsToken(`?scene=${id}&pal=a:b`, token);
+  const parameters = new URLSearchParams(url);
+
+  assert.equal(parameters.get("pal"), "a:b");
+  assert.equal(parameters.get("charts"), token);
+  assert.equal(chartsTokenFor(url), token);
+  assert.equal(routeFor(url, null).kind, "scene");
+  assert.equal((routeFor(url, null) as { display: { charts: string } }).display.charts, token);
+});
+
+test("chart helpers preserve the other params and remove the token on request", () => {
+  assert.equal(withChartsToken(`?scene=${id}`, null), `?scene=${id}`);
+  assert.equal(chartsTokenFor("?scene=abc&charts="), null);
+
+  const added = withChartsToken(`?scene=${id}&t=2019-03`, "abc-_123");
+  assert.ok(added.includes("t=2019-03"));
+  assert.ok(added.includes("charts=abc-_123"));
+
+  const removed = withChartsToken(added, null);
+  assert.ok(!removed.includes("charts"));
+  assert.ok(removed.includes(`scene=${id}`));
 });
