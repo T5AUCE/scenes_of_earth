@@ -56,6 +56,51 @@ export const LAYOUT_CONTROLS = [
   { role: "button", name: "Expand", optional: true },
 ];
 
+/**
+ * Charts dialog controls hit-tested after the gallery opens. Scopes keep the trial
+ * inside the full view, so layer-card buttons with the same names never match, while
+ * the dialog scroll container centres each one before hit-testing.
+ */
+export const CHART_GALLERY_CONTROLS = [
+  { role: "button", name: "+ New chart", scope: "#scene-full", scroll: "#scene-full main" },
+  { role: "button", name: "Open", scope: "#scene-full", scroll: "#scene-full main" },
+];
+
+/**
+ * Chart editor controls hit-tested after a draft opens. Save, Cancel and the
+ * back button must all stay reachable beside the attribution line.
+ */
+export const CHART_EDITOR_CONTROLS = [
+  { role: "button", name: "Back to charts", scope: "#scene-full", scroll: "#scene-full main" },
+  { role: "button", name: "Save", scope: "#scene-full", scroll: "#scene-full main" },
+  { role: "button", name: "Cancel", scope: "#scene-full", scroll: "#scene-full main" },
+];
+
+/** Page checks that fail when the chart preview is missing, clipped or overflowing. */
+export const CHART_RENDERED_CHECK = "chart renders in the dialog";
+export const CHART_TICK_BOUNDS_CHECK = "chart tick labels inside axes";
+export const CHART_REFERENCE_BOUNDS_CHECK = "chart reference labels inside axes";
+export const CHART_ATTRIBUTION_CHECK = "chart attribution visible";
+export const CHART_OVERFLOW_CHECK = "chart editor without horizontal overflow";
+
+/** Gallery checks fail on the same collisions inside each card preview. */
+export const CHART_GALLERY_TICK_BOUNDS_CHECK = "chart gallery tick labels inside axes";
+export const CHART_GALLERY_REFERENCE_BOUNDS_CHECK = "chart gallery reference labels inside axes";
+export const CHART_GALLERY_BAR_BOUNDS_CHECK = "chart gallery bars inside plot";
+
+/** Shapes the record for a chart workflow step that never opened. */
+export function chartOpeningRecord(viewport, stage) {
+  return layoutRecord({
+    viewport,
+    editor: "charts",
+    role: "page",
+    name: `chart ${stage} opens`,
+    present: false,
+    pass: false,
+    hit: null,
+  });
+}
+
 /** Spreads count sample points across a control box for endpoint hit-testing. */
 export function spreadPoints(box, count) {
   const span = box.width - 2 * SLIDER_EDGE_INSET_PX;

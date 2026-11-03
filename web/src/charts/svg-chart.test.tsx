@@ -557,7 +557,7 @@ test("offset ranges use converted zero without expansion", async (context) => {
   assert.ok(Number.isFinite(y));
   assert.ok(height >= 1);
   const top_PX = 20;
-  const bottomMargin_PX = 32;
+  const bottomMargin_PX = 36;
   const height_PX = 140;
   const plotBottom_PX = top_PX + (height_PX - top_PX - bottomMargin_PX);
   assert.equal(y + height, plotBottom_PX);
@@ -669,13 +669,29 @@ test("constant references stagger bounded with inward endpoints", async (context
   assert.equal(new Set(positions).size, positions.length);
   for (const entry of labels) {
     assert.ok(entry.y >= 12);
-    assert.ok(entry.y <= 176);
+    assert.ok(entry.y <= 140);
   }
   for (let first = 0; first < positions.length; first++) {
     for (let second = first + 1; second < positions.length; second++) {
       assert.ok(Math.abs(positions[first] - positions[second]) >= 12);
     }
   }
+  const xTickY = Number(host.querySelector(".chart-x-ticks text")?.getAttribute("y"));
+  assert.equal(xTickY, 160);
+  for (const entry of labels) {
+    assert.ok(entry.y + 4 <= 144);
+    assert.ok(entry.y + 4 < xTickY);
+  }
+  const frame = host.querySelector(".chart-plot-frame")!;
+  assert.equal(Number(frame.getAttribute("y1")), 20);
+  assert.equal(Number(frame.getAttribute("y2")), 144);
+  const gridY = [...host.querySelectorAll(".chart-grid line")].map((line) => (
+    Number(line.getAttribute("y1"))
+  ));
+  assert.equal(gridY.length, 1);
+  assert.equal(gridY[0], 82);
+  assert.ok(labels.some((entry) => entry.y > gridY[0]));
+  assert.ok(labels.every((entry) => entry.y + 4 <= 144));
   const endpoints = [...host.querySelectorAll(".chart-endpoints text")];
   assert.equal(endpoints[0]?.getAttribute("text-anchor"), "end");
   assert.equal(endpoints[1]?.getAttribute("text-anchor"), "start");
@@ -724,12 +740,18 @@ test("constant references stagger bounded with inward endpoints", async (context
   assert.equal(new Set(bottomPositions).size, bottomPositions.length);
   for (const entry of bottomLabels) {
     assert.ok(entry.y >= 12);
-    assert.ok(entry.y <= 176);
+    assert.ok(entry.y <= 140);
   }
   for (let first = 0; first < bottomPositions.length; first++) {
     for (let second = first + 1; second < bottomPositions.length; second++) {
       assert.ok(Math.abs(bottomPositions[first] - bottomPositions[second]) >= 12);
     }
+  }
+  const bottomXTickY = Number(bottomHost.querySelector(".chart-x-ticks text")?.getAttribute("y"));
+  assert.equal(bottomXTickY, 160);
+  for (const entry of bottomLabels) {
+    assert.ok(entry.y + 4 <= 144);
+    assert.ok(entry.y + 4 < bottomXTickY);
   }
   const seaLabel = bottomLabels.find((entry) => entry.text === "Sea level 0")!;
   const lowLabel = bottomLabels.find((entry) => (entry.text ?? "").startsWith("Lowest cell"))!;
@@ -765,9 +787,9 @@ test("hypsometry direction and bar baseline use exact coordinates", async (conte
   const low = 0;
   const high = 1000.987654321;
   const plotTop_PX = 20;
-  const plotHeight_PX = 180 - 20 - 32;
+  const plotHeight_PX = 180 - 20 - 36;
   const span = high - low;
-  const yOf = (value: number) => plotTop_PX + (plotHeight_PX * (high - value)) / span;
+  const yOf = (value: number) => plotTop_PX + ((high - value) / span) * plotHeight_PX;
   const lines = [...host.querySelectorAll(".chart-references line")];
   assert.equal(lines.length, 3);
   assert.equal(Number(lines[0].getAttribute("y1")), yOf(500.123456789));
@@ -794,17 +816,22 @@ test("hypsometry direction and bar baseline use exact coordinates", async (conte
   const seriesLow = -3.75;
   const seriesHigh = 10.123456789012345;
   const seriesTop_PX = 20;
-  const seriesHeight_PX = 140 - 20 - 32;
+  const seriesHeight_PX = 140 - 20 - 36;
   const seriesSpan = seriesHigh - seriesLow;
   const seriesYOf = (value: number) => seriesTop_PX
-    + (seriesHeight_PX * (seriesHigh - value)) / seriesSpan;
+    + ((seriesHigh - value) / seriesSpan) * seriesHeight_PX;
   const baseY = seriesYOf(0);
   assert.equal(Number(rects[0].getAttribute("y")), seriesYOf(10.123456789012345));
   assert.equal(Number(rects[0].getAttribute("height")), baseY - seriesYOf(10.123456789012345));
   assert.equal(Number(rects[1].getAttribute("y")), baseY);
   assert.equal(Number(rects[1].getAttribute("height")), 1);
   assert.equal(Number(rects[2].getAttribute("y")), baseY);
-  assert.equal(Number(rects[2].getAttribute("height")), seriesYOf(-3.75) - baseY);
+  // A stroked edge bar insets by half its stroke so the outer extent stays inside.
+  const strokeHalf_PX = 1.5 / 2;
+  assert.equal(
+    Number(rects[2].getAttribute("height")),
+    seriesYOf(-3.75) - baseY - strokeHalf_PX,
+  );
   await act(async () => {
     barRoot.unmount();
   });
@@ -891,11 +918,11 @@ test("negative area closes at its minimum with converted baselines", async (cont
   const automaticY = automatic.map((corner) => Number(corner.split(",")[1]));
   assert.equal(automaticY[0], automaticY[automaticY.length - 1]);
   assert.equal(automaticY[0], Math.max(...automaticY));
-  assert.equal(automaticY[0], 108);
-  assert.ok(automaticY.every((value) => value >= 20 && value <= 108));
-  assert.equal(automaticY[1], 108);
+  assert.equal(automaticY[0], 104);
+  assert.ok(automaticY.every((value) => value >= 20 && value <= 104));
+  assert.equal(automaticY[1], 104);
   assert.equal(automaticY[2], 20);
-  assert.ok(automaticY.slice(1, -1).includes(108));
+  assert.ok(automaticY.slice(1, -1).includes(104));
   assert.ok(automaticY.slice(1, -1).includes(20));
   const automaticTicks = [...host.querySelectorAll(".chart-y-ticks text")].map(
     (node) => node.textContent,
@@ -926,9 +953,9 @@ test("negative area closes at its minimum with converted baselines", async (cont
   const explicitY = explicit.map((corner) => Number(corner.split(",")[1]));
   assert.equal(explicitY[0], explicitY[explicitY.length - 1]);
   assert.equal(explicitY[0], Math.max(...explicitY));
-  assert.equal(explicitY[0], 108);
-  assert.ok(explicitY.every((value) => value >= 20 && value <= 108));
-  assert.equal(explicitY[1], 108);
+  assert.equal(explicitY[0], 104);
+  assert.ok(explicitY.every((value) => value >= 20 && value <= 104));
+  assert.equal(explicitY[1], 104);
   assert.equal(explicitY[2], 20);
   const explicitTicks = [...explicitHost.querySelectorAll(".chart-y-ticks text")].map(
     (node) => node.textContent,
@@ -985,9 +1012,9 @@ test("negative area closes at its minimum with converted baselines", async (cont
   const convertedY = converted.map((corner) => Number(corner.split(",")[1]));
   assert.equal(convertedY[0], convertedY[convertedY.length - 1]);
   assert.equal(convertedY[0], Math.max(...convertedY));
-  assert.equal(convertedY[0], 108);
-  assert.ok(convertedY.every((value) => value >= 20 && value <= 108));
-  assert.equal(convertedY[1], 108);
+  assert.equal(convertedY[0], 104);
+  assert.ok(convertedY.every((value) => value >= 20 && value <= 104));
+  assert.equal(convertedY[1], 104);
   assert.equal(convertedY[2], 20);
   await act(async () => {
     convertedRoot.unmount();
@@ -1017,9 +1044,9 @@ test("negative area closes at its minimum with converted baselines", async (cont
   const terrainY = terrainPoints.map((corner) => Number(corner.split(",")[1]));
   assert.equal(terrainY[0], terrainY[terrainY.length - 1]);
   assert.equal(terrainY[0], Math.max(...terrainY));
-  assert.equal(terrainY[0], 148);
-  assert.ok(terrainY.every((value) => value >= 20 && value <= 148));
-  assert.equal(terrainY[1], 148);
+  assert.equal(terrainY[0], 144);
+  assert.ok(terrainY.every((value) => value >= 20 && value <= 144));
+  assert.equal(terrainY[1], 144);
   assert.ok(terrainY.slice(1, -1).includes(20));
   const terrainTicks = [...terrainHost.querySelectorAll(".chart-y-ticks text")].map(
     (node) => node.textContent,
@@ -1043,8 +1070,8 @@ test("negative area closes at its minimum with converted baselines", async (cont
   )!.trim().split(/\s+/);
   const explicitTerrainY = explicitTerrainPoints.map((corner) => Number(corner.split(",")[1]));
   assert.equal(explicitTerrainY[0], explicitTerrainY[explicitTerrainY.length - 1]);
-  assert.equal(explicitTerrainY[0], 148);
-  assert.ok(explicitTerrainY.every((value) => value >= 20 && value <= 148));
+  assert.equal(explicitTerrainY[0], 144);
+  assert.ok(explicitTerrainY.every((value) => value >= 20 && value <= 144));
   await act(async () => {
     explicitTerrainRoot.unmount();
   });
@@ -1062,8 +1089,8 @@ test("negative area closes at its minimum with converted baselines", async (cont
   )!.trim().split(/\s+/);
   const seasonalY = seasonalPoints.map((corner) => Number(corner.split(",")[1]));
   assert.equal(seasonalY[0], seasonalY[seasonalY.length - 1]);
-  assert.equal(seasonalY[0], 108);
-  assert.ok(seasonalY.every((value) => value >= 20 && value <= 108));
+  assert.equal(seasonalY[0], 104);
+  assert.ok(seasonalY.every((value) => value >= 20 && value <= 104));
   await act(async () => {
     seasonalRoot.unmount();
   });
@@ -1156,6 +1183,1287 @@ test("singleton time chart keeps unique ticks without key warnings", async (cont
   }
 });
 
+test("presentation rounds axes while tables stay exact", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<SvgChart table={distributionTable()} chartType="line" />);
+  });
+  const yTexts = [...host.querySelectorAll(".chart-y-ticks text")].map((node) => node.textContent);
+  assert.equal(yTexts.length, 4);
+  for (const text of yTexts) {
+    assert.match(text ?? "", /^-?\d+$/);
+    assert.equal((text ?? "").includes("500.123"), false);
+  }
+  const visible = [...host.querySelectorAll(".chart-references text")].map(
+    (node) => node.textContent,
+  );
+  assert.ok(visible.includes("Mean 500"));
+  assert.ok(visible.includes("Median 401"));
+  assert.ok(visible.includes("Sea level 0"));
+  assert.equal(visible.some((text) => (text ?? "").includes("500.123456789")), false);
+  const titles = [...host.querySelectorAll(".chart-references > g > title")].map(
+    (node) => node.textContent,
+  );
+  assert.ok(titles.includes("Mean 500.123456789"));
+  assert.ok(titles.includes("Median 400.987654321"));
+  assert.ok(titles.includes("Sea level 0"));
+  assert.match(host.textContent ?? "", /Mean 500\.123456789/);
+  assert.ok((host.querySelector(".chart-tooltip")?.textContent ?? "").includes("1000.987654321"));
+  await act(async () => {
+    root.unmount();
+  });
+
+  const seriesHost = document.createElement("div");
+  document.body.append(seriesHost);
+  const seriesRoot = createRoot(seriesHost);
+  await act(async () => {
+    seriesRoot.render(<SvgChart table={timeTable()} chartType="line" />);
+  });
+  const seriesTicks = [...seriesHost.querySelectorAll(".chart-y-ticks text")].map(
+    (node) => node.textContent,
+  );
+  assert.ok(seriesTicks.length >= 2);
+  for (const text of seriesTicks) {
+    assert.equal(/\.\d{4,}/.test(text ?? ""), false);
+  }
+  assert.ok((seriesHost.textContent ?? "").includes(String(timeTable().rows[0].value)));
+  await act(async () => {
+    seriesRoot.unmount();
+  });
+  host.remove();
+  seriesHost.remove();
+});
+
+test("time edge labels anchor inward while share labels stay centered", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<SvgChart table={timeTable()} chartType="line" />);
+  });
+  const anchors = [...host.querySelectorAll(".chart-x-ticks text")].map(
+    (node) => node.getAttribute("text-anchor"),
+  );
+  assert.ok(anchors.length >= 2);
+  assert.equal(anchors[0], "start");
+  assert.equal(anchors[anchors.length - 1], "end");
+  await act(async () => {
+    root.unmount();
+  });
+
+  const shareHost = document.createElement("div");
+  document.body.append(shareHost);
+  const shareRoot = createRoot(shareHost);
+  await act(async () => {
+    shareRoot.render(<SvgChart table={distributionTable()} chartType="line" />);
+  });
+  const shareAnchors = [...shareHost.querySelectorAll(".chart-x-ticks text")].map(
+    (node) => node.getAttribute("text-anchor"),
+  );
+  assert.ok(shareAnchors.length >= 2);
+  for (const anchor of shareAnchors) assert.equal(anchor, "middle");
+  await act(async () => {
+    shareRoot.unmount();
+  });
+  host.remove();
+  shareHost.remove();
+});
+
+test("narrow large ticks stay distinct with a disclosed offset", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const low = 1234567890.123456;
+  const high = 1234567891.456789;
+  const table: TimeSeriesTable = {
+    ...timeTable(),
+    rows: [low, high].map((value, index) => ({
+      x: Date.UTC(2019, index, 1),
+      value,
+      label: new Date(Date.UTC(2019, index, 1)).toISOString().slice(0, 10),
+      validFraction: 1,
+      fallbackFraction: null,
+      interval: {
+        start: new Date(Date.UTC(2019, index, 1)).toISOString().slice(0, 10),
+        end: new Date(Date.UTC(2019, index + 1, 1)).toISOString().slice(0, 10),
+      },
+    })),
+  };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<SvgChart table={table} chartType="line" />);
+  });
+  const yTexts = [...host.querySelectorAll(".chart-y-ticks text")].map((node) => node.textContent);
+  assert.ok(yTexts.length >= 2);
+  assert.equal(new Set(yTexts).size, yTexts.length);
+  for (const text of yTexts) {
+    assert.equal((text ?? "").length <= 12, true);
+  }
+  const titles = [...host.querySelectorAll(".chart-axes text")].map((node) => node.textContent);
+  const yTitle = titles.find((text) => (text ?? "").includes("Rain"));
+  assert.equal(yTitle, "Rain (mm/month)");
+  const disclosure = host.querySelector(".chart-offset")?.textContent ?? "";
+  assert.ok(disclosure.includes("ticks"));
+  assert.ok(disclosure.includes(String(low)));
+  assert.ok(disclosure.includes("="));
+  const grid = host.querySelector(".chart-grid line")!;
+  const left = Number(grid.getAttribute("x1"));
+  const note = host.querySelector(".chart-offset")!;
+  assert.equal(Number(note.getAttribute("x")), left);
+  assert.equal(Number(note.getAttribute("y")), 12);
+  assert.equal(note.getAttribute("text-anchor"), "start");
+  const span = high - low;
+  const ticks = [0, 1, 2, 3].map((index) => low + (span * index) / 3);
+  const scale = 1;
+  yTexts.forEach((text, index) => {
+    const absolute = low + scale * Number.parseFloat(text ?? "NaN");
+    assert.ok(Number.isFinite(absolute));
+    assert.ok(Math.abs(absolute - ticks[index]) <= span / 6 + 0.06);
+  });
+  const tickNodes = [...host.querySelectorAll(".chart-y-ticks text")];
+  for (const tick of tickNodes) {
+    const tickX = Number(tick.getAttribute("x"));
+    assert.equal(tickX, left - 4);
+    const width = (tick.textContent ?? "").length * 6;
+    assert.ok(tickX - width >= 20);
+  }
+  assert.ok((host.textContent ?? "").includes("1234567890.123456"));
+  assert.ok((host.textContent ?? "").includes("1234567891.456789"));
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+});
+
+test("narrow tiny ticks stay distinct without losing variation", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const table: TimeSeriesTable = {
+    ...timeTable(),
+    rows: [0.0000123456, 0.0000136789].map((value, index) => ({
+      x: Date.UTC(2019, index, 1),
+      value,
+      label: new Date(Date.UTC(2019, index, 1)).toISOString().slice(0, 10),
+      validFraction: 1,
+      fallbackFraction: null,
+      interval: {
+        start: new Date(Date.UTC(2019, index, 1)).toISOString().slice(0, 10),
+        end: new Date(Date.UTC(2019, index + 1, 1)).toISOString().slice(0, 10),
+      },
+    })),
+  };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<SvgChart table={table} chartType="line" />);
+  });
+  const yTexts = [...host.querySelectorAll(".chart-y-ticks text")].map((node) => node.textContent);
+  assert.ok(yTexts.length >= 2);
+  assert.equal(new Set(yTexts).size, yTexts.length);
+  for (const text of yTexts) {
+    assert.equal((text ?? "").length <= 12, true);
+  }
+  assert.ok((host.textContent ?? "").includes("0.0000123456"));
+  assert.ok((host.textContent ?? "").includes("0.0000136789"));
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+});
+
+test("narrow tiny relative spans use a shared base and scale", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const low = 0.000012345678901;
+  const high = 0.000012345678902;
+  const table: TimeSeriesTable = {
+    ...timeTable(),
+    rows: [low, high].map((value, index) => ({
+      x: Date.UTC(2019, index, 1),
+      value,
+      label: new Date(Date.UTC(2019, index, 1)).toISOString().slice(0, 10),
+      validFraction: 1,
+      fallbackFraction: null,
+      interval: {
+        start: new Date(Date.UTC(2019, index, 1)).toISOString().slice(0, 10),
+        end: new Date(Date.UTC(2019, index + 1, 1)).toISOString().slice(0, 10),
+      },
+    })),
+  };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<SvgChart table={table} chartType="line" />);
+  });
+  const yTexts = [...host.querySelectorAll(".chart-y-ticks text")].map((node) => node.textContent);
+  assert.ok(yTexts.length >= 2);
+  assert.equal(new Set(yTexts).size, yTexts.length);
+  for (const text of yTexts) {
+    assert.ok((text ?? "").length <= 12);
+  }
+  const titles = [...host.querySelectorAll(".chart-axes text")].map((node) => node.textContent);
+  assert.equal(titles.find((text) => (text ?? "").includes("Rain")), "Rain (mm/month)");
+  const disclosure = host.querySelector(".chart-offset")?.textContent ?? "";
+  assert.ok(disclosure.includes("ticks"));
+  assert.ok(disclosure.includes(String(low)));
+  assert.ok(disclosure.includes("e"));
+  assert.ok(disclosure.includes("="));
+  const grid = host.querySelector(".chart-grid line")!;
+  const left = Number(grid.getAttribute("x1"));
+  const note = host.querySelector(".chart-offset")!;
+  assert.equal(Number(note.getAttribute("x")), left);
+  assert.equal(Number(note.getAttribute("y")), 12);
+  const span = high - low;
+  const ticks = [0, 1, 2, 3].map((index) => low + (span * index) / 3);
+  const scaleText = /x (.+) \+/.exec(disclosure)?.[1] ?? "";
+  const scale = Number.parseFloat(scaleText);
+  assert.ok(Number.isFinite(scale) && scale > 0);
+  const magnitude = Math.max(Math.abs(low), Math.abs(high));
+  const tolerance = span / 6 + Number.EPSILON * magnitude;
+  assert.ok(span > tolerance * 2);
+  yTexts.forEach((text, index) => {
+    const delta = Number.parseFloat(text ?? "NaN");
+    assert.ok(Number.isFinite(delta));
+    const expectedDelta = (ticks[index] - low) / scale;
+    const deltaTolerance = tolerance / scale + Number.EPSILON * Math.abs(expectedDelta);
+    assert.ok(Math.abs(delta - expectedDelta) <= deltaTolerance);
+    const absolute = low + scale * delta;
+    assert.ok(Number.isFinite(absolute));
+    assert.ok(Math.abs(absolute - ticks[index]) <= tolerance);
+  });
+  for (const tick of host.querySelectorAll(".chart-y-ticks text")) {
+    const tickX = Number(tick.getAttribute("x"));
+    assert.equal(tickX, left - 4);
+    const width = (tick.textContent ?? "").length * 6;
+    assert.ok(tickX - width >= 20);
+  }
+  const gridY = [...host.querySelectorAll(".chart-grid line")].map((line) => (
+    Number(line.getAttribute("y1"))
+  ));
+  assert.equal(gridY.length, yTexts.length);
+  assert.ok(Math.abs(gridY[0] - 104) <= 1e-9);
+  assert.ok(Math.abs(gridY[gridY.length - 1] - 20) <= 1e-9);
+  for (let index = 1; index < gridY.length; index += 1) {
+    assert.ok(Math.abs(gridY[index] - gridY[index - 1]) >= 10);
+  }
+  const tickY = [...host.querySelectorAll(".chart-y-ticks text")].map((node) => (
+    Number(node.getAttribute("y"))
+  ));
+  assert.equal(tickY.length, gridY.length);
+  for (let first = 0; first < tickY.length; first += 1) {
+    for (let second = first + 1; second < tickY.length; second += 1) {
+      assert.ok(Math.abs(tickY[first] - tickY[second]) >= 12);
+    }
+  }
+  const points = host.querySelector("polyline")?.getAttribute("points")?.trim().split(/\s+/) ?? [];
+  const pointY = points.map((corner) => Number(corner.split(",")[1]));
+  assert.ok(pointY.length >= 2);
+  assert.ok(Math.min(...pointY) <= 20 + 1e-9);
+  assert.ok(Math.max(...pointY) >= 104 - 1e-9);
+  assert.ok(Math.max(...pointY) - Math.min(...pointY) >= 80);
+  assert.ok((host.textContent ?? "").includes(String(low)));
+  assert.ok((host.textContent ?? "").includes(String(high)));
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+});
+
+test("adjacent representable ticks stay bounded and distinct", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const cases = [
+    { low: 1, high: 1.0000000000000002 },
+    { low: 9007199254740991, high: 9007199254740992 },
+    { low: 1e-12, high: 1e-12 * (1 + Number.EPSILON) },
+  ];
+  for (const { low, high } of cases) {
+    const errors: unknown[][] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
+    try {
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host);
+      await act(async () => {
+        root.render(<SvgChart table={timeTable()} chartType="line" yRange={[low, high]} />);
+      });
+      const yTexts = [...host.querySelectorAll(".chart-y-ticks text")].map(
+        (node) => node.textContent,
+      );
+      assert.equal(yTexts.length, 2);
+      assert.equal(new Set(yTexts).size, yTexts.length);
+      for (const text of yTexts) {
+        assert.ok((text ?? "").length <= 12);
+      }
+      const grids = [...host.querySelectorAll(".chart-grid line")];
+      assert.equal(grids.length, yTexts.length);
+      const keys = grids.map((line) => Number(line.getAttribute("y1")));
+      assert.equal(new Set(keys).size, keys.length);
+      const expected = [low, high];
+      assert.notEqual(expected[0], expected[1]);
+      const disclosures = [...host.querySelectorAll(".chart-offset")].map(
+        (node) => node.textContent ?? "",
+      );
+      const equation = disclosures.join(" ");
+      const scaleMatch = /x (.+) \+/.exec(equation);
+      const baseMatch = /\+ (.+) = value/.exec(equation);
+      const base = baseMatch ? Number.parseFloat(baseMatch[1]) : low;
+      const scale = scaleMatch ? Number.parseFloat(scaleMatch[1]) : 1;
+      yTexts.forEach((text, index) => {
+        const delta = Number.parseFloat(text ?? "NaN");
+        assert.ok(Number.isFinite(delta));
+        const absolute = equation.includes("ticks") ? base + scale * delta : delta;
+        assert.equal(absolute, expected[index]);
+      });
+      const duplicates = errors.filter((args) => String(args[0]).includes("same key"));
+      assert.equal(duplicates.length, 0);
+      await act(async () => {
+        root.unmount();
+      });
+      host.remove();
+    } finally {
+      console.error = original;
+    }
+  }
+});
+
+test("long base and scale wrap inside narrow desktop cards", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  let notify: ((width: number) => void) | null = null;
+  class TestObserver {
+    constructor(callback: (entries: { contentRect: { width: number } }[]) => void) {
+      notify = (width: number) => callback([{ contentRect: { width } }]);
+    }
+
+    observe() {}
+
+    disconnect() {}
+  }
+  const previous = (globalThis as Record<string, unknown>).ResizeObserver;
+  (globalThis as Record<string, unknown>).ResizeObserver = TestObserver;
+  context.after(() => {
+    (globalThis as Record<string, unknown>).ResizeObserver = previous;
+  });
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const low = 123456789012345670000;
+  const high = low + 1e15;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<SvgChart table={timeTable()} chartType="line" yRange={[low, high]} />);
+  });
+  await act(async () => {
+    notify?.(264);
+  });
+  const svgWidth = Number(host.querySelector("svg")?.getAttribute("width"));
+  assert.equal(svgWidth, 264);
+  const grid = host.querySelector(".chart-grid line")!;
+  const left = Number(grid.getAttribute("x1"));
+  const lines = [...host.querySelectorAll(".chart-offset")];
+  assert.ok(lines.length >= 2);
+  const combined = lines.map((node) => node.textContent ?? "").join(" ");
+  assert.ok(combined.includes("1e15"));
+  assert.ok(combined.includes(String(low)));
+  assert.ok(combined.includes("="));
+  assert.equal(combined.includes("1000000000000000"), false);
+  for (const line of lines) {
+    const x = Number(line.getAttribute("x"));
+    assert.equal(x, left);
+    const y = Number(line.getAttribute("y"));
+    assert.ok(y >= 0 && y <= 140);
+    const width = (line.textContent ?? "").length * 6;
+    assert.ok(x + width <= svgWidth + 1);
+  }
+  const gridY = [...host.querySelectorAll(".chart-grid line")].map((line) => (
+    Number(line.getAttribute("y1"))
+  ));
+  const lastCaptionY = Math.max(...lines.map((line) => Number(line.getAttribute("y"))));
+  assert.ok(Math.min(...gridY) > lastCaptionY);
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+});
+
+test("wrapped disclosure keeps the current-time cursor inside the plot", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  let notify: ((width: number) => void) | null = null;
+  class TestObserver {
+    constructor(callback: (entries: { contentRect: { width: number } }[]) => void) {
+      notify = (width: number) => callback([{ contentRect: { width } }]);
+    }
+
+    observe() {}
+
+    disconnect() {}
+  }
+  const previous = (globalThis as Record<string, unknown>).ResizeObserver;
+  (globalThis as Record<string, unknown>).ResizeObserver = TestObserver;
+  context.after(() => {
+    (globalThis as Record<string, unknown>).ResizeObserver = previous;
+  });
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const low = 123456789012345670000;
+  const high = low + 1e15;
+  const table: TimeSeriesTable = {
+    ...timeTable(),
+    rows: [low, high].map((value, index) => ({
+      x: Date.UTC(2019, index, 1),
+      value,
+      label: new Date(Date.UTC(2019, index, 1)).toISOString().slice(0, 10),
+      validFraction: 1,
+      fallbackFraction: null,
+      interval: {
+        start: new Date(Date.UTC(2019, index, 1)).toISOString().slice(0, 10),
+        end: new Date(Date.UTC(2019, index + 1, 1)).toISOString().slice(0, 10),
+      },
+    })),
+  };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(
+      <SvgChart
+        table={table}
+        chartType="line"
+        yRange={[low, high]}
+        currentTime="2019-01-15"
+      />,
+    );
+  });
+  await act(async () => {
+    notify?.(264);
+  });
+  assert.equal(Number(host.querySelector("svg")?.getAttribute("width")), 264);
+  const lines = [...host.querySelectorAll(".chart-offset")];
+  assert.ok(lines.length >= 2);
+  const gridY = [...host.querySelectorAll(".chart-grid line")].map((line) => (
+    Number(line.getAttribute("y1"))
+  ));
+  assert.equal(Math.min(...gridY), 32);
+  assert.equal(Math.max(...gridY), 104);
+  const cursor = host.querySelector(".chart-cursor line")!;
+  const cursorTop = Number(cursor.getAttribute("y1"));
+  const cursorBottom = Number(cursor.getAttribute("y2"));
+  assert.equal(cursorTop, Math.min(...gridY));
+  assert.equal(cursorBottom, Math.max(...gridY));
+  const lastCaptionY = Math.max(...lines.map((line) => Number(line.getAttribute("y"))));
+  assert.ok(cursorTop > lastCaptionY);
+  const frame = host.querySelector(".chart-plot-frame")!;
+  assert.equal(Number(frame.getAttribute("y1")), cursorTop);
+  assert.equal(Number(frame.getAttribute("y2")), cursorBottom);
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+});
+
+test("wide fixed labels widen the gutter and clear the title", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  for (const range of [[0, 123456789], [-123456789, 0]] as [number, number][]) {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    await act(async () => {
+      root.render(<SvgChart table={timeTable()} chartType="line" yRange={range} />);
+    });
+    const grid = host.querySelector(".chart-grid line")!;
+    const left = Number(grid.getAttribute("x1"));
+    assert.ok(left > 48);
+    const title = [...host.querySelectorAll(".chart-axes text")].find((node) => (
+      (node.textContent ?? "").includes("Rain")
+    ))!;
+    const titleX = Number(title.getAttribute("x"));
+    assert.equal(titleX, 12);
+    const ticks = [...host.querySelectorAll(".chart-y-ticks text")];
+    assert.ok(ticks.length >= 2);
+    for (const tick of ticks) {
+      const tickX = Number(tick.getAttribute("x"));
+      assert.equal(tickX, left - 4);
+      const width = (tick.textContent ?? "").length * 6;
+      const edge = tickX - width;
+      assert.ok(edge >= 20);
+      assert.ok(edge >= 0);
+    }
+    const texts = ticks.map((node) => node.textContent);
+    assert.equal(new Set(texts).size, texts.length);
+    await act(async () => {
+      root.unmount();
+    });
+    host.remove();
+  }
+});
+
+test("gallery time labels stay separate at card widths", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  let notify: ((width: number) => void) | null = null;
+  class TestObserver {
+    constructor(callback: (entries: { contentRect: { width: number } }[]) => void) {
+      notify = (width: number) => callback([{ contentRect: { width } }]);
+    }
+
+    observe() {}
+
+    disconnect() {}
+  }
+  const previous = (globalThis as Record<string, unknown>).ResizeObserver;
+  (globalThis as Record<string, unknown>).ResizeObserver = TestObserver;
+  context.after(() => {
+    (globalThis as Record<string, unknown>).ResizeObserver = previous;
+  });
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const starts = ["2026-04-01", "2026-05-01", "2026-06-01", "2026-07-01", "2026-08-01"];
+  const table: TimeSeriesTable = {
+    shape: "time_series",
+    layerId: "rain",
+    units: "mm/month",
+    method: "sum",
+    rows: starts.map((start, index) => ({
+      x: Date.parse(start),
+      value: 10 + index,
+      label: start,
+      validFraction: 1,
+      fallbackFraction: null,
+      interval: {
+        start,
+        end: index + 1 < starts.length ? starts[index + 1] : "2026-09-01",
+      },
+    })),
+    xTitle: "Time",
+    yTitle: "Rain (mm/month)",
+  };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<SvgChart table={table} chartType="bar" />);
+  });
+  await act(async () => {
+    notify?.(300);
+  });
+  assert.equal(Number(host.querySelector("svg")?.getAttribute("width")), 300);
+  const ticks = [...host.querySelectorAll(".chart-x-ticks text")];
+  assert.ok(ticks.length >= 2);
+  const labels = ticks.map((node) => node.textContent ?? "");
+  assert.equal(new Set(labels).size, labels.length);
+  for (const label of labels) assert.match(label, /^2026-\d{2}-\d{2}$/);
+  const boxes = ticks.map((node) => {
+    const x = Number(node.getAttribute("x"));
+    const anchor = node.getAttribute("text-anchor");
+    const width = (node.textContent ?? "").length * 6;
+    if (anchor === "start") return { left: x, right: x + width };
+    if (anchor === "end") return { left: x - width, right: x };
+    return { left: x - width / 2, right: x + width / 2 };
+  });
+  for (let index = 0; index < boxes.length - 1; index += 1) {
+    assert.ok(boxes[index].right + 8 <= boxes[index + 1].left);
+  }
+  const cells = [...host.querySelectorAll("tbody th")].map((cell) => cell.textContent);
+  for (const start of starts) assert.ok(cells.includes(start));
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+});
+
+test("gallery bars stay inside the plot clear of y ticks", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  let notify: ((width: number) => void) | null = null;
+  class TestObserver {
+    constructor(callback: (entries: { contentRect: { width: number } }[]) => void) {
+      notify = (width: number) => callback([{ contentRect: { width } }]);
+    }
+
+    observe() {}
+
+    disconnect() {}
+  }
+  const previous = (globalThis as Record<string, unknown>).ResizeObserver;
+  (globalThis as Record<string, unknown>).ResizeObserver = TestObserver;
+  context.after(() => {
+    (globalThis as Record<string, unknown>).ResizeObserver = previous;
+  });
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const starts = ["2026-04-01", "2026-05-01", "2026-06-01", "2026-07-01", "2026-08-01"];
+  const table: TimeSeriesTable = {
+    shape: "time_series",
+    layerId: "rain",
+    units: "mm/month",
+    method: "sum",
+    rows: starts.map((start, index) => ({
+      x: Date.parse(start),
+      value: 10 + index,
+      label: start,
+      validFraction: 1,
+      fallbackFraction: null,
+      interval: {
+        start,
+        end: index + 1 < starts.length ? starts[index + 1] : "2026-09-01",
+      },
+    })),
+    xTitle: "Time",
+    yTitle: "Rain (mm/month)",
+  };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<SvgChart table={table} chartType="bar" />);
+  });
+  await act(async () => {
+    notify?.(300);
+  });
+  const grid = host.querySelector(".chart-grid line")!;
+  const left = Number(grid.getAttribute("x1"));
+  const right = Number(grid.getAttribute("x2"));
+  assert.ok(right > left);
+  const rects = [...host.querySelectorAll(".chart-bars rect")];
+  assert.equal(rects.length, 5);
+  for (const rect of rects) {
+    const x = Number(rect.getAttribute("x"));
+    const width = Number(rect.getAttribute("width"));
+    assert.ok(x >= left - 1);
+    assert.ok(x + width <= right + 1);
+  }
+  const yTicks = [...host.querySelectorAll(".chart-y-ticks text")];
+  assert.ok(yTicks.length >= 2);
+  for (const tick of yTicks) {
+    const tickX = Number(tick.getAttribute("x"));
+    assert.equal(tickX, left - 4);
+  }
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+});
+
+test("two gallery bars stay separated, aligned and contained", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  let notify: ((width: number) => void) | null = null;
+  class TestObserver {
+    constructor(callback: (entries: { contentRect: { width: number } }[]) => void) {
+      notify = (width: number) => callback([{ contentRect: { width } }]);
+    }
+
+    observe() {}
+
+    disconnect() {}
+  }
+  const previous = (globalThis as Record<string, unknown>).ResizeObserver;
+  (globalThis as Record<string, unknown>).ResizeObserver = TestObserver;
+  context.after(() => {
+    (globalThis as Record<string, unknown>).ResizeObserver = previous;
+  });
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const table: TimeSeriesTable = {
+    shape: "time_series",
+    layerId: "rain",
+    units: "mm/month",
+    method: "sum",
+    rows: [
+      {
+        x: Date.parse("2026-04-01"),
+        value: 10,
+        label: "2026-04-01",
+        validFraction: 1,
+        fallbackFraction: null,
+        interval: { start: "2026-04-01", end: "2026-05-01" },
+      },
+      {
+        x: Date.parse("2026-05-01"),
+        value: 20,
+        label: "2026-05-01",
+        validFraction: 1,
+        fallbackFraction: null,
+        interval: { start: "2026-05-01", end: "2026-06-01" },
+      },
+    ],
+    xTitle: "Time",
+    yTitle: "Rain (mm/month)",
+  };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(
+      <SvgChart table={table} chartType="bar" currentTime="2026-04-15" />,
+    );
+  });
+  await act(async () => {
+    notify?.(300);
+  });
+  const frame = host.querySelector(".chart-plot-frame")!;
+  const left = Number(frame.getAttribute("x1"));
+  const right = Number(frame.getAttribute("x2"));
+  const top = Number(frame.getAttribute("y1"));
+  const bottom = Number(frame.getAttribute("y2"));
+  assert.ok(right > left);
+  assert.ok(bottom > top);
+  const rects = [...host.querySelectorAll(".chart-bars rect")];
+  assert.equal(rects.length, 2);
+  const boxes = rects.map((rect) => {
+    const x = Number(rect.getAttribute("x"));
+    const y = Number(rect.getAttribute("y"));
+    const width = Number(rect.getAttribute("width"));
+    const height = Number(rect.getAttribute("height"));
+    const stroke = Number(rect.getAttribute("stroke-width") ?? "0");
+
+    return {
+      x,
+      y,
+      width,
+      height,
+      stroke,
+      outerLeft: x - stroke / 2,
+      outerRight: x + width + stroke / 2,
+      outerTop: y - stroke / 2,
+      outerBottom: y + height + stroke / 2,
+    };
+  });
+  for (const box of boxes) {
+    assert.ok(box.outerLeft >= left - 0.001);
+    assert.ok(box.outerRight <= right + 0.001);
+    assert.ok(box.outerTop >= top - 0.001);
+    assert.ok(box.outerBottom <= bottom + 0.001);
+  }
+  const sorted = [...boxes].sort((first, second) => first.x - second.x);
+  assert.ok(sorted[0].outerRight <= sorted[1].x + 0.001);
+  const cursor = host.querySelector(".chart-cursor line")!;
+  const cursorX = Number(cursor.getAttribute("x1"));
+  assert.ok(Math.abs(cursorX - left) < 0.001);
+  assert.ok(Math.abs(sorted[0].outerLeft - left) < 0.001);
+  assert.ok(Math.abs(sorted[1].outerRight - right) < 0.001);
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+});
+
+test("five gallery bars stay separated, aligned and contained", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  let notify: ((width: number) => void) | null = null;
+  class TestObserver {
+    constructor(callback: (entries: { contentRect: { width: number } }[]) => void) {
+      notify = (width: number) => callback([{ contentRect: { width } }]);
+    }
+
+    observe() {}
+
+    disconnect() {}
+  }
+  const previous = (globalThis as Record<string, unknown>).ResizeObserver;
+  (globalThis as Record<string, unknown>).ResizeObserver = TestObserver;
+  context.after(() => {
+    (globalThis as Record<string, unknown>).ResizeObserver = previous;
+  });
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const starts = ["2026-04-01", "2026-05-01", "2026-06-01", "2026-07-01", "2026-08-01"];
+  const table: TimeSeriesTable = {
+    shape: "time_series",
+    layerId: "rain",
+    units: "mm/month",
+    method: "sum",
+    rows: starts.map((start, index) => ({
+      x: Date.parse(start),
+      value: 10 + index,
+      label: start,
+      validFraction: 1,
+      fallbackFraction: null,
+      interval: {
+        start,
+        end: index + 1 < starts.length ? starts[index + 1] : "2026-09-01",
+      },
+    })),
+    xTitle: "Time",
+    yTitle: "Rain (mm/month)",
+  };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(
+      <SvgChart table={table} chartType="bar" currentTime="2026-06-15" />,
+    );
+  });
+  await act(async () => {
+    notify?.(300);
+  });
+  const frame = host.querySelector(".chart-plot-frame")!;
+  const left = Number(frame.getAttribute("x1"));
+  const right = Number(frame.getAttribute("x2"));
+  const top = Number(frame.getAttribute("y1"));
+  const bottom = Number(frame.getAttribute("y2"));
+  assert.ok(right > left);
+  assert.ok(bottom > top);
+  const rects = [...host.querySelectorAll(".chart-bars rect")];
+  assert.equal(rects.length, 5);
+  const boxes = rects.map((rect) => {
+    const x = Number(rect.getAttribute("x"));
+    const y = Number(rect.getAttribute("y"));
+    const width = Number(rect.getAttribute("width"));
+    const height = Number(rect.getAttribute("height"));
+    const stroke = Number(rect.getAttribute("stroke-width") ?? "0");
+
+    return {
+      x,
+      y,
+      width,
+      height,
+      stroke,
+      outerLeft: x - stroke / 2,
+      outerRight: x + width + stroke / 2,
+      outerTop: y - stroke / 2,
+      outerBottom: y + height + stroke / 2,
+    };
+  });
+  for (const box of boxes) {
+    assert.ok(box.outerLeft >= left - 0.001);
+    assert.ok(box.outerRight <= right + 0.001);
+    assert.ok(box.outerTop >= top - 0.001);
+    assert.ok(box.outerBottom <= bottom + 0.001);
+  }
+  const sorted = [...boxes].sort((first, second) => first.x - second.x);
+  for (let index = 0; index + 1 < sorted.length; index += 1) {
+    assert.ok(sorted[index].outerRight <= sorted[index + 1].x + 0.001);
+  }
+  const cursor = host.querySelector(".chart-cursor line")!;
+  const cursorX = Number(cursor.getAttribute("x1"));
+  const middle = boxes[2];
+  assert.ok(Math.abs(cursorX - (middle.x + middle.width / 2)) < 0.001);
+  assert.ok(Math.abs(sorted[0].outerLeft - left) < 0.001);
+  assert.ok(Math.abs(sorted[4].outerRight - right) < 0.001);
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+});
+
+test("minimum-height and stroked bars stay inside the plot", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  let notify: ((width: number) => void) | null = null;
+  class TestObserver {
+    constructor(callback: (entries: { contentRect: { width: number } }[]) => void) {
+      notify = (width: number) => callback([{ contentRect: { width } }]);
+    }
+
+    observe() {}
+
+    disconnect() {}
+  }
+  const previous = (globalThis as Record<string, unknown>).ResizeObserver;
+  (globalThis as Record<string, unknown>).ResizeObserver = TestObserver;
+  context.after(() => {
+    (globalThis as Record<string, unknown>).ResizeObserver = previous;
+  });
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const cases: { table: TimeSeriesTable; currentTime: string | null }[] = [
+    {
+      table: twoValueTable([0, 20], [1, 1]),
+      currentTime: "2026-04-15",
+    },
+    {
+      table: twoValueTable([-5, 10], [1, 1]),
+      currentTime: "2026-04-15",
+    },
+    {
+      table: twoValueTable([5, 5], [1, 1]),
+      currentTime: null,
+    },
+    {
+      table: twoValueTable([10, 20], [0.5, 1]),
+      currentTime: null,
+    },
+    {
+      table: twoValueTable([10, 20], [1, 1]),
+      currentTime: "2026-05-15",
+    },
+  ];
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  for (const entry of cases) {
+    await act(async () => {
+      root.render(
+        <SvgChart
+          table={entry.table}
+          chartType="bar"
+          currentTime={entry.currentTime}
+        />,
+      );
+    });
+    await act(async () => {
+      notify?.(300);
+    });
+    const frame = host.querySelector(".chart-plot-frame")!;
+    const left = Number(frame.getAttribute("x1"));
+    const right = Number(frame.getAttribute("x2"));
+    const top = Number(frame.getAttribute("y1"));
+    const bottom = Number(frame.getAttribute("y2"));
+    const rects = [...host.querySelectorAll(".chart-bars rect")];
+    assert.equal(rects.length, 2);
+    for (const rect of rects) {
+      const x = Number(rect.getAttribute("x"));
+      const y = Number(rect.getAttribute("y"));
+      const width = Number(rect.getAttribute("width"));
+      const height = Number(rect.getAttribute("height"));
+      const stroke = Number(rect.getAttribute("stroke-width") ?? "0");
+      const outerLeft = x - stroke / 2;
+      const outerRight = x + width + stroke / 2;
+      const outerTop = y - stroke / 2;
+      const outerBottom = y + height + stroke / 2;
+      assert.ok(outerLeft >= left - 0.001);
+      assert.ok(outerRight <= right + 0.001);
+      assert.ok(outerTop >= top - 0.001);
+      assert.ok(outerBottom <= bottom + 0.001);
+      assert.ok(height >= 1 - 0.001);
+    }
+  }
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+});
+
+test("gallery terrain endpoints fit with rounded resolution", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  let notify: ((width: number) => void) | null = null;
+  class TestObserver {
+    constructor(callback: (entries: { contentRect: { width: number } }[]) => void) {
+      notify = (width: number) => callback([{ contentRect: { width } }]);
+    }
+
+    observe() {}
+
+    disconnect() {}
+  }
+  const previous = (globalThis as Record<string, unknown>).ResizeObserver;
+  (globalThis as Record<string, unknown>).ResizeObserver = TestObserver;
+  context.after(() => {
+    (globalThis as Record<string, unknown>).ResizeObserver = previous;
+  });
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const exact = "0.004545454545454546° analysis grid";
+  const table = distributionTable();
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(
+      <SvgChart
+        table={table}
+        chartType="area"
+        resolutionNote={exact}
+        resolutionValue={0.004545454545454546}
+      />,
+    );
+  });
+  await act(async () => {
+    notify?.(300);
+  });
+  assert.equal(Number(host.querySelector("svg")?.getAttribute("width")), 300);
+  const grid = host.querySelector(".chart-grid line")!;
+  const left = Number(grid.getAttribute("x1"));
+  const right = Number(grid.getAttribute("x2"));
+  const texts = [...host.querySelectorAll(".chart-endpoints text")];
+  assert.equal(texts.length, 2);
+  for (const text of texts) {
+    const content = text.textContent ?? "";
+    assert.ok(content.includes("0.00455"));
+    assert.equal(content.includes("0.004545454545454546"), false);
+    const x = Number(text.getAttribute("x"));
+    const anchor = text.getAttribute("text-anchor");
+    const width = content.length * 6;
+    if (anchor === "end") assert.ok(x - width >= left - 1);
+    if (anchor === "start") assert.ok(x + width <= right + 1);
+  }
+  const titles = [...host.querySelectorAll(".chart-endpoints title")].map(
+    (node) => node.textContent ?? "",
+  );
+  assert.ok(titles.some((text) => text.includes("0.004545454545454546")));
+  assert.match(host.textContent ?? "", /0\.004545454545454546/);
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+});
+
+test("narrow terrain x title wraps inside the desktop gallery card", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  let notify: ((width: number) => void) | null = null;
+  class TestObserver {
+    constructor(callback: (entries: { contentRect: { width: number } }[]) => void) {
+      notify = (width: number) => callback([{ contentRect: { width } }]);
+    }
+
+    observe() {}
+
+    disconnect() {}
+  }
+  const previous = (globalThis as Record<string, unknown>).ResizeObserver;
+  (globalThis as Record<string, unknown>).ResizeObserver = TestObserver;
+  context.after(() => {
+    (globalThis as Record<string, unknown>).ResizeObserver = previous;
+  });
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const title = "Share of valid area at or above (%)";
+  const table = { ...distributionTable(), xTitle: title };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<SvgChart table={table} chartType="area" />);
+  });
+  await act(async () => {
+    notify?.(304);
+  });
+  assert.equal(Number(host.querySelector("svg")?.getAttribute("width")), 304);
+  const lines = xTitleLines(host);
+  assert.ok(lines.length >= 2);
+  assert.equal(lines.join(" "), title);
+  const grid = host.querySelector(".chart-grid line")!;
+  const left = Number(grid.getAttribute("x1"));
+  const right = Number(grid.getAttribute("x2"));
+  const plotWidth = right - left;
+  for (const line of lines) assert.ok(line.length * 7 <= plotWidth + 1);
+  const frame = host.querySelector(".chart-plot-frame")!;
+  const bottom = Number(frame.getAttribute("y2"));
+  assert.equal(Number(frame.getAttribute("y1")), 20);
+  assert.ok(bottom < 144);
+  const ticks = [...host.querySelectorAll(".chart-x-ticks text")];
+  assert.ok(ticks.length >= 2);
+  for (const tick of ticks) assert.equal(Number(tick.getAttribute("y")), bottom + 16);
+  const nodes = xTitleNodes(host);
+  nodes.forEach((node, index) => {
+    assert.equal(Number(node.getAttribute("y")), bottom + 32 + index * 12);
+    assert.equal(Number(node.getAttribute("x")), left + plotWidth / 2);
+  });
+  assert.match(host.querySelector("svg")?.getAttribute("aria-label") ?? "", /Elevation/);
+  assert.match(host.textContent ?? "", /Mean 500\.123456789/);
+  await act(async () => {
+    notify?.(330);
+  });
+  assert.equal(Number(host.querySelector("svg")?.getAttribute("width")), 330);
+  assert.deepEqual(xTitleLines(host), [title]);
+  assert.equal(Number(host.querySelector(".chart-plot-frame")?.getAttribute("y2")), 144);
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+});
+
+test("narrow time-series tick clears its single-line title", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  let notify: ((width: number) => void) | null = null;
+  class TestObserver {
+    constructor(callback: (entries: { contentRect: { width: number } }[]) => void) {
+      notify = (width: number) => callback([{ contentRect: { width } }]);
+    }
+
+    observe() {}
+
+    disconnect() {}
+  }
+  const previous = (globalThis as Record<string, unknown>).ResizeObserver;
+  (globalThis as Record<string, unknown>).ResizeObserver = TestObserver;
+  context.after(() => {
+    (globalThis as Record<string, unknown>).ResizeObserver = previous;
+  });
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const starts = ["2026-04-01", "2026-05-01", "2026-06-01", "2026-07-01", "2026-08-01"];
+  const table: TimeSeriesTable = {
+    shape: "time_series",
+    layerId: "rain",
+    units: "mm/month",
+    method: "sum",
+    rows: starts.map((start, index) => ({
+      x: Date.parse(start),
+      value: 10 + index,
+      label: start,
+      validFraction: 1,
+      fallbackFraction: null,
+      interval: {
+        start,
+        end: index + 1 < starts.length ? starts[index + 1] : "2026-09-01",
+      },
+    })),
+    xTitle: "Time",
+    yTitle: "Rain (mm/month)",
+  };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<SvgChart table={table} chartType="bar" />);
+  });
+  await act(async () => {
+    notify?.(300);
+  });
+  assert.equal(Number(host.querySelector("svg")?.getAttribute("width")), 300);
+  assert.equal(Number(host.querySelector("svg")?.getAttribute("height")), 140);
+  assert.deepEqual(xTitleLines(host), ["Time"]);
+  const frame = host.querySelector(".chart-plot-frame")!;
+  const bottom = Number(frame.getAttribute("y2"));
+  assert.equal(bottom, 104);
+  const ticks = [...host.querySelectorAll(".chart-x-ticks text")];
+  assert.ok(ticks.length >= 2);
+  for (const tick of ticks) assert.equal(Number(tick.getAttribute("y")), bottom + 16);
+  const title = xTitleNodes(host)[0];
+  assert.equal(Number(title.getAttribute("y")), bottom + 32);
+  const grid = host.querySelector(".chart-grid line")!;
+  const left = Number(grid.getAttribute("x1"));
+  const right = Number(grid.getAttribute("x2"));
+  const plotWidth = right - left;
+  assert.equal(Number(title.getAttribute("x")), left + plotWidth / 2);
+  const titleWidth = "Time".length * 7;
+  const titleBox = {
+    left: Number(title.getAttribute("x")) - titleWidth / 2,
+    right: Number(title.getAttribute("x")) + titleWidth / 2,
+  };
+  const tickBoxes = ticks.map((node) => {
+    const x = Number(node.getAttribute("x"));
+    const anchor = node.getAttribute("text-anchor");
+    const width = (node.textContent ?? "").length * 6;
+    if (anchor === "start") return { left: x, right: x + width };
+    if (anchor === "end") return { left: x - width, right: x };
+
+    return { left: x - width / 2, right: x + width / 2 };
+  });
+  const overlapping = tickBoxes.some((box) => (
+    box.left < titleBox.right - 1 && titleBox.left < box.right - 1
+  ));
+  assert.ok(overlapping);
+  const tickBottom = bottom + 16 + 4;
+  const titleTop = bottom + 32 - 9;
+  assert.ok(tickBottom + 1 < titleTop);
+  assert.ok(titleTop >= 0);
+  assert.ok(bottom + 32 + 4 <= 140);
+  assert.ok(titleBox.left >= -1);
+  assert.ok(titleBox.right <= 300 + 1);
+  for (const tick of ticks) {
+    assert.ok(Number(tick.getAttribute("y")) - 9 >= -1);
+    assert.ok(Number(tick.getAttribute("y")) + 4 <= 140 + 1);
+  }
+  assert.match(host.querySelector("svg")?.getAttribute("aria-label") ?? "", /time series/);
+  const headers = [...host.querySelectorAll("thead th")].map((cell) => cell.textContent);
+  assert.ok(headers.includes("Time"));
+  assert.ok(headers.includes("Rain (mm/month)"));
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+});
+
+function xTitleNodes(host: Element): Element[] {
+  return [...host.querySelectorAll(".chart-axes text")].filter((node) => (
+    (node.getAttribute("transform") ?? "").indexOf("rotate") === -1
+    && !node.classList.contains("chart-offset")
+  ));
+}
+
+function xTitleLines(host: Element): string[] {
+  return xTitleNodes(host).map((node) => node.textContent ?? "");
+}
+
 function gapTable(values: (number | null)[]): TimeSeriesTable {
   return {
     shape: "time_series",
@@ -1171,6 +2479,30 @@ function gapTable(values: (number | null)[]): TimeSeriesTable {
       interval: {
         start: new Date(Date.UTC(2019, index, 1)).toISOString().slice(0, 10),
         end: new Date(Date.UTC(2019, index + 1, 1)).toISOString().slice(0, 10),
+      },
+    })),
+    xTitle: "Time",
+    yTitle: "Rain (mm/month)",
+  };
+}
+
+function twoValueTable(values: number[], fractions: number[]): TimeSeriesTable {
+  const starts = ["2026-04-01", "2026-05-01"];
+
+  return {
+    shape: "time_series",
+    layerId: "rain",
+    units: "mm/month",
+    method: "sum",
+    rows: starts.map((start, index) => ({
+      x: Date.parse(start),
+      value: values[index] ?? null,
+      label: start,
+      validFraction: fractions[index] ?? 1,
+      fallbackFraction: null,
+      interval: {
+        start,
+        end: index + 1 < starts.length ? starts[index + 1] : "2026-06-01",
       },
     })),
     xTitle: "Time",

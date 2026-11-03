@@ -66,6 +66,7 @@ export function HypsometryChart({
         showTable={showTable ?? !compact}
         fallbackNames={null}
         resolutionNote={resolutionNoteFor(layer)}
+        resolutionValue={resolutionValueFor(layer)}
         baseline={baseline}
       />
       {hint && <p className="chart-hint">{hint}</p>}
@@ -109,6 +110,14 @@ function resolutionNoteFor(layer: LayerDoc) {
   if (typeof res !== "number" || !Number.isFinite(res)) return null;
 
   return `${String(res)}° analysis grid`;
+}
+
+// The renderer rounds the visible grid while titles and tables keep the exact note.
+function resolutionValueFor(layer: LayerDoc) {
+  const res = layer.grid?.res;
+  if (typeof res !== "number" || !Number.isFinite(res)) return null;
+
+  return res;
 }
 
 function displayRange(

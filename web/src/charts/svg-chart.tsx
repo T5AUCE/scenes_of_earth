@@ -17,7 +17,40 @@ export const LOW_COVERAGE_FRACTION = 0.95;
 const MARGIN_LEFT_PX = 48;
 const MARGIN_RIGHT_PX = 24;
 const MARGIN_TOP_PX = 20;
-const MARGIN_BOTTOM_PX = 32;
+const MARGIN_BOTTOM_PX = 36;
+
+/** Wrapped x titles grow downward so narrow cards keep every word inside the svg. */
+const X_TITLE_LINE_HEIGHT_PX = 12;
+const X_TICK_OFFSET_PX = 16;
+const X_TITLE_OFFSET_PX = 32;
+
+/** Titles average wider than tabular digits, so narrow cards wrap them earlier. */
+const TITLE_ESTIMATED_CHAR_PX = 7;
+
+/** The rotated title keeps its own gutter so tick labels never enter it. */
+const TITLE_GUTTER_PX = 20;
+const TICK_GAP_PX = 4;
+const MAX_LEFT_GUTTER_PX = 120;
+
+/** Conservative glyph widths keep tick estimates inside the gutter at 11px. */
+const ESTIMATED_CHAR_PX = 6;
+const MAX_TICK_LABEL_CHARS = 12;
+
+/** Presentation labels stay short enough for the gutter while keeping distinct values. */
+const FALLBACK_TICK_DECIMALS = 2;
+const WHOLE_STEP_THRESHOLD = 1;
+const DECIMAL_GUARD_DIGITS = 1;
+const MIN_EXPONENT_MANTISSA_DIGITS = 2;
+const MAX_EXPONENT_MANTISSA_DIGITS = 6;
+const OFFSET_RELATIVE_SPAN_THRESHOLD = 0.001;
+const MAX_FIXED_DECIMALS = 20;
+const MIN_SCALE_EXPONENT = -300;
+const MAX_SCALE_EXPONENT = 300;
+
+/** The offset disclosure sits in the top margin so the rotated title stays short. */
+const OFFSET_DISCLOSURE_Y_PX = 12;
+const DISCLOSURE_CLEAR_Y_PX = 28;
+const DISCLOSURE_LINE_HEIGHT_PX = 12;
 
 /** Reference labels stagger when values sit closer than this many pixels. */
 const REFERENCE_STAGGER_PX = 12;
@@ -31,6 +64,9 @@ const STAGGER_LIMIT_PX = 60;
 const MIN_ANNOTATION_Y_PX = 12;
 const MIN_ANNOTATION_X_PX = 24;
 const BOTTOM_ANNOTATION_MARGIN_PX = 4;
+/** Text extends above and below its baseline, so lanes keep that clearance. */
+const ANNOTATION_ASCENT_PX = 9;
+const ANNOTATION_DESCENT_PX = 4;
 /** The fallback scan steps one pixel so a free lane is found when one exists. */
 const SCAN_STEP_PX = 1;
 
@@ -39,6 +75,14 @@ const POINT_RADIUS_PX = 3;
 const SINGLE_RADIUS_PX = 4;
 const HOLLOW_WIDTH_PX = 1.5;
 const BAR_MIN_HEIGHT_PX = 1;
+
+/** Time labels keep a gap so neighbouring dates never touch at gallery widths. */
+const TIME_LABEL_GAP_PX = 8;
+
+/** Visible grid resolutions round while exact values stay in titles and tables. */
+const GRID_SIGNIFICANT_DIGITS = 3;
+const FULL_GRID_SUFFIX = "° analysis grid";
+const SHORT_GRID_SUFFIX = "° grid";
 
 /** Props of the shared renderer; wrappers convert units and resolve ink first. */
 export interface SvgChartProps {
@@ -57,6 +101,7 @@ export interface SvgChartProps {
   showTable?: boolean;
   fallbackNames?: string | null;
   resolutionNote?: string | null;
+  resolutionValue?: number | null;
   baseline?: number | null;
 }
 
@@ -80,6 +125,7 @@ export function SvgChart({
   showTable = true,
   fallbackNames = null,
   resolutionNote = null,
+  resolutionValue = null,
   baseline = null,
 }: SvgChartProps): React.ReactElement {
   const [ref, width] = useElementWidth();
@@ -114,8 +160,24 @@ export function SvgChart({
     fallbackNames,
   );
   const hasDomain = domain !== null;
-  const geometry = chartGeometry(compact, width, height, domain ?? [0, 1], span);
-  const ticks = hasDomain ? ticksForDomain(domain!, 4) : [];
+  const rawTicks = hasDomain ? ticksForDomain(domain!, 4) : [];
+  const ticks = dedupeNumericTicks(rawTicks);
+  const plan = hasDomain ? tickLabelsFor(domain!, ticks) : null;
+  const left = leftGutterFor(plan?.labels ?? [], compact);
+  const disclosure = disclosureLinesFor(plan, width, left, compact);
+  const showTitles = !compact && table.shape !== "categorical_shares";
+  const plotWidth = plotWidthFor(width, left, compact);
+  const xTitleLines = showTitles ? xTitleLinesFor(table.xTitle, plotWidth) : [];
+  const geometry = chartGeometry(
+    compact,
+    width,
+    height,
+    domain ?? [0, 1],
+    span,
+    left,
+    disclosure?.length ?? 0,
+    xTitleLines.length,
+  );
 
   return (
     <div ref={ref} className="svg-chart">
@@ -137,11 +199,21 @@ export function SvgChart({
         <title>{summaryFor(table, chartType)}</title>
         {hasDomain ? (
           <>
+            {!compact && plotFrame(geometry)}
             {showGrid && !compact && gridLines(ticks, geometry)}
-            {!compact && yTicks(ticks, geometry)}
+            {!compact && plan && yTicks(ticks, plan, geometry)}
             {!compact && xTicks(table, span, geometry)}
-            {axisTitles(table, geometry, compact)}
-            {referenceLines(table, references, geometry, compact, resolutionNote)}
+            {axisTitles(table, geometry, compact, disclosure, xTitleLines)}
+            {plan && referenceLines(
+              table,
+              references,
+              geometry,
+              compact,
+              resolutionNote,
+              resolutionValue,
+              plan,
+              disclosure,
+            )}
             {marksFor(
               table,
               type,
@@ -158,8 +230,8 @@ export function SvgChart({
           </>
         ) : (
           <>
-            {axisTitles(table, geometry, compact)}
-            <text x={MARGIN_LEFT_PX} y={height / 2}>{"No data to draw."}</text>
+            {axisTitles(table, geometry, compact, null, xTitleLines)}
+            <text x={geometry.left} y={height / 2}>{"No data to draw."}</text>
           </>
         )}
       </svg>
@@ -384,8 +456,11 @@ function summaryFor(table: ChartTable, chartType: ChartType) {
 interface ChartGeometry {
   width: number;
   height: number;
+  left: number;
   plotWidth: number;
   plotHeight: number;
+  plotTop: number;
+  plotBottom: number;
   xOf(x: number): number;
   yOf(value: number): number;
 }
@@ -396,25 +471,91 @@ function chartGeometry(
   height: number,
   domain: [number, number],
   span: [number, number],
+  left: number,
+  disclosureLines = 0,
+  xTitleLines = 1,
 ): ChartGeometry {
   const safeWidth = Math.max(1, Math.round(width));
-  const left = compact ? 2 : MARGIN_LEFT_PX;
   const right = compact ? 2 : MARGIN_RIGHT_PX;
-  const top = compact ? 8 : MARGIN_TOP_PX;
-  const bottom = compact ? 2 : MARGIN_BOTTOM_PX;
+  const extraTop = disclosureLines > 0 ? (disclosureLines - 1) * DISCLOSURE_LINE_HEIGHT_PX : 0;
+  const top = (compact ? 8 : MARGIN_TOP_PX) + extraTop;
+  const extraBottom = xTitleLines > 1 ? (xTitleLines - 1) * X_TITLE_LINE_HEIGHT_PX : 0;
+  const bottom = (compact ? 2 : MARGIN_BOTTOM_PX) + extraBottom;
   const plotWidth = Math.max(1, safeWidth - left - right);
   const plotHeight = Math.max(1, height - top - bottom);
   const [low, high] = domain;
   const [xLow, xHigh] = span;
+  const plotTop = top;
+  const plotBottom = top + plotHeight;
 
   return {
     width: safeWidth,
     height,
+    left,
     plotWidth,
     plotHeight,
-    xOf: (x: number) => left + (plotWidth * (x - xLow)) / Math.max(1e-12, xHigh - xLow),
-    yOf: (value: number) => top + (plotHeight * (high - value)) / Math.max(1e-12, high - low),
+    plotTop,
+    plotBottom,
+    xOf: (x: number) => xPositionFor(x, xLow, xHigh, left, plotWidth),
+    yOf: (value: number) => yPositionFor(value, low, high, plotTop, plotBottom, plotHeight),
   };
+}
+
+function plotWidthFor(width: number, left: number, compact: boolean): number {
+  const safeWidth = Math.max(1, Math.round(width));
+  const right = compact ? 2 : MARGIN_RIGHT_PX;
+
+  return Math.max(1, safeWidth - left - right);
+}
+
+// Long titles wrap on word boundaries so narrow cards keep every word inside the svg.
+function xTitleLinesFor(title: string, plotWidth_PX: number): string[] {
+  const maxChars = Math.max(1, Math.floor(plotWidth_PX / TITLE_ESTIMATED_CHAR_PX));
+  if (title.length <= maxChars) return [title];
+
+  return wrapEquation(title, maxChars);
+}
+
+// A finite positive span maps across the plot, while a degenerate domain stays centered.
+function xPositionFor(
+  x: number,
+  low: number,
+  high: number,
+  left: number,
+  plotWidth: number,
+) {
+  if (!(high > low) || !Number.isFinite(low) || !Number.isFinite(high)) {
+    return left + plotWidth / 2;
+  }
+  if (!Number.isFinite(x)) return left + plotWidth / 2;
+  return left + ((x - low) / (high - low)) * plotWidth;
+}
+
+// Dividing before multiplying keeps tiny spans stable instead of compressing them.
+function yPositionFor(
+  value: number,
+  low: number,
+  high: number,
+  top: number,
+  bottom: number,
+  plotHeight: number,
+) {
+  if (!(high > low) || !Number.isFinite(low) || !Number.isFinite(high)) {
+    return top + plotHeight / 2;
+  }
+  if (!Number.isFinite(value)) return top + plotHeight / 2;
+  return top + ((high - value) / (high - low)) * plotHeight;
+}
+
+// Wide labels widen the left gutter so ticks clear the rotated title.
+function leftGutterFor(labels: string[], compact: boolean) {
+  if (compact) return 2;
+  if (labels.length === 0) return MARGIN_LEFT_PX;
+  const longest = Math.max(...labels.map((label) => label.length));
+  const estimated = longest * ESTIMATED_CHAR_PX;
+  const gutter = TITLE_GUTTER_PX + estimated + TICK_GAP_PX;
+
+  return Math.min(Math.max(gutter, MARGIN_LEFT_PX), MAX_LEFT_GUTTER_PX);
 }
 
 function gridLines(ticks: number[], geometry: ChartGeometry) {
@@ -423,8 +564,8 @@ function gridLines(ticks: number[], geometry: ChartGeometry) {
       {ticks.map((tick) => (
         <line
           key={String(tick)}
-          x1={MARGIN_LEFT_PX}
-          x2={MARGIN_LEFT_PX + geometry.plotWidth}
+          x1={geometry.left}
+          x2={geometry.left + geometry.plotWidth}
           y1={geometry.yOf(tick)}
           y2={geometry.yOf(tick)}
           stroke="var(--chart-grid, #ddd)"
@@ -435,19 +576,37 @@ function gridLines(ticks: number[], geometry: ChartGeometry) {
   );
 }
 
-function yTicks(ticks: number[], geometry: ChartGeometry) {
+// A diagonal line keeps its client box equal to the plot while staying out of bar counts.
+function plotFrame(geometry: ChartGeometry) {
+  return (
+    <line
+      className="chart-plot-frame"
+      x1={geometry.left}
+      y1={geometry.plotTop}
+      x2={geometry.left + geometry.plotWidth}
+      y2={geometry.plotBottom}
+      stroke="transparent"
+      strokeWidth={1}
+      opacity={0}
+      pointerEvents="none"
+      aria-hidden="true"
+    />
+  );
+}
+
+function yTicks(ticks: number[], plan: TickPlan, geometry: ChartGeometry) {
   return (
     <g className="chart-y-ticks">
-      {ticks.map((tick) => (
+      {ticks.map((tick, index) => (
         <text
           key={String(tick)}
-          x={MARGIN_LEFT_PX - 4}
+          x={geometry.left - TICK_GAP_PX}
           y={clampY(geometry.yOf(tick) + 4, geometry.height)}
           textAnchor="end"
           fontSize={11}
           fill="var(--chart-axis, #444)"
         >
-          {String(tick)}
+          {plan.labels[index]}
         </text>
       ))}
     </g>
@@ -459,17 +618,18 @@ function xTicks(
   span: [number, number],
   geometry: ChartGeometry,
 ) {
-  const marks = xTickMarks(table, span);
+  const marks = xTickMarks(table, span, geometry);
   if (!marks) return null;
+  const edgeAnchors = table.shape === "time_series" && marks.length > 1;
 
   return (
     <g className="chart-x-ticks">
-      {marks.map((mark) => (
+      {marks.map((mark, index) => (
         <text
           key={String(mark.x)}
           x={clampX(geometry.xOf(mark.x), geometry.width)}
-          y={geometry.height - 16}
-          textAnchor="middle"
+          y={geometry.plotBottom + X_TICK_OFFSET_PX}
+          textAnchor={anchorFor(index, marks.length, edgeAnchors)}
           fontSize={11}
           fill="var(--chart-axis, #444)"
         >
@@ -480,21 +640,21 @@ function xTicks(
   );
 }
 
+function anchorFor(index: number, count: number, edges: boolean) {
+  if (!edges) return "middle";
+  if (index === 0) return "start";
+  if (index === count - 1) return "end";
+
+  return "middle";
+}
+
 function xTickMarks(
   table: ChartTable,
   span: [number, number],
+  geometry: ChartGeometry,
 ): { x: number; label: string }[] | null {
-  if (table.shape === "time_series") {
-    const marks = ticksForDomain(span, 4).map((tick) => ({
-      x: tick,
-      label: dateLabel(tick),
-    }));
-
-    return dedupeMarks(marks);
-  }
-  if (table.shape === "seasonal_cycle") {
-    return table.rows.map((row) => ({ x: row.x, label: row.label }));
-  }
+  if (table.shape === "time_series") return timeMarksFor(span, geometry);
+  if (table.shape === "seasonal_cycle") return seasonalMarksFor(table, geometry);
   if (table.shape === "distribution") {
     return ticksForDomain([0, 100], 5).map((tick) => ({
       x: tick,
@@ -503,6 +663,82 @@ function xTickMarks(
   }
 
   return null;
+}
+
+// Narrow gallery cards keep the most ticks that still leave a gap between dates.
+function timeMarksFor(
+  span: [number, number],
+  geometry: ChartGeometry,
+): { x: number; label: string }[] {
+  for (const count of [4, 3, 2]) {
+    const marks = dedupeMarks(ticksForDomain(span, count).map((tick) => ({
+      x: tick,
+      label: dateLabel(tick),
+    })));
+    if (marks.length <= 1) return marks;
+    if (xMarksFit(marks, geometry, true)) return marks;
+  }
+  const single = (span[0] + span[1]) / 2;
+
+  return [{ x: single, label: dateLabel(single) }];
+}
+
+// Short month names thin by step so the survivors keep their gap at gallery widths.
+function seasonalMarksFor(
+  table: ChartTable,
+  geometry: ChartGeometry,
+): { x: number; label: string }[] | null {
+  if (table.shape !== "seasonal_cycle") return null;
+  const rows = table.rows.map((row) => ({ x: row.x, label: row.label }));
+  for (const step of [1, 2, 3, 6]) {
+    const thinned = rows.filter((_, index) => index % step === 0);
+    if (thinned.length <= 1) return thinned;
+    if (xMarksFit(thinned, geometry, false)) return thinned;
+  }
+
+  return [rows[Math.floor(rows.length / 2)]];
+}
+
+// Estimated boxes must leave a gap because real glyphs vary around the average width.
+function xMarksFit(
+  marks: { x: number; label: string }[],
+  geometry: ChartGeometry,
+  edges: boolean,
+): boolean {
+  if (marks.length <= 1) return true;
+  const positions = marks.map((mark) => clampX(geometry.xOf(mark.x), geometry.width));
+  const widths = marks.map((mark) => mark.label.length * ESTIMATED_CHAR_PX);
+  for (let index = 0; index < marks.length - 1; index += 1) {
+    const right = edgeRightFor(index, positions[index], widths[index], edges);
+    const left = edgeLeftFor(
+      index + 1,
+      positions[index + 1],
+      widths[index + 1],
+      edges,
+      marks.length,
+    );
+    if (right + TIME_LABEL_GAP_PX > left) return false;
+  }
+
+  return true;
+}
+
+function edgeRightFor(index: number, x: number, width: number, edges: boolean) {
+  if (edges && index === 0) return x + width;
+
+  return x + width / 2;
+}
+
+function edgeLeftFor(
+  index: number,
+  x: number,
+  width: number,
+  edges: boolean,
+  count: number,
+) {
+  if (edges && index === count - 1) return x - width;
+
+  return x - width / 2;
 }
 
 // A singleton span samples milliseconds that share one calendar date, so keep one label.
@@ -524,32 +760,112 @@ function dateLabel(time_MS: number) {
   return new Date(time_MS).toISOString().slice(0, 10);
 }
 
-function axisTitles(table: ChartTable, geometry: ChartGeometry, compact: boolean) {
+function axisTitles(
+  table: ChartTable,
+  geometry: ChartGeometry,
+  compact: boolean,
+  disclosure: string[] | null,
+  xTitleLines: string[],
+) {
   if (compact || table.shape === "categorical_shares") return null;
+  const centerY = geometry.plotTop + geometry.plotHeight / 2;
+  const centerX = geometry.left + geometry.plotWidth / 2;
+  const firstTitleY = geometry.plotBottom + X_TITLE_OFFSET_PX;
 
   return (
     <g className="chart-axes">
-      <text
-        x={MARGIN_LEFT_PX + geometry.plotWidth / 2}
-        y={geometry.height - 4}
-        textAnchor="middle"
-        fontSize={11}
-        fill="var(--chart-axis, #444)"
-      >
-        {table.xTitle}
-      </text>
+      {xTitleLines.map((line, index) => (
+        <text
+          key={`${index}-${line}`}
+          x={centerX}
+          y={firstTitleY + index * X_TITLE_LINE_HEIGHT_PX}
+          textAnchor="middle"
+          fontSize={11}
+          fill="var(--chart-axis, #444)"
+        >
+          {line}
+        </text>
+      ))}
       <text
         x={12}
-        y={MARGIN_TOP_PX + geometry.plotHeight / 2}
+        y={centerY}
         textAnchor="middle"
         fontSize={11}
         fill="var(--chart-axis, #444)"
-        transform={`rotate(-90 12 ${String(MARGIN_TOP_PX + geometry.plotHeight / 2)})`}
+        transform={`rotate(-90 12 ${String(centerY)})`}
       >
         {table.yTitle}
       </text>
+      {(disclosure ?? []).map((line, index) => (
+        <text
+          key={`${index}-${line}`}
+          x={geometry.left}
+          y={OFFSET_DISCLOSURE_Y_PX + index * DISCLOSURE_LINE_HEIGHT_PX}
+          textAnchor="start"
+          fontSize={11}
+          fill="var(--chart-axis, #444)"
+          className="chart-offset"
+        >
+          {line}
+        </text>
+      ))}
     </g>
   );
+}
+
+// A shared base stays in a top-margin caption so short deltas keep their absolute meaning.
+function offsetEquationFor(plan: TickPlan | null) {
+  if (!plan || plan.offset === null) return null;
+  if (!Number.isFinite(plan.offset)) return null;
+  const base = String(plan.offset);
+  const scale = plan.scale;
+  if (scale === null || scale === 1) return `ticks + ${base} = value`;
+  if (!Number.isFinite(scale)) return `ticks + ${base} = value`;
+  return `ticks x ${compactScaleText(scale)} + ${base} = value`;
+}
+
+// Exact powers of ten stay short because 1e notation round-trips to the same double.
+function compactScaleText(scale: number) {
+  const exponent = Math.round(Math.log10(scale));
+  if (!Number.isFinite(exponent)) return String(scale);
+  if (Math.pow(10, exponent) !== scale) return String(scale);
+  return `1e${String(exponent)}`;
+}
+
+// Long equations wrap inside the measured width so every line stays in the svg.
+function disclosureLinesFor(
+  plan: TickPlan | null,
+  width: number,
+  left: number,
+  compact: boolean,
+): string[] | null {
+  if (compact) return null;
+  const equation = offsetEquationFor(plan);
+  if (equation === null) return null;
+  const safeWidth = Math.max(1, Math.round(width));
+  const available = Math.max(1, safeWidth - Math.round(left));
+  const maxChars = Math.max(1, Math.floor(available / ESTIMATED_CHAR_PX));
+  if (equation.length <= maxChars) return [equation];
+  return wrapEquation(equation, maxChars);
+}
+
+// Words stay whole so the base never splits across lines.
+function wrapEquation(equation: string, maxChars: number) {
+  const words = equation.split(" ");
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    const next = current === "" ? word : `${current} ${word}`;
+    if (next.length <= maxChars) {
+      current = next;
+      continue;
+    }
+    if (current !== "") lines.push(current);
+    current = word;
+  }
+  if (current !== "") lines.push(current);
+  if (lines.length === 0) return [equation];
+  return lines;
 }
 
 function referenceLines(
@@ -558,14 +874,18 @@ function referenceLines(
   geometry: ChartGeometry,
   compact: boolean,
   resolutionNote: string | null,
+  resolutionValue: number | null,
+  plan: TickPlan,
+  disclosure: string[] | null,
 ) {
   if (table.shape !== "distribution" || compact) return null;
+  const bounds = annotationBounds(geometry, disclosure);
   const desired = [
     ...references.map((reference) => geometry.yOf(reference.value) + ANNOTATION_OFFSET_PX),
     geometry.yOf(table.min) + ENDPOINT_OFFSET_PX,
     geometry.yOf(table.max) + ENDPOINT_OFFSET_PX,
   ];
-  const allY = placeAnnotations(desired, geometry.height);
+  const allY = placeAnnotations(desired, bounds.low, bounds.high);
   const referenceY = allY.slice(0, references.length);
   const endpointY = allY.slice(references.length);
 
@@ -573,9 +893,10 @@ function referenceLines(
     <g className="chart-references">
       {references.map((reference, index) => (
         <g key={reference.id}>
+          <title>{`${referenceLabel(reference.id)} ${String(reference.value)}`}</title>
           <line
-            x1={MARGIN_LEFT_PX}
-            x2={MARGIN_LEFT_PX + geometry.plotWidth}
+            x1={geometry.left}
+            x2={geometry.left + geometry.plotWidth}
             y1={geometry.yOf(reference.value)}
             y2={geometry.yOf(reference.value)}
             stroke="var(--chart-muted, #888)"
@@ -583,17 +904,17 @@ function referenceLines(
             strokeDasharray={reference.id === "sea_level" ? "4 2" : "6 2"}
           />
           <text
-            x={MARGIN_LEFT_PX + geometry.plotWidth}
+            x={geometry.left + geometry.plotWidth}
             y={referenceY[index]}
             textAnchor="end"
             fontSize={11}
             fill="var(--chart-axis, #444)"
           >
-            {`${referenceLabel(reference.id)} ${String(reference.value)}`}
+            {`${referenceLabel(reference.id)} ${formatPlanValue(reference.value, plan)}`}
           </text>
         </g>
       ))}
-      {endpointMarkers(table, geometry, resolutionNote, endpointY)}
+      {endpointMarkers(table, geometry, resolutionNote, resolutionValue, endpointY, bounds)}
     </g>
   );
 }
@@ -602,19 +923,24 @@ function endpointMarkers(
   table: ChartTable,
   geometry: ChartGeometry,
   resolutionNote: string | null,
+  resolutionValue: number | null,
   endpointY: number[],
+  bounds: { low: number; high: number },
 ) {
   if (table.shape !== "distribution") return null;
   const lowX = geometry.xOf(100);
   const highX = geometry.xOf(0);
-  const note = resolutionNote ? ` (${resolutionNote})` : "";
-  const lowY = endpointY[0] ?? clampY(
+  const exactNote = resolutionNote ? ` (${resolutionNote})` : "";
+  const displayNumber = displayResolutionNumber(resolutionValue, resolutionNote);
+  const lowLabel = endpointLabelFor("Lowest cell", displayNumber, geometry.plotWidth);
+  const highLabel = endpointLabelFor("Highest cell", displayNumber, geometry.plotWidth);
+  const firstY = endpointY[0] ?? clampAnnotation(
     geometry.yOf(table.min) + ENDPOINT_OFFSET_PX,
-    geometry.height,
+    bounds,
   );
-  const highY = endpointY[1] ?? clampY(
+  const secondY = endpointY[1] ?? clampAnnotation(
     geometry.yOf(table.max) + ENDPOINT_OFFSET_PX,
-    geometry.height,
+    bounds,
   );
 
   return (
@@ -625,16 +951,16 @@ function endpointMarkers(
         r={POINT_RADIUS_PX}
         fill="var(--chart-axis, #444)"
       >
-        <title>{`Lowest cell ${String(table.min)}${note}`}</title>
+        <title>{`Lowest cell ${String(table.min)}${exactNote}`}</title>
       </circle>
       <text
         x={lowX}
-        y={lowY}
+        y={firstY}
         textAnchor="end"
         fontSize={11}
         fill="var(--chart-axis, #444)"
       >
-        {`Lowest cell${note}`}
+        {lowLabel}
       </text>
       <circle
         cx={highX}
@@ -642,19 +968,94 @@ function endpointMarkers(
         r={POINT_RADIUS_PX}
         fill="var(--chart-axis, #444)"
       >
-        <title>{`Highest cell ${String(table.max)}${note}`}</title>
+        <title>{`Highest cell ${String(table.max)}${exactNote}`}</title>
       </circle>
       <text
         x={highX}
-        y={highY}
+        y={secondY}
         textAnchor="start"
         fontSize={11}
         fill="var(--chart-axis, #444)"
       >
-        {`Highest cell${note}`}
+        {highLabel}
       </text>
     </g>
   );
+}
+
+// Exact titles keep the stored resolution while visible labels use the rounded number.
+function displayResolutionNumber(
+  value: number | null,
+  note: string | null,
+): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) return formatGridResolution(value);
+  const parsed = parseResolutionValue(note);
+  if (parsed !== null) return formatGridResolution(parsed);
+
+  return null;
+}
+
+// Few significant digits keep the visible grid short because cards are only 300 px wide.
+function formatGridResolution(value: number): string {
+  if (!Number.isFinite(value)) return String(value);
+  const rounded = Number(value.toPrecision(GRID_SIGNIFICANT_DIGITS));
+  if (!Number.isFinite(rounded)) return String(value);
+
+  return String(rounded);
+}
+
+function parseResolutionValue(note: string | null): number | null {
+  if (!note) return null;
+  const match = /^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)/.exec(note);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+// Short suffixes fit narrow plots while the table keeps the full analysis wording.
+function endpointLabelFor(
+  cell: string,
+  displayNumber: string | null,
+  plotWidth_PX: number,
+): string {
+  if (displayNumber === null) return cell;
+  const full = `${cell} (${displayNumber}${FULL_GRID_SUFFIX})`;
+  if (fitsPlot(full, plotWidth_PX)) return full;
+  const short = `${cell} (${displayNumber}${SHORT_GRID_SUFFIX})`;
+  if (fitsPlot(short, plotWidth_PX)) return short;
+
+  return cell;
+}
+
+function fitsPlot(label: string, plotWidth_PX: number) {
+  return label.length * ESTIMATED_CHAR_PX <= Math.max(1, plotWidth_PX);
+}
+
+function annotationLow(hasDisclosure: boolean, lineCount = 1) {
+  if (!hasDisclosure) return MIN_ANNOTATION_Y_PX;
+
+  return DISCLOSURE_CLEAR_Y_PX + Math.max(0, lineCount - 1) * DISCLOSURE_LINE_HEIGHT_PX;
+}
+
+// Reference text stays below the disclosure and above the x ticks with its own descent.
+function annotationBounds(
+  geometry: ChartGeometry,
+  disclosure: string[] | null,
+) {
+  const lines = disclosure?.length ?? 0;
+  const low = Math.max(
+    annotationLow(lines > 0, Math.max(1, lines)),
+    ANNOTATION_ASCENT_PX + 3,
+  );
+  const plotBottom = geometry.plotBottom;
+  const high = Math.max(low, plotBottom - ANNOTATION_DESCENT_PX);
+
+  return { low, high };
+}
+
+function clampAnnotation(value: number, bounds: { low: number; high: number }) {
+  return Math.min(Math.max(value, bounds.low), bounds.high);
 }
 
 function referenceLabel(id: string) {
@@ -666,19 +1067,18 @@ function referenceLabel(id: string) {
 }
 
 // Overlapping labels share one staggered lane so references and endpoints stay readable.
-function placeAnnotations(desired: number[], height: number) {
+function placeAnnotations(desired: number[], low: number, high: number) {
+  const boundedHigh = Math.max(low, high);
   const result: number[] = [];
   for (const target of desired) {
-    const candidate = freeLaneFor(target, result, height);
+    const candidate = freeLaneFor(target, result, low, boundedHigh);
     result.push(candidate);
   }
 
-  return reflowLanes(result, height);
+  return reflowLanes(result, low, boundedHigh);
 }
 
-function freeLaneFor(target: number, placed: number[], height: number) {
-  const low = MIN_ANNOTATION_Y_PX;
-  const high = Math.max(low, height - BOTTOM_ANNOTATION_MARGIN_PX);
+function freeLaneFor(target: number, placed: number[], low: number, high: number) {
   const start = Math.min(Math.max(target, low), high);
   const limit = Math.max(STAGGER_LIMIT_PX, high - low);
   for (let offset = 0; offset <= limit; offset += REFERENCE_STAGGER_PX) {
@@ -716,9 +1116,8 @@ function bestLaneFor(start: number, placed: number[], low: number, high: number)
 }
 
 // Later labels near a clamped edge push earlier ones back inside instead of colliding.
-function reflowLanes(combined: number[], height: number) {
-  const low = MIN_ANNOTATION_Y_PX;
-  const high = Math.max(low, height - BOTTOM_ANNOTATION_MARGIN_PX);
+function reflowLanes(combined: number[], low: number, high: number) {
+  const boundedHigh = Math.max(low, high);
   const order = combined.map((lane, index) => ({ lane, index }));
   order.sort((first, second) => first.lane - second.lane || first.index - second.index);
   for (let index = 1; index < order.length; index++) {
@@ -727,7 +1126,7 @@ function reflowLanes(combined: number[], height: number) {
       order[index].lane = previous + REFERENCE_STAGGER_PX;
     }
   }
-  const overflow = order.length ? order[order.length - 1].lane - high : 0;
+  const overflow = order.length ? order[order.length - 1].lane - boundedHigh : 0;
   if (overflow > 0) {
     for (const entry of order) entry.lane -= overflow;
     for (let index = order.length - 2; index >= 0; index--) {
@@ -743,7 +1142,7 @@ function reflowLanes(combined: number[], height: number) {
   }
   order.sort((first, second) => first.index - second.index);
 
-  return order.map((entry) => Math.min(Math.max(entry.lane, low), high));
+  return order.map((entry) => Math.min(Math.max(entry.lane, low), boundedHigh));
 }
 
 function marksFor(
@@ -809,21 +1208,20 @@ function barsFor(
     <g className="chart-bars">
       {table.rows.map((row, index) => {
         if (typeof row.value !== "number") return null;
-        const x = xPosition(table, row);
-        const centre = geometry.xOf(x);
+        const centre = geometry.xOf(xPosition(table, row));
         const half = widths[index] / 2;
-        const top = geometry.yOf(row.value);
-        const y = Math.min(top, baseY);
-        const height = Math.max(BAR_MIN_HEIGHT_PX, Math.abs(top - baseY));
         const hollow = row.validFraction < LOW_COVERAGE_FRACTION;
+        const strokeHalf = hollow || selected === index ? HOLLOW_WIDTH_PX / 2 : 0;
+        const horizontal = clippedBarHorizontal(centre, half, geometry, strokeHalf);
+        const vertical = clippedBarVertical(geometry.yOf(row.value), baseY, geometry, strokeHalf);
 
         return (
           <rect
             key={index}
-            x={centre - half}
-            y={y}
-            width={Math.max(1, widths[index])}
-            height={height}
+            x={horizontal.x}
+            y={vertical.y}
+            width={horizontal.width}
+            height={vertical.height}
             fill={hollow ? "none" : paint}
             stroke={paint}
             strokeWidth={hollow || selected === index ? HOLLOW_WIDTH_PX : 0}
@@ -834,6 +1232,67 @@ function barsFor(
       })}
     </g>
   );
+}
+
+// True centres stay shared with ticks and cursor, so edge rectangles clip instead of shifting.
+function clippedBarHorizontal(
+  centre: number,
+  half_PX: number,
+  geometry: ChartGeometry,
+  strokeHalf_PX: number,
+): { x: number; width: number } {
+  const innerLeft = geometry.left + strokeHalf_PX;
+  const innerRight = geometry.left + geometry.plotWidth - strokeHalf_PX;
+  if (!(innerRight > innerLeft)) {
+    return { x: geometry.left, width: 1 };
+  }
+  const rawLeft = centre - half_PX;
+  const rawRight = centre + half_PX;
+  let left = Math.max(rawLeft, innerLeft);
+  let right = Math.min(rawRight, innerRight);
+  if (right - left < 1) {
+    if (rawLeft < innerLeft) {
+      left = innerLeft;
+    } else if (rawRight > innerRight) {
+      left = innerRight - 1;
+    } else {
+      left = centre - 0.5;
+    }
+    left = Math.min(Math.max(left, innerLeft), innerRight - 1);
+    right = left + 1;
+  }
+
+  return { x: left, width: right - left };
+}
+
+// Minimum heights grow inward so zero bars stay inside the plot including their stroke.
+function clippedBarVertical(
+  top: number,
+  baseY: number,
+  geometry: ChartGeometry,
+  strokeHalf_PX: number,
+): { y: number; height: number } {
+  const innerTop = geometry.plotTop + strokeHalf_PX;
+  const innerBottom = geometry.plotBottom - strokeHalf_PX;
+  if (!(innerBottom > innerTop)) {
+    return { y: geometry.plotTop, height: BAR_MIN_HEIGHT_PX };
+  }
+  const rawTop = Math.min(top, baseY);
+  const rawBottom = Math.max(top, baseY);
+  const clampedTop = Math.min(Math.max(rawTop, innerTop), innerBottom);
+  const clampedBottom = Math.max(Math.min(rawBottom, innerBottom), innerTop);
+  if (clampedBottom - clampedTop >= BAR_MIN_HEIGHT_PX) {
+    return { y: clampedTop, height: clampedBottom - clampedTop };
+  }
+  let y = clampedTop;
+  if (clampedTop >= innerBottom - BAR_MIN_HEIGHT_PX) {
+    y = innerBottom - BAR_MIN_HEIGHT_PX;
+  } else if (clampedTop <= innerTop) {
+    y = innerTop;
+  }
+  y = Math.min(Math.max(y, innerTop), innerBottom - BAR_MIN_HEIGHT_PX);
+
+  return { y, height: BAR_MIN_HEIGHT_PX };
 }
 
 function areaFor(
@@ -1027,8 +1486,8 @@ function cursorLine(
       <line
         x1={x}
         x2={x}
-        y1={compact ? 0 : MARGIN_TOP_PX}
-        y2={compact ? geometry.height : MARGIN_TOP_PX + geometry.plotHeight}
+        y1={compact ? 0 : geometry.plotTop}
+        y2={compact ? geometry.height : geometry.plotBottom}
         stroke="var(--chart-muted, #888)"
         strokeWidth={1}
         strokeDasharray="3 2"
@@ -1165,10 +1624,10 @@ function distributionReferences(table: Extract<ChartTable, { shape: "distributio
   return `References: ${names.join(", ")}.`;
 }
 
-function clampY(y: number, height: number) {
+function clampY(y: number, height: number, low = MIN_ANNOTATION_Y_PX) {
   return Math.min(
-    Math.max(y, MIN_ANNOTATION_Y_PX),
-    Math.max(MIN_ANNOTATION_Y_PX, height - BOTTOM_ANNOTATION_MARGIN_PX),
+    Math.max(y, low),
+    Math.max(low, height - BOTTOM_ANNOTATION_MARGIN_PX),
   );
 }
 
@@ -1177,4 +1636,224 @@ function clampX(x: number, width: number) {
     Math.max(x, MIN_ANNOTATION_X_PX),
     Math.max(MIN_ANNOTATION_X_PX, width - MIN_ANNOTATION_X_PX),
   );
+}
+
+// Visible ticks round to their spacing so long stored decimals never reach the axes.
+interface TickPlan {
+  labels: string[];
+  decimals: number;
+  offset: number | null;
+  scale: number | null;
+  exponentialDigits: number | null;
+}
+
+// Narrow relative spans show scaled deltas from a disclosed base so ticks stay distinct.
+function tickLabelsFor(domain: readonly [number, number], ticks: number[]): TickPlan {
+  const unique = dedupeNumericTicks(ticks);
+  const spacing = tickSpacingFor(domain, unique.length);
+  const decimals = presentationDecimals(spacing);
+  const fixed = unique.map((tick) => formatFixedValue(tick, decimals));
+  if (distinctLabels(fixed) && fitsGutter(fixed)) {
+    return { labels: fixed, decimals, offset: null, scale: null, exponentialDigits: null };
+  }
+  const base = offsetBaseFor(domain, unique);
+  const scale = scaleFor(domain);
+  if (base !== null && scale !== null) {
+    const scaled = scaledPlanFor(unique, base, scale);
+    if (scaled !== null) return scaled;
+  }
+  for (
+    let digits = MIN_EXPONENT_MANTISSA_DIGITS;
+    digits <= MAX_EXPONENT_MANTISSA_DIGITS;
+    digits += 1
+  ) {
+    const exponential = unique.map((tick) => (
+      tick === 0 ? "0" : shortExponential(tick, digits)
+    ));
+    if (distinctLabels(exponential) && fitsGutter(exponential)) {
+      return {
+        labels: exponential,
+        decimals,
+        offset: null,
+        scale: null,
+        exponentialDigits: digits,
+      };
+    }
+  }
+  if (base !== null) {
+    for (
+      let digits = MIN_EXPONENT_MANTISSA_DIGITS;
+      digits <= MAX_EXPONENT_MANTISSA_DIGITS;
+      digits += 1
+    ) {
+      const deltas = unique.map((tick) => (
+        tick === base ? "0" : shortExponential(tick - base, digits)
+      ));
+      if (distinctLabels(deltas) && fitsGutter(deltas)) {
+        return { labels: deltas, decimals, offset: base, scale: null, exponentialDigits: digits };
+      }
+    }
+  }
+  const fallbackBase = base ?? domain[0];
+  const fallbackScale = scale ?? 1;
+  const fallback = scaledPlanFor(unique, fallbackBase, fallbackScale, MAX_FIXED_DECIMALS);
+  if (fallback !== null) return fallback;
+
+  // Indexed labels keep the last resort bounded and distinct because ticks are deduped.
+  const indexed = unique.map((_, index) => String(index));
+  return {
+    labels: indexed,
+    decimals,
+    offset: null,
+    scale: null,
+    exponentialDigits: null,
+  };
+}
+
+// Adjacent representable values collapse to one tick, so exact duplicates never reach keys.
+function dedupeNumericTicks(ticks: number[]) {
+  const seen = new Set<number>();
+  const unique: number[] = [];
+  for (const tick of ticks) {
+    if (seen.has(tick)) continue;
+    seen.add(tick);
+    unique.push(tick);
+  }
+
+  return unique;
+}
+
+// A narrow relative span needs a shared base at any magnitude so deltas stay readable.
+function offsetBaseFor(domain: readonly [number, number], ticks: number[]) {
+  const span = domain[1] - domain[0];
+  const magnitude = maxAbsOf(ticks);
+  if (!(span > 0) || !Number.isFinite(span)) return null;
+  if (!Number.isFinite(magnitude) || !(magnitude > 0)) return null;
+  if (span / magnitude >= OFFSET_RELATIVE_SPAN_THRESHOLD) return null;
+  const base = domain[0];
+  if (!Number.isFinite(base)) return null;
+  return base;
+}
+
+// A shared power-of-ten scale keeps narrow deltas short without per-label exponents.
+function scaleFor(domain: readonly [number, number]) {
+  const span = domain[1] - domain[0];
+  if (!(span > 0) || !Number.isFinite(span)) return null;
+  const exponent = Math.floor(Math.log10(span));
+  if (!Number.isFinite(exponent)) return null;
+  const bounded = Math.min(Math.max(exponent, MIN_SCALE_EXPONENT), MAX_SCALE_EXPONENT);
+  const scale = Math.pow(10, bounded);
+  if (!(scale > 0) || !Number.isFinite(scale)) return null;
+  return scale;
+}
+
+// Scaled deltas stay short because the shared scale keeps them near single digits.
+function scaledPlanFor(
+  ticks: number[],
+  base: number,
+  scale: number,
+  maxDecimals = MAX_EXPONENT_MANTISSA_DIGITS,
+) {
+  if (!(scale > 0) || !Number.isFinite(scale)) return null;
+  if (!Number.isFinite(base)) return null;
+  for (let decimals = 0; decimals <= maxDecimals; decimals += 1) {
+    const labels = ticks.map((tick) => formatFixedValue((tick - base) / scale, decimals));
+    if (distinctLabels(labels) && fitsGutter(labels)) {
+      return { labels, decimals, offset: base, scale, exponentialDigits: null };
+    }
+  }
+  return null;
+}
+
+function distinctLabels(labels: string[]) {
+  return new Set(labels).size === labels.length;
+}
+
+function fitsGutter(labels: string[]) {
+  return longestLabel(labels) <= MAX_TICK_LABEL_CHARS;
+}
+
+function longestLabel(labels: string[]) {
+  if (labels.length === 0) return 0;
+
+  return Math.max(...labels.map((label) => label.length));
+}
+
+function maxAbsOf(ticks: number[]) {
+  if (ticks.length === 0) return 0;
+
+  return Math.max(...ticks.map((tick) => Math.abs(tick)));
+}
+
+// References share the tick plan so their deltas and exponents match the axis.
+function formatPlanValue(value: number, plan: TickPlan) {
+  if (!Number.isFinite(value)) return "";
+  if (plan.offset !== null) {
+    const scale = plan.scale ?? 1;
+    const delta = (value - plan.offset) / scale;
+    if (!Number.isFinite(delta)) return "";
+    if (plan.exponentialDigits !== null) {
+      if (delta === 0) return "0";
+
+      return shortExponential(delta, plan.exponentialDigits);
+    }
+
+    return formatFixedValue(delta, plan.decimals);
+  }
+  if (plan.exponentialDigits !== null) {
+    if (value === 0) return "0";
+
+    return shortExponential(value, plan.exponentialDigits);
+  }
+
+  return formatFixedValue(value, plan.decimals);
+}
+
+// Bounded precision keeps tiny spans inside the toFixed API limit.
+function formatFixedValue(value: number, decimals: number) {
+  if (!Number.isFinite(value)) return "";
+  const bounded = Math.min(Math.max(Math.floor(decimals), 0), MAX_FIXED_DECIMALS);
+  if (bounded <= 0) return cleanInteger(value);
+
+  return cleanFixed(value, bounded);
+}
+
+function tickSpacingFor(domain: readonly [number, number], count: number) {
+  const span = domain[1] - domain[0];
+  if (!(span > 0) || !Number.isFinite(span)) return Number.NaN;
+  const safeCount = Math.max(2, Math.floor(count));
+
+  return span / (safeCount - 1);
+}
+
+// Whole steps need no decimals while sub-unit steps keep one guard digit past the spacing.
+function presentationDecimals(spacing: number) {
+  if (!Number.isFinite(spacing) || !(spacing > 0)) return FALLBACK_TICK_DECIMALS;
+  if (spacing >= WHOLE_STEP_THRESHOLD) return 0;
+  const decimals = Math.max(0, -Math.floor(Math.log10(spacing))) + DECIMAL_GUARD_DIGITS;
+
+  return Math.min(decimals, MAX_FIXED_DECIMALS);
+}
+
+// Short exponentials stay readable where fixed decimals would run past the margin.
+function shortExponential(value: number, digits: number) {
+  const text = value.toExponential(digits);
+  const trimmed = text.replace(/(\.\d*?)0+e/, "$1e").replace(/\.e/, "e");
+
+  return trimmed;
+}
+
+function cleanInteger(value: number) {
+  const rounded = Math.round(value);
+  if (rounded === 0) return "0";
+
+  return String(rounded);
+}
+
+function cleanFixed(value: number, decimals: number) {
+  const fixed = value.toFixed(decimals);
+  const trimmed = fixed.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+  if (trimmed === "-0") return "0";
+
+  return trimmed;
 }

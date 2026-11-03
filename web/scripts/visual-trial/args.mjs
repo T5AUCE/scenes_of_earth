@@ -19,7 +19,7 @@ const LAYOUT_PLACES = {
       centre: [37.0, 0.5],
       layers: ["terrain", "chirps_monthly", "era5land_temperature", "esa_worldcover"],
       start: "2026-04",
-      end: "2026-09",
+      end: "2026-08",
       layout: true,
     },
   ],

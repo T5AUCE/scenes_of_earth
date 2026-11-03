@@ -530,6 +530,9 @@ body.scene-mode #panel {
 
 .scene-panel {
   flex: none;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   border-radius: 4px;
   background: var(--panel-background);
   box-shadow: var(--panel-outline);
@@ -537,9 +540,16 @@ body.scene-mode #panel {
 
 .scene-panel .panel-header {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   padding: 6px 8px;
   align-items: center;
+  min-width: 0;
+}
+
+.scene-panel .panel-header button {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .scene-panel .panel-header [aria-pressed="true"] {
@@ -852,7 +862,7 @@ body.scene-mode .maplibregl-ctrl-scale {
 
 .svg-chart {
   width: 100%;
-  overflow: hidden;
+  min-width: 0;
 }
 
 .svg-chart svg {
@@ -1020,6 +1030,7 @@ body.scene-mode .maplibregl-ctrl-scale {
 
 .chart-editor .editor-foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-top: 8px;
@@ -1048,7 +1059,8 @@ body.scene-mode .maplibregl-ctrl-scale {
 }
 
 .chart-y-ticks text,
-.chart-x-ticks text {
+.chart-x-ticks text,
+.chart-offset {
   font-size: 11px;
   fill: var(--chart-axis);
 }

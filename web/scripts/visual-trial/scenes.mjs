@@ -44,7 +44,7 @@ function existingScene(spot) {
     const sameArea = boundary?.id === spot.area || boundary?.name === spot.area;
     const hasLayers = spot.layers.every((id) => scene.layers.some((layer) => layer.id === id));
     const samePeriod = (!spot.start || scene.period?.start.startsWith(spot.start))
-      && (!spot.end || scene.period?.end.startsWith(spot.end));
+      && (!spot.end || periodEndMatches(scene.period?.end, spot.end));
     if (sameArea && hasLayers && samePeriod) matches.push(scene);
   }
   matches.sort((first, second) => first.layers.length - second.layers.length
@@ -52,6 +52,25 @@ function existingScene(spot) {
   if (!matches.length) throw new Error(`no local built scene for ${spot.area}`);
 
   return matches[0].id;
+}
+
+// Bundles store half-open periods, so an inclusive monthly end needs the next month.
+function periodEndMatches(bundleEnd, requestedEnd) {
+  if (typeof bundleEnd !== "string") return false;
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(requestedEnd)) return bundleEnd.startsWith(requestedEnd);
+
+  return bundleEnd === nextMonthStart(requestedEnd);
+}
+
+function nextMonthStart(month) {
+  const [yearText, monthText] = month.split("-");
+  const year = Number(yearText);
+  const thisMonth = Number(monthText);
+  const rollsYear = thisMonth === 12;
+  const nextYear = rollsYear ? year + 1 : year;
+  const nextMonth = rollsYear ? 1 : thisMonth + 1;
+
+  return `${nextYear}-${String(nextMonth).padStart(2, "0")}-01`;
 }
 
 async function sceneBody(appUrl, spot) {

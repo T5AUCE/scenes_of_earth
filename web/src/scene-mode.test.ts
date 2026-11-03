@@ -177,12 +177,21 @@ const originalGlobals = {
   location: (globalThis as Record<string, unknown>).location,
 };
 
-afterEach(() => {
-  active?.mode.exit();
-  active = undefined;
+afterEach(async () => {
+  if (active !== undefined) {
+    const { act } = await import("react");
+    await act(async () => {
+      active?.mode.exit();
+    });
+    await act(async () => {});
+    active = undefined;
+  } else {
+    active = undefined;
+  }
   Object.assign(globalThis, originalGlobals);
   if (originalGlobals.location === undefined) Reflect.deleteProperty(globalThis, "location");
   Reflect.deleteProperty(globalThis, "sceneModeTest");
+  await new Promise((resolve) => setImmediate(resolve));
 });
 
 test("delayed geometry and mask tiles keep data hidden through landing and resize", async () => {
@@ -450,7 +459,17 @@ test("the panel owner pushes history and forwards notice options to reopen", () 
 
 test("the owner and real panel keep history through Back and Forward", async (context) => {
   const window = new Window({ url: "http://localhost/?scene=test" });
-  context.after(() => window.happyDOM.abort());
+  context.after(async () => {
+    if (active !== undefined) {
+      const { act } = await import("react");
+      await act(async () => {
+        active?.mode.exit();
+      });
+      await act(async () => {});
+      active = undefined;
+    }
+    window.happyDOM.abort();
+  });
   const harness = createHarness();
   installBrowser(context, window);
   (globalThis as Record<string, unknown>).location = window.location;
@@ -874,7 +893,11 @@ test("exact-boundary chart tokens keep display and time in controller history", 
 
 test("a throwing renderer keeps charts while the working layer keeps colour", async (context) => {
   const window = new Window({ url: "https://example.test/?scene=test" });
-  context.after(() => window.happyDOM.abort());
+  context.after(async () => {
+    const { act } = await import("react");
+    await act(async () => {});
+    window.happyDOM.abort();
+  });
   installBrowser(context, window);
   const mountScene = await importViewWithStubs(THROWING_REGISTRY_STUB);
   const { defaultSlice, encodeSlice } = await import("./charts/state.ts");
@@ -944,7 +967,6 @@ test("a throwing renderer keeps charts while the working layer keeps colour", as
 
 test("a denied storage write stays visible until the retry succeeds", async (context) => {
   const window = new Window({ url: "https://example.test/a/?scene=test" });
-  context.after(() => window.happyDOM.abort());
   installBrowser(context, window);
   const mountScene = await importViewWithStubs(FIELD_REGISTRY_STUB);
   const { NO_TOKENS } = await import("./display-state.ts");
@@ -975,15 +997,18 @@ test("a denied storage write stays visible until the retry succeeds", async (con
   const notices: (string | null)[] = [];
   let panel: ReturnType<typeof createScenePanel> | null = null;
   let mounted: ReturnType<typeof mountScene> | null = null;
-  context.after(() => {
-    try {
+  context.after(async () => {
+    const { act } = await import("react");
+    await act(async () => {
       panel?.destroy();
-    } catch {
-    }
-    try {
+    });
+    panel = null;
+    await act(async () => {
       mounted?.unmount();
-    } catch {
-    }
+    });
+    mounted = null;
+    await act(async () => {});
+    window.happyDOM.abort();
   });
   const map = {
     addSource() {},
@@ -1583,7 +1608,9 @@ function installBrowser(context: { after(hook: () => void): void }, window: Wind
     storage: (globalThis as Record<string, unknown>).localStorage,
     actEnvironment: (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT,
   };
-  context.after(() => {
+  context.after(async () => {
+    const { act } = await import("react");
+    await act(async () => {});
     const globals = globalThis as Record<string, unknown>;
     globals.Node = previous.node;
     globals.Element = previous.element;
@@ -1786,11 +1813,21 @@ async function importViewWithStubs(registryStub: string) {
 }
 
 async function enterOwnerPanel(
-  context: { after(hook: () => void): void },
+  context: { after(hook: () => void | Promise<void>): void },
   options: { chartsToken?: string; mountStore?: unknown; scene?: Scene } = {},
 ) {
   const window = new Window({ url: "https://example.test/a/?scene=test" });
-  context.after(() => window.happyDOM.abort());
+  context.after(async () => {
+    if (active !== undefined) {
+      const { act } = await import("react");
+      await act(async () => {
+        active?.mode.exit();
+      });
+      await act(async () => {});
+      active = undefined;
+    }
+    window.happyDOM.abort();
+  });
   const harness = createHarness();
   installBrowser(context, window);
   (globalThis as Record<string, unknown>).location = window.location;

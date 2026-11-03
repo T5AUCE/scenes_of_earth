@@ -7,6 +7,17 @@ import { chromium } from "playwright-core";
 
 import { installCache } from "./cache.mjs";
 import {
+  CHART_ATTRIBUTION_CHECK,
+  CHART_EDITOR_CONTROLS,
+  CHART_GALLERY_BAR_BOUNDS_CHECK,
+  CHART_GALLERY_CONTROLS,
+  CHART_GALLERY_REFERENCE_BOUNDS_CHECK,
+  CHART_GALLERY_TICK_BOUNDS_CHECK,
+  CHART_OVERFLOW_CHECK,
+  CHART_REFERENCE_BOUNDS_CHECK,
+  CHART_RENDERED_CHECK,
+  CHART_TICK_BOUNDS_CHECK,
+  chartOpeningRecord,
   controlDisplay,
   LAYOUT_CONTROLS,
   LAYOUT_EDITOR,
@@ -240,12 +251,22 @@ export async function trialLayout(context, appUrl, spot, sceneId, options, syste
   const browser = context.browser();
   const records = [];
   for (const viewport of layoutViewports()) {
-    records.push(...await layoutViewport(browser, appUrl, spot, sceneId, viewport, system));
+    records.push(
+      ...await layoutViewport(browser, appUrl, spot, sceneId, viewport, options, system),
+    );
   }
   return records;
 }
 
-export async function layoutViewport(browser, appUrl, spot, sceneId, viewport, system = {}) {
+export async function layoutViewport(
+  browser,
+  appUrl,
+  spot,
+  sceneId,
+  viewport,
+  options = {},
+  system = {},
+) {
   const {
     isolateViewport: isolate = (owner, size) => newContext(owner, size),
     warmViewport: warm = (isolated) => installCache(isolated, HTTP_CACHE_DIR),
@@ -263,6 +284,13 @@ export async function layoutViewport(browser, appUrl, spot, sceneId, viewport, s
       await load(page);
       await settle(page);
       const closed = await layoutState(page, viewport, "closed");
+      await layoutScreenshot(page, spot, viewport, "closed", options);
+      let charts = [];
+      try {
+        charts = await chartWorkflowState(page, viewport, system, options, spot);
+      } catch {
+        charts = [chartOpeningRecord(viewport, "workflow")];
+      }
       // The shortest viewport opens tall and resizes down, modelling open-then-resize.
       if (viewport.openHeight !== undefined) {
         await page.setViewportSize({ width: viewport.width, height: viewport.openHeight });
@@ -272,13 +300,14 @@ export async function layoutViewport(browser, appUrl, spot, sceneId, viewport, s
       } catch (error) {
         const reason = error.message.split("\n")[0];
         console.error(`layout ${viewportLabel(viewport)} editor failed to open: ${reason}`);
-        return [...closed, editorOpeningRecord(viewport)];
+        return [...closed, ...charts, editorOpeningRecord(viewport)];
       }
       if (viewport.openHeight !== undefined) {
         await page.setViewportSize({ width: viewport.width, height: viewport.height });
       }
       const open = await layoutState(page, viewport, "open");
-      return [...closed, ...open];
+      await layoutScreenshot(page, spot, viewport, "open", options);
+      return [...closed, ...charts, ...open];
     } catch (error) {
       throw await layoutSetupError(page, watcher, viewport, error);
     } finally {
@@ -331,6 +360,771 @@ async function layoutState(page, viewport, editor) {
   records.push(...await layoutPageChecks(page, viewport, editor));
 
   return records;
+}
+
+/**
+ * Opens the Charts gallery, creates a draft and checks its controls and labels.
+ * Each missing step keeps the records it already collected, so a failure reads
+ * as one failed check rather than a thrown setup error.
+ */
+export async function chartWorkflowState(page, viewport, system = {}, options = {}, spot = null) {
+  const {
+    openGallery: open = openChartsGallery,
+    openDraft: draft = openChartDraft,
+    closeDialog: close = closeChartsWorkflow,
+  } = system;
+  try {
+    await open(page);
+  } catch {
+    return [chartOpeningRecord(viewport, "gallery")];
+  }
+  await layoutScreenshot(page, spot, viewport, "charts-gallery", options);
+  const records = await chartControlState(page, viewport, CHART_GALLERY_CONTROLS);
+  records.push(...await chartGalleryBoundsState(page, viewport));
+  try {
+    await draft(page);
+  } catch {
+    records.push(chartOpeningRecord(viewport, "editor"));
+
+    return records;
+  }
+  records.push(...await chartControlState(page, viewport, CHART_EDITOR_CONTROLS));
+  records.push(...await chartBoundsState(page, viewport));
+  await layoutScreenshot(page, spot, viewport, "chart-editor", options);
+  try {
+    await close(page);
+  } catch {
+    records.push(chartOpeningRecord(viewport, "close"));
+  }
+
+  return records;
+}
+
+// Screenshots stay inside each state because closing the dialog would lose the footer.
+async function layoutScreenshot(page, spot, viewport, state, options) {
+  if (!options?.screens || !spot) return;
+  const file = `${slug(spot.name)}-${slug(viewportLabel(viewport))}-${state}.png`;
+  await page.screenshot({ path: path.join(options.out, file) });
+}
+
+// The docked Charts tab selects the panel before Expand opens it full view.
+export async function openChartsGallery(page) {
+  await page.getByRole("button", { name: "Charts" }).first().click();
+  await page.getByRole("button", { name: "Expand ⤢" }).first().click();
+  await page.locator(".chart-gallery").first().waitFor();
+}
+
+// A new draft keeps the workflow non-destructive because nothing is saved.
+export async function openChartDraft(page) {
+  await page.getByRole("button", { name: "+ New chart" }).first().click();
+  await page.locator(".chart-editor").first().waitFor();
+}
+
+// Closing returns the page to the map so the later editor checks start clean.
+export async function closeChartsWorkflow(page) {
+  await page.getByRole("button", { name: "✕ Back to scene" }).first().click();
+}
+
+async function chartControlState(page, viewport, controls) {
+  const records = [];
+  for (const control of controls) {
+    records.push(await hitTestControl(page, viewport, "charts", control));
+  }
+
+  return records;
+}
+
+export async function chartBoundsState(page, viewport) {
+  const rendered = await page.evaluate(chartEditorSvg);
+  const ticks = await page.evaluate(chartTickBounds);
+  const references = await page.evaluate(chartReferenceBounds);
+  const attribution = await page.evaluate(chartAttributionVisible);
+  const overflow = await page.evaluate(chartEditorOverflow);
+
+  return [
+    layoutRecord({
+      viewport,
+      editor: "charts",
+      role: "page",
+      name: CHART_RENDERED_CHECK,
+      present: rendered,
+      pass: rendered,
+      hit: null,
+    }),
+    layoutRecord({
+      viewport,
+      editor: "charts",
+      role: "page",
+      name: CHART_TICK_BOUNDS_CHECK,
+      present: ticks.present,
+      pass: ticks.present && ticks.pass,
+      hit: null,
+    }),
+    layoutRecord({
+      viewport,
+      editor: "charts",
+      role: "page",
+      name: CHART_REFERENCE_BOUNDS_CHECK,
+      present: references.present,
+      pass: references.present && references.pass,
+      hit: null,
+    }),
+    layoutRecord({
+      viewport,
+      editor: "charts",
+      role: "page",
+      name: CHART_ATTRIBUTION_CHECK,
+      present: attribution,
+      pass: attribution,
+      hit: null,
+    }),
+    layoutRecord({
+      viewport,
+      editor: "charts",
+      role: "page",
+      name: CHART_OVERFLOW_CHECK,
+      present: overflow !== null,
+      pass: overflow ?? false,
+      hit: null,
+    }),
+  ];
+}
+
+export async function chartGalleryBoundsState(page, viewport) {
+  const ticks = await page.evaluate(chartGalleryTickBounds);
+  const references = await page.evaluate(chartGalleryReferenceBounds);
+  const bars = await page.evaluate(chartGalleryBarBounds);
+  const tickRecord = layoutRecord({
+    viewport,
+    editor: "charts",
+    role: "page",
+    name: CHART_GALLERY_TICK_BOUNDS_CHECK,
+    present: ticks.present,
+    pass: ticks.present && ticks.pass,
+    hit: null,
+  });
+  tickRecord.detail = ticks.detail ?? null;
+
+  return [
+    tickRecord,
+    layoutRecord({
+      viewport,
+      editor: "charts",
+      role: "page",
+      name: CHART_GALLERY_REFERENCE_BOUNDS_CHECK,
+      present: references.present,
+      pass: references.present && references.pass,
+      hit: null,
+    }),
+    layoutRecord({
+      viewport,
+      editor: "charts",
+      role: "page",
+      name: CHART_GALLERY_BAR_BOUNDS_CHECK,
+      present: bars.present,
+      pass: bars.present && bars.pass,
+      hit: null,
+    }),
+  ];
+}
+
+export function chartEditorSvg() {
+  return Boolean(document.querySelector("#scene-full .chart-editor svg"));
+}
+
+// Outer-svg checks let axis collisions pass, so ticks need their own regions.
+export function chartTickBounds() {
+  const tolerance = 1;
+  const svg = document.querySelector("#scene-full .chart-editor svg");
+  if (!svg) return { present: false, pass: false };
+  const svgBox = svg.getBoundingClientRect();
+  const frame = document.querySelector("#scene-full .chart-editor .chart-plot-frame");
+  if (!frame) return { present: false, pass: false };
+  const frameBox = frame.getBoundingClientRect();
+  const plotLeft = frameBox.left;
+  const plotRight = frameBox.right;
+  const plotTop = frameBox.top;
+  const plotBottom = frameBox.bottom;
+  const plotBox = { left: plotLeft, right: plotRight, top: plotTop, bottom: plotBottom };
+  const lines = [...document.querySelectorAll("#scene-full .chart-editor .chart-grid line")];
+  if (lines.length === 0) return { present: false, pass: false };
+  const axes = [...document.querySelectorAll("#scene-full .chart-axes text")];
+  let yTitle = null;
+  let xTitle = null;
+  for (const axis of axes) {
+    if (axis.classList && axis.classList.contains("chart-offset")) continue;
+    const transform = axis.getAttribute("transform") || "";
+    if (transform.indexOf("rotate") !== -1) yTitle = axis.getBoundingClientRect();
+    else xTitle = axis.getBoundingClientRect();
+  }
+  const disclosureEls = [...document.querySelectorAll("#scene-full .chart-editor .chart-offset")];
+  const disclosures = disclosureEls.map((entry) => entry.getBoundingClientRect());
+  const yTicks = [...document.querySelectorAll("#scene-full .chart-editor .chart-y-ticks text")];
+  const xTicks = [...document.querySelectorAll("#scene-full .chart-editor .chart-x-ticks text")];
+  const references = [...document.querySelectorAll(
+    "#scene-full .chart-editor .chart-references text,"
+    + " #scene-full .chart-editor .chart-endpoints text",
+  )];
+  if (yTicks.length === 0 || xTicks.length === 0) return { present: false, pass: false };
+  function insideSvg(rect) {
+    return rect.left >= svgBox.left - tolerance && rect.right <= svgBox.right + tolerance
+      && rect.top >= svgBox.top - tolerance && rect.bottom <= svgBox.bottom + tolerance;
+  }
+  function overlaps(first, second) {
+    return first.left < second.right - tolerance && second.left < first.right - tolerance
+      && first.top < second.bottom - tolerance && second.top < first.bottom - tolerance;
+  }
+  const titles = [yTitle, xTitle, ...disclosures].filter(Boolean);
+  for (const rect of titles) {
+    if (!insideSvg(rect)) return { present: true, pass: false };
+  }
+  const yBoxes = yTicks.map((tick) => tick.getBoundingClientRect());
+  const xBoxes = xTicks.map((tick) => tick.getBoundingClientRect());
+  const referenceBoxes = references.map((text) => text.getBoundingClientRect());
+  for (const rect of yBoxes) {
+    if (!insideSvg(rect)) return { present: true, pass: false };
+    if (rect.right > plotLeft + tolerance) return { present: true, pass: false };
+    if (yTitle && overlaps(rect, yTitle)) return { present: true, pass: false };
+    if (xTitle && overlaps(rect, xTitle)) return { present: true, pass: false };
+    for (const disclosure of disclosures) {
+      if (overlaps(rect, disclosure)) return { present: true, pass: false };
+    }
+    if (overlaps(rect, plotBox)) return { present: true, pass: false };
+    for (const other of referenceBoxes) {
+      if (overlaps(rect, other)) return { present: true, pass: false };
+    }
+  }
+  for (let first = 0; first < yBoxes.length; first += 1) {
+    for (let second = first + 1; second < yBoxes.length; second += 1) {
+      if (overlaps(yBoxes[first], yBoxes[second])) return { present: true, pass: false };
+    }
+  }
+  for (const rect of xBoxes) {
+    if (!insideSvg(rect)) return { present: true, pass: false };
+    if (rect.top < plotBottom - tolerance) return { present: true, pass: false };
+    if (xTitle && overlaps(rect, xTitle)) return { present: true, pass: false };
+    if (yTitle && overlaps(rect, yTitle)) return { present: true, pass: false };
+    for (const disclosure of disclosures) {
+      if (overlaps(rect, disclosure)) return { present: true, pass: false };
+    }
+    if (overlaps(rect, plotBox)) return { present: true, pass: false };
+    for (const other of referenceBoxes) {
+      if (overlaps(rect, other)) return { present: true, pass: false };
+    }
+  }
+  for (let first = 0; first < xBoxes.length; first += 1) {
+    for (let second = first + 1; second < xBoxes.length; second += 1) {
+      if (overlaps(xBoxes[first], xBoxes[second])) return { present: true, pass: false };
+    }
+  }
+
+  return { present: true, pass: true };
+}
+
+// Outer-svg checks let overlapping annotations pass, so references need their own frame.
+export function chartReferenceBounds() {
+  const tolerance = 1;
+  const svg = document.querySelector("#scene-full .chart-editor svg");
+  if (!svg) return { present: false, pass: false };
+  const svgBox = svg.getBoundingClientRect();
+  const frame = document.querySelector("#scene-full .chart-editor .chart-plot-frame");
+  if (!frame) return { present: false, pass: false };
+  const frameBox = frame.getBoundingClientRect();
+  const plotLeft = frameBox.left;
+  const plotRight = frameBox.right;
+  const plotBottom = frameBox.bottom;
+  const lines = [...document.querySelectorAll("#scene-full .chart-editor .chart-grid line")];
+  if (lines.length === 0) return { present: false, pass: false };
+  const axes = [...document.querySelectorAll("#scene-full .chart-axes text")];
+  let yTitle = null;
+  let xTitle = null;
+  for (const axis of axes) {
+    if (axis.classList && axis.classList.contains("chart-offset")) continue;
+    const transform = axis.getAttribute("transform") || "";
+    if (transform.indexOf("rotate") !== -1) yTitle = axis.getBoundingClientRect();
+    else xTitle = axis.getBoundingClientRect();
+  }
+  const disclosureEls = [...document.querySelectorAll("#scene-full .chart-editor .chart-offset")];
+  const disclosures = disclosureEls.map((entry) => entry.getBoundingClientRect());
+  const texts = [...document.querySelectorAll(
+    "#scene-full .chart-editor .chart-references text,"
+    + " #scene-full .chart-editor .chart-endpoints text",
+  )];
+  if (texts.length === 0) return { present: false, pass: false };
+  const yTicks = [...document.querySelectorAll("#scene-full .chart-editor .chart-y-ticks text")];
+  const xTicks = [...document.querySelectorAll("#scene-full .chart-editor .chart-x-ticks text")];
+  function insideSvg(rect) {
+    return rect.left >= svgBox.left - tolerance && rect.right <= svgBox.right + tolerance
+      && rect.top >= svgBox.top - tolerance && rect.bottom <= svgBox.bottom + tolerance;
+  }
+  function overlaps(first, second) {
+    return first.left < second.right - tolerance && second.left < first.right - tolerance
+      && first.top < second.bottom - tolerance && second.top < first.bottom - tolerance;
+  }
+  const titles = [yTitle, xTitle, ...disclosures].filter(Boolean);
+  for (const rect of titles) {
+    if (!insideSvg(rect)) return { present: true, pass: false };
+  }
+  const yBoxes = yTicks.map((tick) => tick.getBoundingClientRect());
+  const xBoxes = xTicks.map((tick) => tick.getBoundingClientRect());
+  const rects = texts.map((text) => text.getBoundingClientRect());
+  for (const rect of rects) {
+    if (!insideSvg(rect)) return { present: true, pass: false };
+    if (rect.left < plotLeft - tolerance) return { present: true, pass: false };
+    if (rect.right > plotRight + tolerance) return { present: true, pass: false };
+    if (rect.bottom > plotBottom + tolerance) return { present: true, pass: false };
+    if (yTitle && overlaps(rect, yTitle)) return { present: true, pass: false };
+    if (xTitle && overlaps(rect, xTitle)) return { present: true, pass: false };
+    for (const disclosure of disclosures) {
+      if (overlaps(rect, disclosure)) return { present: true, pass: false };
+    }
+    for (const other of yBoxes) {
+      if (overlaps(rect, other)) return { present: true, pass: false };
+    }
+    for (const other of xBoxes) {
+      if (overlaps(rect, other)) return { present: true, pass: false };
+    }
+  }
+  for (let first = 0; first < rects.length; first += 1) {
+    for (let second = first + 1; second < rects.length; second += 1) {
+      if (overlaps(rects[first], rects[second])) return { present: true, pass: false };
+    }
+  }
+
+  return { present: true, pass: true };
+}
+
+// Gallery cards use the same regions as the editor, so each card must pass on its own.
+export function chartGalleryTickBounds() {
+  const tolerance = 1;
+  const expected = [
+    "chirps_monthly:time_series",
+    "era5land_temperature:time_series",
+    "terrain:distribution",
+  ];
+  const knownUnavailable = [
+    "No rainfall accumulation",
+    "No temperature series",
+    "No elevation distribution",
+  ];
+  const cards = [...document.querySelectorAll("#scene-full .chart-gallery .gallery-card")];
+  const byId = new Map(cards.map((card) => [card.getAttribute("data-chart-id"), card]));
+  for (const id of expected) {
+    if (!byId.has(id)) return fail(id, "missing-card", null, null);
+  }
+  const unavailable = [
+    ...document.querySelectorAll("#scene-full .chart-gallery .chart-unavailable"),
+  ];
+  for (const tile of unavailable) {
+    const heading = tile.querySelector("h4");
+    const title = heading ? heading.textContent : "";
+    if (knownUnavailable.indexOf(title) === -1) {
+      return fail("gallery", "unknown-unavailable", null, null);
+    }
+  }
+  function insideSvg(rect, svgBox) {
+    return rect.left >= svgBox.left - tolerance && rect.right <= svgBox.right + tolerance
+      && rect.top >= svgBox.top - tolerance && rect.bottom <= svgBox.bottom + tolerance;
+  }
+  function overlaps(first, second) {
+    return first.left < second.right - tolerance && second.left < first.right - tolerance
+      && first.top < second.bottom - tolerance && second.top < first.bottom - tolerance;
+  }
+  // DOM rects do not survive JSON, so the record keeps plain coordinates instead.
+  function boxOf(rect) {
+    if (!rect) return null;
+
+    return {
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      bottom: rect.bottom,
+    };
+  }
+  // A failing tick names its card and predicate so the record shows the rectangle.
+  function fail(card, predicate, rect, peer) {
+    return {
+      present: true,
+      pass: false,
+      detail: {
+        card,
+        predicate,
+        rect: boxOf(rect),
+        peer: boxOf(peer),
+      },
+    };
+  }
+  for (const id of expected) {
+    const card = byId.get(id);
+    const svg = card.querySelector("svg");
+    if (!svg) return fail(id, "missing-svg", null, null);
+    const svgBox = svg.getBoundingClientRect();
+    const frame = card.querySelector(".chart-plot-frame");
+    if (!frame) return fail(id, "missing-frame", null, svgBox);
+    const frameBox = frame.getBoundingClientRect();
+    const plotBox = {
+      left: frameBox.left,
+      right: frameBox.right,
+      top: frameBox.top,
+      bottom: frameBox.bottom,
+    };
+    const lines = [...card.querySelectorAll(".chart-grid line")];
+    if (lines.length === 0) return fail(id, "missing-grid", null, svgBox);
+    const axes = [...card.querySelectorAll(".chart-axes text")];
+    let yTitle = null;
+    const xTitles = [];
+    for (const axis of axes) {
+      if (axis.classList && axis.classList.contains("chart-offset")) continue;
+      const transform = axis.getAttribute("transform") || "";
+      const rect = axis.getBoundingClientRect();
+      if (transform.indexOf("rotate") !== -1) yTitle = rect;
+      else xTitles.push(rect);
+    }
+    const disclosureEls = [...card.querySelectorAll(".chart-offset")];
+    const disclosures = disclosureEls.map((entry) => entry.getBoundingClientRect());
+    const yTicks = [...card.querySelectorAll(".chart-y-ticks text")];
+    const xTicks = [...card.querySelectorAll(".chart-x-ticks text")];
+    const references = [...card.querySelectorAll(
+      ".chart-references text,"
+      + " .chart-endpoints text",
+    )];
+    if (yTicks.length === 0 || xTicks.length === 0) {
+      return fail(id, "missing-ticks", null, svgBox);
+    }
+    if (yTitle && !insideSvg(yTitle, svgBox)) {
+      return fail(id, "y-title-outside-svg", yTitle, svgBox);
+    }
+    for (const title of xTitles) {
+      if (!insideSvg(title, svgBox)) return fail(id, "x-title-outside-svg", title, svgBox);
+    }
+    for (const disclosure of disclosures) {
+      if (!insideSvg(disclosure, svgBox)) {
+        return fail(id, "disclosure-outside-svg", disclosure, svgBox);
+      }
+    }
+    const yBoxes = yTicks.map((tick) => tick.getBoundingClientRect());
+    const xBoxes = xTicks.map((tick) => tick.getBoundingClientRect());
+    const referenceBoxes = references.map((text) => text.getBoundingClientRect());
+    for (const rect of yBoxes) {
+      if (!insideSvg(rect, svgBox)) return fail(id, "y-tick-outside-svg", rect, svgBox);
+      if (rect.right > frameBox.left + tolerance) {
+        return fail(id, "y-tick-enters-plot", rect, frameBox);
+      }
+      if (yTitle && overlaps(rect, yTitle)) {
+        return fail(id, "y-tick-overlaps-y-title", rect, yTitle);
+      }
+      for (const title of xTitles) {
+        if (overlaps(rect, title)) return fail(id, "y-tick-overlaps-x-title", rect, title);
+      }
+      for (const disclosure of disclosures) {
+        if (overlaps(rect, disclosure)) {
+          return fail(id, "y-tick-overlaps-disclosure", rect, disclosure);
+        }
+      }
+      if (overlaps(rect, plotBox)) return fail(id, "y-tick-overlaps-plot", rect, plotBox);
+      for (const other of referenceBoxes) {
+        if (overlaps(rect, other)) return fail(id, "y-tick-overlaps-reference", rect, other);
+      }
+    }
+    for (let first = 0; first < yBoxes.length; first += 1) {
+      for (let second = first + 1; second < yBoxes.length; second += 1) {
+        if (overlaps(yBoxes[first], yBoxes[second])) {
+          return fail(id, "y-tick-overlap", yBoxes[first], yBoxes[second]);
+        }
+      }
+    }
+    for (const rect of xBoxes) {
+      if (!insideSvg(rect, svgBox)) return fail(id, "x-tick-outside-svg", rect, svgBox);
+      if (rect.top < frameBox.bottom - tolerance) {
+        return fail(id, "x-tick-enters-plot", rect, frameBox);
+      }
+      for (const title of xTitles) {
+        if (overlaps(rect, title)) return fail(id, "x-tick-overlaps-x-title", rect, title);
+      }
+      if (yTitle && overlaps(rect, yTitle)) {
+        return fail(id, "x-tick-overlaps-y-title", rect, yTitle);
+      }
+      for (const disclosure of disclosures) {
+        if (overlaps(rect, disclosure)) {
+          return fail(id, "x-tick-overlaps-disclosure", rect, disclosure);
+        }
+      }
+      if (overlaps(rect, plotBox)) return fail(id, "x-tick-overlaps-plot", rect, plotBox);
+      for (const other of referenceBoxes) {
+        if (overlaps(rect, other)) return fail(id, "x-tick-overlaps-reference", rect, other);
+      }
+    }
+    for (let first = 0; first < xBoxes.length; first += 1) {
+      for (let second = first + 1; second < xBoxes.length; second += 1) {
+        if (overlaps(xBoxes[first], xBoxes[second])) {
+          return fail(id, "x-tick-overlap", xBoxes[first], xBoxes[second]);
+        }
+      }
+    }
+  }
+
+  return { present: true, pass: true, detail: null };
+}
+
+export function chartGalleryReferenceBounds() {
+  const tolerance = 1;
+  const expected = [
+    "chirps_monthly:time_series",
+    "era5land_temperature:time_series",
+    "terrain:distribution",
+  ];
+  const referenceCards = ["terrain:distribution"];
+  const knownUnavailable = [
+    "No rainfall accumulation",
+    "No temperature series",
+    "No elevation distribution",
+  ];
+  const cards = [...document.querySelectorAll("#scene-full .chart-gallery .gallery-card")];
+  const byId = new Map(cards.map((card) => [card.getAttribute("data-chart-id"), card]));
+  for (const id of expected) {
+    if (!byId.has(id)) return { present: true, pass: false };
+  }
+  const unavailable = [
+    ...document.querySelectorAll("#scene-full .chart-gallery .chart-unavailable"),
+  ];
+  for (const tile of unavailable) {
+    const heading = tile.querySelector("h4");
+    const title = heading ? heading.textContent : "";
+    if (knownUnavailable.indexOf(title) === -1) return { present: true, pass: false };
+  }
+  function insideSvg(rect, svgBox) {
+    return rect.left >= svgBox.left - tolerance && rect.right <= svgBox.right + tolerance
+      && rect.top >= svgBox.top - tolerance && rect.bottom <= svgBox.bottom + tolerance;
+  }
+  function overlaps(first, second) {
+    return first.left < second.right - tolerance && second.left < first.right - tolerance
+      && first.top < second.bottom - tolerance && second.top < first.bottom - tolerance;
+  }
+  for (const id of expected) {
+    const card = byId.get(id);
+    const svg = card.querySelector("svg");
+    if (!svg) return { present: true, pass: false };
+    const svgBox = svg.getBoundingClientRect();
+    const frame = card.querySelector(".chart-plot-frame");
+    if (!frame) return { present: true, pass: false };
+    const frameBox = frame.getBoundingClientRect();
+    const lines = [...card.querySelectorAll(".chart-grid line")];
+    if (lines.length === 0) return { present: true, pass: false };
+    const axes = [...card.querySelectorAll(".chart-axes text")];
+    let yTitle = null;
+    let xTitle = null;
+    for (const axis of axes) {
+      if (axis.classList && axis.classList.contains("chart-offset")) continue;
+      const transform = axis.getAttribute("transform") || "";
+      if (transform.indexOf("rotate") !== -1) yTitle = axis.getBoundingClientRect();
+      else xTitle = axis.getBoundingClientRect();
+    }
+    const disclosureEls = [...card.querySelectorAll(".chart-offset")];
+    const disclosures = disclosureEls.map((entry) => entry.getBoundingClientRect());
+    const yTicks = [...card.querySelectorAll(".chart-y-ticks text")];
+    const xTicks = [...card.querySelectorAll(".chart-x-ticks text")];
+    if (yTicks.length === 0 || xTicks.length === 0) return { present: true, pass: false };
+    const titles = [yTitle, xTitle, ...disclosures].filter(Boolean);
+    for (const rect of titles) {
+      if (!insideSvg(rect, svgBox)) return { present: true, pass: false };
+    }
+    if (referenceCards.indexOf(id) === -1) continue;
+    const texts = [...card.querySelectorAll(
+      ".chart-references text,"
+      + " .chart-endpoints text",
+    )];
+    if (texts.length === 0) return { present: true, pass: false };
+    const yBoxes = yTicks.map((tick) => tick.getBoundingClientRect());
+    const xBoxes = xTicks.map((tick) => tick.getBoundingClientRect());
+    const rects = texts.map((text) => text.getBoundingClientRect());
+    for (const rect of rects) {
+      if (!insideSvg(rect, svgBox)) return { present: true, pass: false };
+      if (rect.left < frameBox.left - tolerance) return { present: true, pass: false };
+      if (rect.right > frameBox.right + tolerance) return { present: true, pass: false };
+      if (rect.bottom > frameBox.bottom + tolerance) return { present: true, pass: false };
+      if (yTitle && overlaps(rect, yTitle)) return { present: true, pass: false };
+      if (xTitle && overlaps(rect, xTitle)) return { present: true, pass: false };
+      for (const disclosure of disclosures) {
+        if (overlaps(rect, disclosure)) return { present: true, pass: false };
+      }
+      for (const other of yBoxes) {
+        if (overlaps(rect, other)) return { present: true, pass: false };
+      }
+      for (const other of xBoxes) {
+        if (overlaps(rect, other)) return { present: true, pass: false };
+      }
+    }
+    for (let first = 0; first < rects.length; first += 1) {
+      for (let second = first + 1; second < rects.length; second += 1) {
+        if (overlaps(rects[first], rects[second])) return { present: true, pass: false };
+      }
+    }
+  }
+
+  return { present: true, pass: true };
+}
+
+export function chartGalleryBarBounds() {
+  const tolerance = 1;
+  const expected = [
+    "chirps_monthly:time_series",
+    "era5land_temperature:time_series",
+    "terrain:distribution",
+  ];
+  const barCards = ["chirps_monthly:time_series"];
+  const knownUnavailable = [
+    "No rainfall accumulation",
+    "No temperature series",
+    "No elevation distribution",
+  ];
+  const cards = [...document.querySelectorAll("#scene-full .chart-gallery .gallery-card")];
+  const byId = new Map(cards.map((card) => [card.getAttribute("data-chart-id"), card]));
+  for (const id of expected) {
+    if (!byId.has(id)) return { present: true, pass: false };
+  }
+  const unavailable = [
+    ...document.querySelectorAll("#scene-full .chart-gallery .chart-unavailable"),
+  ];
+  for (const tile of unavailable) {
+    const heading = tile.querySelector("h4");
+    const title = heading ? heading.textContent : "";
+    if (knownUnavailable.indexOf(title) === -1) return { present: true, pass: false };
+  }
+  function overlaps(first, second) {
+    return first.left < second.right - tolerance && second.left < first.right - tolerance
+      && first.top < second.bottom - tolerance && second.top < first.bottom - tolerance;
+  }
+  for (const id of expected) {
+    const card = byId.get(id);
+    const svg = card.querySelector("svg");
+    if (!svg) return { present: true, pass: false };
+    const frame = card.querySelector(".chart-plot-frame");
+    if (!frame) return { present: true, pass: false };
+    const frameBox = frame.getBoundingClientRect();
+    const yTicks = [...card.querySelectorAll(".chart-y-ticks text")];
+    const xTicks = [...card.querySelectorAll(".chart-x-ticks text")];
+    if (yTicks.length === 0 || xTicks.length === 0) return { present: true, pass: false };
+    if (barCards.indexOf(id) === -1) continue;
+    const bars = [...card.querySelectorAll(".chart-bars rect")];
+    if (bars.length === 0) return { present: true, pass: false };
+    const yBoxes = yTicks.map((tick) => tick.getBoundingClientRect());
+    const barBoxes = bars.map((bar) => bar.getBoundingClientRect());
+    for (const box of barBoxes) {
+      if (box.left < frameBox.left - tolerance) return { present: true, pass: false };
+      if (box.right > frameBox.right + tolerance) return { present: true, pass: false };
+      if (box.top < frameBox.top - tolerance) return { present: true, pass: false };
+      if (box.bottom > frameBox.bottom + tolerance) return { present: true, pass: false };
+      for (const other of yBoxes) {
+        if (overlaps(box, other)) return { present: true, pass: false };
+      }
+    }
+    for (let first = 0; first < barBoxes.length; first += 1) {
+      for (let second = first + 1; second < barBoxes.length; second += 1) {
+        if (overlaps(barBoxes[first], barBoxes[second])) {
+          return { present: true, pass: false };
+        }
+      }
+    }
+  }
+
+  return { present: true, pass: true };
+}
+
+// The editor attribution rides in the footer, so it must stay visible beside Save.
+export function chartAttributionVisible() {
+  const tolerance = 1;
+  const note = document.querySelector("#scene-full .chart-editor .editor-attribution");
+  if (!note) return false;
+  const style = window.getComputedStyle(note);
+  if (style.display === "none") return false;
+  if (style.visibility === "hidden" || style.visibility === "collapse") return false;
+  if (Number(style.opacity) === 0) return false;
+  if (typeof note.checkVisibility === "function") {
+    if (!note.checkVisibility({ visibilityProperty: true })) return false;
+  }
+  const main = document.querySelector("#scene-full main");
+  if (!main) return false;
+  const mainBox = main.getBoundingClientRect();
+  const visible = {
+    left: Math.max(mainBox.left, 0),
+    right: Math.min(mainBox.right, window.innerWidth),
+    top: Math.max(mainBox.top, 0),
+    bottom: Math.min(mainBox.bottom, window.innerHeight),
+  };
+  if (!(visible.right > visible.left && visible.bottom > visible.top)) return false;
+  function collectNodes(root) {
+    const nodes = [];
+    const stack = [root];
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (!current) continue;
+      if (current.nodeType === 3) nodes.push(current);
+      else if (current.childNodes) {
+        for (let index = current.childNodes.length - 1; index >= 0; index -= 1) {
+          stack.push(current.childNodes[index]);
+        }
+      }
+    }
+
+    return nodes;
+  }
+  function fragmentsFor(textNode) {
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(textNode);
+      const rects = range.getClientRects();
+
+      return [...rects];
+    } catch {
+      return [];
+    }
+  }
+  function representativePoints(rect) {
+    const inset = 1;
+    const middleX = rect.left + rect.width / 2;
+    const middleY = rect.top + rect.height / 2;
+    const left = Math.min(Math.max(rect.left + inset, rect.left), rect.right);
+    const right = Math.max(Math.min(rect.right - inset, rect.right), rect.left);
+    const top = Math.min(Math.max(rect.top + inset, rect.top), rect.bottom);
+    const bottom = Math.max(Math.min(rect.bottom - inset, rect.bottom), rect.top);
+
+    return [[middleX, middleY], [left, top], [right, top], [left, bottom], [right, bottom]];
+  }
+  const textNodes = collectNodes(note).filter((node) => (node.textContent ?? "").trim() !== "");
+  let fragments = [];
+  for (const textNode of textNodes) {
+    fragments = fragments.concat(fragmentsFor(textNode));
+  }
+  if (fragments.length === 0) {
+    try {
+      fragments = [...note.getClientRects()];
+    } catch {
+      return false;
+    }
+  }
+  if (fragments.length === 0) return false;
+  for (const fragment of fragments) {
+    if (!(fragment.width > 0 && fragment.height > 0)) return false;
+    if (fragment.left < visible.left - tolerance) return false;
+    if (fragment.right > visible.right + tolerance) return false;
+    if (fragment.top < visible.top - tolerance) return false;
+    if (fragment.bottom > visible.bottom + tolerance) return false;
+    for (const point of representativePoints(fragment)) {
+      const hit = document.elementFromPoint(point[0], point[1]);
+      if (!hit) return false;
+      if (!note.contains(hit)) return false;
+    }
+  }
+
+  return true;
+}
+
+// The wrapped footer keeps Save and attribution on one page without sideways scroll.
+export function chartEditorOverflow() {
+  const main = document.querySelector("#scene-full main");
+  if (!main) return null;
+
+  return main.scrollWidth <= main.clientWidth + 1;
 }
 
 export async function hitTestControl(page, viewport, editor, control) {

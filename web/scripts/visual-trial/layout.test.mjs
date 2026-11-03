@@ -2,6 +2,17 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  CHART_ATTRIBUTION_CHECK,
+  CHART_EDITOR_CONTROLS,
+  CHART_GALLERY_BAR_BOUNDS_CHECK,
+  CHART_GALLERY_CONTROLS,
+  CHART_GALLERY_REFERENCE_BOUNDS_CHECK,
+  CHART_GALLERY_TICK_BOUNDS_CHECK,
+  CHART_OVERFLOW_CHECK,
+  CHART_REFERENCE_BOUNDS_CHECK,
+  CHART_RENDERED_CHECK,
+  CHART_TICK_BOUNDS_CHECK,
+  chartOpeningRecord,
   controlDisplay,
   DEFAULT_LAYOUT_VIEWPORTS_PX,
   hitLabel,
@@ -193,6 +204,53 @@ test("layoutRecord keeps an explicit absent pass and nulls its hit", () => {
   assert.equal(missing.pass, false);
   assert.equal(missing.hit, null);
   assert.equal(skipped.pass, null);
+});
+
+test("chart workflow controls stay scoped to the full dialog", () => {
+  const workflow = [...CHART_GALLERY_CONTROLS, ...CHART_EDITOR_CONTROLS];
+
+  assert.ok(workflow.length >= 5);
+  for (const control of workflow) {
+    assert.equal(control.role, "button");
+    assert.equal(control.scope, "#scene-full");
+    assert.equal(control.scroll, "#scene-full main");
+  }
+  const names = workflow.map(controlDisplay);
+  assert.ok(names.includes("+ New chart"));
+  assert.ok(names.includes("Open"));
+  assert.ok(names.includes("Save"));
+  assert.ok(names.includes("Cancel"));
+  assert.ok(names.includes("Back to charts"));
+});
+
+test("chart page checks name rendering, bounds and overflow", () => {
+  const names = [
+    CHART_RENDERED_CHECK,
+    CHART_TICK_BOUNDS_CHECK,
+    CHART_REFERENCE_BOUNDS_CHECK,
+    CHART_ATTRIBUTION_CHECK,
+    CHART_OVERFLOW_CHECK,
+    CHART_GALLERY_TICK_BOUNDS_CHECK,
+    CHART_GALLERY_REFERENCE_BOUNDS_CHECK,
+    CHART_GALLERY_BAR_BOUNDS_CHECK,
+  ];
+
+  assert.equal(new Set(names).size, names.length);
+  for (const name of names) assert.match(name, /chart/);
+});
+
+test("chartOpeningRecord fails the missing workflow step", () => {
+  const record = chartOpeningRecord({ width: 1024, height: 768 }, "gallery");
+
+  assert.deepEqual(record, {
+    viewport: "1024x768",
+    editor: "charts",
+    role: "page",
+    name: "chart gallery opens",
+    present: false,
+    pass: false,
+    hit: null,
+  });
 });
 
 test("layoutFailed fails on any explicit failure", () => {

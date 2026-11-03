@@ -86,7 +86,8 @@ test("the layout preset checks four layers over a period without a file", () => 
     "era5land_temperature",
     "esa_worldcover",
   ]);
-  assert.ok(spot.start && spot.end);
+  assert.equal(spot.start, "2026-04");
+  assert.equal(spot.end, "2026-08");
   assert.deepEqual(spot.zooms, ["fitted"]);
 });
 
