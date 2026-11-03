@@ -2,10 +2,11 @@
 
 <img src="https://github.com/T5AUCE/scenes_of_earth/blob/main/docs/sample_kenya_custom_temp.png" alt="Example Image of Kenya With Custom Temperature Colors" width="1100" height="600">
 
-A small FastAPI + SQLite service that turns an area (a country, state, county or large city, or a drawn polygon) and a
-month range into a static scene bundle: `scene.json`, `area.geojson` and a Zarr v3 store (`data.zarr`, gzip) with monthly
-rain and the statistics of the terrain. The browser reads the finished bundle directly. Bundles live at
-`data/scenes/{id}/`, where `{id}` is a content hash, so a finished bundle never changes and is served as immutable.
+Scenes of Earth is an open-source web application for exploring and sharing climate and geographic data through special interactive maps known as **scenes**, that serve as highly configurable sandboxes for environmental datasets. Users can choose to select a country, state, county, major city, or draw their own region, then explore layers such as rainfall, temperature, terrain, and land cover (more to be added later) using editable layers and a time slider.
+
+Each saved scene combines a region, selected datasets, and a date range. Shareable URLs identify the scene and encode its viewing settings, allowing others to open and explore the same view. The aim is to support scientific communication by making environmental data easier to explore and discuss, while also attempting to promote interest and outreach simply through the innate visual beauty that it offers.
+
+A FastAPI and SQLite backend prepares reusable scene bundles containing metadata (scene.json), geographic boundaries (area.geojson), and chunked arrays in Zarr v3 format (data.zarr). The browser reads completed bundles directly. Each bundle has a content-based ID and remains unchanged after publication, allowing it to be cached and reused.
 
 Planned features and hosting: [docs/ROADMAP.md](docs/ROADMAP.md).
 
