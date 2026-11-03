@@ -1,7 +1,13 @@
 /** Close-up of one saved chart with its data table and chart actions. */
 import type { SceneStore } from "../scene-store";
-import type { Scene } from "../types";
+import type { LayerDoc, Scene } from "../types";
 import { useSceneStore } from "../ui/use-scene-store";
+import {
+  buildByMonthCsv,
+  buildElevationCsv,
+  buildLayerAreaMeansCsv,
+  downloadCsv,
+} from "./csv";
 import { HypsometryChart } from "./hypsometry-chart";
 import { SeriesChart } from "./series-chart";
 import { unionIntervals } from "./series";
@@ -113,8 +119,40 @@ export function ChartDetail({
           {"Delete"}
         </button>
       </div>
+      <div className="detail-downloads">
+        {definition.source.shape === "time_series" && (
+          <button type="button" onClick={() => downloadLayerArea(scene, layer)}>
+            {"Area means (CSV)"}
+          </button>
+        )}
+        {definition.source.shape === "seasonal_cycle" && (
+          <button type="button" onClick={() => downloadByMonth(scene, layer)}>
+            {"By month (CSV)"}
+          </button>
+        )}
+        {definition.source.shape === "distribution" && (
+          <button type="button" onClick={() => downloadElevation(scene, layer)}>
+            {"Elevation distribution (CSV)"}
+          </button>
+        )}
+      </div>
     </section>
   );
+}
+
+function downloadLayerArea(scene: Scene, layer: LayerDoc): void {
+  const file = buildLayerAreaMeansCsv(scene, layer);
+  downloadCsv(file.filename, file.content);
+}
+
+function downloadByMonth(scene: Scene, layer: LayerDoc): void {
+  const file = buildByMonthCsv(scene, layer);
+  downloadCsv(file.filename, file.content);
+}
+
+function downloadElevation(scene: Scene, layer: LayerDoc): void {
+  const file = buildElevationCsv(scene, layer);
+  downloadCsv(file.filename, file.content);
 }
 
 function unionDomainFor(scene: Scene): [number, number] | null {

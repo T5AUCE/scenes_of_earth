@@ -1460,6 +1460,156 @@ test("invalid pending Save keeps the draft, decision focus and history", async (
   await act(async () => panel.destroy());
 });
 
+test("the charts gallery shows its download section below it", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+    document.body.append(dialog);
+    panel.openFull("charts");
+  });
+
+  const gallery = dialog.querySelector(".chart-gallery");
+  const downloads = dialog.querySelector(".chart-downloads");
+  assert.ok(gallery);
+  assert.ok(downloads);
+  assert.equal(
+    gallery!.compareDocumentPosition(downloads!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+  const labels = [...downloads!.querySelectorAll("button")].map((button) => button.textContent);
+  assert.ok(labels.includes("Area means (CSV)"));
+  assert.ok(labels.includes("Elevation distribution (CSV)"));
+
+  await act(async () => panel!.destroy());
+});
+
+test("the gallery download writes attribution and cleans up its object url", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const downloads = installDownloadCapture(context);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+    document.body.append(dialog);
+    panel.openFull("charts");
+  });
+
+  const button = [...dialog.querySelectorAll(".chart-downloads button")].find(
+    (entry) => entry.textContent === "Area means (CSV)",
+  )!;
+  await act(async () => {
+    button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.equal(downloads.blobs.length, 1);
+  const content = await downloads.blobs[0].text();
+  assert.ok(content.includes("rain_mean [mm/month]"));
+  assert.ok(content.includes("Rain credit"));
+  assert.ok(content.includes("Terms."));
+  assert.equal(downloads.revoked.length, 1);
+  assert.equal(document.body.contains(downloads.anchors[0]), false);
+
+  await act(async () => panel!.destroy());
+});
+
+test("detail downloads follow the selected shape from the gallery", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+    document.body.append(dialog);
+    panel.openFull("charts");
+  });
+
+  const open = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Open",
+  )!;
+  await act(async () => {
+    open.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.ok(dialog.querySelector(".chart-detail"));
+  const detailLabels = [...dialog.querySelectorAll(".detail-downloads button")]
+    .map((button) => button.textContent);
+  assert.ok(detailLabels.includes("Area means (CSV)"));
+  assert.equal(detailLabels.includes("By month (CSV)"), false);
+
+  const back = [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent === "Back to charts",
+  )!;
+  await act(async () => {
+    back.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.ok(dialog.querySelector(".chart-gallery"));
+  assert.ok(dialog.querySelector(".chart-downloads"));
+
+  await act(async () => panel!.destroy());
+});
+
+function installDownloadCapture(context: { after: (hook: () => void) => void }) {
+  const blobs: Blob[] = [];
+  const revoked: string[] = [];
+  const anchors: HTMLAnchorElement[] = [];
+  const originalCreate = document.createElement.bind(document);
+  const originalObjectUrl = URL.createObjectURL;
+  const originalRevoke = URL.revokeObjectURL;
+  (document as unknown as Record<string, unknown>).createElement = (tag: string) => {
+    const element = originalCreate(tag);
+    if (tag === "a") anchors.push(element as HTMLAnchorElement);
+
+    return element;
+  };
+  (URL as unknown as Record<string, unknown>).createObjectURL = (blob: Blob) => {
+    blobs.push(blob);
+
+    return "blob:fake-download";
+  };
+  (URL as unknown as Record<string, unknown>).revokeObjectURL = (url: string) => {
+    revoked.push(url);
+  };
+  context.after(() => {
+    (document as unknown as Record<string, unknown>).createElement = originalCreate;
+    URL.createObjectURL = originalObjectUrl;
+    URL.revokeObjectURL = originalRevoke;
+  });
+
+  return { blobs, revoked, anchors };
+}
+
 function installScrollSpy(context: { after: (hook: () => void) => void }): string[] {
   const scrolled: string[] = [];
   const prototype = globalThis.Element.prototype as unknown as {

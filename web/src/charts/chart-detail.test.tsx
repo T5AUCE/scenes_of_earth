@@ -194,6 +194,243 @@ test("detail shows sync notice and follows effective palette", async (context) =
   });
 });
 
+test("a time close-up downloads its layer means in source units with cleanup", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const downloads = installDownloadCapture(context);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { ChartDetail } = await import("./chart-detail.tsx");
+
+  const layers = [rainLayer()];
+  const store = createSceneStore(layers, display());
+  const main = store.getSnapshot().charts.mainChartId!;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(
+      <ChartDetail
+        scene={makeScene(layers)}
+        store={store}
+        definitionId={main}
+        currentTime={null}
+        onBack={() => {}}
+        onEdit={() => {}}
+      />,
+    );
+  });
+  const buttons = [...host.querySelectorAll("button")].map((button) => button.textContent);
+  assert.ok(buttons.includes("Area means (CSV)"));
+  assert.equal(buttons.includes("By month (CSV)"), false);
+  assert.equal(buttons.includes("Elevation distribution (CSV)"), false);
+
+  const download = [...host.querySelectorAll("button")].find(
+    (button) => button.textContent === "Area means (CSV)",
+  )!;
+  await act(async () => {
+    download.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.equal(downloads.blobs.length, 1);
+  const content = await downloads.blobs[0].text();
+  assert.equal(
+    downloads.anchors.at(-1)?.download,
+    "test-scene_2019-01-01_2021-07-01_area-means.csv",
+  );
+  assert.ok(content.includes("rain_mean [mm/month]"));
+  assert.equal(downloads.revoked.length, 1);
+  assert.equal(document.body.contains(downloads.anchors[0]), false);
+  await act(async () => {
+    root.unmount();
+  });
+});
+
+test("a seasonal close-up downloads by-month rows without other exports", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const downloads = installDownloadCapture(context);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { ChartDetail } = await import("./chart-detail.tsx");
+
+  const layers = [rainLayer()];
+  const store = createSceneStore(layers, display());
+  store.dispatch({
+    kind: "saveChart",
+    definition: {
+      id: "rain-bymonth",
+      title: "Rain by month",
+      source: { layerId: "rain", shape: "seasonal_cycle" },
+      chartType: "bar",
+      options: {},
+    },
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(
+      <ChartDetail
+        scene={makeScene(layers)}
+        store={store}
+        definitionId="rain-bymonth"
+        currentTime={null}
+        onBack={() => {}}
+        onEdit={() => {}}
+      />,
+    );
+  });
+  const buttons = [...host.querySelectorAll("button")].map((button) => button.textContent);
+  assert.ok(buttons.includes("By month (CSV)"));
+  assert.equal(buttons.includes("Area means (CSV)"), false);
+  assert.equal(buttons.includes("Elevation distribution (CSV)"), false);
+
+  const download = [...host.querySelectorAll("button")].find(
+    (button) => button.textContent === "By month (CSV)",
+  )!;
+  await act(async () => {
+    download.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.equal(downloads.blobs.length, 1);
+  const content = await downloads.blobs[0].text();
+  assert.ok(downloads.anchors.at(-1)?.download.endsWith("_by-month.csv"));
+  assert.ok(content.includes("sample_count"));
+  assert.equal(downloads.revoked.length, 1);
+  assert.equal(document.body.contains(downloads.anchors[0]), false);
+  await act(async () => {
+    root.unmount();
+  });
+});
+
+test("a distribution close-up downloads exact elevation stats", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const downloads = installDownloadCapture(context);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { ChartDetail } = await import("./chart-detail.tsx");
+
+  const layers = [rainLayer(), terrainLayer()];
+  const store = createSceneStore(layers, display());
+  const second = store.getSnapshot().charts.definitions[1].id;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(
+      <ChartDetail
+        scene={makeScene(layers)}
+        store={store}
+        definitionId={second}
+        currentTime={null}
+        onBack={() => {}}
+        onEdit={() => {}}
+      />,
+    );
+  });
+  const buttons = [...host.querySelectorAll("button")].map((button) => button.textContent);
+  assert.ok(buttons.includes("Elevation distribution (CSV)"));
+  assert.equal(buttons.includes("Area means (CSV)"), false);
+  assert.equal(buttons.includes("By month (CSV)"), false);
+
+  const download = [...host.querySelectorAll("button")].find(
+    (button) => button.textContent === "Elevation distribution (CSV)",
+  )!;
+  await act(async () => {
+    download.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  const content = await downloads.blobs[0].text();
+  assert.ok(content.includes("share_of_valid_area_below_pct,elevation [m]"));
+  assert.ok(content.includes("# Mean elevation: 500 m."));
+  assert.ok(content.includes("# Median elevation: 500 m."));
+  assert.equal(downloads.revoked.length, 1);
+  await act(async () => {
+    root.unmount();
+  });
+});
+
+test("close-up downloads keep source units after a viewer unit switch", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const downloads = installDownloadCapture(context);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { ChartDetail } = await import("./chart-detail.tsx");
+
+  const layers = [rainLayer()];
+  const store = createSceneStore(layers, display());
+  const main = store.getSnapshot().charts.mainChartId!;
+  await act(async () => {
+    store.dispatch({
+      kind: "display",
+      update: (display) => {
+        display.layers.rain = { units: "in/month" };
+      },
+    });
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(
+      <ChartDetail
+        scene={makeScene(layers)}
+        store={store}
+        definitionId={main}
+        currentTime={null}
+        onBack={() => {}}
+        onEdit={() => {}}
+      />,
+    );
+  });
+  const download = [...host.querySelectorAll("button")].find(
+    (button) => button.textContent === "Area means (CSV)",
+  )!;
+  await act(async () => {
+    download.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  const content = await downloads.blobs[0].text();
+  assert.ok(content.includes("rain_mean [mm/month]"));
+  assert.equal(content.includes("in/month"), false);
+  await act(async () => {
+    root.unmount();
+  });
+});
+
+function installDownloadCapture(context: { after(hook: () => void): void }) {
+  const blobs: Blob[] = [];
+  const revoked: string[] = [];
+  const anchors: HTMLAnchorElement[] = [];
+  const originalCreate = document.createElement.bind(document);
+  const originalObjectUrl = URL.createObjectURL;
+  const originalRevoke = URL.revokeObjectURL;
+  (document as unknown as Record<string, unknown>).createElement = (tag: string) => {
+    const element = originalCreate(tag);
+    if (tag === "a") anchors.push(element as HTMLAnchorElement);
+
+    return element;
+  };
+  (URL as unknown as Record<string, unknown>).createObjectURL = (blob: Blob) => {
+    blobs.push(blob);
+
+    return "blob:fake-download";
+  };
+  (URL as unknown as Record<string, unknown>).revokeObjectURL = (url: string) => {
+    revoked.push(url);
+  };
+  context.after(() => {
+    (document as unknown as Record<string, unknown>).createElement = originalCreate;
+    URL.createObjectURL = originalObjectUrl;
+    URL.revokeObjectURL = originalRevoke;
+  });
+
+  return { blobs, revoked, anchors };
+}
+
 function display() {
   return { layers: {}, off: new Set<string>(), showAs: {} };
 }

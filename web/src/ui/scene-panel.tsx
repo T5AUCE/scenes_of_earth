@@ -6,6 +6,7 @@ import { creditsLine, NOTICES_HEADING_ID, renderAbout, renderCredits, summaryTex
 import { elevationUnitFrom } from "../display-state";
 import type { SceneDisplay } from "../display-state";
 import { ChartDetail } from "../charts/chart-detail";
+import { DownloadSection } from "../charts/download-section";
 import { ChartGallery } from "../charts/chart-gallery";
 import { draftForEdit, draftForNew, ChartEditor, type ChartDraft } from "../charts/chart-editor";
 import { resolveMainId } from "../charts/definitions";
@@ -758,26 +759,29 @@ function chartViewFor(args: {
   }
 
   return (
-    <ChartGallery
-      scene={scene}
-      store={store}
-      currentTime={currentTime}
-      syncNotice={syncNotice}
-      onOpenDetail={openDetail}
-      onEdit={(id) => {
-        const snapshot = store.getSnapshot();
-        const definition = snapshot.charts.definitions.find((entry) => entry.id === id);
-        if (!definition) return;
-        openEditor(draftForEdit(definition), false, null, id);
-      }}
-      onNew={() => {
-        const snapshot = store.getSnapshot();
-        const existing = snapshot.charts.definitions.map((entry) => entry.id);
-        const draft = draftForNew(scene.layers, existing);
-        if (!draft) return;
-        openEditor(draft, true, null, null);
-      }}
-    />
+    <>
+      <ChartGallery
+        scene={scene}
+        store={store}
+        currentTime={currentTime}
+        syncNotice={syncNotice}
+        onOpenDetail={openDetail}
+        onEdit={(id) => {
+          const snapshot = store.getSnapshot();
+          const definition = snapshot.charts.definitions.find((entry) => entry.id === id);
+          if (!definition) return;
+          openEditor(draftForEdit(definition), false, null, id);
+        }}
+        onNew={() => {
+          const snapshot = store.getSnapshot();
+          const existing = snapshot.charts.definitions.map((entry) => entry.id);
+          const draft = draftForNew(scene.layers, existing);
+          if (!draft) return;
+          openEditor(draft, true, null, null);
+        }}
+      />
+      <DownloadSection scene={scene} />
+    </>
   );
 }
 
