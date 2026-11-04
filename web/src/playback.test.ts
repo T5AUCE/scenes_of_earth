@@ -12,6 +12,8 @@ import {
   stepCacheLimit,
 } from "./data.ts";
 import {
+  crossfadeOpacities,
+  ImageCrossfade,
   labelIndexFor,
   LoadMeter,
   loadPlaySpeed,
@@ -697,3 +699,275 @@ test("time while the tab or view is hidden does not slow pacing", () => {
   assert.ok(meter.stepMs()! < 100, `load ${meter.stepMs()} ms a step`);
   assert.equal(sustainedStepMs(CHOSEN_STEP_MS, meter.stepMs()), CHOSEN_STEP_MS);
 });
+
+const FADE_ALPHA = 0.8;
+const FADE_MIXES = [0, 0.25, 0.5, 1];
+
+test("the basemap share stays at 1 - alpha for every mix of a crossfade", () => {
+  for (const mix of FADE_MIXES) {
+    const { incoming, outgoing } = crossfadeOpacities(FADE_ALPHA, mix);
+    const share = (1 - incoming) * (1 - outgoing);
+    const outgoingWeight = outgoing * (1 - incoming);
+
+    assert.ok(Math.abs(share - (1 - FADE_ALPHA)) < 1e-12, `mix ${mix}`);
+    assert.ok(Math.abs(incoming - FADE_ALPHA * mix) < 1e-12);
+    assert.ok(Math.abs(outgoingWeight - FADE_ALPHA * (1 - mix)) < 1e-12);
+  }
+});
+
+test("a crossfade keeps the basemap share whichever image is on top", () => {
+  const { fade, layers } = fadePair();
+  fade.show(1, paintOf("one"));
+  fade.arm(2, paintOf("two"));
+  fade.show(2, paintOf("two"));
+  fade.arm(3, paintOf("three"));
+
+  for (const [from, to] of [[2, 3], [3, 2]]) {
+    for (const mix of FADE_MIXES) {
+      fade.frame(from, to, mix);
+      const [bottom, top] = layers.opacities;
+      const share = (1 - bottom) * (1 - top);
+      assert.ok(Math.abs(share - (1 - FADE_ALPHA)) < 1e-12, `${from} to ${to} at ${mix}`);
+    }
+  }
+});
+
+test("the incoming image ends at full opacity and the outgoing one at none", () => {
+  const { fade, layers } = fadePair();
+  fade.show(1, paintOf("one"));
+  fade.arm(2, paintOf("two"));
+
+  fade.frame(1, 2, 1);
+
+  assert.deepEqual(layers.opacities, [0, FADE_ALPHA]);
+});
+
+test("the images swap roles after a fade and the next step is painted into the idle one", () => {
+  const { fade, layers } = fadePair();
+  fade.show(1, paintOf("one"));
+  fade.arm(2, paintOf("two"));
+  fade.frame(1, 2, 1);
+  layers.images.length = 0;
+
+  assert.equal(fade.frame(2, 3, 0), true);
+  fade.arm(3, paintOf("three"));
+
+  assert.deepEqual(layers.opacities, [0, FADE_ALPHA]);
+  assert.deepEqual(layers.images, [{ slot: 0, name: "three" }]);
+});
+
+test("a step that does not change does no work and sets no opacity again", () => {
+  const { fade, layers } = fadePair();
+  fade.show(4, paintOf("four"));
+  layers.calls = 0;
+  layers.images.length = 0;
+
+  for (const mix of FADE_MIXES) fade.frame(4, 4, mix);
+  fade.arm(4, paintOf("four"));
+
+  assert.equal(layers.calls, 0);
+  assert.deepEqual(layers.images, []);
+});
+
+test("a step outside the axis fades out and in through transparent", () => {
+  const { fade, layers } = fadePair();
+  fade.show(1, paintOf("one"));
+
+  fade.frame(1, null, 0.25);
+  assert.deepEqual(layers.opacities, [FADE_ALPHA * 0.75, 0]);
+  fade.frame(null, null, 0);
+  assert.deepEqual(layers.opacities, [0, 0]);
+
+  fade.arm(2, paintOf("two"));
+  fade.frame(null, 2, 0.5);
+  assert.deepEqual(layers.opacities, [0, FADE_ALPHA * 0.5]);
+});
+
+test("a fade waits on the outgoing image until the incoming one is painted", () => {
+  const { fade, layers } = fadePair();
+  fade.show(1, paintOf("one"));
+
+  assert.equal(fade.frame(1, 2, 0.5), true);
+  assert.deepEqual(layers.opacities, [FADE_ALPHA, 0]);
+  assert.equal(fade.frame(5, 6, 0.5), false);
+  assert.deepEqual(layers.opacities, [FADE_ALPHA, 0]);
+});
+
+test("showing a step alone cancels a fade and a held step needs no paint", () => {
+  const { fade, layers } = fadePair();
+  fade.show(1, paintOf("one"));
+  fade.arm(2, paintOf("two"));
+  fade.frame(1, 2, 0.5);
+  layers.images.length = 0;
+
+  fade.show(2, paintOf("two"));
+
+  assert.deepEqual(layers.opacities, [0, FADE_ALPHA]);
+  assert.deepEqual(layers.images, []);
+});
+
+test("a palette change mid-fade repaints one image at full opacity", () => {
+  const { fade, layers } = fadePair();
+  fade.show(1, paintOf("one"));
+  fade.arm(2, paintOf("two"));
+  fade.frame(1, 2, 0.5);
+  layers.images.length = 0;
+
+  fade.invalidate();
+  assert.equal(fade.holds(1), false);
+  assert.equal(fade.holds(2), false);
+  fade.show(1, paintOf("one again"));
+
+  assert.deepEqual(layers.images, [{ slot: 0, name: "one again" }]);
+  assert.deepEqual(layers.opacities, [FADE_ALPHA, 0]);
+});
+
+test("a crossfade never paints more than the two images", () => {
+  const { fade, layers } = fadePair();
+  fade.show(0, paintOf("0"));
+  for (let step = 1; step < 20; step += 1) {
+    fade.arm(step, paintOf(String(step)));
+    fade.frame(step - 1, step, 1);
+    fade.frame(step, step + 1, 0);
+  }
+
+  assert.deepEqual([...new Set(layers.images.map(({ slot }) => slot))].sort(), [0, 1]);
+  assert.equal(fade.holds(18) && fade.holds(19), true);
+  assert.equal(fade.holds(0), false);
+});
+
+test("preparing a key paints it in an idle moment and never for a held one", async () => {
+  const { fade, layers } = fadePair();
+  const idle = stubIdle();
+  fade.show(1, paintOf("one"));
+  layers.images.length = 0;
+
+  fade.prepare(2, async () => paintOf("two"));
+  fade.prepare(2, async () => paintOf("again"));
+  assert.deepEqual(layers.images, []);
+  idle.runAll();
+  await flush();
+
+  assert.deepEqual(layers.images, [{ slot: 1, name: "two" }]);
+  fade.prepare(2, async () => paintOf("held"));
+  fade.prepare(1, async () => paintOf("held"));
+  assert.equal(idle.tasks.length, 0);
+  idle.restore();
+});
+
+test("hiding or invalidating cancels a prepare that has not run", () => {
+  const { fade, layers } = fadePair();
+  const idle = stubIdle();
+  fade.show(1, paintOf("one"));
+  fade.prepare(2, async () => paintOf("two"));
+
+  fade.invalidate();
+  idle.runAll();
+
+  assert.deepEqual(layers.images, [{ slot: 0, name: "one" }]);
+  idle.restore();
+});
+
+test("a failed prepare lets a fade proceed once and is not retried", async () => {
+  const { fade } = fadePair();
+  const idle = stubIdle();
+  fade.show(1, paintOf("one"));
+  assert.equal(fade.isReady(1, 2), false);
+
+  fade.prepare(2, async () => {
+    throw new Error("read failed");
+  });
+  idle.runAll();
+  await flush();
+  fade.prepare(2, async () => paintOf("two"));
+
+  assert.equal(fade.isReady(1, 2), true);
+  assert.equal(idle.tasks.length, 0);
+  idle.restore();
+});
+
+test("a failed outgoing step stays failed through a hide and fades the next one in", async () => {
+  const { fade, layers } = fadePair();
+  const idle = stubIdle();
+  fade.show(1, paintOf("one"));
+  fade.prepare(2, async () => {
+    throw new Error("read failed");
+  });
+  idle.runAll();
+  await flush();
+  fade.hide();
+  fade.arm(3, paintOf("three"));
+
+  assert.equal(fade.isReady(2, 3), true);
+  assert.equal(fade.frame(2, 3, 0.5), true);
+  assert.deepEqual([...layers.opacities].sort(), [0, FADE_ALPHA * 0.5]);
+  idle.restore();
+});
+
+test("a dropped image is reported with its key and invalidating reports both", () => {
+  const evicted: number[] = [];
+  const layers = fadePair().layers;
+  const fade = new ImageCrossfade<number>(FADE_ALPHA, layers, (key) => evicted.push(key));
+  fade.show(1, paintOf("one"));
+  fade.arm(2, paintOf("two"));
+  fade.show(3, paintOf("three"));
+  assert.deepEqual(evicted, [1]);
+
+  fade.invalidate();
+
+  assert.deepEqual(evicted.toSorted(), [1, 2, 3]);
+});
+
+test("selecting a held key shows it at full opacity without painting", () => {
+  const { fade, layers } = fadePair();
+  fade.show(1, paintOf("one"));
+  fade.arm(2, paintOf("two"));
+  fade.frame(1, 2, 0.5);
+  layers.images.length = 0;
+
+  assert.equal(fade.select(1), true);
+  assert.deepEqual(layers.opacities, [FADE_ALPHA, 0]);
+  assert.equal(fade.select(9), false);
+  assert.deepEqual(layers.images, []);
+});
+
+function stubIdle() {
+  const tasks: (() => void)[] = [];
+  const target = globalThis as unknown as Record<string, unknown>;
+  target.requestIdleCallback = (task: () => void) => tasks.push(task);
+  target.cancelIdleCallback = (id: number) => {
+    tasks[id - 1] = () => {};
+  };
+
+  return {
+    tasks,
+    runAll() {
+      tasks.splice(0).forEach((task) => task());
+    },
+    restore() {
+      Reflect.deleteProperty(target, "requestIdleCallback");
+      Reflect.deleteProperty(target, "cancelIdleCallback");
+    },
+  };
+}
+
+function fadePair() {
+  const layers = {
+    calls: 0,
+    opacities: [0, 0] as readonly [number, number],
+    images: [] as { slot: number; name: string }[],
+    setImage(slot: number, image: ImageData) {
+      layers.images.push({ slot, name: (image as unknown as { name: string }).name });
+    },
+    setOpacities(opacities: readonly [number, number]) {
+      layers.calls += 1;
+      layers.opacities = opacities;
+    },
+  };
+
+  return { layers, fade: new ImageCrossfade<number>(FADE_ALPHA, layers) };
+}
+
+function paintOf(name: string) {
+  return () => ({ name }) as unknown as ImageData;
+}

@@ -409,6 +409,14 @@ export interface LayerView {
   menu?: LayerMenu;
   ready?: Promise<void>; // rejects when the layer's data cannot be read
   setTime(time: string): void;
+  /**
+   * Draw one frame of play fading from `time` to `next` by `mix`. While playing, a view with it
+   * gets this every frame in place of setTime at the label flip, and setTime still shows a single
+   * step when play pauses or the viewer jumps.
+   */
+  setFrame?(time: string, next: string, mix: number): void;
+  /** Whether the fade from `time` to `next` can start now, so the clock waits for the paint. */
+  isFrameReady?(time: string, next: string): boolean;
   /** Decode the step into the cache without drawing, so play never shows a half step. */
   prepare?(time: string): Promise<void>;
   /** How many steps ahead of the shown one the layer keeps decoded, which bounds the lookahead. */

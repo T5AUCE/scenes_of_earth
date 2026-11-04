@@ -4,7 +4,7 @@ import { afterEach, test } from "node:test";
 import { Window } from "happy-dom";
 
 import { bundleStore, createStepReader, decode, readArray, readSteps } from "./data.ts";
-import { LoadMeter, PLAY_SPEED_KEY } from "./playback.ts";
+import { ImageCrossfade, LoadMeter, PLAY_SPEED_KEY } from "./playback.ts";
 import {
   createTimeline,
   formatTime,
@@ -582,15 +582,18 @@ function mount(
   context: { after(hook: () => void): void },
   times: string[],
   options: TimelineOptions = {},
+  browserOptions: { reducedMotion?: boolean } = {},
 ) {
-  const browser = installTimelineBrowser(context, {});
+  const browser = installTimelineBrowser(context, browserOptions);
   const shown: string[] = [];
   const timeline = createTimeline(
     times,
     ["P1M"],
-    (time) => {
+    (time, isFrame) => {
       shown.push(time);
-      options.views?.forEach((view) => view.setTime(time));
+      options.views?.forEach((view) => {
+        if (!isFrame || !view.setFrame) view.setTime(time);
+      });
     },
     options,
   );
@@ -600,6 +603,103 @@ function mount(
 
   return { browser, shown, timeline };
 }
+
+test("play draws each fade frame and leaves the label flip to the fading view", async (context) => {
+  const view = fakeFadingView(quarter);
+  const { browser, timeline } = mount(context, quarter, { views: [view] });
+  view.setTimes.length = 0;
+  playButton(timeline.element).click();
+  await advanceSettling(browser, 1400);
+
+  const mixes = view.frames.map(({ mix }) => mix);
+  assert.ok(mixes.some((mix) => mix > 0 && mix < 1));
+  assert.ok(mixes.every((mix, index) => index === 0 || mix >= mixes[index - 1] || mix === 0));
+  assert.deepEqual(view.frames[0], { time: "2020-01-01", next: "2020-02-01", mix: 0 });
+  assert.deepEqual(view.setTimes, []);
+});
+
+test("a view without setFrame still gets setTime at the label flip", async (context) => {
+  const view = fakeFadingView(quarter);
+  const plain = fakeView(quarter);
+  const setTimes: string[] = [];
+  plain.setTime = (time: string) => setTimes.push(time);
+  const { browser, timeline } = mount(context, quarter, { views: [view, plain] });
+  setTimes.length = 0;
+  playButton(timeline.element).click();
+  await advanceSettling(browser, 1400);
+
+  assert.deepEqual(setTimes, ["2020-02-01"]);
+});
+
+test("reduced motion never gives a view a partial mix", async (context) => {
+  const view = fakeFadingView(quarter);
+  const { browser, timeline } = mount(
+    context,
+    quarter,
+    { views: [view] },
+    { reducedMotion: true },
+  );
+  playButton(timeline.element).click();
+  await advanceSettling(browser, 2500);
+
+  assert.ok(view.frames.length > 0);
+  assert.deepEqual(view.frames.filter(({ mix }) => mix !== 0), []);
+});
+
+test("pausing mid-fade shows the label's step alone", async (context) => {
+  const view = fakeFadingView(quarter);
+  const { browser, timeline } = mount(context, quarter, { views: [view] });
+  view.setTimes.length = 0;
+  playButton(timeline.element).click();
+  await advanceSettling(browser, 1400);
+  assert.ok(view.frames.at(-1)!.mix > 0.5);
+
+  playButton(timeline.element).click();
+
+  assert.deepEqual(view.setTimes, ["2020-02-01"]);
+});
+
+test("jumping to the shown step mid-fade shows it alone", async (context) => {
+  const view = fakeFadingView(quarter);
+  const { browser, timeline } = mount(context, quarter, { views: [view] });
+  view.setTimes.length = 0;
+  playButton(timeline.element).click();
+  await advanceSettling(browser, 1400);
+
+  timeline.goTo("2020-02-01");
+
+  assert.deepEqual(view.setTimes, ["2020-02-01"]);
+});
+
+test("a fade waits while the view has not painted the next step", async (context) => {
+  const view = fakeFadingView(quarter);
+  view.isReady = false;
+  const { browser, shown, timeline } = mount(context, quarter, { views: [view] });
+  playButton(timeline.element).click();
+  await advanceSettling(browser, 3000);
+
+  assert.deepEqual(shown, []);
+  assert.ok(view.frames.every(({ mix }) => mix === 0));
+
+  view.isReady = true;
+  await advanceSettling(browser, 1000);
+
+  assert.deepEqual(shown, ["2020-02-01"]);
+});
+
+test("playing across a step that failed to paint reaches the next good step", async (context) => {
+  const view = fakeCrossfadeView(quarter, "2020-02-01");
+  const { browser, shown, timeline } = mount(context, quarter, { views: [view] });
+  view.setTime("2020-01-01");
+  playButton(timeline.element).click();
+
+  for (let round = 0; round < 80 && !shown.includes("2020-03-01"); round += 1) {
+    browser.advance(SETTLE_STEP_MS);
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+
+  assert.deepEqual(shown.slice(0, 2), ["2020-02-01", "2020-03-01"]);
+});
 
 async function advanceSettling(browser: { advance(ms: number): void }, ms: number) {
   for (let left = ms; left > 0; left -= SETTLE_STEP_MS) {
@@ -649,6 +749,46 @@ function fakeTab(context: { after(hook: () => void): void }) {
   };
 
   return { hide: () => change("hidden"), show: () => change("visible") };
+}
+
+function fakeCrossfadeView(times: string[], failing: string) {
+  const view = fakeFadingView(times);
+  const fade = new ImageCrossfade<string>(0.8, { setImage() {}, setOpacities() {} });
+  let shownTime: string | null = null;
+  view.setTime = (time: string) => {
+    shownTime = time;
+    if (time === failing) fade.hide();
+    else fade.show(time, () => ({}) as ImageData);
+  };
+  view.setFrame = (time, next, mix) => {
+    if (time !== shownTime) {
+      view.setTime(time);
+      return;
+    }
+
+    fade.frame(time, next, mix);
+    fade.prepare(next, async () => {
+      if (next === failing) throw new Error("read failed");
+      return () => ({}) as ImageData;
+    });
+  };
+  view.isFrameReady = (time, next) => fade.isReady(time, next);
+  return view;
+}
+
+function fakeFadingView(times: string[]) {
+  const view = fakeView(times) as ReturnType<typeof fakeView> & {
+    frames: { time: string; next: string; mix: number }[];
+    setTimes: string[];
+    isReady: boolean;
+  };
+  view.frames = [];
+  view.setTimes = [];
+  view.isReady = true;
+  view.setTime = (time: string) => view.setTimes.push(time);
+  view.setFrame = (time, next, mix) => view.frames.push({ time, next, mix });
+  view.isFrameReady = () => view.isReady;
+  return view;
 }
 
 function fakeView(times: string[]) {
@@ -885,7 +1025,7 @@ async function playFrames(
 
 function installTimelineBrowser(
   context: { after(hook: () => void): void },
-  options: { storage?: object },
+  options: { storage?: object; reducedMotion?: boolean },
 ) {
   const window = new Window({ url: "http://localhost/" });
   context.after(() => window.happyDOM.abort());
@@ -908,7 +1048,11 @@ function installTimelineBrowser(
   previous.set("localStorage", (globalThis as Record<string, unknown>).localStorage);
   Object.assign(globalThis, { localStorage: storage });
 
-  const media = { matches: false, addEventListener() {}, removeEventListener() {} };
+  const media = {
+    matches: options.reducedMotion ?? false,
+    addEventListener() {},
+    removeEventListener() {},
+  };
   previous.set("matchMedia", (globalThis as Record<string, unknown>).matchMedia);
   Object.assign(globalThis, { matchMedia: () => media });
 

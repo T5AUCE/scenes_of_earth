@@ -2,7 +2,14 @@
 import { rangeDecimals } from "../display-state";
 import { makeHtmlElement } from "../html";
 import { bivariateLegend } from "../legend";
-import { addImageLayer, maxTextureSize, removeLayerAndSource, setImage } from "../map";
+import {
+  addImagePair,
+  maxTextureSize,
+  removeLayerAndSource,
+  setImage,
+  setPairOpacities,
+} from "../map";
+import { ImageCrossfade } from "../playback";
 import { displayStops } from "../units";
 import {
   type BivariateAxis,
@@ -65,14 +72,17 @@ class Blend implements BlendView {
       note: SMOOTH_NOTE,
       initial: true,
       set: (on: boolean) => {
-        this.context.map.setPaintProperty(this.id, "raster-resampling", on ? "linear" : "nearest");
+        for (const id of this.fadeIds) {
+          this.context.map.setPaintProperty(id, "raster-resampling", on ? "linear" : "nearest");
+        }
       },
     },
   ];
   readonly time = null;
 
   private readonly context: BlendContext;
-  private readonly id = `${BLEND}-series`;
+  private readonly fadeIds = [`${BLEND}-series`, `${BLEND}-series-next`] as const;
+  private readonly fade: ImageCrossfade<string>;
   private readonly halves: [Half, Half];
   private readonly width: number;
   private readonly height: number;
@@ -84,10 +94,16 @@ class Blend implements BlendView {
   private alive = true;
   // A slow read of an older step must not overwrite the one being displayed.
   private shownTime: string | null = null;
+  private shownKey: string | null = null;
+  private notedTime: string | null = null;
 
   constructor([rain, temperature]: readonly [LayerDoc, LayerDoc], context: BlendContext) {
     this.context = context;
     const { map, store, shift, slots } = context;
+    this.fade = new ImageCrossfade(BLEND_OPACITY, {
+      setImage: (slot, image) => setImage(map, this.fadeIds[slot], image),
+      setOpacities: (opacities) => setPairOpacities(map, this.fadeIds, opacities),
+    });
     const finer = rain.grid.res <= temperature.grid.res ? rain : temperature;
     const table = sampleTable(finer.grid, maxTextureSize(map), { preserveCoverage: true });
     this.width = table.width;
@@ -108,8 +124,7 @@ class Blend implements BlendView {
     };
     this.halves = [halfOf(rain), halfOf(temperature)];
 
-    addImageLayer(map, this.id, finer.grid.bbox, shift, slots.fill, {
-      "raster-opacity": 0,
+    addImagePair(map, this.fadeIds, finer.grid.bbox, shift, slots.fill, {
       "raster-resampling": "linear",
     });
 
@@ -119,7 +134,7 @@ class Blend implements BlendView {
       {
         id: BLEND,
         label: BLEND_TITLE,
-        layerIds: [this.id],
+        layerIds: [...this.fadeIds],
         note: this.noteBox,
       },
     ];
@@ -131,8 +146,27 @@ class Blend implements BlendView {
     this.refresh();
   }
 
+  setFrame(time: string, next: string, mix: number) {
+    if (time !== this.shownTime) {
+      this.setTime(time);
+      return;
+    }
+
+    if (!this.isShown) return;
+
+    const nextKey = this.keyAt(next);
+    this.fade.frame(this.keyAt(time), nextKey, mix);
+    const dominant = mix < 0.5 ? time : next;
+    if (dominant !== this.notedTime) this.showNotes(dominant);
+    if (nextKey !== null) this.fade.prepare(nextKey, () => this.loadNext(next));
+  }
+
+  isFrameReady(time: string, next: string) {
+    return !this.isShown || this.fade.isReady(this.keyAt(time), this.keyAt(next));
+  }
+
   async prepare(time: string): Promise<void> {
-    const steps = this.halves.map(({ time: axis }) => stepAt(axis.values, axis.end, time));
+    const steps = this.stepsAt(time);
     if (steps[0] < 0 || steps[1] < 0) return;
 
     await Promise.all(this.halves.map(({ reader }, index) => reader.read(steps[index], false)));
@@ -157,7 +191,8 @@ class Blend implements BlendView {
 
   restyle() {
     this.showLegend();
-    if (this.values) this.paint(this.values);
+    this.fade.invalidate();
+    if (this.values && this.shownKey !== null) this.paint(this.values, this.shownKey);
   }
 
   legend() {
@@ -166,45 +201,52 @@ class Blend implements BlendView {
 
   destroy() {
     this.alive = false;
-    removeLayerAndSource(this.context.map, this.id);
+    this.fade.invalidate();
+    for (const id of this.fadeIds) removeLayerAndSource(this.context.map, id);
   }
 
   private refresh() {
-    this.hide();
-    if (this.isShown && this.shownTime !== null) this.drawLatest(this.shownTime);
+    if (!this.isShown || this.shownTime === null) {
+      this.hide();
+      return;
+    }
+
+    // A painted image shows at once, so a pause never waits on the decoded values.
+    const key = this.keyAt(this.shownTime);
+    if (key !== null && this.fade.select(key)) this.values = null;
+    else this.hide();
+    this.drawLatest(this.shownTime);
   }
 
   private hide() {
-    this.values = null;
+    this.hideImage();
+    this.notedTime = null;
     this.noteBox.hidden = true;
-    this.context.map.setPaintProperty(this.id, "raster-opacity", 0);
+  }
+
+  private hideImage() {
+    this.values = null;
+    this.fade.hide();
   }
 
   private async drawTime(time: string) {
     if (!this.isCurrent(time)) return;
 
-    const steps = this.halves.map(({ time: axis }) => stepAt(axis.values, axis.end, time));
-    const label = formatTime(time, this.halves.map(({ time: axis }) => axis.step));
-    const note = missingStepNote(
-      this.halves.map(({ layer }, index) => ({ title: layer.title, step: steps[index] })),
-      label,
-    );
-    if (note) {
-      this.noteBox.textContent = note;
-      this.noteBox.hidden = false;
+    if (this.showNotes(time)) {
+      this.hideImage();
       return;
     }
 
     try {
       const [rain, temperature] = this.halves;
+      const steps = this.stepsAt(time);
       const values = await Promise.all([
         rain.reader.read(steps[0]),
         temperature.reader.read(steps[1]),
       ]);
       if (!this.isCurrent(time)) return;
 
-      this.paint(values);
-      this.showPeriodNote(steps);
+      this.paint(values, this.keyAt(time)!);
       this.halves.forEach(({ reader, time: axis }, index) => {
         reader.prime(steps[index], axis.values.length - 1);
       });
@@ -217,23 +259,40 @@ class Blend implements BlendView {
     }
   }
 
-  private showPeriodNote(steps: number[]) {
-    const periods = this.halves.map(({ layer, time: axis }, index) => ({
+  /** Sets the note for a time and returns whether a half has no step there. */
+  private showNotes(time: string) {
+    const steps = this.stepsAt(time);
+    const label = formatTime(time, this.halves.map(({ time: axis }) => axis.step));
+    const missing = missingStepNote(
+      this.halves.map(({ layer }, index) => ({ title: layer.title, step: steps[index] })),
+      label,
+    );
+    const note = missing ?? differingPeriodNote(this.periodsAt(steps));
+    this.notedTime = time;
+    this.noteBox.textContent = note ?? "";
+    this.noteBox.hidden = note === null;
+
+    return missing !== null;
+  }
+
+  private periodsAt(steps: number[]) {
+    return this.halves.map(({ layer, time: axis }, index) => ({
       title: layer.title,
       period: formatTime(axis.values[steps[index]], [axis.step]),
     }));
-    const note = differingPeriodNote(periods);
-    if (!note) return;
-
-    this.noteBox.textContent = note;
-    this.noteBox.hidden = false;
   }
 
   private isCurrent(time: string) {
     return this.alive && this.isShown && time === this.shownTime;
   }
 
-  private paint(values: Float32Array[]) {
+  private paint(values: Float32Array[], key: string) {
+    this.values = values;
+    this.shownKey = key;
+    this.fade.show(key, () => this.paintImage(values));
+  }
+
+  private paintImage(values: Float32Array[]) {
     const [rain, temperature] = this.halves.map((half, index): BivariateAxis => ({
       values: values[index],
       table: half.table,
@@ -241,9 +300,27 @@ class Blend implements BlendView {
     }));
     const rgba = paintBivariate(rain, temperature, BLEND_COLORS);
 
-    this.values = values;
-    setImage(this.context.map, this.id, new ImageData(rgba, this.width, this.height));
-    this.context.map.setPaintProperty(this.id, "raster-opacity", BLEND_OPACITY);
+    return new ImageData(rgba, this.width, this.height);
+  }
+
+  private async loadNext(time: string) {
+    const steps = this.stepsAt(time);
+    const values = await Promise.all(
+      this.halves.map(({ reader }, index) => reader.read(steps[index], false)),
+    );
+
+    return () => this.paintImage(values);
+  }
+
+  private stepsAt(time: string) {
+    return this.halves.map(({ time: axis }) => stepAt(axis.values, axis.end, time));
+  }
+
+  // The blend fades only between times where both halves have a step.
+  private keyAt(time: string) {
+    const steps = this.stepsAt(time);
+
+    return steps.some((step) => step < 0) ? null : steps.join(":");
   }
 
   private nativeStops({ layer, fitted }: Half) {

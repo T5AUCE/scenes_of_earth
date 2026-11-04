@@ -446,8 +446,11 @@ function createSceneTimeline(
   return createTimeline(
     times,
     steps,
-    (time) => {
-      views.forEach((view) => view.setTime(time));
+    (time, isFrame) => {
+      // A view that fades is driven by setFrame while play runs, so the label flip must not cut it.
+      views.forEach((view) => {
+        if (!isFrame || !view.setFrame) view.setTime(time);
+      });
       onTime(time, formatTime(time, steps));
     },
     { views, visibility, onPlayingChange },

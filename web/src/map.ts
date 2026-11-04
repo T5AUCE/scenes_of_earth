@@ -187,7 +187,7 @@ export function addImageLayer(
   bbox: Bbox,
   shift: number,
   beforeId: string | undefined,
-  paint: Record<string, string | number>,
+  paint: Record<string, string | number | { duration: number }>,
 ) {
   map.addSource(id, { type: "image", coordinates: imageCorners(bbox, shift) });
   setImage(map, id, new ImageData(PLACEHOLDER_SIZE_PX, PLACEHOLDER_SIZE_PX));
@@ -195,6 +195,36 @@ export function addImageLayer(
     { id, type: "raster", source: id, paint: { "raster-fade-duration": 0, ...paint } },
     beforeId,
   );
+}
+
+/**
+ * Adds two image layers in one slot, the second above the first, whose opacity changes apply at
+ * once so a crossfade can drive them every frame.
+ */
+export function addImagePair(
+  map: MapLibreMap,
+  ids: readonly [string, string],
+  bbox: Bbox,
+  shift: number,
+  beforeId: string | undefined,
+  paint: Record<string, string | number>,
+) {
+  for (const id of ids) {
+    addImageLayer(map, id, bbox, shift, beforeId, {
+      "raster-opacity": 0,
+      "raster-opacity-transition": { duration: 0 },
+      ...paint,
+    });
+  }
+}
+
+/** Sets the opacity of both layers of an image pair. */
+export function setPairOpacities(
+  map: MapLibreMap,
+  ids: readonly [string, string],
+  opacities: readonly [number, number],
+) {
+  ids.forEach((id, index) => map.setPaintProperty(id, "raster-opacity", opacities[index]));
 }
 
 /** Replaces the picture of a layer added with addImageLayer. */

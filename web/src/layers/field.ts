@@ -26,7 +26,14 @@ import {
   hatchLegend,
   isothermLegend,
 } from "../legend";
-import { addImageLayer, maxTextureSize, removeLayerAndSource, setImage } from "../map";
+import {
+  addImagePair,
+  maxTextureSize,
+  removeLayerAndSource,
+  setImage,
+  setPairOpacities,
+} from "../map";
+import { ImageCrossfade } from "../playback";
 import { displayStops, displayUnitFor, isUnitFor, unitOptions } from "../units";
 import { lut, paintColormap, stopsForRange } from "../render/colormap";
 import {
@@ -69,6 +76,13 @@ export function createSeriesView(context: LayerContext): LayerView {
   return new FieldView(context);
 }
 
+/** Kept for each painted image so the hatch can switch at the fade midpoint without rereading. */
+interface MarksState {
+  positions: Uint8Array;
+  mask: ArrayLike<number> | null;
+  hasHatch: boolean;
+}
+
 class FieldView implements LayerView {
   readonly parts;
   readonly options;
@@ -77,6 +91,8 @@ class FieldView implements LayerView {
 
   private readonly context: LayerContext;
   private readonly id: string;
+  private readonly fadeIds: readonly [string, string];
+  private readonly fade: ImageCrossfade<number>;
   private readonly marksId: string;
   private readonly fittedStops: number[];
   private readonly legendBox = makeHtmlElement("div");
@@ -102,6 +118,8 @@ class FieldView implements LayerView {
   private alive = true;
   // A slow read of an older step must not overwrite the one being displayed.
   private shownStep = -1;
+  private marksStep: number | null = null;
+  private readonly marksByStep = new Map<number, MarksState>();
 
   constructor(context: LayerContext) {
     this.context = context;
@@ -112,6 +130,15 @@ class FieldView implements LayerView {
     }
 
     this.id = `${layer.id}-series`;
+    this.fadeIds = [this.id, `${this.id}-next`];
+    this.fade = new ImageCrossfade(
+      SERIES_OPACITY,
+      {
+        setImage: (slot, image) => setImage(map, this.fadeIds[slot], image),
+        setOpacities: (opacities) => setPairOpacities(map, this.fadeIds, opacities),
+      },
+      (step) => this.marksByStep.delete(step),
+    );
     this.marksId = `${layer.id}-dots`;
     this.time = layer.time;
     this.fittedStops = fittedStops;
@@ -123,8 +150,7 @@ class FieldView implements LayerView {
     this.colors = lut(gradientOf(this.palette));
     this.stops = stopsForRange(this.fittedStops, this.range);
 
-    addImageLayer(map, this.id, layer.grid.bbox, shift, slots.fill, {
-      "raster-opacity": 0,
+    addImagePair(map, this.fadeIds, layer.grid.bbox, shift, slots.fill, {
       "raster-resampling": "linear",
     });
 
@@ -154,7 +180,7 @@ class FieldView implements LayerView {
         id: layer.id,
         label: layer.title,
         layerIds: [
-          this.id,
+          ...this.fadeIds,
           ...(this.marks ? [this.marksId] : []),
           ...(this.isolines?.layerIds ?? []),
         ],
@@ -167,7 +193,9 @@ class FieldView implements LayerView {
         note: SMOOTH_NOTE,
         initial: true,
         set: (on: boolean) => {
-          map.setPaintProperty(this.id, "raster-resampling", on ? "linear" : "nearest");
+          for (const id of this.fadeIds) {
+            map.setPaintProperty(id, "raster-resampling", on ? "linear" : "nearest");
+          }
           this.isolines?.setSmooth(on);
           if (this.draw === "isolines" && this.shownStep >= 0) {
             this.drawLatestStep(this.shownStep);
@@ -345,6 +373,8 @@ class FieldView implements LayerView {
   private restyle() {
     this.colors = lut(gradientOf(this.palette));
     this.stops = stopsForRange(this.fittedStops, this.range);
+    this.fade.invalidate();
+    this.marksStep = null;
     this.isolines?.setRange(this.range);
     this.showLegend();
     if (this.shownStep >= 0) this.drawLatestStep(this.shownStep);
@@ -352,8 +382,43 @@ class FieldView implements LayerView {
 
   setTime(time: string) {
     this.shownStep = stepAt(this.time.values, this.time.end, time);
-    if (this.shownStep < 0) this.hideStep();
-    else this.drawLatestStep(this.shownStep);
+    if (this.shownStep < 0) {
+      this.hideStep();
+      return;
+    }
+
+    // A painted image shows at once, so a pause never waits on the decoded values.
+    if (this.draw === "colour" && this.fade.select(this.shownStep)) {
+      this.followDominant(this.shownStep);
+    }
+    this.drawLatestStep(this.shownStep);
+  }
+
+  setFrame(time: string, next: string, mix: number) {
+    const step = stepAt(this.time.values, this.time.end, time);
+    const nextStep = stepAt(this.time.values, this.time.end, next);
+    if (this.draw !== "colour") {
+      this.cutTo(mix < 0.5 ? time : next);
+      return;
+    }
+
+    if (step !== this.shownStep) {
+      this.setTime(time);
+      return;
+    }
+
+    this.fade.frame(keyOf(step), keyOf(nextStep), mix);
+    this.followDominant(mix < 0.5 ? step : nextStep);
+    if (nextStep >= 0) this.fade.prepare(nextStep, () => this.loadNext(nextStep));
+  }
+
+  isFrameReady(time: string, next: string) {
+    if (this.draw !== "colour") return true;
+
+    const step = stepAt(this.time.values, this.time.end, time);
+    const nextStep = stepAt(this.time.values, this.time.end, next);
+
+    return this.fade.isReady(keyOf(step), keyOf(nextStep));
   }
 
   async prepare(time: string): Promise<void> {
@@ -384,12 +449,49 @@ class FieldView implements LayerView {
     if (this.draw && this.shownStep >= 0) this.drawLatestStep(this.shownStep);
   }
 
+  // Isolines and dots do not fade, so they cut to the label's step at the midpoint.
+  private cutTo(time: string) {
+    const step = stepAt(this.time.values, this.time.end, time);
+    if (step !== this.shownStep) this.setTime(time);
+  }
+
+  private async loadNext(step: number) {
+    const [values, mask] = await Promise.all([this.readStep.read(step, false), this.mask]);
+
+    return () => {
+      if (this.marks) this.cacheMarks(step, this.marksOf(values, mask));
+      return this.paintImage(values);
+    };
+  }
+
+  // The hatch follows the step that shows more, so it switches at the fade midpoint and not later.
+  private followDominant(step: number) {
+    if (!this.marks || step === this.marksStep) return;
+
+    if (step < 0) {
+      this.marks.setHatch(false);
+      this.setHatched(false);
+    } else {
+      const state = this.marksByStep.get(step);
+      if (!state) return;
+
+      this.showMarks(state);
+    }
+    this.marksStep = step;
+  }
+
+  private cacheMarks(step: number, state: MarksState) {
+    this.marksByStep.set(step, state);
+  }
+
+
   private hideStep() {
-    this.context.map.setPaintProperty(this.id, "raster-opacity", 0);
+    this.fade.hide();
     this.marks?.setDots(false);
     this.marks?.setHatch(false);
     this.isolines?.setVisible(false);
     this.setHatched(false);
+    this.marksStep = null;
   }
 
   private setHatched(hasHatched: boolean) {
@@ -422,27 +524,40 @@ class FieldView implements LayerView {
     step: number,
     mask: ArrayLike<number> | null,
   ) {
-    const { map } = this.context;
-    this.updateMarks(values, mask);
+    if (this.marks) {
+      const state = this.marksOf(values, mask);
+      this.showMarks(state);
+      if (this.draw === "colour") {
+        this.cacheMarks(step, state);
+        this.marksStep = step;
+      }
+    }
     if (this.draw === "colour") {
-      const rgba = paintColormap(values, this.table, this.colors, this.stops);
-      setImage(map, this.id, new ImageData(rgba, this.table.width, this.table.height));
-      map.setPaintProperty(this.id, "raster-opacity", SERIES_OPACITY);
+      this.fade.show(step, () => this.paintImage(values));
     } else if (this.draw === "isolines") {
       this.isolines!.setValues(values, step);
       this.isolines!.setVisible(true);
     }
   }
 
-  private updateMarks(values: Float32Array, mask: ArrayLike<number> | null) {
-    if (!this.marks) return;
+  private paintImage(values: Float32Array) {
+    const rgba = paintColormap(values, this.table, this.colors, this.stops);
 
+    return new ImageData(rgba, this.table.width, this.table.height);
+  }
+
+  private marksOf(values: Float32Array, mask: ArrayLike<number> | null): MarksState {
     const positions = positionBytes(values, this.stops);
     const hasHatch = mask !== null && this.draw !== null && hasHatchedCells(positions, mask);
-    this.marks.setMask(mask ?? new Uint8Array(positions.length).fill(1));
-    this.marks.setPositions(positions);
-    this.marks.setDots(this.draw === "dots");
-    this.marks.setHatch(hasHatch);
+
+    return { positions, mask, hasHatch };
+  }
+
+  private showMarks({ positions, mask, hasHatch }: MarksState) {
+    this.marks!.setMask(mask ?? new Uint8Array(positions.length).fill(1));
+    this.marks!.setPositions(positions);
+    this.marks!.setDots(this.draw === "dots");
+    this.marks!.setHatch(hasHatch);
     this.setHatched(hasHatch);
   }
 
@@ -454,7 +569,8 @@ class FieldView implements LayerView {
     this.alive = false;
     this.dotsZoomWatch.setActive(false);
     this.stopKeepingMarks?.();
-    removeLayerAndSource(this.context.map, this.id);
+    this.fade.invalidate();
+    for (const id of this.fadeIds) removeLayerAndSource(this.context.map, id);
     removeLayerAndSource(this.context.map, this.marksId);
     this.isolines?.destroy();
   }
@@ -481,6 +597,10 @@ export function fieldReader(layer: LayerDoc, store: Promise<Store>): StepReader 
   );
   byLayer.set(layer.id, reader);
   return reader;
+}
+
+function keyOf(step: number) {
+  return step < 0 ? null : step;
 }
 
 function gradientOf(palette: string) {

@@ -9,6 +9,7 @@ import {
   lumpFor,
   PACE_SLOWED_RATIO,
   PLAY_SPEEDS,
+  type Playhead,
   playheadAt,
   prefersReducedMotion,
   rescalePosition,
@@ -94,7 +95,7 @@ export function latestOnly<T>(task: (value: T) => Promise<void>) {
 export function createTimeline(
   times: string[],
   steps: string[],
-  onChange: (time: string) => void,
+  onChange: (time: string, isFrame: boolean) => void,
   options?: TimelineOptions,
 ) {
   const controls = createControls(times.length);
@@ -168,7 +169,8 @@ function createControls(count: number): Controls {
 class PlaybackClock {
   private readonly times: string[];
   private readonly steps: string[];
-  private readonly onChange: (time: string) => void;
+  private readonly onChange: (time: string, isFrame: boolean) => void;
+  private readonly views: LayerView[];
   private readonly onPlayingChange?: (playing: boolean) => void;
   private readonly controls: Controls;
   private readonly window: PrefetchWindow;
@@ -191,19 +193,20 @@ class PlaybackClock {
   constructor(
     times: string[],
     steps: string[],
-    onChange: (time: string) => void,
+    onChange: (time: string, isFrame: boolean) => void,
     controls: Controls,
     options?: TimelineOptions,
   ) {
     this.times = times;
     this.steps = steps;
     this.onChange = onChange;
+    this.views = options?.views ?? [];
     this.controls = controls;
     this.onPlayingChange = options?.onPlayingChange;
     this.stepMs = stepMsFor(times.length, this.speed);
     this.paceMs = this.stepMs;
     this.lookahead = lookaheadFor(this.stepMs);
-    this.window = new PrefetchWindow(times, options?.views ?? [], options?.visibility);
+    this.window = new PrefetchWindow(times, this.views, options?.visibility);
     controls.speedSelect.value = String(this.speed);
     this.stopReducedMotion = watchReducedMotion((reduced) => {
       this.reducedMotion = reduced;
@@ -250,6 +253,7 @@ class PlaybackClock {
     this.endStall();
     // Drawing while still playing holds the link until the pause writes it once.
     if (clamped !== this.shown) this.show(clamped);
+    else if (this.playing) this.settleViews();
     this.stopPlaying();
   }
 
@@ -300,6 +304,7 @@ class PlaybackClock {
     this.playheadMs = Math.max(this.shown, 0) * this.stepMs;
     this.endStall();
     this.stopPlaying();
+    this.settleViews();
   }
 
   private stopPlaying() {
@@ -332,12 +337,17 @@ class PlaybackClock {
     const frame = playheadAt(candidateMs, this.paceMs, this.times.length, this.reducedMotion);
     const desired = labelIndexFor(frame);
 
-    if (desired !== this.shown && !this.window.isReady(desired)) {
+    const isLabelBlocked = desired !== this.shown && !this.window.isReady(desired);
+    const isFadeBlocked = !isLabelBlocked && !this.isFadeReady(frame);
+    if (isLabelBlocked || isFadeBlocked) {
       this.stall(frameMs);
+      // Holding at no mix still lets the views start painting the step they fade to.
+      if (isFadeBlocked) this.drawFrame(frame.index, frame.next, 0);
     } else {
       this.playheadMs = candidateMs;
       this.endStall();
       this.markSlowed();
+      this.drawFrame(frame.index, frame.next, frame.mix);
       if (desired !== this.shown) this.advanceTo(desired);
     }
     this.frameId = scheduleFrame(this.tick);
@@ -384,8 +394,33 @@ class PlaybackClock {
   }
 
   private advanceTo(index: number) {
-    this.show(index);
+    this.show(index, true);
     this.warm();
+  }
+
+  private frameViews() {
+    return this.views.filter((view) => view.setFrame);
+  }
+
+  private isFadeReady(frame: Playhead) {
+    if (frame.mix <= 0) return true;
+
+    const time = this.times[frame.index];
+    const next = this.times[frame.next];
+    return this.frameViews().every((view) => {
+      return !this.window.isVisible(view) || view.isFrameReady?.(time, next) !== false;
+    });
+  }
+
+  private drawFrame(index: number, next: number, mix: number) {
+    for (const view of this.frameViews()) view.setFrame!(this.times[index], this.times[next], mix);
+  }
+
+  // Pausing or jumping shows the label's step alone, which cannot wait for the next frame.
+  private settleViews() {
+    if (this.shown < 0) return;
+
+    for (const view of this.frameViews()) view.setTime(this.times[this.shown]);
   }
 
   private viewsChanged() {
@@ -397,14 +432,14 @@ class PlaybackClock {
     if (this.playing) this.window.refresh(Math.max(this.shown, 0), this.lookahead);
   }
 
-  private show(index: number) {
+  private show(index: number, isFrame = false) {
     if (!this.alive || index === this.shown) return;
 
     const { slider, label } = this.controls;
     this.shown = index;
     slider.value = String(index);
     label.textContent = formatTime(this.times[index], this.steps);
-    this.onChange(this.times[index]);
+    this.onChange(this.times[index], isFrame);
   }
 
   private setPlaying(playing: boolean) {
@@ -432,6 +467,10 @@ class PrefetchWindow {
     this.times = times;
     this.views = views;
     this.visibility = visibility;
+  }
+
+  isVisible(view: LayerView) {
+    return this.visibility?.isVisible(view) !== false;
   }
 
   /** Whether every visible view holds the position, which is true when none can prepare. */
@@ -480,7 +519,7 @@ class PrefetchWindow {
   syncCounting() {
     const isTabShown = typeof document === "undefined" || document.visibilityState !== "hidden";
     for (const [view, meter] of this.meters) {
-      const isViewShown = this.visibility?.isVisible(view) !== false;
+      const isViewShown = this.isVisible(view);
       meter.setCounting(isTabShown && isViewShown, nowMs());
     }
   }
@@ -499,7 +538,7 @@ class PrefetchWindow {
   }
 
   private visibleViews() {
-    return this.views.filter((view) => view.prepare && this.visibility?.isVisible(view) !== false);
+    return this.views.filter((view) => view.prepare && this.isVisible(view));
   }
 
   private prepare(view: LayerView, time: string) {
