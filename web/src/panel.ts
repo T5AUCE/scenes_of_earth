@@ -18,6 +18,7 @@ import {
   fitToBbox,
   showPickedOutline,
 } from "./map";
+import { createMonthSelect } from "./month-select";
 import { shiftLongitudes, worldShift } from "./render/mercator";
 import type { EnterOptions } from "./scene-mode";
 import type {
@@ -395,9 +396,9 @@ function createSearchControls(root: HTMLElement) {
 
 function createMonthInputs(root: HTMLElement) {
   const months = makeHtmlElement("div", "", root);
-  const start = document.createElement("input");
-  const end = document.createElement("input");
-  start.type = end.type = "month";
+  months.className = "months";
+  const start = createMonthSelect("From month", "From year");
+  const end = createMonthSelect("To month", "To year");
   months.append("From ", start, " to ", end);
 
   return { start, end };

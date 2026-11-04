@@ -113,6 +113,18 @@ body {
   font-weight: bold;
 }
 
+#panel .months {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+#panel .month-select {
+  display: inline-flex;
+  gap: 2px;
+}
+
 #panel .status,
 #panel .notice {
   color: #444;

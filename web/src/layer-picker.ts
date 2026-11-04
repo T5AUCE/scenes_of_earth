@@ -1,3 +1,4 @@
+import type { MonthSelect } from "./month-select";
 import type { Layer } from "./types";
 
 const MONTH_STEP = "P1M"; // the only request step the inputs below can take so far
@@ -9,8 +10,8 @@ type TimeAxis = NonNullable<Layer["time"]>;
 /** The panel controls that the layer choices fill in. */
 export interface LayerChoiceControls {
   layerBox: HTMLElement;
-  start: HTMLInputElement;
-  end: HTMLInputElement;
+  start: MonthSelect;
+  end: MonthSelect;
 }
 
 /**
@@ -26,6 +27,7 @@ export async function loadLayerChoices({ layerBox, start, end }: LayerChoiceCont
   appendLayerBoxes(layerBox, layers, defaultIds);
   const updateRange = () => setMonthRange(start, end, checkedAxes(layerBox, layers));
   layerBox.addEventListener("change", updateRange);
+  keepMonthOrder(start, end);
   updateRange();
   return layers;
 }
@@ -59,16 +61,31 @@ function checkedAxes(layerBox: HTMLElement, layers: Layer[]) {
   return checked.flatMap((layer) => (layer.time ? [layer.time] : []));
 }
 
+// Moving one end past the other drags the other end along, so a request never ends early.
+function keepMonthOrder(start: MonthSelect, end: MonthSelect): void {
+  start.addEventListener("change", () => {
+    if (start.value > end.value) end.value = start.value;
+  });
+  end.addEventListener("change", () => {
+    if (end.value < start.value) start.value = end.value;
+  });
+}
+
 // The range follows only the checked layers, so unchecking temperature brings back the
 // longer rain range.
-function setMonthRange(start: HTMLInputElement, end: HTMLInputElement, axes: TimeAxis[]) {
+function setMonthRange(start: MonthSelect, end: MonthSelect, axes: TimeAxis[]) {
   const range = commonRange(axes);
   if (!range) return;
 
+  // Bounds rebuild the year lists, so the picks are read first while they still hold dates.
+  const previousStart = start.value || addMonths(range.last, 1 - DEFAULT_MONTHS);
+  const previousEnd = end.value || range.last;
   start.min = end.min = range.first;
   start.max = end.max = range.last;
-  end.value = withinRange(end.value || range.last, range);
-  start.value = withinRange(start.value || addMonths(range.last, 1 - DEFAULT_MONTHS), range);
+  end.value = withinRange(previousEnd, range);
+  start.value = withinRange(previousStart, range);
+  // Both ends clamp separately, so From still wins after an inverted pick.
+  if (start.value > end.value) end.value = start.value;
 }
 
 function withinRange(month: string, { first, last }: { first: string; last: string }) {
