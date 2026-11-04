@@ -3,6 +3,7 @@ import json
 import threading
 import time
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -23,6 +24,7 @@ from soe.sources import (
     SyntheticSource,
     make_registry,
 )
+from tests.conftest import write_updating_chirps_cube
 from tests.helpers import FIJI, ReingestedSource, boundary_row, write_cube
 
 POLL_ATTEMPTS = 100
@@ -144,6 +146,85 @@ def wait_for(client: TestClient, scene_id: str, wanted_status: str = "done") -> 
             return scene
         time.sleep(POLL_INTERVAL_SECS)
     raise AssertionError("timeout")
+
+
+def build_rain_scene(tmp_path: Path, source: SyntheticSource) -> tuple[str, JsonObject]:
+    """Build the rain scene through a fresh app and return its id and rain layer."""
+    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(source))
+    with TestClient(app) as client:
+        response = client.post("/api/scenes", json=body(layers=["chirps_monthly"]))
+        scene_id = response.json()["id"]
+        done = wait_for(client, scene_id)
+        assert done["status"] == "done"
+        repeat = client.post("/api/scenes", json=body(layers=["chirps_monthly"]))
+        assert repeat.json()["id"] == scene_id
+        return scene_id, client.get(done["bundle_url"]).json()["layers"][0]
+
+
+def test_scene_built_from_the_cube_matches_one_built_over_http_within_quantisation(tmp_path):
+    http_id, http_rain = build_rain_scene(tmp_path / "http", SyntheticSource())
+    cube_source = SyntheticSource(chirps_cube=True)
+    cube_id, cube_rain = build_rain_scene(tmp_path / "cube", cube_source)
+
+    assert cube_id != http_id
+    assert cube_rain["area_series"]["values"] == pytest.approx(
+        http_rain["area_series"]["values"],
+        abs=0.05,
+    )
+
+
+def test_rain_scene_from_the_cube_makes_no_chirps_http_reads(tmp_path):
+    class NoHttp(SyntheticSource):
+        def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
+            raise AssertionError("the cube holds every month")
+
+        def latest_month(self) -> str:
+            raise AssertionError("a build with a cube must not probe CHIRPS")
+
+    scene_id, _ = build_rain_scene(tmp_path, NoHttp(chirps_cube=True))
+
+    assert len(scene_id) == ID_CHARS
+
+
+def test_rain_scene_without_a_cube_still_builds_over_http(tmp_path):
+    class NoCubeRead(SyntheticSource):
+        def read_cube(self, spec: CubeSpec, month: str, window: CellWindow) -> np.ndarray:
+            assert spec.name != "chirps_monthly"
+            return super().read_cube(spec, month, window)
+
+    scene_id, _ = build_rain_scene(tmp_path, NoCubeRead())
+
+    assert len(scene_id) == ID_CHARS
+
+
+def test_scene_request_gets_503_while_the_chirps_cube_is_updating_before_any_read(tmp_path):
+    class NoRead(RealSource):
+        def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
+            raise AssertionError("an updating cube must not fall back to HTTP")
+
+        def current_revision(self, month: str) -> str:
+            raise AssertionError("an updating cube must not ask CHIRPS")
+
+        def latest_month(self) -> str:
+            raise AssertionError("an updating cube must not probe CHIRPS")
+
+    cubes = tmp_path / "cubes"
+    write_cube(cubes, "era5_precipitation", 0)
+    write_updating_chirps_cube(cubes)
+    app = create_app(
+        tmp_path / "soe.db",
+        tmp_path / "scenes",
+        make_registry(NoRead(latest="2026-08", cubes_dir=cubes)),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/scenes",
+            json=body(layers=["chirps_monthly"], start="2016-01", end="2016-01"),
+        )
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == str(SOURCE_RETRY_AFTER_SECS)
 
 
 def test_series_without_steps_is_refused_before_any_read(tmp_path):

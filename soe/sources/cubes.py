@@ -132,7 +132,8 @@ class CubeStore:
     """Manage monthly cubes in one folder and select them by specification."""
 
     def __init__(self, specs: tuple[CubeSpec, ...], cubes_dir: Path | str) -> None:
-        self._cubes = {spec.name: MonthlyCube(spec, cubes_dir) for spec in specs}
+        self._cubes_dir = Path(cubes_dir)
+        self._cubes = {spec.name: MonthlyCube(spec, self._cubes_dir) for spec in specs}
 
     def has_cube(self, spec: CubeSpec) -> bool:
         """Return whether the cube has published months and no pending update."""
@@ -141,6 +142,20 @@ class CubeStore:
     def cube_months(self, spec: CubeSpec) -> dict[str, str]:
         """Return the marker of each month the cube stores, oldest first; see MonthlyCube.months."""
         return self._cubes[spec.name].months()
+
+    def optional_cube_months(self, spec: CubeSpec) -> dict[str, str]:
+        """Return the months a cube holds, or an empty dict when it was never ingested.
+
+        A cube that is updating still raises SourceUnavailable, so a build never mixes paths.
+        """
+        if not (self._cubes_dir / f"{spec.name}.zarr" / "zarr.json").exists():
+            return {}
+
+        cube = self._cubes.get(spec.name)
+        if cube is None:
+            cube = MonthlyCube(spec, self._cubes_dir)
+
+        return cube.months()
 
     def read_cube(self, spec: CubeSpec, month: str, window: CellWindow) -> np.ndarray:
         """Return one month of the window as float32 in the cube's units; see MonthlyCube.read."""

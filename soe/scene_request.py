@@ -2,8 +2,9 @@
 
 A revision is a marker that changes whenever the provider republishes data of the requested
 periods. For CHIRPS, the remote component is the Last-Modified date of the last requested month
-and is cached. The local component uses the on-disk monthly markers and is read fresh for each
-preparation. Both components contribute to scene identity so revised data gets a new scene.
+that is read over HTTP (none when the CHIRPS cube holds every month) and is cached. The local
+component uses the on-disk monthly markers and is read fresh for each preparation. Both
+components contribute to scene identity so revised data gets a new scene.
 """
 import hashlib
 import json
@@ -201,14 +202,22 @@ def _current_revisions(
 
 
 def _remote_revision(db_path: Path | str, dataset: Dataset, steps: list[str]) -> str | None:
-    """Return the stored remote revision while it is fresh, or a stale one if the source is down."""
+    """Return the stored remote revision while it is fresh, or a stale one if the source is down.
+
+    Only the months read from the remote server are stored and keyed, so a request that reads
+    none of them never meets an old revision.
+    """
     # Offline answers must not reach the stored real ones; a dataset without a remote part is cheap.
     if dataset.synthetic or not dataset.remote:
         return dataset.remote_revision(steps)
 
     # The suffix keeps this apart from the combined digests that older versions stored here.
     cache_key = f"{dataset.id}:remote"
-    period = f"{steps[0]}/{steps[-1]}"
+    remote_steps = dataset.remote_steps(steps)
+    if not remote_steps:
+        return dataset.remote_revision(steps)
+
+    period = f"{remote_steps[0]}/{remote_steps[-1]}"
     stored_revision, age_secs = db.get_revision(db_path, cache_key, period) or (None, None)
     if stored_revision is not None and age_secs < REVISION_FRESH_SECS:
         return stored_revision

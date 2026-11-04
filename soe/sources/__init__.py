@@ -5,7 +5,7 @@ era5land_temperature.py, terrain.py and worldcover.py reads one source. The era5
 the general ERA5 cubes that fill the gaps of the first two. The synthetic.py module stands in for
 all of them offline. The registry.py module lists the datasets.
 """
-from .chirps import CHIRPS_GRID, RainDataset
+from .chirps import CHIRPS_CUBE, CHIRPS_GRID, RainDataset
 from .cubes import DEFAULT_CUBES_DIR, CubeSpec, CubeStore, MonthlyCube
 from .datasets import (
     FROM_FALLBACK,
@@ -55,6 +55,7 @@ from .worldcover import LandCoverDataset, WorldCoverReader
 
 __all__ = [
     "CELL_DEG",
+    "CHIRPS_CUBE",
     "CHIRPS_GRID",
     "DEFAULT_CUBES_DIR",
     "ERA5_GRID",

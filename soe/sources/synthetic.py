@@ -7,7 +7,7 @@ from collections.abc import Callable
 import numpy as np
 from rasterio.transform import Affine, from_origin
 
-from .chirps import FIRST_MONTH
+from .chirps import CHIRPS_CUBE, FIRST_MONTH
 from .cubes import FINAL_EXPVER, MONTHS_PER_YEAR, PRELIMINARY_EXPVER, CubeSpec, month_index
 from .era5 import ERA5_PRECIPITATION_CUBE, ERA5_TEMPERATURE_CUBE
 from .era5land_temperature import ERA5_LAND_TEMPERATURE_CUBE
@@ -22,8 +22,10 @@ class SyntheticSource:
 
     synthetic = True
 
-    def __init__(self, latest: str = "2026-08") -> None:
+    def __init__(self, latest: str = "2026-08", chirps_cube: bool = False) -> None:
+        """Read rain over fake HTTP, or from a fake CHIRPS cube when `chirps_cube` is set."""
         self._latest = latest
+        self._chirps_cube = chirps_cube
         self.reads = 0
 
     def latest_month(self) -> str:
@@ -33,8 +35,15 @@ class SyntheticSource:
         return "synthetic"
 
     def has_cube(self, spec: CubeSpec) -> bool:
-        """Return True because the synthetic cubes need no files."""
-        return True
+        """Return True for every cube except the CHIRPS one, which exists when enabled."""
+        return spec.name != CHIRPS_CUBE.name or self._chirps_cube
+
+    def optional_cube_months(self, spec: CubeSpec) -> dict[str, str]:
+        """Return the final markers of the CHIRPS cube when enabled, and no months otherwise."""
+        if spec.name != CHIRPS_CUBE.name or not self._chirps_cube:
+            return {}
+
+        return {month: f"{FINAL_EXPVER}:synthetic" for month in self.cube_months(spec)}
 
     def cube_months(self, spec: CubeSpec) -> dict[str, str]:
         """Return monthly markers from 1981-01 and mark the latest two months preliminary."""
@@ -59,13 +68,8 @@ class SyntheticSource:
     def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
         self.reads += 1
         col, row, width, height = window
-        month_number = int(month[:4]) * 12 + int(month[5:7])
         cols, rows = np.meshgrid(np.arange(col, col + width), np.arange(row, row + height))
-
-        rain = 100 + 80 * np.sin(cols / 15 + month_number * 0.5) * np.cos(rows / 11)
-        rain = rain.astype("float32")
-        rain[(cols * 7 + rows * 13) % 11 == 0] = np.nan  # Holes, to exercise NaN-aware means.
-        return rain
+        return _rain(month, cols, rows).astype("float32")
 
     def terrain(
         self,
@@ -106,6 +110,19 @@ def _synthetic_classes(tile: PlacedTile, part: Bbox, res: float) -> np.ndarray:
     return values[bands.astype(int) % len(values)]
 
 
+def _rain(month: str, cols: np.ndarray, rows: np.ndarray) -> np.ndarray:
+    """Return a wavy field with holes to exercise NaN-aware means."""
+    month_number = int(month[:4]) * 12 + int(month[5:7])
+    rain = 100 + 80 * np.sin(cols / 15 + month_number * 0.5) * np.cos(rows / 11)
+    rain[(cols * 7 + rows * 13) % 11 == 0] = np.nan
+    return rain
+
+
+def _chirps_rain(month: str, cols: np.ndarray, rows: np.ndarray, spec: CubeSpec) -> np.ndarray:
+    """Return the field that read_rain gives, so both paths read the same values."""
+    return _rain(month, cols, rows)
+
+
 def _land_temperature(month: str, cols: np.ndarray, rows: np.ndarray, spec: CubeSpec) -> np.ndarray:
     """Return a seasonal field that falls poleward and has holes to exercise NaN-aware means."""
     temperature = _temperature(month, rows, spec)
@@ -138,4 +155,5 @@ CUBE_FIELDS = {
     ERA5_LAND_TEMPERATURE_CUBE.name: _land_temperature,
     ERA5_TEMPERATURE_CUBE.name: _era5_temperature,
     ERA5_PRECIPITATION_CUBE.name: _era5_precipitation,
+    CHIRPS_CUBE.name: _chirps_rain,
 }

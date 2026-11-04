@@ -189,7 +189,7 @@ def _ingest_batch(
     target = downloads / f"{spec.cube.name}-{batch[0]}.grib"
     try:
         if _retrieve(client, spec, batch, target, may_be_unpublished):
-            write_months(cube_dir, spec, read_grib_months(target, spec))
+            write_months(cube_dir, spec.cube, spec.complete, read_grib_months(target, spec))
     finally:
         target.unlink(missing_ok=True)
 
@@ -410,46 +410,58 @@ def _cube_positions(dataset: rasterio.DatasetReader, grid: Grid) -> tuple[np.nda
     return rows, columns
 
 
-def write_months(cube_dir: Path | str, spec: IngestSpec, months: Iterable[MonthField]) -> None:
+def write_months(
+    cube_dir: Path | str,
+    cube: CubeSpec,
+    complete: bool,
+    months: Iterable[MonthField],
+    attrs: dict[str, object] | None = None,
+) -> None:
     """Store months in the cube, creating it if needed, and mark each with its revision.
 
     A month must replace a stored one, follow the last stored one, or precede the first as part of
-    a contiguous batch. Every month is checked and
-    encoded before anything is written. The cube is then flagged as updating, which readers
-    treat as unavailable, until the data and all markers are published in one step. If a write
-    fails, the flag stays and the next run of these months clears it.
+    a contiguous batch. Every month is checked and encoded before anything is written. The cube is
+    then flagged as updating, which readers treat as unavailable, until the data and all markers
+    are published in one step. If a write fails, the flag stays and the next run of these months
+    clears it. Extra group attributes in `attrs` are published with the markers, so they cannot
+    disagree with the data.
     """
     cube_dir = Path(cube_dir)
-    attrs = _cube_attrs(cube_dir, spec.cube)
-    markers = dict(attrs.get("months", {}))
-    staged = _stage_months(months, markers, spec)
+    stored = _cube_attrs(cube_dir, cube)
+    markers = dict(stored.get("months", {}))
+    staged = _stage_months(months, markers, cube, complete)
     if not staged:
         return
 
-    group = _open_cube(cube_dir, spec.cube)
+    group = _open_cube(cube_dir, cube)
     staged_months = {month for month, _, _ in staged}
-    pending = sorted({*attrs.get("pending", []), *staged_months})
+    pending = sorted({*stored.get("pending", []), *staged_months})
     _begin_update(group, pending)
-    for month, encoded, marker in staged:
-        _store_month(group[spec.cube.array], month, encoded)
+    _store_run(group[cube.array], staged)
+    for month, _, marker in staged:
         markers[month] = marker
 
-    _publish(group, markers, [month for month in pending if month not in staged_months])
+    _publish(
+        group,
+        markers,
+        [month for month in pending if month not in staged_months],
+        attrs,
+    )
 
 
 def _stage_months(
     months: Iterable[MonthField],
     stored: dict[str, str],
-    spec: IngestSpec,
+    cube: CubeSpec,
+    complete: bool,
 ) -> list[tuple[str, np.ndarray, str]]:
     """Check that each month fits the cube, then return it with its encoded values and marker."""
-    cube = spec.cube
     markers = dict(stored)
     staged = []
     for month, values, expver in months:
         if values.shape != (cube.grid.rows, cube.grid.columns):
             raise ValueError(f"{month}: field shape {values.shape} is not the cube grid")
-        if spec.complete and not np.isfinite(values).all():
+        if complete and not np.isfinite(values).all():
             raise ValueError(f"{month}: the source has no value in some cells")
 
         _check_before_origin(month)
@@ -522,16 +534,46 @@ def _begin_update(group: zarr.Group, pending: list[str]) -> None:
     group.attrs["pending"] = pending
 
 
-def _store_month(array: zarr.Array, month: str, encoded: np.ndarray) -> None:
-    index = month_index(month)
-    if index >= array.shape[0]:
-        array.resize((index + 1, *array.shape[1:]))
+def _store_run(array: zarr.Array, staged: list[tuple[str, np.ndarray, str]]) -> None:
+    """Store staged months with one slice assignment per consecutive run."""
+    for run in _consecutive_runs(staged):
+        first = month_index(run[0][0])
+        last = month_index(run[-1][0])
+        if last + 1 > array.shape[0]:
+            array.resize((last + 1, *array.shape[1:]))
 
-    array[index] = encoded
+        array[first:last + 1] = np.stack([encoded for _, encoded, _ in run])
 
 
-def _publish(group: zarr.Group, markers: dict[str, str], pending: list[str]) -> None:
-    group.attrs.update({"months": dict(sorted(markers.items())), "pending": pending})
+def _consecutive_runs(
+    staged: list[tuple[str, np.ndarray, str]],
+) -> list[list[tuple[str, np.ndarray, str]]]:
+    """Group staged months into consecutive runs in ascending order."""
+    ordered = sorted(staged)
+    runs = [[ordered[0]]]
+    for entry in ordered[1:]:
+        if month_index(entry[0]) == month_index(runs[-1][-1][0]) + 1:
+            runs[-1].append(entry)
+        else:
+            runs.append([entry])
+
+    return runs
+
+
+def _publish(
+    group: zarr.Group,
+    markers: dict[str, str],
+    pending: list[str],
+    attrs: dict[str, object] | None = None,
+) -> None:
+    """Publish markers, pending and extra attributes together so they cannot disagree."""
+    group.attrs.update(
+        {
+            "months": dict(sorted(markers.items())),
+            "pending": pending,
+            **(attrs or {}),
+        },
+    )
 
 
 def _kelvin_to_celsius(values: np.ndarray, month: str) -> np.ndarray:

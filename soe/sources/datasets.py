@@ -108,6 +108,10 @@ class Dataset(ABC):
         """
         return None
 
+    def remote_steps(self, steps: list[str]) -> list[str]:
+        """Return the period starts of `steps` that the dataset reads from the remote server."""
+        return steps
+
     def local_revision(self, steps: list[str]) -> str | None:
         """Return the revision marker that local files give the period starts `steps`, or None.
 

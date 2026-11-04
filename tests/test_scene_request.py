@@ -1,6 +1,7 @@
 """Test scene request validation, the revision cache and scene ids without network."""
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from shapely.geometry import box, mapping
@@ -31,6 +32,14 @@ from tests.helpers import RAIN, write_cube
 SQUARE = mapping(box(36.5, -1.5, 37.5, -0.5))
 PINNED_REVISION = "Tue, 01 Sep 2015 00:00:00 GMT"
 PINNED_SCENE_ID = "51c67b0430f967920733"  # Computed for soe 0.9.0 and scene format 0.7.
+
+
+def db_path_of(tmp_path: Path, name: str) -> str:
+    """Return the path of the named database in tmp_path, creating it on first use."""
+    path = tmp_path / f"{name}.db"
+    if not path.exists():
+        db.init(str(path))
+    return str(path)
 
 
 def request_body(**overrides: object) -> str:
@@ -345,13 +354,55 @@ def test_rain_scene_id_follows_the_fallback_cube_while_chirps_is_down(
     assert revised.scene_id != first.scene_id
 
 
+def test_cube_scene_id_ignores_the_remote_revision_cache_of_an_earlier_http_scene(
+    tmp_path,
+    monkeypatch,
+    revision_source,
+):
+    prepare_scene(db_path_of(tmp_path, "http"), make_registry(revision_source), request_body())
+    revision_source.data = SyntheticSource(chirps_cube=True)
+    registry = make_registry(revision_source)
+    calls_before = revision_source.revision_calls
+
+    fresh = prepare_scene(db_path_of(tmp_path, "http"), registry, request_body())
+    empty = prepare_scene(db_path_of(tmp_path, "empty"), registry, request_body())
+    monkeypatch.setattr("soe.scene_request.REVISION_FRESH_SECS", 0)
+    revision_source.down = True
+    expired = prepare_scene(db_path_of(tmp_path, "http"), registry, request_body())
+
+    assert fresh.scene_id == empty.scene_id == expired.scene_id
+    assert revision_source.revision_calls == calls_before
+
+
+def test_mixed_scene_does_not_reuse_a_revision_stored_for_other_http_months(
+    tmp_path,
+    revision_source,
+):
+    path = db_path_of(tmp_path, "mixed")
+    prepare_scene(path, make_registry(revision_source), request_body())
+    revision_source.data = SyntheticSource(chirps_cube=True)
+    registry = make_registry(revision_source)
+    cube_months = revision_source.data.optional_cube_months
+    revision_source.optional_cube_months = lambda spec: {
+        month: marker
+        for month, marker in cube_months(spec).items()
+        if month != "2015-06"
+    }
+
+    prepare_scene(path, registry, request_body())
+
+    assert revision_source.revision_calls == 2
+
+
 def test_a_revision_stored_before_the_local_part_existed_is_not_reused(
     db_path,
     revision_source,
 ):
     db.set_revision(db_path, "chirps_monthly", "2015-01-01/2015-06-01", "old combined digest")
 
-    prepare_scene(db_path, make_registry(revision_source), request_body())
+    registry = make_registry(revision_source)
+
+    prepare_scene(db_path, registry, request_body())
 
     assert revision_source.revision_calls == 1
     assert db.get_revision(db_path, "chirps_monthly:remote", "2015-01-01/2015-06-01")[0] == "first"

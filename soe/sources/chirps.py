@@ -1,4 +1,4 @@
-"""Read CHIRPS monthly rain from its COGs and describe the dataset with its grid."""
+"""Read CHIRPS monthly rain from the local cube or its COGs and describe the dataset's grid."""
 import threading
 import time
 import urllib.error
@@ -10,7 +10,7 @@ import numpy as np
 import rasterio
 from rasterio.windows import Window
 
-from .cubes import month_markers, preliminary_runs
+from .cubes import CubeSpec, month_markers, preliminary_runs
 from .datasets import SeriesDataset, revision_digest
 from .grid import CELL_DEG, Bbox, CellWindow, Grid, block_mean, read_wrapped
 from .periods import MONTH_CHARS
@@ -20,12 +20,26 @@ FIRST_MONTH = "1981-01"
 
 CHIRPS_GRID = Grid(-180, 60, CELL_DEG, 7200, 2400)
 
+# Same encoding as the bundle role, so the cube keeps everything the bundle keeps.
+CHIRPS_CUBE = CubeSpec(
+    name="chirps_monthly",
+    title="CHIRPS rainfall",
+    array="precip",
+    grid=CHIRPS_GRID,
+    dtype="uint16",
+    scale=0.1,
+    fill=65535,
+    units="mm/month",
+)
+
 HEAD_TIMEOUT_SECS = 5  # latest-month probes run on the first page load
 REVISION_TIMEOUT_SECS = 15
 LATEST_MONTH_PROBES = 7
 LATEST_TTL_SECS = 24 * 60 * 60
 OFFLINE_LATEST_TTL_SECS = 10 * 60
 OFFLINE_ASSUMED_LAG_MONTHS = 2
+
+HTTP_MARKER = "http"  # stands in a revision for a month read over HTTP
 
 CHIRPS_URL = (
     "https://data.chc.ucsb.edu/products/CHIRPS/v3.0/monthly/global/cogs/"
@@ -41,17 +55,39 @@ class RainDataset(SeriesDataset):
         return f"{max(FIRST_MONTH, next(iter(self.fallback_months())))}-01"
 
     def latest(self) -> str:
-        """Return the last month held by CHIRPS and the fallback cube as an ISO start date."""
-        return f"{min(self.backend.latest_month(), list(self.fallback_months())[-1])}-01"
+        """Return the last month held by CHIRPS and the fallback cube as an ISO start date.
+
+        With a CHIRPS cube the newest month follows the cube, so builds make no HTTP probe.
+        """
+        cube_months = self._cube_months()
+        newest = list(cube_months)[-1] if cube_months else self.backend.latest_month()
+        return f"{min(newest, list(self.fallback_months())[-1])}-01"
 
     def remote_revision(self, steps: list[str]) -> str | None:
-        """CHIRPS republishes a month as a whole, so its last month's marker stands for all."""
-        return self.backend.current_revision(steps[-1][:MONTH_CHARS])
+        """Return the marker of the CHIRPS file of the last month read over HTTP, or None.
+
+        CHIRPS republishes a month as a whole, so that month's marker stands for all of them.
+        """
+        over_http = self.remote_steps(steps)
+        if not over_http:
+            return None
+
+        return self.backend.current_revision(over_http[-1][:MONTH_CHARS])
+
+    def remote_steps(self, steps: list[str]) -> list[str]:
+        """Return the period starts of `steps` whose months the CHIRPS cube does not hold."""
+        cube_months = self._cube_months()
+        return [step for step in steps if step[:MONTH_CHARS] not in cube_months]
 
     def local_revision(self, steps: list[str]) -> str | None:
-        """Return a hash of the fallback cube markers for exactly the requested months."""
+        """Return a hash of the fallback markers and the CHIRPS cube markers of the months.
+
+        A month read over HTTP counts as "http", so its id differs from one read from the cube.
+        """
         labels = [step[:MONTH_CHARS] for step in steps]
-        return revision_digest(*month_markers(self.fallback_months(), labels))
+        cube_months = self._cube_months()
+        cube_markers = [cube_months.get(label, HTTP_MARKER) for label in labels]
+        return revision_digest(*month_markers(self.fallback_months(), labels), *cube_markers)
 
     def fallback_notices(self, steps: list[str], filled: list[bool]) -> list[str]:
         """Return one notice for each run of months where preliminary ERA5 rain filled a gap."""
@@ -75,12 +111,17 @@ class RainDataset(SeriesDataset):
 
     def read_month(self, month: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
         """Rain of month 'YYYY-MM' over a grid-aligned bbox, block-averaged by `factor`."""
-        rain = read_wrapped(
-            self.grid,
-            bbox,
-            lambda window: self.backend.read_rain(month, window),
-        )
+        rain = read_wrapped(self.grid, bbox, lambda window: self._read_window(month, window))
         return block_mean(rain, factor)
+
+    def _read_window(self, month: str, window: CellWindow) -> np.ndarray:
+        if month in self._cube_months():
+            return self.backend.read_cube(CHIRPS_CUBE, month, window)
+
+        return self.backend.read_rain(month, window)
+
+    def _cube_months(self) -> dict[str, str]:
+        return self.backend.optional_cube_months(CHIRPS_CUBE)
 
 
 class ChirpsReader:

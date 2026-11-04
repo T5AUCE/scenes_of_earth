@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from .chirps import CHIRPS_GRID, ChirpsReader, RainDataset
+from .chirps import CHIRPS_CUBE, CHIRPS_GRID, ChirpsReader, RainDataset
 from .cubes import DEFAULT_CUBES_DIR, CubeStore
 from .datasets import Registry, Role
 from .era5 import (
@@ -26,11 +26,16 @@ from .worldcover import (
 )
 
 
-CUBE_SPECS = (ERA5_LAND_TEMPERATURE_CUBE, ERA5_TEMPERATURE_CUBE, ERA5_PRECIPITATION_CUBE)
+CUBE_SPECS = (
+    ERA5_LAND_TEMPERATURE_CUBE,
+    ERA5_TEMPERATURE_CUBE,
+    ERA5_PRECIPITATION_CUBE,
+    CHIRPS_CUBE,
+)
 
 
 class RealSource(ChirpsReader, CopernicusDemReader, WorldCoverReader, CubeStore):
-    """Read CHIRPS, terrain and land cover over HTTP and the monthly cubes from local disk."""
+    """Read terrain and land cover over HTTP, CHIRPS from its cube or HTTP, and cubes from disk."""
 
     synthetic = False
 

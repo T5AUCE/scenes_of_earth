@@ -53,7 +53,13 @@ def write_cube(
     """Store one month in the named cube; a number fills every cell of the cube's grid."""
     grid = INGEST_SPECS[name].cube.grid
     field = np.full((grid.rows, grid.columns), values, "float32")
-    write_months(cubes_dir, INGEST_SPECS[name], [(month, field, expver)])
+    spec = INGEST_SPECS[name]
+    write_months(
+        cubes_dir,
+        spec.cube,
+        spec.complete,
+        [(month, field, expver)],
+    )
 
 
 def plan_months(area: Area, datasets: list[Dataset], months: int = 12) -> Plan:

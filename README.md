@@ -24,8 +24,8 @@ Open the folder in the devcontainer (Python 3.12, Node LTS, GitHub CLI, Claude C
 uvicorn main:app --reload --port 8000
 ```
 
-Without `SOE_SYNTHETIC=1`, the first start probes CHIRPS online (a few HEAD requests, in the background) for the latest
-month, so it needs network access.
+Without `SOE_SYNTHETIC=1` and without the CHIRPS cube (see Cubes), the first start probes CHIRPS online (a few HEAD
+requests, in the background) for the latest month, so it needs network access.
 
 For the frontend (`npm run dev`, port 5173), set the Vite dev server to proxy `/api` and `/scenes` to
 `http://localhost:8000`, so the browser uses the same relative URLs as in production and needs no CORS setup.
@@ -87,22 +87,23 @@ The import is large (several hundred MB of input). CGAZ draws disputed borders t
 
 ## Cubes (once, then monthly)
 
-Builds read three monthly Zarr cubes from local disk (`SOE_CUBES_DIR`). Reading the cubes makes no network calls, while Rainfall still reads CHIRPS over HTTP:
+Builds read monthly Zarr cubes from local disk (`SOE_CUBES_DIR`). Reading the cubes makes no network calls. Rainfall reads each month from the CHIRPS cube when it holds that month, and over HTTP otherwise, so a checkout without the CHIRPS cube still builds:
 
 | Cube | Folder | Used for |
 |---|---|---|
 | ERA5-Land 2 m temperature | `era5land_temperature.zarr` | Temperature (main source) |
 | ERA5 2 m temperature | `era5_temperature.zarr` | Temperature cells where ERA5-Land has no land value |
 | ERA5 total precipitation | `era5_precipitation.zarr` | Rainfall cells where CHIRPS has no value |
+| CHIRPS monthly rain | `chirps_monthly.zarr` | Rainfall (main source), optional |
 
-Rainfall and Temperature are listed only when their cubes exist, so no layer lacks the data that fills its gaps. The fill
+Rainfall and Temperature are listed only when their ERA5 cubes exist, so no layer lacks the data that fills its gaps. The fill
 is automatic. ERA5-Land and CHIRPS values are never changed. ERA5 is sampled at the centre of each native layer cell,
 and a scene that is averaged over blocks of cells averages these samples the same way as the main source. Only an output
 cell with no main-source value takes the ERA5 value (about 28 km, over land and sea). A filled bundle carries a `source`
 array (1 main source, 2 fallback, 3 both, 0 outside the area or no value), lists ERA5 under `fallback_sources`, and states
 the number of filled cells in its notices. Nothing is marked on the map.
 
-The cubes are filled from the Copernicus Climate Data Store (CDS), one request per year. Needs a CDS account, the key in
+The ERA5 cubes are filled from the Copernicus Climate Data Store (CDS), one request per year. They need a CDS account, the key in
 `~/.cdsapirc` (https://cds.climate.copernicus.eu/how-to-api), and the licences accepted on the dataset pages
 (https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land-monthly-means and
 https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels-monthly-means).
@@ -113,12 +114,26 @@ python -m soe.cli ingest-cube era5_temperature --from 1981-01
 python -m soe.cli ingest-cube era5_precipitation --from 1981-01
 ```
 
-All three cubes start at CHIRPS' first month (1981-01), so both layers offer 1981-01 onward. Each layer offers only the months
+The CHIRPS cube needs no account. Its first run downloads about 16 GB (1981-01 onward, about 1.5 hours) and stores about
+3 to 5 GB.
+
+```
+python -m soe.cli ingest-cube chirps_monthly --from 1981-01
+```
+
+With the CHIRPS cube, Rainfall's newest month is the earlier of the cube's newest month and the ERA5 fallback's, and
+builds make no latest-month probe (`SOE_LATEST` and the startup probe do not apply). A build whose months the cube
+holds all makes no CHIRPS request at all; a cube that starts later than the request still reads its older months
+over HTTP. A rain scene read from the cube gets a different id from one read over HTTP, and scenes built before the
+cube existed are built again once. Run it monthly, around the 20th, because CHIRPS publishes
+final months about mid-month.
+
+The three ERA5 cubes start at CHIRPS' first month (1981-01), so both layers offer 1981-01 onward. Each layer offers only the months
 that all of its cubes hold. The first run of a cube starts at `--from`; later runs continue after the last stored month and fetch
 again every month still marked preliminary (final data replaces it about two months later, and the scene then gets a new
 id). The newest month may be skipped when the CDS has not published it yet. Restart the server after the first ingests, so
 the layers are listed. Builds that need a cube get 503 while an ingest is publishing (seconds per month); if an ingest fails
-in that step, the layer stays unavailable until the next run, which refetches the affected months. Run all three monthly,
+in that step, the layer stays unavailable until the next run, which refetches the affected months. Run the three ERA5 cubes monthly,
 around the 8th. A `--from` before a cube's first stored month adds the earlier months, newest year first, so a cube
 that started later can be extended backwards without a rebuild. An ERA5 month with a missing cell, or values that its cube cannot hold, is refused and nothing is stored.
 
@@ -238,8 +253,8 @@ python -m soe.cli worldcover-index
 | `SOE_MAX_BUILDS` | `1` | Concurrent builds |
 | `SOE_MAX_QUEUE` | `20` | Queued plus running jobs before new ones get 503 |
 | `SOE_SYNTHETIC` | `0` | `1` uses fake offline data |
-| `SOE_LATEST` | probed | Fix the latest CHIRPS month (`YYYY-MM`) and skip the probe |
-| `SOE_CUBES_DIR` | `./data/cubes` | Where the ERA5-Land and ERA5 cubes are read from and written to |
+| `SOE_LATEST` | probed | Fix the latest CHIRPS month (`YYYY-MM`) and skip the probe; unused when the CHIRPS cube exists |
+| `SOE_CUBES_DIR` | `./data/cubes` | Where the ERA5-Land, ERA5 and CHIRPS cubes are read from and written to |
 | `SOE_TERRAIN_TILES` | `https://tiles.mapterhorn.com/{z}/{x}/{y}.webp` | Elevation tile URL template, absolute or relative to `bundle_url` |
 
 ## Tests

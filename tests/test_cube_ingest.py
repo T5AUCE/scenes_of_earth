@@ -269,7 +269,12 @@ def test_kelvin_becomes_celsius_and_ocean_becomes_fill(tmp_path):
     write_raster(path, -180.05, 0.1, SHAPE[1], SHAPE[0], kelvin)
 
     with rasterio.open(path) as dataset:
-        write_months(tmp_path / "cubes", LAND, read_months(dataset, ["0001"], LAND))
+        write_months(
+            tmp_path / "cubes",
+            LAND.cube,
+            LAND.complete,
+            read_months(dataset, ["0001"], LAND),
+        )
 
     stored = zarr.open_group(tmp_path / "cubes" / CUBE_NAME, mode="r")[CUBE_ARRAY]
     january_2016 = 66 * 12
@@ -314,12 +319,12 @@ def test_rotated_raster_is_refused():
 
 
 def test_rewriting_an_unchanged_month_keeps_its_marker(tmp_path):
-    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0001")])
+    write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(20), "0001")])
     marker = land_cube(tmp_path).months()["2016-01"]
 
-    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0001")])
+    write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(20), "0001")])
     unchanged = land_cube(tmp_path).months()["2016-01"]
-    write_months(tmp_path, LAND, [("2016-01", celsius_field(21), "0001")])
+    write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(21), "0001")])
     changed = land_cube(tmp_path).months()["2016-01"]
 
     assert unchanged == marker
@@ -328,16 +333,47 @@ def test_rewriting_an_unchanged_month_keeps_its_marker(tmp_path):
 
 @pytest.mark.parametrize("month", ["2015-11", "2016-03"], ids=["before", "after"])
 def test_gap_before_or_after_stored_months_is_refused(tmp_path, month):
-    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0001")])
+    write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(20), "0001")])
 
     with pytest.raises(ValueError, match="gap"):
-        write_months(tmp_path, LAND, [(month, celsius_field(20), "0001")])
+        write_months(tmp_path, LAND.cube, LAND.complete, [(month, celsius_field(20), "0001")])
 
     assert list(land_cube(tmp_path).months()) == ["2016-01"]
 
 
+def test_sparse_revision_within_one_year_keeps_the_month_between(tmp_path):
+    write_months(
+        tmp_path,
+        LAND.cube,
+        LAND.complete,
+        [
+            ("2016-01", celsius_field(20), "0001"),
+            ("2016-02", celsius_field(21), "0001"),
+            ("2016-03", celsius_field(22), "0001"),
+        ],
+    )
+    before = land_cube(tmp_path).months()["2016-02"]
+
+    write_months(
+        tmp_path,
+        LAND.cube,
+        LAND.complete,
+        [
+            ("2016-01", celsius_field(30), "0001"),
+            ("2016-03", celsius_field(32), "0001"),
+        ],
+    )
+
+    cube = land_cube(tmp_path)
+    assert list(cube.months()) == ["2016-01", "2016-02", "2016-03"]
+    assert cube.months()["2016-02"] == before
+    assert cube.read("2016-01", (0, 0, 1, 1))[0, 0] == pytest.approx(30)
+    assert cube.read("2016-02", (0, 0, 1, 1))[0, 0] == pytest.approx(21)
+    assert cube.read("2016-03", (0, 0, 1, 1))[0, 0] == pytest.approx(32)
+
+
 def test_failed_batch_changes_neither_data_nor_marker(tmp_path):
-    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0005")])
+    write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(20), "0005")])
     before = land_cube(tmp_path).months()["2016-01"]
 
     def failing_batch() -> Iterator[MonthField]:
@@ -345,7 +381,7 @@ def test_failed_batch_changes_neither_data_nor_marker(tmp_path):
         raise ValueError("second field is invalid")
 
     with pytest.raises(ValueError, match="second field"):
-        write_months(tmp_path, LAND, failing_batch())
+        write_months(tmp_path, LAND.cube, LAND.complete, failing_batch())
 
     cube = land_cube(tmp_path)
     assert cube.months()["2016-01"] == before
@@ -353,7 +389,7 @@ def test_failed_batch_changes_neither_data_nor_marker(tmp_path):
 
 
 def test_published_marker_matches_the_stored_bytes(tmp_path):
-    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0001")])
+    write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(20), "0001")])
     stored = zarr.open_group(tmp_path / CUBE_NAME, mode="r")[CUBE_ARRAY][month_index("2016-01")]
 
     marker = land_cube(tmp_path).months()["2016-01"]
@@ -362,7 +398,7 @@ def test_published_marker_matches_the_stored_bytes(tmp_path):
 
 
 def test_field_of_the_wrong_shape_is_refused_before_anything_is_written(tmp_path):
-    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0005")])
+    write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(20), "0005")])
     before = land_cube(tmp_path).months()
 
     for bad_shape in ((1200, 3600), (1201, 3599), (3600,)):
@@ -371,7 +407,7 @@ def test_field_of_the_wrong_shape_is_refused_before_anything_is_written(tmp_path
             ("2016-02", np.full(bad_shape, 21, "float32"), "0001"),
         ]
         with pytest.raises(ValueError, match="not the cube grid"):
-            write_months(tmp_path, LAND, later_bad)
+            write_months(tmp_path, LAND.cube, LAND.complete, later_bad)
 
     cube = land_cube(tmp_path)
     assert cube.months() == before
@@ -386,20 +422,19 @@ def test_failure_while_storing_data_leaves_the_cube_unavailable_until_rewritten(
     tmp_path,
     monkeypatch,
 ):
-    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0005")])
-    store_month = cube_ingest._store_month
-    stored = []
+    write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(20), "0005")])
+    store_run = cube_ingest._store_run
 
-    def store_then_fail(array: zarr.Array, month: str, encoded: np.ndarray) -> None:
-        if stored:
-            raise OSError("disk full")
+    def store_then_fail(
+        array: zarr.Array,
+        staged: list[tuple[str, np.ndarray, str]],
+    ) -> None:
+        store_run(array, staged)
+        raise OSError("disk full")
 
-        store_month(array, month, encoded)
-        stored.append(month)
-
-    monkeypatch.setattr(cube_ingest, "_store_month", store_then_fail)
+    monkeypatch.setattr(cube_ingest, "_store_run", store_then_fail)
     with pytest.raises(OSError, match="disk full"):
-        write_months(tmp_path, LAND, two_months())
+        write_months(tmp_path, LAND.cube, LAND.complete, two_months())
 
     cube = land_cube(tmp_path)
     assert not cube.has_months()
@@ -407,7 +442,7 @@ def test_failure_while_storing_data_leaves_the_cube_unavailable_until_rewritten(
         cube.read("2016-01", (0, 0, 1, 1))
 
     monkeypatch.undo()
-    write_months(tmp_path, LAND, two_months())
+    write_months(tmp_path, LAND.cube, LAND.complete, two_months())
 
     recovered = land_cube(tmp_path)
     assert list(recovered.months()) == ["2016-01", "2016-02"]
@@ -418,29 +453,34 @@ def test_failure_while_publishing_markers_leaves_the_cube_unavailable_until_rewr
     tmp_path,
     monkeypatch,
 ):
-    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0005")])
+    write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(20), "0005")])
 
-    def fail_to_publish(group: zarr.Group, markers: dict[str, str], pending: list[str]) -> None:
+    def fail_to_publish(
+        group: zarr.Group,
+        markers: dict[str, str],
+        pending: list[str],
+        attrs: dict[str, object] | None = None,
+    ) -> None:
         raise OSError("metadata not written")
 
     monkeypatch.setattr(cube_ingest, "_publish", fail_to_publish)
     with pytest.raises(OSError, match="metadata"):
-        write_months(tmp_path, LAND, two_months())
+        write_months(tmp_path, LAND.cube, LAND.complete, two_months())
 
     assert not land_cube(tmp_path).has_months()
 
     monkeypatch.undo()
-    write_months(tmp_path, LAND, [two_months()[1]])
+    write_months(tmp_path, LAND.cube, LAND.complete, [two_months()[1]])
     assert not land_cube(tmp_path).has_months()
 
-    write_months(tmp_path, LAND, two_months())
+    write_months(tmp_path, LAND.cube, LAND.complete, two_months())
     recovered = land_cube(tmp_path)
     assert recovered.months()["2016-01"].startswith("0001:")
     assert recovered.read("2016-02", (0, 0, 1, 1))[0, 0] == pytest.approx(22)
 
 
 def test_failure_before_the_update_starts_changes_nothing(tmp_path, monkeypatch):
-    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0005")])
+    write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(20), "0005")])
     before = land_cube(tmp_path).months()
 
     def fail_to_begin(group: zarr.Group, pending: list[str]) -> None:
@@ -448,7 +488,7 @@ def test_failure_before_the_update_starts_changes_nothing(tmp_path, monkeypatch)
 
     monkeypatch.setattr(cube_ingest, "_begin_update", fail_to_begin)
     with pytest.raises(OSError):
-        write_months(tmp_path, LAND, two_months())
+        write_months(tmp_path, LAND.cube, LAND.complete, two_months())
 
     cube = land_cube(tmp_path)
     assert cube.months() == before
@@ -456,7 +496,7 @@ def test_failure_before_the_update_starts_changes_nothing(tmp_path, monkeypatch)
 
 
 def test_read_that_overlaps_an_update_is_refused(tmp_path, monkeypatch):
-    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0005")])
+    write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(20), "0005")])
     cube = land_cube(tmp_path)
     cube.months()
     open_group = zarr.open_group
@@ -464,7 +504,7 @@ def test_read_that_overlaps_an_update_is_refused(tmp_path, monkeypatch):
     def open_then_update(*args: object, **kwargs: object) -> zarr.Group:
         monkeypatch.undo()
         group = open_group(*args, **kwargs)
-        write_months(tmp_path, LAND, [("2016-01", celsius_field(21), "0001")])
+        write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(21), "0001")])
         return group
 
     monkeypatch.setattr(zarr, "open_group", open_then_update)
@@ -479,7 +519,7 @@ def update_between_stamp_and_validation(
     publish: bool,
 ) -> MonthlyCube:
     """A primed cube whose reader is updated right after it samples the cube's change stamp."""
-    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0005")])
+    write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(20), "0005")])
     cube = land_cube(tmp_path)
     cube.months()
     months_at = MonthlyCube._months_at
@@ -489,7 +529,12 @@ def update_between_stamp_and_validation(
         if not publish:
             monkeypatch.setattr(cube_ingest, "_publish", raise_os_error)
         try:
-            write_months(tmp_path, LAND, [("2016-01", celsius_field(21), "0001")])
+            write_months(
+                tmp_path,
+                LAND.cube,
+                LAND.complete,
+                [("2016-01", celsius_field(21), "0001")],
+            )
         except OSError:
             pass
 
@@ -526,7 +571,7 @@ def test_read_is_refused_when_a_whole_update_happens_after_the_stamp(tmp_path, m
 
 
 def test_ingest_refetches_months_left_pending_by_a_failed_update(tmp_path, fake_grib):
-    write_months(tmp_path, LAND, [("2016-12", celsius_field(20), "0001")])
+    write_months(tmp_path, LAND.cube, LAND.complete, [("2016-12", celsius_field(20), "0001")])
     group = zarr.open_group(tmp_path / CUBE_NAME, mode="a")
     group.attrs["pending"] = ["2016-12"]
     client = FakeClient()
@@ -544,7 +589,7 @@ def test_failed_first_batch_leaves_no_cube(tmp_path):
         yield
 
     with pytest.raises(ValueError, match="first field"):
-        write_months(tmp_path, LAND, failing_batch())
+        write_months(tmp_path, LAND.cube, LAND.complete, failing_batch())
 
     assert not (tmp_path / CUBE_NAME).exists()
 
@@ -678,7 +723,12 @@ def test_era5_month_with_a_missing_cell_is_refused_and_leaves_no_cube(tmp_path):
     field[7, 7] = np.nan
 
     with pytest.raises(ValueError, match="no value in some cells"):
-        write_months(tmp_path, ERA5_TEMPERATURE, [("2016-01", field, "0001")])
+        write_months(
+            tmp_path,
+            ERA5_TEMPERATURE.cube,
+            ERA5_TEMPERATURE.complete,
+            [("2016-01", field, "0001")],
+        )
 
     assert not (tmp_path / "era5_temperature.zarr").exists()
 
@@ -687,7 +737,7 @@ def test_era5land_month_with_missing_cells_is_still_accepted(tmp_path):
     field = celsius_field(20)
     field[7, 7] = np.nan
 
-    write_months(tmp_path, LAND, [("2016-01", field, "0001")])
+    write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", field, "0001")])
 
     assert np.isnan(land_cube(tmp_path).read("2016-01", (7, 7, 1, 1))[0, 0])
 
@@ -742,7 +792,8 @@ def test_precipitation_stamped_before_month_uses_next_month_and_its_day_count(
     with rasterio.open(path) as dataset:
         write_months(
             tmp_path,
-            ERA5_PRECIPITATION,
+            ERA5_PRECIPITATION.cube,
+            ERA5_PRECIPITATION.complete,
             read_months(dataset, ["0001"], ERA5_PRECIPITATION),
         )
     cube = MonthlyCube(ERA5_PRECIPITATION.cube, tmp_path)
@@ -764,7 +815,12 @@ def test_precipitation_packing_noise_below_zero_becomes_zero(tmp_path):
 def test_precipitation_cube_stores_tenths_of_a_millimetre(tmp_path):
     field = np.full(ERA5_SHAPE, 58.04, "float32")
 
-    write_months(tmp_path, ERA5_PRECIPITATION, [("2016-01", field, "0001")])
+    write_months(
+        tmp_path,
+        ERA5_PRECIPITATION.cube,
+        ERA5_PRECIPITATION.complete,
+        [("2016-01", field, "0001")],
+    )
 
     stored = zarr.open_group(tmp_path / "era5_precipitation.zarr", mode="r")["tp"]
     assert stored.dtype == "uint16" and stored[66 * 12, 3, 3] == 580
@@ -774,7 +830,12 @@ def test_month_that_the_cube_encoding_would_clip_is_refused(tmp_path):
     field = np.full(ERA5_SHAPE, 7000, "float32")
 
     with pytest.raises(ValueError, match="values outside 0 to 6553.4 mm/month"):
-        write_months(tmp_path, ERA5_PRECIPITATION, [("2016-01", field, "0001")])
+        write_months(
+            tmp_path,
+            ERA5_PRECIPITATION.cube,
+            ERA5_PRECIPITATION.complete,
+            [("2016-01", field, "0001")],
+        )
 
     assert not (tmp_path / "era5_precipitation.zarr").exists()
 
@@ -834,18 +895,23 @@ def test_precipitation_with_a_non_finite_cell_is_refused_when_written(tmp_path, 
     field[7, 7] = bad
 
     with pytest.raises(ValueError, match="no value in some cells"):
-        write_months(tmp_path, ERA5_PRECIPITATION, [("2016-01", field, "0001")])
+        write_months(
+            tmp_path,
+            ERA5_PRECIPITATION.cube,
+            ERA5_PRECIPITATION.complete,
+            [("2016-01", field, "0001")],
+        )
 
     assert not (tmp_path / "era5_precipitation.zarr").exists()
 
 
 def test_earlier_months_extend_a_cube_backwards_and_leave_later_ones_alone(tmp_path):
-    write_months(tmp_path, LAND, [("2016-01", celsius_field(20), "0001")])
+    write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(20), "0001")])
     later = land_cube(tmp_path).read("2016-01", (7, 7, 1, 1))
     shape_before = zarr.open_group(tmp_path / CUBE_NAME, mode="r")[CUBE_ARRAY].shape
 
     earlier = [("2015-11", celsius_field(5), "0001"), ("2015-12", celsius_field(6), "0001")]
-    write_months(tmp_path, LAND, earlier)
+    write_months(tmp_path, LAND.cube, LAND.complete, earlier)
 
     cube = land_cube(tmp_path)
     assert list(cube.months()) == ["2015-11", "2015-12", "2016-01"]

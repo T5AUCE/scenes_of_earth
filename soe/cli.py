@@ -1,8 +1,9 @@
 """Run the offline data jobs from the command line.
 
 The module imports country and city boundaries into SQLite. It rebuilds the Copernicus terrain
-tile indexes and the ESA WorldCover tile index. It also ingests ERA5-Land and ERA5 monthly cubes
-into local folders. Run `python -m soe.cli --help` to see the commands and their options.
+tile indexes and the ESA WorldCover tile index. It also ingests ERA5-Land, ERA5 and CHIRPS
+monthly cubes into local folders. Run `python -m soe.cli --help` to see the commands and their
+options.
 """
 import argparse
 import json
@@ -15,10 +16,11 @@ from pathlib import Path
 
 import numpy as np
 
-from . import db
+from . import chirps_ingest, db
 from .boundary_import import import_cgaz, import_ucdb
 from .cube_ingest import INGEST_SPECS, ingest
 from .sources import (
+    CHIRPS_CUBE,
     DEFAULT_CUBES_DIR,
     REQUEST_STEP,
     TERRAIN_PRODUCTS,
@@ -58,7 +60,10 @@ def main(argv: list[str] | None = None) -> None:
             parser.error("--from must be YYYY-MM")
 
         logging.basicConfig(level=logging.INFO)
-        ingest(args.cubes, INGEST_SPECS[args.cube], args.start)
+        if args.cube == CHIRPS_CUBE.name:
+            chirps_ingest.ingest(args.cubes, args.start)
+        else:
+            ingest(args.cubes, INGEST_SPECS[args.cube], args.start)
         return
 
     if not (args.cgaz or args.ucdb):
@@ -92,9 +97,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     ingest_parser = subparsers.add_parser(
         "ingest-cube",
-        help="download a monthly ERA5-Land or ERA5 variable from the CDS into its local cube",
+        help="download a monthly variable into its local cube (ERA5 via CDS, CHIRPS via HTTP)",
     )
-    ingest_parser.add_argument("cube", choices=INGEST_SPECS, help="the cube to fill or update")
+    ingest_parser.add_argument(
+        "cube",
+        choices=[*INGEST_SPECS, CHIRPS_CUBE.name],
+        help="the cube to fill or update",
+    )
     ingest_parser.add_argument(
         "--from",
         dest="start",

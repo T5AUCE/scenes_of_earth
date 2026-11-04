@@ -17,6 +17,7 @@ from shapely.geometry.base import BaseGeometry
 
 from soe.areas import AreaError
 from soe.sources import (
+    CHIRPS_CUBE,
     CHIRPS_GRID,
     ERA5_GRID,
     ERA5_LAND_TEMPERATURE_CUBE,
@@ -24,11 +25,13 @@ from soe.sources import (
     ERA5_TEMPERATURE_CUBE,
     SOURCES,
     Bbox,
+    CellWindow,
     CubeSpec,
     Dataset,
     Era5LandTemperatureDataset,
     Grid,
     MonthlyCube,
+    RainDataset,
     RealSource,
     Role,
     SeriesDataset,
@@ -65,11 +68,13 @@ from soe.sources.worldcover import (
     overview_factor,
     worldcover_tiles,
 )
+from tests.conftest import write_updating_chirps_cube
 from tests.helpers import LAND_COVER, NAIROBI, RAIN, TERRAIN, write_cube
 
 TILE_PX = 60  # the fake terrain tiles are small, 1 / 60 degree per pixel
 NARROW_TILE_PX = 40  # tiles from 50 degrees poleward have 2/3 of the pixels in x
 CELL_DEG = 0.05
+NAIROBI_BBOX = [36.5, -1.5, 37.5, -0.5]
 CUBE_SHAPE = (ERA5_LAND_TEMPERATURE_GRID.rows, ERA5_LAND_TEMPERATURE_GRID.columns)
 
 
@@ -242,17 +247,28 @@ def test_era5_preliminary_month_gets_the_preliminary_notice():
 
 
 class FakeRainBackend(FakeCubes):
-    """Provide fixed CHIRPS revisions and fallback-cube month markers."""
+    """Provide fixed CHIRPS revisions, a CHIRPS cube and fallback-cube month markers."""
 
-    def __init__(self, fallback: dict[str, str], chirps_revision: str = "chirps") -> None:
+    def __init__(
+        self,
+        fallback: dict[str, str],
+        chirps_revision: str = "chirps",
+        chirps_cube: dict[str, str] | None = None,
+    ) -> None:
         super().__init__({"era5_precipitation": fallback})
         self.chirps_revision = chirps_revision
+        self.chirps_cube = chirps_cube or {}
+        self.revised_months = []
 
     def latest_month(self) -> str:
         return "2026-08"
 
     def current_revision(self, month: str) -> str:
+        self.revised_months.append(month)
         return self.chirps_revision
+
+    def optional_cube_months(self, spec: CubeSpec) -> dict[str, str]:
+        return self.chirps_cube
 
 
 def test_rain_remote_revision_follows_the_chirps_file_and_local_one_the_fallback_marker():
@@ -270,6 +286,139 @@ def test_rain_remote_revision_follows_the_chirps_file_and_local_one_the_fallback
     assert base.remote_revision(steps) == final_fallback.remote_revision(steps)
     assert base.local_revision(steps) != final_fallback.local_revision(steps)
     assert base.local_revision(steps[:1]) == final_fallback.local_revision(steps[:1])
+
+
+def rain_over(
+    chirps_cube: dict[str, str],
+    fallback_months: tuple[str, ...] = ("2026-06", "2026-07"),
+) -> tuple[RainDataset, FakeRainBackend]:
+    fallback = {month: "0001:a" for month in fallback_months}
+    backend = FakeRainBackend(fallback, "http file", chirps_cube)
+    return replace(RAIN, backend=backend), backend
+
+
+def test_rain_revision_is_local_only_when_the_cube_holds_every_month():
+    rain, backend = rain_over({"2026-06": "0001:c", "2026-07": "0001:d"})
+
+    assert rain.remote_revision(["2026-06-01", "2026-07-01"]) is None
+    assert backend.revised_months == []
+
+
+def test_rain_remote_revision_follows_the_last_month_read_over_http():
+    rain, backend = rain_over({"2026-06": "0001:c"})
+
+    assert rain.remote_revision(["2026-06-01", "2026-07-01"]) == "http file"
+    assert backend.revised_months == ["2026-07"]
+
+
+def test_rain_revision_changes_when_a_cube_month_is_replaced():
+    steps = ["2026-06-01", "2026-07-01"]
+    first, _ = rain_over({"2026-06": "0001:c", "2026-07": "0001:d"})
+    replaced, _ = rain_over({"2026-06": "0001:c", "2026-07": "0001:e"})
+
+    assert first.local_revision(steps) != replaced.local_revision(steps)
+    assert first.local_revision(steps[:1]) == replaced.local_revision(steps[:1])
+
+
+def test_rain_revision_tells_a_cube_month_from_one_read_over_http():
+    steps = ["2026-06-01", "2026-07-01"]
+    over_http, _ = rain_over({})
+    from_cube, _ = rain_over({"2026-06": "0001:c", "2026-07": "0001:d"})
+    mixed, _ = rain_over({"2026-06": "0001:c"})
+
+    revisions = {rain.local_revision(steps) for rain in (over_http, from_cube, mixed)}
+
+    assert len(revisions) == 3
+
+
+def test_rain_latest_follows_the_cube_without_probing():
+    class CubeUpTo202605(SyntheticSource):
+        def latest_month(self) -> str:
+            raise AssertionError("a build with a cube must not probe CHIRPS")
+
+        def optional_cube_months(self, spec: CubeSpec) -> dict[str, str]:
+            months = super().optional_cube_months(spec)
+            return {month: marker for month, marker in months.items() if month <= "2026-05"}
+
+    lagging = make_registry(CubeUpTo202605(chirps_cube=True))["chirps_monthly"]
+
+    assert lagging.latest() == "2026-05-01"
+    assert make_registry(SyntheticSource())["chirps_monthly"].latest() == "2026-08-01"
+
+
+class RecordingSource(SyntheticSource):
+    """Record the CHIRPS months read over HTTP and from the cube."""
+
+    def __init__(self, cube_months: tuple[str, ...] = ()) -> None:
+        super().__init__()
+        self.held = cube_months
+        self.http_reads = []
+        self.cube_reads = []
+
+    def optional_cube_months(self, spec: CubeSpec) -> dict[str, str]:
+        return {month: "0001:cube" for month in self.held}
+
+    def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
+        self.http_reads.append(month)
+        return super().read_rain(month, window)
+
+    def read_cube(self, spec: CubeSpec, month: str, window: CellWindow) -> np.ndarray:
+        if spec.name == CHIRPS_CUBE.name:
+            self.cube_reads.append(month)
+        return super().read_cube(spec, month, window)
+
+
+def test_rain_reads_months_held_by_the_cube_without_http():
+    source = RecordingSource(("2020-03", "2020-04"))
+
+    make_registry(source)["chirps_monthly"].read_step("2020-03-01", NAIROBI_BBOX)
+
+    assert (source.cube_reads, source.http_reads) == (["2020-03"], [])
+
+
+def test_rain_reads_months_missing_from_the_cube_over_http():
+    source = RecordingSource()
+
+    make_registry(source)["chirps_monthly"].read_step("2020-03-01", NAIROBI_BBOX)
+
+    assert (source.cube_reads, source.http_reads) == ([], ["2020-03"])
+
+
+def test_rain_reads_each_month_from_the_path_that_holds_it():
+    source = RecordingSource(("2020-04",))
+    rain = make_registry(source)["chirps_monthly"]
+
+    rain.read_step("2020-03-01", NAIROBI_BBOX)
+    rain.read_step("2020-04-01", NAIROBI_BBOX)
+
+    assert (source.http_reads, source.cube_reads) == (["2020-03"], ["2020-04"])
+
+
+def test_rain_cube_that_is_updating_is_unavailable_instead_of_read_over_http(tmp_path):
+    write_updating_chirps_cube(tmp_path)
+    source = RealSource(cubes_dir=tmp_path)
+
+    with pytest.raises(SourceUnavailable):
+        source.optional_cube_months(CHIRPS_CUBE)
+
+
+@pytest.mark.parametrize(
+    ("chirps_cube", "chirps_has_cube"),
+    [(True, True), (False, False)],
+)
+def test_synthetic_has_cube_follows_the_chirps_flag_and_keeps_era5_cubes(
+    chirps_cube,
+    chirps_has_cube,
+):
+    source = SyntheticSource(chirps_cube=chirps_cube)
+
+    assert source.has_cube(CHIRPS_CUBE) is chirps_has_cube
+    assert source.has_cube(ERA5_TEMPERATURE_CUBE) is True
+    assert source.has_cube(ERA5_LAND_TEMPERATURE_CUBE) is True
+
+
+def test_rain_without_a_cube_folder_has_no_cube_months(tmp_path):
+    assert RealSource(cubes_dir=tmp_path).optional_cube_months(CHIRPS_CUBE) == {}
 
 
 def test_revision_of_a_month_the_cube_lost_is_unavailable():
