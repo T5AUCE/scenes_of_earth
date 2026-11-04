@@ -1,4 +1,4 @@
-/** Takeover editor for new and existing chart definitions with live preview. */
+/** Edit new or saved chart definitions as drafts with live preview and validation. */
 import { useEffect, useRef, useState } from "react";
 
 import { INK_COLORS } from "../render/palettes";
@@ -10,6 +10,7 @@ import {
   allowedTypesFor,
   canonicalTableFor,
   chartTypeLabel,
+  defaultChartTypeFor,
   defaultOptionsFor,
   isSupportedShape,
   MAX_TITLE_CHARS,
@@ -23,7 +24,7 @@ import { HypsometryChart } from "./hypsometry-chart";
 import { SeriesChart } from "./series-chart";
 import { isSeasonalEligible, shapesForLayer } from "./series";
 import { validateYRange } from "./ticks";
-import type { ChartType } from "./table";
+import { isChartType, type ChartType } from "./table";
 
 /** A draft the editor edits; saving copies it atomically into the store. */
 export interface ChartDraft {
@@ -56,12 +57,7 @@ export function draftForNew(
   const layer = layers.find((entry) => shapesForLayer(entry).length > 0);
   if (!layer) return null;
   const shape = shapesForLayer(layer)[0];
-  const method = layer.time?.method ?? null;
-  const chartType = shape === "distribution"
-    ? "area"
-    : method === "sum"
-      ? "bar"
-      : "line";
+  const chartType = defaultChartTypeFor(shape, layer.time?.method ?? null);
 
   return {
     id: newChartId(existingIds),
@@ -296,17 +292,13 @@ function withLayer(draft: ChartDraft, layers: readonly LayerDoc[], layerId: stri
   const next: ChartDraft = {
     ...draft,
     source: { layerId, shape },
-    chartType: draft.source.shape === shape ? draft.chartType : defaultTypeFor(shape, layer),
+    chartType: draft.source.shape === shape
+      ? draft.chartType
+      : defaultChartTypeFor(shape, layer.time?.method ?? null),
     options: { ...draft.options },
   };
 
   return compatibleDraft(next, layer);
-}
-
-function defaultTypeFor(shape: SupportedShape, layer: LayerDoc): ChartType {
-  if (shape === "distribution") return "area";
-
-  return layer.time?.method === "sum" ? "bar" : "line";
 }
 
 function shapeSelect(
@@ -351,7 +343,7 @@ function withShape(draft: ChartDraft, layer: LayerDoc, shape: SupportedShape): C
     source: { ...draft.source, shape },
     chartType: allowedTypesFor(shape).includes(draft.chartType)
       ? draft.chartType
-      : defaultTypeFor(shape, layer),
+      : defaultChartTypeFor(shape, layer.time?.method ?? null),
     options: { ...draft.options },
   };
 
@@ -366,7 +358,7 @@ function typeSelect(draft: ChartDraft, onChange: (next: ChartDraft) => void) {
         value={draft.chartType}
         onChange={(event) => {
           const chartType = event.target.value;
-          if (chartType !== "line" && chartType !== "bar" && chartType !== "area") return;
+          if (!isChartType(chartType)) return;
           onChange({ ...draft, chartType });
         }}
       >

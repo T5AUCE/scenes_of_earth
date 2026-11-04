@@ -1,4 +1,4 @@
-/** One policy for the chart Notes that gallery previews hide and detail shows. */
+/** Collect chart notes in display order to explain coverage and chart choices. */
 import type { LayerDoc } from "../types";
 import { hintFor } from "./definitions";
 import type { ChartTable, ChartType } from "./table";

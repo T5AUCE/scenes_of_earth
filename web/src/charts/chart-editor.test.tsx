@@ -664,7 +664,10 @@ test("complete save stores options preview and invalid stays with focus", async 
   assert.ok(host.querySelector(".editor-confirm"));
   assertSameNode(document.activeElement, decisionSave);
   assert.equal(JSON.stringify(store.getSnapshot().charts), beforeInvalid);
-  assert.equal((host.querySelector('input[type="text"]') as HTMLInputElement).value, "Edited title");
+  assert.equal(
+    (host.querySelector('input[type="text"]') as HTMLInputElement).value,
+    "Edited title",
+  );
   const retained = [...host.querySelectorAll('input[type="number"]')] as HTMLInputElement[];
   assert.equal(retained[0].value, "11");
   assert.equal(retained[1].value, "12");

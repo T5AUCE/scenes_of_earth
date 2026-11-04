@@ -1,3 +1,4 @@
+/** Switch one map between the world and a single scene, holding the camera and masking the rest. */
 import type {
   ExpressionSpecification,
   GeoJSONSource,
@@ -48,14 +49,14 @@ const MAX_LATITUDE_DEG = 85;
 const DOCK_GAP_PX = 8;
 
 /**
- * How entering a scene treats history. push: a new entry; replace: the entry the page was opened
- * with; keep: Back/Forward.
+ * How entering a scene treats history. A push adds a new entry and a replace reuses the entry the
+ * page was opened with. Keep leaves history alone because Back or Forward made the change.
  */
 export type SceneEntry = "push" | "replace" | "keep";
 
 /**
- * How a scene is entered: the time to show (a year, month or day), its history entry and the
- * display settings of the link, if any.
+ * Say which time a scene opens at, as a year, month or day, and how history records the entry.
+ * A shared link may also bring display settings.
  */
 export interface EnterOptions {
   time: string | null;
@@ -63,7 +64,7 @@ export interface EnterOptions {
   display?: DisplayTokens;
 }
 
-/** The page elements a scene uses: the column, the time bar and the full-view dialog. */
+/** Group the scene's column and time bar with its full-view dialog. */
 export interface SceneRoots {
   column: HTMLElement;
   timeBar: HTMLElement;
@@ -80,7 +81,7 @@ interface ActiveScene {
   close(): void;
 }
 
-/** One map with two modes: the world, and one scene at a time that the camera is held to. */
+/** Switch between the world view and one scene with the camera held to its area. */
 export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   let current: ActiveScene | null = null;
   let worldCamera: Camera | null = null;
@@ -682,7 +683,7 @@ function outlines(geometry: AreaFeature["geometry"]) {
   };
 }
 
-// One world wide, centred on the area: MapLibre does not cut holes from a ring that is wider.
+// The ring is one world wide and centred on the area because MapLibre cannot cut holes in a wider one.
 function worldRing(holes: number[][][]) {
   const longitudes = holes.flat().map(([longitude]) => longitude);
   const centre = (Math.min(...longitudes) + Math.max(...longitudes)) / 2;

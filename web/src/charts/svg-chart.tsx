@@ -1,4 +1,4 @@
-/** One accessible SVG renderer for line, bar and area chart tables. */
+/** Render chart tables as accessible SVG without changing their stored values. */
 import { useEffect, useMemo, useState } from "react";
 
 import { chartPaintFor } from "./paint";
@@ -149,7 +149,7 @@ export function SvgChart({
   );
   const domain = domainFor(table, type, references, convertedZero, yRange);
   const span = xSpan(table, xDomain);
-  const rowTotal = rowCount(table);
+  const rowTotal = table.rows.length;
   useEffect(() => {
     setCursor(null);
   }, [table.shape, table.layerId]);
@@ -355,7 +355,7 @@ function initialCursor(
 }
 
 function moveCursor(key: string, table: ChartTable, selected: number | null) {
-  const count = rowCount(table);
+  const count = table.rows.length;
   if (count === 0) return null;
   if (selected === null) {
     if (key === "ArrowRight" || key === "ArrowLeft" || key === "Home") return 0;
@@ -369,10 +369,6 @@ function moveCursor(key: string, table: ChartTable, selected: number | null) {
   if (key === "End") return count - 1;
 
   return null;
-}
-
-function rowCount(table: ChartTable) {
-  return table.rows.length;
 }
 
 function tooltipFor(
@@ -458,7 +454,7 @@ function seasonalDetail(row: RowCoverage) {
 }
 
 function summaryFor(table: ChartTable, chartType: ChartType) {
-  const count = rowCount(table);
+  const count = table.rows.length;
   const finite = finiteValues(table).length;
   const shape = table.shape === "distribution"
     ? "hypsometry"
@@ -526,8 +522,8 @@ function plotWidthFor(width: number, left: number, compact: boolean): number {
 }
 
 // Long titles wrap on word boundaries so narrow cards keep every word inside the svg.
-function xTitleLinesFor(title: string, plotWidth_PX: number): string[] {
-  const maxChars = Math.max(1, Math.floor(plotWidth_PX / TITLE_ESTIMATED_CHAR_PX));
+function xTitleLinesFor(title: string, plotWidthPx: number): string[] {
+  const maxChars = Math.max(1, Math.floor(plotWidthPx / TITLE_ESTIMATED_CHAR_PX));
   if (title.length <= maxChars) return [title];
 
   return wrapEquation(title, maxChars);
@@ -771,10 +767,10 @@ function dedupeMarks(marks: { x: number; label: string }[]) {
   return unique;
 }
 
-function dateLabel(time_MS: number) {
-  if (!Number.isFinite(time_MS)) return "";
+function dateLabel(timeMs: number) {
+  if (!Number.isFinite(timeMs)) return "";
 
-  return new Date(time_MS).toISOString().slice(0, 10);
+  return new Date(timeMs).toISOString().slice(0, 10);
 }
 
 function axisTitles(
@@ -1029,19 +1025,19 @@ function parseResolutionValue(note: string | null): number | null {
 function endpointLabelFor(
   cell: string,
   displayNumber: string | null,
-  plotWidth_PX: number,
+  plotWidthPx: number,
 ): string {
   if (displayNumber === null) return cell;
   const full = `${cell} (${displayNumber}${FULL_GRID_SUFFIX})`;
-  if (fitsPlot(full, plotWidth_PX)) return full;
+  if (fitsPlot(full, plotWidthPx)) return full;
   const short = `${cell} (${displayNumber}${SHORT_GRID_SUFFIX})`;
-  if (fitsPlot(short, plotWidth_PX)) return short;
+  if (fitsPlot(short, plotWidthPx)) return short;
 
   return cell;
 }
 
-function fitsPlot(label: string, plotWidth_PX: number) {
-  return label.length * ESTIMATED_CHAR_PX <= Math.max(1, plotWidth_PX);
+function fitsPlot(label: string, plotWidthPx: number) {
+  return label.length * ESTIMATED_CHAR_PX <= Math.max(1, plotWidthPx);
 }
 
 function annotationLow(hasDisclosure: boolean, lineCount = 1) {
@@ -1266,17 +1262,17 @@ function barsFor(
 // True centres stay shared with ticks and cursor, so edge rectangles clip instead of shifting.
 function clippedBarHorizontal(
   centre: number,
-  half_PX: number,
+  halfPx: number,
   geometry: ChartGeometry,
-  strokeHalf_PX: number,
+  strokeHalfPx: number,
 ): { x: number; width: number } {
-  const innerLeft = geometry.left + strokeHalf_PX;
-  const innerRight = geometry.left + geometry.plotWidth - strokeHalf_PX;
+  const innerLeft = geometry.left + strokeHalfPx;
+  const innerRight = geometry.left + geometry.plotWidth - strokeHalfPx;
   if (!(innerRight > innerLeft)) {
     return { x: geometry.left, width: 1 };
   }
-  const rawLeft = centre - half_PX;
-  const rawRight = centre + half_PX;
+  const rawLeft = centre - halfPx;
+  const rawRight = centre + halfPx;
   let left = Math.max(rawLeft, innerLeft);
   let right = Math.min(rawRight, innerRight);
   if (right - left < 1) {
@@ -1299,10 +1295,10 @@ function clippedBarVertical(
   top: number,
   baseY: number,
   geometry: ChartGeometry,
-  strokeHalf_PX: number,
+  strokeHalfPx: number,
 ): { y: number; height: number } {
-  const innerTop = geometry.plotTop + strokeHalf_PX;
-  const innerBottom = geometry.plotBottom - strokeHalf_PX;
+  const innerTop = geometry.plotTop + strokeHalfPx;
+  const innerBottom = geometry.plotBottom - strokeHalfPx;
   if (!(innerBottom > innerTop)) {
     return { y: geometry.plotTop, height: BAR_MIN_HEIGHT_PX };
   }

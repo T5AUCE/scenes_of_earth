@@ -1,4 +1,4 @@
-/** Close-up of one saved chart with its data table and chart actions. */
+/** Show a saved chart with its data table and controls for managing or exporting it. */
 import { useState } from "react";
 
 import type { SceneStore } from "../scene-store";

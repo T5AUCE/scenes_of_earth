@@ -34,6 +34,8 @@ export const MAX_TOKEN_CHARS = Math.ceil((MAX_DECODED_BYTES * 4) / 3);
 export const MAX_COMPLETE_URL_CHARS = 8 * 1024;
 
 const BASE64URL_PATTERN = /^[A-Za-z0-9-_]*$/;
+/** Base64 encodes four characters per three bytes, so padding restores the block size. */
+const BASE64_BLOCK = 4;
 
 /** The versioned chart slice of one scene. */
 export interface ChartSlice {
@@ -258,9 +260,6 @@ export function formatChartsParam(slice: ChartSlice | null) {
 export function isCompleteUrlOversized(url: string) {
   return url.length > MAX_COMPLETE_URL_CHARS;
 }
-
-/** Base64 encodes four characters per three bytes, so padding restores the block size. */
-const BASE64_BLOCK = 4;
 
 function encodeBase64Url(json: string) {
   const bytes = new TextEncoder().encode(json);

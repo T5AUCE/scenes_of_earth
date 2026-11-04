@@ -1,3 +1,4 @@
+/** Call the backend API and resolve bundle files from each scene's own URL so hosting can move. */
 import type {
   AreaFeature,
   AreaHit,

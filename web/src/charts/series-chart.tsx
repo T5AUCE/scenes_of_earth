@@ -7,8 +7,8 @@ import { chartNotesFor } from "./notes";
 import { paletteInkFor } from "./paint";
 import { buildSeasonalCycle, buildTimeSeries, rowAtTime } from "./series";
 import { SvgChart } from "./svg-chart";
-import { finiteValues, toDisplayTable, type ChartType } from "./table";
-import { baselineFor, formatPresentationValue } from "./ticks";
+import { toDisplayTable, type ChartType } from "./table";
+import { convertedBaseline, displayRange, formatPresentationValue } from "./ticks";
 
 /** Props of a time or seasonal chart; the table stays derived from the layer. */
 export interface SeriesChartProps {
@@ -91,21 +91,6 @@ function notesFor(notes: string[]): React.ReactElement {
   );
 }
 
-// Validation and drawing must share one baseline, so convert the canonical requirement.
-function convertedBaseline(
-  table: ReturnType<typeof buildTimeSeries> | ReturnType<typeof buildSeasonalCycle>,
-  chartType: ChartType,
-  nativeUnits: string,
-  displayUnit: string,
-) {
-  const values = finiteValues(table);
-  const minimum = values.length > 0 ? Math.min(...values) : null;
-  const canonical = baselineFor(chartType, minimum);
-  if (canonical === null) return null;
-
-  return convertValue(canonical, nativeUnits, displayUnit);
-}
-
 function shapeLabel(shape: "time_series" | "seasonal_cycle") {
   return shape === "time_series" ? "Over time" : "By month";
 }
@@ -158,17 +143,4 @@ function fallbackNamesFor(layer: LayerDoc) {
   const names = (layer.fallback_sources ?? []).map((source) => source.name);
 
   return names.length ? names.join(", ") : null;
-}
-
-function displayRange(
-  range: [number, number] | null | undefined,
-  nativeUnits: string,
-  displayUnit: string,
-): [number, number] | null {
-  if (!range) return null;
-
-  return [
-    convertValue(range[0], nativeUnits, displayUnit),
-    convertValue(range[1], nativeUnits, displayUnit),
-  ];
 }

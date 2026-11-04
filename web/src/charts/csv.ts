@@ -243,7 +243,7 @@ function elevationNotes(
   layer: LayerDoc,
   table: ReturnType<typeof buildDistributionTable>,
 ): string[] {
-  const notes = [
+  return [
     `Export: elevation distribution for ${layer.id} in source units.`,
     `Minimum elevation: ${String(table.min)} ${layer.units}.`,
     `Maximum elevation: ${String(table.max)} ${layer.units}.`,
@@ -256,8 +256,6 @@ function elevationNotes(
       + "comes from weighted cells directly.",
     "Shares describe valid area only; ocean and missing data are excluded.",
   ];
-
-  return notes;
 }
 
 function gridLine(layer: LayerDoc): string {
@@ -359,8 +357,9 @@ function datePart(value: string): string {
  */
 function csvDocument(metadata: string[], header: string[], rows: string[][]): string {
   // Credits may use CRLF or bare CR so split on every newline form.
-  const comments = metadata.flatMap((line) => line.split(/\r\n|\r|\n/)
-    .map((physical) => `# ${physical}`));
+  const comments = metadata.flatMap(
+    (line) => line.split(/\r\n|\r|\n/).map((physical) => `# ${physical}`),
+  );
   const records = [header, ...rows].map((row) => row.map(escapeCsvCell).join(","));
 
   return [...comments, ...records].join("\r\n") + "\r\n";

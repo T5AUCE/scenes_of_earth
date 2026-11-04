@@ -1,4 +1,4 @@
-/** Saved chart definitions with metadata-driven defaults, hints and validation. */
+/** Define saved charts and derive defaults and validation from layer metadata. */
 import { inkColor } from "../render/palettes";
 import type { LayerDoc } from "../types";
 import { isUnitFor } from "../units";

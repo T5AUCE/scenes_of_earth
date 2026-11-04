@@ -9,10 +9,10 @@ export const FALLBACK_WIDTH_PX = 320;
  * measurement and where ResizeObserver is unavailable, so layout never depends on the observer.
  */
 export function useElementWidth(
-  fallback_PX = FALLBACK_WIDTH_PX,
+  fallbackPx = FALLBACK_WIDTH_PX,
 ): [RefObject<HTMLDivElement | null>, number] {
   const ref = useRef<HTMLDivElement | null>(null);
-  const [width, setWidth] = useState(fallback_PX);
+  const [width, setWidth] = useState(fallbackPx);
 
   useEffect(() => {
     const element = ref.current;

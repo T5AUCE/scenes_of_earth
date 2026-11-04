@@ -25,16 +25,15 @@ export const LAYOUT_EDITOR = {
 
 /**
  * Lists the controls that must stay clickable, matched by accessible role and name.
- * Plain names match a substring while the layer entries anchor on the draw
- * separator, because the blend card shares the Rainfall prefix. The slider
- * stays scoped to the time bar and samples five points across it, because a fixed
- * editor can cover one end while the center stays clickable. Editors add their own
- * sliders, so the scope matters twice.
- * Editor-only entries carry when "open" so a closed editor skips them instead
- * of failing, while Expand stays optional until the chip UI arrives. Entries
- * with a scroll selector live in that scrollable container, so the trial
- * centres them there before hit-testing; fixed regions are never scrolled,
- * so an overlap with the time bar, the panel footer or the editor still fails.
+ * Plain names match a substring while the layer entries anchor on the draw separator, because
+ * the blend card shares the Rainfall prefix. The slider stays scoped to the time bar and samples
+ * five points across it, because a fixed editor can cover one end while the center stays
+ * clickable. Editors add their own sliders, so the scope matters twice.
+ *
+ * Editor-only entries carry when "open" so a closed editor skips them instead of failing, while
+ * Expand stays optional until the chip UI arrives. Entries with a scroll selector live in that
+ * scrollable container, so the trial centres them there before hit-testing. Fixed regions are
+ * never scrolled, so an overlap with the time bar, the panel footer or the editor still fails.
  */
 export const LAYOUT_CONTROLS = [
   { role: "button", name: "Play" },

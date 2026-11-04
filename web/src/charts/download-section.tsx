@@ -1,4 +1,4 @@
-/** Scene-wide CSV downloads below the chart gallery. */
+/** Offer CSV downloads for the scene's area means and elevation distributions. */
 import type { LayerDoc, Scene } from "../types";
 import { buildAreaMeansCsv, buildElevationCsv, downloadCsv } from "./csv";
 import { isDistributionLayer, isTimeSeriesLayer } from "./series";

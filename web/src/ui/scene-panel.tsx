@@ -1,10 +1,9 @@
-/** Port the docked scene panel and its full-view dialog to React with charts. */
+/** Render the docked scene panel and its full-view dialog with charts. */
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 
 import { creditsLine, NOTICES_HEADING_ID, renderAbout, renderCredits, summaryText } from "../about";
-import { elevationUnitFrom } from "../display-state";
-import type { SceneDisplay } from "../display-state";
+import { elevationUnitFrom, type SceneDisplay } from "../display-state";
 import { ChartDetail } from "../charts/chart-detail";
 import { DownloadSection } from "../charts/download-section";
 import { ChartGallery } from "../charts/chart-gallery";

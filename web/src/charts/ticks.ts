@@ -1,4 +1,5 @@
 /** Derive axis domains, baselines and hints without rounding stored statistics. */
+import { convertValue } from "../units";
 import { finiteValues, type ChartTable, type ChartType } from "./table";
 
 /** The most fractional digits an ordinary presentation value keeps. */
@@ -13,12 +14,41 @@ export const DENSITY_HINT_THRESHOLD = 60;
 /** The fewest ticks an axis keeps, so a degenerate domain still shows its value. */
 const MIN_TICK_COUNT = 2;
 
+/** Convert the canonical baseline so validation and drawing share the same requirement. */
+export function convertedBaseline(
+  table: ChartTable,
+  chartType: ChartType,
+  nativeUnits: string,
+  displayUnit: string,
+) {
+  const values = finiteValues(table);
+  const minimum = values.length > 0 ? Math.min(...values) : null;
+  const canonical = baselineFor(chartType, minimum);
+  if (canonical === null) return null;
+
+  return convertValue(canonical, nativeUnits, displayUnit);
+}
+
 /** The baseline a chart type must include; lines float while bars and areas are anchored. */
 export function baselineFor(chartType: ChartType, minValue: number | null) {
   if (chartType === "bar") return 0;
   if (chartType === "area") return minValue === null ? 0 : Math.min(0, minValue);
 
   return null;
+}
+
+/** Convert a canonical y-range while absent ranges stay automatic. */
+export function displayRange(
+  range: [number, number] | null | undefined,
+  nativeUnits: string,
+  displayUnit: string,
+): [number, number] | null {
+  if (!range) return null;
+
+  return [
+    convertValue(range[0], nativeUnits, displayUnit),
+    convertValue(range[1], nativeUnits, displayUnit),
+  ];
 }
 
 /**

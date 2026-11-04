@@ -1,3 +1,4 @@
+/** Assertions whose failures stay short because node:assert would print whole DOM graphs. */
 import assert from "node:assert/strict";
 
 const DESCRIPTION_LIMIT_CHARS = 40;

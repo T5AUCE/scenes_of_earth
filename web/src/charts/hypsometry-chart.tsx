@@ -6,8 +6,8 @@ import type { ChartOptions } from "./definitions";
 import { chartNotesFor } from "./notes";
 import { buildDistributionTable } from "./series";
 import { SvgChart } from "./svg-chart";
-import { finiteValues, toDisplayTable, type ChartType } from "./table";
-import { baselineFor, formatPresentationValue } from "./ticks";
+import { toDisplayTable, type ChartType } from "./table";
+import { convertedBaseline, displayRange, formatPresentationValue } from "./ticks";
 
 /** Props of a hypsometry chart; the table stays derived from the layer. */
 export interface HypsometryChartProps {
@@ -87,21 +87,6 @@ function notesFor(notes: string[]): React.ReactElement {
   );
 }
 
-// Validation and drawing must share one baseline, so convert the canonical requirement.
-function convertedBaseline(
-  table: ReturnType<typeof buildDistributionTable>,
-  chartType: ChartType,
-  nativeUnits: string,
-  displayUnit: string,
-) {
-  const values = finiteValues(table);
-  const minimum = values.length > 0 ? Math.min(...values) : null;
-  const canonical = baselineFor(chartType, minimum);
-  if (canonical === null) return null;
-
-  return convertValue(canonical, nativeUnits, displayUnit);
-}
-
 /** Neutral grey keeps hypsometry separate from the map palettes until the viewer picks an ink. */
 export function hypsometryInkFor(
   ink: string | undefined,
@@ -128,17 +113,4 @@ function resolutionValueFor(layer: LayerDoc) {
   if (typeof res !== "number" || !Number.isFinite(res)) return null;
 
   return res;
-}
-
-function displayRange(
-  range: [number, number] | null | undefined,
-  nativeUnits: string,
-  displayUnit: string,
-): [number, number] | null {
-  if (!range) return null;
-
-  return [
-    convertValue(range[0], nativeUnits, displayUnit),
-    convertValue(range[1], nativeUnits, displayUnit),
-  ];
 }

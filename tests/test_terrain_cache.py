@@ -1,4 +1,4 @@
-"""Offline tests: the terrain cache returns what a read would, and its key tracks every input."""
+"""Test offline that the terrain cache returns what a read would and its key tracks each input."""
 from collections.abc import Callable
 from dataclasses import replace
 

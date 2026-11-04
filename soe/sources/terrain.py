@@ -31,7 +31,7 @@ from .grid import (
 from .licences import SOURCES
 from .remote import GDAL_OPTS, read_with_retries
 
-# The warp target is a plain array; a module filter, as catch_warnings is not thread-safe.
+# The warp target is a plain array, so only a module filter helps as catch_warnings is not thread-safe.
 warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
 
 GLO30_RES_DEG = 1 / 3600
@@ -70,7 +70,7 @@ GLO90_URL = "https://copernicus-dem-90m.s3.amazonaws.com/{n}/{n}.tif"
 
 @dataclass(frozen=True)
 class TerrainProduct:
-    """One Copernicus DEM product: where its tiles are and how they are named."""
+    """Describe a Copernicus DEM product's tile locations and naming scheme."""
 
     url: str  # tile URL template with {n} for the tile name
     index: Path  # bitmap of the tiles that exist
@@ -79,7 +79,7 @@ class TerrainProduct:
     tile_px: int  # tile height in pixels, and width below NARROW_TILE_FROM_LAT_DEG
 
 
-# Finest first: this is also the order of a mixed scene's sources.
+# The products run finest first, which is also the order of a mixed scene's sources.
 TERRAIN_PRODUCTS = {
     "glo30": TerrainProduct(GLO30_URL, GLO30_TILE_INDEX, "10", GLO30_RES_DEG, 3600),
     "glo90": TerrainProduct(GLO90_URL, GLO90_TILE_INDEX, "30", GLO90_RES_DEG, 1200),

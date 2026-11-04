@@ -1,4 +1,4 @@
-/** Gallery of saved chart previews with unavailable placeholders. */
+/** Show saved chart previews and explain why unavailable default charts cannot be drawn. */
 import { useState } from "react";
 
 import type { SceneStore } from "../scene-store";
