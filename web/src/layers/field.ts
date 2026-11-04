@@ -5,6 +5,7 @@ import {
   decode,
   readArray,
   readMask,
+  readSteps,
   type Store,
   type StepReader,
 } from "../data";
@@ -355,16 +356,23 @@ class FieldView implements LayerView {
     else this.drawLatestStep(this.shownStep);
   }
 
-  async prepare(time: string, lookahead: number): Promise<void> {
+  async prepare(time: string): Promise<void> {
     const step = stepAt(this.time.values, this.time.end, time);
     if (step < 0) return;
 
-    this.readStep.keep(lookahead);
     await this.readStep.read(step, false);
+  }
+
+  maxLookahead() {
+    return this.readStep.maxLookahead();
   }
 
   release() {
     this.readStep.release();
+  }
+
+  setPlaying(isPlaying: boolean) {
+    this.readStep.setPlaying(isPlaying);
   }
 
   show(next: Draw | null) {
@@ -398,10 +406,7 @@ class FieldView implements LayerView {
 
       this.drawValues(values, step, mask);
 
-      const nextStep = step + 1;
-      if (nextStep < this.time.values.length) {
-        this.readStep.read(nextStep, false).catch(() => {});
-      }
+      this.readStep.prime(step, this.time.values.length - 1);
     } catch (error) {
       // An error for a step the user has already left is no longer relevant.
       if (!this.alive || step !== this.shownStep) return;
@@ -463,10 +468,17 @@ export function fieldReader(layer: LayerDoc, store: Promise<Store>): StepReader 
   if (existing) return existing;
 
   const valueArray = arrayDoc(layer, "value");
-  const reader = createStepReader(layer.grid, async (step) => {
-    const raw = await readArray(await store, valueArray.path, [step, null, null]);
-    return decode(raw, valueArray);
-  });
+  const reader = createStepReader(
+    layer.grid,
+    async (step) => {
+      const raw = await readArray(await store, valueArray.path, [step, null, null]);
+      return decode(raw, valueArray);
+    },
+    async (first, count) => {
+      const steps = await readSteps(await store, valueArray.path, first, count);
+      return steps.map((raw) => decode(raw, valueArray));
+    },
+  );
   byLayer.set(layer.id, reader);
   return reader;
 }

@@ -1,17 +1,31 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
-import { cacheByIndex, createStepReader, stepCacheLimit } from "./data.ts";
+import type { AsyncReadable } from "zarrita";
+
+import {
+  BATCH_MAX_STEPS,
+  cacheByIndex,
+  createStepReader,
+  mergingStore,
+  STEP_CACHE_BYTES,
+  stepCacheLimit,
+} from "./data.ts";
 import {
   labelIndexFor,
+  LoadMeter,
   loadPlaySpeed,
   lookaheadFor,
   loopMsFor,
   PLAY_SPEED_KEY,
   playheadAt,
+  PRIME_STEPS,
+  READS_IN_FLIGHT_PAUSED,
+  READS_IN_FLIGHT_PLAYING,
   rescalePosition,
   stepMsFor,
   storePlaySpeed,
+  sustainedStepMs,
 } from "./playback.ts";
 
 const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
@@ -39,10 +53,11 @@ test("speed scales the cruise while the 60 ms floor holds", () => {
   assert.equal(stepMsFor(312, 4), 60);
 });
 
-test("lookahead covers two seconds of play", () => {
+test("lookahead covers three seconds of play", () => {
   assert.equal(lookaheadFor(1500), 2);
-  assert.equal(lookaheadFor(237), 9);
-  assert.equal(lookaheadFor(150), 12);
+  assert.equal(lookaheadFor(237), 13);
+  assert.equal(lookaheadFor(150), 20);
+  assert.equal(lookaheadFor(60), 24);
 });
 
 test("the playhead holds the step before fading", () => {
@@ -93,16 +108,23 @@ test("reduced motion never fades", () => {
 });
 
 test("a tiny grid keeps the full cache while a huge one shrinks by bytes", () => {
-  assert.equal(stepCacheLimit(10, 10, 2), 48);
-  assert.equal(stepCacheLimit(800, 800, 9), 13);
-  assert.equal(stepCacheLimit(800, 800, 12), 14);
+  assert.equal(stepCacheLimit(10, 10), 48);
+  assert.equal(stepCacheLimit(800, 800), 13);
 });
 
-test("a 76-step 800 by 800 layer at 4x keeps room for the 12-step lookahead", () => {
-  const lookahead = lookaheadFor(stepMsFor(76, 4));
+test("a grid too large for the budget still keeps the minimum for play", () => {
+  assert.equal(stepCacheLimit(4000, 4000), 4);
+});
 
-  assert.equal(lookahead, 12);
-  assert.equal(stepCacheLimit(800, 800, lookahead), 14);
+test("a 76-step 800 by 800 layer at 4x stays inside the byte budget", () => {
+  const reader = createStepReader({ nx: 800, ny: 800 }, async () => new Float32Array(1));
+  const wanted = lookaheadFor(stepMsFor(76, 4));
+  const effective = Math.min(wanted, reader.maxLookahead());
+  const cachedBytes = (effective + 2) * 800 * 800 * 4;
+
+  assert.equal(wanted, 24);
+  assert.equal(effective, 11);
+  assert.ok(cachedBytes <= STEP_CACHE_BYTES);
 });
 
 test("shrinking the cache drops the oldest steps", async () => {
@@ -229,6 +251,111 @@ test("a waiting step the map needs jumps ahead of other prefetches", async () =>
   await drawn;
 });
 
+test("playing raises the reads in flight and pausing lowers them again", async () => {
+  const reads = fakeReads();
+  const reader = createStepReader({ nx: 10, ny: 10 }, reads.load);
+  const steps = Array.from({ length: 8 }, (_, step) => step);
+
+  steps.slice(0, 5).forEach((step) => reader.read(step, false));
+  assert.equal(reads.active, READS_IN_FLIGHT_PAUSED);
+
+  reader.setPlaying(true);
+  assert.equal(reads.active, READS_IN_FLIGHT_PLAYING);
+
+  reader.setPlaying(false);
+  steps.slice(5).forEach((step) => reader.read(step, false));
+  reads.finish(0);
+  await flush();
+  assert.equal(reads.active, READS_IN_FLIGHT_PLAYING - 1);
+  assert.equal(reads.peak, READS_IN_FLIGHT_PLAYING);
+
+  [1, 2, 3].forEach((step) => reads.finish(step));
+  await flush();
+  assert.equal(reads.active, READS_IN_FLIGHT_PAUSED);
+});
+
+test("while playing a step the map needs still jumps the queue", async () => {
+  const reads = fakeReads();
+  const reader = createStepReader({ nx: 10, ny: 10 }, reads.load);
+  reader.setPlaying(true);
+  [0, 1, 2, 3, 4, 5, 6].forEach((step) => reader.read(step, false));
+
+  const drawn = reader.read(6);
+  reads.finish(0);
+  await flush();
+
+  assert.deepEqual(reads.started, [0, 1, 2, 3, 6]);
+  reads.finish(6);
+  await drawn;
+});
+
+test("priming warms the steps after a draw and stops at the last step", async () => {
+  const reads = fakeReads();
+  const reader = createStepReader({ nx: 10, ny: 10 }, reads.load);
+
+  reader.prime(3, 10);
+  assert.deepEqual(reads.started, [4, 5].slice(0, PRIME_STEPS));
+
+  reader.prime(9, 10);
+  [4, 5].forEach((step) => reads.finish(step));
+  await flush();
+  assert.deepEqual(reads.started, [4, 5, 10]);
+});
+
+test("a cap of four nearly removes the stalls of a cap of two", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const twoSlots = await simulatedStallMs(false, context.mock.timers);
+  const fourSlots = await simulatedStallMs(true, context.mock.timers);
+
+  assert.ok(twoSlots > 200, `two slots stalled only ${twoSlots} ms`);
+  assert.ok(fourSlots < 50, `four slots stalled ${fourSlots} ms`);
+});
+
+const SIMULATED_STEPS = 44;
+const SIMULATED_STEP_MS = 60;
+const SIMULATED_LOOKAHEAD = 12;
+
+/** Plays a cold series at 60 ms a step through slow reads on a virtual clock; sums the stalls. */
+async function simulatedStallMs(isPlaying: boolean, timers: { tick(ms: number): void }) {
+  const ready = new Set<number>();
+  const reader = createStepReader({ nx: 10, ny: 10 }, async (step) => {
+    const latencyMs = step % 2 === 0 ? 120 : 150;
+    await new Promise((resolve) => setTimeout(resolve, latencyMs));
+    ready.add(step);
+    return new Float32Array(1);
+  });
+  reader.setPlaying(isPlaying);
+  const warm = (shown: number) => {
+    const last = Math.min(shown + SIMULATED_LOOKAHEAD, SIMULATED_STEPS - 1);
+    for (let step = shown + 1; step <= last; step++) void reader.read(step, false);
+  };
+  const advanceOneMs = async () => {
+    timers.tick(1);
+    await flush();
+  };
+
+  warm(0);
+  while (!ready.has(1)) await advanceOneMs();
+
+  let shown = 1;
+  let stallMs = 0;
+  let waitedMs = SIMULATED_STEP_MS;
+  while (shown < SIMULATED_STEPS - 1) {
+    await advanceOneMs();
+    waitedMs--;
+    if (waitedMs > 0) continue;
+    if (!ready.has(shown + 1)) {
+      stallMs++;
+      continue;
+    }
+
+    shown++;
+    waitedMs = SIMULATED_STEP_MS;
+    warm(shown);
+  }
+  return stallMs;
+}
+
 test("a failed read frees its slot for the next one", async () => {
   const reads = fakeReads();
   const reader = createStepReader({ nx: 10, ny: 10 }, reads.load);
@@ -240,6 +367,166 @@ test("a failed read frees its slot for the next one", async () => {
   await flush();
 
   assert.deepEqual(reads.started, [0, 1, 2]);
+});
+
+test("one tick of ranges makes one request and each caller gets its bytes", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const source = rangeSource();
+  const store = mergingStore(source.store);
+
+  const asked = [
+    store.getRange!("/a", { offset: 10, length: 5 }),
+    store.getRange!("/a", { offset: 15, length: 5 }),
+    store.getRange!("/a", { offset: 40, length: 4 }),
+  ];
+  context.mock.timers.tick(1);
+  const parts = await Promise.all(asked);
+
+  assert.deepEqual(source.requests, [{ key: "/a", offset: 10, length: 34 }]);
+  assert.deepEqual(parts.map((part) => [...part!]), [
+    [10, 11, 12, 13, 14],
+    [15, 16, 17, 18, 19],
+    [40, 41, 42, 43],
+  ]);
+});
+
+test("ranges asked in different ticks or for different shards are not merged", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const source = rangeSource();
+  const store = mergingStore(source.store);
+
+  const first = [
+    store.getRange!("/a", { offset: 0, length: 4 }),
+    store.getRange!("/b", { offset: 4, length: 4 }),
+  ];
+  context.mock.timers.tick(1);
+  await Promise.all(first);
+  const later = store.getRange!("/a", { offset: 4, length: 4 });
+  context.mock.timers.tick(1);
+  await later;
+
+  assert.deepEqual(source.requests.map(({ key }) => key), ["/a", "/b", "/a"]);
+});
+
+test("the byte cap and a wide gap split a merge", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const source = rangeSource();
+  const store = mergingStore(source.store, 20);
+
+  const asked = [0, 10, 20, 200000].map((offset) => {
+    return store.getRange!("/a", { offset, length: 10 });
+  });
+  context.mock.timers.tick(1);
+  const parts = await Promise.all(asked);
+
+  assert.deepEqual(source.requests, [
+    { key: "/a", offset: 0, length: 20 },
+    { key: "/a", offset: 20, length: 10 },
+    { key: "/a", offset: 200000, length: 10 },
+  ]);
+  assert.deepEqual(parts.map((part) => part![0]), [0, 10, 20, 200000 % 256]);
+});
+
+test("a suffix read passes through and a failed merge fails every caller", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const source = rangeSource();
+  const store = mergingStore(source.store);
+
+  const tail = await store.getRange!("/a", { suffixLength: 3 });
+  assert.deepEqual([...tail!], [299997, 299998, 299999].map((index) => index % 256));
+
+  source.failNext();
+  const asked = [0, 4].map((offset) => store.getRange!("/a", { offset, length: 4 }));
+  const outcomes = asked.map((request) => request.then(() => "ok", () => "failed"));
+  context.mock.timers.tick(1);
+
+  assert.deepEqual(await Promise.all(outcomes), ["failed", "failed"]);
+});
+
+test("queued prefetches of consecutive steps share one read and keep their own step", async () => {
+  const reads = fakeReads();
+  const reader = createStepReader({ nx: 10, ny: 10 }, reads.load, reads.loadSteps);
+  reader.setPlaying(true);
+
+  const loaded = [1, 2, 3, 4, 5, 6, 7, 8].map((step) => reader.read(step, false));
+  await flush();
+
+  assert.deepEqual(reads.batches, [[1, 8]]);
+  assert.deepEqual(reads.started, []);
+  const values = await Promise.all(loaded);
+  assert.deepEqual(values.map((step) => step[0]), [1, 2, 3, 4, 5, 6, 7, 8]);
+});
+
+test("a shared read stops at one shard of steps", async () => {
+  const reads = fakeReads();
+  const reader = createStepReader({ nx: 10, ny: 10 }, reads.load, reads.loadSteps);
+  reader.setPlaying(true);
+
+  const steps = Array.from({ length: 2 * BATCH_MAX_STEPS + 5 }, (_, index) => index + 1);
+  const loaded = steps.map((step) => reader.read(step, false));
+  await flush();
+  await Promise.all(loaded);
+
+  assert.deepEqual(reads.batches, [
+    [1, BATCH_MAX_STEPS],
+    [1 + BATCH_MAX_STEPS, BATCH_MAX_STEPS],
+    [1 + 2 * BATCH_MAX_STEPS, 5],
+  ]);
+});
+
+test("an urgent step waiting behind prefetches is read alone and goes first", async () => {
+  const reads = fakeReads();
+  let openGate!: () => void;
+  reads.batchGate = new Promise<void>((resolve) => {
+    openGate = resolve;
+  });
+  const reader = createStepReader({ nx: 10, ny: 10 }, reads.load, reads.loadSteps);
+  [1, 2, 3, 10, 20, 21, 22].forEach((step) => void reader.read(step, false));
+  await flush();
+  assert.deepEqual(reads.batches, [[1, 3]]);
+  assert.deepEqual(reads.started, [10]);
+
+  const drawn = reader.read(21);
+  reads.finish(10);
+  await flush();
+
+  assert.deepEqual(reads.started, [10, 21]);
+  reads.finish(21);
+  assert.equal((await drawn)[0], 21);
+  openGate();
+  await flush();
+  assert.deepEqual(reads.batches, [[1, 3]]);
+  assert.deepEqual(reads.started, [10, 21, 20, 22]);
+});
+
+test("an urgent step inside a shared read waits for it instead of repeating it", async () => {
+  const reads = fakeReads();
+  const reader = createStepReader({ nx: 10, ny: 10 }, reads.load, reads.loadSteps);
+  [1, 2, 3].forEach((step) => void reader.read(step, false));
+  await flush();
+
+  const drawn = await reader.read(2);
+
+  assert.equal(drawn[0], 2);
+  assert.deepEqual(reads.batches, [[1, 3]]);
+  assert.deepEqual(reads.started, []);
+});
+
+test("a failed shared read fails each step in it and lets them be retried", async () => {
+  const reads = fakeReads();
+  reads.failBatches = true;
+  const reader = createStepReader({ nx: 10, ny: 10 }, reads.load, reads.loadSteps);
+
+  const outcomes = [1, 2, 3].map((step) => {
+    return reader.read(step, false).then(() => "ok", () => "failed");
+  });
+  assert.deepEqual(await Promise.all(outcomes), ["failed", "failed", "failed"]);
+
+  reads.failBatches = false;
+  const retried = reader.read(2, false);
+  await flush();
+  reads.finish(2);
+  assert.equal((await retried)[0], 2);
 });
 
 test("moving to another speed keeps the place in the step", () => {
@@ -295,8 +582,18 @@ function fakeReads() {
   const waiting = new Map<number, { resolve(): void; reject(error: Error): void }>();
   const reads = {
     started: [] as number[],
+    batches: [] as [number, number][],
+    failBatches: false,
+    batchGate: null as Promise<void> | null,
     active: 0,
     peak: 0,
+    async loadSteps(first: number, count: number) {
+      reads.batches.push([first, count]);
+      await reads.batchGate;
+      if (reads.failBatches) throw new Error("failed");
+
+      return Array.from({ length: count }, (_, index) => Float32Array.of(first + index));
+    },
     load(step: number) {
       reads.started.push(step);
       reads.active += 1;
@@ -305,7 +602,7 @@ function fakeReads() {
         waiting.set(step, {
           resolve: () => {
             reads.active -= 1;
-            resolve(new Float32Array(1));
+            resolve(Float32Array.of(step));
           },
           reject: (error) => {
             reads.active -= 1;
@@ -327,3 +624,76 @@ function fakeReads() {
 function flush() {
   return new Promise((resolve) => setImmediate(resolve));
 }
+
+function rangeSource() {
+  const bytes = Uint8Array.from({ length: 300000 }, (_, index) => index % 256);
+  const requests: { key: string; offset: number; length: number }[] = [];
+  let failsNext = false;
+  const store: AsyncReadable = {
+    async get() {
+      return undefined;
+    },
+    async getRange(key, range) {
+      if ("suffixLength" in range) return bytes.slice(bytes.length - range.suffixLength);
+
+      requests.push({ key, offset: range.offset, length: range.length });
+      if (failsNext) throw new Error("failed");
+
+      return bytes.slice(range.offset, range.offset + range.length);
+    },
+  };
+
+  return { store, requests, failNext: () => void (failsNext = true) };
+}
+
+const CHOSEN_STEP_MS = 237;
+
+/** Feeds a meter 12-step batches that each land after `batchMs`, returning the clock. */
+function feedBatches(meter: LoadMeter, startMs: number, batches: number, batchMs: number): number {
+  let nowMs = startMs;
+  for (let batch = 0; batch < batches; batch += 1) {
+    for (let step = 0; step < 12; step += 1) meter.begin(nowMs);
+    nowMs += batchMs;
+    for (let step = 0; step < 12; step += 1) meter.finish(nowMs);
+  }
+  return nowMs;
+}
+
+function normalArrivals(meter: LoadMeter): number {
+  let nowMs = 0;
+  for (let step = 0; step < 40; step += 1) {
+    meter.begin(nowMs);
+    nowMs += 60;
+    meter.finish(nowMs);
+  }
+  return nowMs;
+}
+
+test("pacing recovers within seconds after a five minute stall", () => {
+  const meter = new LoadMeter();
+  let nowMs = normalArrivals(meter);
+
+  for (let step = 0; step < 12; step += 1) meter.begin(nowMs);
+  nowMs += 5 * 60 * 1000;
+  for (let step = 0; step < 12; step += 1) meter.finish(nowMs);
+  assert.ok(meter.stepMs()! <= 1500);
+
+  feedBatches(meter, nowMs, 12, 265); // about 3 s of playback
+  const targetMs = sustainedStepMs(CHOSEN_STEP_MS, meter.stepMs());
+
+  assert.ok(targetMs < CHOSEN_STEP_MS * 1.2, `target ${targetMs} ms`);
+});
+
+test("time while the tab or view is hidden does not slow pacing", () => {
+  const meter = new LoadMeter();
+  let nowMs = normalArrivals(meter);
+
+  for (let step = 0; step < 12; step += 1) meter.begin(nowMs);
+  meter.setCounting(false, nowMs);
+  nowMs += 5 * 60 * 1000;
+  meter.setCounting(true, nowMs);
+  for (let step = 0; step < 12; step += 1) meter.finish(nowMs);
+
+  assert.ok(meter.stepMs()! < 100, `load ${meter.stepMs()} ms a step`);
+  assert.equal(sustainedStepMs(CHOSEN_STEP_MS, meter.stepMs()), CHOSEN_STEP_MS);
+});

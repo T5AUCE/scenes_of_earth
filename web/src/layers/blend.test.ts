@@ -51,7 +51,6 @@ function mockModule(specifier: string) {
     case "./field":
       return `
         export const fieldReader = () => ({
-          keep() {},
           read: () => new Promise((resolve) => {
             globalThis.pendingReads.push(() => resolve(Float32Array.of(1, 1, 1, 1)));
           }),
@@ -161,7 +160,7 @@ test("prepare decodes both halves without drawing", async () => {
     } as unknown as Parameters<typeof createBlendView>[1],
   );
 
-  const warming = view.prepare!("2026-09-01", 2);
+  const warming = view.prepare!("2026-09-01");
   assert.equal(pendingReads.length, 2);
   pendingReads.forEach((resolve) => resolve());
   await warming;
@@ -187,7 +186,7 @@ test("prepare outside both axes reads nothing", async () => {
     } as unknown as Parameters<typeof createBlendView>[1],
   );
 
-  await view.prepare!("2020-01-01", 2);
+  await view.prepare!("2020-01-01");
 
   assert.equal(pendingReads.length, 0);
 });

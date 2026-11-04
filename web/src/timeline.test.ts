@@ -3,8 +3,8 @@ import { afterEach, test } from "node:test";
 
 import { Window } from "happy-dom";
 
-import { createStepReader } from "./data.ts";
-import { PLAY_SPEED_KEY } from "./playback.ts";
+import { bundleStore, createStepReader, decode, readArray, readSteps } from "./data.ts";
+import { LoadMeter, PLAY_SPEED_KEY } from "./playback.ts";
 import {
   createTimeline,
   formatTime,
@@ -25,6 +25,11 @@ const sixMonths = [...quarter, "2020-04-01", "2020-05-01", "2020-06-01"];
 const seventySix = Array.from({ length: 76 }, (_, index) => {
   return `2020-${String(index + 1).padStart(2, "0")}-01`;
 });
+const twoHundred = Array.from({ length: 200 }, (_, index) => {
+  const month = String((index % 12) + 1).padStart(2, "0");
+  return `${2000 + Math.floor(index / 12)}-${month}-01`;
+});
+const LAGGING_SLOTS = 4;
 const sixteenDay = ["2020-01-01", "2020-01-17", "2020-02-02", "2020-02-18"];
 
 test("union of a monthly and a 16-day axis is sorted without duplicates", () => {
@@ -208,7 +213,7 @@ test("a stall holds the step and marks the label loading", async (context) => {
 
   view.unblock("2020-02-01");
   await settle();
-  browser.advance(16);
+  await advanceSettling(browser, 1200);
   assert.deepEqual(shown, ["2020-02-01"]);
   assert.equal(labelOf(timeline.element).classList.contains("loading"), false);
 });
@@ -224,10 +229,10 @@ test("a blocked step is waited for and the ready one after it cannot overtake", 
 
   view.unblock("2020-02-01");
   await settle();
-  browser.advance(32);
+  await advanceSettling(browser, 1200);
   assert.deepEqual(shown, ["2020-02-01"]);
 
-  browser.advance(1500);
+  await advanceSettling(browser, 1500);
   assert.deepEqual(shown, ["2020-02-01", "2020-03-01"]);
 });
 
@@ -272,7 +277,7 @@ test("play waits only for views the viewer can see", async (context) => {
   );
 
   playButton(timeline.element).click();
-  await advanceSettling(browser, 1200);
+  await advanceSettling(browser, 2400);
 
   assert.deepEqual(shown, ["2020-02-01"]);
   assert.deepEqual(hiddenView.calls, []);
@@ -295,7 +300,7 @@ test("hiding the blocked view releases play at once", (context) => {
   assert.deepEqual(shown, []);
 
   visibility.hide(blockedView);
-  browser.advance(16);
+  browser.advance(1200);
 
   assert.deepEqual(shown, ["2020-02-01"]);
 });
@@ -320,19 +325,29 @@ test("the whole lookahead is requested nearest first and wraps past the end", (c
 
   playButton(timeline.element).click();
 
-  assert.deepEqual(view.calls, [75, 0, 1, 2, 3, 4, 5, 6, 7].map((index) => seventySix[index]));
-  assert.deepEqual(new Set(view.lookaheads), new Set([9]));
+  const expectedIndices = [75, ...Array.from({ length: 12 }, (_, index) => index)];
+  assert.deepEqual(view.calls, expectedIndices.map((index) => seventySix[index]));
 });
 
-test("faster play tells the layers to keep a longer lookahead", (context) => {
+test("faster play warms a longer lookahead", (context) => {
   const view = fakeView(seventySix);
   const { timeline } = mount(context, seventySix, { views: [view] });
   chooseSpeed(timeline.element, "4");
 
   playButton(timeline.element).click();
 
-  assert.equal(view.calls.length, 12);
-  assert.deepEqual(new Set(view.lookaheads), new Set([12]));
+  assert.equal(view.calls.length, 24);
+});
+
+test("the lookahead never exceeds what a view's cache can hold", (context) => {
+  const view = fakeView(seventySix);
+  view.maxLookahead = () => 5;
+  const { timeline } = mount(context, seventySix, { views: [view] });
+  chooseSpeed(timeline.element, "4");
+
+  playButton(timeline.element).click();
+
+  assert.equal(view.calls.length, 5);
 });
 
 test("a scrub during a stall draws instantly and stops play", (context) => {
@@ -404,6 +419,165 @@ test("pausing, scrubbing and destroying release the views' prefetched steps", (c
   assert.equal(view.releases, 3);
 });
 
+test("play tells the views to read more at once and pause tells them to read less", (context) => {
+  const view = fakeView(quarter);
+  const { timeline } = mount(context, quarter, { views: [view] });
+
+  playButton(timeline.element).click();
+  assert.deepEqual(view.playing, [true]);
+
+  playButton(timeline.element).click();
+  assert.deepEqual(view.playing, [true, false]);
+
+  playButton(timeline.element).click();
+  timeline.destroy();
+  assert.deepEqual(view.playing, [true, false, true, false]);
+});
+
+test("the playhead starts only once the next step is ready", async (context) => {
+  const view = fakeView(sixMonths);
+  const { browser, shown, timeline } = mount(context, sixMonths, { views: [view] });
+  view.block("2020-02-01");
+
+  playButton(timeline.element).click();
+  await advanceSettling(browser, 3000);
+  assert.deepEqual(shown, []);
+
+  view.unblock("2020-02-01");
+  await advanceSettling(browser, 600);
+  assert.deepEqual(shown, []);
+
+  await advanceSettling(browser, 700);
+  assert.deepEqual(shown, ["2020-02-01"]);
+});
+
+test("the start buffer does not wait for steps beyond the next one", async (context) => {
+  const view = fakeView(sixMonths);
+  const { browser, shown, timeline } = mount(context, sixMonths, { views: [view] });
+  view.block("2020-03-01");
+
+  playButton(timeline.element).click();
+  await advanceSettling(browser, 1400);
+
+  assert.deepEqual(shown, ["2020-02-01"]);
+});
+
+test("a 76-step loop at 4x reads each shard in a few requests", async (context) => {
+  const series = shardedSeries(76, 12);
+  const view = zarrView(seventySix, series.store);
+  const { browser, shown, timeline } = mount(context, seventySix, { views: [view] });
+  chooseSpeed(timeline.element, "4");
+
+  playButton(timeline.element).click();
+  for (let left = 5000; left > 0; left -= FRAME_MS) {
+    browser.advance(FRAME_MS);
+    await new Promise((resolve) => setTimeout(resolve, 3));
+  }
+
+  assert.equal(shown.at(-1), seventySix.at(-1));
+  assert.deepEqual(view.drawn, seventySix.map((_, index) => index));
+  const dataRequests = series.requests.filter((request) => request.includes("offset"));
+  const indexRequests = series.requests.filter((request) => request.includes("suffix"));
+  assert.equal(indexRequests.length, 7);
+  // A lump of steps can straddle two shards, so a shard may take two data requests.
+  assert.ok(dataRequests.length <= 2 * 7 + 2, `${dataRequests.length} data requests`);
+});
+
+test("slow reads slow the pace smoothly instead of bursting and stalling", async (context) => {
+  const view = laggingView(twoHundred, { ms: 265 });
+  const { browser, timeline } = mount(context, twoHundred, { views: [view] });
+  chooseSpeed(timeline.element, "4");
+
+  playButton(timeline.element).click();
+  await playFrames(browser, view, 1500);
+  await playFrames(browser, view, 6000);
+
+  // The first gap is the cold start buffer, which waits for the first step to load.
+  const gaps = view.gapsMs().slice(1);
+  assert.ok(gaps.length > 40, `${gaps.length} steps shown`);
+  assert.ok(Math.min(...gaps) > 40, `shortest gap ${Math.min(...gaps)} ms`);
+  assert.ok(Math.max(...gaps) < 130, `longest gap ${Math.max(...gaps)} ms`);
+  assert.equal(labelOf(timeline.element).classList.contains("loading"), false);
+});
+
+test("the pace recovers toward the chosen speed when loading catches up", async (context) => {
+  const latency = { ms: 265 };
+  const view = laggingView(twoHundred, latency);
+  const { browser, timeline } = mount(context, twoHundred, { views: [view] });
+  chooseSpeed(timeline.element, "4");
+
+  playButton(timeline.element).click();
+  await playFrames(browser, view, 6000);
+  const slowGaps = view.gapsMs().slice(-20);
+
+  latency.ms = 40;
+  await playFrames(browser, view, 6000);
+  const fastGaps = view.gapsMs().slice(-20);
+
+  const mean = (gaps: number[]) => gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length;
+  assert.ok(mean(slowGaps) > 70 && mean(slowGaps) < 95, `slow mean ${mean(slowGaps)} ms`);
+  assert.ok(mean(fastGaps) < 66, `recovered mean ${mean(fastGaps)} ms`);
+});
+
+test("loading time counts again only when both tab and view are visible", (context) => {
+  const view = fakeView(quarter);
+  const visibility = fakeVisibility([view]);
+  const playing: boolean[] = [];
+  const setCounting = context.mock.method(LoadMeter.prototype, "setCounting");
+  const { browser, timeline } = mount(context, quarter, {
+    views: [view],
+    visibility,
+    onPlayingChange: (active) => playing.push(active),
+  });
+  view.block("2020-02-01");
+  playButton(timeline.element).click();
+  browser.advance(100);
+  const tab = fakeTab(context);
+
+  const counting = () => setCounting.mock.calls.at(-1)?.arguments[0];
+  const steps: [() => void, boolean][] = [
+    [() => tab.hide(), false],
+    [() => visibility.hide(view), false],
+    [() => tab.show(), false],
+    [() => visibility.show(view), true],
+    [() => visibility.hide(view), false],
+    [() => tab.hide(), false],
+    [() => visibility.show(view), false],
+    [() => tab.show(), true],
+  ];
+  for (const [change, expected] of steps) {
+    const before = setCounting.mock.callCount();
+    change();
+    assert.ok(setCounting.mock.callCount() > before);
+    assert.equal(counting(), expected);
+  }
+
+  assert.deepEqual(playing, [true]);
+});
+
+test("destroy stops both visibility listeners and may repeat", (context) => {
+  const view = fakeView(quarter);
+  const visibility = fakeVisibility([view]);
+  const setCounting = context.mock.method(LoadMeter.prototype, "setCounting");
+  const { browser, timeline } = mount(context, quarter, { views: [view], visibility });
+  view.block("2020-02-01");
+  playButton(timeline.element).click();
+  browser.advance(100);
+  const tab = fakeTab(context);
+  assert.equal(visibility.listenerCount(), 1);
+  const removed = context.mock.method(document, "removeEventListener");
+
+  timeline.destroy();
+  timeline.destroy();
+  const before = setCounting.mock.callCount();
+  tab.hide();
+  visibility.hide(view);
+
+  assert.equal(visibility.listenerCount(), 0);
+  assert.deepEqual(removed.mock.calls.map((call) => call.arguments[0]), ["visibilitychange"]);
+  assert.equal(setCounting.mock.callCount(), before);
+});
+
 function mount(
   context: { after(hook: () => void): void },
   times: string[],
@@ -446,6 +620,7 @@ function fakeVisibility(initial: LayerView[]) {
   const notify = () => listeners.forEach((listener) => listener());
 
   return {
+    listenerCount: () => listeners.size,
     isVisible: (view: LayerView) => visible.has(view),
     subscribe(listener: () => void) {
       listeners.add(listener);
@@ -462,12 +637,26 @@ function fakeVisibility(initial: LayerView[]) {
   };
 }
 
+/** Makes the page's visibility state switchable, announcing each change as a browser does. */
+function fakeTab(context: { after(hook: () => void): void }) {
+  let state = "visible";
+  const page = document;
+  Object.defineProperty(page, "visibilityState", { get: () => state, configurable: true });
+  context.after(() => Reflect.deleteProperty(page, "visibilityState"));
+  const change = (next: string) => {
+    state = next;
+    page.dispatchEvent(new Event("visibilitychange"));
+  };
+
+  return { hide: () => change("hidden"), show: () => change("visible") };
+}
+
 function fakeView(times: string[]) {
   const gates = new Map<string, { wait: Promise<void>; release: () => void }>();
   const view = {
     calls: [] as string[],
     releases: 0,
-    lookaheads: [] as number[],
+    playing: [] as boolean[],
     time: { step: "P1M", values: times, end: "2030-01-01", method: null },
     parts: [],
     options: [],
@@ -492,18 +681,118 @@ function fakeView(times: string[]) {
     release() {
       view.releases += 1;
     },
-    async prepare(time: string, lookahead: number) {
+    setPlaying(isPlaying: boolean) {
+      view.playing.push(isPlaying);
+    },
+    async prepare(time: string) {
       view.calls.push(time);
-      view.lookaheads.push(lookahead);
       await gates.get(time)?.wait;
     },
   } as unknown as LayerView & {
     calls: string[];
     releases: number;
-    lookaheads: number[];
+    playing: boolean[];
     block(time: string): void;
     unblock(time: string): void;
   };
+  return view;
+}
+
+/** A Zarr v3 series of int16 steps in shards, where step N holds the value N in every cell. */
+function shardedSeries(stepCount: number, shardSteps: number) {
+  const cellBytes = 2 * 2 * 2;
+  const shards = new Map<string, Uint8Array>();
+  for (let shard = 0; shard * shardSteps < stepCount; shard++) {
+    const index = new BigUint64Array(shardSteps * 2).fill(2n ** 64n - 1n);
+    const data = new Uint8Array(shardSteps * cellBytes + shardSteps * 16);
+    for (let offset = 0; offset < shardSteps && shard * shardSteps + offset < stepCount; offset++) {
+      const cells = new Int16Array(4).fill(shard * shardSteps + offset);
+      data.set(new Uint8Array(cells.buffer), offset * cellBytes);
+      index[2 * offset] = BigInt(offset * cellBytes);
+      index[2 * offset + 1] = BigInt(cellBytes);
+    }
+    data.set(new Uint8Array(index.buffer), shardSteps * cellBytes);
+    shards.set(`/a/c/${shard}/0/0`, data);
+  }
+  const arrayMeta = {
+    zarr_format: 3,
+    node_type: "array",
+    shape: [stepCount, 2, 2],
+    data_type: "int16",
+    chunk_grid: { name: "regular", configuration: { chunk_shape: [shardSteps, 2, 2] } },
+    chunk_key_encoding: { name: "default", configuration: { separator: "/" } },
+    fill_value: 0,
+    codecs: [
+      {
+        name: "sharding_indexed",
+        configuration: {
+          chunk_shape: [1, 2, 2],
+          codecs: [{ name: "bytes", configuration: { endian: "little" } }],
+          index_codecs: [{ name: "bytes", configuration: { endian: "little" } }],
+          index_location: "end",
+        },
+      },
+    ],
+  };
+  const documents = new Map<string, unknown>([
+    ["/zarr.json", { zarr_format: 3, node_type: "group" }],
+    ["/a/zarr.json", arrayMeta],
+  ]);
+  const requests: string[] = [];
+  const store = bundleStore({
+    async get(key) {
+      requests.push(`get ${key}`);
+      const document = documents.get(key);
+
+      return document ? new TextEncoder().encode(JSON.stringify(document)) : undefined;
+    },
+    async getRange(key, range) {
+      const data = shards.get(key);
+      if (!data) return undefined;
+      if ("suffixLength" in range) {
+        requests.push(`suffix ${key}`);
+        return data.slice(data.length - range.suffixLength);
+      }
+
+      requests.push(`offset ${key} ${range.offset} ${range.length}`);
+      return data.slice(range.offset, range.offset + range.length);
+    },
+  });
+
+  return { store, requests };
+}
+
+/** A view that reads steps of the sharded series through a real step reader. */
+function zarrView(times: string[], store: ReturnType<typeof bundleStore>) {
+  const encoding = { scale_factor: 1, add_offset: 0, fill: -1 };
+  const reader = createStepReader(
+    { nx: 2, ny: 2 },
+    async (step) => decode(await readArray(await store, "a", [step, null, null]), encoding),
+    async (first, count) => {
+      const steps = await readSteps(await store, "a", first, count);
+      return steps.map((raw) => decode(raw, encoding));
+    },
+  );
+  const drawn: number[] = [];
+  const view = {
+    drawn,
+    time: { step: "P1M", values: times, end: "2030-01-01", method: null },
+    parts: [],
+    options: [],
+    setTime(time: string) {
+      void reader.read(times.indexOf(time)).then((values) => drawn.push(values[0]));
+    },
+    legend() {
+      return null;
+    },
+    destroy() {},
+    release: () => reader.release(),
+    maxLookahead: () => reader.maxLookahead(),
+    setPlaying: (isPlaying: boolean) => reader.setPlaying(isPlaying),
+    async prepare(time: string) {
+      await reader.read(times.indexOf(time), false);
+    },
+  } as unknown as LayerView & { drawn: number[] };
   return view;
 }
 
@@ -531,12 +820,67 @@ function readerView(times: string[]) {
     release() {
       reader.release();
     },
-    async prepare(time: string, lookahead: number) {
-      reader.keep(lookahead);
+    maxLookahead() {
+      return reader.maxLookahead();
+    },
+    async prepare(time: string) {
       await reader.read(times.indexOf(time), false);
     },
   } as unknown as LayerView & { loads: Map<number, number> };
   return view;
+}
+
+/**
+ * A view whose reads each take `latency.ms` and run at most four at a time, like the four reads
+ * in flight of a real reader; `pump` advances them to the browser's fake clock.
+ */
+function laggingView(times: string[], latency: { ms: number }) {
+  const waiting: (() => void)[] = [];
+  const running: { dueMs: number; finish: () => void }[] = [];
+  const shownAtMs: number[] = [];
+  const pump = () => {
+    const now = performance.now();
+    for (const read of running.filter((candidate) => candidate.dueMs <= now)) {
+      running.splice(running.indexOf(read), 1);
+      read.finish();
+    }
+    while (running.length < LAGGING_SLOTS && waiting.length > 0) {
+      running.push({ dueMs: now + latency.ms, finish: waiting.shift()! });
+    }
+  };
+  const view = {
+    pump,
+    gapsMs: () => shownAtMs.slice(1).map((atMs, index) => atMs - shownAtMs[index]),
+    time: { step: "P1M", values: times, end: "2030-01-01", method: null },
+    parts: [],
+    options: [],
+    setTime() {
+      shownAtMs.push(performance.now());
+    },
+    legend() {
+      return null;
+    },
+    destroy() {},
+    prepare() {
+      return new Promise<void>((resolve) => {
+        waiting.push(resolve);
+        pump();
+      });
+    },
+  } as unknown as LayerView & { pump(): void; gapsMs(): number[] };
+  return view;
+}
+
+async function playFrames(
+  browser: { advance(ms: number): void },
+  view: { pump(): void },
+  ms: number,
+) {
+  for (let left = ms; left > 0; left -= FRAME_MS) {
+    browser.advance(FRAME_MS);
+    view.pump();
+    await settle();
+  }
 }
 
 function installTimelineBrowser(

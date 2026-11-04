@@ -131,16 +131,23 @@ class Blend implements BlendView {
     this.refresh();
   }
 
-  async prepare(time: string, lookahead: number): Promise<void> {
+  async prepare(time: string): Promise<void> {
     const steps = this.halves.map(({ time: axis }) => stepAt(axis.values, axis.end, time));
     if (steps[0] < 0 || steps[1] < 0) return;
 
-    this.halves.forEach(({ reader }) => reader.keep(lookahead));
     await Promise.all(this.halves.map(({ reader }, index) => reader.read(steps[index], false)));
+  }
+
+  maxLookahead() {
+    return Math.min(...this.halves.map(({ reader }) => reader.maxLookahead()));
   }
 
   release() {
     this.halves.forEach(({ reader }) => reader.release());
+  }
+
+  setPlaying(isPlaying: boolean) {
+    this.halves.forEach(({ reader }) => reader.setPlaying(isPlaying));
   }
 
   show(draw: Draw | null) {
@@ -198,6 +205,9 @@ class Blend implements BlendView {
 
       this.paint(values);
       this.showPeriodNote(steps);
+      this.halves.forEach(({ reader, time: axis }, index) => {
+        reader.prime(steps[index], axis.values.length - 1);
+      });
     } catch (error) {
       // An error for a step the user has already left is no longer relevant.
       if (!this.isCurrent(time)) return;

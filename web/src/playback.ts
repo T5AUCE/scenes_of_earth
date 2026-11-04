@@ -7,10 +7,22 @@ export const FASTEST_STEP_MS = 60;
 export const HOLD_SHARE = 0.5;
 export const END_HOLD_MIN_MS = 1000;
 
-export const LOOKAHEAD_WINDOW_MS = 2 * 1000;
+export const LOOKAHEAD_WINDOW_MS = 3 * 1000;
 export const LOOKAHEAD_MIN = 2;
-export const LOOKAHEAD_MAX = 12;
+export const LOOKAHEAD_MAX = 24;
+export const PRIME_STEPS = 2;
 export const STALL_LOADING_MS = 300;
+export const PREFETCH_LUMP_MAX = 12; // steps a lookahead refill waits for, to share shard reads
+
+export const PACE_MARGIN = 1.15;
+export const PACE_SMOOTHING_MS = 1500;
+export const PACE_SLOWED_RATIO = 1.25; // slower than this much shows the loading cue
+export const PACE_MIN_STEPS = 4;
+export const PACE_MEMORY = 0.97; // weight of each earlier arrival when the next one lands
+export const PACE_HALF_LIFE_MS = 2 * 1000; // history also halves per this much wall time
+
+export const READS_IN_FLIGHT_PLAYING = 4;
+export const READS_IN_FLIGHT_PAUSED = 2;
 
 export const PLAY_SPEEDS = [0.5, 1, 2, 4];
 export const PLAY_SPEED_KEY = "soe.playspeed.v1";
@@ -43,6 +55,82 @@ export function lookaheadFor(stepMs: number): number {
   const count = Math.ceil(LOOKAHEAD_WINDOW_MS / stepMs);
 
   return Math.min(Math.max(count, LOOKAHEAD_MIN), LOOKAHEAD_MAX);
+}
+
+/** How many missing steps the lookahead gathers before it asks for them, so they share reads. */
+export function lumpFor(reach: number): number {
+  return Math.min(Math.ceil(reach / 2), PREFETCH_LUMP_MAX);
+}
+
+/**
+ * The step duration loading sustains, never faster than the viewer chose. The measured time per
+ * step is null until enough steps arrived, which leaves the chosen speed unchanged.
+ */
+export function sustainedStepMs(chosenMs: number, loadMs: number | null): number {
+  if (loadMs === null) return chosenMs;
+
+  return Math.max(chosenMs, Math.min(loadMs * PACE_MARGIN, MAX_STEP_MS));
+}
+
+/** Moves the step duration part of the way to its target, so pacing changes never jump. */
+export function easePaceMs(paceMs: number, targetMs: number, elapsedMs: number): number {
+  const share = 1 - Math.exp(-Math.max(elapsedMs, 0) / PACE_SMOOTHING_MS);
+
+  return paceMs + (targetMs - paceMs) * share;
+}
+
+/**
+ * Time a view spends loading per arrived step. Only time with a read outstanding counts, so a
+ * view that is idle because its lookahead is full never looks slow. Time while the tab or view is
+ * hidden is left out, one interval counts at most MAX_STEP_MS per outstanding read, and history
+ * fades with wall time, so one long stall cannot hold playback slow once reads are fast again.
+ */
+export class LoadMeter {
+  private outstanding = 0;
+  private lastMs = 0;
+  private busyMs = 0;
+  private totalBusyMs = 0;
+  private totalSteps = 0;
+  private arrived = 0;
+  private lastArrivalMs: number | null = null;
+  private isCounting = true;
+
+  begin(atMs: number) {
+    this.accrue(atMs);
+    this.outstanding += 1;
+  }
+
+  finish(atMs: number) {
+    this.accrue(atMs);
+    this.outstanding = Math.max(this.outstanding - 1, 0);
+    const idleMs = this.lastArrivalMs === null ? 0 : atMs - this.lastArrivalMs;
+    const memory = PACE_MEMORY * 0.5 ** (Math.max(idleMs, 0) / PACE_HALF_LIFE_MS);
+    this.totalBusyMs = this.totalBusyMs * memory + this.busyMs;
+    this.totalSteps = this.totalSteps * memory + 1;
+    this.lastArrivalMs = atMs;
+    this.busyMs = 0;
+    this.arrived += 1;
+  }
+
+  /** Stops or resumes counting time, for a hidden tab or a view the viewer does not see. */
+  setCounting(isCounting: boolean, atMs: number) {
+    this.accrue(atMs);
+    this.isCounting = isCounting;
+  }
+
+  /** Busy milliseconds per arrived step, or null before enough steps arrived to tell. */
+  stepMs(): number | null {
+    if (this.arrived < PACE_MIN_STEPS) return null;
+
+    return this.totalBusyMs / this.totalSteps;
+  }
+
+  private accrue(atMs: number) {
+    if (this.outstanding > 0 && this.isCounting) {
+      this.busyMs += Math.min(atMs - this.lastMs, MAX_STEP_MS * this.outstanding);
+    }
+    this.lastMs = atMs;
+  }
 }
 
 /**
