@@ -127,6 +127,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
         clock.update(time, label);
         current?.panel.setTime(time, label);
       },
+      onPlayingChange: (playing) => clock.setPlaying(playing),
       onUnits: (_elevation, _displayUnits, layerIds) => {
         if (!current) {
           pendingLayerIds.push(layerIds);
@@ -488,6 +489,7 @@ function createSceneClock(sceneId: string) {
   let display = "";
   let chartsToken: string | null = null;
   let isEntered = false;
+  let isPlaying = false;
   let syncNotice: string | null = null;
   let lastSafeComplete: string | null = null;
   let onSync: ((notice: string | null) => void) | null = null;
@@ -519,7 +521,13 @@ function createSceneClock(sceneId: string) {
     update(newTime: string | null, newLabel: string | null) {
       time = newTime;
       label = newLabel;
-      if (isEntered) this.syncUrl();
+      if (isEntered && !isPlaying) this.syncUrl();
+    },
+
+    setPlaying(playing: boolean) {
+      const wasPlaying = isPlaying;
+      isPlaying = playing;
+      if (wasPlaying && !playing && isEntered) this.syncUrl();
     },
 
     setDisplay(params: string) {

@@ -1,7 +1,34 @@
-const PLAY_INTERVAL_MS = 700;
+/** Scrub and play through scene times with pacing, speed and prefetch gating. */
+import {
+  labelIndexFor,
+  loadPlaySpeed,
+  lookaheadFor,
+  loopMsFor,
+  PLAY_SPEEDS,
+  playheadAt,
+  prefersReducedMotion,
+  rescalePosition,
+  STALL_LOADING_MS,
+  stepMsFor,
+  storePlaySpeed,
+  watchReducedMotion,
+} from "./playback";
+import type { LayerView } from "./types";
 
 const YEAR_CHARS = 4; // "YYYY"
 const MONTH_CHARS = 7; // "YYYY-MM"
+const FRAME_FALLBACK_MS = 16;
+
+/** Extra inputs the scene passes so play can warm steps and report its state. */
+export interface TimelineOptions {
+  views?: LayerView[];
+  /** Which views the viewer sees now; play waits only for these. Without it all are seen. */
+  visibility?: {
+    isVisible(view: LayerView): boolean;
+    subscribe(listener: () => void): () => void;
+  };
+  onPlayingChange?: (playing: boolean) => void;
+}
 
 /** The steps of several time axes, sorted and without duplicates. */
 export const unionTimes = (axes: string[][]) => [...new Set(axes.flat())].sort();
@@ -57,12 +84,50 @@ export function latestOnly<T>(task: (value: T) => Promise<void>) {
   };
 }
 
-/** A play button, slider and label that step through the times. */
+/** A play button, slider, label and speed control that step through the times. */
 export function createTimeline(
   times: string[],
   steps: string[],
   onChange: (time: string) => void,
+  options?: TimelineOptions,
 ) {
+  const controls = createControls(times.length);
+  const clock = new PlaybackClock(times, steps, onChange, controls, options);
+  controls.play.onclick = () => clock.toggle();
+  controls.slider.oninput = () => clock.select(Number(controls.slider.value));
+  controls.speedSelect.onchange = () => clock.setSpeed(Number(controls.speedSelect.value));
+  clock.showFirst();
+
+  return {
+    element: controls.element,
+    times,
+    destroy: () => clock.destroy(),
+
+    get isPlaying() {
+      return clock.isPlaying;
+    },
+
+    goTo(time: string) {
+      const index = times.indexOf(time);
+      if (index >= 0) clock.select(index);
+    },
+
+    // Stops at both ends; only play wraps around.
+    move(delta: number) {
+      clock.select(clock.shownIndex + delta);
+    },
+  };
+}
+
+interface Controls {
+  element: HTMLDivElement;
+  play: HTMLButtonElement;
+  slider: HTMLInputElement;
+  label: HTMLSpanElement;
+  speedSelect: HTMLSelectElement;
+}
+
+function createControls(count: number): Controls {
   const element = document.createElement("div");
   element.className = "timeline";
 
@@ -72,65 +137,319 @@ export function createTimeline(
   const slider = document.createElement("input");
   slider.type = "range";
   slider.min = "0";
-  slider.max = String(times.length - 1);
+  slider.max = String(Math.max(count - 1, 0));
   slider.value = "0";
 
   const label = document.createElement("span");
-  element.append(play, slider, label);
 
-  let timer: ReturnType<typeof setInterval> | undefined;
+  const speedSelect = document.createElement("select");
+  for (const speed of PLAY_SPEEDS) {
+    const option = document.createElement("option");
+    option.value = String(speed);
+    option.textContent = `${speed}×`;
+    speedSelect.append(option);
+  }
+  const speedLabel = document.createElement("label");
+  speedLabel.textContent = "Playback speed";
+  speedLabel.append(speedSelect);
 
-  const stop = () => {
-    clearInterval(timer);
-    timer = undefined;
-    play.textContent = "Play";
+  element.append(play, slider, label, speedLabel);
+
+  return { element, play, slider, label, speedSelect };
+}
+
+/** Advances the playhead of one timeline by frames and waits for data it is about to show. */
+class PlaybackClock {
+  private readonly times: string[];
+  private readonly steps: string[];
+  private readonly onChange: (time: string) => void;
+  private readonly onPlayingChange?: (playing: boolean) => void;
+  private readonly controls: Controls;
+  private readonly window: PrefetchWindow;
+  private readonly stopReducedMotion: () => void;
+  private readonly stopVisibility: () => void;
+  private speed = loadPlaySpeed();
+  private stepMs: number;
+  private lookahead: number;
+  private shown = -1;
+  private playing = false;
+  private alive = true;
+  private reducedMotion = prefersReducedMotion();
+  private playheadMs = 0;
+  private lastFrameMs = 0;
+  private frameId: number | undefined;
+  private stallStartMs: number | null = null;
+
+  constructor(
+    times: string[],
+    steps: string[],
+    onChange: (time: string) => void,
+    controls: Controls,
+    options?: TimelineOptions,
+  ) {
+    this.times = times;
+    this.steps = steps;
+    this.onChange = onChange;
+    this.controls = controls;
+    this.onPlayingChange = options?.onPlayingChange;
+    this.stepMs = stepMsFor(times.length, this.speed);
+    this.lookahead = lookaheadFor(this.stepMs);
+    this.window = new PrefetchWindow(times, options?.views ?? [], options?.visibility);
+    controls.speedSelect.value = String(this.speed);
+    this.stopReducedMotion = watchReducedMotion((reduced) => {
+      this.reducedMotion = reduced;
+    });
+    this.stopVisibility = options?.visibility?.subscribe(() => this.warm()) ?? (() => {});
+  }
+
+  get isPlaying() {
+    return this.playing;
+  }
+
+  get shownIndex() {
+    return this.shown;
+  }
+
+  showFirst() {
+    if (this.times.length > 0) this.show(0);
+  }
+
+  toggle() {
+    if (this.playing) {
+      this.pause();
+      return;
+    }
+
+    if (this.shown < 0 && this.times.length > 0) this.show(0);
+    this.start();
+  }
+
+  select(index: number) {
+    const clamped = Math.min(Math.max(index, 0), this.times.length - 1);
+    this.playheadMs = clamped * this.stepMs;
+    this.endStall();
+    // Drawing while still playing holds the link until the pause writes it once.
+    if (clamped !== this.shown) this.show(clamped);
+    this.stopPlaying();
+  }
+
+  setSpeed(speed: number) {
+    if (!PLAY_SPEEDS.includes(speed)) return;
+
+    const previousStepMs = this.stepMs;
+    this.speed = speed;
+    storePlaySpeed(speed);
+    this.stepMs = stepMsFor(this.times.length, speed);
+    this.lookahead = lookaheadFor(this.stepMs);
+    this.playheadMs = rescalePosition(
+      this.playheadMs,
+      previousStepMs,
+      this.stepMs,
+      this.times.length,
+    );
+    this.lastFrameMs = nowMs();
+    this.warm();
+  }
+
+  destroy() {
+    if (!this.alive) return;
+
+    this.alive = false;
+    cancelFrame(this.frameId);
+    this.frameId = undefined;
+    this.stopReducedMotion();
+    this.stopVisibility();
+    this.window.clear();
+    this.controls.play.textContent = "Play";
+  }
+
+  private start() {
+    if (this.playing || !this.alive || this.times.length <= 1) return;
+
+    this.lastFrameMs = nowMs();
+    this.setPlaying(true);
+    this.warm();
+    this.frameId = scheduleFrame(this.tick);
+  }
+
+  private pause() {
+    // Snapping keeps the label's step so the next play resumes from its hold.
+    this.playheadMs = Math.max(this.shown, 0) * this.stepMs;
+    this.endStall();
+    this.stopPlaying();
+  }
+
+  private stopPlaying() {
+    if (!this.playing) return;
+
+    cancelFrame(this.frameId);
+    this.frameId = undefined;
+    this.window.clear();
+    this.setPlaying(false);
+  }
+
+  private tick = (frameMs: number) => {
+    if (!this.playing || !this.alive) return;
+
+    // A long frame must not carry the playhead over a step that was never shown.
+    const elapsedMs = Math.min(Math.max(frameMs - this.lastFrameMs, 0), this.stepMs / 2);
+    this.lastFrameMs = frameMs;
+    const loopMs = loopMsFor(this.stepMs, this.times.length);
+    const candidateMs = (this.playheadMs + elapsedMs) % loopMs;
+    const frame = playheadAt(candidateMs, this.stepMs, this.times.length, this.reducedMotion);
+    const desired = labelIndexFor(frame);
+
+    if (desired !== this.shown && !this.window.isReady(desired)) {
+      this.stall(frameMs);
+    } else {
+      this.playheadMs = candidateMs;
+      this.endStall();
+      if (desired !== this.shown) this.advanceTo(desired);
+    }
+    this.frameId = scheduleFrame(this.tick);
   };
 
-  const show = () => {
-    const time = times[Number(slider.value)];
-    label.textContent = formatTime(time, steps);
-    onChange(time);
-  };
+  // The playhead stays where it is, so the hold lasts until the data is ready.
+  private stall(frameMs: number) {
+    this.stallStartMs ??= frameMs;
+    if (frameMs - this.stallStartMs > STALL_LOADING_MS) {
+      this.controls.label.classList.add("loading");
+    }
+    this.warm();
+  }
 
-  const advance = () => {
-    slider.value = String((Number(slider.value) + 1) % times.length);
-    show();
-  };
+  private endStall() {
+    this.stallStartMs = null;
+    this.controls.label.classList.remove("loading");
+  }
 
-  slider.oninput = () => {
-    stop();
-    show();
-  };
+  private advanceTo(index: number) {
+    this.show(index);
+    this.warm();
+  }
 
-  play.onclick = () => {
-    if (timer !== undefined) return stop();
+  private warm() {
+    if (this.playing) this.window.refresh(Math.max(this.shown, 0), this.lookahead);
+  }
 
-    play.textContent = "Pause";
-    timer = setInterval(advance, PLAY_INTERVAL_MS);
-  };
+  private show(index: number) {
+    if (!this.alive || index === this.shown) return;
 
-  const select = (index: number) => {
-    stop();
+    const { slider, label } = this.controls;
+    this.shown = index;
     slider.value = String(index);
-    show();
-  };
+    label.textContent = formatTime(this.times[index], this.steps);
+    this.onChange(this.times[index]);
+  }
 
-  show();
+  private setPlaying(playing: boolean) {
+    if (!this.alive || playing === this.playing) return;
 
-  return {
-    element,
-    times,
-    destroy: stop,
+    this.playing = playing;
+    this.controls.play.textContent = playing ? "Pause" : "Play";
+    this.onPlayingChange?.(playing);
+  }
+}
 
-    goTo(time: string) {
-      const index = times.indexOf(time);
-      if (index >= 0) select(index);
-    },
+/**
+ * The positions the clock is about to show and which visible views have them decoded. Only the
+ * current window counts as ready, so a step that left it is prepared again when it returns.
+ */
+class PrefetchWindow {
+  private readonly times: string[];
+  private readonly views: LayerView[];
+  private readonly visibility: TimelineOptions["visibility"];
+  private readonly settled = new Map<string, Map<LayerView, boolean>>();
+  private generation = 0;
 
-    // Stops at both ends; only play wraps around.
-    move(delta: number) {
-      const target = Number(slider.value) + delta;
-      select(Math.min(Math.max(target, 0), times.length - 1));
-    },
-  };
+  constructor(times: string[], views: LayerView[], visibility: TimelineOptions["visibility"]) {
+    this.times = times;
+    this.views = views;
+    this.visibility = visibility;
+  }
+
+  /** Whether every visible view holds the position, which is true when none can prepare. */
+  isReady(index: number) {
+    const states = this.settled.get(this.times[index]);
+
+    return this.visibleViews().every((view) => states?.get(view) === true);
+  }
+
+  /** Keeps the positions after `base` prepared, nearest first, for the views that show now. */
+  refresh(base: number, lookahead: number) {
+    const count = Math.min(lookahead, this.times.length - 1);
+    const wanted = Array.from({ length: count }, (_, offset) => {
+      return this.times[(base + offset + 1) % this.times.length];
+    });
+    for (const time of this.settled.keys()) {
+      if (!wanted.includes(time)) this.settled.delete(time);
+    }
+
+    for (const time of wanted) {
+      for (const view of this.visibleViews()) this.prepare(view, time, lookahead);
+    }
+  }
+
+  clear() {
+    this.generation += 1;
+    this.settled.clear();
+    this.views.forEach((view) => view.release?.());
+  }
+
+  private visibleViews() {
+    return this.views.filter((view) => view.prepare && this.visibility?.isVisible(view) !== false);
+  }
+
+  private prepare(view: LayerView, time: string, lookahead: number) {
+    const states = this.settled.get(time) ?? new Map<LayerView, boolean>();
+    this.settled.set(time, states);
+    if (states.has(view)) return;
+
+    const ticket = this.generation;
+    states.set(view, false);
+    // A failed prepare must not stall play forever because the draw reports it later.
+    view.prepare!(time, lookahead).catch(() => {}).then(() => {
+      if (ticket === this.generation && this.settled.get(time) === states) {
+        states.set(view, true);
+      }
+    });
+  }
+}
+
+function nowMs(): number {
+  try {
+    if (typeof performance !== "undefined" && typeof performance.now === "function") {
+      return performance.now();
+    }
+  } catch {
+    // A blocked clock falls back to the date below.
+  }
+  return Date.now();
+}
+
+function scheduleFrame(callback: (time: number) => void): number {
+  try {
+    const frame = (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame;
+    if (typeof frame === "function") {
+      return (frame as typeof requestAnimationFrame).call(globalThis, callback);
+    }
+  } catch {
+    // A blocked scheduler falls back to a timer below.
+  }
+  return Number(setTimeout(() => callback(nowMs()), FRAME_FALLBACK_MS));
+}
+
+function cancelFrame(id: number | undefined): void {
+  if (id === undefined) return;
+
+  try {
+    const cancel = (globalThis as { cancelAnimationFrame?: unknown }).cancelAnimationFrame;
+    if (typeof cancel === "function") {
+      (cancel as typeof cancelAnimationFrame).call(globalThis, id);
+      return;
+    }
+  } catch {
+    // A blocked scheduler falls through to clearing the timer.
+  }
+  clearTimeout(id);
 }

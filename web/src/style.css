@@ -150,6 +150,17 @@ body.scene-mode #panel {
   min-width: 0;
 }
 
+.timeline label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.timeline .loading {
+  opacity: 0.55;
+}
+
 .legend-bar {
   height: 10px;
   border: 1px solid #999;

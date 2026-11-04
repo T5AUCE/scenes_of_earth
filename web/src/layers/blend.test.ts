@@ -50,8 +50,11 @@ function mockModule(specifier: string) {
       `;
     case "./field":
       return `
-        export const fieldReader = () => () => new Promise((resolve) => {
-          globalThis.pendingReads.push(() => resolve(Float32Array.of(1, 1, 1, 1)));
+        export const fieldReader = () => ({
+          keep() {},
+          read: () => new Promise((resolve) => {
+            globalThis.pendingReads.push(() => resolve(Float32Array.of(1, 1, 1, 1)));
+          }),
         });
       `;
     default:
@@ -137,6 +140,56 @@ test("a queued missing-step note stays hidden once the blend is switched off", a
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(view.parts[0].note.hidden, true);
+});
+
+test("prepare decodes both halves without drawing", async () => {
+  const pendingReads: (() => void)[] = [];
+  Object.assign(globalThis, { pendingReads, ImageData: class {} });
+  const view = createBlendView(
+    [
+      layerOf("rain", ["2026-08-01", "2026-09-01"], "2026-10-01"),
+      layerOf("temperature", ["2026-08-01", "2026-09-01"], "2026-10-01"),
+    ],
+    {
+      map: { setPaintProperty() {} },
+      store: Promise.resolve({}),
+      shift: 0,
+      slots: {},
+      report: () => assert.fail("no read should fail"),
+      rangeOf: () => null,
+      unitsOf: (id: string) => layerOf(id, [], "").units,
+    } as unknown as Parameters<typeof createBlendView>[1],
+  );
+
+  const warming = view.prepare!("2026-09-01", 2);
+  assert.equal(pendingReads.length, 2);
+  pendingReads.forEach((resolve) => resolve());
+  await warming;
+  await new Promise((resolve) => setImmediate(resolve));
+});
+
+test("prepare outside both axes reads nothing", async () => {
+  const pendingReads: (() => void)[] = [];
+  Object.assign(globalThis, { pendingReads, ImageData: class {} });
+  const view = createBlendView(
+    [
+      layerOf("rain", ["2026-08-01"], "2026-09-01"),
+      layerOf("temperature", ["2026-08-01"], "2026-09-01"),
+    ],
+    {
+      map: { setPaintProperty() {} },
+      store: Promise.resolve({}),
+      shift: 0,
+      slots: {},
+      report: () => {},
+      rangeOf: () => null,
+      unitsOf: (id: string) => layerOf(id, [], "").units,
+    } as unknown as Parameters<typeof createBlendView>[1],
+  );
+
+  await view.prepare!("2020-01-01", 2);
+
+  assert.equal(pendingReads.length, 0);
 });
 
 test("the blend legend converts stops and units to the chosen display units", () => {

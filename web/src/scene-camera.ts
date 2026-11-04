@@ -1,11 +1,11 @@
 import type { LngLat, Map as MapLibreMap, PaddingOptions } from "maplibre-gl";
 
 import { fitCamera, fitToBbox, lockPan } from "./map";
+import { prefersReducedMotion } from "./playback";
 import type { Scene } from "./types";
 
 const FLY_DURATION_MS = 1800;
 const SNAP_BACK_MS = 250;
-const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 
 const USER_INPUT_EVENTS = ["wheel", "mousedown", "touchstart"];
 // Capture and non-passive, so a gesture can be stopped before the map handles it.
@@ -193,5 +193,4 @@ export function watchResize(onSettled: () => void) {
 }
 
 /** Respect reduced motion for scene entry and return flights. */
-export const flightDuration = () =>
-  (matchMedia(REDUCED_MOTION_QUERY).matches ? 0 : FLY_DURATION_MS);
+export const flightDuration = () => (prefersReducedMotion() ? 0 : FLY_DURATION_MS);

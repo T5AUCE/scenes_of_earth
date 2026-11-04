@@ -114,6 +114,7 @@ const dependencies = {
     export function mountScene(map, scene, slots) {
       globalThis.sceneModeTest.onUnits = slots.onUnits;
       globalThis.sceneModeTest.onTime = slots.onTime;
+      globalThis.sceneModeTest.onPlayingChange = slots.onPlayingChange;
       globalThis.sceneModeTest.onCharts = slots.onCharts;
       globalThis.sceneModeTest.onDisplay = slots.onDisplay;
       globalThis.sceneModeTest.onChartSync = slots.onChartSync;
@@ -371,6 +372,34 @@ test("the panel receives the scene store and follows the timeline", () => {
   harness.onTime!("2020-02-01", "2020-02");
 
   assert.deepEqual(harness.times.at(-1), ["2020-02-01", "2020-02"]);
+});
+
+test("play holds the share link until pause writes it once", () => {
+  const harness = createHarness();
+  const replaced: string[] = [];
+  Object.assign(globalThis, {
+    history: {
+      get state() {
+        return null;
+      },
+      pushState() {},
+      replaceState(_next: unknown, _title: string, url: string) {
+        replaced.push(url);
+      },
+      back() {},
+    },
+  });
+  harness.enter();
+  replaced.length = 0;
+
+  harness.onPlayingChange!(true);
+  harness.onTime!("2020-01-01", "2020-01");
+  harness.onTime!("2020-02-01", "2020-02");
+  assert.equal(replaced.length, 0);
+
+  harness.onPlayingChange!(false);
+  assert.equal(replaced.length, 1);
+  assert.match(replaced[0], /t=2020-02/);
 });
 
 test("the panel owner pushes history and forwards notice options to reopen", () => {
@@ -1388,6 +1417,7 @@ function createHarness() {
     onUnits: null as ((elevation: string, units: Record<string, string>, ids: string[]) => void)
       | null,
     onTime: null as ((time: string, label: string) => void) | null,
+    onPlayingChange: null as ((playing: boolean) => void) | null,
     onCharts: null as ((token: string | null) => void) | null,
     onDisplay: null as ((params: string) => void) | null,
     onChartSync: null as ((notice: string | null) => void) | null,

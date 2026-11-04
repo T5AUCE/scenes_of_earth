@@ -65,6 +65,7 @@ export interface SceneSlots {
   cards: HTMLElement;
   timeBar: HTMLElement;
   onTime(time: string, label: string): void;
+  onPlayingChange?(playing: boolean): void;
   /** The display settings of the link the scene was opened from, if any. */
   display?: DisplayTokens;
   /** Receives the link parameters for the scene's display choices whenever they change. */
@@ -88,6 +89,7 @@ export function mountScene(
     cards,
     timeBar,
     onTime,
+    onPlayingChange,
     display: linked = NO_TOKENS,
     onDisplay,
     onCharts,
@@ -256,7 +258,13 @@ export function mountScene(
     onUnits?.(elevationUnit, displayUnits, currentLayerIds());
     onCharts?.(encodeSlice(store.getSnapshot().charts));
 
-    timeline = createSceneTimeline(blend ? [...views, blend] : views, scene.period, onTime);
+    timeline = createSceneTimeline(
+      blend ? [...views, blend] : views,
+      scene.period,
+      store,
+      onTime,
+      onPlayingChange,
+    );
     if (timeline) timeBar.append(timeline.element);
   } catch (error) {
     unmount();
@@ -420,7 +428,9 @@ function mountBlend(
 function createSceneTimeline(
   views: LayerView[],
   period: Scene["period"],
+  store: SceneStore,
   onTime: SceneSlots["onTime"],
+  onPlayingChange?: SceneSlots["onPlayingChange"],
 ) {
   const axes = views.flatMap((view) => (view.time ? [view.time] : []));
   if (!axes.length || !period) return null;
@@ -428,9 +438,24 @@ function createSceneTimeline(
   const steps = axes.map((axis) => axis.step);
   const timeValues = axes.map((axis) => axis.values);
   const times = scrubberTimes(timeValues, period);
+  const visibility = {
+    isVisible: (view: LayerView) => isDrawn(store, view),
+    subscribe: store.subscribe,
+  };
 
-  return createTimeline(times, steps, (time) => {
-    views.forEach((view) => view.setTime(time));
-    onTime(time, formatTime(time, steps));
-  });
+  return createTimeline(
+    times,
+    steps,
+    (time) => {
+      views.forEach((view) => view.setTime(time));
+      onTime(time, formatTime(time, steps));
+    },
+    { views, visibility, onPlayingChange },
+  );
+}
+
+function isDrawn(store: SceneStore, view: LayerView) {
+  const draw = store.getSnapshot().allocation.draws.get(view.parts[0].id);
+
+  return typeof draw === "string";
 }

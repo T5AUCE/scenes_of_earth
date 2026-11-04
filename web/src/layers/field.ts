@@ -1,5 +1,13 @@
 /** Draw field time series as colour fills or fallback marks with shared cached values. */
-import { arrayDoc, cacheByIndex, decode, readArray, readMask, type Store } from "../data";
+import {
+  arrayDoc,
+  createStepReader,
+  decode,
+  readArray,
+  readMask,
+  type Store,
+  type StepReader,
+} from "../data";
 import {
   defaultInk,
   defaultPalette as layerDefaultPalette,
@@ -49,11 +57,8 @@ import { type Draw, layerDraws } from "./allocate";
 import { createIsolineOverlay, type IsolineOverlay } from "./isolines";
 import { FALLBACK_PALETTE_NOTE } from "./layer-menu";
 
-const CACHED_STEPS = 24;
 const SERIES_OPACITY = 0.8;
 const SMOOTH_NOTE = "Smoothed for display; values are per cell.";
-
-type StepReader = (step: number) => Promise<Float32Array>;
 
 // Layers read by the blend share their cached steps with the layer's own view.
 const readers = new WeakMap<Promise<Store>, Map<string, StepReader>>();
@@ -350,6 +355,18 @@ class FieldView implements LayerView {
     else this.drawLatestStep(this.shownStep);
   }
 
+  async prepare(time: string, lookahead: number): Promise<void> {
+    const step = stepAt(this.time.values, this.time.end, time);
+    if (step < 0) return;
+
+    this.readStep.keep(lookahead);
+    await this.readStep.read(step, false);
+  }
+
+  release() {
+    this.readStep.release();
+  }
+
   show(next: Draw | null) {
     this.draw = next;
     this.dotsZoomWatch.setActive(next === "dots");
@@ -376,13 +393,15 @@ class FieldView implements LayerView {
 
   private async drawStep(step: number) {
     try {
-      const [values, mask] = await Promise.all([this.readStep(step), this.mask]);
+      const [values, mask] = await Promise.all([this.readStep.read(step), this.mask]);
       if (!this.alive || step !== this.shownStep) return;
 
       this.drawValues(values, step, mask);
 
       const nextStep = step + 1;
-      if (nextStep < this.time.values.length) this.readStep(nextStep).catch(() => {});
+      if (nextStep < this.time.values.length) {
+        this.readStep.read(nextStep, false).catch(() => {});
+      }
     } catch (error) {
       // An error for a step the user has already left is no longer relevant.
       if (!this.alive || step !== this.shownStep) return;
@@ -444,7 +463,7 @@ export function fieldReader(layer: LayerDoc, store: Promise<Store>): StepReader 
   if (existing) return existing;
 
   const valueArray = arrayDoc(layer, "value");
-  const reader = cacheByIndex(CACHED_STEPS, async (step) => {
+  const reader = createStepReader(layer.grid, async (step) => {
     const raw = await readArray(await store, valueArray.path, [step, null, null]);
     return decode(raw, valueArray);
   });

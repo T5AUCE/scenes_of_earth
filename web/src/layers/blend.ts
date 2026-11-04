@@ -15,6 +15,7 @@ import { RAIN_TEMPERATURE_GRID } from "../render/palettes";
 import { formatTime, latestOnly, stepAt } from "../timeline";
 import type { LayerContext, LayerDoc, LayerView, TimeDoc } from "../types";
 import { BLEND, type Draw, differingPeriodNote, missingStepNote } from "./allocate";
+import type { StepReader } from "../data";
 import { fieldReader } from "./field";
 
 const BLEND_OPACITY = 0.8;
@@ -53,7 +54,7 @@ interface Half {
   time: TimeDoc;
   fitted: number[];
   table: SampleTable;
-  read(step: number): Promise<Float32Array>;
+  reader: StepReader;
 }
 
 class Blend implements BlendView {
@@ -102,7 +103,7 @@ class Blend implements BlendView {
         time: layer.time,
         fitted: layer.style.stops,
         table: layer === finer ? table : crossSampleTable(table, finer.grid, layer.grid),
-        read: fieldReader(layer, store),
+        reader: fieldReader(layer, store),
       };
     };
     this.halves = [halfOf(rain), halfOf(temperature)];
@@ -128,6 +129,18 @@ class Blend implements BlendView {
   setTime(time: string) {
     this.shownTime = time;
     this.refresh();
+  }
+
+  async prepare(time: string, lookahead: number): Promise<void> {
+    const steps = this.halves.map(({ time: axis }) => stepAt(axis.values, axis.end, time));
+    if (steps[0] < 0 || steps[1] < 0) return;
+
+    this.halves.forEach(({ reader }) => reader.keep(lookahead));
+    await Promise.all(this.halves.map(({ reader }, index) => reader.read(steps[index], false)));
+  }
+
+  release() {
+    this.halves.forEach(({ reader }) => reader.release());
   }
 
   show(draw: Draw | null) {
@@ -177,7 +190,10 @@ class Blend implements BlendView {
 
     try {
       const [rain, temperature] = this.halves;
-      const values = await Promise.all([rain.read(steps[0]), temperature.read(steps[1])]);
+      const values = await Promise.all([
+        rain.reader.read(steps[0]),
+        temperature.reader.read(steps[1]),
+      ]);
       if (!this.isCurrent(time)) return;
 
       this.paint(values);

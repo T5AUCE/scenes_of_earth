@@ -410,6 +410,13 @@ export interface LayerView {
   ready?: Promise<void>; // rejects when the layer's data cannot be read
   setTime(time: string): void;
   /**
+   * Decode the step into the cache without drawing, so play never shows a half step. The
+   * lookahead is how many steps ahead the clock warms, so the layer keeps room for them.
+   */
+  prepare?(time: string, lookahead: number): Promise<void>;
+  /** Lets the steps `prepare` warmed be evicted again once the clock stops needing them. */
+  release?(): void;
+  /**
    * Draw the layer's first part as the allocation says, or stop drawing for null. A view without
    * it lets its parts' checkboxes switch their map layers.
    */
