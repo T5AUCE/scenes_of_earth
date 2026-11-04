@@ -13,8 +13,8 @@ SOURCES = {
             "dataset doi:10.15780/G2JQ0P"
         ),
         "modified": (
-            "negative fill values masked; stored at 0.1 mm; block-mean aggregation when stated "
-            "in the layer resolution"
+            "negative fill values and values above 6553.4 mm/month masked; stored at 0.1 mm; "
+            "block-mean aggregation when stated in the layer resolution"
         ),
     },
     "era5land": {

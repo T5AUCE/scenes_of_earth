@@ -31,7 +31,8 @@ from tests.helpers import RAIN, write_cube
 
 SQUARE = mapping(box(36.5, -1.5, 37.5, -0.5))
 PINNED_REVISION = "Tue, 01 Sep 2015 00:00:00 GMT"
-PINNED_SCENE_ID = "51c67b0430f967920733"  # Computed for soe 0.9.0 and scene format 0.7.
+PINNED_SCENE_ID = "bdafee6364463965855c"  # Computed for soe 0.9.1 and scene format 0.7.
+PREVIOUS_SCENE_ID = "51c67b0430f967920733"  # The same inputs under soe 0.9.0.
 
 
 def db_path_of(tmp_path: Path, name: str) -> str:
@@ -132,10 +133,14 @@ def test_changed_revision_after_recovery_gives_a_new_scene_id(
 
 
 def test_scene_id_is_unchanged_for_known_inputs(tmp_path):
+    assert known_scene_id(tmp_path) == PINNED_SCENE_ID
+
+
+def known_scene_id(tmp_path: Path) -> str:
+    """Return the id of the pinned inputs."""
     write_cube(tmp_path, "era5_precipitation", 0)
     registry = make_registry(RealSource(cubes_dir=tmp_path))
-
-    scene_id = compute_scene_id(
+    return compute_scene_id(
         "poly:abc",
         ["chirps_monthly", "terrain"],
         ("2015-01-01", "2015-07-01"),
@@ -143,7 +148,9 @@ def test_scene_id_is_unchanged_for_known_inputs(tmp_path):
         {"chirps_monthly": (PINNED_REVISION, "local")},
     )
 
-    assert scene_id == PINNED_SCENE_ID
+
+def test_rain_scene_id_differs_from_the_one_older_generator_bundles_have(tmp_path):
+    assert known_scene_id(tmp_path) != PREVIOUS_SCENE_ID
 
 
 def test_changing_the_bundle_format_renames_the_scene(monkeypatch):

@@ -248,6 +248,34 @@ def test_chirps_negative_values_become_fill(tmp_path, monkeypatch):
     assert stored[0, 0, 0] == 65535
 
 
+def test_chirps_values_above_the_cube_maximum_become_fill_instead_of_refusing_the_month(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(chirps_ingest, "_newest_month", lambda: "1981-01")
+    monkeypatch.setattr(
+        chirps_ingest,
+        "_head_month",
+        fake_head_factory({"1981-01": True}, {"1981-01": FIRST_LAST_MODIFIED}),
+    )
+    field = chirps_field(JAN_MM)
+    field[0, 0] = 7676
+    field[0, 1] = 6553.4
+
+    def fake_download(month: str, target: Path) -> str | None:
+        write_chirps_raster(target, field)
+        return FIRST_LAST_MODIFIED
+
+    monkeypatch.setattr(chirps_ingest, "_download_month", fake_download)
+
+    ingest(tmp_path, "1981-01", TEST_CUBE)
+
+    values = CubeStore((TEST_CUBE,), tmp_path).read_cube(TEST_CUBE, "1981-01", (0, 0, 10, 5))
+    assert np.isnan(values[0, 0])
+    assert values[0, 1] == pytest.approx(6553.4, abs=0.05)
+    assert values[1, 0] == pytest.approx(JAN_MM)
+
+
 def test_chirps_raster_off_the_edge_aligned_grid_is_refused(tmp_path, monkeypatch):
     monkeypatch.setattr(chirps_ingest, "_newest_month", lambda: "1981-01")
     monkeypatch.setattr(

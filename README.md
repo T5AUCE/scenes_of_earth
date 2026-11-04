@@ -97,7 +97,8 @@ Builds read monthly Zarr cubes from local disk (`SOE_CUBES_DIR`). Reading the cu
 | CHIRPS monthly rain | `chirps_monthly.zarr` | Rainfall (main source), optional |
 
 Rainfall and Temperature are listed only when their ERA5 cubes exist, so no layer lacks the data that fills its gaps. The fill
-is automatic. ERA5-Land and CHIRPS values are never changed. ERA5 is sampled at the centre of each native layer cell,
+is automatic. ERA5-Land and CHIRPS values are never changed, except that a CHIRPS value above 6553.4 mm/month, which the
+cube cannot store, counts as no value and ERA5 fills it. ERA5 is sampled at the centre of each native layer cell,
 and a scene that is averaged over blocks of cells averages these samples the same way as the main source. Only an output
 cell with no main-source value takes the ERA5 value (about 28 km, over land and sea). A filled bundle carries a `source`
 array (1 main source, 2 fallback, 3 both, 0 outside the area or no value), lists ERA5 under `fallback_sources`, and states
@@ -115,7 +116,8 @@ python -m soe.cli ingest-cube era5_precipitation --from 1981-01
 ```
 
 The CHIRPS cube needs no account. Its first run downloads about 16 GB (1981-01 onward, about 1.5 hours) and stores about
-3 to 5 GB.
+3 to 5 GB. CHIRPS v3.0 covers 60°S to 60°N. Negative fill and values above 6553.4 mm/month are stored as no value. Implausible
+values below that limit are kept, for example 1998-08 near the Falklands, where a few hundred cells exceed 2000 mm.
 
 ```
 python -m soe.cli ingest-cube chirps_monthly --from 1981-01
@@ -161,7 +163,7 @@ python -m soe.cli worldcover-index
 
 - `area.bbox` is `[W, S, E, N]` with W < E always. A shape across the antimeridian is unwrapped into one frame, so E may be
   above 180 (up to 360) and `lon` arrays rise past 180, as MapLibre's `LngLatBounds` does. `area.geojson` is in the same frame.
-- `scene.json` is version 0.7 and the generator is 0.9.0. The top-level `period` (`start`, `end` exclusive, `step`; ISO dates) is the requested range,
+- `scene.json` is version 0.7 and the generator is 0.9.1. The top-level `period` (`start`, `end` exclusive, `step`; ISO dates) is the requested range,
   or `null` for a scene without series. Each layer has its own `grid` (crs, bbox, res, nx, ny; `aggregation` for series), `mask`,
   `coverage`, `time` (`step` as an ISO 8601 duration, `end` = the day after the last step's period, `method` = how a step summarises
   its period (`sum`, `mean`, `point`, `max`), `count`, explicit `values`, or `null` for static layers) and
@@ -206,7 +208,7 @@ python -m soe.cli worldcover-index
 - `credits` carries `terms_passthrough` with the reuse terms that bind later users, alongside `lines`, `disclaimers` and
   `endorsement`. Positive `fallback_fraction` shares need credited `fallback_sources`, while all-zero shares may appear without
   them. Ring-only fallback still needs attribution though its share is zero.
-- Rain is stored as uint16 at 0.1 mm (fill 65535, values above 6553.4 mm are clipped). Series are chunked one step per
+- Rain is stored as uint16 at 0.1 mm (fill 65535, ERA5 values above 6553.4 mm are clipped and CHIRPS values above it become no data). Series are chunked one step per
   chunk and sharded 12 steps per shard; static arrays are one chunk each. The root `zarr.json` has consolidated metadata.
 - Budgets: the raw size of all layers' arrays together is capped at 50 MB, and the source cells x steps read for all
   time-varying layers together at 100M. Terrain is planned first; each time-varying layer then gets its own aggregation
@@ -234,7 +236,7 @@ python -m soe.cli worldcover-index
 - Terrain reads are cached in `SCENES_DIR/.cache/` (keyed by dataset, source versions, bbox, res and soe version), so
   rebuilding an area with other layers or dates does not read the tiles again. Deleting the folder is always safe, and it
   is the way to clear files that older versions left behind.
-- Format 0.7 keeps the real-data ring and adds `area_series` with `distribution`. Generator 0.9.0 and the bundle format
+- Format 0.7 keeps the real-data ring and adds `area_series` with `distribution`. Generator 0.9.1 and the bundle format
   both enter the scene id, so new requests cannot reuse older bundles and old terrain caches are not reused. Build a new scene
   rather than replacing an immutable bundle in place. The viewer rejects older formats with a prompt to pick the area again.
 - Contours use `maplibre-contour` (BSD-3-Clause) with a scene-seeded nested 10–2000 m ladder. New tiers fade in over

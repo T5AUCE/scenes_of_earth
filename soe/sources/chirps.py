@@ -1,4 +1,8 @@
-"""Read CHIRPS monthly rain from the local cube or its COGs and describe the dataset's grid."""
+"""Read CHIRPS v3.0 monthly rain from the local cube or its COGs and describe the dataset's grid.
+
+CHIRPS covers 60S to 60N. A value that is negative or above `CHIRPS_MAX_MM` counts as no value, so
+ERA5 fills it. Implausible values below that limit are kept, for example 1998-08 near the Falklands.
+"""
 import threading
 import time
 import urllib.error
@@ -19,6 +23,9 @@ from .remote import GDAL_OPTS, SourceUnavailable
 FIRST_MONTH = "1981-01"
 
 CHIRPS_GRID = Grid(-180, 60, CELL_DEG, 7200, 2400)
+
+# The largest value the cube's uint16 encoding at 0.1 mm holds below its fill value.
+CHIRPS_MAX_MM = 6553.4
 
 # Same encoding as the bundle role, so the cube keeps everything the bundle keeps.
 CHIRPS_CUBE = CubeSpec(
@@ -189,7 +196,7 @@ class ChirpsReader:
         return last_modified
 
     def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
-        """One month at native resolution as float32; fill values (< 0) become NaN."""
+        """One month at native resolution as float32; fill and over-range values become NaN."""
         col, row, width, height = window
 
         with rasterio.Env(**GDAL_OPTS), rasterio.open(_chirps_url(month)) as dataset:
@@ -197,8 +204,16 @@ class ChirpsReader:
                 raise RuntimeError(f"unexpected CHIRPS grid {dataset.width}x{dataset.height}")
             rain = dataset.read(1, window=Window(col, row, width, height)).astype("float32")
 
-        rain[rain < 0] = np.nan
+        mask_unusable_rain(rain)
         return rain
+
+
+def mask_unusable_rain(rain: np.ndarray) -> None:
+    """Set negative fill and values the cube cannot encode to NaN, in place.
+
+    CHIRPS has isolated months with implausible huge values, which ERA5 then replaces.
+    """
+    rain[(rain < 0) | (rain > CHIRPS_MAX_MM)] = np.nan
 
 
 def _preliminary_notice(first: str, last: str) -> str:

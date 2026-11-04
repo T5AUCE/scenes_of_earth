@@ -16,7 +16,6 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-import numpy as np
 import rasterio
 
 from .cube_ingest import (
@@ -31,7 +30,7 @@ from .cube_ingest import (
     _previous_month,
     write_months,
 )
-from .sources.chirps import CHIRPS_CUBE, CHIRPS_URL, FIRST_MONTH
+from .sources.chirps import CHIRPS_CUBE, CHIRPS_URL, FIRST_MONTH, mask_unusable_rain
 from .sources.cubes import FINAL_EXPVER, CubeSpec
 from .sources.grid import Grid
 
@@ -232,12 +231,12 @@ def _fetch_once(url: str, timeout: float) -> tuple[bytes, str | None]:
 
 
 def _read_cog_month(path: Path | str, month: str, cube: CubeSpec) -> MonthField:
-    """Return the month's cube-grid values with negative fill masked to NaN."""
+    """Return the month's cube-grid values with negative fill and over-range values as NaN."""
     with rasterio.open(path) as dataset:
         _check_grid(dataset, cube.grid)
         values = dataset.read(1).astype("float32")
 
-    values[values < 0] = np.nan
+    mask_unusable_rain(values)
     return month, values, FINAL_EXPVER
 
 

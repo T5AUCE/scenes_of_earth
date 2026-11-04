@@ -47,7 +47,7 @@ from soe.sources import (
 from soe.sources import remote, worldcover
 from soe.sources.chirps import previous_month
 from soe.sources.fallback import read_bilinear
-from soe.sources.grid import block_mean
+from soe.sources.grid import CELL_DEG, block_mean
 from soe.sources.periods import add_duration
 from soe.sources.terrain import (
     LATITUDE_DEGREE_M,
@@ -382,6 +382,29 @@ def test_rain_reads_months_missing_from_the_cube_over_http():
     make_registry(source)["chirps_monthly"].read_step("2020-03-01", NAIROBI_BBOX)
 
     assert (source.cube_reads, source.http_reads) == ([], ["2020-03"])
+
+
+def test_http_rain_above_the_cube_maximum_or_negative_becomes_no_value(tmp_path, monkeypatch):
+    path = tmp_path / "chirps.tif"
+    values = np.array([[100, 6553.4, 6553.5], [7676, -9999, 0]], "float32")
+    profile = {
+        "driver": "GTiff",
+        "dtype": "float32",
+        "count": 1,
+        "width": 3,
+        "height": 2,
+        "crs": "EPSG:4326",
+        "transform": from_origin(-180, 60, CELL_DEG, CELL_DEG),
+    }
+    with rasterio.open(path, "w", **profile) as dataset:
+        dataset.write(values, 1)
+    monkeypatch.setattr(chirps, "_chirps_url", lambda month: str(path))
+    monkeypatch.setattr(chirps, "CHIRPS_GRID", Grid(-180, 60, CELL_DEG, 3, 2))
+
+    rain = chirps.ChirpsReader().read_rain("2020-03", (0, 0, 3, 2))
+
+    assert rain[0, :2] == pytest.approx([100, 6553.4])
+    assert np.isnan(rain[0, 2]) and np.isnan(rain[1, :2]).all() and rain[1, 2] == 0
 
 
 def test_rain_reads_each_month_from_the_path_that_holds_it():

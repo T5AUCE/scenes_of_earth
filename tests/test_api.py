@@ -22,6 +22,7 @@ from soe.sources import (
     RealSource,
     SourceUnavailable,
     SyntheticSource,
+    chirps,
     make_registry,
 )
 from tests.conftest import write_updating_chirps_cube
@@ -88,7 +89,7 @@ def test_post_poll_and_serve(env):
     assert scene["version"] == "0.7" and terrain["arrays"] == {} and terrain["stats"]["p98"] > 0
     assert terrain["tiles"]["source"]["attribution"] in scene["credits"]["lines"]
     assert scene["credits"]["terms_passthrough"]
-    assert scene["generator"]["version"] == "0.9.0"
+    assert scene["generator"]["version"] == "0.9.1"
     rain = scene["layers"][1]
     assert rain["area_series"]["statistic"] == "mean"
     assert len(rain["area_series"]["values"]) == rain["time"]["count"]
@@ -171,6 +172,37 @@ def test_scene_built_from_the_cube_matches_one_built_over_http_within_quantisati
         http_rain["area_series"]["values"],
         abs=0.05,
     )
+
+
+class OverRangeRain(SyntheticSource):
+    """Give every other column a CHIRPS value above the cube maximum, as the reader masks it."""
+
+    def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
+        rain = super().read_rain(month, window)
+        rain[:, ::2] = 7676
+        chirps.mask_unusable_rain(rain)
+        return rain
+
+
+def test_rain_above_the_cube_maximum_is_filled_from_era5_with_provenance_and_notice(tmp_path):
+    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(OverRangeRain()))
+    with TestClient(app) as client:
+        request = body(layers=["chirps_monthly"], start="2015-01", end="2015-01")
+        scene_id = client.post("/api/scenes", json=request).json()["id"]
+        done = wait_for(client, scene_id)
+        assert done["status"] == "done"
+        scene = client.get(done["bundle_url"]).json()
+
+    group = zarr.open_group(tmp_path / "scenes" / scene_id / "data.zarr", mode="r")
+    codes = group["chirps_monthly/source"][:]
+    inside = group["chirps_monthly/mask"][:] == 1
+    layer = scene["layers"][0]
+    filled = int((np.isin(codes, [2, 3]) & inside).sum())
+    assert (codes[:, ::2][inside[:, ::2]] == 2).all()
+    assert (codes[:, 1::2] == 1).any()
+    assert layer["area_series"]["valid_fraction"] == [1.0]
+    assert layer["area_series"]["fallback_fraction"][0] > 0.4
+    assert f"in {filled} of {layer['mask']['cells_inside']} cells" in scene["notices"]["limits"][0]
 
 
 def test_rain_scene_from_the_cube_makes_no_chirps_http_reads(tmp_path):
