@@ -7,6 +7,7 @@ import { Window } from "happy-dom";
 import React from "react";
 
 import { createSceneStore } from "../scene-store.ts";
+import { assertSameNode } from "../testing/dom-assert.ts";
 import type { LayerDoc, LayerMenu, LayerView } from "../types.ts";
 
 registerHooks({
@@ -223,7 +224,7 @@ test("a later menu or option change clears the displacement notice", async (cont
   await act(async () => {
     batlow.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
-  assert.equal(container.querySelector(".colour-notice"), null);
+  assertSameNode(container.querySelector(".colour-notice"), null);
 
   await act(async () => root.unmount());
 });
@@ -259,7 +260,7 @@ test("an option change clears the displacement notice", async (context) => {
   await act(async () => {
     smooth.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
-  assert.equal(container.querySelector(".colour-notice"), null);
+  assertSameNode(container.querySelector(".colour-notice"), null);
 
   await act(async () => root.unmount());
 });
@@ -433,25 +434,25 @@ test("closing the editor returns focus to its Edit button", async (context) => {
     edits()[0].dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   const panel = container.querySelector(".layer-editor") as HTMLElement;
-  assert.equal(document.activeElement, panel);
+  assertSameNode(document.activeElement, panel);
 
   const close = buttonWithText(container, "Close");
   await act(async () => {
     close.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
-  assert.equal(container.querySelector(".layer-editor"), null);
-  assert.equal(document.activeElement, edits()[0]);
+  assertSameNode(container.querySelector(".layer-editor"), null);
+  assertSameNode(document.activeElement, edits()[0]);
 
   await act(async () => {
     edits()[0].dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
-  assert.equal(document.activeElement, container.querySelector(".layer-editor"));
+  assertSameNode(document.activeElement, container.querySelector(".layer-editor"));
 
   await act(async () => {
     window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape" }));
   });
-  assert.equal(container.querySelector(".layer-editor"), null);
-  assert.equal(document.activeElement, edits()[0]);
+  assertSameNode(container.querySelector(".layer-editor"), null);
+  assertSameNode(document.activeElement, edits()[0]);
 
   await act(async () => {
     edits()[0].dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
@@ -461,7 +462,7 @@ test("closing the editor returns focus to its Edit button", async (context) => {
   });
   const swapped = container.querySelector(".layer-editor") as HTMLElement;
   assert.match(swapped.getAttribute("aria-label") ?? "", /Temperature/);
-  assert.equal(document.activeElement, swapped);
+  assertSameNode(document.activeElement, swapped);
 
   await act(async () => column!.unmount());
 });
@@ -594,7 +595,7 @@ test("part controls live in Options with no Parts heading", async (context) => {
     />,
   ));
 
-  assert.equal(container.querySelector(".editor-parts"), null);
+  assertSameNode(container.querySelector(".editor-parts"), null);
   assert.ok(container.querySelector(".editor-options"));
   assert.ok(container.querySelector(".editor-options .part-controls input"));
 
@@ -650,7 +651,7 @@ test("multi-part layers keep per-part checkboxes in Options", async (context) =>
     />,
   ));
 
-  assert.equal(container.querySelector(".editor-parts"), null);
+  assertSameNode(container.querySelector(".editor-parts"), null);
   assert.ok(checkboxByLabel(container, "Relief"));
   assert.ok(checkboxByLabel(container, "Contours"));
   assert.ok(container.querySelector(".editor-options")?.contains(checkboxByLabel(container, "Relief")));
@@ -879,7 +880,7 @@ test("the editor shows Low and High on one line", async (context) => {
   const high = container.querySelector('input[aria-label="High"]') as HTMLInputElement;
   assert.ok(low);
   assert.ok(high);
-  assert.equal(low.closest(".range-row"), high.closest(".range-row"));
+  assertSameNode(low.closest(".range-row"), high.closest(".range-row"));
 
   await act(async () => root.unmount());
 });
@@ -916,7 +917,7 @@ test("a convertible layer offers a Units choice and others show none", async (co
       store={store}
     />,
   ));
-  assert.equal(container.querySelector(".editor-units"), null);
+  assertSameNode(container.querySelector(".editor-units"), null);
 
   await act(async () => root.unmount());
 });
@@ -992,7 +993,7 @@ test("the notice fades and clears after about three seconds", async (context) =>
       .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assert.ok(container.querySelector(".colour-notice"));
-  assert.equal(container.querySelector(".colour-notice.fading"), null);
+  assertSameNode(container.querySelector(".colour-notice.fading"), null);
 
   await act(async () => {
     mock.timers.tick(3 * 1000);
@@ -1002,7 +1003,7 @@ test("the notice fades and clears after about three seconds", async (context) =>
   await act(async () => {
     mock.timers.tick(1600);
   });
-  assert.equal(container.querySelector(".colour-notice"), null);
+  assertSameNode(container.querySelector(".colour-notice"), null);
 
   await act(async () => root.unmount());
 });
@@ -1039,13 +1040,13 @@ test("a new notice restarts the fade timer", async (context) => {
   await act(async () => {
     mock.timers.tick(2 * 1000);
   });
-  assert.equal(container.querySelector(".colour-notice.fading"), null);
+  assertSameNode(container.querySelector(".colour-notice.fading"), null);
 
   await act(async () => {
     inputByValue(container, "hidden")
       .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
-  assert.equal(container.querySelector(".colour-notice"), null);
+  assertSameNode(container.querySelector(".colour-notice"), null);
 
   await act(async () => {
     inputByValue(container, "colour")
@@ -1054,7 +1055,7 @@ test("a new notice restarts the fade timer", async (context) => {
   await act(async () => {
     mock.timers.tick(2 * 1000);
   });
-  assert.equal(container.querySelector(".colour-notice.fading"), null);
+  assertSameNode(container.querySelector(".colour-notice.fading"), null);
 
   await act(async () => {
     mock.timers.tick(1000);

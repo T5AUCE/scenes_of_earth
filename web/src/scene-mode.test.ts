@@ -6,6 +6,7 @@ import { Window } from "happy-dom";
 import type { Map as MapLibreMap } from "maplibre-gl";
 
 import type { SceneRoots } from "./scene-mode.ts";
+import { assertSameNode } from "./testing/dom-assert.ts";
 import type { Scene } from "./types.ts";
 
 const MASK_ID = "soe-scene-mask";
@@ -542,7 +543,7 @@ test("the owner and real panel keep history through Back and Forward", async (co
   const aboutTab = [...dialog.querySelectorAll('[role="tab"]')].find(
     (button) => button.textContent === "About",
   ) as HTMLButtonElement;
-  assert.equal(document.activeElement, aboutTab);
+  assertSameNode(document.activeElement, aboutTab);
   const main = dialog.querySelector("main") as HTMLElement;
   assert.equal(main.scrollTop, 0);
   assert.equal(dialog.querySelector("#notices-heading")?.textContent, "Notices and limits");
@@ -559,7 +560,7 @@ test("the owner and real panel keep history through Back and Forward", async (co
   await closed;
   await act(async () => {});
   assert.equal(dialog.open, false);
-  assert.equal(document.activeElement, column.querySelector(".expand"));
+  assertSameNode(document.activeElement, column.querySelector(".expand"));
 
   main.scrollTop = 123;
   scrolled.length = 0;
@@ -574,7 +575,7 @@ test("the owner and real panel keep history through Back and Forward", async (co
     dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
     "About",
   );
-  assert.equal(document.activeElement, aboutTab);
+  assertSameNode(document.activeElement, aboutTab);
   assert.equal(main.scrollTop, 0);
   assert.deepEqual(scrolled, []);
   await act(async () => {
