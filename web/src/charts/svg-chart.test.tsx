@@ -2034,9 +2034,10 @@ test("two gallery bars stay separated, aligned and contained", async (context) =
   assert.ok(sorted[0].outerRight <= sorted[1].x + 0.001);
   const cursor = host.querySelector(".chart-cursor line")!;
   const cursorX = Number(cursor.getAttribute("x1"));
-  assert.ok(Math.abs(cursorX - left) < 0.001);
-  assert.ok(Math.abs(sorted[0].outerLeft - left) < 0.001);
-  assert.ok(Math.abs(sorted[1].outerRight - right) < 0.001);
+  assert.ok(Math.abs(sorted[0].width - sorted[1].width) < 0.001);
+  assert.ok(sorted[0].outerLeft > left + 0.001);
+  assert.ok(sorted[1].outerRight < right - 0.001);
+  assert.ok(Math.abs(cursorX - (sorted[0].x + sorted[0].width / 2)) < 0.001);
   await act(async () => {
     root.unmount();
   });
@@ -2139,8 +2140,11 @@ test("five gallery bars stay separated, aligned and contained", async (context) 
   const cursorX = Number(cursor.getAttribute("x1"));
   const middle = boxes[2];
   assert.ok(Math.abs(cursorX - (middle.x + middle.width / 2)) < 0.001);
-  assert.ok(Math.abs(sorted[0].outerLeft - left) < 0.001);
-  assert.ok(Math.abs(sorted[4].outerRight - right) < 0.001);
+  for (const box of sorted) {
+    assert.ok(Math.abs(box.width - sorted[0].width) < 0.001);
+  }
+  assert.ok(sorted[0].outerLeft > left + 0.001);
+  assert.ok(sorted[4].outerRight < right - 0.001);
   await act(async () => {
     root.unmount();
   });
@@ -2707,6 +2711,282 @@ test("preview readouts stay short while full readouts keep rounded coverage", as
   });
   preview.remove();
   full.remove();
+});
+
+test("time bars keep full width inside while lines stay on the edges", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const starts = ["2026-04-01", "2026-05-01", "2026-06-01", "2026-07-01", "2026-08-01"];
+  const table: TimeSeriesTable = {
+    shape: "time_series",
+    layerId: "rain",
+    units: "mm/month",
+    method: "sum",
+    rows: starts.map((start, index) => ({
+      x: Date.parse(start),
+      value: 10 + index,
+      label: start,
+      validFraction: 1,
+      fallbackFraction: null,
+      interval: {
+        start,
+        end: index + 1 < starts.length ? starts[index + 1] : "2026-09-01",
+      },
+    })),
+    xTitle: "Time",
+    yTitle: "Rain (mm/month)",
+  };
+  const low = Date.parse("2026-04-01");
+  const high = Date.parse("2026-08-01");
+
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<SvgChart table={table} chartType="bar" />);
+  });
+  const frame = host.querySelector(".chart-plot-frame")!;
+  const left = Number(frame.getAttribute("x1"));
+  const right = Number(frame.getAttribute("x2"));
+  const rects = [...host.querySelectorAll(".chart-bars rect")];
+  assert.equal(rects.length, 5);
+  const widths = rects.map((rect) => Number(rect.getAttribute("width")));
+  for (const width of widths) {
+    assert.ok(Math.abs(width - widths[0]) < 0.001);
+  }
+  for (const rect of rects) {
+    const x = Number(rect.getAttribute("x"));
+    const width = Number(rect.getAttribute("width"));
+    assert.ok(x >= left - 0.001);
+    assert.ok(x + width <= right + 0.001);
+  }
+  const firstX = Number(rects[0].getAttribute("x"));
+  const last = rects[rects.length - 1];
+  const lastRight = Number(last.getAttribute("x")) + Number(last.getAttribute("width"));
+  assert.ok(firstX > left + 0.001);
+  assert.ok(lastRight < right - 0.001);
+
+  await act(async () => {
+    root.render(<SvgChart table={table} chartType="line" />);
+  });
+  const lineFrame = host.querySelector(".chart-plot-frame")!;
+  const lineLeft = Number(lineFrame.getAttribute("x1"));
+  const lineRight = Number(lineFrame.getAttribute("x2"));
+  const points = host.querySelector(".chart-lines polyline")!.getAttribute("points")!.trim().split(
+    /\s+/,
+  );
+  const firstPoint = points[0].split(",").map(Number);
+  const lastPoint = points[points.length - 1].split(",").map(Number);
+  assert.ok(Math.abs(firstPoint[0] - lineLeft) < 0.001);
+  assert.ok(Math.abs(lastPoint[0] - lineRight) < 0.001);
+
+  await act(async () => {
+    root.render(<SvgChart table={table} chartType="bar" xDomain={[low, high]} />);
+  });
+  const overrideFrame = host.querySelector(".chart-plot-frame")!;
+  const overrideLeft = Number(overrideFrame.getAttribute("x1"));
+  const overrideRight = Number(overrideFrame.getAttribute("x2"));
+  const overrideRects = [...host.querySelectorAll(".chart-bars rect")];
+  assert.equal(overrideRects.length, 5);
+  const overrideWidths = overrideRects.map((rect) => Number(rect.getAttribute("width")));
+  for (const width of overrideWidths) {
+    assert.ok(Math.abs(width - overrideWidths[0]) < 0.001);
+  }
+  const overrideFirst = Number(overrideRects[0].getAttribute("x"));
+  const overrideLast = overrideRects[overrideRects.length - 1];
+  const overrideLastRight = Number(overrideLast.getAttribute("x"))
+    + Number(overrideLast.getAttribute("width"));
+  assert.ok(overrideFirst > overrideLeft + 0.001);
+  assert.ok(overrideLastRight < overrideRight - 0.001);
+
+  await act(async () => {
+    root.render(<SvgChart table={table} chartType="line" xDomain={[low, high]} />);
+  });
+  const overrideLine = host.querySelector(".chart-lines polyline")!.getAttribute("points")!.trim()
+    .split(/\s+/);
+  const overrideFirstPoint = overrideLine[0].split(",").map(Number);
+  const overrideLastPoint = overrideLine[overrideLine.length - 1].split(",").map(Number);
+  assert.ok(Math.abs(overrideFirstPoint[0] - overrideLeft) < 0.001);
+  assert.ok(Math.abs(overrideLastPoint[0] - overrideRight) < 0.001);
+
+  await act(async () => {
+    root.render(<SvgChart table={table} chartType="bar" compact={true} />);
+  });
+  const compactWidth = Number(host.querySelector("svg")?.getAttribute("width"));
+  const compactLeft = 2;
+  const compactRight = compactWidth - 2;
+  const compactRects = [...host.querySelectorAll(".chart-bars rect")];
+  assert.equal(compactRects.length, 5);
+  const compactWidths = compactRects.map((rect) => Number(rect.getAttribute("width")));
+  for (const width of compactWidths) {
+    assert.ok(Math.abs(width - compactWidths[0]) < 0.001);
+  }
+  for (const rect of compactRects) {
+    const x = Number(rect.getAttribute("x"));
+    const width = Number(rect.getAttribute("width"));
+    assert.ok(x >= compactLeft - 0.001);
+    assert.ok(x + width <= compactRight + 0.001);
+  }
+  const compactFirst = Number(compactRects[0].getAttribute("x"));
+  const compactLast = compactRects[compactRects.length - 1];
+  const compactLastRight = Number(compactLast.getAttribute("x"))
+    + Number(compactLast.getAttribute("width"));
+  assert.ok(compactFirst > compactLeft + 0.001);
+  assert.ok(compactLastRight < compactRight - 0.001);
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+});
+
+test("seasonal bars keep full width inside while lines stay on the edges", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  const table = {
+    shape: "seasonal_cycle",
+    layerId: "rain",
+    units: "mm/month",
+    method: "sum",
+    rows: months.map((label, index) => ({
+      x: index + 1,
+      value: 10 + index,
+      label,
+      validFraction: 1,
+      fallbackFraction: null,
+      sampleCount: 5,
+      yearRange: [2019, 2023],
+    })),
+    xTitle: "Month",
+    yTitle: "Rain by month (mm/month)",
+  } as const;
+
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<SvgChart table={{ ...table }} chartType="bar" />);
+  });
+  const frame = host.querySelector(".chart-plot-frame")!;
+  const left = Number(frame.getAttribute("x1"));
+  const right = Number(frame.getAttribute("x2"));
+  const rects = [...host.querySelectorAll(".chart-bars rect")];
+  assert.equal(rects.length, 12);
+  const widths = rects.map((rect) => Number(rect.getAttribute("width")));
+  for (const width of widths) {
+    assert.ok(Math.abs(width - widths[0]) < 0.001);
+  }
+  for (const rect of rects) {
+    const x = Number(rect.getAttribute("x"));
+    const width = Number(rect.getAttribute("width"));
+    assert.ok(x >= left - 0.001);
+    assert.ok(x + width <= right + 0.001);
+  }
+  const firstX = Number(rects[0].getAttribute("x"));
+  const last = rects[rects.length - 1];
+  const lastRight = Number(last.getAttribute("x")) + Number(last.getAttribute("width"));
+  assert.ok(firstX > left + 0.001);
+  assert.ok(lastRight < right - 0.001);
+
+  await act(async () => {
+    root.render(<SvgChart table={{ ...table }} chartType="line" />);
+  });
+  const lineFrame = host.querySelector(".chart-plot-frame")!;
+  const lineLeft = Number(lineFrame.getAttribute("x1"));
+  const lineRight = Number(lineFrame.getAttribute("x2"));
+  const points = host.querySelector(".chart-lines polyline")!.getAttribute("points")!.trim().split(
+    /\s+/,
+  );
+  const firstPoint = points[0].split(",").map(Number);
+  const lastPoint = points[points.length - 1].split(",").map(Number);
+  assert.ok(Math.abs(firstPoint[0] - lineLeft) < 0.001);
+  assert.ok(Math.abs(lastPoint[0] - lineRight) < 0.001);
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+});
+
+test("distribution bars keep full width inside while lines stay on the edges", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const solid = distributionTable();
+  solid.rows = solid.rows.map((row) => ({ ...row, validFraction: 1 }));
+
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<SvgChart table={solid} chartType="bar" />);
+  });
+  const frame = host.querySelector(".chart-plot-frame")!;
+  const left = Number(frame.getAttribute("x1"));
+  const right = Number(frame.getAttribute("x2"));
+  const rects = [...host.querySelectorAll(".chart-bars rect")];
+  assert.equal(rects.length, 3);
+  const widths = rects.map((rect) => Number(rect.getAttribute("width")));
+  for (const width of widths) {
+    assert.ok(Math.abs(width - widths[0]) < 0.001);
+  }
+  for (const rect of rects) {
+    const x = Number(rect.getAttribute("x"));
+    const width = Number(rect.getAttribute("width"));
+    assert.ok(x >= left - 0.001);
+    assert.ok(x + width <= right + 0.001);
+  }
+  const centres = rects.map((rect) => (
+    Number(rect.getAttribute("x")) + Number(rect.getAttribute("width")) / 2
+  ));
+  assert.ok(centres[0] > centres[1]);
+  assert.ok(centres[1] > centres[2]);
+  assert.ok(centres[0] < right - 0.001);
+  assert.ok(centres[2] > left + 0.001);
+
+  await act(async () => {
+    root.render(<SvgChart table={distributionTable()} chartType="line" />);
+  });
+  const lineFrame = host.querySelector(".chart-plot-frame")!;
+  const lineLeft = Number(lineFrame.getAttribute("x1"));
+  const lineRight = Number(lineFrame.getAttribute("x2"));
+  const points = host.querySelector(".chart-lines polyline")!.getAttribute("points")!.trim().split(
+    /\s+/,
+  );
+  const firstPoint = points[0].split(",").map(Number);
+  const lastPoint = points[points.length - 1].split(",").map(Number);
+  assert.ok(Math.abs(firstPoint[0] - lineRight) < 0.001);
+  assert.ok(Math.abs(lastPoint[0] - lineLeft) < 0.001);
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
 });
 
 function xTitleNodes(host: Element): Element[] {

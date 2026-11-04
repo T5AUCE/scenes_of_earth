@@ -328,19 +328,23 @@ function CollapsedPanel({
         )}
         <button
           type="button"
+          className="collapse"
           ref={collapseRef}
           aria-label="Collapse scene panel"
+          title="Collapse"
           onClick={collapsePanel}
         >
-          {"Collapse"}
+          {"–"}
         </button>
         <button
           type="button"
           className="expand"
+          aria-label="Expand to full view"
+          title="Expand to full view"
           aria-haspopup="dialog"
           onClick={() => hooks.requestOpen(selected)}
         >
-          {"Expand ⤢"}
+          {"⤢"}
         </button>
       </div>
       <div className="panel-body">{body}</div>

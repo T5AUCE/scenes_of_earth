@@ -255,7 +255,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       dataLayers.update(fadeZoom());
       refreshMaskAndLabels(fadeZoom());
     });
-    const stopDocking = watchDocking(roots.timeBar);
+    const stopDocking = watchDocking(roots);
 
     return {
       id: scene.id,
@@ -323,7 +323,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 }
 
 /** Keep the docked column above the attribution and time bar. */
-function watchDocking(timeBar: HTMLElement): () => void {
+function watchDocking(roots: SceneRoots): () => void {
   if (typeof ResizeObserver === "undefined") return () => {};
 
   try {
@@ -332,24 +332,48 @@ function watchDocking(timeBar: HTMLElement): () => void {
 
     const updateDocking = () => {
       const footer = document.querySelector(".maplibregl-ctrl-bottom-left");
-      // The column keeps a gap above the taller footer, matching its side margins.
+      // Only overlapping chrome lifts the column so the desktop gap stays at 8 px.
       const dockBottom = Math.max(
         DOCK_GAP_PX,
-        bottomExtent(footer) + DOCK_GAP_PX,
-        bottomExtent(timeBar) + DOCK_GAP_PX,
+        dockedExtent(footer, roots.column) + DOCK_GAP_PX,
+        dockedExtent(roots.timeBar, roots.column) + DOCK_GAP_PX,
       );
       root.style.setProperty("--scene-dock-bottom", `${dockBottom}px`);
     };
+    const onWindowResize = () => updateDocking();
     const observer = new ResizeObserver(updateDocking);
-    if (timeBar instanceof Element) observer.observe(timeBar);
+    if (roots.column instanceof Element) observer.observe(roots.column);
+    if (roots.timeBar instanceof Element) observer.observe(roots.timeBar);
     const footer = document.querySelector(".maplibregl-ctrl-bottom-left");
     if (footer instanceof Element) observer.observe(footer);
+    window.addEventListener("resize", onWindowResize);
     updateDocking();
 
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", onWindowResize);
+    };
   } catch {
     return () => {};
   }
+}
+
+function dockedExtent(element: Element | null, column: Element | null): number {
+  if (!overlapsColumn(element, column)) return 0;
+
+  return bottomExtent(element);
+}
+
+function overlapsColumn(element: Element | null, column: Element | null): boolean {
+  if (!(element instanceof Element)) return false;
+  if (!(column instanceof Element)) return true;
+  const elementRect = element.getBoundingClientRect();
+  const columnRect = column.getBoundingClientRect();
+  if (!elementRect || !columnRect) return true;
+  // A missing column rect cannot prove separation, so the column stays lifted.
+  if (columnRect.width === 0 || columnRect.height === 0) return true;
+
+  return elementRect.left < columnRect.right && elementRect.right > columnRect.left;
 }
 
 function bottomExtent(element: Element | null): number {

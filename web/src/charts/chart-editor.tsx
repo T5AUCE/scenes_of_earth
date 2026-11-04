@@ -195,7 +195,7 @@ export function ChartEditor({
               checked={draft.useAsMain}
               onChange={(event) => update({ ...draft, useAsMain: event.target.checked })}
             />
-            {"Use as main"}
+            <span className="checkbox-text">{"Use as main"}</span>
           </label>
           {categoricalNote(layers)}
           {explanation && <p className="chart-note">{explanation}</p>}
@@ -521,7 +521,7 @@ function rangeFields(
               options: { ...draft.options, yRange: event.target.checked ? null : [0, 1] },
             })}
         />
-        {"Automatic"}
+        <span className="checkbox-text">{"Automatic"}</span>
       </label>
       {!automatic && (
         <>
@@ -579,7 +579,7 @@ function toggleFields(
           onChange={(event) =>
             onChange({ ...draft, options: { ...draft.options, showGrid: event.target.checked } })}
         />
-        {"Grid"}
+        <span className="checkbox-text">{"Grid"}</span>
       </label>
       <label className="checkbox-row">
         <input
@@ -591,7 +591,7 @@ function toggleFields(
               options: { ...draft.options, showPoints: event.target.checked },
             })}
         />
-        {"Point marks"}
+        <span className="checkbox-text">{"Point marks"}</span>
       </label>
       {showTime && (
         <label className="checkbox-row">
@@ -604,7 +604,7 @@ function toggleFields(
                 options: { ...draft.options, showCurrentTime: event.target.checked },
               })}
           />
-          {seasonal || draft.source.shape === "seasonal_cycle" ? "Current month" : "Current time"}
+          <span className="checkbox-text">{seasonal || draft.source.shape === "seasonal_cycle" ? "Current month" : "Current time"}</span>
         </label>
       )}
       <label className="checkbox-row">
@@ -617,7 +617,7 @@ function toggleFields(
               options: { ...draft.options, showReferences: event.target.checked },
             })}
         />
-        {"Reference lines"}
+        <span className="checkbox-text">{"Reference lines"}</span>
       </label>
     </fieldset>
   );

@@ -410,7 +410,7 @@ async function layoutScreenshot(page, spot, viewport, state, options) {
 // The docked Charts tab selects the panel before Expand opens it full view.
 export async function openChartsGallery(page) {
   await page.getByRole("button", { name: "Charts" }).first().click();
-  await page.getByRole("button", { name: "Expand ⤢" }).first().click();
+  await page.getByRole("button", { name: "Expand to full view" }).first().click();
   await page.locator(".chart-gallery").first().waitFor();
 }
 

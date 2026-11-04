@@ -624,11 +624,14 @@ test("docking observes the attribution and time bar and publishes their extent",
 
   docking.setFooterHeight(40);
   docking.setBarHeight(100);
-  docking.trigger();
+  docking.fireResize();
   assert.equal(docking.values["--scene-dock-bottom"], "136px");
 
+  assert.equal(docking.addedResize.length, 1);
   harness.mode.exit();
   assert.equal(docking.disconnects, 1);
+  assert.equal(docking.removedResize.length, 1);
+  assert.equal(docking.removedResize[0], docking.addedResize[0]);
 });
 
 test("docking disconnects on exit and re-observes on re-entry", (context) => {
@@ -638,9 +641,20 @@ test("docking disconnects on exit and re-observes on re-entry", (context) => {
   harness.enter();
   assert.equal(docking.observed.length, 2);
   assert.equal(docking.values["--scene-dock-bottom"], "60px");
+  assert.equal(docking.addedResize.length, 1);
+
+  docking.setBarHeight(50);
+  docking.fireResize();
+  assert.equal(docking.values["--scene-dock-bottom"], "86px");
+
+  docking.setBarHeight(24);
+  docking.fireResize();
+  assert.equal(docking.values["--scene-dock-bottom"], "60px");
 
   harness.mode.exit();
   assert.equal(docking.disconnects, 1);
+  assert.equal(docking.removedResize.length, 1);
+  assert.equal(docking.removedResize[0], docking.addedResize[0]);
 
   harness.map.layers.set("relief", { id: "relief", layout: { visibility: "visible" } });
   harness.map.layers.set("contours", {
@@ -664,9 +678,59 @@ test("docking disconnects on exit and re-observes on re-entry", (context) => {
   harness.enter();
   assert.equal(docking.observed.length, 4);
   assert.equal(docking.values["--scene-dock-bottom"], "60px");
+  assert.equal(docking.addedResize.length, 2);
+
+  docking.fireResize();
+  assert.equal(docking.values["--scene-dock-bottom"], "60px");
 
   harness.mode.exit();
   assert.equal(docking.disconnects, 2);
+  assert.equal(docking.removedResize.length, 2);
+  assert.equal(docking.removedResize[1], docking.addedResize[1]);
+});
+
+test("docking stays at the gap when nothing overlaps the column", (context) => {
+  const harness = createHarness();
+  const docking = installDockingStubs(context, { footerHeight: 40, barHeight: 50 });
+  harness.roots.timeBar = docking.timeBar;
+  harness.roots.column = docking.column;
+  harness.enter();
+
+  assert.ok(docking.observed.includes(docking.column));
+  assert.ok(docking.observed.includes(docking.timeBar));
+  assert.ok(docking.observed.includes(docking.footer));
+  assert.equal(docking.values["--scene-dock-bottom"], "8px");
+
+  harness.mode.exit();
+  assert.equal(docking.disconnects, 1);
+});
+
+test("docking lifts above a footer overlapping the column", (context) => {
+  const harness = createHarness();
+  const docking = installDockingStubs(context, { footerHeight: 40, barHeight: 50 });
+  docking.setFooterRight(800);
+  harness.roots.timeBar = docking.timeBar;
+  harness.roots.column = docking.column;
+  harness.enter();
+
+  assert.equal(docking.values["--scene-dock-bottom"], "48px");
+
+  harness.mode.exit();
+  assert.equal(docking.disconnects, 1);
+});
+
+test("docking lifts above a time bar overlapping the column", (context) => {
+  const harness = createHarness();
+  const docking = installDockingStubs(context, { footerHeight: 40, barHeight: 50 });
+  docking.setBarRight(800);
+  harness.roots.timeBar = docking.timeBar;
+  harness.roots.column = docking.column;
+  harness.enter();
+
+  assert.equal(docking.values["--scene-dock-bottom"], "86px");
+
+  harness.mode.exit();
+  assert.equal(docking.disconnects, 1);
 });
 
 test("chart commits update the share link without clobbering display or history", () => {
@@ -1361,11 +1425,17 @@ function installDockingStubs(
 ): {
   footer: unknown;
   timeBar: unknown;
+  column: unknown;
   observed: unknown[];
   values: Record<string, string>;
   trigger(): void;
   setFooterHeight(height: number): void;
   setBarHeight(height: number): void;
+  setFooterRight(right: number): void;
+  setBarRight(right: number): void;
+  fireResize(): void;
+  readonly addedResize: (() => void)[];
+  readonly removedResize: (() => void)[];
   readonly disconnects: number;
 } {
   const previous = {
@@ -1391,10 +1461,31 @@ function installDockingStubs(
 
   const INNER_HEIGHT_PX = 800;
   const TIME_BAR_BOTTOM_PX = 28;
+  const COLUMN_TOP_PX = 8;
+  const COLUMN_BOTTOM_PX = 792;
   let footerHeight = sizes.footerHeight;
   let barHeight = sizes.barHeight;
   class DockingElement {
-    constructor(readonly kind: string) {}
+    left = 0;
+    right = 0;
+    hidden = false;
+
+    constructor(readonly kind: string) {
+      if (kind === "footer") {
+        this.left = 0;
+        this.right = 200;
+      } else if (kind === "bar") {
+        this.left = 8;
+        this.right = 400;
+      } else {
+        this.left = 724;
+        this.right = 1016;
+      }
+    }
+
+    append() {}
+
+    replaceChildren() {}
 
     getBoundingClientRect() {
       if (this.kind === "footer") {
@@ -1402,6 +1493,19 @@ function installDockingStubs(
           top: INNER_HEIGHT_PX - footerHeight,
           bottom: INNER_HEIGHT_PX,
           height: footerHeight,
+          left: this.left,
+          right: this.right,
+          width: this.right - this.left,
+        };
+      }
+      if (this.kind === "column") {
+        return {
+          top: COLUMN_TOP_PX,
+          bottom: COLUMN_BOTTOM_PX,
+          height: COLUMN_BOTTOM_PX - COLUMN_TOP_PX,
+          left: this.left,
+          right: this.right,
+          width: this.right - this.left,
         };
       }
 
@@ -1409,6 +1513,9 @@ function installDockingStubs(
         top: INNER_HEIGHT_PX - TIME_BAR_BOTTOM_PX - barHeight,
         bottom: INNER_HEIGHT_PX - TIME_BAR_BOTTOM_PX,
         height: barHeight,
+        left: this.left,
+        right: this.right,
+        width: this.right - this.left,
       };
     }
   }
@@ -1416,7 +1523,10 @@ function installDockingStubs(
   const values: Record<string, string> = {};
   const footer = new DockingElement("footer");
   const timeBar = new DockingElement("bar") as unknown as HTMLElement;
+  const column = new DockingElement("column") as unknown as HTMLElement;
   const observed: unknown[] = [];
+  const addedResize: (() => void)[] = [];
+  const removedResize: (() => void)[] = [];
   let disconnects = 0;
   let update: (() => void) | null = null;
   class TestObserver {
@@ -1435,7 +1545,15 @@ function installDockingStubs(
 
   (globalThis as Record<string, unknown>).Element = DockingElement;
   (globalThis as Record<string, unknown>).HTMLElement = DockingElement;
-  (globalThis as Record<string, unknown>).window = { innerHeight: INNER_HEIGHT_PX };
+  (globalThis as Record<string, unknown>).window = {
+    innerHeight: INNER_HEIGHT_PX,
+    addEventListener(type: string, listener: () => void) {
+      if (type === "resize") addedResize.push(listener);
+    },
+    removeEventListener(type: string, listener: () => void) {
+      if (type === "resize") removedResize.push(listener);
+    },
+  };
   (globalThis as Record<string, unknown>).ResizeObserver = TestObserver;
   Object.assign(globalThis, {
     document: {
@@ -1461,6 +1579,7 @@ function installDockingStubs(
   return {
     footer,
     timeBar,
+    column,
     observed,
     values,
     trigger() {
@@ -1472,6 +1591,19 @@ function installDockingStubs(
     setBarHeight(height: number) {
       barHeight = height;
     },
+    setFooterRight(right: number) {
+      footer.right = right;
+    },
+    setBarRight(right: number) {
+      (timeBar as unknown as DockingElement).right = right;
+    },
+    fireResize() {
+      for (const listener of [...addedResize]) {
+        if (!removedResize.includes(listener)) listener();
+      }
+    },
+    addedResize,
+    removedResize,
     get disconnects() {
       return disconnects;
     },

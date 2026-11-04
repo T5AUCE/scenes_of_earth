@@ -10,7 +10,7 @@ export interface CardTitleState {
   draw: Draw | Hidden | undefined;
   /** Whether the card's own switch is off. */
   off: boolean;
-  /** Whether the Smooth option applies to this layer, which only marks dots. */
+  /** Whether the Smooth option applies to this layer, which marks any visible draw. */
   smoothed?: boolean;
   /** The on parts of a multi-part layer with no draw, already lowercase. */
   parts?: readonly string[];
@@ -41,7 +41,7 @@ export function drawLabel(draw: Draw, layer: TitledLayer): string {
   return draw === "shade" ? "relief" : draw;
 }
 
-/** A card title such as "Rainfall · Dots, Smoothed" or "Terrain · Relief, Contours". */
+/** A card title such as "Rainfall · Colour, Smoothed" or "Terrain · Relief, Contours". */
 export function cardTitle(
   layer: TitledLayer,
   { draw, off, smoothed, parts }: CardTitleState,
@@ -51,7 +51,7 @@ export function cardTitle(
   if (draw === undefined) return partTitle(layer, parts);
 
   const label = drawLabel(draw, layer);
-  const smooth = smoothed === true && draw === "dots";
+  const smooth = smoothed === true;
 
   return titled(layer, smooth ? [label, "smoothed"] : [label]);
 }

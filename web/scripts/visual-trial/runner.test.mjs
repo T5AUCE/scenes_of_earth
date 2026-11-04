@@ -654,7 +654,7 @@ test("opening the gallery clicks Charts then Expand and waits for it", async () 
 
   await openChartsGallery(page);
 
-  assert.deepEqual(calls, ["button:Charts", "button:Expand ⤢", "wait:.chart-gallery"]);
+  assert.deepEqual(calls, ["button:Charts", "button:Expand to full view", "wait:.chart-gallery"]);
 });
 
 test("a missing gallery fails only its opening check", async () => {

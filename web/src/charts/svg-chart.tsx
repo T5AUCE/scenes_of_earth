@@ -78,6 +78,9 @@ const SINGLE_RADIUS_PX = 4;
 const HOLLOW_WIDTH_PX = 1.5;
 const BAR_MIN_HEIGHT_PX = 1;
 
+/** Half a month or percent slot keeps edge bars fully inside the plot. */
+const BAR_HALF_SLOT = 0.5;
+
 /** A dark edge keeps a light mark visible without rewriting its stored ink. */
 const CONTRAST_OUTLINE_PX = 1.5;
 const LIGHT_LINE_UNDER_PX = 4;
@@ -148,7 +151,7 @@ export function SvgChart({
     [table, showReferences, compact],
   );
   const domain = domainFor(table, type, references, convertedZero, yRange);
-  const span = xSpan(table, xDomain);
+  const span = xSpan(table, xDomain, type);
   const rowTotal = table.rows.length;
   useEffect(() => {
     setCursor(null);
@@ -318,6 +321,17 @@ function domainFor(
 function xSpan(
   table: ChartTable,
   override: [number, number] | null,
+  type: ChartType,
+): [number, number] {
+  const base = baseSpan(table, override);
+  if (type !== "bar") return base;
+
+  return barSpan(table, base);
+}
+
+function baseSpan(
+  table: ChartTable,
+  override: [number, number] | null,
 ): [number, number] {
   if (override) return override;
   if (table.shape === "seasonal_cycle") return [1, 12];
@@ -330,6 +344,31 @@ function xSpan(
   if (!(high > low)) return [low - 1, low + 1];
 
   return [low, high];
+}
+
+function barSpan(table: ChartTable, base: [number, number]): [number, number] {
+  if (table.shape === "seasonal_cycle" || table.shape === "distribution") {
+    return [base[0] - BAR_HALF_SLOT, base[1] + BAR_HALF_SLOT];
+  }
+  if (table.shape !== "time_series") return base;
+  const half = halfTimeSlot(table);
+  if (half === null) return base;
+
+  return [base[0] - half, base[1] + half];
+}
+
+function halfTimeSlot(table: ChartTable): number | null {
+  if (table.shape !== "time_series") return null;
+  const sorted = table.rows.map((row) => row.x).sort((first, second) => first - second);
+  let smallest: number | null = null;
+  for (let index = 1; index < sorted.length; index += 1) {
+    const gap = sorted[index] - sorted[index - 1];
+    if (!(gap > 0)) continue;
+    if (smallest === null || gap < smallest) smallest = gap;
+  }
+  if (smallest === null) return null;
+
+  return smallest / 2;
 }
 
 function initialCursor(

@@ -26,6 +26,8 @@ stays cheap and simple. Each feature is checked for extensibility before users g
 - Before deploy: R2 upload, a "Cache Everything" rule (Zarr chunks have no file extension),
   CORS on the bucket, lifecycle eviction, uint16 rain encoding, summary cache eviction. Copy the
   Mapterhorn tiles (z0–11, 60°S–60°N) to R2, set `SOE_TERRAIN_TILES`, and settle their terms first.
+  Ingest a monthly CHIRPS cube so rain builds read local data instead of fetching every month from
+  the CHIRPS server, and cache WorldCover tiles the way terrain is cached.
 - After deploy: time a real build on the VPS (Kenya: about 40 s of terrain statistics from the
   devcontainer), then pre-warm the summary cache for every country and region in the boundary
   list, so only drawn shapes pay the first full terrain read.
@@ -91,5 +93,6 @@ A toolbar with three tools; Esc returns to Pointer.
   scenarios (monthly, CC0, no login); ERA5-Land snow and soil moisture; population and vegetation
   over time.
 - Daily data (CHIRPS daily, AgERA5 or ERA5-Land daily statistics) once there is funding: it needs global cubes on
-  R2 and adds about $2–5 a month per daily layer at 10k scenes.
+  R2 and adds about $2–5 a month per daily layer at 10k scenes. Daily cubes sit beside the monthly
+  ones, which stay for long ranges and yearly values.
 - Latitudes beyond 60°.

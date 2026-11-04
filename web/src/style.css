@@ -540,7 +540,7 @@ body.scene-mode #panel {
 
 .scene-panel .panel-header {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px;
   padding: 6px 8px;
   align-items: center;
@@ -550,6 +550,9 @@ body.scene-mode #panel {
 .scene-panel .panel-header button {
   min-width: 0;
   max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .scene-panel .panel-header [aria-pressed="true"] {
@@ -557,9 +560,28 @@ body.scene-mode #panel {
   text-decoration: underline;
 }
 
-.scene-panel .expand {
+.scene-panel .panel-header .collapse,
+.scene-panel .panel-header .expand {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  line-height: 1;
+  text-align: center;
+}
+
+.scene-panel .panel-header .collapse {
   margin-left: auto;
+}
+
+.scene-panel .expand {
   font-weight: bold;
+}
+
+.scene-panel .panel-header .collapse:focus-visible,
+.scene-panel .panel-header .expand:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
 }
 
 .scene-panel .panel-body {
@@ -901,10 +923,18 @@ body.scene-mode .maplibregl-ctrl-scale {
   margin: 4px 0;
 }
 
+.chart-notes h4 {
+  margin: 10px 0 2px;
+}
+
 .chart-error {
   font-size: 12px;
   color: #b42318;
   margin: 4px 0;
+}
+
+.chart-table {
+  margin-top: 10px;
 }
 
 .chart-table-scroll {
@@ -1042,6 +1072,12 @@ body.scene-mode .maplibregl-ctrl-scale {
 
 .chart-editor .checkbox-row input[type="checkbox"] {
   flex: none;
+  margin: 0;
+}
+
+/* Trimming the line box to the capitals keeps the text optically centred on the checkbox. */
+.chart-editor .checkbox-text {
+  text-box: trim-both cap alphabetic;
 }
 
 .chart-editor fieldset {

@@ -8,12 +8,33 @@ const RAIN = layer("Rainfall", "mm/month");
 const TEMPERATURE = layer("Temperature", "°C");
 const OTHER = layer("Wind", "m/s");
 
-test("a dotted layer says that it is smoothed while the option applies", () => {
+test("any visible draw says that it is smoothed while the option applies", () => {
   assert.equal(
     cardTitle(RAIN, { draw: "dots", off: false, smoothed: true }),
     "Rainfall · Dots, Smoothed",
   );
+  assert.equal(
+    cardTitle(RAIN, { draw: "colour", off: false, smoothed: true }),
+    "Rainfall · Colour, Smoothed",
+  );
+  assert.equal(
+    cardTitle(TEMPERATURE, { draw: "isolines", off: false, smoothed: true }),
+    "Temperature · Isotherms, Smoothed",
+  );
+  assert.equal(
+    cardTitle(OTHER, { draw: "isolines", off: false, smoothed: true }),
+    "Wind · Lines, Smoothed",
+  );
+  assert.equal(
+    cardTitle(OTHER, { draw: "contours", off: false, smoothed: true }),
+    "Wind · Contours, Smoothed",
+  );
+  assert.equal(
+    cardTitle(OTHER, { draw: "shade", off: false, smoothed: true }),
+    "Wind · Relief, Smoothed",
+  );
   assert.equal(cardTitle(RAIN, { draw: "dots", off: false }), "Rainfall · Dots");
+  assert.equal(cardTitle(RAIN, { draw: "colour", off: false }), "Rainfall · Colour");
 });
 
 test("a temperature field names its lines isotherms and other fields name them lines", () => {
@@ -38,6 +59,17 @@ test("a layer hidden by colour reads hidden", () => {
     }),
     "Land cover · Hidden",
   );
+  assert.equal(
+    cardTitle(
+      { title: "Land cover", units: "" },
+      {
+        draw: { hidden: "Shown only in colour" },
+        off: false,
+        smoothed: true,
+      },
+    ),
+    "Land cover · Hidden",
+  );
 });
 
 test("a layer stopped by a slot conflict keeps its reason in the title", () => {
@@ -55,6 +87,10 @@ test("a switched-off layer reads off whatever it would draw", () => {
     cardTitle(RAIN, { draw: "dots", off: true, smoothed: true }),
     "Rainfall · Off",
   );
+  assert.equal(
+    cardTitle(RAIN, { draw: "colour", off: true, smoothed: true }),
+    "Rainfall · Off",
+  );
 });
 
 test("a multi-part layer with no draw names the parts that are on", () => {
@@ -70,6 +106,18 @@ test("a multi-part layer with no draw names the parts that are on", () => {
   assert.equal(
     cardTitle(terrain, { draw: undefined, off: false, parts: ["contours"] }),
     "Terrain · Contours",
+  );
+  assert.equal(
+    cardTitle(
+      terrain,
+      {
+        draw: undefined,
+        off: false,
+        smoothed: true,
+        parts: ["relief", "contours"],
+      },
+    ),
+    "Terrain · Relief, Contours",
   );
 });
 

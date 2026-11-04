@@ -96,6 +96,42 @@ test("the notice badge asks for About while the footer asks for Credits", async 
   await act(async () => panel!.destroy());
 });
 
+test("the docked header renders compact collapse and expand symbols", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeScene();
+  const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+  });
+
+  const header = panel!.element.querySelector(".panel-header") as HTMLElement;
+  const collapse = header.querySelector(
+    'button[aria-label="Collapse scene panel"]',
+  ) as HTMLButtonElement;
+  const expand = header.querySelector(
+    'button[aria-label="Expand to full view"]',
+  ) as HTMLButtonElement;
+  assert.equal(collapse.textContent, "–");
+  assert.equal(collapse.title, "Collapse");
+  assert.equal(expand.textContent, "⤢");
+  assert.equal(expand.title, "Expand to full view");
+  assert.equal(expand.getAttribute("aria-haspopup"), "dialog");
+  assert.ok(expand.classList.contains("expand"));
+
+  await act(async () => panel!.destroy());
+});
+
 test("setTime shows the dialog label and hides it without a time", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
@@ -1225,8 +1261,8 @@ test("chip follows effective palette and collapse preserves preview", async (con
   });
   const after = mark();
   assert.notEqual(before, after);
-  const collapse = [...panel!.element.querySelectorAll("button")].find(
-    (button) => button.textContent === "Collapse",
+  const collapse = panel!.element.querySelector(
+    'button[aria-label="Collapse scene panel"]',
   )! as HTMLButtonElement;
   await act(async () => {
     collapse.focus();
@@ -1244,8 +1280,8 @@ test("chip follows effective palette and collapse preserves preview", async (con
   });
   assert.ok(panel!.element.querySelector("svg"));
   assert.match(panel!.element.textContent ?? "", /Rain/);
-  const restored = [...panel!.element.querySelectorAll("button")].find(
-    (button) => button.textContent === "Collapse",
+  const restored = panel!.element.querySelector(
+    'button[aria-label="Collapse scene panel"]',
   )! as HTMLButtonElement;
   assertSameNode(document.activeElement, restored);
   await act(async () => panel!.destroy());
@@ -1675,8 +1711,8 @@ test("main switches keep type fidelity while About and collapse stay put", async
   assert.equal(aboutTab.getAttribute("aria-pressed"), "true");
   assert.equal(panel!.element.querySelector(".panel-body")?.textContent, summary);
   assertSameNode(panel!.element.querySelector("svg"), null);
-  const collapse = [...panel!.element.querySelectorAll("button")].find(
-    (button) => button.textContent === "Collapse",
+  const collapse = panel!.element.querySelector(
+    'button[aria-label="Collapse scene panel"]',
   )!;
   await act(async () => {
     collapse.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
