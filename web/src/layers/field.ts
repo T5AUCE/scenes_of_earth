@@ -120,6 +120,7 @@ class FieldView implements LayerView {
   private shownStep = -1;
   private marksStep: number | null = null;
   private readonly marksByStep = new Map<number, MarksState>();
+  private readonly isolineInflight = new Set<number>();
 
   constructor(context: LayerContext) {
     this.context = context;
@@ -390,6 +391,8 @@ class FieldView implements LayerView {
     // A painted image shows at once, so a pause never waits on the decoded values.
     if (this.draw === "colour" && this.fade.select(this.shownStep)) {
       this.followDominant(this.shownStep);
+    } else if (this.draw === "isolines" && this.isolines?.holds(this.shownStep)) {
+      this.isolines.select(this.shownStep);
     }
     this.drawLatestStep(this.shownStep);
   }
@@ -397,6 +400,20 @@ class FieldView implements LayerView {
   setFrame(time: string, next: string, mix: number) {
     const step = stepAt(this.time.values, this.time.end, time);
     const nextStep = stepAt(this.time.values, this.time.end, next);
+    if (this.draw === "isolines") {
+      if (step !== this.shownStep) {
+        this.setTime(time);
+        return;
+      }
+
+      // Equal steps hold a single set, so the map is never touched mid-play.
+      if (step === nextStep) return;
+
+      if (step < 0 && nextStep >= 0) this.isolines!.setVisible(true);
+      this.isolines!.frame(step, nextStep, mix);
+      this.refillIsolines(next, nextStep);
+      return;
+    }
     if (this.draw !== "colour") {
       this.cutTo(mix < 0.5 ? time : next);
       return;
@@ -412,11 +429,23 @@ class FieldView implements LayerView {
     if (nextStep >= 0) this.fade.prepare(nextStep, () => this.loadNext(nextStep));
   }
 
-  isFrameReady(time: string, next: string) {
-    if (this.draw !== "colour") return true;
+  private refillIsolines(next: string, nextStep: number) {
+    if (nextStep < 0) return;
+    if (this.isolines!.holds(nextStep)) return;
+    if (this.isolines!.hasFailed(nextStep)) return;
+    if (this.isolineInflight.has(nextStep)) return;
 
+    this.isolineInflight.add(nextStep);
+    void this.prepare(next)
+      .catch(() => {})
+      .finally(() => this.isolineInflight.delete(nextStep));
+  }
+
+  isFrameReady(time: string, next: string) {
     const step = stepAt(this.time.values, this.time.end, time);
     const nextStep = stepAt(this.time.values, this.time.end, next);
+    if (this.draw === "isolines") return this.isolines!.isReady(step, nextStep);
+    if (this.draw !== "colour") return true;
 
     return this.fade.isReady(keyOf(step), keyOf(nextStep));
   }
@@ -425,7 +454,21 @@ class FieldView implements LayerView {
     const step = stepAt(this.time.values, this.time.end, time);
     if (step < 0) return;
 
-    await this.readStep.read(step, false);
+    if (this.draw !== "isolines") {
+      await this.readStep.read(step, false);
+      return;
+    }
+
+    // A failed read marks the step so the fade moves on and the draw reports it later.
+    try {
+      const values = await this.readStep.read(step, false);
+      if (!this.alive || this.draw !== "isolines") return;
+
+      this.isolines!.prepareStep(step, values);
+    } catch (error) {
+      this.isolines?.markFailed(step);
+      throw error;
+    }
   }
 
   maxLookahead() {

@@ -701,6 +701,18 @@ test("playing across a step that failed to paint reaches the next good step", as
   assert.deepEqual(shown.slice(0, 2), ["2020-02-01", "2020-03-01"]);
 });
 
+test("isoline holds survive a two-step lookahead so play never stalls", async (context) => {
+  const view = fakeIsolineView(quarter);
+  const { browser, shown, timeline } = mount(context, quarter, { views: [view] });
+  playButton(timeline.element).click();
+  await advanceSettling(browser, 6000);
+
+  assert.ok(shown.includes("2020-02-01"));
+  assert.ok(shown.includes("2020-03-01"));
+  assert.ok(view.calls.includes("2020-02-01"));
+  assert.ok(view.calls.includes("2020-03-01"));
+});
+
 async function advanceSettling(browser: { advance(ms: number): void }, ms: number) {
   for (let left = ms; left > 0; left -= SETTLE_STEP_MS) {
     browser.advance(Math.min(left, SETTLE_STEP_MS));
@@ -788,6 +800,65 @@ function fakeFadingView(times: string[]) {
   view.setTime = (time: string) => view.setTimes.push(time);
   view.setFrame = (time, next, mix) => view.frames.push({ time, next, mix });
   view.isFrameReady = () => view.isReady;
+  return view;
+}
+
+function fakeIsolineView(times: string[]) {
+  const held: number[] = [];
+  const cached = new Set<number>();
+  const calls: string[] = [];
+  type Fade = { time: string; next: string; mix: number; nextStep: number; held: number[] };
+  const frames: Fade[] = [];
+  const view = {
+    calls,
+    frames,
+    time: { step: "P1M", values: times, end: "2020-04-01", method: null },
+    parts: [],
+    options: [],
+    setTime(time: string) {
+      const step = times.indexOf(time);
+      if (step < 0) return;
+      cached.add(step);
+      if (!held.includes(step)) {
+        held.push(step);
+        if (held.length > 2) held.shift();
+      } else {
+        held.splice(held.indexOf(step), 1);
+        held.push(step);
+      }
+    },
+    async prepare(time: string) {
+      calls.push(time);
+      const step = times.indexOf(time);
+      if (step >= 0) cached.add(step);
+    },
+    setFrame(time: string, next: string, mix: number) {
+      const step = times.indexOf(time);
+      const nextStep = times.indexOf(next);
+      if (mix <= 0 && step >= 0) {
+        if (held.includes(step)) {
+          held.splice(held.indexOf(step), 1);
+          held.push(step);
+        }
+        if (nextStep >= 0 && !held.includes(nextStep) && cached.has(nextStep)) {
+          held.push(nextStep);
+          if (held.length > 2) held.shift();
+        }
+      }
+      frames.push({ time, next, mix, nextStep, held: [...held] });
+    },
+    isFrameReady(time: string, next: string) {
+      const step = times.indexOf(time);
+      const nextStep = times.indexOf(next);
+      if (step === nextStep) return true;
+      const settled = (value: number) => value < 0 || held.includes(value);
+      return settled(step) && settled(nextStep);
+    },
+    legend() {
+      return null;
+    },
+    destroy() {},
+  } as unknown as LayerView & { calls: string[]; frames: Fade[] };
   return view;
 }
 

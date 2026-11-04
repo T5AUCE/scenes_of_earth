@@ -85,17 +85,116 @@ function mockModule(specifier: string) {
       return "export const keepThroughContextLoss = () => () => {};";
     case "./isolines":
       return `
-        export const createIsolineOverlay = () => ({
-          layerIds: [],
-          interval: 1,
-          setVisible() {},
-          setValues() {},
-          setSmooth() {},
-          setUnits() {},
-          setInk() {},
-          setRange() {},
-          destroy() {},
-        });
+        export const createIsolineOverlay = () => {
+          const held = [];
+          const cached = new Set();
+          const failed = new Set();
+          const overlay = {
+            layerIds: [],
+            interval: 1,
+            setVisible(visible) {
+              globalThis.isolineVisible.push(visible);
+              if (!visible) {
+                held.length = 0;
+                cached.clear();
+                failed.clear();
+              }
+            },
+            setValues(values, step) {
+              globalThis.isolineValues.push(step);
+              if (step < 0) return;
+              cached.add(step);
+              if (!held.includes(step)) {
+                held.push(step);
+                if (held.length > 2) held.shift();
+              } else {
+                const index = held.indexOf(step);
+                held.splice(index, 1);
+                held.push(step);
+              }
+            },
+            prepareStep(step, values) {
+              globalThis.isolinePrepares.push(step);
+              if (step < 0 || held.includes(step) || failed.has(step)) return;
+              cached.add(step);
+            },
+            frame(from, to, mix) {
+              const reduced = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches
+                ?? globalThis.matchMedia?.()?.matches ?? false;
+              if (reduced) mix = 0;
+              if (from === to) return true;
+              if (mix <= 0) {
+                if (from < 0) {
+                  if (to >= 0 && !held.includes(to) && cached.has(to)) {
+                    held.push(to);
+                    if (held.length > 2) held.shift();
+                  }
+                  globalThis.isolineFrames.push({ from, to, mix });
+                  return true;
+                }
+                if (!overlay.isSettled(from)) return false;
+                const index = held.indexOf(from);
+                if (index >= 0) {
+                  held.splice(index, 1);
+                  held.push(from);
+                }
+                if (to >= 0 && !held.includes(to) && cached.has(to)) {
+                  held.push(to);
+                  if (held.length > 2) held.shift();
+                }
+                globalThis.isolineFrames.push({ from, to, mix });
+                return true;
+              }
+              if (from < 0 && to >= 0 && !held.includes(to) && cached.has(to)) {
+                held.push(to);
+                if (held.length > 2) held.shift();
+              }
+              if (!overlay.isReady(from, to)) return false;
+              globalThis.isolineFrames.push({ from, to, mix });
+              if (mix >= 1 && held.includes(to)) {
+                const index = held.indexOf(to);
+                held.splice(index, 1);
+                held.push(to);
+              }
+              return true;
+            },
+            isSettled(step) {
+              if (step < 0 || failed.has(step)) return true;
+              const loaded = globalThis.isolineLoaded ?? true;
+              return held.includes(step) && loaded;
+            },
+            isReady(from, to) {
+              if (from === to) return true;
+              return overlay.isSettled(from) && overlay.isSettled(to);
+            },
+            holds(step) { return held.includes(step); },
+            hasFailed(step) { return failed.has(step); },
+            select(step) {
+              globalThis.isolineSelects.push(step);
+              return held.includes(step);
+            },
+            markFailed(step) { failed.add(step); },
+            setSmooth() {
+              held.length = 0;
+              cached.clear();
+              globalThis.isolineResets.push("smooth");
+            },
+            setUnits() {
+              held.length = 0;
+              cached.clear();
+              globalThis.isolineResets.push("units");
+            },
+            setInk() {},
+            setRange() {
+              held.length = 0;
+              cached.clear();
+              globalThis.isolineResets.push("range");
+            },
+            destroy() {},
+          };
+          globalThis.lastIsolineOverlay = overlay;
+          return overlay;
+        };
       `;
     default:
       return null;
@@ -269,6 +368,185 @@ test("a pause shows the painted step before its decoded read returns", async () 
   await flush();
 });
 
+test("isolines prepare traces the next step for the hidden source", async () => {
+  const { view, flush } = mountIsolineField([COMPLETE, COMPLETE, COMPLETE]);
+  view.show("isolines");
+  view.setTime(TIMES[0]);
+  await flush();
+
+  await prepareStep(view, flush, TIMES[1]);
+  assert.deepEqual(isolinePrepares(), [1]);
+  assert.equal(view.isFrameReady!(TIMES[0], TIMES[1]), false);
+  view.setFrame!(TIMES[0], TIMES[1], 0);
+  assert.equal(view.isFrameReady!(TIMES[0], TIMES[1]), true);
+});
+
+test("isolines stall while the next set is not loaded", async () => {
+  const { view, flush } = mountIsolineField([COMPLETE, COMPLETE, COMPLETE]);
+  view.show("isolines");
+  view.setTime(TIMES[0]);
+  await flush();
+  await prepareStep(view, flush, TIMES[1]);
+  view.setFrame!(TIMES[0], TIMES[1], 0);
+  (globalThis as Record<string, unknown>).isolineLoaded = false;
+
+  try {
+    assert.equal(view.isFrameReady!(TIMES[0], TIMES[1]), false);
+  } finally {
+    (globalThis as Record<string, unknown>).isolineLoaded = true;
+  }
+
+  assert.equal(view.isFrameReady!(TIMES[0], TIMES[1]), true);
+  view.setFrame!(TIMES[0], TIMES[1], 0.5);
+  assert.equal(isolineFrames().at(-1)?.mix, 0.5);
+});
+
+test("isolines with equal steps do no work", async () => {
+  const { view, flush } = mountIsolineField([COMPLETE, COMPLETE, COMPLETE]);
+  view.show("isolines");
+  view.setTime(TIMES[0]);
+  await flush();
+  const frames = isolineFrames().length;
+
+  view.setFrame!(TIMES[0], TIMES[0], 0.5);
+
+  assert.equal(isolineFrames().length, frames);
+});
+
+test("isolines fade to and from minus one", async () => {
+  const { view, flush } = mountIsolineField([COMPLETE, COMPLETE, COMPLETE]);
+  view.show("isolines");
+  view.setTime(TIMES[1]);
+  await flush();
+
+  assert.equal(view.isFrameReady!(TIMES[1], "2026-11-01"), true);
+  view.setFrame!(TIMES[1], "2026-11-01", 0.5);
+  assert.deepEqual(isolineFrames().at(-1), { from: 1, to: -1, mix: 0.5 });
+
+  view.setTime("2026-11-01");
+  await prepareStep(view, flush, TIMES[1]);
+  view.setFrame!("2026-11-01", TIMES[1], 0.5);
+  assert.deepEqual(isolineFrames().at(-1), { from: -1, to: 1, mix: 0.5 });
+});
+
+test("isolines pause and scrub show one set at full opacity", async () => {
+  const { view, flush } = mountIsolineField([COMPLETE, COMPLETE, COMPLETE]);
+  view.show("isolines");
+  view.setTime(TIMES[0]);
+  await flush();
+  const selects = isolineSelects().length;
+
+  view.setTime(TIMES[1]);
+  await flush();
+
+  assert.ok(isolineValues().includes(1));
+  assert.ok(isolineSelects().length >= selects);
+});
+
+test("isolines never set a partial opacity under reduced motion", async () => {
+  const { view, flush } = mountIsolineField([COMPLETE, COMPLETE, COMPLETE]);
+  view.show("isolines");
+  view.setTime(TIMES[0]);
+  await flush();
+  await prepareStep(view, flush, TIMES[1]);
+  useReducedMotion(true);
+
+  try {
+    view.setFrame!(TIMES[0], TIMES[1], 0.75);
+    assert.equal(isolineFrames().at(-1)?.mix, 0);
+  } finally {
+    useReducedMotion(false);
+  }
+});
+
+test("isolines reset both sources on settings change mid-fade", async () => {
+  const { view, flush } = mountIsolineField([COMPLETE, COMPLETE, COMPLETE]);
+  view.show("isolines");
+  view.setTime(TIMES[0]);
+  await flush();
+  await prepareStep(view, flush, TIMES[1]);
+  view.setFrame!(TIMES[0], TIMES[1], 0);
+  view.setFrame!(TIMES[0], TIMES[1], 0.5);
+
+  view.options.find((option) => option.label === "Smooth")!.set(false);
+  await flush();
+
+  assert.ok(isolineResets().includes("smooth"));
+  assert.equal((globalThis.lastIsolineOverlay as { holds(n: number): boolean }).holds(1), false);
+});
+
+test("isolines reset both sources when toggled off mid-fade", async () => {
+  const { view, flush } = mountIsolineField([COMPLETE, COMPLETE, COMPLETE]);
+  view.show("isolines");
+  view.setTime(TIMES[0]);
+  await flush();
+  await prepareStep(view, flush, TIMES[1]);
+  view.setFrame!(TIMES[0], TIMES[1], 0);
+  view.setFrame!(TIMES[0], TIMES[1], 0.5);
+  view.show(null);
+
+  assert.equal((globalThis.lastIsolineOverlay as { holds(n: number): boolean }).holds(0), false);
+  assert.equal((globalThis.lastIsolineOverlay as { holds(n: number): boolean }).holds(1), false);
+});
+
+test("isolines keep at most two traced sets", async () => {
+  const { view, flush } = mountIsolineField([COMPLETE, COMPLETE, COMPLETE, COMPLETE]);
+  view.show("isolines");
+  view.setTime(TIMES[0]);
+  await flush();
+  await prepareStep(view, flush, TIMES[1]);
+  await prepareStep(view, flush, TIMES[2]);
+
+  const overlay = globalThis.lastIsolineOverlay as { holds(n: number): boolean };
+  const held = [0, 1, 2].filter((step) => overlay.holds(step));
+  assert.ok(held.length <= 2);
+});
+
+test("isolines re-prepare a lost hidden set so play never stalls", async () => {
+  const { view, flush } = mountIsolineField([COMPLETE, COMPLETE, COMPLETE]);
+  view.show("isolines");
+  view.setTime(TIMES[0]);
+  await flush();
+  await prepareStep(view, flush, TIMES[1]);
+  view.setFrame!(TIMES[0], TIMES[1], 0);
+  view.setFrame!(TIMES[0], TIMES[1], 0.5);
+  const prepared = isolinePrepares().length;
+
+  view.options.find((option) => option.label === "Smooth")!.set(false);
+  const overlay = globalThis.lastIsolineOverlay as { holds(n: number): boolean };
+  assert.equal(overlay.holds(1), false);
+
+  view.setFrame!(TIMES[0], TIMES[1], 0.5);
+  view.setFrame!(TIMES[0], TIMES[1], 0.5);
+  await flush();
+
+  assert.ok(isolinePrepares().length > prepared);
+  view.setFrame!(TIMES[0], TIMES[1], 0);
+  assert.equal(view.isFrameReady!(TIMES[0], TIMES[1]), true);
+});
+
+test("isolines fading in from minus one makes the lines visible", async () => {
+  const { view, flush } = mountIsolineField([COMPLETE, COMPLETE, COMPLETE]);
+  view.show("isolines");
+  view.setTime(TIMES[0]);
+  await flush();
+  view.setTime("2026-11-01");
+  await prepareStep(view, flush, TIMES[0]);
+  view.setFrame!("2026-11-01", TIMES[0], 0.5);
+
+  assert.equal((globalThis as Record<string, unknown[]>).isolineVisible.at(-1), true);
+});
+
+async function prepareStep(
+  view: ReturnType<typeof createSeriesView>,
+  flush: () => Promise<void>,
+  time: string,
+) {
+  const preparing = view.prepare!(time);
+  await flush();
+  await preparing;
+}
+
 const failedSteps = new Set<number>();
 const pendingReads: (() => void)[] = [];
 let imageDataCount = 0;
@@ -294,6 +572,48 @@ async function showFirstStep(
 }
 
 function mountField(steps: number[][], end = "2026-11-01") {
+  return mountWithEncodings(steps, ["ramp", "dots"], end);
+}
+
+function mountIsolineField(steps: number[][], end = "2026-11-01") {
+  return mountWithEncodings(steps, ["ramp", "isolines"], end);
+}
+
+function isolinePrepares(): number[] {
+  return (globalThis as Record<string, number[]>).isolinePrepares ?? [];
+}
+
+function isolineFrames(): { from: number; to: number; mix: number }[] {
+  return (globalThis as Record<string, { from: number; to: number; mix: number }[]>)
+    .isolineFrames ?? [];
+}
+
+function isolineValues(): number[] {
+  return (globalThis as Record<string, number[]>).isolineValues ?? [];
+}
+
+function isolineSelects(): number[] {
+  return (globalThis as Record<string, number[]>).isolineSelects ?? [];
+}
+
+function isolineResets(): string[] {
+  return (globalThis as Record<string, string[]>).isolineResets ?? [];
+}
+
+function useReducedMotion(matches: boolean) {
+  const target = globalThis as unknown as Record<string, unknown>;
+  if (matches) {
+    target.matchMedia = () => ({
+      matches: true,
+      addEventListener() {},
+      removeEventListener() {},
+    });
+  } else {
+    Reflect.deleteProperty(target, "matchMedia");
+  }
+}
+
+function mountWithEncodings(steps: number[][], encodings: string[], end = "2026-11-01") {
   const reports: unknown[] = [];
   failedSteps.clear();
   pendingReads.length = 0;
@@ -306,18 +626,27 @@ function mountField(steps: number[][], end = "2026-11-01") {
     hatchCalls: [],
     markPositions: [],
     capturedOpacities: [],
+    isolinePrepares: [],
+    isolineFrames: [],
+    isolineValues: [],
+    isolineSelects: [],
+    isolineResets: [],
+    isolineVisible: [],
+    isolineLoaded: true,
     ImageData: class {
       constructor() {
         imageDataCount += 1;
       }
     },
   });
+  Reflect.deleteProperty(globalThis as Record<string, unknown>, "matchMedia");
+  Reflect.deleteProperty(globalThis as Record<string, unknown>, "lastIsolineOverlay");
   const layer = {
     id: "rain",
     title: "Rainfall",
     units: "mm",
     grid: { bbox: [0, 0, 2, 2], nx: 2, ny: 2, res: 1 },
-    style: { palette: "ink-blue", stops: [0, 10], encodings: ["ramp", "dots"] },
+    style: { palette: "ink-blue", stops: [0, 10], encodings },
     time: { step: "P1M", values: TIMES, end, method: null },
     arrays: {},
   } as unknown as LayerDoc;

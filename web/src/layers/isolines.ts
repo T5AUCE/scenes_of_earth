@@ -1,4 +1,4 @@
-/** Cache traced isotherms and display their dashed lines with temperature labels. */
+/** Cache traced isotherms and crossfade them between two sources with dominant labels. */
 import type {
   ExpressionSpecification,
   GeoJSONSource,
@@ -6,6 +6,7 @@ import type {
   SymbolLayerSpecification,
 } from "maplibre-gl";
 
+import { labelIndexFor, prefersReducedMotion } from "../playback";
 import { evenStops } from "../render/colormap";
 import {
   BOLD_ISOTHERM_MULTIPLE,
@@ -54,6 +55,24 @@ export interface IsolineOverlay {
   /** The spacing of the lines in display units, which follows the display range. */
   readonly interval: number;
   setValues(values: ArrayLike<number>, step: number): void;
+  /** Traces the step into the cache, so the hold paints it without tracing. */
+  prepareStep(step: number, values: ArrayLike<number>): void;
+  /**
+   * Drives one frame of the fade from one step to the next by its weight. A step of -1 stands
+   * for empty, which fades to or from transparent. Returns false without changing anything when
+   * the outgoing image is not painted, so the clock stalls instead of showing a stale set.
+   */
+  frame(fromStep: number, toStep: number, mix: number): boolean;
+  /** Whether the fade from one step to another can start now, so the clock waits for the paint. */
+  isReady(fromStep: number, toStep: number): boolean;
+  /** Shows the held step alone at full opacity without tracing, else false. */
+  select(step: number): boolean;
+  /** Whether one of the two sources already shows the step. */
+  holds(step: number): boolean;
+  /** Whether the step failed to trace, so the fade moves on without waiting for it. */
+  hasFailed(step: number): boolean;
+  /** Lets a fade proceed once after a read failed, with the draw reporting the failure later. */
+  markFailed(step: number): void;
   setSmooth(smooth: boolean): void;
   setRange(range: [number, number] | null): void;
   setUnits(unit: string): void;
@@ -62,7 +81,7 @@ export interface IsolineOverlay {
   destroy(): void;
 }
 
-/** Add an empty isotherm source for a layer; values arrive one time step at a time. */
+/** Add two empty isotherm sources for a layer; values arrive one time step at a time. */
 export function createIsolineOverlay(
   { map, layer, shift, beforeId, display }: LayerContext,
   ink: InkPaint,
@@ -74,19 +93,27 @@ export function createIsolineOverlay(
   let displayUnit = displayUnitFor(nativeUnits, display?.units);
   let currentRange = display?.range ?? undefined;
   let { interval, levels } = isothermScale(stops, currentRange, nativeUnits, displayUnit);
-  const sourceId = `${layer.id}-isotherms`;
-  const ids = {
+  const sourceIds = [`${layer.id}-isotherms-a`, `${layer.id}-isotherms-b`] as const;
+  const groups = sourceIds.map((sourceId) => ({
     casingId: `${sourceId}-casing`,
     lineId: `${sourceId}-lines`,
     labelId: `${sourceId}-labels`,
-  };
+  }));
   const tracedSteps = new Map<string, Isoline[]>();
   let smooth = true;
+  let front: 0 | 1 = 0;
+  let keys: [number | null, number | null] = [null, null];
+  const failed = new Set<number>();
+  let overallVisible = true;
+  let dominantStep: number | null = null;
 
-  map.addSource(sourceId, { type: "geojson", data: EMPTY_LINES });
-  addIsothermLayers(map, sourceId, ids, beforeId);
-  paintInk(map, ids, ink);
-  const layerIds = Object.values(ids);
+  for (const [index, sourceId] of sourceIds.entries()) {
+    map.addSource(sourceId, { type: "geojson", data: EMPTY_LINES });
+    addIsothermLayers(map, sourceId, groups[index], beforeId);
+    paintInk(map, groups[index], ink);
+    setSlotFactor(groups[index], 0);
+  }
+  const layerIds = groups.flatMap((group) => Object.values(group));
 
   return {
     layerIds,
@@ -96,23 +123,116 @@ export function createIsolineOverlay(
     },
 
     setValues(values, step) {
+      if (step < 0) {
+        setSlotFactor(groups[0], 0);
+        setSlotFactor(groups[1], 0);
+        dominantStep = null;
+        updateLabelVisibility();
+        return;
+      }
+
+      if (holdsStep(step)) {
+        front = slotOfStep(step)!;
+        failed.delete(step);
+        showSingle();
+        return;
+      }
+
       const traced = cachedTrace(
         tracedSteps,
         traceKey(step, smooth),
         () => traceIsolines(values, layer.grid.nx, layer.grid.ny, levels, smooth),
       );
-      const features = traced.map(
-        (line) =>
-          lineFeature(line, interval, layer.grid, shift, nativeUnits, displayUnit),
+      setSourceData(sourceIds[front], traced);
+      keys[front] = step;
+      failed.delete(step);
+      showSingle();
+    },
+
+    prepareStep(step, values) {
+      if (step < 0 || holdsStep(step) || failed.has(step)) return;
+
+      cachedTrace(
+        tracedSteps,
+        traceKey(step, smooth),
+        () => traceIsolines(values, layer.grid.nx, layer.grid.ny, levels, smooth),
       );
-      (map.getSource(sourceId) as GeoJSONSource).setData({
-        type: "FeatureCollection",
-        features,
-      });
+    },
+
+    frame(fromStep, toStep, mix) {
+      if (prefersReducedMotion()) mix = 0;
+      if (fromStep === toStep) return true;
+
+      if (mix <= 0) {
+        if (fromStep < 0) {
+          paintHidden(toStep);
+          setSlotFactor(groups[0], 0);
+          setSlotFactor(groups[1], 0);
+          dominantStep = null;
+          updateLabelVisibility();
+          return true;
+        }
+
+        if (!isSettled(fromStep)) return false;
+
+        front = slotOfStep(fromStep)!;
+        paintHidden(toStep);
+        showSingle();
+        return true;
+      }
+
+      if (fromStep < 0) paintHidden(toStep);
+      if (!isSettled(fromStep) || !isSettled(toStep)) return false;
+
+      const outgoingFactor = 1 - mix;
+      const incomingFactor = mix;
+      const outgoingSlot = fromStep < 0 ? null : slotOfStep(fromStep);
+      const incomingSlot = toStep < 0 ? null : slotOfStep(toStep);
+      for (const [slot, group] of groups.entries()) {
+        if (slot === outgoingSlot) setSlotFactor(group, outgoingFactor);
+        else if (slot === incomingSlot) setSlotFactor(group, incomingFactor);
+        else setSlotFactor(group, 0);
+      }
+      dominantStep = labelIndexFor({ index: fromStep, next: toStep, mix });
+      if (dominantStep < 0) dominantStep = null;
+      updateLabelVisibility();
+      if (mix >= 1 && toStep >= 0) front = slotOfStep(toStep)!;
+
+      return true;
+    },
+
+    isReady(fromStep, toStep) {
+      if (fromStep === toStep) return true;
+
+      return isSettled(fromStep) && isSettled(toStep);
+    },
+
+    select(step) {
+      if (!holdsStep(step)) return false;
+
+      front = slotOfStep(step)!;
+      failed.delete(step);
+      showSingle();
+      return true;
+    },
+
+    holds(step) {
+      return holdsStep(step);
+    },
+
+    hasFailed(step) {
+      return failed.has(step);
+    },
+
+    markFailed(step) {
+      failed.add(step);
     },
 
     setSmooth(next) {
+      if (next === smooth) return;
+
       smooth = next;
+      clearSources();
     },
 
     setRange(range) {
@@ -122,6 +242,8 @@ export function createIsolineOverlay(
       if (sameLevels(next.levels, levels)) return;
       levels = next.levels;
       tracedSteps.clear();
+      failed.clear();
+      clearSources();
     },
 
     setUnits(unit) {
@@ -131,26 +253,115 @@ export function createIsolineOverlay(
       interval = next.interval;
       levels = next.levels;
       tracedSteps.clear();
+      failed.clear();
+      clearSources();
     },
 
     setInk(next) {
-      paintInk(map, ids, next);
+      for (const group of groups) paintInk(map, group, next);
     },
 
     setVisible(visible) {
-      const visibility = visible ? "visible" : "none";
-      for (const id of layerIds) {
-        map.setLayoutProperty(id, "visibility", visibility);
+      overallVisible = visible;
+      for (const group of groups) {
+        map.setLayoutProperty(group.casingId, "visibility", visible ? "visible" : "none");
+        map.setLayoutProperty(group.lineId, "visibility", visible ? "visible" : "none");
       }
+      if (!visible) clearSources();
+      else updateLabelVisibility();
     },
 
     destroy() {
-      for (const id of layerIds) {
-        if (map.getLayer(id)) map.removeLayer(id);
+      for (const group of groups) {
+        for (const id of Object.values(group)) {
+          if (map.getLayer(id)) map.removeLayer(id);
+        }
       }
-      if (map.getSource(sourceId)) map.removeSource(sourceId);
+      for (const sourceId of sourceIds) {
+        if (map.getSource(sourceId)) map.removeSource(sourceId);
+      }
     },
   };
+
+  function holdsStep(step: number): boolean {
+    return step >= 0 && keys.includes(step);
+  }
+
+  function slotOfStep(step: number): 0 | 1 | null {
+    if (step < 0) return null;
+    if (keys[0] === step) return 0;
+    if (keys[1] === step) return 1;
+
+    return null;
+  }
+
+  function isLoaded(sourceId: string): boolean {
+    const isSourceLoaded = (map as { isSourceLoaded?: (id: string) => boolean }).isSourceLoaded;
+
+    return isSourceLoaded?.call(map, sourceId) ?? true;
+  }
+
+  function isSettled(step: number): boolean {
+    if (step < 0) return true;
+    if (failed.has(step)) return true;
+
+    const slot = slotOfStep(step);
+    return slot !== null && isLoaded(sourceIds[slot]);
+  }
+
+  function paintHidden(toStep: number): void {
+    // Only the hold paints the hidden slot, so the lookahead never replaces a fading set.
+    if (toStep < 0 || holdsStep(toStep)) return;
+    const cached = tracedSteps.get(traceKey(toStep, smooth));
+    if (!cached) return;
+
+    const hidden = otherSlot(front);
+    setSourceData(sourceIds[hidden], cached);
+    keys[hidden] = toStep;
+  }
+
+  function setSourceData(sourceId: string, traced: Isoline[]) {
+    const features = traced.map(
+      (line) => lineFeature(line, interval, layer.grid, shift, nativeUnits, displayUnit),
+    );
+    (map.getSource(sourceId) as GeoJSONSource).setData({
+      type: "FeatureCollection",
+      features,
+    });
+  }
+
+  function showSingle() {
+    const shown = keys[front];
+    for (const [slot, group] of groups.entries()) {
+      setSlotFactor(group, slot === front ? 1 : 0);
+    }
+    dominantStep = shown;
+    updateLabelVisibility();
+  }
+
+  function clearSources() {
+    for (const sourceId of sourceIds) {
+      (map.getSource(sourceId) as GeoJSONSource).setData(EMPTY_LINES);
+    }
+    keys = [null, null];
+    front = 0;
+    dominantStep = null;
+    failed.clear();
+    for (const group of groups) setSlotFactor(group, 0);
+    updateLabelVisibility();
+  }
+
+  function updateLabelVisibility() {
+    for (const [slot, group] of groups.entries()) {
+      const showsDominant = overallVisible && dominantStep !== null && keys[slot] === dominantStep;
+      map.setLayoutProperty(group.labelId, "visibility", showsDominant ? "visible" : "none");
+    }
+  }
+
+  function setSlotFactor(group: IsothermLayerIds, factor: number) {
+    map.setPaintProperty(group.casingId, "line-opacity", CASING_OPACITY * factor);
+    map.setPaintProperty(group.lineId, "line-opacity", scaledZoomStops(factor));
+  }
 }
 
 interface IsothermLayerIds {
@@ -166,15 +377,17 @@ function addIsothermLayers(
   beforeId: string | undefined,
 ) {
   // The casing repeats the line's dashes scaled to its width, so both line up in screen pixels.
+  // Transitions stay at zero so the per-frame crossfade values apply directly.
   map.addLayer(
     {
       id: casingId,
       type: "line",
       source: sourceId,
-      layout: { "line-cap": "butt", "line-join": "round" },
+      layout: { "line-cap": "butt", "line-join": "round", visibility: "visible" },
       paint: {
         "line-dasharray": CASING_DASH_PATTERN,
-        "line-opacity": CASING_OPACITY,
+        "line-opacity": 0,
+        "line-opacity-transition": { duration: 0 },
         "line-width": isothermWidth(ISOTHERM_CASING_RATIO),
       },
     },
@@ -185,10 +398,11 @@ function addIsothermLayers(
       id: lineId,
       type: "line",
       source: sourceId,
-      layout: { "line-cap": "butt", "line-join": "round" },
+      layout: { "line-cap": "butt", "line-join": "round", visibility: "visible" },
       paint: {
         "line-dasharray": ISOTHERM_DASH_PATTERN,
         "line-opacity": zoomStops(LINE_OPACITY_STOPS),
+        "line-opacity-transition": { duration: 0 },
         "line-width": isothermWidth(1),
       },
     },
@@ -207,9 +421,10 @@ function addIsothermLayers(
         "text-field": ["get", "label"] as ExpressionSpecification,
         "text-max-angle": LABEL_MAX_ANGLE_DEG,
         "text-size": LABEL_SIZE_PX,
+        visibility: "visible",
         ...(font ? { "text-font": font } : {}),
       },
-      paint: { "text-halo-width": LABEL_HALO_WIDTH_PX },
+      paint: { "text-halo-width": LABEL_HALO_WIDTH_PX, "text-opacity-transition": { duration: 0 } },
     },
     beforeId,
   );
@@ -238,11 +453,25 @@ function zoomStops(stops: readonly (readonly [number, number])[]): ExpressionSpe
   return ["interpolate", ["linear"], ["zoom"], ...stops.flat()] as ExpressionSpecification;
 }
 
+/** Rebuilds the zoom stops scaled by the fade weight, keeping zoom the top-level input. */
+function scaledZoomStops(factor: number): ExpressionSpecification {
+  const scaled: (readonly [number, number])[] = LINE_OPACITY_STOPS.map(([zoom, opacity]) => [
+    zoom,
+    opacity * factor,
+  ]);
+
+  return zoomStops(scaled);
+}
+
 function textFont(map: MapLibreMap) {
   return map.getStyle().layers.find(
     (layer): layer is SymbolLayerSpecification =>
       layer.type === "symbol" && layer.layout?.["text-font"] !== undefined,
   )?.layout?.["text-font"];
+}
+
+function otherSlot(slot: 0 | 1): 0 | 1 {
+  return slot === 0 ? 1 : 0;
 }
 
 function isothermScale(
