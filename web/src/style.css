@@ -967,6 +967,17 @@ body.scene-mode .maplibregl-ctrl-scale {
   color: #246b4a;
 }
 
+.chart-notes-button {
+  margin-left: 6px;
+  font-size: 11px;
+  color: #246b4a;
+  background: #eef6f1;
+  border: 1px solid #246b4a;
+  border-radius: 4px;
+  padding: 0 6px;
+  cursor: pointer;
+}
+
 .gallery-preview {
   cursor: pointer;
 }
@@ -1021,6 +1032,16 @@ body.scene-mode .maplibregl-ctrl-scale {
   flex-direction: column;
   gap: 2px;
   font-size: 12px;
+}
+
+.chart-editor label.checkbox-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.chart-editor .checkbox-row input[type="checkbox"] {
+  flex: none;
 }
 
 .chart-editor fieldset {

@@ -9,7 +9,7 @@ import { ChartDetail } from "../charts/chart-detail";
 import { DownloadSection } from "../charts/download-section";
 import { ChartGallery } from "../charts/chart-gallery";
 import { draftForEdit, draftForNew, ChartEditor, type ChartDraft } from "../charts/chart-editor";
-import { resolveMainId } from "../charts/definitions";
+import { chartTypeLabel, resolveMainId } from "../charts/definitions";
 import { HypsometryChart } from "../charts/hypsometry-chart";
 import { SeriesChart } from "../charts/series-chart";
 import { makeHtmlElement } from "../html";
@@ -57,7 +57,7 @@ interface FullRequest {
 
 type ChartView =
   | { kind: "gallery" }
-  | { kind: "detail"; id: string; origin: string | null }
+  | { kind: "detail"; id: string; origin: string | null; focusNotes?: boolean }
   | {
     kind: "editor";
     draft: ChartDraft;
@@ -65,6 +65,8 @@ type ChartView =
     returnTo: string | null;
     origin: string | null;
   };
+
+type GalleryReturnFocus = { id: string | null; target: "title" | "notes" };
 
 interface CollapsedProps {
   scene: Scene;
@@ -377,14 +379,18 @@ function ChartChip({
 
   return (
     <span className="chart-chip">
-      <span className="chip-title">{`${definition.title} · ${shapeLabel}`}</span>
+      <span className="chip-title">
+        {`${definition.title} · ${shapeLabel} · ${chartTypeLabel(definition.chartType)}`}
+      </span>
       {definition.source.shape === "distribution"
         ? (
           <HypsometryChart
+            key={definition.id}
             layer={layer}
             chartType={definition.chartType}
             options={definition.options}
             compact={true}
+            showNotes={false}
             viewerUnit={viewerUnit}
             effectivePalette={effectivePalette}
             effectiveInk={effectiveInk}
@@ -392,12 +398,14 @@ function ChartChip({
         )
         : (
           <SeriesChart
+            key={definition.id}
             layer={layer}
             shape={definition.source.shape}
             chartType={definition.chartType}
             options={definition.options}
             currentTime={currentTime}
             compact={true}
+            showNotes={false}
             viewerUnit={viewerUnit}
             effectivePalette={effectivePalette}
             effectiveInk={effectiveInk}
@@ -441,7 +449,7 @@ function FullPanel({
   const invokingRef = useRef<HTMLElement | null>(null);
   const confirmSaveRef = useRef<HTMLButtonElement | null>(null);
   const editorActions = useRef<{ save: () => void; discard: () => void } | null>(null);
-  const galleryReturnFocus = useRef<{ id: string | null } | null>(null);
+  const galleryReturnFocus = useRef<GalleryReturnFocus | null>(null);
   useEffect(() => {
     onDirtyFlag(editorDirty);
   }, [editorDirty, onDirtyFlag]);
@@ -472,9 +480,9 @@ function FullPanel({
   useEffect(() => {
     if (current !== "charts" || chartView.kind !== "gallery") return;
     if (!galleryReturnFocus.current) return;
-    const focusId = galleryReturnFocus.current.id;
+    const focus = galleryReturnFocus.current;
     galleryReturnFocus.current = null;
-    focusGalleryCard(dialog, focusId);
+    focusGalleryCard(dialog, focus.id, focus.target);
   }, [chartView, current, dialog]);
   // The outer confirmation is a new decision group, so focus enters it on open.
   useEffect(() => {
@@ -483,7 +491,13 @@ function FullPanel({
   useEffect(() => {
     if (current !== "charts") return;
     if (chartView.kind === "detail") {
-      dialog.querySelector<HTMLElement>("[data-detail-back]")?.focus();
+      if (chartView.focusNotes) {
+        const heading = dialog.querySelector<HTMLElement>("[data-chart-notes-heading]");
+        heading?.focus();
+        heading?.scrollIntoView();
+      } else {
+        dialog.querySelector<HTMLElement>("[data-detail-back]")?.focus();
+      }
     }
     if (chartView.kind === "editor") {
       dialog.querySelector<HTMLElement>(".chart-editor .editor-head button")?.focus();
@@ -501,9 +515,9 @@ function FullPanel({
   );
   const editing = current === "charts" && chartView.kind === "editor";
 
-  const openDetail = (id: string) => {
-    galleryReturnFocus.current = { id };
-    setChartView({ kind: "detail", id, origin: id });
+  const openDetail = (id: string, focusNotes = false) => {
+    galleryReturnFocus.current = { id, target: focusNotes ? "notes" : "title" };
+    setChartView({ kind: "detail", id, origin: id, focusNotes });
   };
   const openEditor = (
     draft: ChartDraft,
@@ -511,12 +525,13 @@ function FullPanel({
     returnTo: string | null,
     origin: string | null,
   ) => {
-    galleryReturnFocus.current = { id: origin };
+    galleryReturnFocus.current = { id: origin, target: "title" };
     setChartView({ kind: "editor", draft, isNew, returnTo, origin });
     setEditorDirty(false);
   };
   const backToGallery = (focusId: string | null) => {
-    galleryReturnFocus.current = { id: focusId };
+    const target = galleryReturnFocus.current?.target ?? "title";
+    galleryReturnFocus.current = { id: focusId, target };
     setChartView({ kind: "gallery" });
     setEditorDirty(false);
     setCloseConfirm(false);
@@ -691,7 +706,7 @@ function chartViewFor(args: {
   view: ChartView;
   currentTime: string | null;
   syncNotice: string | null;
-  openDetail(id: string): void;
+  openDetail(id: string, focusNotes?: boolean): void;
   openEditor(
     draft: ChartDraft,
     isNew: boolean,
@@ -785,11 +800,23 @@ function chartViewFor(args: {
   );
 }
 
-function focusGalleryCard(dialog: HTMLElement, focusId: string | null) {
+function focusGalleryCard(
+  dialog: HTMLElement,
+  focusId: string | null,
+  target: GalleryReturnFocus["target"] = "title",
+) {
   if (focusId) {
     const cards = [...dialog.querySelectorAll("[data-chart-id]")];
     const match = cards.find((element) => (element as HTMLElement).dataset.chartId === focusId);
     if (match) {
+      if (target === "notes") {
+        const notes = match.querySelector(".chart-notes-button");
+        if (notes instanceof HTMLElement) {
+          notes.focus();
+
+          return;
+        }
+      }
       const button = match.querySelector("button");
       if (button instanceof HTMLElement) {
         button.focus();

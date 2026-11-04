@@ -1,4 +1,6 @@
 /** Close-up of one saved chart with its data table and chart actions. */
+import { useState } from "react";
+
 import type { SceneStore } from "../scene-store";
 import type { LayerDoc, Scene } from "../types";
 import { useSceneStore } from "../ui/use-scene-store";
@@ -37,6 +39,7 @@ export function ChartDetail({
   syncNotice = null,
 }: ChartDetailProps): React.ReactElement {
   const { charts, display } = useSceneStore(store);
+  const [confirmation, setConfirmation] = useState<string | null>(null);
   const definition = charts.definitions.find((entry) => entry.id === definitionId);
   if (!definition) {
     return (
@@ -63,7 +66,12 @@ export function ChartDetail({
   const viewerUnit = display.layers[layer.id]?.units ?? null;
   const effectivePalette = display.layers[layer.id]?.palette ?? layer.style.palette ?? null;
   const effectiveInk = display.layers[layer.id]?.ink ?? null;
-  const setMain = () => store.dispatch({ kind: "setMain", id: definition.id });
+  const setMain = () => {
+    store.dispatch({ kind: "setMain", id: definition.id });
+    setConfirmation(
+      `${definition.title} is now the main chart in the scene panel's Charts tab.`,
+    );
+  };
   const remove = () => {
     store.dispatch({ kind: "deleteChart", id: definition.id });
     onBack();
@@ -119,6 +127,7 @@ export function ChartDetail({
           {"Delete"}
         </button>
       </div>
+      {confirmation && <p role="status">{confirmation}</p>}
       <div className="detail-downloads">
         {definition.source.shape === "time_series" && (
           <button type="button" onClick={() => downloadLayerArea(scene, layer)}>

@@ -1,6 +1,12 @@
 /** Derive axis domains, baselines and hints without rounding stored statistics. */
 import { finiteValues, type ChartTable, type ChartType } from "./table";
 
+/** The most fractional digits an ordinary presentation value keeps. */
+export const PRESENTATION_MAX_DECIMALS = 3;
+
+/** Mantissa digits of the concise scientific form for values that would round to zero. */
+const PRESENTATION_SCIENTIFIC_DIGITS = 2;
+
 /** Bars pile past this many points, so the editor suggests a line instead of switching. */
 export const DENSITY_HINT_THRESHOLD = 60;
 
@@ -111,6 +117,27 @@ export function ticksForDomain(domain: readonly [number, number], count: number)
   return Array.from({ length: safeCount }, (_, index) =>
     low + ((high - low) * index) / (safeCount - 1),
   );
+}
+
+/**
+ * Format an ordinary chart number with at most three fractional digits. Exact zeros stay
+ * plain while tiny nonzero values use concise scientific notation instead of vanishing.
+ */
+export function formatPresentationValue(value: number): string {
+  if (!Number.isFinite(value)) return String(value);
+  if (value === 0) return "0";
+  const fixed = value.toFixed(PRESENTATION_MAX_DECIMALS);
+  const trimmed = fixed.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+  if (Number(trimmed) !== 0) return trimmed === "-0" ? "0" : trimmed;
+
+  return shortPresentation(value);
+}
+
+function shortPresentation(value: number): string {
+  const text = value.toExponential(PRESENTATION_SCIENTIFIC_DIGITS);
+  const trimmed = text.replace(/(\.\d*?)0+e/, "$1e").replace(/\.e/, "e");
+
+  return trimmed;
 }
 
 /** Suggest a line once bars would pile into a dense strip, without switching the type. */

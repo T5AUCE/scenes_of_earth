@@ -6,6 +6,7 @@ import { Window } from "happy-dom";
 import React from "react";
 
 import { createSceneStore } from "../scene-store.ts";
+import { assertSameNode } from "../testing/dom-assert.ts";
 import type { LayerDoc, Scene } from "../types.ts";
 
 test("the gallery shows saved previews with a deterministic main", async (context) => {
@@ -39,7 +40,7 @@ test("the gallery shows saved previews with a deterministic main", async (contex
   assert.ok(host.textContent?.includes("Rain over time"));
   assert.ok(host.textContent?.includes("Main"));
   assert.equal(host.querySelectorAll(".gallery-card").length, 3);
-  assert.equal(host.querySelector(".chart-unavailable"), null);
+  assertSameNode(host.querySelector(".chart-unavailable"), null);
 
   const mainButton = [...host.querySelectorAll("button")].find(
     (button) => button.textContent === "Use as main" && !button.disabled,
@@ -176,7 +177,10 @@ test("follow ink tracks effective palette and sync notice shows", async (context
     );
   });
   assert.match(host.textContent ?? "", /too long/);
-  const before = host.querySelector("polyline, polygon, rect")?.getAttribute("stroke");
+  const mark = () =>
+    host.querySelector("rect")?.getAttribute("fill")
+    ?? host.querySelector("polyline, polygon")?.getAttribute("stroke");
+  const before = mark();
   await act(async () => {
     store.dispatch({
       kind: "display",
@@ -185,8 +189,204 @@ test("follow ink tracks effective palette and sync notice shows", async (context
       },
     });
   });
-  const after = host.querySelector("polyline, polygon, rect")?.getAttribute("stroke");
+  const after = mark();
   assert.notEqual(before, after);
+  await act(async () => {
+    root.unmount();
+  });
+});
+
+test("cards hide long notes while the Notes action requests detail focus", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { ChartGallery } = await import("./chart-gallery.tsx");
+
+  const rain = rainLayer();
+  rain.area_series!.fallback_fraction = rain.time!.values.map(() => 0.123456789);
+  rain.fallback_sources = [{ name: "ERA5" }] as LayerDoc["fallback_sources"];
+  const layers = [rain, tempLayer(), terrainLayer()];
+  const store = createSceneStore(layers, display());
+  const opened: { id: string; notes?: boolean }[] = [];
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(
+      <ChartGallery
+        scene={makeScene(layers)}
+        store={store}
+        currentTime={null}
+        onOpenDetail={(id, focusNotes) => opened.push({ id, notes: focusNotes })}
+        onEdit={() => {}}
+        onNew={() => {}}
+      />,
+    );
+  });
+  const cards = [...host.querySelectorAll(".gallery-card")];
+  for (const card of cards) {
+    const text = card.textContent ?? "";
+    assert.equal(text.includes("Hollow marks"), false);
+    assert.equal(text.includes("area-weighted"), false);
+    assert.equal(text.includes("quantile heights"), false);
+    assert.doesNotMatch(text, /ERA5|filled from|12\.346%|12\.3456789/);
+    assertSameNode(card.querySelector(".chart-notes"), null);
+  }
+  const terrainCard = cards.find(
+    (card) => (card as HTMLElement).dataset.chartId === "terrain:distribution",
+  )!;
+  const notesButton = terrainCard.querySelector(".chart-notes-button") as HTMLButtonElement;
+  assert.equal(
+    notesButton.getAttribute("aria-label"),
+    "Notes for Terrain distribution; opens chart detail",
+  );
+  await act(async () => {
+    notesButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.deepEqual(opened, [{ id: "terrain:distribution", notes: true }]);
+  const rainCard = cards.find(
+    (card) => (card as HTMLElement).dataset.chartId === "rain:time_series",
+  )!;
+  const rainNotes = rainCard.querySelector(".chart-notes-button") as HTMLButtonElement;
+  assert.ok(rainNotes);
+  for (const key of ["Enter", " "]) {
+    rainNotes.focus();
+    assertSameNode(document.activeElement, rainNotes);
+    await act(async () => {
+      rainNotes.dispatchEvent(new window.KeyboardEvent("keydown", { key, bubbles: true }));
+      rainNotes.dispatchEvent(new window.KeyboardEvent("keyup", { key, bubbles: true }));
+      // Happy DOM needs the native button activation supplied explicitly.
+      rainNotes.click();
+    });
+  }
+  assert.deepEqual(opened, [
+    { id: "terrain:distribution", notes: true },
+    { id: "rain:time_series", notes: true },
+    { id: "rain:time_series", notes: true },
+  ]);
+  const tempCard = cards.find(
+    (card) => (card as HTMLElement).dataset.chartId === "temp:time_series",
+  )!;
+  assertSameNode(tempCard.querySelector(".chart-notes-button"), null);
+  await act(async () => {
+    root.unmount();
+  });
+});
+
+test("temperature keeps readable paint across all chart types", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { ChartGallery } = await import("./chart-gallery.tsx");
+  const { fieldGradient } = await import("../render/palettes.ts");
+  const { paletteInkFor } = await import("./paint.ts");
+
+  const layers = [tempLayer()];
+  layers[0].style.palette = "climate";
+  const store = createSceneStore(layers, display());
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(
+      <ChartGallery
+        scene={makeScene(layers)}
+        store={store}
+        currentTime={null}
+        onOpenDetail={() => {}}
+        onEdit={() => {}}
+        onNew={() => {}}
+      />,
+    );
+  });
+  for (const chartType of ["line", "bar", "area"] as const) {
+    const definition = store.getSnapshot().charts.definitions[0];
+    await act(async () => {
+      store.dispatch({ kind: "saveChart", definition: { ...definition, chartType } });
+    });
+    const selector = chartType === "line"
+      ? '.chart-lines polyline:not([aria-hidden="true"])'
+      : chartType === "bar" ? ".chart-bars rect" : ".chart-areas polygon";
+    const attribute = chartType === "line" ? "stroke" : "fill";
+    for (const palette of ["climate", "blue-red"]) {
+      await act(async () => {
+        store.dispatch({
+          kind: "display",
+          update: (display) => {
+            display.layers.temp = { palette };
+          },
+        });
+      });
+      const expected = paletteInkFor(fieldGradient(palette)!, "#1a3658");
+      assert.equal(host.querySelector(selector)?.getAttribute(attribute), expected);
+      assert.notEqual(expected, "#f7f7f7");
+    }
+    await act(async () => {
+      store.dispatch({
+        kind: "display",
+        update: (display) => {
+          display.layers.temp = { ink: "white" };
+        },
+      });
+    });
+    const whiteMark = host.querySelector(selector)!;
+    assert.equal(whiteMark.getAttribute(attribute), "#ffffff");
+    if (chartType === "line") {
+      const under = host.querySelector('.chart-lines polyline[aria-hidden="true"]')!;
+      assert.equal(under.getAttribute("stroke"), "#1a3658");
+    } else {
+      assert.equal(whiteMark.getAttribute("stroke"), "#1a3658");
+    }
+  }
+  await act(async () => {
+    root.unmount();
+  });
+});
+
+test("choosing main confirms without leaving the gallery", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { ChartGallery } = await import("./chart-gallery.tsx");
+
+  const layers = [rainLayer(), tempLayer()];
+  const store = createSceneStore(layers, display());
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(
+      <ChartGallery
+        scene={makeScene(layers)}
+        store={store}
+        currentTime={null}
+        onOpenDetail={() => {}}
+        onEdit={() => {}}
+        onNew={() => {}}
+      />,
+    );
+  });
+  const mainButton = [...host.querySelectorAll("button")].find(
+    (button) => button.textContent === "Use as main" && !button.disabled,
+  ) as HTMLButtonElement;
+  mainButton.focus();
+  await act(async () => {
+    mainButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  const statuses = [...host.querySelectorAll('[role="status"]')].map(
+    (node) => node.textContent ?? "",
+  );
+  assert.ok(
+    statuses.some((text) => /is now the main chart in the scene panel's Charts tab/.test(text)),
+  );
+  assertSameNode(document.activeElement, mainButton);
+  assert.ok(host.querySelector(".gallery-grid"));
   await act(async () => {
     root.unmount();
   });

@@ -82,6 +82,14 @@ export function isSupportedShape(shape: unknown): shape is SupportedShape {
   return shape === "time_series" || shape === "seasonal_cycle" || shape === "distribution";
 }
 
+/** The visible label of a saved chart type while stored values stay lowercase. */
+export function chartTypeLabel(chartType: ChartType): string {
+  if (chartType === "bar") return "Bar";
+  if (chartType === "area") return "Area";
+
+  return "Line";
+}
+
 /** The default type follows the period method for timed charts and area for hypsometry. */
 export function defaultChartTypeFor(shape: SupportedShape, method: string | null): ChartType {
   if (shape === "distribution") return "area";

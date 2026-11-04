@@ -1,5 +1,5 @@
 /** Takeover editor for new and existing chart definitions with live preview. */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { INK_COLORS } from "../render/palettes";
 import type { SceneStore } from "../scene-store";
@@ -9,8 +9,8 @@ import { useSceneStore } from "../ui/use-scene-store";
 import {
   allowedTypesFor,
   canonicalTableFor,
+  chartTypeLabel,
   defaultOptionsFor,
-  hintFor,
   isSupportedShape,
   MAX_TITLE_CHARS,
   newChartId,
@@ -116,10 +116,6 @@ export function ChartEditor({
   useEffect(() => {
     if (confirming) confirmSaveRef.current?.focus();
   }, [confirming]);
-  const hint = useMemo(
-    () => hintFor(draft.source.shape, draft.chartType, layer?.units ?? "", 30),
-    [draft.source.shape, draft.chartType, layer],
-  );
   const viewerUnit = layer ? display.layers[layer.id]?.units ?? null : null;
   const effectivePalette = layer ? display.layers[layer.id]?.palette ?? null : null;
   const effectiveInk = layer ? display.layers[layer.id]?.ink ?? null : null;
@@ -197,7 +193,7 @@ export function ChartEditor({
           {axisFields(draft, (next) => update(next))}
           {rangeFields(layer, draft, (next) => update(next))}
           {toggleFields(draft, layer, (next) => update(next))}
-          <label>
+          <label className="checkbox-row">
             <input
               type="checkbox"
               checked={draft.useAsMain}
@@ -207,7 +203,6 @@ export function ChartEditor({
           </label>
           {categoricalNote(layers)}
           {explanation && <p className="chart-note">{explanation}</p>}
-          {hint && <p className="chart-hint">{hint}</p>}
           {error && (
             <p className="chart-error" role="alert">
               {error}
@@ -377,7 +372,7 @@ function typeSelect(draft: ChartDraft, onChange: (next: ChartDraft) => void) {
       >
         {allowedTypesFor(draft.source.shape).map((type) => (
           <option key={type} value={type}>
-            {type}
+            {chartTypeLabel(type)}
           </option>
         ))}
       </select>
@@ -524,7 +519,7 @@ function rangeFields(
   return (
     <fieldset>
       <legend>{`Y range in ${layer?.units ?? "source units"}`}</legend>
-      <label>
+      <label className="checkbox-row">
         <input
           type="checkbox"
           checked={automatic}
@@ -585,7 +580,7 @@ function toggleFields(
   return (
     <fieldset>
       <legend>{"Display"}</legend>
-      <label>
+      <label className="checkbox-row">
         <input
           type="checkbox"
           checked={draft.options.showGrid ?? true}
@@ -594,7 +589,7 @@ function toggleFields(
         />
         {"Grid"}
       </label>
-      <label>
+      <label className="checkbox-row">
         <input
           type="checkbox"
           checked={draft.options.showPoints ?? false}
@@ -607,7 +602,7 @@ function toggleFields(
         {"Point marks"}
       </label>
       {showTime && (
-        <label>
+        <label className="checkbox-row">
           <input
             type="checkbox"
             checked={draft.options.showCurrentTime ?? true}
@@ -620,7 +615,7 @@ function toggleFields(
           {seasonal || draft.source.shape === "seasonal_cycle" ? "Current month" : "Current time"}
         </label>
       )}
-      <label>
+      <label className="checkbox-row">
         <input
           type="checkbox"
           checked={draft.options.showReferences ?? true}

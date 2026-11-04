@@ -2,11 +2,12 @@
 import { contourColor, inkColor } from "../render/palettes";
 import type { LayerDoc } from "../types";
 import { convertValue, displayUnitFor } from "../units";
-import { hintFor, type ChartOptions } from "./definitions";
+import type { ChartOptions } from "./definitions";
+import { chartNotesFor } from "./notes";
 import { buildDistributionTable } from "./series";
 import { SvgChart } from "./svg-chart";
 import { finiteValues, toDisplayTable, type ChartType } from "./table";
-import { baselineFor } from "./ticks";
+import { baselineFor, formatPresentationValue } from "./ticks";
 
 /** Props of a hypsometry chart; the table stays derived from the layer. */
 export interface HypsometryChartProps {
@@ -16,6 +17,7 @@ export interface HypsometryChartProps {
   compact?: boolean;
   height_PX?: number;
   showTable?: boolean;
+  showNotes?: boolean;
   viewerUnit?: string | null;
   effectivePalette?: string | null;
   effectiveInk?: string | null;
@@ -32,6 +34,7 @@ export function HypsometryChart({
   compact = false,
   height_PX,
   showTable,
+  showNotes = true,
   viewerUnit = null,
   effectivePalette = null,
   effectiveInk = null,
@@ -43,8 +46,8 @@ export function HypsometryChart({
     ...converted,
     xTitle: options.xTitle ?? "Share of valid area at or above (%)",
   };
-  const hint = hintFor("distribution", chartType, layer.units, display.rows.length);
-  const mean = String(convertValue(canonical.mean, layer.units, displayUnit));
+  const notes = chartNotesFor(layer, canonical, chartType);
+  const mean = formatPresentationValue(convertValue(canonical.mean, layer.units, displayUnit));
   const baseline = convertedBaseline(canonical, chartType, layer.units, displayUnit);
   const heading = `${layer.title} · Hypsometry · mean ${mean} ${displayUnit}`;
 
@@ -64,16 +67,23 @@ export function HypsometryChart({
         height_PX={height_PX}
         compact={compact}
         showTable={showTable ?? !compact}
+        showCoverageDetails={showNotes}
         fallbackNames={null}
         resolutionNote={resolutionNoteFor(layer)}
         resolutionValue={resolutionValueFor(layer)}
         baseline={baseline}
       />
-      {hint && <p className="chart-hint">{hint}</p>}
-      <p className="chart-note">
-        {coverageText(canonical.validFraction, canonical.referenceValues)}
-      </p>
+      {showNotes && notes.length > 0 && notesFor(notes)}
     </figure>
+  );
+}
+
+function notesFor(notes: string[]): React.ReactElement {
+  return (
+    <div className="chart-notes">
+      <h4 data-chart-notes-heading={true} tabIndex={-1}>{"Notes"}</h4>
+      {notes.map((note, index) => <p key={index} className="chart-note">{note}</p>)}
+    </div>
   );
 }
 
@@ -131,19 +141,4 @@ function displayRange(
     convertValue(range[0], nativeUnits, displayUnit),
     convertValue(range[1], nativeUnits, displayUnit),
   ];
-}
-
-function coverageText(validFraction: number, references: { id: string }[]) {
-  const excluded = String((1 - validFraction) * 100);
-  const curve = "The curve joins stored 1% quantiles, so values between knots are approximate, "
-    + "while the mean comes from weighted cells directly.";
-  const coverage = `Valid terrain covers ${String(validFraction * 100)}% of the outline; `
-    + `the other ${excluded}% is ocean or missing data and is excluded. ${curve}`;
-  if (references.some((reference) => reference.id === "sea_level")) {
-    return `${coverage} Sea level marks 0 m where the bundle emitted it because valid heights `
-      + `span zero or the outline overlaps a coarse ocean tile.`;
-  }
-
-  return `${coverage} No sea-level reference was emitted for this bundle, which means neither `
-    + `condition held and proves nothing about a coastline.`;
 }

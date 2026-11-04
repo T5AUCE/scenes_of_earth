@@ -5,6 +5,7 @@ import { Window } from "happy-dom";
 // Tests sit outside the tsconfig, so tsx gives them the classic JSX runtime.
 import React from "react";
 
+import { assertSameNode } from "../testing/dom-assert.ts";
 import type { DistributionTable, TimeSeriesTable } from "./table.ts";
 
 test("line, bar and area share rows without mutating them", async (context) => {
@@ -60,7 +61,7 @@ test("dense bars never switch type on their own", async (context) => {
     root.render(<SvgChart table={table} chartType="bar" />);
   });
   assert.equal(host.querySelectorAll("rect").length, 61);
-  assert.equal(host.querySelector("polyline"), null);
+  assertSameNode(host.querySelector("polyline"), null);
   await act(async () => {
     root.unmount();
   });
@@ -114,41 +115,47 @@ test("null gaps break lines while zero and single values stay visible", async (c
   });
 });
 
-test("tables and tooltips keep full precision and arrows move the cursor", async (context) => {
-  const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
-  installBrowser(window);
-  const { act } = await import("react");
-  const { createRoot } = await import("react-dom/client");
-  const { SvgChart } = await import("./svg-chart.tsx");
+test(
+  "tables stay exact while tooltips use concise values and arrows move the cursor",
+  async (context) => {
+    const window = new Window({ url: "http://localhost" });
+    context.after(() => window.happyDOM.abort());
+    installBrowser(window);
+    const { act } = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const { SvgChart } = await import("./svg-chart.tsx");
 
-  const table = timeTable();
-  const precise = String(table.rows[0].value);
-  const host = document.createElement("div");
-  document.body.append(host);
-  const root = createRoot(host);
-  await act(async () => {
-    root.render(<SvgChart table={table} chartType="line" />);
-  });
-  const cells = [...host.querySelectorAll("td")].map((cell) => cell.textContent);
-  assert.ok(cells.includes(precise));
-  const tooltip = host.querySelector(".chart-tooltip")!;
-  assert.ok((tooltip.textContent ?? "").includes("-3.75"));
-  const svg = host.querySelector("svg")!;
-  await act(async () => {
-    svg.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
-  });
-  assert.match(tooltip.textContent ?? "", /2015-01-01/);
-  assert.ok((tooltip.textContent ?? "").includes(precise));
-  await act(async () => {
-    svg.dispatchEvent(new window.KeyboardEvent("keydown", { key: "End", bubbles: true }));
-  });
-  assert.match(tooltip.textContent ?? "", /2015-04-01/);
-  assert.ok((tooltip.textContent ?? "").includes("-3.75"));
-  await act(async () => {
-    root.unmount();
-  });
-});
+    const table = timeTable();
+    const precise = String(table.rows[0].value);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    await act(async () => {
+      root.render(<SvgChart table={table} chartType="line" />);
+    });
+    const cells = [...host.querySelectorAll("td")].map((cell) => cell.textContent);
+    assert.ok(cells.includes(precise));
+    const tooltip = host.querySelector(".chart-tooltip")!;
+    assert.ok((tooltip.textContent ?? "").includes("-3.75"));
+    const svg = host.querySelector("svg")!;
+    await act(async () => {
+      svg.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    });
+    assert.match(tooltip.textContent ?? "", /2015-01-01/);
+    assert.ok((tooltip.textContent ?? "").includes("10.123"));
+    assert.equal((tooltip.textContent ?? "").includes(precise), false);
+    assert.ok((tooltip.textContent ?? "").includes("valid 100%"));
+    await act(async () => {
+      svg.dispatchEvent(new window.KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    });
+    assert.match(tooltip.textContent ?? "", /2015-04-01/);
+    assert.ok((tooltip.textContent ?? "").includes("-3.75"));
+    assert.ok((tooltip.textContent ?? "").includes("valid 70%"));
+    await act(async () => {
+      root.unmount();
+    });
+  },
+);
 
 test("low coverage draws hollow marks with credited fallback shares", async (context) => {
   const window = new Window({ url: "http://localhost" });
@@ -203,8 +210,9 @@ test("hypsometry uses above-percent direction with exact references", async (con
       />,
     );
   });
-  assert.match(host.textContent ?? "", /Mean 500\.123456789/);
-  assert.match(host.textContent ?? "", /Median 400\.987654321/);
+  const details = host.querySelector("details")!;
+  assert.match(details.textContent ?? "", /Mean 500\.123456789/);
+  assert.match(details.textContent ?? "", /median 400\.987654321/);
   assert.match(host.textContent ?? "", /Lowest cell/);
   assert.match(host.textContent ?? "", /Highest cell/);
   assert.match(host.textContent ?? "", /0\.01° analysis grid/);
@@ -230,7 +238,7 @@ test("hypsometry uses above-percent direction with exact references", async (con
   });
 });
 
-test("responsive width follows the observer and compact simplifies", async (context) => {
+test("responsive width follows the observer and compact keeps each type", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
@@ -253,16 +261,30 @@ test("responsive width follows the observer and compact simplifies", async (cont
   const { createRoot } = await import("react-dom/client");
   const { SvgChart } = await import("./svg-chart.tsx");
 
+  for (const chartType of ["line", "bar", "area"] as const) {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    await act(async () => {
+      root.render(<SvgChart table={timeTable()} chartType={chartType} compact={true} />);
+    });
+    assert.equal(host.querySelector("svg")?.getAttribute("height"), "36");
+    assertSameNode(host.querySelector("details"), null);
+    if (chartType === "line") assert.ok(host.querySelector("polyline"));
+    if (chartType === "bar") assert.ok(host.querySelector("rect"));
+    if (chartType === "area") assert.ok(host.querySelector("polygon"));
+    await act(async () => {
+      root.unmount();
+    });
+    host.remove();
+  }
+
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   await act(async () => {
     root.render(<SvgChart table={timeTable()} chartType="bar" compact={true} />);
   });
-  assert.equal(host.querySelector("svg")?.getAttribute("height"), "36");
-  assert.equal(host.querySelector("details"), null);
-  assert.ok(host.querySelector("polyline"));
-  assert.equal(host.querySelector("rect"), null);
   await act(async () => {
     notify?.(500);
   });
@@ -361,7 +383,7 @@ test("grid toggles only strokes while axes stay readable", async (context) => {
   await act(async () => {
     root.render(<SvgChart table={timeTable()} chartType="line" showGrid={false} />);
   });
-  assert.equal(host.querySelector(".chart-grid"), null);
+  assertSameNode(host.querySelector(".chart-grid"), null);
   assert.ok(host.querySelector(".chart-y-ticks"));
   assert.ok(host.querySelector(".chart-x-ticks"));
   assert.ok(host.querySelector(".chart-axes"));
@@ -1213,11 +1235,17 @@ test("presentation rounds axes while tables stay exact", async (context) => {
   const titles = [...host.querySelectorAll(".chart-references > g > title")].map(
     (node) => node.textContent,
   );
-  assert.ok(titles.includes("Mean 500.123456789"));
-  assert.ok(titles.includes("Median 400.987654321"));
+  assert.ok(titles.includes("Mean 500.123"));
+  assert.ok(titles.includes("Median 400.988"));
   assert.ok(titles.includes("Sea level 0"));
-  assert.match(host.textContent ?? "", /Mean 500\.123456789/);
-  assert.ok((host.querySelector(".chart-tooltip")?.textContent ?? "").includes("1000.987654321"));
+  assert.equal(titles.some((text) => (text ?? "").includes("500.123456789")), false);
+  const exact = host.querySelector("details")!;
+  assert.match(exact.textContent ?? "", /Mean 500\.123456789/);
+  assert.ok((host.querySelector(".chart-tooltip")?.textContent ?? "").includes("1000.988"));
+  assert.equal(
+    (host.querySelector(".chart-tooltip")?.textContent ?? "").includes("1000.987654321"),
+    false,
+  );
   await act(async () => {
     root.unmount();
   });
@@ -1235,7 +1263,8 @@ test("presentation rounds axes while tables stay exact", async (context) => {
   for (const text of seriesTicks) {
     assert.equal(/\.\d{4,}/.test(text ?? ""), false);
   }
-  assert.ok((seriesHost.textContent ?? "").includes(String(timeTable().rows[0].value)));
+  const seriesExact = seriesHost.querySelector("details")!;
+  assert.ok(seriesExact.textContent?.includes(String(timeTable().rows[0].value)));
   await act(async () => {
     seriesRoot.unmount();
   });
@@ -2258,7 +2287,7 @@ test("gallery terrain endpoints fit with rounded resolution", async (context) =>
   assert.equal(texts.length, 2);
   for (const text of texts) {
     const content = text.textContent ?? "";
-    assert.ok(content.includes("0.00455"));
+    assert.ok(content.includes("0.005"));
     assert.equal(content.includes("0.004545454545454546"), false);
     const x = Number(text.getAttribute("x"));
     const anchor = text.getAttribute("text-anchor");
@@ -2451,6 +2480,233 @@ test("narrow time-series tick clears its single-line title", async (context) => 
     root.unmount();
   });
   host.remove();
+});
+
+test(
+  "light paint keeps its ink with a dark edge and no duplicate announcements",
+  async (context) => {
+    const window = new Window({ url: "http://localhost" });
+    context.after(() => window.happyDOM.abort());
+    installBrowser(window);
+    const { act } = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const { SvgChart } = await import("./svg-chart.tsx");
+
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    await act(async () => {
+      root.render(<SvgChart table={timeTable()} chartType="bar" ink="#ffffff" />);
+    });
+    const bars = [...host.querySelectorAll("rect")];
+    assert.ok(bars.length >= 2);
+    const solid = bars.find((rect) => rect.getAttribute("fill") === "#ffffff")!;
+    assert.equal(solid.getAttribute("stroke"), "#1a3658");
+    assert.equal(solid.getAttribute("stroke-width"), "1.5");
+    const hollow = bars.find((rect) => rect.getAttribute("fill") === "none")!;
+    assert.equal(hollow.getAttribute("fill"), "none");
+    assert.equal(hollow.getAttribute("stroke"), "#1a3658");
+    const barTitles = bars.map((rect) => rect.querySelector("title")?.textContent ?? "");
+    assert.ok(barTitles.every((text) => text.length > 0));
+    const frame = host.querySelector(".chart-plot-frame")!;
+    const left = Number(frame.getAttribute("x1"));
+    const right = Number(frame.getAttribute("x2"));
+    const top = Number(frame.getAttribute("y1"));
+    const bottom = Number(frame.getAttribute("y2"));
+    for (const bar of bars) {
+      const x = Number(bar.getAttribute("x"));
+      const y = Number(bar.getAttribute("y"));
+      const width = Number(bar.getAttribute("width"));
+      const height = Number(bar.getAttribute("height"));
+      const strokeHalf_PX = Number(bar.getAttribute("stroke-width")) / 2;
+      assert.ok(x - strokeHalf_PX >= left);
+      assert.ok(x + width + strokeHalf_PX <= right);
+      assert.ok(y - strokeHalf_PX >= top);
+      assert.ok(y + height + strokeHalf_PX <= bottom);
+    }
+    await act(async () => {
+      root.unmount();
+    });
+
+    const lineHost = document.createElement("div");
+    document.body.append(lineHost);
+    const lineRoot = createRoot(lineHost);
+    await act(async () => {
+      lineRoot.render(<SvgChart table={timeTable()} chartType="line" ink="#ffffff" />);
+    });
+    const lines = [...lineHost.querySelectorAll(".chart-lines polyline")];
+    assert.ok(lines.some((line) => line.getAttribute("stroke") === "#ffffff"));
+    const under = lines.find((line) => line.getAttribute("aria-hidden") === "true")!;
+    assert.equal(under.getAttribute("stroke"), "#1a3658");
+    assertSameNode(under.querySelector("title"), null);
+    await act(async () => {
+      lineRoot.unmount();
+    });
+
+    const areaHost = document.createElement("div");
+    document.body.append(areaHost);
+    const areaRoot = createRoot(areaHost);
+    await act(async () => {
+      areaRoot.render(<SvgChart table={timeTable()} chartType="area" ink="#ffffff" />);
+    });
+    const polygon = areaHost.querySelector("polygon")!;
+    assert.equal(polygon.getAttribute("fill"), "#ffffff");
+    const edge = areaHost.querySelector('.chart-areas polyline[aria-hidden="true"]')!;
+    assert.equal(edge.getAttribute("stroke"), "#1a3658");
+    assertSameNode(edge.querySelector("title"), null);
+    await act(async () => {
+      areaRoot.unmount();
+    });
+    host.remove();
+    lineHost.remove();
+    areaHost.remove();
+  },
+);
+
+test("light solid and hollow circles keep contrasting outlines", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  for (const chartType of ["line", "area"] as const) {
+    await act(async () => {
+      root.render(
+        <SvgChart table={timeTable()} chartType={chartType} ink="#ffffff" showPoints={true} />,
+      );
+    });
+    const circles = [...host.querySelectorAll(".chart-points circle")];
+    assert.equal(circles.length, 3);
+    assert.equal(circles[0].getAttribute("fill"), "#ffffff");
+    assert.equal(circles[0].getAttribute("stroke-width"), "1.5");
+    assert.equal(circles[1].getAttribute("fill"), "none");
+    assert.equal(circles[1].getAttribute("stroke-width"), "1.5");
+    for (const circle of circles) {
+      assert.equal(circle.getAttribute("stroke"), "#1a3658");
+      assert.equal(circle.querySelectorAll("title").length, 1);
+    }
+  }
+  await act(async () => root.unmount());
+  host.remove();
+});
+
+test("wrappers honour ink precedence and fall back for unknown palettes", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SeriesChart } = await import("./series-chart.tsx");
+  const { HypsometryChart } = await import("./hypsometry-chart.tsx");
+
+  const cases = [
+    { ink: "#123456", effectiveInk: "white", palette: "blue-red", expected: "#123456" },
+    { ink: undefined, effectiveInk: "white", palette: "blue-red", expected: "#ffffff" },
+    { ink: undefined, effectiveInk: null, palette: "unknown-palette", expected: null },
+  ];
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  for (const entry of cases) {
+    await act(async () => {
+      root.render(
+        <>
+          <SeriesChart
+            layer={wrapperRain()}
+            shape="time_series"
+            chartType="bar"
+            options={{ ink: entry.ink }}
+            effectiveInk={entry.effectiveInk}
+            effectivePalette={entry.palette}
+          />
+          <HypsometryChart
+            layer={wrapperTerrain()}
+            chartType="area"
+            options={{ ink: entry.ink }}
+            effectiveInk={entry.effectiveInk}
+            effectivePalette={entry.palette}
+          />
+        </>,
+      );
+    });
+    assert.equal(
+      host.querySelector(".series-chart .chart-bars rect")?.getAttribute("fill"),
+      entry.expected ?? "#1a3658",
+    );
+    assert.equal(
+      host.querySelector(".hypsometry-chart .chart-areas polygon")?.getAttribute("fill"),
+      entry.expected ?? "#6e6e6e",
+    );
+  }
+  await act(async () => root.unmount());
+  host.remove();
+});
+
+test("preview readouts stay short while full readouts keep rounded coverage", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
+
+  const preview = document.createElement("div");
+  document.body.append(preview);
+  const previewRoot = createRoot(preview);
+  await act(async () => {
+    previewRoot.render(
+      <SvgChart
+        table={timeTable()}
+        chartType="bar"
+        fallbackNames="ERA5"
+        showCoverageDetails={false}
+      />,
+    );
+  });
+  const previewTooltip = preview.querySelector(".chart-tooltip")!;
+  assert.ok((previewTooltip.textContent ?? "").includes("-3.75"));
+  assert.equal((previewTooltip.textContent ?? "").includes("valid"), false);
+  assert.equal((previewTooltip.textContent ?? "").includes("ERA5"), false);
+  const previewTitles = [...preview.querySelectorAll("rect title")].map(
+    (node) => node.textContent ?? "",
+  );
+  assert.ok(previewTitles.length > 0);
+  assert.ok(previewTitles.every((text) => !text.includes("valid")));
+  assert.ok(previewTitles.every((text) => !text.includes("ERA5")));
+  await act(async () => {
+    previewRoot.unmount();
+  });
+
+  const full = document.createElement("div");
+  document.body.append(full);
+  const fullRoot = createRoot(full);
+  await act(async () => {
+    fullRoot.render(
+      <SvgChart table={timeTable()} chartType="bar" fallbackNames="ERA5" />,
+    );
+  });
+  const fullTooltip = full.querySelector(".chart-tooltip")!;
+  assert.ok((fullTooltip.textContent ?? "").includes("-3.75"));
+  assert.ok((fullTooltip.textContent ?? "").includes("valid 70%"));
+  assert.ok((fullTooltip.textContent ?? "").includes("ERA5"));
+  const summary = full.querySelector("summary")!;
+  assert.equal(summary.textContent, "Table (exact values)");
+  assert.ok((full.querySelector("details")?.textContent ?? "").includes("source units"));
+  assert.ok(
+    [...full.querySelectorAll("td")].some(
+      (cell) => cell.textContent === String(timeTable().rows[0].value),
+    ),
+  );
+  await act(async () => {
+    fullRoot.unmount();
+  });
+  preview.remove();
+  full.remove();
 });
 
 function xTitleNodes(host: Element): Element[] {

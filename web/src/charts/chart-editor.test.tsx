@@ -6,6 +6,7 @@ import { Window } from "happy-dom";
 import React from "react";
 
 import { createSceneStore } from "../scene-store.ts";
+import { assertSameNode } from "../testing/dom-assert.ts";
 import type { LayerDoc, Scene } from "../types.ts";
 import { draftForEdit, draftForNew } from "./chart-editor.tsx";
 
@@ -106,7 +107,7 @@ test("clipping ranges block save while hints and table stay visible", async (con
   assert.match(host.textContent ?? "", /baseline|observed/);
   assert.ok(host.querySelector("details"));
   assert.equal(JSON.stringify(store.getSnapshot().charts), before);
-  assert.equal(document.activeElement, save);
+  assertSameNode(document.activeElement, save);
   await act(async () => {
     root.unmount();
   });
@@ -415,18 +416,18 @@ test("repeated dirty back keeps pending with focus and keep restores invoking", 
     back.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   const saveConfirm = confirmSaveButton(host);
-  assert.equal(document.activeElement, saveConfirm);
+  assertSameNode(document.activeElement, saveConfirm);
   await act(async () => {
     back.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assert.equal(cancelled, 0);
   assert.ok(host.querySelector(".editor-confirm"));
-  assert.equal(document.activeElement, saveConfirm);
+  assertSameNode(document.activeElement, saveConfirm);
   const keep = keepButton(host);
   await act(async () => {
     keep.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
-  assert.equal(document.activeElement, back);
+  assertSameNode(document.activeElement, back);
   assert.equal(cancelled, 0);
   await act(async () => {
     root.unmount();
@@ -603,13 +604,13 @@ test("complete save stores options preview and invalid stays with focus", async 
   assert.match(host.textContent ?? "", /Custom X/);
   assert.match(host.textContent ?? "", /Custom Y/);
   assert.match(host.textContent ?? "", /0\.393/);
-  assert.equal(host.querySelector(".chart-grid"), null);
+  assertSameNode(host.querySelector(".chart-grid"), null);
   assert.ok(host.querySelectorAll("circle").length >= 1);
   assert.match(host.querySelector("polyline")?.getAttribute("stroke") ?? "", /#7a2430/);
   await act(async () => {
     checkboxFor(host, "Current").click();
   });
-  assert.equal(host.querySelector(".chart-cursor"), null);
+  assertSameNode(host.querySelector(".chart-cursor"), null);
   await act(async () => {
     checkboxFor(host, "Reference lines").click();
   });
@@ -646,7 +647,7 @@ test("complete save stores options preview and invalid stays with focus", async 
   assert.equal(saved.length, 1);
   assert.match(host.textContent ?? "", /observed|baseline/);
   assert.equal(title.value, "Edited title");
-  assert.equal(document.activeElement, save);
+  assertSameNode(document.activeElement, save);
   assert.equal(JSON.stringify(store.getSnapshot().charts), beforeInvalid);
   await act(async () => {
     const back = backButton(host);
@@ -654,14 +655,14 @@ test("complete save stores options preview and invalid stays with focus", async 
   });
   assert.ok(host.querySelector(".editor-confirm"));
   const decisionSave = confirmSaveButton(host);
-  assert.equal(document.activeElement, decisionSave);
+  assertSameNode(document.activeElement, decisionSave);
   await act(async () => {
     decisionSave.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assert.equal(saved.length, 1);
   assert.match(host.textContent ?? "", /observed|baseline/);
   assert.ok(host.querySelector(".editor-confirm"));
-  assert.equal(document.activeElement, decisionSave);
+  assertSameNode(document.activeElement, decisionSave);
   assert.equal(JSON.stringify(store.getSnapshot().charts), beforeInvalid);
   assert.equal((host.querySelector('input[type="text"]') as HTMLInputElement).value, "Edited title");
   const retained = [...host.querySelectorAll('input[type="number"]')] as HTMLInputElement[];
@@ -822,6 +823,123 @@ function selectFor(host: ParentNode, labelText: string): HTMLSelectElement {
 
   return label?.querySelector("select") as HTMLSelectElement;
 }
+
+test("checkbox rows align while types show capitals with lowercase values", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { ChartEditor, draftForEdit } = await import("./chart-editor.tsx");
+
+  const layers = [rainLayer()];
+  const store = createSceneStore(layers, display());
+  const definition = store.getSnapshot().charts.definitions[0];
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(
+      <ChartEditor
+        scene={makeScene(layers)}
+        store={store}
+        initial={draftForEdit(definition)}
+        isNew={false}
+        currentTime={null}
+        onSave={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+  });
+  const boxes = [...host.querySelectorAll('input[type="checkbox"]')];
+  assert.equal(boxes.length, 6);
+  for (const box of boxes) {
+    const label = box.closest("label")!;
+    assert.ok(label.classList.contains("checkbox-row"));
+    assert.ok((label.textContent ?? "").trim().length > 0);
+  }
+  const typeSelect = selectFor(host, "Type");
+  const options = [...typeSelect.querySelectorAll("option")];
+  assert.deepEqual(options.map((option) => option.value), ["line", "bar", "area"]);
+  assert.deepEqual(
+    options.map((option) => option.textContent),
+    ["Line", "Bar", "Area"],
+  );
+  await act(async () => {
+    root.unmount();
+  });
+});
+
+test("preview notes follow the draft with exact ranges and no duplicate hints", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { ChartEditor, draftForEdit } = await import("./chart-editor.tsx");
+
+  const rain = rainLayer();
+  rain.area_series!.valid_fraction[0] = 0.5;
+  const layers = [rain, tempLayer(), terrainLayer()];
+  const store = createSceneStore(layers, display());
+  const definition = store.getSnapshot().charts.definitions[0];
+  const saved: string[] = [];
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(
+      <ChartEditor
+        scene={makeScene(layers)}
+        store={store}
+        initial={{
+          ...draftForEdit(definition),
+          options: { ...draftForEdit(definition).options, yRange: [0, 20.123456789] },
+        }}
+        isNew={false}
+        currentTime={null}
+        onSave={(id) => saved.push(id)}
+        onCancel={() => {}}
+      />,
+    );
+  });
+  assertSameNode(host.querySelector(".chart-hint"), null);
+  assert.ok(host.querySelector("[data-chart-notes-heading]"));
+  const notesText = () => host.querySelector(".chart-notes")?.textContent ?? "";
+  assert.match(notesText(), /Hollow marks/);
+  assert.doesNotMatch(notesText(), /By month averages|Filled size depends/);
+  await act(async () => {
+    setSelectValue(window, selectFor(host, "Table"), "seasonal_cycle");
+  });
+  assert.match(notesText(), /By month averages/);
+  await act(async () => {
+    setSelectValue(window, selectFor(host, "Layer"), "temp");
+  });
+  assert.doesNotMatch(notesText(), /Hollow marks/);
+  assert.match(notesText(), /By month averages/);
+  await act(async () => {
+    setSelectValue(window, selectFor(host, "Type"), "line");
+  });
+  assert.doesNotMatch(notesText(), /Filled size depends/);
+  await act(async () => {
+    setSelectValue(window, selectFor(host, "Type"), "area");
+  });
+  assert.match(notesText(), /Filled size depends on the chosen zero/);
+  assert.equal(host.querySelectorAll(".chart-notes").length, 1);
+  assertSameNode(host.querySelector(".chart-hint"), null);
+  const save = saveButton(host);
+  await act(async () => {
+    save.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.equal(saved.length, 1);
+  const stored = store.getSnapshot().charts.definitions.find((entry) => entry.id === saved[0])!;
+  assert.deepEqual(stored.source, { layerId: "temp", shape: "seasonal_cycle" });
+  assert.equal(stored.chartType, "area");
+  assert.deepEqual(stored.options.yRange, [0, 20.123456789]);
+  await act(async () => {
+    root.unmount();
+  });
+});
 
 function checkboxFor(host: ParentNode, labelText: string): HTMLInputElement {
   const label = [...host.querySelectorAll("label")].find(

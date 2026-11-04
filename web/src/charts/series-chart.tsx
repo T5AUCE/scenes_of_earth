@@ -1,12 +1,14 @@
 /** Prepare time and seasonal tables for the shared SVG renderer. */
-import { contourColor, fieldGradient, inkColor, rgbToHex } from "../render/palettes";
+import { contourColor, fieldGradient, inkColor } from "../render/palettes";
 import type { LayerDoc } from "../types";
 import { convertValue, displayUnitFor } from "../units";
-import { hintFor, type ChartOptions } from "./definitions";
+import type { ChartOptions } from "./definitions";
+import { chartNotesFor } from "./notes";
+import { paletteInkFor } from "./paint";
 import { buildSeasonalCycle, buildTimeSeries, rowAtTime } from "./series";
 import { SvgChart } from "./svg-chart";
 import { finiteValues, toDisplayTable, type ChartType } from "./table";
-import { baselineFor } from "./ticks";
+import { baselineFor, formatPresentationValue } from "./ticks";
 
 /** Props of a time or seasonal chart; the table stays derived from the layer. */
 export interface SeriesChartProps {
@@ -19,6 +21,7 @@ export interface SeriesChartProps {
   height_PX?: number;
   xDomain?: [number, number] | null;
   showTable?: boolean;
+  showNotes?: boolean;
   viewerUnit?: string | null;
   effectivePalette?: string | null;
   effectiveInk?: string | null;
@@ -38,6 +41,7 @@ export function SeriesChart({
   height_PX,
   xDomain = null,
   showTable,
+  showNotes = true,
   viewerUnit = null,
   effectivePalette = null,
   effectiveInk = null,
@@ -48,7 +52,7 @@ export function SeriesChart({
   const displayUnit = displayUnitFor(layer.units, options.displayUnit ?? viewerUnit);
   const converted = toDisplayTable(canonical, displayUnit, options.yTitle);
   const display = { ...converted, xTitle: options.xTitle ?? converted.xTitle };
-  const hint = hintFor(shape, chartType, layer.units, display.rows.length);
+  const notes = chartNotesFor(layer, canonical, chartType);
   const current = currentText(layer, shape, currentTime, displayUnit);
   const baseline = convertedBaseline(canonical, chartType, layer.units, displayUnit);
 
@@ -69,13 +73,21 @@ export function SeriesChart({
         height_PX={height_PX}
         compact={compact}
         showTable={showTable ?? !compact}
+        showCoverageDetails={showNotes}
         fallbackNames={fallbackNamesFor(layer)}
         baseline={baseline}
       />
-      {hint && <p className="chart-hint">{hint}</p>}
-      {seasonalNote(shape, display) && <p className="chart-note">{seasonalNote(shape, display)}</p>}
-      {coverageNote(display) && <p className="chart-note">{coverageNote(display)}</p>}
+      {showNotes && notes.length > 0 && notesFor(notes)}
     </figure>
+  );
+}
+
+function notesFor(notes: string[]): React.ReactElement {
+  return (
+    <div className="chart-notes">
+      <h4 data-chart-notes-heading={true} tabIndex={-1}>{"Notes"}</h4>
+      {notes.map((note, index) => <p key={index} className="chart-note">{note}</p>)}
+    </div>
   );
 }
 
@@ -109,15 +121,17 @@ function currentText(
     const table = buildTimeSeries(layer);
     const row = rowAtTime(table, currentTime);
     if (!row || typeof row.value !== "number") return " · unavailable for current time";
+    const presented = formatPresentationValue(convertValue(row.value, table.units, displayUnit));
 
-    return ` · ${String(convertValue(row.value, table.units, displayUnit))} ${displayUnit}`;
+    return ` · ${presented} ${displayUnit}`;
   }
   const table = buildSeasonalCycle(layer);
   const month = Number(currentTime.slice(5, 7));
   const row = table.rows.find((entry) => entry.x === month);
   if (!row || typeof row.value !== "number") return " · unavailable for current time";
+  const presented = formatPresentationValue(convertValue(row.value, table.units, displayUnit));
 
-  return ` · ${String(convertValue(row.value, table.units, displayUnit))} ${displayUnit}`;
+  return ` · ${presented} ${displayUnit}`;
 }
 
 /** Palette-derived ink keeps series colours with the map until the viewer overrides them. */
@@ -134,7 +148,7 @@ export function seriesInkFor(
     const contour = contourColor(palette);
     if (contour) return contour;
     const gradient = fieldGradient(palette);
-    if (gradient && gradient.length > 0) return rgbToHex(gradient[Math.floor(gradient.length / 2)]);
+    if (gradient && gradient.length > 0) return paletteInkFor(gradient, "#1a3658");
   }
 
   return "#1a3658";
@@ -157,27 +171,4 @@ function displayRange(
     convertValue(range[0], nativeUnits, displayUnit),
     convertValue(range[1], nativeUnits, displayUnit),
   ];
-}
-
-function seasonalNote(
-  shape: "time_series" | "seasonal_cycle",
-  table: ReturnType<typeof toDisplayTable>,
-) {
-  if (shape !== "seasonal_cycle" || table.shape !== "seasonal_cycle") return null;
-  const counts = table.rows.map((row) => row.sampleCount);
-  const smallest = Math.min(...counts);
-  const largest = Math.max(...counts);
-
-  return `By month averages each available January together; `
-    + `the Sample count column shows how many years contributed `
-    + `(${String(smallest)}-${String(largest)}).`;
-}
-
-function coverageNote(table: ReturnType<typeof toDisplayTable>) {
-  if (table.shape !== "time_series" && table.shape !== "seasonal_cycle") return null;
-  if (table.rows.some((row) => row.validFraction < 0.95)) {
-    return "Hollow marks cover less than 95% of the outline.";
-  }
-
-  return null;
 }

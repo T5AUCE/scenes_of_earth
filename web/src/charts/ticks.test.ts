@@ -7,6 +7,7 @@ import {
   densityHint,
   DENSITY_HINT_THRESHOLD,
   domainIncludes,
+  formatPresentationValue,
   offsetFillWarning,
   quantileBarHint,
   ticksForDomain,
@@ -96,6 +97,21 @@ test("domain helpers treat endpoints as included", () => {
   assert.equal(domainIncludes([0, 10], 0), true);
   assert.equal(domainIncludes([0, 10], 10), true);
   assert.equal(domainIncludes([0, 10], -0.1), false);
+});
+
+test("presentation values keep three decimals without trailing zeros or negative zero", () => {
+  assert.equal(formatPresentationValue(1.23456), "1.235");
+  assert.equal(formatPresentationValue(1.2), "1.2");
+  assert.equal(formatPresentationValue(100), "100");
+  assert.equal(formatPresentationValue(0), "0");
+  assert.equal(formatPresentationValue(-0), "0");
+  assert.equal(formatPresentationValue(-0.0001), "-1e-4");
+  assert.equal(formatPresentationValue(0.00004), "4e-5");
+  assert.equal(formatPresentationValue(0.0005), "0.001");
+  assert.equal(formatPresentationValue(Number.NaN), "NaN");
+  assert.equal(formatPresentationValue(Number.POSITIVE_INFINITY), "Infinity");
+  assert.deepEqual(autoDomain(timeTable(), "bar"), [0, 20.5]);
+  assert.equal(baselineFor("bar", 10), 0);
 });
 
 function timeTable(): TimeSeriesTable {

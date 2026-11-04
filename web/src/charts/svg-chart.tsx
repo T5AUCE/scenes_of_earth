@@ -1,7 +1,8 @@
 /** One accessible SVG renderer for line, bar and area chart tables. */
 import { useEffect, useMemo, useState } from "react";
 
-import { autoDomain, ticksForDomain } from "./ticks";
+import { chartPaintFor } from "./paint";
+import { autoDomain, formatPresentationValue, ticksForDomain } from "./ticks";
 import { finiteValues, type ChartTable, type ChartType } from "./table";
 import { useElementWidth } from "./use-element-width";
 
@@ -38,6 +39,7 @@ const MAX_TICK_LABEL_CHARS = 12;
 
 /** Presentation labels stay short enough for the gutter while keeping distinct values. */
 const FALLBACK_TICK_DECIMALS = 2;
+const PRESENTATION_TICK_MAX_DECIMALS = 3;
 const WHOLE_STEP_THRESHOLD = 1;
 const DECIMAL_GUARD_DIGITS = 1;
 const MIN_EXPONENT_MANTISSA_DIGITS = 2;
@@ -76,11 +78,16 @@ const SINGLE_RADIUS_PX = 4;
 const HOLLOW_WIDTH_PX = 1.5;
 const BAR_MIN_HEIGHT_PX = 1;
 
+/** A dark edge keeps a light mark visible without rewriting its stored ink. */
+const CONTRAST_OUTLINE_PX = 1.5;
+const LIGHT_LINE_UNDER_PX = 4;
+const LIGHT_COMPACT_LINE_UNDER_PX = 3;
+const AREA_EDGE_PX = 2;
+
 /** Time labels keep a gap so neighbouring dates never touch at gallery widths. */
 const TIME_LABEL_GAP_PX = 8;
 
-/** Visible grid resolutions round while exact values stay in titles and tables. */
-const GRID_SIGNIFICANT_DIGITS = 3;
+/** Visible grid resolutions use concise values while exact notes stay in titles and tables. */
 const FULL_GRID_SUFFIX = "° analysis grid";
 const SHORT_GRID_SUFFIX = "° grid";
 
@@ -99,6 +106,7 @@ export interface SvgChartProps {
   height_PX?: number;
   compact?: boolean;
   showTable?: boolean;
+  showCoverageDetails?: boolean;
   fallbackNames?: string | null;
   resolutionNote?: string | null;
   resolutionValue?: number | null;
@@ -123,6 +131,7 @@ export function SvgChart({
   height_PX,
   compact = false,
   showTable = true,
+  showCoverageDetails = true,
   fallbackNames = null,
   resolutionNote = null,
   resolutionValue = null,
@@ -132,7 +141,7 @@ export function SvgChart({
   const [cursor, setCursor] = useState<number | null>(null);
   const paint = ink ?? "var(--chart-ink, #1a3658)";
   const height = height_PX ?? heightFor(table, compact);
-  const type = effectiveType(table, chartType, compact);
+  const type = effectiveType(table, chartType);
   const convertedZero = convertedBaseline(table, type, baseline);
   const references = useMemo(
     () => visibleReferences(table, showReferences && !compact),
@@ -158,6 +167,7 @@ export function SvgChart({
     currentTime,
     showCurrentTime,
     fallbackNames,
+    showCoverageDetails,
   );
   const hasDomain = domain !== null;
   const rawTicks = hasDomain ? ticksForDomain(domain!, 4) : [];
@@ -225,6 +235,7 @@ export function SvgChart({
               showPoints,
               fallbackNames,
               convertedZero,
+              showCoverageDetails,
             )}
             {cursorLine(table, currentIndex, showCurrentTime, currentTime, geometry, compact)}
           </>
@@ -250,12 +261,7 @@ function heightFor(table: ChartTable, compact: boolean) {
   return SERIES_HEIGHT_PX;
 }
 
-function effectiveType(
-  table: ChartTable,
-  chartType: ChartType,
-  compact: boolean,
-): ChartType {
-  if (compact) return "line";
+function effectiveType(table: ChartTable, chartType: ChartType): ChartType {
   if (table.shape === "categorical_shares") return "line";
 
   return chartType;
@@ -376,39 +382,44 @@ function tooltipFor(
   currentTime: string | null,
   showCurrentTime: boolean,
   fallbackNames: string | null,
+  showCoverageDetails: boolean,
 ) {
   if (table.shape === "categorical_shares") return "";
   if (inspection !== null) {
     const row = table.rows[inspection];
     if (!row) return "";
     if (table.shape === "time_series" || table.shape === "seasonal_cycle") {
-      const text = rowText(table, row, fallbackNames);
+      const text = rowText(table, row, fallbackNames, showCoverageDetails);
 
       return `Inspection: ${text}`;
     }
 
-    return rowText(table, row, fallbackNames);
+    return rowText(table, row, fallbackNames, showCoverageDetails);
   }
   if (currentIndex !== null) {
     const row = table.rows[currentIndex];
     if (!row) return "";
-    return rowText(table, row, fallbackNames);
+    return rowText(table, row, fallbackNames, showCoverageDetails);
   }
   if (currentTime && showCurrentTime) return "No observation for current time.";
 
-  return currentValueText(table, fallbackNames);
+  return currentValueText(table, fallbackNames, showCoverageDetails);
 }
 
-function currentValueText(table: ChartTable, fallbackNames: string | null) {
+function currentValueText(
+  table: ChartTable,
+  fallbackNames: string | null,
+  showCoverageDetails: boolean,
+) {
   if (table.shape === "categorical_shares") return "";
   const finite = table.rows.filter((row) => typeof row.value === "number");
   if (finite.length === 0) return "No data in this table.";
   const last = finite[finite.length - 1];
 
-  return rowText(table, last, fallbackNames);
+  return rowText(table, last, fallbackNames, showCoverageDetails);
 }
 
-// Full precision stays in the tooltip because String never rounds the stored value.
+// Ordinary inspection uses concise values while tables keep exact numbers for download.
 interface RowCoverage {
   value: number | null;
   label: string;
@@ -418,19 +429,25 @@ interface RowCoverage {
   yearRange?: [number, number] | null;
 }
 
-function rowText(table: ChartTable, row: RowCoverage, fallbackNames: string | null) {
+function rowText(
+  table: ChartTable,
+  row: RowCoverage,
+  fallbackNames: string | null,
+  showCoverageDetails = true,
+) {
   const units = table.units;
-  const value = row.value === null ? "No data" : `${String(row.value)} ${units}`;
-  const coverage = `valid ${String(row.validFraction * 100)}%`;
-  const seasonal = seasonalDetail(row);
+  const value = row.value === null ? "No data" : `${formatPresentationValue(row.value)} ${units}`;
   const label = table.shape === "distribution" ? `${row.label} below` : row.label;
+  if (!showCoverageDetails) return `${label}: ${value}`;
+  const coverage = `valid ${formatPresentationValue(row.validFraction * 100)}%`;
+  const seasonal = seasonalDetail(row);
   const base = `${label}: ${value} (${coverage}${seasonal}`;
   if (row.fallbackFraction === null || row.fallbackFraction === 0 || !fallbackNames) {
     return `${base})`;
   }
+  const share = formatPresentationValue(row.fallbackFraction * 100);
 
-  return `${base}, `
-    + `${String(row.fallbackFraction * 100)}% of outline filled from ${fallbackNames})`;
+  return `${base}, ${share}% of outline filled from ${fallbackNames})`;
 }
 
 function seasonalDetail(row: RowCoverage) {
@@ -893,7 +910,9 @@ function referenceLines(
     <g className="chart-references">
       {references.map((reference, index) => (
         <g key={reference.id}>
-          <title>{`${referenceLabel(reference.id)} ${String(reference.value)}`}</title>
+          <title>
+            {`${referenceLabel(reference.id)} ${formatPresentationValue(reference.value)}`}
+          </title>
           <line
             x1={geometry.left}
             x2={geometry.left + geometry.plotWidth}
@@ -951,7 +970,7 @@ function endpointMarkers(
         r={POINT_RADIUS_PX}
         fill="var(--chart-axis, #444)"
       >
-        <title>{`Lowest cell ${String(table.min)}${exactNote}`}</title>
+        <title>{`Lowest cell ${formatPresentationValue(table.min)}${exactNote}`}</title>
       </circle>
       <text
         x={lowX}
@@ -968,7 +987,7 @@ function endpointMarkers(
         r={POINT_RADIUS_PX}
         fill="var(--chart-axis, #444)"
       >
-        <title>{`Highest cell ${String(table.max)}${exactNote}`}</title>
+        <title>{`Highest cell ${formatPresentationValue(table.max)}${exactNote}`}</title>
       </circle>
       <text
         x={highX}
@@ -983,25 +1002,18 @@ function endpointMarkers(
   );
 }
 
-// Exact titles keep the stored resolution while visible labels use the rounded number.
+// Exact titles keep the stored resolution while visible labels use concise values.
 function displayResolutionNumber(
   value: number | null,
   note: string | null,
 ): string | null {
-  if (typeof value === "number" && Number.isFinite(value)) return formatGridResolution(value);
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return formatPresentationValue(value);
+  }
   const parsed = parseResolutionValue(note);
-  if (parsed !== null) return formatGridResolution(parsed);
+  if (parsed !== null) return formatPresentationValue(parsed);
 
   return null;
-}
-
-// Few significant digits keep the visible grid short because cards are only 300 px wide.
-function formatGridResolution(value: number): string {
-  if (!Number.isFinite(value)) return String(value);
-  const rounded = Number(value.toPrecision(GRID_SIGNIFICANT_DIGITS));
-  if (!Number.isFinite(rounded)) return String(value);
-
-  return String(rounded);
 }
 
 function parseResolutionValue(note: string | null): number | null {
@@ -1156,10 +1168,20 @@ function marksFor(
   showPoints: boolean,
   fallbackNames: string | null,
   convertedZero: number | null,
+  showCoverageDetails: boolean,
 ) {
   if (table.shape === "categorical_shares") return null;
   if (chartType === "bar") {
-    return barsFor(table, geometry, paint, inspection, currentIndex, fallbackNames, convertedZero);
+    return barsFor(
+      table,
+      geometry,
+      paint,
+      inspection,
+      currentIndex,
+      fallbackNames,
+      convertedZero,
+      showCoverageDetails,
+    );
   }
   const isolated = isolatedIndices(table);
   if (chartType === "area") {
@@ -1173,6 +1195,7 @@ function marksFor(
       fallbackNames,
       isolated,
       convertedZero,
+      showCoverageDetails,
     );
   }
 
@@ -1186,6 +1209,7 @@ function marksFor(
     showPoints,
     fallbackNames,
     isolated,
+    showCoverageDetails,
   );
 }
 
@@ -1197,12 +1221,15 @@ function barsFor(
   currentIndex: number | null,
   fallbackNames: string | null,
   convertedZero: number | null,
+  showCoverageDetails: boolean,
 ) {
   if (table.shape === "categorical_shares") return null;
   const baseline = convertedZero ?? 0;
   const baseY = geometry.yOf(baseline);
   const widths = barWidths(table, geometry);
   const selected = inspection ?? currentIndex;
+  const resolved = chartPaintFor(paint);
+  const stroke = resolved.edge ?? resolved.ink;
 
   return (
     <g className="chart-bars">
@@ -1211,7 +1238,9 @@ function barsFor(
         const centre = geometry.xOf(xPosition(table, row));
         const half = widths[index] / 2;
         const hollow = row.validFraction < LOW_COVERAGE_FRACTION;
-        const strokeHalf = hollow || selected === index ? HOLLOW_WIDTH_PX / 2 : 0;
+        const outlined = hollow || selected === index || resolved.edge !== null;
+        const outline = outlined ? CONTRAST_OUTLINE_PX : 0;
+        const strokeHalf = outlined ? outline / 2 : 0;
         const horizontal = clippedBarHorizontal(centre, half, geometry, strokeHalf);
         const vertical = clippedBarVertical(geometry.yOf(row.value), baseY, geometry, strokeHalf);
 
@@ -1222,11 +1251,11 @@ function barsFor(
             y={vertical.y}
             width={horizontal.width}
             height={vertical.height}
-            fill={hollow ? "none" : paint}
-            stroke={paint}
-            strokeWidth={hollow || selected === index ? HOLLOW_WIDTH_PX : 0}
+            fill={hollow ? "none" : resolved.ink}
+            stroke={outlined ? stroke : "none"}
+            strokeWidth={outlined ? outline : 0}
           >
-            <title>{rowText(table, row, fallbackNames)}</title>
+            <title>{rowText(table, row, fallbackNames, showCoverageDetails)}</title>
           </rect>
         );
       })}
@@ -1305,12 +1334,15 @@ function areaFor(
   fallbackNames: string | null,
   isolated: Set<number>,
   convertedZero: number | null,
+  showCoverageDetails: boolean,
 ) {
   if (table.shape === "categorical_shares") return null;
   const baseline = convertedZero ?? 0;
   const baseY = geometry.yOf(baseline);
   const segments = segmentsFor(table);
   const selected = inspection ?? currentIndex;
+  const resolved = chartPaintFor(paint);
+  const edge = resolved.edge;
 
   return (
     <g className="chart-areas">
@@ -1318,13 +1350,32 @@ function areaFor(
         <polygon
           key={index}
           points={areaPoints(segment, geometry, baseY)}
-          fill={paint}
+          fill={resolved.ink}
           opacity={0.3}
-          stroke={paint}
-          strokeWidth={1}
+          stroke={edge ?? resolved.ink}
+          strokeWidth={edge ? AREA_EDGE_PX : 1}
         />
       ))}
-      {circlesFor(table, geometry, paint, selected, showPoints, fallbackNames, isolated)}
+      {edge && segments.map((segment, index) => (
+        <polyline
+          key={`edge-${index}`}
+          points={linePoints(segment, geometry)}
+          fill="none"
+          stroke={edge}
+          strokeWidth={AREA_EDGE_PX}
+          aria-hidden={true}
+        />
+      ))}
+      {circlesFor(
+        table,
+        geometry,
+        paint,
+        selected,
+        showPoints,
+        fallbackNames,
+        isolated,
+        showCoverageDetails,
+      )}
     </g>
   );
 }
@@ -1339,23 +1390,47 @@ function linesFor(
   showPoints: boolean,
   fallbackNames: string | null,
   isolated: Set<number>,
+  showCoverageDetails: boolean,
 ) {
   if (table.shape === "categorical_shares") return null;
   const segments = segmentsFor(table);
   const selected = inspection ?? currentIndex;
+  const resolved = chartPaintFor(paint);
+  const edge = resolved.edge;
+  const width = compact ? 1 : 2;
+  const under = compact ? LIGHT_COMPACT_LINE_UNDER_PX : LIGHT_LINE_UNDER_PX;
 
   return (
     <g className="chart-lines">
+      {edge && segments.map((segment, index) => (
+        <polyline
+          key={`under-${index}`}
+          points={linePoints(segment, geometry)}
+          fill="none"
+          stroke={edge}
+          strokeWidth={under}
+          aria-hidden={true}
+        />
+      ))}
       {segments.map((segment, index) => (
         <polyline
           key={index}
           points={linePoints(segment, geometry)}
           fill="none"
-          stroke={paint}
-          strokeWidth={compact ? 1 : 2}
+          stroke={resolved.ink}
+          strokeWidth={width}
         />
       ))}
-      {circlesFor(table, geometry, paint, selected, showPoints, fallbackNames, isolated)}
+      {circlesFor(
+        table,
+        geometry,
+        paint,
+        selected,
+        showPoints,
+        fallbackNames,
+        isolated,
+        showCoverageDetails,
+      )}
     </g>
   );
 }
@@ -1368,8 +1443,11 @@ function circlesFor(
   showPoints: boolean,
   fallbackNames: string | null,
   isolated: Set<number>,
+  showCoverageDetails: boolean,
 ) {
   if (table.shape === "categorical_shares") return null;
+  const resolved = chartPaintFor(paint);
+  const stroke = resolved.edge ?? resolved.ink;
 
   return (
     <g className="chart-points">
@@ -1380,6 +1458,8 @@ function circlesFor(
         if (!showPoints && !hollow && selected !== index && !single) return null;
         const x = xPosition(table, row);
         const radius = single ? SINGLE_RADIUS_PX : POINT_RADIUS_PX;
+        const outlined = hollow || selected === index || resolved.edge !== null;
+        const width = hollow ? HOLLOW_WIDTH_PX : selected === index ? 2 : CONTRAST_OUTLINE_PX;
 
         return (
           <circle
@@ -1387,11 +1467,11 @@ function circlesFor(
             cx={geometry.xOf(x)}
             cy={geometry.yOf(row.value)}
             r={radius}
-            fill={hollow ? "none" : paint}
-            stroke={paint}
-            strokeWidth={hollow ? HOLLOW_WIDTH_PX : selected === index ? 2 : 0}
+            fill={hollow ? "none" : resolved.ink}
+            stroke={outlined ? stroke : "none"}
+            strokeWidth={outlined ? width : 0}
           >
-            <title>{rowText(table, row, fallbackNames)}</title>
+            <title>{rowText(table, row, fallbackNames, showCoverageDetails)}</title>
           </circle>
         );
       })}
@@ -1504,8 +1584,9 @@ function chartTable(table: ChartTable, resolutionNote: string | null) {
 
   return (
     <details className="chart-table">
-      <summary>{"Table"}</summary>
+      <summary>{"Table (exact values)"}</summary>
       <div className="chart-table-scroll">
+        <p>{`Values use display units (${table.units}); CSV downloads use source units.`}</p>
         <table>
           <caption>{table.yTitle}</caption>
           <thead>
@@ -1535,8 +1616,9 @@ function chartTable(table: ChartTable, resolutionNote: string | null) {
 function seasonalTable(table: Extract<ChartTable, { shape: "seasonal_cycle" }>) {
   return (
     <details className="chart-table">
-      <summary>{"Table"}</summary>
+      <summary>{"Table (exact values)"}</summary>
       <div className="chart-table-scroll">
+        <p>{`Values use display units (${table.units}); CSV downloads use source units.`}</p>
         <table>
           <caption>{table.yTitle}</caption>
           <thead>
@@ -1575,7 +1657,7 @@ function distributionTable(
 
   return (
     <details className="chart-table">
-      <summary>{"Table"}</summary>
+      <summary>{"Table (exact values)"}</summary>
       <div className="chart-table-scroll">
         <p>
           {`Mean ${String(table.mean)}, median ${String(table.median)}, `
@@ -1583,6 +1665,7 @@ function distributionTable(
             + `Valid terrain covers ${String(table.validFraction * 100)}% of the outline. `
             + distributionReferences(table)}
         </p>
+        <p>{`Values use display units (${table.units}); CSV downloads use source units.`}</p>
         <table>
           <caption>{table.yTitle}</caption>
           <thead>
@@ -1832,7 +1915,7 @@ function presentationDecimals(spacing: number) {
   if (spacing >= WHOLE_STEP_THRESHOLD) return 0;
   const decimals = Math.max(0, -Math.floor(Math.log10(spacing))) + DECIMAL_GUARD_DIGITS;
 
-  return Math.min(decimals, MAX_FIXED_DECIMALS);
+  return Math.min(decimals, PRESENTATION_TICK_MAX_DECIMALS);
 }
 
 // Short exponentials stay readable where fixed decimals would run past the margin.

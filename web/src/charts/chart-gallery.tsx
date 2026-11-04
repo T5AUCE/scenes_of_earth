@@ -1,14 +1,18 @@
 /** Gallery of saved chart previews with unavailable placeholders. */
+import { useState } from "react";
+
 import type { SceneStore } from "../scene-store";
 import type { LayerDoc, Scene } from "../types";
 import { useSceneStore } from "../ui/use-scene-store";
 import {
+  canonicalTableFor,
   creationAvailability,
   resolveMainId,
   unavailableTemplates,
   type ChartDefinition,
 } from "./definitions";
 import { HypsometryChart } from "./hypsometry-chart";
+import { chartNotesFor } from "./notes";
 import { SeriesChart } from "./series-chart";
 import { unionIntervals } from "./series";
 
@@ -17,7 +21,7 @@ export interface ChartGalleryProps {
   scene: Scene;
   store: SceneStore;
   currentTime: string | null;
-  onOpenDetail(id: string): void;
+  onOpenDetail(id: string, focusNotes?: boolean): void;
   onEdit(id: string): void;
   onNew(): void;
   syncNotice?: string | null;
@@ -79,6 +83,7 @@ export function ChartGallery({
             effectiveInk={effectiveInkFor(display, definition, layers)}
             xDomain={domain}
             onOpen={() => onOpenDetail(definition.id)}
+            onOpenNotes={() => onOpenDetail(definition.id, true)}
             onEdit={() => onEdit(definition.id)}
           />
         ))}
@@ -147,6 +152,7 @@ interface GalleryCardProps {
   effectiveInk: string | null;
   xDomain: [number, number] | null;
   onOpen(): void;
+  onOpenNotes(): void;
   onEdit(): void;
 }
 
@@ -161,10 +167,18 @@ function GalleryCard({
   effectiveInk,
   xDomain,
   onOpen,
+  onOpenNotes,
   onEdit,
 }: GalleryCardProps): React.ReactElement {
   const layer = scene.layers.find((entry) => entry.id === definition.source.layerId);
-  const setMain = () => store.dispatch({ kind: "setMain", id: definition.id });
+  const [confirmation, setConfirmation] = useState<string | null>(null);
+  const setMain = () => {
+    store.dispatch({ kind: "setMain", id: definition.id });
+    setConfirmation(
+      `${definition.title} is now the main chart in the scene panel's Charts tab.`,
+    );
+  };
+  const notes = notesFor(layer ?? null, definition);
 
   return (
     <article className="gallery-card" data-chart-id={definition.id}>
@@ -173,6 +187,16 @@ function GalleryCard({
           {definition.title}
         </button>
         {isMain && <span className="chart-main-badge">{"Main"}</span>}
+        {notes.length > 0 && (
+          <button
+            type="button"
+            className="chart-notes-button"
+            aria-label={`Notes for ${definition.title}; opens chart detail`}
+            onClick={onOpenNotes}
+          >
+            {"Notes"}
+          </button>
+        )}
       </h4>
       <div className="gallery-preview" onClick={onOpen} onKeyDown={previewKey(onOpen)}>
         {layer && previewFor(
@@ -196,8 +220,20 @@ function GalleryCard({
           {"Use as main"}
         </button>
       </div>
+      {confirmation && <p role="status">{confirmation}</p>}
     </article>
   );
+}
+
+function notesFor(layer: LayerDoc | null, definition: ChartDefinition): string[] {
+  if (!layer) return [];
+  try {
+    const canonical = canonicalTableFor(layer, definition.source.shape);
+
+    return chartNotesFor(layer, canonical, definition.chartType);
+  } catch {
+    return [];
+  }
 }
 
 function previewKey(onOpen: () => void) {
@@ -225,6 +261,7 @@ function previewFor(
         chartType={definition.chartType}
         options={definition.options}
         showTable={false}
+        showNotes={false}
         viewerUnit={viewerUnit}
         effectivePalette={effectivePalette}
         effectiveInk={effectiveInk}
@@ -240,6 +277,7 @@ function previewFor(
       options={definition.options}
       currentTime={currentTime}
       showTable={false}
+      showNotes={false}
       viewerUnit={viewerUnit}
       effectivePalette={effectivePalette}
       effectiveInk={effectiveInk}

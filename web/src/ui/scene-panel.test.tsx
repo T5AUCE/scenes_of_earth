@@ -6,6 +6,7 @@ import { Window } from "happy-dom";
 import React from "react";
 
 import { createSceneStore } from "../scene-store.ts";
+import { assertSameNode } from "../testing/dom-assert.ts";
 import type { LayerDoc, Scene } from "../types.ts";
 
 test("the collapsed panel keeps its label and switches its preview", async (context) => {
@@ -195,7 +196,7 @@ test("open, Escape and close keep focus on the collapsed entry point", async (co
   const creditsTab = [...dialog.querySelectorAll('[role="tab"]')].find(
     (button) => button.textContent === "Credits",
   ) as HTMLButtonElement;
-  assert.equal(document.activeElement, creditsTab);
+  assertSameNode(document.activeElement, creditsTab);
 
   await act(async () => {
     dialog.dispatchEvent(new window.Event("cancel", { bubbles: true, cancelable: true }));
@@ -206,7 +207,7 @@ test("open, Escape and close keep focus on the collapsed entry point", async (co
     panel!.closeFull();
   });
   assert.equal(panel!.isOpen, false);
-  assert.equal(
+  assertSameNode(
     document.activeElement,
     panel!.element.querySelector(".expand"),
   );
@@ -276,7 +277,7 @@ test("an immediate Credits open wins before the first commit", async (context) =
     dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
     "Credits",
   );
-  assert.equal(document.activeElement, creditsTab);
+  assertSameNode(document.activeElement, creditsTab);
   assert.equal(dialog.querySelector(".mini-time span")?.textContent, "2020-02");
 
   await act(async () => panel!.destroy());
@@ -313,7 +314,7 @@ test("an immediate Charts open wins before the first commit", async (context) =>
     dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
     "Charts",
   );
-  assert.equal(document.activeElement, chartsTab);
+  assertSameNode(document.activeElement, chartsTab);
 
   await act(async () => panel!.destroy());
 });
@@ -351,7 +352,7 @@ test("the first About open focuses its tab and resets scroll", async (context) =
     dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
     "About",
   );
-  assert.equal(document.activeElement, aboutTab);
+  assertSameNode(document.activeElement, aboutTab);
   assert.equal(main.scrollTop, 0);
   assert.match(dialog.textContent ?? "", /Test scene/);
 
@@ -385,7 +386,7 @@ test("reopening the same tab refocuses and resets scroll", async (context) => {
     panel!.closeFull();
   });
   assert.equal(panel!.isOpen, false);
-  assert.equal(
+  assertSameNode(
     document.activeElement,
     panel!.element.querySelector(".expand"),
   );
@@ -398,7 +399,7 @@ test("reopening the same tab refocuses and resets scroll", async (context) => {
   const creditsTab = [...dialog.querySelectorAll('[role="tab"]')].find(
     (button) => button.textContent === "Credits",
   ) as HTMLButtonElement;
-  assert.equal(document.activeElement, creditsTab);
+  assertSameNode(document.activeElement, creditsTab);
   assert.equal(main.scrollTop, 0);
 
   await act(async () => panel!.destroy());
@@ -438,7 +439,7 @@ test("a notice from Credits commits About before scrolling to notices", async (c
     dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
     "Credits",
   );
-  assert.equal(dialog.querySelector("#notices-heading"), null);
+  assertSameNode(dialog.querySelector("#notices-heading"), null);
   assert.deepEqual(scrolled, []);
 
   const main = dialog.querySelector("main") as HTMLElement;
@@ -459,7 +460,7 @@ test("a notice from Credits commits About before scrolling to notices", async (c
   const aboutTab = [...dialog.querySelectorAll('[role="tab"]')].find(
     (button) => button.textContent === "About",
   ) as HTMLButtonElement;
-  assert.equal(document.activeElement, aboutTab);
+  assertSameNode(document.activeElement, aboutTab);
   assert.equal(main.scrollTop, 0);
   assert.equal(dialog.querySelector("#notices-heading")?.textContent, "Notices and limits");
   assert.ok(scrolled.includes("notices-heading"));
@@ -558,7 +559,7 @@ test("a pending notice destroyed early leaves no stale scroll or focus", async (
   const creditsTab = [...dialog.querySelectorAll('[role="tab"]')].find(
     (button) => button.textContent === "Credits",
   ) as HTMLButtonElement;
-  assert.equal(document.activeElement, creditsTab);
+  assertSameNode(document.activeElement, creditsTab);
 
   await act(async () => reopened!.destroy());
   assert.equal(dialog.textContent, "");
@@ -597,7 +598,7 @@ test("cancel is prevented and delegated while close returns to Expand", async (c
     panel!.closeFull();
   });
   assert.equal(panel!.isOpen, false);
-  assert.equal(
+  assertSameNode(
     document.activeElement,
     panel!.element.querySelector(".expand"),
   );
@@ -687,7 +688,7 @@ test("gallery opens detail and edit with focus restoration", async (context) => 
     back.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assert.ok(dialog.querySelector(".chart-gallery"));
-  assert.equal(
+  assertSameNode(
     document.activeElement,
     dialog.querySelector('[data-chart-id] button'),
   );
@@ -1037,7 +1038,7 @@ test("close confirm save completes pending close and keep restores focus", async
     save.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assert.deepEqual(closings, ["close"]);
-  assert.equal(dialog.querySelector(".chart-detail"), null);
+  assertSameNode(dialog.querySelector(".chart-detail"), null);
   await act(async () => panel!.destroy());
 });
 
@@ -1068,13 +1069,13 @@ test("gallery detail editor focus lands on exact controls", async (context) => {
     open.focus();
     open.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
-  assert.equal(document.activeElement, dialog.querySelector("[data-detail-back]"));
+  assertSameNode(document.activeElement, dialog.querySelector("[data-detail-back]"));
   const editDetail = dialog.querySelector("[data-detail-edit]") as HTMLButtonElement;
   await act(async () => {
     editDetail.focus();
     editDetail.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
-  assert.equal(
+  assertSameNode(
     document.activeElement,
     dialog.querySelector(".chart-editor .editor-head button"),
   );
@@ -1085,14 +1086,14 @@ test("gallery detail editor focus lands on exact controls", async (context) => {
     cancel.focus();
     cancel.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
-  assert.equal(document.activeElement, dialog.querySelector("[data-detail-back]"));
+  assertSameNode(document.activeElement, dialog.querySelector("[data-detail-back]"));
   const back = dialog.querySelector("[data-detail-back]") as HTMLButtonElement;
   await act(async () => {
     back.focus();
     back.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   const cardButton = dialog.querySelector('[data-chart-id] button') as HTMLButtonElement;
-  assert.equal(document.activeElement, cardButton);
+  assertSameNode(document.activeElement, cardButton);
   await act(async () => panel!.destroy());
 });
 
@@ -1210,7 +1211,10 @@ test("chip follows effective palette and collapse preserves preview", async (con
   await act(async () => {
     chartsTab.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
-  const before = panel!.element.querySelector("polyline, polygon")?.getAttribute("stroke");
+  const mark = () =>
+    panel!.element.querySelector("rect")?.getAttribute("fill")
+    ?? panel!.element.querySelector("polyline, polygon")?.getAttribute("stroke");
+  const before = mark();
   await act(async () => {
     store.dispatch({
       kind: "display",
@@ -1219,7 +1223,7 @@ test("chip follows effective palette and collapse preserves preview", async (con
       },
     });
   });
-  const after = panel!.element.querySelector("polyline, polygon")?.getAttribute("stroke");
+  const after = mark();
   assert.notEqual(before, after);
   const collapse = [...panel!.element.querySelectorAll("button")].find(
     (button) => button.textContent === "Collapse",
@@ -1232,7 +1236,7 @@ test("chip follows effective palette and collapse preserves preview", async (con
   const shown = [...panel!.element.querySelectorAll("button")].find(
     (button) => button.textContent === "Show details",
   )! as HTMLButtonElement;
-  assert.equal(document.activeElement, shown);
+  assertSameNode(document.activeElement, shown);
   assert.match(panel!.element.textContent ?? "", /note/);
   await act(async () => {
     shown.focus();
@@ -1243,7 +1247,7 @@ test("chip follows effective palette and collapse preserves preview", async (con
   const restored = [...panel!.element.querySelectorAll("button")].find(
     (button) => button.textContent === "Collapse",
   )! as HTMLButtonElement;
-  assert.equal(document.activeElement, restored);
+  assertSameNode(document.activeElement, restored);
   await act(async () => panel!.destroy());
 });
 
@@ -1579,6 +1583,291 @@ test("detail downloads follow the selected shape from the gallery", async (conte
 
   await act(async () => panel!.destroy());
 });
+
+test("main switches keep type fidelity while About and collapse stay put", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+    document.body.append(dialog);
+    panel.openFull("charts");
+  });
+  const chartsTab = [...panel!.element.querySelectorAll("button")].find(
+    (button) => button.textContent === "Charts",
+  )!;
+  await act(async () => {
+    chartsTab.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.match(panel!.element.textContent ?? "", /Rain over time · Over time · Bar/);
+  assert.ok(panel!.element.querySelector("rect"));
+
+  const mains = [...dialog.querySelectorAll("button")].filter(
+    (button) => button.textContent === "Use as main",
+  );
+  await act(async () => {
+    mains[1].dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.match(panel!.element.textContent ?? "", /Terrain distribution · Hypsometry · Area/);
+  assert.ok(panel!.element.querySelector("polygon"));
+
+  await act(async () => {
+    store.dispatch({
+      kind: "saveChart",
+      definition: {
+        id: "rain-line",
+        title: "Rain over time",
+        source: { layerId: "rain", shape: "time_series" },
+        chartType: "line",
+        options: {},
+      },
+      makeMain: false,
+    });
+  });
+  await act(async () => {
+    buttonNamed(galleryCardFor(dialog, "rain:time_series"), "Use as main").click();
+  });
+  await act(async () => {
+    panel!.element.querySelector("svg")!.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Home", bubbles: true }),
+    );
+  });
+  assert.match(panel!.element.querySelector(".chart-tooltip")?.textContent ?? "", /2019-01-01/);
+  const lineCard = [...dialog.querySelectorAll(".gallery-card")].find(
+    (card) => (card as HTMLElement).dataset.chartId === "rain-line",
+  )!;
+  const lineButton = [...lineCard.querySelectorAll("button")].find(
+    (button) => button.textContent === "Use as main",
+  )!;
+  await act(async () => {
+    lineButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.match(panel!.element.textContent ?? "", /Rain over time · Over time · Line/);
+  assert.ok(panel!.element.querySelector("polyline"));
+  assert.match(panel!.element.querySelector(".chart-tooltip")?.textContent ?? "", /2021-06-01/);
+
+  const aboutTab = [...panel!.element.querySelectorAll("button")].find(
+    (button) => button.textContent === "About",
+  )!;
+  await act(async () => {
+    aboutTab.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.equal(aboutTab.getAttribute("aria-pressed"), "true");
+  const summary = panel!.element.querySelector(".panel-body")?.textContent ?? "";
+  assert.match(summary, /km²/);
+  assert.match(summary, /2019.*2021/);
+  assert.match(summary, /2 layers/);
+  await act(async () => {
+    buttonNamed(galleryCardFor(dialog, "terrain:distribution"), "Use as main").click();
+  });
+  assert.equal(store.getSnapshot().charts.mainChartId, "terrain:distribution");
+  assert.equal(aboutTab.getAttribute("aria-pressed"), "true");
+  assert.equal(panel!.element.querySelector(".panel-body")?.textContent, summary);
+  assertSameNode(panel!.element.querySelector("svg"), null);
+  const collapse = [...panel!.element.querySelectorAll("button")].find(
+    (button) => button.textContent === "Collapse",
+  )!;
+  await act(async () => {
+    collapse.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assertSameNode(panel!.element.querySelector("svg"), null);
+  assert.match(panel!.element.textContent ?? "", /Show details/);
+  await act(async () => {
+    buttonNamed(galleryCardFor(dialog, "rain-line"), "Use as main").click();
+  });
+  assert.equal(store.getSnapshot().charts.mainChartId, "rain-line");
+  assertSameNode(panel!.element.querySelector("svg"), null);
+  assert.match(panel!.element.textContent ?? "", /Show details/);
+  await act(async () => {
+    buttonNamed(panel!.element, "Show details").click();
+  });
+  assert.equal(buttonNamed(panel!.element, "About").getAttribute("aria-pressed"), "true");
+  assert.equal(panel!.element.querySelector(".panel-body")?.textContent, summary);
+  await act(async () => {
+    buttonNamed(panel!.element, "Charts").click();
+  });
+  assert.match(panel!.element.textContent ?? "", /Rain over time · Over time · Line/);
+  assert.ok(panel!.element.querySelector("polyline"));
+  await act(async () => panel!.destroy());
+});
+
+test("detail main edits and delete or reset update both panel roots", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  store.dispatch({
+    kind: "saveChart",
+    definition: {
+      id: "rain-line",
+      title: "Custom rain",
+      source: { layerId: "rain", shape: "time_series" },
+      chartType: "line",
+      options: {},
+    },
+  });
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element, dialog);
+    panel.openFull("charts");
+  });
+  await act(async () => {
+    buttonNamed(panel!.element, "Charts").click();
+  });
+  await act(async () => {
+    buttonNamed(galleryCardFor(dialog, "rain-line"), "Open").click();
+  });
+  await act(async () => {
+    buttonNamed(dialog.querySelector(".chart-detail")!, "Use as main").click();
+  });
+
+  assert.equal(store.getSnapshot().charts.mainChartId, "rain-line");
+  assert.ok(dialog.querySelector(".chart-detail"));
+  assert.match(dialog.querySelector('.chart-detail > p[role="status"]')?.textContent ?? "", /main/);
+  assert.match(panel!.element.textContent ?? "", /Custom rain · Over time · Line/);
+  assert.ok(panel!.element.querySelector("polyline"));
+  await act(async () => {
+    buttonNamed(dialog.querySelector(".chart-detail")!, "Edit").click();
+  });
+  const type = [...dialog.querySelectorAll("label")].find(
+    (label) => label.textContent?.startsWith("Type"),
+  )!.querySelector("select") as HTMLSelectElement;
+  await act(async () => {
+    const native = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value")!;
+    native.set!.call(type, "area");
+    type.dispatchEvent(new window.Event("change", { bubbles: true }));
+  });
+  await act(async () => {
+    buttonNamed(dialog.querySelector(".editor-foot")!, "Save").click();
+  });
+  assert.equal(store.getSnapshot().charts.mainChartId, "rain-line");
+  assert.equal(
+    store.getSnapshot().charts.definitions.find((definition) => definition.id === "rain-line")!
+      .chartType,
+    "area",
+  );
+  assert.ok(dialog.querySelector(".chart-detail polygon"));
+  assert.match(panel!.element.textContent ?? "", /Custom rain · Over time · Area/);
+  assert.ok(panel!.element.querySelector("polygon"));
+  await act(async () => {
+    buttonNamed(dialog.querySelector(".chart-detail")!, "Delete").click();
+  });
+  assert.ok(dialog.querySelector(".chart-gallery"));
+  assert.equal(store.getSnapshot().charts.mainChartId, "rain:time_series");
+  assert.match(panel!.element.textContent ?? "", /Rain over time · Over time · Bar/);
+  assert.ok(panel!.element.querySelector("rect"));
+  await act(async () => {
+    buttonNamed(galleryCardFor(dialog, "terrain:distribution"), "Use as main").click();
+  });
+  assert.ok(panel!.element.querySelector("polygon"));
+  await act(async () => {
+    buttonNamed(dialog, "Reset charts").click();
+  });
+  assert.equal(store.getSnapshot().charts.mainChartId, "rain:time_series");
+  assert.match(panel!.element.textContent ?? "", /Rain over time · Over time · Bar/);
+  assert.ok(panel!.element.querySelector("rect"));
+  assert.ok(galleryCardFor(dialog, "rain:time_series").querySelector(".chart-main-badge"));
+  await act(async () => panel!.destroy());
+});
+
+test("notes focus the detail heading and back restores the notes action", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const scrolled = installScrollSpy(context);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  await act(async () => {
+    store.dispatch({
+      kind: "saveChart",
+      definition: {
+        id: 'we"ird',
+        title: "Quoted chart",
+        source: { layerId: "terrain", shape: "distribution" },
+        chartType: "area",
+        options: {},
+      },
+      makeMain: false,
+    });
+  });
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+    document.body.append(dialog);
+    panel.openFull("charts");
+  });
+  const quotedCard = [...dialog.querySelectorAll(".gallery-card")].find(
+    (card) => (card as HTMLElement).dataset.chartId === 'we"ird',
+  )!;
+  const notesButton = quotedCard.querySelector(".chart-notes-button") as HTMLButtonElement;
+  assert.equal(
+    notesButton.getAttribute("aria-label"),
+    "Notes for Quoted chart; opens chart detail",
+  );
+  await act(async () => {
+    notesButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.ok(dialog.querySelector(".chart-detail"));
+  const heading = dialog.querySelector("[data-chart-notes-heading]") as HTMLElement;
+  assert.equal(heading.textContent, "Notes");
+  assertSameNode(document.activeElement, heading);
+  assert.equal(scrolled.length, 1);
+  assert.equal(scrolled[0], heading.id);
+  const back = dialog.querySelector("[data-detail-back]") as HTMLButtonElement;
+  await act(async () => {
+    back.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.ok(dialog.querySelector(".chart-gallery"));
+  const remountedCard = galleryCardFor(dialog, 'we"ird');
+  const remountedNotes = remountedCard.querySelector(".chart-notes-button");
+  assert.ok(remountedNotes);
+  assertSameNode(document.activeElement, remountedNotes);
+  await act(async () => panel!.destroy());
+});
+
+function buttonNamed(host: ParentNode, text: string): HTMLButtonElement {
+  const button = [...host.querySelectorAll("button")].find((entry) => entry.textContent === text);
+  assert.ok(button, `Expected button ${text}`);
+
+  return button as HTMLButtonElement;
+}
+
+function galleryCardFor(host: ParentNode, id: string): HTMLElement {
+  const card = [...host.querySelectorAll<HTMLElement>(".gallery-card")].find(
+    (entry) => entry.dataset.chartId === id,
+  );
+  assert.ok(card, `Expected gallery card ${id}`);
+
+  return card;
+}
 
 function installDownloadCapture(context: { after: (hook: () => void) => void }) {
   const blobs: Blob[] = [];

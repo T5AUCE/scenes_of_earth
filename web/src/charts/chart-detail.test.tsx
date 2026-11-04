@@ -6,6 +6,7 @@ import { Window } from "happy-dom";
 import React from "react";
 
 import { createSceneStore } from "../scene-store.ts";
+import { assertSameNode } from "../testing/dom-assert.ts";
 import type { LayerDoc, Scene } from "../types.ts";
 
 test("the close-up shows its chart with Back, Edit, main and delete", async (context) => {
@@ -178,7 +179,10 @@ test("detail shows sync notice and follows effective palette", async (context) =
     );
   });
   assert.match(host.textContent ?? "", /kept for this visit/);
-  const before = host.querySelector("polyline, polygon, rect")?.getAttribute("stroke");
+  const mark = () =>
+    host.querySelector("rect")?.getAttribute("fill")
+    ?? host.querySelector("polyline, polygon")?.getAttribute("stroke");
+  const before = mark();
   await act(async () => {
     store.dispatch({
       kind: "display",
@@ -187,7 +191,7 @@ test("detail shows sync notice and follows effective palette", async (context) =
       },
     });
   });
-  const after = host.querySelector("polyline, polygon, rect")?.getAttribute("stroke");
+  const after = mark();
   assert.notEqual(before, after);
   await act(async () => {
     root.unmount();
@@ -434,6 +438,106 @@ function installDownloadCapture(context: { after(hook: () => void): void }) {
 function display() {
   return { layers: {}, off: new Set<string>(), showAs: {} };
 }
+
+test("the close-up shows notes with rounded fallback and exact tables", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { ChartDetail } = await import("./chart-detail.tsx");
+
+  const rain = rainLayer();
+  rain.area_series!.values[0] = 10.123456789;
+  rain.area_series!.valid_fraction[0] = 0.87654321;
+  rain.area_series!.fallback_fraction = rain.time!.values.map(() => 0.123456789);
+  rain.fallback_sources = [{ name: "ERA5" }] as LayerDoc["fallback_sources"];
+  const layers = [rain];
+  const store = createSceneStore(layers, display());
+  const main = store.getSnapshot().charts.mainChartId!;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(
+      <ChartDetail
+        scene={makeScene(layers)}
+        store={store}
+        definitionId={main}
+        currentTime="2019-01-01"
+        onBack={() => {}}
+        onEdit={() => {}}
+      />,
+    );
+  });
+  const heading = host.querySelector("[data-chart-notes-heading]")!;
+  assert.equal(heading.textContent, "Notes");
+  assert.match(heading.parentElement?.textContent ?? "", /filled from ERA5/);
+  assert.match(heading.parentElement?.textContent ?? "", /Hollow marks/);
+  const tooltip = host.querySelector(".chart-tooltip")?.textContent ?? "";
+  assert.match(tooltip, /10\.123 mm\/month/);
+  assert.match(tooltip, /valid 87\.654%/);
+  assert.match(tooltip, /12\.346% of outline filled from ERA5/);
+  assert.doesNotMatch(tooltip, /10\.123456789|87\.654321|12\.3456789/);
+  const firstTitle = host.querySelector(".chart-bars rect title")?.textContent ?? "";
+  assert.match(firstTitle, /valid 87\.654%/);
+  assert.match(firstTitle, /12\.346% of outline filled from ERA5/);
+  const summary = host.querySelector("summary")!;
+  assert.equal(summary.textContent, "Table (exact values)");
+  const exactCells = [...host.querySelectorAll("td")].map((cell) => cell.textContent);
+  assert.ok(exactCells.includes("10.123456789"));
+  assert.ok(exactCells.includes("0.87654321"));
+  assert.ok(exactCells.includes("0.123456789"));
+  await act(async () => {
+    root.unmount();
+  });
+});
+
+test("choosing main in the close-up confirms politely", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { ChartDetail } = await import("./chart-detail.tsx");
+
+  const layers = [rainLayer(), terrainLayer()];
+  const store = createSceneStore(layers, display());
+  const second = store.getSnapshot().charts.definitions[1].id;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(
+      <ChartDetail
+        scene={makeScene(layers)}
+        store={store}
+        definitionId={second}
+        currentTime={null}
+        onBack={() => {}}
+        onEdit={() => {}}
+      />,
+    );
+  });
+  const useMain = [...host.querySelectorAll("button")].find(
+    (button) => button.textContent === "Use as main",
+  ) as HTMLButtonElement;
+  useMain.focus();
+  await act(async () => {
+    useMain.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+  assert.equal(store.getSnapshot().charts.mainChartId, second);
+  const statuses = [...host.querySelectorAll('[role="status"]')].map(
+    (node) => node.textContent ?? "",
+  );
+  assert.ok(
+    statuses.some((text) => /is now the main chart in the scene panel's Charts tab/.test(text)),
+  );
+  assertSameNode(document.activeElement, useMain);
+  await act(async () => {
+    root.unmount();
+  });
+});
 
 function makeScene(layers: LayerDoc[]): Scene {
   return {
