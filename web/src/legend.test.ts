@@ -573,12 +573,31 @@ test("the class legend lists only the classes present, in class order", () => {
   const legend = classLegend(
     classes,
     new Set([30, 10]),
-    classColors(classes),
+    classColors("esa_worldcover", classes),
   ) as unknown as TestElement;
 
   assert.deepEqual(
     legend.children.map((row) => row.textContent),
     ["Tree cover", "Grassland"],
+  );
+});
+
+test("the class legend adds a heading each time the group of the listed classes changes", () => {
+  const classes = [
+    { value: 1, label: "Sand", color: "#ffff00", group: "Sediments" },
+    { value: 2, label: "Clay", color: "#aaaa00", group: "Sediments" },
+    { value: 3, label: "Basalt", color: "#aa0000", group: "Volcanic" },
+    { value: 4, label: "Granite", color: "#ff0000", group: "Plutonic" },
+  ];
+  const legend = classLegend(
+    classes,
+    new Set([1, 2, 4]),
+    classColors("geology", classes),
+  ) as unknown as TestElement;
+
+  assert.deepEqual(
+    legend.children.map((row) => row.textContent),
+    ["Sediments", "Sand", "Clay", "Plutonic", "Granite"],
   );
 });
 
@@ -588,7 +607,7 @@ test("class legend swatches follow the active colours", () => {
     const legend = classLegend(
       classes,
       new Set([10]),
-      classColors(classes, palette),
+      classColors("esa_worldcover", classes, palette),
     ) as unknown as TestElement;
     return legend.children[0].children[0].style.background;
   };

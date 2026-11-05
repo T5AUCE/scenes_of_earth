@@ -178,31 +178,72 @@ export const FIELD_PALETTES: PaletteOption[] = [
   { name: "blue-red", label: "Blue-red" },
 ];
 
-/**
- * Softened colours of land cover classes, by palette name. Classes or palettes that are missing
- * here use the layer's own colours.
- */
-export const CLASS_PALETTES: Record<string, Record<number, string>> = {
-  painted: {
-    10: "#456d3b",
-    20: "#cd9242",
-    30: "#dfd77e",
-    40: "#d099d0",
-    50: "#c55d4c",
-    60: "#c3baaf",
-    70: "#eaf2f4",
-    80: "#447ab0",
-    90: "#49a0a1",
-    95: "#75c399",
-    100: "#f6e7c2",
+/** The class palettes of one categorical layer and the colours that each one sets by class. */
+interface ClassPaletteSet {
+  options: PaletteOption[];
+  /** A palette or class missing here uses the layer's own colour. */
+  colors: Record<string, Record<number, string>>;
+}
+
+/** The only class palette of a categorical layer that has no palettes of its own. */
+const SOURCE_COLOURS_ONLY: ClassPaletteSet = {
+  options: [{ name: "esa", label: "Source colours" }],
+  colors: {},
+};
+
+/** The class palettes by layer id; esa and classic are the colours in the bundle. */
+export const CLASS_PALETTES: Record<string, ClassPaletteSet> = {
+  esa_worldcover: {
+    options: [
+      { name: "painted", label: "Softened" },
+      { name: "esa", label: "ESA official" },
+    ],
+    colors: {
+      painted: {
+        10: "#456d3b",
+        20: "#cd9242",
+        30: "#dfd77e",
+        40: "#d099d0",
+        50: "#c55d4c",
+        60: "#c3baaf",
+        70: "#eaf2f4",
+        80: "#447ab0",
+        90: "#49a0a1",
+        95: "#75c399",
+        100: "#f6e7c2",
+      },
+    },
+  },
+  geology: {
+    options: [
+      { name: "painted", label: "Painted" },
+      { name: "classic", label: "Classic" },
+    ],
+    colors: {
+      painted: {
+        14: "#ede3c8",
+        13: "#d9b77e",
+        11: "#c9b98a",
+        5: "#9db8c9",
+        6: "#c9a9c9",
+        12: "#e8a07c",
+        2: "#e58e6a",
+        9: "#c9705a",
+        4: "#9e4e3e",
+        1: "#e7a1b0",
+        8: "#c97f8e",
+        3: "#8e5a73",
+        10: "#8fa67a",
+        7: "#f2f4f5",
+      },
+    },
   },
 };
 
-/** The class palettes offered to a categorical layer; esa is the colours in the bundle. */
-export const CLASS_PALETTE_OPTIONS: PaletteOption[] = [
-  { name: "painted", label: "Softened" },
-  { name: "esa", label: "ESA official" },
-];
+/** The class palettes offered to a categorical layer, in menu order. */
+export function classPaletteOptions(layerId: string) {
+  return (CLASS_PALETTES[layerId] ?? SOURCE_COLOURS_ONLY).options;
+}
 
 /** The colour of the contour lines and their labels, by palette name. */
 export const CONTOUR_COLORS = [
@@ -284,14 +325,15 @@ export function contourColor(name: string) {
   return CONTOUR_COLORS.find((entry) => entry.name === name)?.color;
 }
 
-/** Hex colours of the named class palette, or undefined when the layer's own colours apply. */
-export function classPalette(name?: string) {
-  return name && Object.hasOwn(CLASS_PALETTES, name) ? CLASS_PALETTES[name] : undefined;
+/** Hex colours of the layer's named class palette, or undefined when its own colours apply. */
+export function classPalette(layerId: string, name?: string) {
+  const { colors } = CLASS_PALETTES[layerId] ?? SOURCE_COLOURS_ONLY;
+  return name && Object.hasOwn(colors, name) ? colors[name] : undefined;
 }
 
-/** The RGB of each class value from the named palette, else from the class's own colour. */
-export function classColors(classes: ClassDoc[], palette?: string) {
-  const named = classPalette(palette);
+/** The RGB of each class value from the layer's named palette, else from the class's own colour. */
+export function classColors(layerId: string, classes: ClassDoc[], palette?: string) {
+  const named = classPalette(layerId, palette);
   return new Map(
     classes.map(({ value, color }) => [value, hexToRgb(named?.[value] ?? color)]),
   );

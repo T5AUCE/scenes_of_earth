@@ -142,6 +142,7 @@ export interface ClassDoc {
   value: number;
   label: string;
   color: string; // #rrggbb
+  group?: string; // family heading used by the legend
 }
 
 /** Per-step area means of a time-varying continuous layer, in layer units. */

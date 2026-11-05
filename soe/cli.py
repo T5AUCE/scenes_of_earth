@@ -2,8 +2,8 @@
 
 The module imports country and city boundaries into SQLite. It rebuilds the Copernicus terrain
 tile indexes and the ESA WorldCover tile index. It also ingests ERA5-Land, ERA5 and CHIRPS
-monthly cubes into local folders. Run `python -m soe.cli --help` to see the commands and their
-options.
+monthly cubes and the lithology map into local folders. Run `python -m soe.cli --help` to see
+the commands and their options.
 """
 import argparse
 import json
@@ -20,6 +20,7 @@ from . import db
 from .boundary_import import import_cgaz, import_ucdb
 from .ingest import chirps
 from .ingest.era5 import INGEST_SPECS, ingest
+from .ingest.lithology import ingest_lithology
 from .sources import (
     CHIRPS_CUBE,
     DEFAULT_CUBES_DIR,
@@ -43,7 +44,7 @@ DOWNLOAD_TIMEOUT_SECS = 60
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Run the `terrain-index`, `worldcover-index`, `ingest-cube` or `import-boundaries` command."""
+    """Run the command named on the command line; `--help` lists them."""
     parser = _build_parser()
     args = parser.parse_args(argv)
 
@@ -65,6 +66,11 @@ def main(argv: list[str] | None = None) -> None:
             chirps.ingest(args.cubes, args.start)
         else:
             ingest(args.cubes, INGEST_SPECS[args.cube], args.start)
+        return
+
+    if args.command == "ingest-lithology":
+        logging.basicConfig(level=logging.INFO)
+        print("Lithology COG:", ingest_lithology(args.cubes))
         return
 
     if not (args.cgaz or args.ucdb):
@@ -95,6 +101,15 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "worldcover-index",
         help="rebuild the ESA WorldCover tile bitmap in soe/data (downloads 0.5 MB)",
+    )
+    lithology_parser = subparsers.add_parser(
+        "ingest-lithology",
+        help="download the OpenLandMap lithology map (232 MB) and write its COG for Geology",
+    )
+    lithology_parser.add_argument(
+        "--cubes",
+        default=os.environ.get("SOE_CUBES_DIR", DEFAULT_CUBES_DIR),
+        help="folder of the cubes (default: SOE_CUBES_DIR or ./data/cubes)",
     )
     ingest_parser = subparsers.add_parser(
         "ingest-cube",

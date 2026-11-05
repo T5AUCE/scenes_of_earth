@@ -325,6 +325,23 @@ test("every layer with a menu names its palette but ranges and off parts only wh
   );
 });
 
+test("a link accepts only the palettes of its own layer", () => {
+  const geology = {
+    id: "geology",
+    style: { kind: "categorical", encodings: ["fill"], palette: "painted" },
+    arrays: {},
+  } as unknown as LayerDoc;
+  const layers = [...LAYERS, geology];
+  const { display, dropped } = resolveDisplay(
+    layers,
+    { ...NO_TOKENS, pal: "geology:classic,esa_worldcover:classic" },
+    {},
+  );
+
+  assert.equal(dropped, true);
+  assert.deepEqual(display.layers, { geology: { palette: "classic" } });
+});
+
 test("palettes, ranges and off parts round trip through the link text", () => {
   const tokens = {
     ...NO_TOKENS,

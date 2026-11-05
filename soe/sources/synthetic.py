@@ -1,4 +1,4 @@
-"""Generate deterministic offline stand-ins for rainfall, terrain, land cover and cube data.
+"""Generate deterministic offline stand-ins for rain, terrain, land cover, geology and cube data.
 
 Offline runs and tests use it, so nothing here needs the network or a cube.
 """
@@ -12,6 +12,7 @@ from .cubes import FINAL_EXPVER, MONTHS_PER_YEAR, PRELIMINARY_EXPVER, CubeSpec, 
 from .era5 import ERA5_PRECIPITATION_CUBE, ERA5_TEMPERATURE_CUBE
 from .era5land_temperature import ERA5_LAND_TEMPERATURE_CUBE
 from .grid import Bbox, CellWindow
+from .lithology import GEOLOGY_CLASSES
 from .periods import MONTH_CHARS, add_duration
 from .terrain import terrain_block_count
 from .worldcover import WORLDCOVER_CLASSES, PlacedTile, land_cover_by_tiles
@@ -21,11 +22,21 @@ class SyntheticSource:
     """Provide deterministic offline data and count rain and cube reads in `reads`."""
 
     synthetic = True
+    _lithology = False  # so that subclasses that skip __init__ still have no lithology map
 
-    def __init__(self, latest: str = "2026-08", chirps_cube: bool = False) -> None:
-        """Read rain over fake HTTP, or from a fake CHIRPS cube when `chirps_cube` is set."""
+    def __init__(
+        self,
+        latest: str = "2026-08",
+        chirps_cube: bool = False,
+        lithology: bool = False,
+    ) -> None:
+        """Read rain over fake HTTP, or from a fake CHIRPS cube when `chirps_cube` is set.
+
+        The lithology map exists only when `lithology` is set.
+        """
         self._latest = latest
         self._chirps_cube = chirps_cube
+        self._lithology = lithology
         self.reads = 0
 
     def latest_month(self) -> str:
@@ -98,15 +109,34 @@ class SyntheticSource:
         """Return deterministic class bands over bounds with zeroes where no tile exists."""
         return land_cover_by_tiles(bounds, res, _synthetic_classes, on_block)
 
+    def has_lithology(self) -> bool:
+        """Return whether deterministic lithology data is enabled."""
+        return self._lithology
+
+    def lithology(
+        self,
+        bounds: Bbox,
+        res: float,
+        on_block: Callable[[], None] = lambda: None,
+    ) -> tuple[np.ndarray, Affine]:
+        """Return deterministic class bands over bounds, with 0 as one of the bands."""
+        on_block()
+        values = [0, *(entry["value"] for entry in GEOLOGY_CLASSES)]
+        return _class_bands(bounds, res, values), from_origin(bounds[0], bounds[3], res, res)
+
 
 def _synthetic_classes(tile: PlacedTile, part: Bbox, res: float) -> np.ndarray:
+    return _class_bands(part, res, [entry["value"] for entry in WORLDCOVER_CLASSES])
+
+
+def _class_bands(part: Bbox, res: float, class_values: list[int]) -> np.ndarray:
     """Return diagonal class bands in the frame of the bounds, so they continue across 180."""
     west, south, east, north = part
     width, height = round((east - west) / res), round((north - south) / res)
     lon = west + (np.arange(width) + 0.5) * res
     lat = north - (np.arange(height) + 0.5) * res
     bands = np.floor(lon * 4)[None, :] + np.floor(lat * 4)[:, None]
-    values = np.array([entry["value"] for entry in WORLDCOVER_CLASSES], "uint8")
+    values = np.array(class_values, "uint8")
     return values[bands.astype(int) % len(values)]
 
 

@@ -103,12 +103,12 @@ def index_cell(lat: int, file_lon: int) -> tuple[int, int]:
     return (lat + 90) // TILE_DEG, (file_lon + 180) // TILE_DEG
 
 
-def overview_factor(res_deg: float) -> int:
+def overview_factor(res_deg: float, native_res_deg: float = WORLDCOVER_RES_DEG) -> int:
     """The coarsest overview (1, 2, 4 ... 64) that still gives each cell 16 source samples.
 
-    A cell finer than that gets the full-resolution tile.
+    A cell finer than that gets the full-resolution raster.
     """
-    samples_per_side = res_deg / WORLDCOVER_RES_DEG / SAMPLES_PER_SIDE
+    samples_per_side = res_deg / native_res_deg / SAMPLES_PER_SIDE
     whole = int(samples_per_side * (1 + FACTOR_TOLERANCE))
     if whole < 1:
         return 1
@@ -183,25 +183,43 @@ def _read_tile(tile: PlacedTile, part: Bbox, res: float) -> np.ndarray:
     file_west = west - tile.lon + tile.file_lon
     height, width = round((north - south) / res), round((east - west) / res)
     classes = np.zeros((height, width), "uint8")
-    factor = overview_factor(res)
     url = WORLDCOVER_URL.format(n=_tile_name(tile.lat, tile.file_lon))
-    # Overview level 0 is the factor 2 overview.
-    level = factor.bit_length() - 2 if factor > 1 else None
+    level = overview_level(overview_factor(res))
 
     def warp() -> np.ndarray:
         with rasterio.Env(**GDAL_OPTS), rasterio.open(url, overview_level=level) as source:
-            reproject(
-                rasterio.band(source, 1),
-                classes,
-                src_nodata=0,
-                dst_transform=from_origin(file_west, north, res, res),
-                dst_crs="EPSG:4326",
-                dst_nodata=0,
-                resampling=Resampling.mode,
-            )
+            warp_modes(source, classes, file_west, north, res)
         return classes
 
     return read_with_retries(warp, "ESA WorldCover tiles did not answer")
+
+
+def overview_level(factor: int) -> int | None:
+    """The rasterio overview level of an overview factor, or None for the full resolution."""
+    # Overview level 0 is the factor 2 overview.
+    return factor.bit_length() - 2 if factor > 1 else None
+
+
+def warp_modes(
+    source: rasterio.DatasetReader,
+    classes: np.ndarray,
+    west: float,
+    north: float,
+    res: float,
+) -> None:
+    """Fill classes with the most common source class in each cell, where 0 is no data.
+
+    The cells start at the north-west corner (west, north) and are res degrees square.
+    """
+    reproject(
+        rasterio.band(source, 1),
+        classes,
+        src_nodata=0,
+        dst_transform=from_origin(west, north, res, res),
+        dst_crs="EPSG:4326",
+        dst_nodata=0,
+        resampling=Resampling.mode,
+    )
 
 
 class LandCoverDataset(StaticDataset):

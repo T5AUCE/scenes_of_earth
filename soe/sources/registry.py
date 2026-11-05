@@ -16,6 +16,7 @@ from .era5land_temperature import (
 )
 from .grid import CELL_DEG
 from .licences import SOURCES
+from .lithology import GEOLOGY_CLASSES, LITHOLOGY_RES_DEG, GeologyDataset, LithologyReader
 from .synthetic import SyntheticSource
 from .terrain import GLO30_RES_DEG, CopernicusDemReader, TerrainDataset, terrain_tiles_block
 from .worldcover import (
@@ -34,8 +35,11 @@ CUBE_SPECS = (
 )
 
 
-class RealSource(ChirpsReader, CopernicusDemReader, WorldCoverReader, CubeStore):
-    """Read terrain and land cover over HTTP, CHIRPS from its cube or HTTP, and cubes from disk."""
+class RealSource(ChirpsReader, CopernicusDemReader, WorldCoverReader, LithologyReader, CubeStore):
+    """Read terrain and land cover over HTTP, CHIRPS from its cube or HTTP, and cubes from disk.
+
+    The lithology map is read from its COG in the cubes folder.
+    """
 
     synthetic = False
 
@@ -46,19 +50,23 @@ class RealSource(ChirpsReader, CopernicusDemReader, WorldCoverReader, CubeStore)
     ) -> None:
         ChirpsReader.__init__(self, latest)
         CubeStore.__init__(self, CUBE_SPECS, cubes_dir)
+        LithologyReader.__init__(self, cubes_dir)
 
 
 def make_registry(backend: RealSource | SyntheticSource) -> Registry:
     """Return the datasets that can read through `backend`.
 
     Rainfall and Temperature are listed only when the backend has all of their cubes, so no
-    layer lacks the fallback that fills its gaps.
+    layer lacks the fallback that fills its gaps. Geology is listed only when the backend has
+    the lithology map.
     """
     registry = {}
     if backend.has_cube(ERA5_PRECIPITATION_CUBE):
         registry["chirps_monthly"] = _chirps_monthly(backend)
     registry["terrain"] = _terrain(backend)
     registry["esa_worldcover"] = _land_cover(backend)
+    if backend.has_lithology():
+        registry["geology"] = _geology(backend)
     if backend.has_cube(ERA5_LAND_TEMPERATURE_CUBE) and backend.has_cube(ERA5_TEMPERATURE_CUBE):
         registry["era5land_temperature"] = _era5land_temperature(backend)
     return registry
@@ -141,6 +149,33 @@ def _land_cover(backend: RealSource | SyntheticSource) -> LandCoverDataset:
         grid=CHIRPS_GRID,
         max_tiles=400,
         needs_tiles=True,
+        synthetic=backend.synthetic,
+    )
+
+
+def _geology(backend: RealSource | SyntheticSource) -> GeologyDataset:
+    return GeologyDataset(
+        id="geology",
+        title="Geology",
+        units="",
+        resolution_deg=LITHOLOGY_RES_DEG,
+        source=SOURCES["lithology"],
+        roles={
+            "value": Role(
+                "class",
+                "uint8",
+                fill=0,
+                long_name="Lithology class",
+            ),
+        },
+        style={
+            "kind": "categorical",
+            "encodings": ["fill"],
+            "palette": "painted",
+            "classes": GEOLOGY_CLASSES,
+        },
+        backend=backend,
+        grid=CHIRPS_GRID,
         synthetic=backend.synthetic,
     )
 

@@ -24,6 +24,7 @@ import { crossSampleTable, mercY, sampleTable, type SampleTable } from "./mercat
 import {
   CLASS_PALETTES,
   classColors,
+  classPaletteOptions,
   customPalette,
   FIELD_PALETTES,
   fieldGradient,
@@ -186,7 +187,7 @@ const WORLDCOVER_CLASSES = [10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100].map((va
 }));
 
 test("the painted palette has a colour for every WorldCover class", () => {
-  const painted = Object.keys(CLASS_PALETTES.painted).map(Number);
+  const painted = Object.keys(CLASS_PALETTES.esa_worldcover.colors.painted).map(Number);
 
   assert.deepEqual(painted, WORLDCOVER_CLASSES.map(({ value }) => value));
 });
@@ -194,10 +195,32 @@ test("the painted palette has a colour for every WorldCover class", () => {
 test("class colours come from the named palette and fall back to the layer's own", () => {
   const classes = [...WORLDCOVER_CLASSES, { value: 110, label: "New", color: "#ff0000" }];
 
-  assert.deepEqual(classColors(classes, "painted").get(10), [0x45, 0x6d, 0x3b]);
-  assert.deepEqual(classColors(classes, "painted").get(110), [255, 0, 0]);
-  assert.deepEqual(classColors(classes, "unknown").get(10), [0x10, 0x20, 0x30]);
-  assert.deepEqual(classColors(classes).get(10), [0x10, 0x20, 0x30]);
+  assert.deepEqual(classColors("esa_worldcover", classes, "painted").get(10), [0x45, 0x6d, 0x3b]);
+  assert.deepEqual(classColors("esa_worldcover", classes, "painted").get(110), [255, 0, 0]);
+  assert.deepEqual(classColors("esa_worldcover", classes, "unknown").get(10), [0x10, 0x20, 0x30]);
+  assert.deepEqual(classColors("esa_worldcover", classes).get(10), [0x10, 0x20, 0x30]);
+});
+
+test("each categorical layer offers its own class palettes", () => {
+  const labelsOf = (layerId: string) => classPaletteOptions(layerId).map(({ label }) => label);
+
+  assert.deepEqual(labelsOf("esa_worldcover"), ["Softened", "ESA official"]);
+  assert.deepEqual(labelsOf("geology"), ["Painted", "Classic"]);
+  assert.deepEqual(labelsOf("any_other_layer"), ["Source colours"]);
+});
+
+test("the geology painted palette does not colour another layer's classes", () => {
+  const classes = [{ value: 14, label: "Class", color: "#102030" }];
+
+  assert.deepEqual(classColors("geology", classes, "painted").get(14), [0xed, 0xe3, 0xc8]);
+  assert.deepEqual(classColors("esa_worldcover", classes, "painted").get(14), [0x10, 0x20, 0x30]);
+  assert.deepEqual(classColors("geology", classes, "classic").get(14), [0x10, 0x20, 0x30]);
+});
+
+test("the geology painted palette colours the 14 classes the backend lists", () => {
+  const values = Object.keys(CLASS_PALETTES.geology.colors.painted).map(Number);
+
+  assert.deepEqual(values.sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
 });
 
 test("paintClasses colours known classes and leaves fill and unknown values transparent", () => {

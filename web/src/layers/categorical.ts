@@ -12,7 +12,7 @@ import { createClassFieldLayer } from "../gpu/class-field-layer";
 import { layerPosition, type LayerPosition } from "../gpu/tiled-layer";
 import { classLegend } from "../legend";
 import { removeLayerAndSource } from "../map";
-import { CLASS_PALETTE_OPTIONS, classColors, classPalette } from "../render/palettes";
+import { classColors, classPalette, classPaletteOptions } from "../render/palettes";
 import { cellClassIds } from "../render/smooth-classes";
 import type { EdgeSettings, EdgesMenu, LayerContext, LayerMenu, LayerView } from "../types";
 import type { Draw } from "./allocate";
@@ -63,7 +63,7 @@ class CategoricalView implements LayerView {
     this.classes = classes;
     this.classValues = this.classes.map(({ value }) => value);
     this.palette = context.display?.palette ?? defaultPalette(layer);
-    this.colors = classColors(this.classes, this.palette);
+    this.colors = classColors(layer.id, this.classes, this.palette);
     this.edges = loadStoredEdges(layer.id);
     this.gpu = createClassFieldLayer({
       id: this.id,
@@ -141,15 +141,18 @@ class CategoricalView implements LayerView {
 
   private createMenu(): LayerMenu {
     const view = this;
+    const layerId = this.context.layer.id;
 
     return {
       title: this.context.layer.title,
       heading: "Colours",
       blocks: true,
-      palettes: CLASS_PALETTE_OPTIONS.map(({ name, label }) => ({
+      palettes: classPaletteOptions(layerId).map(({ name, label }) => ({
         name,
         label,
-        colors: this.classes.map(({ value, color }) => classPalette(name)?.[value] ?? color),
+        colors: this.classes.map(
+          ({ value, color }) => classPalette(layerId, name)?.[value] ?? color,
+        ),
       })),
       defaultPalette: defaultPalette(this.context.layer),
       custom: false,
@@ -159,7 +162,7 @@ class CategoricalView implements LayerView {
       },
       setPalette: (name) => {
         this.palette = name;
-        this.colors = classColors(this.classes, name);
+        this.colors = classColors(layerId, this.classes, name);
         this.repaint();
       },
       get edges() {

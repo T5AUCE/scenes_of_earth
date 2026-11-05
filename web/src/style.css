@@ -804,6 +804,10 @@ body.scene-mode .maplibregl-ctrl-scale {
   vertical-align: -2px;
 }
 
+.legend-group {
+  font-weight: 600;
+}
+
 .legend-bivariate {
   font-size: 11px;
   color: #444;

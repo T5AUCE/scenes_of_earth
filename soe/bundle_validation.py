@@ -710,6 +710,10 @@ def _classes_problems(layer_id: str, classes: object) -> list[str]:
     if not all(entry.get("label") and _is_colour(entry.get("color")) for entry in classes):
         return [f"{layer_id}: style.classes need a label and a #rrggbb color each"]
 
+    groups = [entry["group"] for entry in classes if "group" in entry]
+    if not all(isinstance(group, str) and group for group in groups):
+        return [f"{layer_id}: style.classes group must be a non-empty string when given"]
+
     return []
 
 

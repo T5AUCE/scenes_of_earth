@@ -484,14 +484,20 @@ function openLabel(position: number, value: number, isBottomOpen: boolean) {
   return position === 0 && isBottomOpen ? `≤ ${value}` : String(value);
 }
 
-/** Render a swatch and name for each class present in the area. */
+/**
+ * Render a swatch and name for each class present in the area. Classes with a group are listed
+ * under a heading each time the group changes.
+ */
 export function classLegend(
   classes: ClassDoc[],
   presentValues: Set<number>,
   colors: Map<number, number[]>,
 ) {
   const element = document.createElement("div");
-  for (const { value, label } of classes.filter((entry) => presentValues.has(entry.value))) {
+  let currentGroup: string | undefined;
+  for (const { value, label, group } of classes.filter((entry) => presentValues.has(entry.value))) {
+    if (group && group !== currentGroup) element.append(groupHeading(group));
+    currentGroup = group;
     const row = document.createElement("div");
     const swatch = document.createElement("span");
     swatch.className = "legend-swatch";
@@ -502,4 +508,11 @@ export function classLegend(
     element.append(row);
   }
   return element;
+}
+
+function groupHeading(group: string) {
+  const heading = document.createElement("div");
+  heading.className = "legend-group";
+  heading.textContent = group;
+  return heading;
 }

@@ -7,7 +7,7 @@ import {
   quantiseDensity,
 } from "./render/lattice";
 import {
-  CLASS_PALETTE_OPTIONS,
+  classPaletteOptions,
   CONTOUR_COLORS,
   DEFAULT_CONTOUR_COLOR,
   DEFAULT_DOT_INK,
@@ -607,7 +607,7 @@ function isPaletteOf(layer: LayerDoc | undefined, palette: string | undefined) {
     case "field":
       return fieldGradient(palette) !== undefined;
     case "categorical":
-      return CLASS_PALETTE_OPTIONS.some(({ name }) => name === palette);
+      return classPaletteOptions(layer.id).some(({ name }) => name === palette);
     case "terrain":
       return CONTOUR_COLORS.some(({ name }) => name === palette);
     default:

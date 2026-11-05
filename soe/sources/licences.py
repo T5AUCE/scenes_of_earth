@@ -147,6 +147,27 @@ SOURCES = {
             "per cell"
         ),
     },
+    "lithology": {
+        "name": "OpenLandMap lithology 250 m (USGS Global Ecosystem Map)",
+        "version": "1.1",
+        "licence": "CC BY-SA 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+        "attribution": (
+            "Geology: OpenLandMap lithology, derived from the USGS Global Ecological Land Units "
+            "and the GLiM lithology classes (CC BY-SA 4.0, ShareAlike)"
+        ),
+        "citation": (
+            "Hengl, T. (2018) Global landform and lithology class at 250 m based on the USGS "
+            "global ecosystem map. doi:10.5281/zenodo.1464846; Sayre, R. et al. (2014) A new "
+            "map of global ecological land units. Global Ecology and Conservation 2; "
+            "Hartmann, J. and Moosdorf, N. (2012) The new global lithological map database "
+            "GLiM. Geochem. Geophys. Geosyst. 13, Q12004, doi:10.1029/2012GC004370"
+        ),
+        "modified": (
+            "cropped to 60°S-60°N; water and undefined set to no data; faulty columns at "
+            "±180° replaced by their inner neighbours; most common class per output cell"
+        ),
+    },
     "geoBoundaries CGAZ": {
         "name": "geoBoundaries CGAZ",
         "licence": "CC BY 4.0",

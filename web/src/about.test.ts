@@ -47,6 +47,21 @@ test("terrain summaries face live relief and contours", (context) => {
   assert.ok((summaryText(makeScene(), "ft") ?? "").includes("mi"));
 });
 
+test("geology scenes explain the rock-type scale and seams", (context) => {
+  const window = new Window();
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const plain = renderAbout(makeScene(), "m", {});
+  const geology = renderAbout(makeGeologyScene(), "m", {});
+
+  assert.doesNotMatch(plain.textContent ?? "", /rock type/);
+  assert.match(geology.textContent ?? "", /rock type from a global map at about 1:3\.75 million/);
+  assert.match(geology.textContent ?? "", /OpenLandMap, from GLiM/);
+  assert.match(geology.textContent ?? "", /approximate at local scale/);
+  assert.match(geology.textContent ?? "", /seams can show/);
+  assert.match(geology.textContent ?? "", /180° longitude/);
+});
+
 function makeScene(): Scene {
   return {
     id: "test",
@@ -119,6 +134,23 @@ function makeScene(): Scene {
       terms_passthrough: "Terms.",
     },
   } as unknown as Scene;
+}
+
+function makeGeologyScene(): Scene {
+  const scene = makeScene();
+  const geology = {
+    id: "geology",
+    title: "Geology",
+    units: "",
+    source: { name: "Lithology", licence: "CC BY-SA 4.0" },
+    style: { kind: "categorical", encodings: ["fill"] },
+    grid: { bbox: [0, -1, 1, 1], res: 0.01, nx: 10, ny: 10 },
+    mask: { path: "mask.zarr", cells_inside: 100 },
+    time: null,
+    arrays: {},
+  } as unknown as Scene["layers"][number];
+  scene.layers = [...scene.layers, geology];
+  return scene;
 }
 
 function installBrowser(window: Window): void {
