@@ -1,14 +1,5 @@
 /** Draw field time series as colour fills or fallback marks with shared cached values. */
-import {
-  arrayDoc,
-  createStepReader,
-  decode,
-  readArray,
-  readMask,
-  readSteps,
-  type Store,
-  type StepReader,
-} from "../data";
+import { arrayDoc, decode, readArray, readMask, readSteps, type Store } from "../data";
 import {
   defaultInk,
   defaultPalette as layerDefaultPalette,
@@ -33,7 +24,8 @@ import {
   setImage,
   setPairOpacities,
 } from "../map";
-import { ImageCrossfade, prefersReducedMotion } from "../playback";
+import { prefersReducedMotion } from "../reduced-motion";
+import { createStepReader, type StepReader } from "../step-reader";
 import { displayStops, displayUnitFor, isUnitFor, unitOptions } from "../units";
 import { lut, paintColormap, stopsForRange } from "../render/colormap";
 import {
@@ -62,6 +54,8 @@ import type {
   UnitsMenu,
 } from "../types";
 import { type Draw, layerDraws } from "./allocate";
+import { ImageCrossfade } from "./crossfade";
+import { MarksFade, type MarksState } from "./field-marks-fade";
 import { createIsolineOverlay, type IsolineOverlay } from "./isolines";
 import { FALLBACK_PALETTE_NOTE } from "./layer-menu";
 
@@ -74,13 +68,6 @@ const readers = new WeakMap<Promise<Store>, Map<string, StepReader>>();
 /** Render a field time series with cached steps and a fitted colour legend. */
 export function createSeriesView(context: LayerContext): LayerView {
   return new FieldView(context);
-}
-
-/** Kept for each painted image so the hatch can switch at the fade midpoint without rereading. */
-interface MarksState {
-  positions: Uint8Array;
-  mask: ArrayLike<number> | null;
-  hasHatch: boolean;
 }
 
 class FieldView implements LayerView {
@@ -119,10 +106,14 @@ class FieldView implements LayerView {
   // A slow read of an older step must not overwrite the one being displayed.
   private shownStep = -1;
   private marksStep: number | null = null;
-  private readonly marksByStep = new Map<number, MarksState>();
+  private readonly marksFade = new MarksFade({
+    read: (step) => Promise.all([this.readStep.read(step, false), this.mask]),
+    toMarks: (values, mask) => (
+      this.alive && this.draw === "dots" ? this.marksOf(values, mask) : null
+    ),
+    isUploaded: (positions) => this.marks!.isReady(positions),
+  });
   private readonly isolineInflight = new Set<number>();
-  private armingStep: number | null = null;
-  private readonly failedMarks = new Set<number>();
   // Without an area mask every cell counts, and one array keeps the layer's blocks cached.
   private solidMask: Uint8Array | null = null;
 
@@ -142,7 +133,7 @@ class FieldView implements LayerView {
         setImage: (slot, image) => setImage(map, this.fadeIds[slot], image),
         setOpacities: (opacities) => setPairOpacities(map, this.fadeIds, opacities),
       },
-      (step) => this.marksByStep.delete(step),
+      (step) => this.marksFade.delete(step),
     );
     this.marksId = `${layer.id}-dots`;
     this.time = layer.time;
@@ -379,8 +370,7 @@ class FieldView implements LayerView {
     this.colors = lut(gradientOf(this.palette));
     this.stops = stopsForRange(this.fittedStops, this.range);
     this.fade.invalidate();
-    this.marksByStep.clear();
-    this.failedMarks.clear();
+    this.marksFade.clear();
     this.marksStep = null;
     this.isolines?.setRange(this.range);
     this.showLegend();
@@ -399,8 +389,8 @@ class FieldView implements LayerView {
       this.followDominant(this.shownStep);
     } else if (this.draw === "isolines" && this.isolines?.holds(this.shownStep)) {
       this.isolines.select(this.shownStep);
-    } else if (this.draw === "dots" && this.marksByStep.has(this.shownStep)) {
-      this.showMarks(this.marksByStep.get(this.shownStep)!);
+    } else if (this.draw === "dots" && this.marksFade.has(this.shownStep)) {
+      this.showMarks(this.marksFade.get(this.shownStep)!);
     }
     this.drawLatestStep(this.shownStep);
   }
@@ -442,10 +432,9 @@ class FieldView implements LayerView {
   }
 
   private refillIsolines(next: string, nextStep: number) {
-    if (nextStep < 0) return;
-    if (this.isolines!.holds(nextStep)) return;
-    if (this.isolines!.hasFailed(nextStep)) return;
-    if (this.isolineInflight.has(nextStep)) return;
+    const isolines = this.isolines!;
+    const isSettled = nextStep < 0 || isolines.holds(nextStep) || isolines.hasFailed(nextStep);
+    if (isSettled || this.isolineInflight.has(nextStep)) return;
 
     this.isolineInflight.add(nextStep);
     void this.prepare(next)
@@ -462,59 +451,55 @@ class FieldView implements LayerView {
     // Equal steps hold what the shown step drew, so the layer is not touched mid-play.
     if (step === nextStep) return;
 
-    this.keepMarksOf(step, nextStep);
-    this.armMarks(nextStep);
-    const from = this.marksByStep.get(step) ?? null;
-    const to = this.marksByStep.get(nextStep) ?? null;
+    this.marksFade.keepOnly(step, nextStep);
+    this.marksFade.arm(nextStep);
+    const from = this.marksFade.get(step) ?? null;
+    const to = this.marksFade.get(nextStep) ?? null;
     const isMissing = (step >= 0 && !from) || (nextStep >= 0 && !to);
     if (isMissing) return;
 
     this.showFade(from, to, mix);
   }
 
-  // Only the two steps in use stay, however far play looks ahead.
-  private keepMarksOf(step: number, nextStep: number) {
-    for (const cached of this.marksByStep.keys()) {
-      if (cached !== step && cached !== nextStep) this.marksByStep.delete(cached);
-    }
+  // A layer that draws nothing yet still follows the label's step.
+  private cutTo(time: string) {
+    const step = stepAt(this.time.values, this.time.end, time);
+    if (step !== this.shownStep) this.setTime(time);
   }
 
-  private armMarks(step: number) {
-    const isArmed = step < 0 || this.marksByStep.has(step) || this.failedMarks.has(step);
-    if (isArmed || this.armingStep === step) return;
+  private async loadNext(step: number) {
+    const [values, mask] = await Promise.all([this.readStep.read(step, false), this.mask]);
 
-    this.armingStep = step;
-    void this.loadMarks(step);
+    return () => {
+      if (this.marks) this.marksFade.cache(step, this.marksOf(values, mask));
+      return this.paintImage(values);
+    };
   }
 
-  private async loadMarks(step: number) {
-    try {
-      const [values, mask] = await Promise.all([this.readStep.read(step, false), this.mask]);
-      if (this.alive && this.draw === "dots") this.cacheMarks(step, this.marksOf(values, mask));
-    } catch {
-      // The draw of that step reports the failure when the viewer reaches it.
-      this.failedMarks.add(step);
-    } finally {
-      if (this.armingStep === step) this.armingStep = null;
+  // The hatch follows the step that shows more, so it switches at the fade midpoint and not later.
+  private followDominant(step: number) {
+    if (!this.marks || step === this.marksStep) return;
+
+    if (step < 0) {
+      this.marks.setHatch(false);
+      this.setHatched(false);
+    } else {
+      const state = this.marksFade.get(step);
+      if (!state) return;
+
+      this.showMarks(state);
     }
+    this.marksStep = step;
   }
 
   isFrameReady(time: string, next: string) {
     const step = stepAt(this.time.values, this.time.end, time);
     const nextStep = stepAt(this.time.values, this.time.end, next);
     if (this.draw === "isolines") return this.isolines!.isReady(step, nextStep);
-    if (this.draw === "dots") return this.areMarksReady(nextStep);
+    if (this.draw === "dots") return this.marksFade.isReady(nextStep);
     if (this.draw !== "colour") return true;
 
     return this.fade.isReady(keyOf(step), keyOf(nextStep));
-  }
-
-  // A fade can start once the next step's bytes are uploaded, or when it failed to load.
-  private areMarksReady(nextStep: number) {
-    if (nextStep < 0 || this.failedMarks.has(nextStep)) return true;
-
-    const state = this.marksByStep.get(nextStep);
-    return state !== undefined && this.marks!.isReady(state.positions);
   }
 
   async prepare(time: string): Promise<void> {
@@ -560,42 +545,6 @@ class FieldView implements LayerView {
     if (this.draw && this.shownStep >= 0) this.drawLatestStep(this.shownStep);
   }
 
-  // A layer that draws nothing yet still follows the label's step.
-  private cutTo(time: string) {
-    const step = stepAt(this.time.values, this.time.end, time);
-    if (step !== this.shownStep) this.setTime(time);
-  }
-
-  private async loadNext(step: number) {
-    const [values, mask] = await Promise.all([this.readStep.read(step, false), this.mask]);
-
-    return () => {
-      if (this.marks) this.cacheMarks(step, this.marksOf(values, mask));
-      return this.paintImage(values);
-    };
-  }
-
-  // The hatch follows the step that shows more, so it switches at the fade midpoint and not later.
-  private followDominant(step: number) {
-    if (!this.marks || step === this.marksStep) return;
-
-    if (step < 0) {
-      this.marks.setHatch(false);
-      this.setHatched(false);
-    } else {
-      const state = this.marksByStep.get(step);
-      if (!state) return;
-
-      this.showMarks(state);
-    }
-    this.marksStep = step;
-  }
-
-  private cacheMarks(step: number, state: MarksState) {
-    this.failedMarks.delete(step);
-    this.marksByStep.set(step, state);
-  }
-
   private hideStep() {
     this.fade.hide();
     this.marks?.setDots(false);
@@ -637,9 +586,9 @@ class FieldView implements LayerView {
   ) {
     if (this.marks) {
       const isCached = this.draw === "colour" || this.draw === "dots";
-      const state = this.marksByStep.get(step) ?? this.marksOf(values, mask);
+      const state = this.marksFade.get(step) ?? this.marksOf(values, mask);
       this.showMarks(state);
-      if (isCached) this.cacheMarks(step, state);
+      if (isCached) this.marksFade.cache(step, state);
       if (this.draw === "colour") this.marksStep = step;
     }
     if (this.draw === "colour") {

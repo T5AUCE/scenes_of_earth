@@ -217,8 +217,7 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
   protected uploadStaleData(gl: WebGL2RenderingContext, gpu: MarksGpu) {
     this.frame = this.lattice();
     const factors = blockFactors(this.frame.level, this.frame.fade);
-    const { from, to } = this;
-    const { uploaded } = this;
+    const { from, to, uploaded } = this;
     const isSameBlocks = uploaded?.factor === factors.factor
       && uploaded.parentFactor === factors.parentFactor;
     if (isSameBlocks && uploaded.from === from && uploaded.to === to) return;
@@ -236,9 +235,7 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
   // The first texture set holds the leaving step, or the entering one when nothing leaves.
   private uploadFirstTiles(gl: WebGL2RenderingContext, gpu: MarksGpu, factors: BlockFactors) {
     const first = this.pyramidOf((this.from ?? this.to)!);
-    const { grid, cells } = first.blocks(factors.factor);
-    // The parent sampler needs an integer texture even when nothing fades, or the draw fails.
-    const parentCells = factors.parentFactor ? first.parentCells(factors.factor) : cells;
+    const { grid, cells, parentCells } = first.textureCells(factors);
     this.uploadRows(gl, gpu, grid);
     this.uploadTiles(gl, gpu, grid, cells, parentCells);
   }
@@ -252,18 +249,12 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
     gpu.nextTiles = [];
   }
 
-  private uploadNextTiles(
-    gl: WebGL2RenderingContext,
-    gpu: MarksGpu,
-    factors: BlockFactors,
-  ) {
+  private uploadNextTiles(gl: WebGL2RenderingContext, gpu: MarksGpu, factors: BlockFactors) {
     deleteResources(gl, { textures: this.extraTextures(gpu) });
     gpu.nextTiles = [];
     if (!this.from || !this.to) return;
 
-    const next = this.pyramidOf(this.to);
-    const { grid, cells } = next.blocks(factors.factor);
-    const parentCells = factors.parentFactor ? next.parentCells(factors.factor) : cells;
+    const { grid, cells, parentCells } = this.pyramidOf(this.to).textureCells(factors);
     try {
       for (const { tile } of gpu.tiles) {
         const nextTile: NextTile = {
@@ -376,7 +367,14 @@ class StepPyramid {
     this.mask = mask;
   }
 
-  blocks(factor: number): BlockData {
+  // The parent sampler needs an integer texture even when nothing fades, or the draw fails.
+  textureCells({ factor, parentFactor }: BlockFactors) {
+    const { grid, cells } = this.blocks(factor);
+    const parentCells = parentFactor ? this.parentCells(factor) : cells;
+    return { grid, cells, parentCells };
+  }
+
+  private blocks(factor: number): BlockData {
     const cached = this.blockByFactor.get(factor);
     if (cached) return cached;
 
@@ -387,7 +385,7 @@ class StepPyramid {
     return data;
   }
 
-  parentCells(factor: number) {
+  private parentCells(factor: number) {
     const { grid } = this.blocks(factor);
     const parent = this.blocks(2 * factor);
     const cells = new Uint8Array(grid.nx * grid.ny);

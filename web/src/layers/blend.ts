@@ -9,7 +9,7 @@ import {
   setImage,
   setPairOpacities,
 } from "../map";
-import { ImageCrossfade } from "../playback";
+import type { StepReader } from "../step-reader";
 import { displayStops } from "../units";
 import {
   type BivariateAxis,
@@ -22,7 +22,7 @@ import { RAIN_TEMPERATURE_GRID } from "../render/palettes";
 import { formatTime, latestOnly, stepAt } from "../timeline";
 import type { LayerContext, LayerDoc, LayerView, TimeDoc } from "../types";
 import { BLEND, type Draw, differingPeriodNote, missingStepNote } from "./allocate";
-import type { StepReader } from "../data";
+import { ImageCrossfade } from "./crossfade";
 import { fieldReader } from "./field";
 
 const BLEND_OPACITY = 0.8;
@@ -169,7 +169,7 @@ class Blend implements BlendView {
     const steps = this.stepsAt(time);
     if (steps[0] < 0 || steps[1] < 0) return;
 
-    await Promise.all(this.halves.map(({ reader }, index) => reader.read(steps[index], false)));
+    await this.readSteps(steps, false);
   }
 
   maxLookahead() {
@@ -238,12 +238,8 @@ class Blend implements BlendView {
     }
 
     try {
-      const [rain, temperature] = this.halves;
       const steps = this.stepsAt(time);
-      const values = await Promise.all([
-        rain.reader.read(steps[0]),
-        temperature.reader.read(steps[1]),
-      ]);
+      const values = await this.readSteps(steps);
       if (!this.isCurrent(time)) return;
 
       this.paint(values, this.keyAt(time)!);
@@ -304,12 +300,13 @@ class Blend implements BlendView {
   }
 
   private async loadNext(time: string) {
-    const steps = this.stepsAt(time);
-    const values = await Promise.all(
-      this.halves.map(({ reader }, index) => reader.read(steps[index], false)),
-    );
+    const values = await this.readSteps(this.stepsAt(time), false);
 
     return () => this.paintImage(values);
+  }
+
+  private readSteps(steps: number[], isUrgent = true) {
+    return Promise.all(this.halves.map(({ reader }, index) => reader.read(steps[index], isUrgent)));
   }
 
   private stepsAt(time: string) {

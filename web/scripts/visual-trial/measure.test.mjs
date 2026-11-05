@@ -244,6 +244,49 @@ test("a colour spot sets the pick through the scene link", async () => {
   assert.equal(records[0].marks_frame_ms_p95, 10);
 });
 
+test("an encoded colour link still names its owner", async () => {
+  const search = "?scene=8db2b3434ee7cf729daf"
+    + "&as=chirps_monthly%3Acolour%2Cera5land_temperature%3Aisolines"
+    + "&charts=eyJ9";
+  const sandbox = {
+    document: { querySelectorAll: () => [], querySelector: () => null },
+    window: {
+      __trialMaskReady: true,
+      __trialLayersReady: true,
+      location: { search },
+      __map: {
+        getStyle: () => ({ layers: [] }),
+        getCanvas: () => ({ clientWidth: 1280, clientHeight: 800 }),
+        getZoom: () => 8,
+        areTilesLoaded: () => true,
+      },
+    },
+  };
+  const page = {
+    on: () => {},
+    goto: async () => {},
+    waitForFunction: async () => {},
+    evaluate: async (callback, patterns) => {
+      if (callback.name === "waitForIdle") return true;
+      if (callback.name === "panFrames") return [6, 8, 10];
+      if (callback.name !== "takeSample") return [];
+      const sample = runInNewContext(`(${callback})(patterns)`, { ...sandbox, patterns });
+      return JSON.parse(JSON.stringify(sample));
+    },
+    close: async () => {},
+  };
+  const records = await trialSpot(
+    { newPage: async () => page },
+    "https://example.test",
+    { name: "Kenya-rain", enable: [], colour: "chirps_monthly", zooms: ["fitted"] },
+    "scene",
+    { screens: false },
+  );
+
+  assert.equal(records[0].colour_owner, "chirps_monthly");
+  assert.equal(records[0].timed_out, false);
+});
+
 test("slug keeps file names simple", () => {
   assert.equal(slug("Viti Levu (Sigatoka valley)"), "viti-levu-sigatoka-valley");
 });

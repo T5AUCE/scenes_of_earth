@@ -1,6 +1,6 @@
 """Read monthly Zarr cubes from local disk and expose their revision markers.
 
-A cube holds one variable on a fixed grid with one slice per month. `soe.cube_ingest` writes the
+A cube holds one variable on a fixed grid with one slice per month. `soe.ingest` writes the
 cubes, and a build only reads them, so it makes no network calls for cube data. Each month carries
 a marker that changes whenever its data is replaced, which lets scene ids follow revisions.
 """
@@ -38,7 +38,7 @@ class CubeSpec(NamedTuple):
 
 
 class MonthlyCube:
-    """Read a monthly cube maintained on local disk by `soe.cube_ingest`."""
+    """Read a monthly cube maintained on local disk by `soe.ingest`."""
 
     def __init__(self, spec: CubeSpec, cubes_dir: Path | str = DEFAULT_CUBES_DIR) -> None:
         self._spec = spec
@@ -151,10 +151,7 @@ class CubeStore:
         if not (self._cubes_dir / f"{spec.name}.zarr" / "zarr.json").exists():
             return {}
 
-        cube = self._cubes.get(spec.name)
-        if cube is None:
-            cube = MonthlyCube(spec, self._cubes_dir)
-
+        cube = self._cubes.get(spec.name) or MonthlyCube(spec, self._cubes_dir)
         return cube.months()
 
     def read_cube(self, spec: CubeSpec, month: str, window: CellWindow) -> np.ndarray:

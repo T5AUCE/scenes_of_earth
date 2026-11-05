@@ -11,14 +11,13 @@ import {
   PLAY_SPEEDS,
   type Playhead,
   playheadAt,
-  prefersReducedMotion,
   rescalePosition,
   STALL_LOADING_MS,
   stepMsFor,
   storePlaySpeed,
   sustainedStepMs,
-  watchReducedMotion,
 } from "./playback";
+import { prefersReducedMotion, watchReducedMotion } from "./reduced-motion";
 import type { LayerView } from "./types";
 
 const YEAR_CHARS = 4; // "YYYY"
@@ -407,9 +406,9 @@ class PlaybackClock {
 
     const time = this.times[frame.index];
     const next = this.times[frame.next];
-    return this.frameViews().every((view) => {
-      return !this.window.isVisible(view) || view.isFrameReady?.(time, next) !== false;
-    });
+    return this.frameViews().every(
+      (view) => !this.window.isVisible(view) || view.isFrameReady?.(time, next) !== false,
+    );
   }
 
   private drawFrame(index: number, next: number, mix: number) {
@@ -497,16 +496,17 @@ class PrefetchWindow {
     const limits = views.map((view) => view.maxLookahead?.() ?? lookahead);
     const reach = Math.min(lookahead, ...limits);
     const count = Math.min(reach, this.times.length - 1);
-    const wanted = Array.from({ length: count }, (_, offset) => {
-      return this.times[(base + offset + 1) % this.times.length];
-    });
+    const wanted = Array.from(
+      { length: count },
+      (_, offset) => this.times[(base + offset + 1) % this.times.length],
+    );
     for (const time of this.settled.keys()) {
       if (!wanted.includes(time)) this.settled.delete(time);
     }
 
-    const missing = wanted.filter((time) => {
-      return views.some((view) => !this.settled.get(time)?.has(view));
-    });
+    const missing = wanted.filter(
+      (time) => views.some((view) => !this.settled.get(time)?.has(view)),
+    );
     const isNextMissing = missing.includes(wanted[0]);
     if (!isNextMissing && missing.length < lumpFor(count)) return;
 

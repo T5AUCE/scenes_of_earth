@@ -1,7 +1,7 @@
 """Read monthly ERA5-Land air temperature and fill its missing values with general ERA5.
 
 The dataset reports the available months and revisions shared by both cubes. It marks preliminary
-months with a notice. It reads cells from the cubes that `soe.cube_ingest` writes, so a build makes
+months with a notice. It reads cells from the cubes that `soe.ingest.era5` writes, so a build makes
 no network calls for temperature.
 """
 import numpy as np

@@ -3,8 +3,10 @@ import { afterEach, test } from "node:test";
 
 import { Window } from "happy-dom";
 
-import { bundleStore, createStepReader, decode, readArray, readSteps } from "./data.ts";
-import { ImageCrossfade, LoadMeter, PLAY_SPEED_KEY } from "./playback.ts";
+import { bundleStore, decode, readArray, readSteps } from "./data.ts";
+import { ImageCrossfade } from "./layers/crossfade.ts";
+import { LoadMeter, PLAY_SPEED_KEY } from "./playback.ts";
+import { createStepReader } from "./step-reader.ts";
 import {
   createTimeline,
   formatTime,
@@ -389,17 +391,20 @@ test("destroy drops a pending prepare without drawing late", async (context) => 
   assert.deepEqual(shown, []);
 });
 
-test("play never reaches a step whose prepared data was evicted from the real reader", async (context) => {
-  const view = readerView(seventySix);
-  const { browser, shown, timeline } = mount(context, seventySix, { views: [view] });
-  chooseSpeed(timeline.element, "4");
+test(
+  "play never reaches a step whose prepared data was evicted from the real reader",
+  async (context) => {
+    const view = readerView(seventySix);
+    const { browser, shown, timeline } = mount(context, seventySix, { views: [view] });
+    chooseSpeed(timeline.element, "4");
 
-  playButton(timeline.element).click();
-  await advanceSettling(browser, 1500);
+    playButton(timeline.element).click();
+    await advanceSettling(browser, 1500);
 
-  assert.ok(shown.length > 6);
-  assert.deepEqual([...view.loads.values()].filter((count) => count > 1), []);
-});
+    assert.ok(shown.length > 6);
+    assert.deepEqual([...view.loads.values()].filter((count) => count > 1), []);
+  },
+);
 
 test("pausing, scrubbing and destroying release the views' prefetched steps", (context) => {
   const view = fakeView(quarter);

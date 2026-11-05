@@ -1,7 +1,7 @@
 import type { LngLat, Map as MapLibreMap, PaddingOptions } from "maplibre-gl";
 
 import { fitCamera, fitToBbox, lockPan } from "./map";
-import { prefersReducedMotion } from "./playback";
+import { prefersReducedMotion } from "./reduced-motion";
 import type { Scene } from "./types";
 
 const FLY_DURATION_MS = 1800;

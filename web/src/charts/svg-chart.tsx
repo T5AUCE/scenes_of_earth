@@ -1,8 +1,9 @@
 /** Render chart tables as accessible SVG without changing their stored values. */
 import { useEffect, useMemo, useState } from "react";
 
+import { domainFor, xSpan } from "./chart-domain";
 import { chartPaintFor } from "./paint";
-import { autoDomain, formatPresentationValue, ticksForDomain } from "./ticks";
+import { formatPresentationValue, ticksForDomain } from "./ticks";
 import { finiteValues, type ChartTable, type ChartType } from "./table";
 import { useElementWidth } from "./use-element-width";
 
@@ -77,9 +78,6 @@ const POINT_RADIUS_PX = 3;
 const SINGLE_RADIUS_PX = 4;
 const HOLLOW_WIDTH_PX = 1.5;
 const BAR_MIN_HEIGHT_PX = 1;
-
-/** Half a month or percent slot keeps edge bars fully inside the plot. */
-const BAR_HALF_SLOT = 0.5;
 
 /** A dark edge keeps a light mark visible without rewriting its stored ink. */
 const CONTRAST_OUTLINE_PX = 1.5;
@@ -301,74 +299,6 @@ function visibleReferences(
   }
 
   return references;
-}
-
-function domainFor(
-  table: ChartTable,
-  type: ChartType,
-  references: readonly { id: string; value: number }[],
-  convertedZero: number | null,
-  explicit: [number, number] | null,
-): [number, number] | null {
-  if (explicit) return [explicit[0], explicit[1]];
-  const valuesOnly = autoDomain(table, "line", references);
-  if (!valuesOnly) return null;
-  if (type === "line" || convertedZero === null) return valuesOnly;
-
-  return [Math.min(valuesOnly[0], convertedZero), Math.max(valuesOnly[1], convertedZero)];
-}
-
-function xSpan(
-  table: ChartTable,
-  override: [number, number] | null,
-  type: ChartType,
-): [number, number] {
-  const base = baseSpan(table, override);
-  if (type !== "bar") return base;
-
-  return barSpan(table, base);
-}
-
-function baseSpan(
-  table: ChartTable,
-  override: [number, number] | null,
-): [number, number] {
-  if (override) return override;
-  if (table.shape === "seasonal_cycle") return [1, 12];
-  if (table.shape === "distribution") return [0, 100];
-  if (table.shape === "categorical_shares") return [0, 1];
-  const values = table.rows.map((row) => row.x);
-  if (values.length === 0) return [0, 1];
-  const low = Math.min(...values);
-  const high = Math.max(...values);
-  if (!(high > low)) return [low - 1, low + 1];
-
-  return [low, high];
-}
-
-function barSpan(table: ChartTable, base: [number, number]): [number, number] {
-  if (table.shape === "seasonal_cycle" || table.shape === "distribution") {
-    return [base[0] - BAR_HALF_SLOT, base[1] + BAR_HALF_SLOT];
-  }
-  if (table.shape !== "time_series") return base;
-  const half = halfTimeSlot(table);
-  if (half === null) return base;
-
-  return [base[0] - half, base[1] + half];
-}
-
-function halfTimeSlot(table: ChartTable): number | null {
-  if (table.shape !== "time_series") return null;
-  const sorted = table.rows.map((row) => row.x).sort((first, second) => first - second);
-  let smallest: number | null = null;
-  for (let index = 1; index < sorted.length; index += 1) {
-    const gap = sorted[index] - sorted[index - 1];
-    if (!(gap > 0)) continue;
-    if (smallest === null || gap < smallest) smallest = gap;
-  }
-  if (smallest === null) return null;
-
-  return smallest / 2;
 }
 
 function initialCursor(

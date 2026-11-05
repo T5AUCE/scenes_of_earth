@@ -16,16 +16,9 @@ import rasterio.shutil
 import zarr
 from rasterio.transform import Affine, from_origin
 
-from soe import cube_ingest
-from soe.cube_ingest import (
-    INGEST_SPECS,
-    MonthField,
-    grib_expvers,
-    ingest,
-    open_grib,
-    read_months,
-    write_months,
-)
+from soe.ingest import cubes, era5
+from soe.ingest.cubes import MonthField, write_months
+from soe.ingest.era5 import INGEST_SPECS, grib_expvers, ingest, open_grib, read_months
 from soe.sources import (
     ERA5_GRID,
     ERA5_LAND_TEMPERATURE_CUBE,
@@ -423,7 +416,7 @@ def test_failure_while_storing_data_leaves_the_cube_unavailable_until_rewritten(
     monkeypatch,
 ):
     write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(20), "0005")])
-    store_run = cube_ingest._store_run
+    store_run = cubes._store_run
 
     def store_then_fail(
         array: zarr.Array,
@@ -432,7 +425,7 @@ def test_failure_while_storing_data_leaves_the_cube_unavailable_until_rewritten(
         store_run(array, staged)
         raise OSError("disk full")
 
-    monkeypatch.setattr(cube_ingest, "_store_run", store_then_fail)
+    monkeypatch.setattr(cubes, "_store_run", store_then_fail)
     with pytest.raises(OSError, match="disk full"):
         write_months(tmp_path, LAND.cube, LAND.complete, two_months())
 
@@ -463,7 +456,7 @@ def test_failure_while_publishing_markers_leaves_the_cube_unavailable_until_rewr
     ) -> None:
         raise OSError("metadata not written")
 
-    monkeypatch.setattr(cube_ingest, "_publish", fail_to_publish)
+    monkeypatch.setattr(cubes, "_publish", fail_to_publish)
     with pytest.raises(OSError, match="metadata"):
         write_months(tmp_path, LAND.cube, LAND.complete, two_months())
 
@@ -486,7 +479,7 @@ def test_failure_before_the_update_starts_changes_nothing(tmp_path, monkeypatch)
     def fail_to_begin(group: zarr.Group, pending: list[str]) -> None:
         raise OSError("metadata not written")
 
-    monkeypatch.setattr(cube_ingest, "_begin_update", fail_to_begin)
+    monkeypatch.setattr(cubes, "_begin_update", fail_to_begin)
     with pytest.raises(OSError):
         write_months(tmp_path, LAND.cube, LAND.complete, two_months())
 
@@ -527,7 +520,7 @@ def update_between_stamp_and_validation(
     def update_then_validate(self: MonthlyCube, stamp: int) -> dict[str, str]:
         monkeypatch.undo()
         if not publish:
-            monkeypatch.setattr(cube_ingest, "_publish", raise_os_error)
+            monkeypatch.setattr(cubes, "_publish", raise_os_error)
         try:
             write_months(
                 tmp_path,
@@ -625,12 +618,12 @@ class GribClient:
 def fake_grib(monkeypatch):
     """Reads the fake client's files; months of the year 2017 onward are preliminary."""
 
-    def read_fake(path: Path, spec: cube_ingest.IngestSpec) -> Iterator[MonthField]:
+    def read_fake(path: Path, spec: era5.IngestSpec) -> Iterator[MonthField]:
         for month in json.loads(Path(path).read_text()):
             yield month, celsius_field(20), "0005" if month >= "2017" else "0001"
 
-    monkeypatch.setattr(cube_ingest, "read_grib_months", read_fake)
-    monkeypatch.setattr(cube_ingest, "_newest_month", lambda: "2017-02")
+    monkeypatch.setattr(era5, "read_grib_months", read_fake)
+    monkeypatch.setattr(era5, "newest_month", lambda: "2017-02")
 
 
 def test_ingest_requests_one_year_per_call_and_refetches_preliminary_months(tmp_path, fake_grib):
@@ -684,7 +677,7 @@ def test_other_failures_of_the_newest_month_are_not_taken_for_unpublished(
 
 
 def test_invalid_download_of_the_newest_month_fails_and_leaves_no_cube(tmp_path, monkeypatch):
-    monkeypatch.setattr(cube_ingest, "_newest_month", lambda: "2017-01")
+    monkeypatch.setattr(era5, "newest_month", lambda: "2017-01")
     client = GribClient(grib1_message("0001", edition=2))
 
     with pytest.raises(ValueError, match="only GRIB edition 1"):
@@ -867,8 +860,8 @@ def test_ingest_asks_the_cds_for_the_dataset_and_variable_of_the_cube(
     dataset,
     variable,
 ):
-    monkeypatch.setattr(cube_ingest, "read_grib_months", lambda path, spec: iter(()))
-    monkeypatch.setattr(cube_ingest, "_newest_month", lambda: "2016-02")
+    monkeypatch.setattr(era5, "read_grib_months", lambda path, spec: iter(()))
+    monkeypatch.setattr(era5, "newest_month", lambda: "2016-02")
     client = FakeClient()
 
     ingest(tmp_path, INGEST_SPECS[name], "2016-01", client)

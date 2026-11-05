@@ -28,6 +28,9 @@ function mockModule(specifier: string) {
         export const readArray = async () => null;
         export const readSteps = async () => [];
         export const readMask = async () => globalThis.fieldMask;
+      `;
+    case "../step-reader":
+      return `
         export const createStepReader = () => ({
           prime: () => {},
           release: () => {},

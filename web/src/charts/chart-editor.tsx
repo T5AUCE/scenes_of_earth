@@ -604,7 +604,9 @@ function toggleFields(
                 options: { ...draft.options, showCurrentTime: event.target.checked },
               })}
           />
-          <span className="checkbox-text">{seasonal || draft.source.shape === "seasonal_cycle" ? "Current month" : "Current time"}</span>
+          <span className="checkbox-text">
+            {seasonal || draft.source.shape === "seasonal_cycle" ? "Current month" : "Current time"}
+          </span>
         </label>
       )}
       <label className="checkbox-row">

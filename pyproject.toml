@@ -24,7 +24,7 @@ dev = ["pytest", "pytest-xdist", "httpx"]
 soe = "soe.cli:main"
 
 [tool.setuptools]
-packages = ["soe", "soe.sources"]
+packages = ["soe", "soe.ingest", "soe.sources"]
 
 [tool.setuptools.package-data]
 soe = [

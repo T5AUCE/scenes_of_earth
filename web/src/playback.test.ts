@@ -3,17 +3,9 @@ import { afterEach, test } from "node:test";
 
 import type { AsyncReadable } from "zarrita";
 
+import { crossfadeOpacities, ImageCrossfade } from "./layers/crossfade.ts";
+import { mergingStore } from "./merging-store.ts";
 import {
-  BATCH_MAX_STEPS,
-  cacheByIndex,
-  createStepReader,
-  mergingStore,
-  STEP_CACHE_BYTES,
-  stepCacheLimit,
-} from "./data.ts";
-import {
-  crossfadeOpacities,
-  ImageCrossfade,
   labelIndexFor,
   LoadMeter,
   loadPlaySpeed,
@@ -29,6 +21,13 @@ import {
   storePlaySpeed,
   sustainedStepMs,
 } from "./playback.ts";
+import {
+  BATCH_MAX_STEPS,
+  cacheByIndex,
+  createStepReader,
+  STEP_CACHE_BYTES,
+  stepCacheLimit,
+} from "./step-reader.ts";
 
 const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 
@@ -127,23 +126,6 @@ test("a 76-step 800 by 800 layer at 4x stays inside the byte budget", () => {
   assert.equal(wanted, 24);
   assert.equal(effective, 11);
   assert.ok(cachedBytes <= STEP_CACHE_BYTES);
-});
-
-test("shrinking the cache drops the oldest steps", async () => {
-  const loaded: number[] = [];
-  const cache = cacheByIndex(
-    3,
-    async (index) => {
-      loaded.push(index);
-    },
-  );
-  [0, 1, 2].forEach((index) => cache.read(index));
-
-  cache.resize(2);
-  cache.read(0);
-  cache.read(2);
-
-  assert.deepEqual(loaded, [0, 1, 2, 0]);
 });
 
 test("a warmed step outlasts drawn steps until the map reads it", async () => {

@@ -6,7 +6,8 @@ import type {
   SymbolLayerSpecification,
 } from "maplibre-gl";
 
-import { labelIndexFor, prefersReducedMotion } from "../playback";
+import { labelIndexFor } from "../playback";
+import { prefersReducedMotion } from "../reduced-motion";
 import { evenStops } from "../render/colormap";
 import {
   BOLD_ISOTHERM_MULTIPLE,
@@ -130,26 +131,13 @@ export function createIsolineOverlay(
 
     setValues(values, step) {
       if (step < 0) {
-        setSlotFactor(groups[0], 0);
-        setSlotFactor(groups[1], 0);
-        dominantStep = null;
-        updateLabelVisibility();
+        hideBoth();
         return;
       }
 
-      if (holdsStep(step)) {
-        front = slotOfStep(step)!;
-        failed.delete(step);
-        showSingle();
-        return;
-      }
+      if (selectStep(step)) return;
 
-      const traced = cachedTrace(
-        tracedSteps,
-        traceKey(step, smooth),
-        () => traceIsolines(values, layer.grid.nx, layer.grid.ny, levels, smooth),
-      );
-      setSourceData(front, traced);
+      setSourceData(front, traceStep(step, values));
       keys[front] = step;
       failed.delete(step);
       showSingle();
@@ -158,11 +146,7 @@ export function createIsolineOverlay(
     prepareStep(step, values) {
       if (step < 0 || holdsStep(step) || failed.has(step)) return;
 
-      cachedTrace(
-        tracedSteps,
-        traceKey(step, smooth),
-        () => traceIsolines(values, layer.grid.nx, layer.grid.ny, levels, smooth),
-      );
+      traceStep(step, values);
     },
 
     frame(fromStep, toStep, mix) {
@@ -172,10 +156,7 @@ export function createIsolineOverlay(
       if (mix <= 0) {
         if (fromStep < 0) {
           paintHidden(toStep);
-          setSlotFactor(groups[0], 0);
-          setSlotFactor(groups[1], 0);
-          dominantStep = null;
-          updateLabelVisibility();
+          hideBoth();
           return true;
         }
 
@@ -208,18 +189,11 @@ export function createIsolineOverlay(
     },
 
     isReady(fromStep, toStep) {
-      if (fromStep === toStep) return true;
-
-      return isSettled(fromStep) && isSettled(toStep);
+      return fromStep === toStep || (isSettled(fromStep) && isSettled(toStep));
     },
 
     select(step) {
-      if (!holdsStep(step)) return false;
-
-      front = slotOfStep(step)!;
-      failed.delete(step);
-      showSingle();
-      return true;
+      return selectStep(step);
     },
 
     holds(step) {
@@ -269,9 +243,10 @@ export function createIsolineOverlay(
 
     setVisible(visible) {
       overallVisible = visible;
+      const visibility = visible ? "visible" : "none";
       for (const group of groups) {
-        map.setLayoutProperty(group.casingId, "visibility", visible ? "visible" : "none");
-        map.setLayoutProperty(group.lineId, "visibility", visible ? "visible" : "none");
+        map.setLayoutProperty(group.casingId, "visibility", visibility);
+        map.setLayoutProperty(group.lineId, "visibility", visibility);
       }
       if (!visible) clearSources();
       else updateLabelVisibility();
@@ -301,8 +276,25 @@ export function createIsolineOverlay(
     },
   };
 
+  function selectStep(step: number): boolean {
+    if (!holdsStep(step)) return false;
+
+    front = slotOfStep(step)!;
+    failed.delete(step);
+    showSingle();
+    return true;
+  }
+
+  function traceStep(step: number, values: ArrayLike<number>): Isoline[] {
+    return cachedTrace(
+      tracedSteps,
+      traceKey(step, smooth),
+      () => traceIsolines(values, layer.grid.nx, layer.grid.ny, levels, smooth),
+    );
+  }
+
   function holdsStep(step: number): boolean {
-    return step >= 0 && keys.includes(step);
+    return slotOfStep(step) !== null;
   }
 
   function slotOfStep(step: number): 0 | 1 | null {
@@ -313,19 +305,18 @@ export function createIsolineOverlay(
     return null;
   }
 
-  function isLoaded(sourceId: string): boolean {
-    const isSourceLoaded = (map as { isSourceLoaded?: (id: string) => boolean }).isSourceLoaded;
-
-    return isSourceLoaded?.call(map, sourceId) ?? true;
-  }
-
   function isSettled(step: number): boolean {
-    if (step < 0) return true;
-    if (failed.has(step)) return true;
+    if (step < 0 || failed.has(step)) return true;
 
     const slot = slotOfStep(step);
     // A reload keeps drawing the same data so only the slot's own setData waits.
     return slot !== null && (painted[slot] ||= isLoaded(sourceIds[slot]));
+  }
+
+  function isLoaded(sourceId: string): boolean {
+    const isSourceLoaded = (map as { isSourceLoaded?: (id: string) => boolean }).isSourceLoaded;
+
+    return isSourceLoaded?.call(map, sourceId) ?? true;
   }
 
   function paintHidden(toStep: number): void {
@@ -352,11 +343,16 @@ export function createIsolineOverlay(
   }
 
   function showSingle() {
-    const shown = keys[front];
     for (const [slot, group] of groups.entries()) {
       setSlotFactor(group, slot === front ? 1 : 0);
     }
-    dominantStep = shown;
+    dominantStep = keys[front];
+    updateLabelVisibility();
+  }
+
+  function hideBoth() {
+    for (const group of groups) setSlotFactor(group, 0);
+    dominantStep = null;
     updateLabelVisibility();
   }
 

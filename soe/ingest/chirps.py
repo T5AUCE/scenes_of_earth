@@ -7,32 +7,35 @@ last stored month.
 """
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from email.message import Message
 from email.utils import parsedate_to_datetime
 from http.client import IncompleteRead
 from pathlib import Path
+from typing import TypeVar
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import rasterio
 
-from .cube_ingest import (
+from ..sources.chirps import CHIRPS_CUBE, CHIRPS_URL, FIRST_MONTH, mask_unusable_rain
+from ..sources.cubes import FINAL_EXPVER, CubeSpec
+from ..sources.grid import Grid
+from .cubes import (
     DOWNLOADS_DIR,
     RESOLUTION_TOLERANCE_DEG,
     MonthField,
-    _batches,
-    _cube_attrs,
-    _months_between,
-    _newest_month,
-    _next_month,
-    _previous_month,
+    cube_attrs,
+    months_between,
+    newest_month,
+    next_month,
+    previous_month,
     write_months,
+    year_batches,
 )
-from .sources.chirps import CHIRPS_CUBE, CHIRPS_URL, FIRST_MONTH, mask_unusable_rain
-from .sources.cubes import FINAL_EXPVER, CubeSpec
-from .sources.grid import Grid
+
+T = TypeVar("T")
 
 HEAD_TIMEOUT_SECS = 30
 DOWNLOAD_TIMEOUT_SECS = 2 * 60
@@ -60,16 +63,16 @@ def ingest(
     """
     cube_dir = Path(cube_dir)
     stored, source_modified, pending = _stored_state(cube_dir, cube)
-    newest = _newest_month()
+    newest = newest_month()
     new_months, first_unpublished = _probe_new_months(stored, start_month, newest)
     refetch = _revision_months(stored, source_modified)
-    earlier = _months_between(start_month, _previous_month(min(stored))) if stored else []
+    earlier = months_between(start_month, previous_month(min(stored))) if stored else []
     wanted = sorted({*new_months, *refetch, *earlier, *pending})
     if not wanted:
         return
 
-    pending_newest = first_unpublished or _next_month(newest)
-    batches = _batches(wanted, pending_newest, min(stored, default=None))
+    pending_newest = first_unpublished or next_month(newest)
+    batches = year_batches(wanted, pending_newest, min(stored, default=None))
     downloads = cube_dir / DOWNLOADS_DIR
     downloads.mkdir(parents=True, exist_ok=True)
     for batch in batches:
@@ -82,7 +85,7 @@ def _stored_state(
     cube: CubeSpec,
 ) -> tuple[dict[str, str], dict[str, str], list[str]]:
     """Return stored markers, Last-Modified dates and pending months, empty when missing."""
-    stored_attrs = _cube_attrs(cube_dir, cube)
+    stored_attrs = cube_attrs(cube_dir, cube)
     return (
         dict(stored_attrs.get("months", {})),
         dict(stored_attrs.get(SOURCE_MODIFIED_ATTR, {})),
@@ -100,13 +103,9 @@ def _probe_new_months(
     Probe forward serially because the server throttles bursts. A trailing run of missing months
     ends the probe, while a missing month before a published one means the archive has a gap.
     """
-    first = _next_month(max(stored)) if stored else start_month
-    candidates = _months_between(first, newest)
-    exists_by_month = {}
-    for month in candidates:
-        exists, _ = _head_month(month)
-        exists_by_month[month] = exists
-
+    first = next_month(max(stored)) if stored else start_month
+    candidates = months_between(first, newest)
+    exists_by_month = {month: _head_month(month)[0] for month in candidates}
     published = [month for month in candidates if exists_by_month[month]]
     first_unpublished = None
     for month in reversed(candidates):
@@ -156,6 +155,42 @@ def _revision_months(
     return refetch
 
 
+def _head_month(month: str) -> tuple[bool, str | None]:
+    """Return whether the month is published and its Last-Modified date, retrying throttles."""
+    url = _chirps_url(month)
+    return _with_retries(url, lambda: _head_once(url, HEAD_TIMEOUT_SECS))
+
+
+def _with_retries(url: str, attempt: Callable[[], T]) -> T:
+    """Run attempt with retries on throttles, server errors, timeouts and short bodies."""
+    for attempt_index in range(MAX_ATTEMPTS):
+        try:
+            return attempt()
+        except HTTPError as error:
+            if not _is_retryable_code(error.code) or attempt_index == MAX_ATTEMPTS - 1:
+                raise
+
+            _sleep_before_retry(attempt_index, error.headers)
+        except (URLError, TimeoutError, OSError, IncompleteRead) as error:
+            if attempt_index == MAX_ATTEMPTS - 1:
+                raise OSError(f"{url}: {error}") from error
+
+            _sleep_before_retry(attempt_index, None)
+
+
+def _head_once(url: str, timeout: float) -> tuple[bool, str | None]:
+    """Single HEAD attempt; 404 means missing, throttles and timeouts raise for a retry."""
+    try:
+        request = Request(url, method="HEAD")
+        with urlopen(request, timeout=timeout) as response:
+            return True, response.headers.get("Last-Modified")
+    except HTTPError as error:
+        if error.code == 404:
+            return False, None
+
+        raise
+
+
 def _ingest_batch(
     cube_dir: Path,
     cube: CubeSpec,
@@ -164,15 +199,15 @@ def _ingest_batch(
 ) -> None:
     """Download one year batch, check it and publish it with its Last-Modified dates."""
     targets = {month: downloads / f"{cube.name}-{month}.cog" for month in batch}
-    combined = dict(_cube_attrs(cube_dir, cube).get(SOURCE_MODIFIED_ATTR, {}))
+    combined = dict(cube_attrs(cube_dir, cube).get(SOURCE_MODIFIED_ATTR, {}))
     try:
         fields = _batch_fields(batch, targets, cube, combined)
         write_months(
             cube_dir,
             cube,
-            False,
-            fields,
-            {SOURCE_MODIFIED_ATTR: combined},
+            complete=False,
+            months=fields,
+            attrs={SOURCE_MODIFIED_ATTR: combined},
         )
     finally:
         for target in targets.values():
@@ -196,26 +231,10 @@ def _batch_fields(
 
 def _download_month(month: str, target: Path) -> str | None:
     """Fetch one COG to `target` with retries and return its Last-Modified date."""
-    body, last_modified = _fetch_with_retries(_chirps_url(month))
+    url = _chirps_url(month)
+    body, last_modified = _with_retries(url, lambda: _fetch_once(url, DOWNLOAD_TIMEOUT_SECS))
     target.write_bytes(body)
     return last_modified
-
-
-def _fetch_with_retries(url: str) -> tuple[bytes, str | None]:
-    """GET with retries on throttles, server errors, timeouts and short bodies."""
-    for attempt in range(MAX_ATTEMPTS):
-        try:
-            return _fetch_once(url, DOWNLOAD_TIMEOUT_SECS)
-        except HTTPError as error:
-            if not _is_retryable_code(error.code) or attempt == MAX_ATTEMPTS - 1:
-                raise
-
-            _sleep_before_retry(attempt, error.headers)
-        except (URLError, TimeoutError, OSError, IncompleteRead) as error:
-            if attempt == MAX_ATTEMPTS - 1:
-                raise OSError(f"{url}: {error}") from error
-
-            _sleep_before_retry(attempt, None)
 
 
 def _fetch_once(url: str, timeout: float) -> tuple[bytes, str | None]:
@@ -267,43 +286,6 @@ def _check_grid(dataset: rasterio.DatasetReader, grid: Grid) -> None:
 def _chirps_url(month: str) -> str:
     """Return the COG URL of month 'YYYY-MM'."""
     return CHIRPS_URL.format(ym=month.replace("-", "."))
-
-
-def _head_month(month: str) -> tuple[bool, str | None]:
-    """Return whether the month is published and its Last-Modified date, retrying throttles."""
-    return _head_with_retries(_chirps_url(month))
-
-
-def _head_with_retries(url: str) -> tuple[bool, str | None]:
-    """HEAD with retries on throttles, server errors and timeouts, honouring Retry-After."""
-    for attempt in range(MAX_ATTEMPTS):
-        try:
-            return _head_once(url, HEAD_TIMEOUT_SECS)
-        except HTTPError as error:
-            if not _is_retryable_code(error.code) or attempt == MAX_ATTEMPTS - 1:
-                raise
-
-            _sleep_before_retry(attempt, error.headers)
-        except (URLError, TimeoutError, OSError):
-            if attempt == MAX_ATTEMPTS - 1:
-                raise
-
-            _sleep_before_retry(attempt, None)
-
-
-def _head_once(url: str, timeout: float) -> tuple[bool, str | None]:
-    """Single HEAD attempt; 404 means missing, throttles and timeouts raise for a retry."""
-    try:
-        request = Request(url, method="HEAD")
-        with urlopen(request, timeout=timeout) as response:
-            return True, response.headers.get("Last-Modified")
-    except HTTPError as error:
-        if error.code == 404:
-            return False, None
-
-        raise
-    except (URLError, TimeoutError, OSError):
-        raise
 
 
 def _is_retryable_code(code: int) -> bool:

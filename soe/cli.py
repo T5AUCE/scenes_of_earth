@@ -16,9 +16,10 @@ from pathlib import Path
 
 import numpy as np
 
-from . import chirps_ingest, db
+from . import db
 from .boundary_import import import_cgaz, import_ucdb
-from .cube_ingest import INGEST_SPECS, ingest
+from .ingest import chirps
+from .ingest.era5 import INGEST_SPECS, ingest
 from .sources import (
     CHIRPS_CUBE,
     DEFAULT_CUBES_DIR,
@@ -61,7 +62,7 @@ def main(argv: list[str] | None = None) -> None:
 
         logging.basicConfig(level=logging.INFO)
         if args.cube == CHIRPS_CUBE.name:
-            chirps_ingest.ingest(args.cubes, args.start)
+            chirps.ingest(args.cubes, args.start)
         else:
             ingest(args.cubes, INGEST_SPECS[args.cube], args.start)
         return

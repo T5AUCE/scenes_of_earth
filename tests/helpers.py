@@ -11,9 +11,18 @@ from soe import db
 from soe.areas import Area
 from soe.build import build_scene
 from soe.bundle import JsonObject
-from soe.cube_ingest import INGEST_SPECS, write_months
+from soe.ingest.cubes import write_months
+from soe.ingest.era5 import INGEST_SPECS
 from soe.plan import Plan, plan
-from soe.sources import CellWindow, CubeSpec, Dataset, Grid, SyntheticSource, make_registry
+from soe.sources import (
+    CHIRPS_CUBE,
+    CellWindow,
+    CubeSpec,
+    Dataset,
+    Grid,
+    SyntheticSource,
+    make_registry,
+)
 
 NAIROBI = box(36.5, -1.5, 37.5, -0.5)
 FIJI = MultiPolygon([box(178, -19, 180, -17), box(-180, -19, -178, -17)])
@@ -51,15 +60,18 @@ def write_cube(
     expver: str = "0001",
 ) -> None:
     """Store one month in the named cube; a number fills every cell of the cube's grid."""
-    grid = INGEST_SPECS[name].cube.grid
-    field = np.full((grid.rows, grid.columns), values, "float32")
     spec = INGEST_SPECS[name]
-    write_months(
-        cubes_dir,
-        spec.cube,
-        spec.complete,
-        [(month, field, expver)],
-    )
+    grid = spec.cube.grid
+    field = np.full((grid.rows, grid.columns), values, "float32")
+    write_months(cubes_dir, spec.cube, spec.complete, [(month, field, expver)])
+
+
+def write_updating_chirps_cube(cubes_dir: Path) -> None:
+    """Store a CHIRPS cube with one month still pending, as while an ingest is publishing."""
+    group = zarr.open_group(cubes_dir / f"{CHIRPS_CUBE.name}.zarr", mode="w")
+    group.create_array(CHIRPS_CUBE.array, shape=(1, 1, 1), dtype=CHIRPS_CUBE.dtype)
+    group.attrs["months"] = {"2016-01": "0001:final"}
+    group.attrs["pending"] = ["2016-01"]
 
 
 def plan_months(area: Area, datasets: list[Dataset], months: int = 12) -> Plan:

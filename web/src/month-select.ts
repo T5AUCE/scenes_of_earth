@@ -39,9 +39,7 @@ export function createMonthSelect(monthLabel: string, yearLabel: string): MonthS
   wrapper.className = "month-select";
   const month = document.createElement("select");
   month.setAttribute("aria-label", monthLabel);
-  MONTH_LABELS.forEach((label, index) => {
-    month.append(makeMonthOption(label, padMonth(index + 1)));
-  });
+  month.append(...MONTH_LABELS.map((label, index) => makeMonthOption(label, padMonth(index + 1))));
   const year = document.createElement("select");
   year.setAttribute("aria-label", yearLabel);
   wrapper.append(month, year);
@@ -92,6 +90,7 @@ class MonthSelectControl {
 
   get value(): string {
     if (this.year.selectedIndex < 0) return "";
+
     return `${this.year.value}-${this.month.value}`;
   }
 
@@ -102,6 +101,7 @@ class MonthSelectControl {
       this.year.selectedIndex = -1;
       return;
     }
+
     this.year.value = String(parsed.year);
     this.month.value = padMonth(parsed.month);
     this.refreshMonths();
@@ -184,6 +184,7 @@ function parseYearMonth(text: string): { year: number; month: number } | null {
 
   const month = Number(match[2]);
   if (month < FIRST_MONTH || month > MONTHS_PER_YEAR) return null;
+
   return { year: Number(match[1]), month };
 }
 

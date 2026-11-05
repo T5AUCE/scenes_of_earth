@@ -25,8 +25,13 @@ from soe.sources import (
     chirps,
     make_registry,
 )
-from tests.conftest import write_updating_chirps_cube
-from tests.helpers import FIJI, ReingestedSource, boundary_row, write_cube
+from tests.helpers import (
+    FIJI,
+    ReingestedSource,
+    boundary_row,
+    write_cube,
+    write_updating_chirps_cube,
+)
 
 POLL_ATTEMPTS = 100
 POLL_INTERVAL_SECS = 0.1

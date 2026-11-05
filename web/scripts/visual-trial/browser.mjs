@@ -1789,7 +1789,18 @@ function takeSample([linePattern, labelPattern]) {
   // The link carries the normalized allocation, so its as entries name the colour owner.
   const search = window.location?.search ?? "";
   // URLSearchParams is missing from the trial's sandbox, so the query is read by hand.
-  const queryParam = (name) => new RegExp(`[?&]${name}=([^&]*)`).exec(search)?.[1] ?? "";
+  const queryParam = (name) => {
+    const raw = new RegExp(`[?&]${name}=([^&]*)`).exec(search)?.[1] ?? "";
+    return decodeValue(raw);
+  };
+  // The app percent-encodes the query once a charts token is present, so values decode here.
+  const decodeValue = (value) => {
+    try {
+      return decodeURIComponent(value.replace(/\+/g, " "));
+    } catch {
+      return value;
+    }
+  };
   const off = new Set(queryParam("off").split(",").filter(Boolean));
   let colourOwner = null;
   for (const entry of queryParam("as").split(",").filter(Boolean)) {

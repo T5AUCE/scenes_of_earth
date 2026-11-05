@@ -2,6 +2,7 @@
 
 Check trailing-month probing, revision re-checks, grid checks and retries.
 """
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from http.client import IncompleteRead
@@ -14,23 +15,14 @@ import rasterio
 import zarr
 from rasterio.transform import from_origin
 
-from soe import chirps_ingest
-from soe.chirps_ingest import SOURCE_MODIFIED_ATTR, ingest
-from soe.sources import CubeSpec
+from soe.ingest import chirps
+from soe.ingest.chirps import SOURCE_MODIFIED_ATTR, ingest
+from soe.sources import CHIRPS_CUBE
 from soe.sources.cubes import CubeStore
 from soe.sources.grid import Grid
 
 TEST_GRID = Grid(-180, 60, 0.05, 10, 5)
-TEST_CUBE = CubeSpec(
-    name="chirps_monthly",
-    title="CHIRPS rainfall",
-    array="precip",
-    grid=TEST_GRID,
-    dtype="uint16",
-    scale=0.1,
-    fill=65535,
-    units="mm/month",
-)
+TEST_CUBE = CHIRPS_CUBE._replace(grid=TEST_GRID)
 
 FIRST_LAST_MODIFIED = "Wed, 25 Feb 2025 00:00:00 GMT"
 SECOND_LAST_MODIFIED = "Thu, 15 May 2025 00:00:00 GMT"
@@ -68,7 +60,7 @@ def write_chirps_raster(
 def fake_head_factory(
     exists: dict[str, bool],
     modified: dict[str, str],
-) -> object:
+) -> Callable[[str], tuple[bool, str | None]]:
     """Return a fake `_head_month` serving `exists` and Last-Modified dates."""
 
     def fake_head(month: str) -> tuple[bool, str | None]:
@@ -80,7 +72,7 @@ def fake_head_factory(
 def fake_download_factory(
     values_by_month: dict[str, np.ndarray],
     modified: dict[str, str],
-) -> object:
+) -> Callable[[str, Path], str | None]:
     """Return a fake `_download_month` writing test rasters and Last-Modified dates."""
 
     def fake_download(month: str, target: Path) -> str | None:
@@ -96,9 +88,9 @@ def stored_months(cubes_dir: Path) -> dict[str, str]:
 
 
 def test_chirps_ingest_stops_at_the_first_unpublished_trailing_month(tmp_path, monkeypatch):
-    monkeypatch.setattr(chirps_ingest, "_newest_month", lambda: "1981-03")
+    monkeypatch.setattr(chirps, "newest_month", lambda: "1981-03")
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_head_month",
         fake_head_factory(
             {"1981-01": True, "1981-02": True},
@@ -106,7 +98,7 @@ def test_chirps_ingest_stops_at_the_first_unpublished_trailing_month(tmp_path, m
         ),
     )
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_download_month",
         fake_download_factory(
             {"1981-01": chirps_field(JAN_MM), "1981-02": chirps_field(FEB_MM)},
@@ -121,9 +113,9 @@ def test_chirps_ingest_stops_at_the_first_unpublished_trailing_month(tmp_path, m
 
 
 def test_chirps_missing_older_month_fails(tmp_path, monkeypatch):
-    monkeypatch.setattr(chirps_ingest, "_newest_month", lambda: "1981-03")
+    monkeypatch.setattr(chirps, "newest_month", lambda: "1981-03")
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_head_month",
         fake_head_factory(
             {"1981-01": True, "1981-03": True},
@@ -138,9 +130,9 @@ def test_chirps_missing_older_month_fails(tmp_path, monkeypatch):
 
 
 def test_chirps_month_with_a_new_last_modified_is_refetched(tmp_path, monkeypatch):
-    monkeypatch.setattr(chirps_ingest, "_newest_month", lambda: "1981-02")
+    monkeypatch.setattr(chirps, "newest_month", lambda: "1981-02")
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_head_month",
         fake_head_factory(
             {"1981-01": True, "1981-02": True},
@@ -148,7 +140,7 @@ def test_chirps_month_with_a_new_last_modified_is_refetched(tmp_path, monkeypatc
         ),
     )
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_download_month",
         fake_download_factory(
             {"1981-01": chirps_field(JAN_MM), "1981-02": chirps_field(FEB_MM)},
@@ -159,7 +151,7 @@ def test_chirps_month_with_a_new_last_modified_is_refetched(tmp_path, monkeypatc
     before = stored_months(tmp_path)["1981-02"]
 
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_head_month",
         fake_head_factory(
             {"1981-01": True, "1981-02": True},
@@ -167,7 +159,7 @@ def test_chirps_month_with_a_new_last_modified_is_refetched(tmp_path, monkeypatc
         ),
     )
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_download_month",
         fake_download_factory(
             {"1981-02": chirps_field(FEB_MM + 5)},
@@ -186,14 +178,14 @@ def test_chirps_month_with_a_new_last_modified_is_refetched(tmp_path, monkeypatc
 
 
 def test_chirps_republish_with_identical_bytes_keeps_the_marker(tmp_path, monkeypatch):
-    monkeypatch.setattr(chirps_ingest, "_newest_month", lambda: "1981-01")
+    monkeypatch.setattr(chirps, "newest_month", lambda: "1981-01")
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_head_month",
         fake_head_factory({"1981-01": True}, {"1981-01": FIRST_LAST_MODIFIED}),
     )
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_download_month",
         fake_download_factory(
             {"1981-01": chirps_field(JAN_MM)},
@@ -204,12 +196,12 @@ def test_chirps_republish_with_identical_bytes_keeps_the_marker(tmp_path, monkey
     before = stored_months(tmp_path)["1981-01"]
 
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_head_month",
         fake_head_factory({"1981-01": True}, {"1981-01": SECOND_LAST_MODIFIED}),
     )
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_download_month",
         fake_download_factory(
             {"1981-01": chirps_field(JAN_MM)},
@@ -224,9 +216,9 @@ def test_chirps_republish_with_identical_bytes_keeps_the_marker(tmp_path, monkey
 
 
 def test_chirps_negative_values_become_fill(tmp_path, monkeypatch):
-    monkeypatch.setattr(chirps_ingest, "_newest_month", lambda: "1981-01")
+    monkeypatch.setattr(chirps, "newest_month", lambda: "1981-01")
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_head_month",
         fake_head_factory({"1981-01": True}, {"1981-01": FIRST_LAST_MODIFIED}),
     )
@@ -237,7 +229,7 @@ def test_chirps_negative_values_become_fill(tmp_path, monkeypatch):
         write_chirps_raster(target, field)
         return FIRST_LAST_MODIFIED
 
-    monkeypatch.setattr(chirps_ingest, "_download_month", fake_download)
+    monkeypatch.setattr(chirps, "_download_month", fake_download)
 
     ingest(tmp_path, "1981-01", TEST_CUBE)
 
@@ -252,9 +244,9 @@ def test_chirps_values_above_the_cube_maximum_become_fill_instead_of_refusing_th
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.setattr(chirps_ingest, "_newest_month", lambda: "1981-01")
+    monkeypatch.setattr(chirps, "newest_month", lambda: "1981-01")
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_head_month",
         fake_head_factory({"1981-01": True}, {"1981-01": FIRST_LAST_MODIFIED}),
     )
@@ -266,7 +258,7 @@ def test_chirps_values_above_the_cube_maximum_become_fill_instead_of_refusing_th
         write_chirps_raster(target, field)
         return FIRST_LAST_MODIFIED
 
-    monkeypatch.setattr(chirps_ingest, "_download_month", fake_download)
+    monkeypatch.setattr(chirps, "_download_month", fake_download)
 
     ingest(tmp_path, "1981-01", TEST_CUBE)
 
@@ -277,9 +269,9 @@ def test_chirps_values_above_the_cube_maximum_become_fill_instead_of_refusing_th
 
 
 def test_chirps_raster_off_the_edge_aligned_grid_is_refused(tmp_path, monkeypatch):
-    monkeypatch.setattr(chirps_ingest, "_newest_month", lambda: "1981-01")
+    monkeypatch.setattr(chirps, "newest_month", lambda: "1981-01")
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_head_month",
         fake_head_factory({"1981-01": True}, {"1981-01": FIRST_LAST_MODIFIED}),
     )
@@ -288,7 +280,7 @@ def test_chirps_raster_off_the_edge_aligned_grid_is_refused(tmp_path, monkeypatc
         write_chirps_raster(target, chirps_field(JAN_MM), west_edge=-180.025)
         return FIRST_LAST_MODIFIED
 
-    monkeypatch.setattr(chirps_ingest, "_download_month", fake_download)
+    monkeypatch.setattr(chirps, "_download_month", fake_download)
 
     with pytest.raises(ValueError, match="unrotated"):
         ingest(tmp_path, "1981-01", TEST_CUBE)
@@ -307,10 +299,13 @@ def test_chirps_ingest_retries_429_then_succeeds(monkeypatch):
         return True, FIRST_LAST_MODIFIED
 
     slept = []
-    monkeypatch.setattr(chirps_ingest, "_head_once", fail_once)
-    monkeypatch.setattr(chirps_ingest, "_sleep", slept.append)
+    monkeypatch.setattr(chirps, "_head_once", fail_once)
+    monkeypatch.setattr(chirps, "_sleep", slept.append)
+    url = "https://example.test/file"
+    def attempt() -> tuple[bool, str | None]:
+        return chirps._head_once(url, chirps.HEAD_TIMEOUT_SECS)
 
-    assert chirps_ingest._head_with_retries("https://example.test/file") == (
+    assert chirps._with_retries(url, attempt) == (
         True,
         FIRST_LAST_MODIFIED,
     )
@@ -322,11 +317,31 @@ def test_chirps_ingest_gives_up_after_repeated_429(monkeypatch):
         raise HTTPError(url, 429, "Too Many Requests", {}, None)
 
     slept = []
-    monkeypatch.setattr(chirps_ingest, "_head_once", always_throttled)
-    monkeypatch.setattr(chirps_ingest, "_sleep", slept.append)
+    monkeypatch.setattr(chirps, "_head_once", always_throttled)
+    monkeypatch.setattr(chirps, "_sleep", slept.append)
+    url = "https://example.test/file"
+    def attempt() -> tuple[bool, str | None]:
+        return chirps._head_once(url, chirps.HEAD_TIMEOUT_SECS)
 
     with pytest.raises(HTTPError):
-        chirps_ingest._head_with_retries("https://example.test/file")
+        chirps._with_retries(url, attempt)
+
+    assert slept == [2, 4, 8, 16, 32]
+
+
+def test_chirps_head_gives_up_with_url(monkeypatch):
+    def always_fails(url: str, timeout: float) -> tuple[bool, str | None]:
+        raise OSError("connection reset")
+
+    slept = []
+    monkeypatch.setattr(chirps, "_head_once", always_fails)
+    monkeypatch.setattr(chirps, "_sleep", slept.append)
+    url = "https://example.test/file"
+    def attempt() -> tuple[bool, str | None]:
+        return chirps._head_once(url, chirps.HEAD_TIMEOUT_SECS)
+
+    with pytest.raises(OSError, match="example.test"):
+        chirps._with_retries(url, attempt)
 
     assert slept == [2, 4, 8, 16, 32]
 
@@ -342,10 +357,13 @@ def test_chirps_get_retries_incomplete_read_then_succeeds(monkeypatch):
         return b"body", FIRST_LAST_MODIFIED
 
     slept = []
-    monkeypatch.setattr(chirps_ingest, "_fetch_once", fail_once)
-    monkeypatch.setattr(chirps_ingest, "_sleep", slept.append)
+    monkeypatch.setattr(chirps, "_fetch_once", fail_once)
+    monkeypatch.setattr(chirps, "_sleep", slept.append)
+    url = "https://example.test/file"
+    def attempt() -> tuple[bytes, str | None]:
+        return chirps._fetch_once(url, chirps.DOWNLOAD_TIMEOUT_SECS)
 
-    assert chirps_ingest._fetch_with_retries("https://example.test/file") == (
+    assert chirps._with_retries(url, attempt) == (
         b"body",
         FIRST_LAST_MODIFIED,
     )
@@ -357,20 +375,23 @@ def test_chirps_get_gives_up_on_incomplete_read_with_url(monkeypatch):
         raise IncompleteRead(b"half", 8)
 
     slept = []
-    monkeypatch.setattr(chirps_ingest, "_fetch_once", always_short)
-    monkeypatch.setattr(chirps_ingest, "_sleep", slept.append)
+    monkeypatch.setattr(chirps, "_fetch_once", always_short)
+    monkeypatch.setattr(chirps, "_sleep", slept.append)
+    url = "https://example.test/file"
+    def attempt() -> tuple[bytes, str | None]:
+        return chirps._fetch_once(url, chirps.DOWNLOAD_TIMEOUT_SECS)
 
     with pytest.raises(OSError, match="example.test"):
-        chirps_ingest._fetch_with_retries("https://example.test/file")
+        chirps._with_retries(url, attempt)
 
     assert slept == [2, 4, 8, 16, 32]
 
 
 def test_retry_after_delay_seconds_wins_over_backoff(monkeypatch):
     slept = []
-    monkeypatch.setattr(chirps_ingest, "_sleep", slept.append)
+    monkeypatch.setattr(chirps, "_sleep", slept.append)
 
-    chirps_ingest._sleep_before_retry(0, {"Retry-After": "120"})
+    chirps._sleep_before_retry(0, {"Retry-After": "120"})
 
     assert slept == [120]
 
@@ -379,9 +400,9 @@ def test_retry_after_http_date_wins_over_backoff(monkeypatch):
     future = datetime.now(timezone.utc) + timedelta(seconds=120)
     headers = {"Retry-After": format_datetime(future, usegmt=True)}
     slept = []
-    monkeypatch.setattr(chirps_ingest, "_sleep", slept.append)
+    monkeypatch.setattr(chirps, "_sleep", slept.append)
 
-    chirps_ingest._sleep_before_retry(0, headers)
+    chirps._sleep_before_retry(0, headers)
 
     assert slept[0] == pytest.approx(120, abs=5)
 
@@ -392,9 +413,9 @@ def test_chirps_pending_month_is_repaired_without_revision_change(
     monkeypatch,
     modified,
 ):
-    monkeypatch.setattr(chirps_ingest, "_newest_month", lambda: "1981-02")
+    monkeypatch.setattr(chirps, "newest_month", lambda: "1981-02")
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_head_month",
         fake_head_factory(
             {"1981-01": True, "1981-02": True},
@@ -402,7 +423,7 @@ def test_chirps_pending_month_is_repaired_without_revision_change(
         ),
     )
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_download_month",
         fake_download_factory(
             {"1981-01": chirps_field(JAN_MM), "1981-02": chirps_field(FEB_MM)},
@@ -418,12 +439,12 @@ def test_chirps_pending_month_is_repaired_without_revision_change(
     revision = {} if modified is None else {"1981-01": modified, "1981-02": modified}
     download_modified = {} if modified is None else {"1981-02": modified}
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_head_month",
         fake_head_factory({"1981-01": True, "1981-02": True}, revision),
     )
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_download_month",
         fake_download_factory({"1981-02": chirps_field(FEB_MM)}, download_modified),
     )
@@ -438,9 +459,9 @@ def test_chirps_pending_month_is_repaired_without_revision_change(
 
 
 def test_source_modified_is_published_with_the_markers(tmp_path, monkeypatch):
-    monkeypatch.setattr(chirps_ingest, "_newest_month", lambda: "1981-02")
+    monkeypatch.setattr(chirps, "newest_month", lambda: "1981-02")
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_head_month",
         fake_head_factory(
             {"1981-01": True, "1981-02": True},
@@ -448,7 +469,7 @@ def test_source_modified_is_published_with_the_markers(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        chirps_ingest,
+        chirps,
         "_download_month",
         fake_download_factory(
             {"1981-01": chirps_field(JAN_MM), "1981-02": chirps_field(FEB_MM)},

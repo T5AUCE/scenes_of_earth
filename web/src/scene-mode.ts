@@ -341,18 +341,17 @@ function watchDocking(roots: SceneRoots): () => void {
       );
       root.style.setProperty("--scene-dock-bottom", `${dockBottom}px`);
     };
-    const onWindowResize = () => updateDocking();
     const observer = new ResizeObserver(updateDocking);
     if (roots.column instanceof Element) observer.observe(roots.column);
     if (roots.timeBar instanceof Element) observer.observe(roots.timeBar);
     const footer = document.querySelector(".maplibregl-ctrl-bottom-left");
     if (footer instanceof Element) observer.observe(footer);
-    window.addEventListener("resize", onWindowResize);
+    window.addEventListener("resize", updateDocking);
     updateDocking();
 
     return () => {
       observer.disconnect();
-      window.removeEventListener("resize", onWindowResize);
+      window.removeEventListener("resize", updateDocking);
     };
   } catch {
     return () => {};
@@ -360,9 +359,7 @@ function watchDocking(roots: SceneRoots): () => void {
 }
 
 function dockedExtent(element: Element | null, column: Element | null): number {
-  if (!overlapsColumn(element, column)) return 0;
-
-  return bottomExtent(element);
+  return overlapsColumn(element, column) ? bottomExtent(element) : 0;
 }
 
 function overlapsColumn(element: Element | null, column: Element | null): boolean {
@@ -715,7 +712,7 @@ function outlines(geometry: AreaFeature["geometry"]) {
   };
 }
 
-// The ring is one world wide and centred on the area because MapLibre cannot cut holes in a wider one.
+// The ring is one world wide and centred on the area, as MapLibre cannot cut holes in a wider one.
 function worldRing(holes: number[][][]) {
   const longitudes = holes.flat().map(([longitude]) => longitude);
   const centre = (Math.min(...longitudes) + Math.max(...longitudes)) / 2;
