@@ -12,7 +12,7 @@ from .cubes import FINAL_EXPVER, MONTHS_PER_YEAR, PRELIMINARY_EXPVER, CubeSpec, 
 from .era5 import ERA5_PRECIPITATION_CUBE, ERA5_TEMPERATURE_CUBE
 from .era5land_temperature import ERA5_LAND_TEMPERATURE_CUBE
 from .grid import Bbox, CellWindow
-from .lithology import GEOLOGY_CLASSES
+from .lithology import GEOLOGY_CLASSES, GLIM_SOURCE
 from .periods import MONTH_CHARS, add_duration
 from .terrain import terrain_block_count
 from .worldcover import WORLDCOVER_CLASSES, PlacedTile, land_cover_by_tiles
@@ -112,6 +112,10 @@ class SyntheticSource:
     def has_lithology(self) -> bool:
         """Return whether deterministic lithology data is enabled."""
         return self._lithology
+
+    def lithology_source(self) -> str:
+        """Return GLiM, which the deterministic offline data stands in for."""
+        return GLIM_SOURCE
 
     def lithology(
         self,

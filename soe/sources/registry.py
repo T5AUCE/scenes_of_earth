@@ -16,7 +16,14 @@ from .era5land_temperature import (
 )
 from .grid import CELL_DEG
 from .licences import SOURCES
-from .lithology import GEOLOGY_CLASSES, LITHOLOGY_RES_DEG, GeologyDataset, LithologyReader
+from .lithology import (
+    GEOLOGY_CLASSES,
+    GLIM_SOURCE,
+    LITHOLOGY_RES_DEG,
+    OPENLANDMAP_CLASSES,
+    GeologyDataset,
+    LithologyReader,
+)
 from .synthetic import SyntheticSource
 from .terrain import GLO30_RES_DEG, CopernicusDemReader, TerrainDataset, terrain_tiles_block
 from .worldcover import (
@@ -154,12 +161,19 @@ def _land_cover(backend: RealSource | SyntheticSource) -> LandCoverDataset:
 
 
 def _geology(backend: RealSource | SyntheticSource) -> GeologyDataset:
+    # The COG records which map built it, so the registry passes that map's source and classes.
+    if backend.lithology_source() == GLIM_SOURCE:
+        source = SOURCES["glim"]
+        classes = GEOLOGY_CLASSES
+    else:
+        source = SOURCES["lithology"]
+        classes = OPENLANDMAP_CLASSES
     return GeologyDataset(
         id="geology",
         title="Geology",
         units="",
         resolution_deg=LITHOLOGY_RES_DEG,
-        source=SOURCES["lithology"],
+        source=source,
         roles={
             "value": Role(
                 "class",
@@ -172,7 +186,7 @@ def _geology(backend: RealSource | SyntheticSource) -> GeologyDataset:
             "kind": "categorical",
             "encodings": ["fill"],
             "palette": "painted",
-            "classes": GEOLOGY_CLASSES,
+            "classes": classes,
         },
         backend=backend,
         grid=CHIRPS_GRID,

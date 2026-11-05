@@ -30,6 +30,9 @@ const RGB_MAX = 255;
 const MAX_CHROMA = 0.4;
 const CHROMA_SEARCH_STEPS = 16;
 const CHROMA_CURVE = 0.8;
+// Variants step away from the nearer lightness extreme so neighbours still differ.
+const VARIANT_LIGHTNESS_STEP = 0.035;
+const LIGHT_FAMILY_LIGHTNESS = 0.65;
 const GRID_ROWS = 5;
 const FIELD_STOP_COUNT = 9;
 
@@ -183,6 +186,8 @@ interface ClassPaletteSet {
   options: PaletteOption[];
   /** A palette or class missing here uses the layer's own colour. */
   colors: Record<string, Record<number, string>>;
+  /** The base colour of each family in a palette, which shades the classes that name a parent. */
+  families?: Record<string, Record<string, string>>;
 }
 
 /** The only class palette of a categorical layer that has no palettes of its own. */
@@ -235,6 +240,24 @@ export const CLASS_PALETTES: Record<string, ClassPaletteSet> = {
         3: "#8e5a73",
         10: "#8fa67a",
         7: "#f2f4f5",
+      },
+    },
+    families: {
+      painted: {
+        su: "#ede3c8",
+        ss: "#d9b77e",
+        sm: "#c9b98a",
+        sc: "#9db8c9",
+        ev: "#c9a9c9",
+        py: "#e8a07c",
+        va: "#e58e6a",
+        vi: "#c9705a",
+        vb: "#9e4e3e",
+        pa: "#e7a1b0",
+        pi: "#c97f8e",
+        pb: "#8e5a73",
+        mt: "#8fa67a",
+        ig: "#f2f4f5",
       },
     },
   },
@@ -331,12 +354,35 @@ export function classPalette(layerId: string, name?: string) {
   return name && Object.hasOwn(colors, name) ? colors[name] : undefined;
 }
 
-/** The RGB of each class value from the layer's named palette, else from the class's own colour. */
+/**
+ * The RGB of each class value. A class with a parent and variant is a shade of its family's
+ * colour in the named palette, or of its own colour when the palette has none. Another class
+ * takes the named palette's colour for its value, else its own colour.
+ */
 export function classColors(layerId: string, classes: ClassDoc[], palette?: string) {
   const named = classPalette(layerId, palette);
+  const families = classFamilies(layerId, palette);
   return new Map(
-    classes.map(({ value, color }) => [value, hexToRgb(named?.[value] ?? color)]),
+    classes.map((entry) => {
+      const { value, color, parent, variant } = entry;
+      if (parent === undefined || variant === undefined) {
+        return [value, hexToRgb(named?.[value] ?? color)];
+      }
+
+      return [value, shadedRgb(hexToRgb(families?.[parent] ?? color), variant)];
+    }),
   );
+}
+
+function classFamilies(layerId: string, palette?: string) {
+  const { families } = CLASS_PALETTES[layerId] ?? SOURCE_COLOURS_ONLY;
+  return palette && families && Object.hasOwn(families, palette) ? families[palette] : undefined;
+}
+
+function shadedRgb(base: number[], variant: number) {
+  const { lightness, chroma, hue } = rgbToOklch(base);
+  const direction = lightness > LIGHT_FAMILY_LIGHTNESS ? -1 : 1;
+  return oklchRgb(lightness + direction * VARIANT_LIGHTNESS_STEP * variant, chroma, hue);
 }
 
 /** A CSS colour for an RGB triple. */

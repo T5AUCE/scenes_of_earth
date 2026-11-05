@@ -30,6 +30,7 @@ import {
   fieldGradient,
   oklchGrid,
   RAIN_TEMPERATURE_GRID,
+  rgbToHex,
 } from "./palettes.ts";
 
 const gradient = (name: string) => fieldGradient(name)!;
@@ -221,6 +222,48 @@ test("the geology painted palette colours the 14 classes the backend lists", () 
   const values = Object.keys(CLASS_PALETTES.geology.colors.painted).map(Number);
 
   assert.deepEqual(values.sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+});
+
+const ROCK_FAMILY = [
+  { value: 40, label: "Rock", color: "#6c3483", parent: "vb", variant: 0 },
+  { value: 41, label: "Rock, one", color: "#6c3483", parent: "vb", variant: 1 },
+  { value: 42, label: "Rock, two", color: "#6c3483", parent: "vb", variant: 2 },
+  { value: 43, label: "Rock, three", color: "#6c3483", parent: "vb", variant: 3 },
+];
+
+test("geology sub-classes are distinct shades of their family colour in each palette", () => {
+  for (const palette of ["painted", "classic"]) {
+    const shades = classColors("geology", ROCK_FAMILY, palette);
+    const hexes = [...shades.values()].map((rgb) => rgbToHex(rgb));
+
+    assert.equal(new Set(hexes).size, ROCK_FAMILY.length);
+  }
+});
+
+test("the first variant is the palette family colour, or the bundle colour for classic", () => {
+  assert.deepEqual(classColors("geology", ROCK_FAMILY, "classic").get(40), [0x6c, 0x34, 0x83]);
+  assert.deepEqual(classColors("geology", ROCK_FAMILY, "painted").get(40), [0x9e, 0x4e, 0x3e]);
+});
+
+test("later variants of a dark family are lighter and of a light family darker", () => {
+  const lightnessOf = (rgb: number[] | undefined) => rgbToOklch(rgb!).lightness;
+  const dark = classColors("geology", ROCK_FAMILY, "classic");
+  const light = classColors(
+    "geology",
+    ROCK_FAMILY.map((entry) => ({ ...entry, color: "#fdf0a8" })),
+    "classic",
+  );
+
+  assert.ok(lightnessOf(dark.get(43)) > lightnessOf(dark.get(41)));
+  assert.ok(lightnessOf(dark.get(41)) > lightnessOf(dark.get(40)));
+  assert.ok(lightnessOf(light.get(43)) < lightnessOf(light.get(41)));
+  assert.ok(lightnessOf(light.get(41)) < lightnessOf(light.get(40)));
+});
+
+test("classes without a family keep the value-based palette colours", () => {
+  const classes = [{ value: 14, label: "Class", color: "#102030" }];
+
+  assert.deepEqual(classColors("geology", classes, "painted").get(14), [0xed, 0xe3, 0xc8]);
 });
 
 test("paintClasses colours known classes and leaves fill and unknown values transparent", () => {

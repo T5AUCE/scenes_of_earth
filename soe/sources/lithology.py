@@ -1,6 +1,8 @@
 """Read the lithology COG as the most common rock class in each output cell.
 
-`soe.ingest.lithology` writes the COG from the OpenLandMap lithology map, and a build only reads it.
+`soe.ingest.lithology` writes the COG from GLiM or the OpenLandMap lithology map, and a build only
+reads it. The COG records which one, and the registry takes the classes and source from that.
+Table order fixes the class values, so new codes may only be appended.
 """
 from collections.abc import Callable
 from pathlib import Path
@@ -26,8 +28,13 @@ LITHOLOGY_FILE = "lithology.tif"  # in the cubes folder
 LITHOLOGY_RES_DEG = 1 / 480
 ANTIMERIDIAN_DEG = WORLD_WIDTH_DEG / 2
 
-# Values 1 to 15 are the source classes in file-name order with water and undefined as no data.
-GEOLOGY_CLASSES = [
+OPENLANDMAP_SOURCE = "openlandmap"
+GLIM_SOURCE = "glim"
+LITHOLOGY_SOURCE_TAG = "LITHOLOGY_SOURCE"  # in the COG; a COG without it came from OpenLandMap
+
+# OpenLandMap values 1 to 15 are the source classes in file-name order with water and undefined
+# as no data.
+OPENLANDMAP_CLASSES = [
     {"value": 14, "label": "Unconsolidated sediment", "color": "#fdf0a8", "group": "Sediments"},
     {"value": 13, "label": "Siliciclastic sedimentary", "color": "#e8c33c", "group": "Sediments"},
     {"value": 11, "label": "Mixed sedimentary", "color": "#c2ab5a", "group": "Sediments"},
@@ -46,6 +53,147 @@ GEOLOGY_CLASSES = [
 UNDEFINED_CLASS = 15
 WATER_CLASS = 255
 
+# Each family lists its level 2 codes in value order, with "__" for no level 2 code.
+GLIM_FAMILIES = [
+    (
+        "su",
+        "Unconsolidated sediments",
+        "Sediments",
+        "#fdf0a8",
+        "mx ss sh pu py ad ds la lo or",
+    ),
+    (
+        "ss",
+        "Siliciclastic sedimentary rocks",
+        "Sediments",
+        "#e8c33c",
+        "mx ss sh py am la lo",
+    ),
+    (
+        "sm",
+        "Mixed sedimentary rocks",
+        "Sediments",
+        "#c2ab5a",
+        "mx ss sh py ad ds la lo or am gr",
+    ),
+    (
+        "sc",
+        "Carbonate sedimentary rocks",
+        "Sediments",
+        "#6fa8d6",
+        "mx ss sh pu py ad la lo am",
+    ),
+    (
+        "ev",
+        "Evaporites",
+        "Sediments",
+        "#c5a3d6",
+        "__ mx ss sh pu",
+    ),
+    (
+        "py",
+        "Pyroclastics",
+        "Volcanic",
+        "#d9753b",
+        "__ mx ss sh pu or am",
+    ),
+    (
+        "va",
+        "Acid volcanic rocks",
+        "Volcanic",
+        "#e57373",
+        "__ pu py am",
+    ),
+    (
+        "vi",
+        "Intermediate volcanic rocks",
+        "Volcanic",
+        "#c0392b",
+        "__ mx pu py am",
+    ),
+    (
+        "vb",
+        "Basic volcanic rocks",
+        "Volcanic",
+        "#6c3483",
+        "__ mx pu py la am gr",
+    ),
+    (
+        "pa",
+        "Acid plutonic rocks",
+        "Plutonic",
+        "#f194b4",
+        "__ pu py am gr",
+    ),
+    (
+        "pi",
+        "Intermediate plutonic rocks",
+        "Plutonic",
+        "#d65d8a",
+        "__ pu py am gr",
+    ),
+    (
+        "pb",
+        "Basic plutonic rocks",
+        "Plutonic",
+        "#8e2f5c",
+        "__ pu py am",
+    ),
+    (
+        "mt",
+        "Metamorphic rocks",
+        "Metamorphic",
+        "#8a9a7b",
+        "__ mx sh pu py la am gr",
+    ),
+    (
+        "ig",
+        "Ice and glaciers",
+        "Ice/other",
+        "#f2f4f5",
+        "__",
+    ),
+]
+GLIM_LEVEL2_NAMES = {
+    "__": "",
+    "mx": "mixed grain size",
+    "ss": "coarse grained",
+    "sh": "fine grained",
+    "pu": "pure",
+    "py": "with pyroclastics",
+    "ad": "alluvial",
+    "ds": "dune sands",
+    "la": "lateritic",
+    "lo": "loess",
+    "or": "organic",
+    "am": "amphibolite facies",
+    "gr": "greenschist facies",
+}
+
+
+def _glim_class_table() -> list[tuple[str, dict]]:
+    """Return (level 1 + level 2 code, class) for each GLiM class, valued in table order."""
+    table = []
+    for code, name, group, color, level2_codes in GLIM_FAMILIES:
+        for variant, level2 in enumerate(level2_codes.split()):
+            suffix = GLIM_LEVEL2_NAMES[level2]
+            entry = {
+                "value": len(table) + 1,
+                "label": f"{name}, {suffix}" if suffix else name,
+                "color": color,
+                "group": group,
+                "parent": code,
+                "variant": variant,
+            }
+            table.append((code + level2, entry))
+    return table
+
+
+_GLIM_TABLE = _glim_class_table()
+GEOLOGY_CLASSES = [entry for _, entry in _GLIM_TABLE]  # the classes of the GLiM COG
+# Water bodies (wb) and no data (nd) have no value, so the COG stores them as 0.
+GLIM_VALUES = {code: entry["value"] for code, entry in _GLIM_TABLE}
+
 
 class LithologyReader:
     """The lithology COG on local disk."""
@@ -56,6 +204,15 @@ class LithologyReader:
     def has_lithology(self) -> bool:
         """Return whether the lithology COG has been ingested."""
         return self._lithology_path.exists()
+
+    def lithology_source(self) -> str:
+        """Return which map built the COG, GLIM_SOURCE or OPENLANDMAP_SOURCE."""
+        try:
+            with rasterio.open(self._lithology_path) as source:
+                return source.tags().get(LITHOLOGY_SOURCE_TAG, OPENLANDMAP_SOURCE)
+        except RasterioIOError:
+            # A read of the unreadable COG reports it, so the dataset only needs some source.
+            return OPENLANDMAP_SOURCE
 
     def lithology(
         self,
@@ -101,8 +258,16 @@ class GeologyDataset(StaticDataset):
     """The most common rock class in each cell, at a size set by the area."""
 
     def __post_init__(self) -> None:
-        """Mark the dataset as needing land tiles, so open sea is refused early."""
+        """Remember which map built the COG for the notices and require land tiles.
+
+        Offline data stands in for GLiM. Land tiles make open sea refused early.
+        """
         self.needs_tiles = True
+        self.lithology_source = (
+            self.backend.lithology_source()
+            if isinstance(self.backend, LithologyReader)
+            else GLIM_SOURCE
+        )
 
     def tile_count(self, bbox: Bbox) -> int:
         """Return the land tile count of bbox, which is zero over open sea."""
@@ -128,7 +293,15 @@ class GeologyDataset(StaticDataset):
         return {"value": classes}, transform
 
     def notices(self, bbox: Bbox, steps: list[str]) -> list[str]:
-        """Return notices about the scale of the source map, its seams and its missing islands."""
+        """Return notices about the scale of the source map, its seams and its gaps."""
+        if self.lithology_source == GLIM_SOURCE:
+            return [
+                "Rock type comes from the Global Lithological Map (GLiM) at about 1:3.75 "
+                "million, so boundaries are approximate at local scale and can jump where "
+                "the 92 source maps it joins meet. Lakes and rivers "
+                "have no rock class, so they stay uncoloured.",
+            ]
+
         return [
             "Rock type comes from a global map at about 1:3.75 million, so boundaries are "
             "approximate at local scale and can jump where national source maps meet and at "

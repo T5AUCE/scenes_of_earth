@@ -5,11 +5,13 @@ import time
 import urllib.request
 from pathlib import Path
 
+import geopandas as gpd
 import numpy as np
 import pytest
 import rasterio
 import zarr
 from fastapi.testclient import TestClient
+from pyogrio.errors import DataSourceError
 from rasterio.transform import from_origin
 from shapely.geometry import box, mapping
 
@@ -18,11 +20,27 @@ from soe.areas import Area
 from soe.build import build_scene
 from soe.bundle import JsonObject, validate
 from soe.ingest.cubes import DOWNLOADS_DIR
-from soe.ingest.lithology import NORTH_EDGE_DEG, build_lithology_cog, ingest_lithology
+from soe.ingest import lithology as ingest
+from soe.ingest.lithology import (
+    GLIM_DIR,
+    GLIM_FILE,
+    NORTH_EDGE_DEG,
+    build_glim_cog,
+    build_lithology_cog,
+    ingest_lithology,
+)
 from soe.scene_request import compute_scene_id
 from soe.sources import RealSource, Registry, SourceUnavailable, SyntheticSource, make_registry
 from soe.sources import lithology
-from soe.sources.lithology import GEOLOGY_CLASSES, LITHOLOGY_FILE, WATER_CLASS
+from soe.sources.lithology import (
+    GEOLOGY_CLASSES,
+    GLIM_SOURCE,
+    GLIM_VALUES,
+    LITHOLOGY_FILE,
+    OPENLANDMAP_CLASSES,
+    OPENLANDMAP_SOURCE,
+    WATER_CLASS,
+)
 from soe.sources.licences import SOURCES
 from tests.helpers import BOUNDARY, FIJI, HASH_A, NAIROBI, write_cube
 
@@ -37,6 +55,7 @@ POLL_INTERVAL_SECS = 0.1
 def coarse_source(monkeypatch):
     """Make the test rasters, which have 0.5 degree cells, count as the native resolution."""
     monkeypatch.setattr(lithology, "LITHOLOGY_RES_DEG", SOURCE_RES_DEG)
+    monkeypatch.setattr(ingest, "LITHOLOGY_RES_DEG", SOURCE_RES_DEG)
 
 
 def write_source_map(path: Path) -> None:
@@ -67,6 +86,34 @@ def cubes_dir(tmp_path):
     folder.mkdir()
     write_source_map(tmp_path / "source.tif")
     build_lithology_cog(tmp_path / "source.tif", folder / LITHOLOGY_FILE)
+    return folder
+
+
+GLIM_SHAPES = [
+    ("sumx__", (0, 0, 5, 5)),
+    ("sush__", (5, 0, 10, 5)),
+    ("wb____", (-5, 0, 0, 5)),
+    ("nd____", (-10, 0, -5, 5)),
+    ("ig__mt", (10, 0, 15, 5)),
+]
+
+
+def write_glim_source(path: Path) -> None:
+    """Write GLiM-like polygons in World Eckert IV, each a box in degrees named by GLIM_SHAPES."""
+    shapes = gpd.GeoDataFrame(
+        {"Litho": [litho for litho, _ in GLIM_SHAPES]},
+        geometry=[box(*bounds) for _, bounds in GLIM_SHAPES],
+        crs="EPSG:4326",
+    )
+    shapes.to_crs("ESRI:54012").to_file(path, driver="GPKG")
+
+
+@pytest.fixture
+def glim_cubes_dir(tmp_path):
+    folder = tmp_path / "glim-cubes"
+    folder.mkdir()
+    write_glim_source(tmp_path / "glim.gpkg")
+    build_glim_cog(tmp_path / "glim.gpkg", folder / LITHOLOGY_FILE)
     return folder
 
 
@@ -132,6 +179,75 @@ def test_failed_cog_build_leaves_no_partial_files(tmp_path):
 
     with pytest.raises(rasterio.errors.RasterioIOError):
         build_lithology_cog(tmp_path / "broken.tif", folder / LITHOLOGY_FILE)
+
+    assert list(folder.iterdir()) == []
+
+
+def test_glim_cog_holds_level_two_classes_and_leaves_water_and_no_data_at_zero(glim_cubes_dir):
+    with rasterio.open(glim_cubes_dir / LITHOLOGY_FILE) as dataset:
+        values = dataset.read(1)
+        bounds = dataset.bounds
+
+    row = round((NORTH_EDGE_DEG - 2.5) / SOURCE_RES_DEG)
+
+    def column_at(longitude: float) -> int:
+        return round((longitude + 180) / SOURCE_RES_DEG)
+
+    assert (bounds.left, bounds.bottom, bounds.right, bounds.top) == (-180, -60, 180, 60)
+    assert values[row, column_at(2.5)] == GLIM_VALUES["sumx"]
+    assert values[row, column_at(7.5)] == GLIM_VALUES["sush"]
+    assert values[row, column_at(12.5)] == GLIM_VALUES["ig__"]
+    assert values[row, column_at(-2.5)] == 0 and values[row, column_at(-7.5)] == 0
+    expected = {0, GLIM_VALUES["sumx"], GLIM_VALUES["sush"], GLIM_VALUES["ig__"]}
+    assert set(np.unique(values)) == expected
+
+
+def test_cog_records_which_map_built_it(cubes_dir, glim_cubes_dir):
+    assert RealSource(cubes_dir=cubes_dir).lithology_source() == OPENLANDMAP_SOURCE
+    assert RealSource(cubes_dir=glim_cubes_dir).lithology_source() == GLIM_SOURCE
+
+
+def test_cog_without_a_source_tag_counts_as_openlandmap(tmp_path):
+    with rasterio.open(
+        tmp_path / LITHOLOGY_FILE,
+        "w",
+        driver="GTiff",
+        dtype="uint8",
+        count=1,
+        width=2,
+        height=2,
+        crs="EPSG:4326",
+        transform=from_origin(0, 1, 1, 1),
+    ) as dataset:
+        dataset.write(np.zeros((1, 2, 2), "uint8"))
+
+    assert RealSource(cubes_dir=tmp_path).lithology_source() == OPENLANDMAP_SOURCE
+
+
+def test_ingest_builds_from_glim_without_downloading_when_it_is_present(tmp_path, monkeypatch):
+    cubes = tmp_path / "cubes"
+    glim_folder = cubes / DOWNLOADS_DIR / GLIM_DIR
+    glim_folder.mkdir(parents=True)
+    write_glim_source(glim_folder / GLIM_FILE)
+
+    def refuse_download(*args: object, **kwargs: object) -> None:
+        raise AssertionError("downloaded the OpenLandMap map")
+
+    monkeypatch.setattr(urllib.request, "urlopen", refuse_download)
+
+    published = ingest_lithology(cubes)
+
+    assert RealSource(cubes_dir=cubes).lithology_source() == GLIM_SOURCE
+    assert published == cubes / LITHOLOGY_FILE and published.exists()
+
+
+def test_failed_glim_build_leaves_no_partial_files(tmp_path):
+    folder = tmp_path / "cubes"
+    folder.mkdir()
+    (tmp_path / "broken.gpkg").write_bytes(b"not a geopackage")
+
+    with pytest.raises(DataSourceError):
+        build_glim_cog(tmp_path / "broken.gpkg", folder / LITHOLOGY_FILE)
 
     assert list(folder.iterdir()) == []
 
@@ -241,17 +357,36 @@ def test_lithology_version_change_only_renames_geology_scenes(monkeypatch, cubes
     assert _layered_scene_id(bumped, plain_layers) == plain_id
 
 
+def test_glim_and_openlandmap_geology_scenes_get_different_ids(cubes_dir, glim_cubes_dir):
+    plain_layers = ["terrain", "esa_worldcover"]
+    openlandmap = make_registry(RealSource(cubes_dir=cubes_dir))
+    glim = make_registry(RealSource(cubes_dir=glim_cubes_dir))
+
+    assert _layered_scene_id(glim, ["geology"]) != _layered_scene_id(openlandmap, ["geology"])
+    assert _layered_scene_id(glim, plain_layers) == _layered_scene_id(openlandmap, plain_layers)
+
+
+def test_geology_source_and_classes_follow_the_cog(cubes_dir, glim_cubes_dir):
+    openlandmap = make_registry(RealSource(cubes_dir=cubes_dir))["geology"]
+    glim = make_registry(RealSource(cubes_dir=glim_cubes_dir))["geology"]
+
+    assert openlandmap.source is SOURCES["lithology"]
+    assert openlandmap.style["classes"] == OPENLANDMAP_CLASSES
+    assert glim.source is SOURCES["glim"]
+    assert glim.style["classes"] == GEOLOGY_CLASSES
+
+
 def _layered_scene_id(registry: Registry, layers: list[str]) -> str:
     """Return the scene id of the registry's datasets named by `layers`."""
     datasets = [registry[layer_id] for layer_id in layers]
     return compute_scene_id("poly:abc", layers, None, datasets, {})
 
 
-def test_class_values_are_unique_and_every_class_names_a_group():
-    values = [entry["value"] for entry in GEOLOGY_CLASSES]
+def test_openlandmap_class_values_are_unique_and_every_class_names_a_group():
+    values = [entry["value"] for entry in OPENLANDMAP_CLASSES]
 
     assert len(set(values)) == len(values)
-    assert {entry["group"] for entry in GEOLOGY_CLASSES} == {
+    assert {entry["group"] for entry in OPENLANDMAP_CLASSES} == {
         "Sediments",
         "Volcanic",
         "Plutonic",
@@ -260,13 +395,127 @@ def test_class_values_are_unique_and_every_class_names_a_group():
     }
 
 
+def test_glim_classes_have_unique_values_a_family_and_a_level_one_parent():
+    values = [entry["value"] for entry in GEOLOGY_CLASSES]
+    variants = [(entry["parent"], entry["variant"]) for entry in GEOLOGY_CLASSES]
+
+    assert len(set(values)) == len(values) and max(values) <= 255
+    assert len(set(variants)) == len(variants)
+    assert {entry["group"] for entry in GEOLOGY_CLASSES} == {
+        "Sediments",
+        "Volcanic",
+        "Plutonic",
+        "Metamorphic",
+        "Ice/other",
+    }
+    assert {entry["parent"] for entry in GEOLOGY_CLASSES} == {
+        "su", "ss", "sm", "sc", "ev", "py", "va", "vi", "vb", "pa", "pi", "pb", "mt", "ig",
+    }
+    assert len(GLIM_VALUES) == len(GEOLOGY_CLASSES)
+    assert "wb__" not in GLIM_VALUES and "nd__" not in GLIM_VALUES
+
+
+def test_glim_values_follow_the_family_table_in_order():
+    assert list(GLIM_VALUES) == [
+        "sumx",
+        "suss",
+        "sush",
+        "supu",
+        "supy",
+        "suad",
+        "suds",
+        "sula",
+        "sulo",
+        "suor",
+        "ssmx",
+        "ssss",
+        "sssh",
+        "sspy",
+        "ssam",
+        "ssla",
+        "sslo",
+        "smmx",
+        "smss",
+        "smsh",
+        "smpy",
+        "smad",
+        "smds",
+        "smla",
+        "smlo",
+        "smor",
+        "smam",
+        "smgr",
+        "scmx",
+        "scss",
+        "scsh",
+        "scpu",
+        "scpy",
+        "scad",
+        "scla",
+        "sclo",
+        "scam",
+        "ev__",
+        "evmx",
+        "evss",
+        "evsh",
+        "evpu",
+        "py__",
+        "pymx",
+        "pyss",
+        "pysh",
+        "pypu",
+        "pyor",
+        "pyam",
+        "va__",
+        "vapu",
+        "vapy",
+        "vaam",
+        "vi__",
+        "vimx",
+        "vipu",
+        "vipy",
+        "viam",
+        "vb__",
+        "vbmx",
+        "vbpu",
+        "vbpy",
+        "vbla",
+        "vbam",
+        "vbgr",
+        "pa__",
+        "papu",
+        "papy",
+        "paam",
+        "pagr",
+        "pi__",
+        "pipu",
+        "pipy",
+        "piam",
+        "pigr",
+        "pb__",
+        "pbpu",
+        "pbpy",
+        "pbam",
+        "mt__",
+        "mtmx",
+        "mtsh",
+        "mtpu",
+        "mtpy",
+        "mtla",
+        "mtam",
+        "mtgr",
+        "ig__",
+    ]
+    assert list(GLIM_VALUES.values()) == list(range(1, len(GLIM_VALUES) + 1))
+
+
 def build_geology(tmp_path: Path, area: Area) -> JsonObject:
     registry = make_registry(SyntheticSource(lithology=True))
     build_scene(HASH_A, area, None, None, [registry["geology"]], "Test", tmp_path)
     return json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
 
 
-def test_geology_layer_is_valid_and_credits_the_lithology_map(tmp_path):
+def test_geology_layer_is_valid_and_credits_glim_as_unpublishable(tmp_path):
     doc = build_geology(tmp_path, Area(NAIROBI, BOUNDARY))
     layer = doc["layers"][0]
 
@@ -274,16 +523,25 @@ def test_geology_layer_is_valid_and_credits_the_lithology_map(tmp_path):
     assert layer["id"] == "geology" and layer["title"] == "Geology"
     assert layer["style"]["kind"] == "categorical" and layer["style"]["palette"] == "painted"
     assert layer["style"]["classes"][0]["group"] == "Sediments"
-    assert SOURCES["lithology"]["attribution"] in doc["credits"]["lines"]
-    assert any("CC BY-SA 4.0" in line for line in doc["credits"]["lines"])
+    assert layer["style"]["classes"][0]["parent"] == "su"
+    assert SOURCES["glim"]["attribution"] in doc["credits"]["lines"]
+    assert layer["source"]["licence"].startswith("not stated by the authors")
 
 
-def test_geology_notice_states_the_scale_of_the_source_map(tmp_path):
+def test_glim_notice_states_the_scale_and_the_seams_between_source_maps(tmp_path):
     doc = build_geology(tmp_path, Area(NAIROBI, BOUNDARY))
+    limits = " ".join(doc["notices"]["limits"])
 
-    assert any("1:3.75 million" in notice for notice in doc["notices"]["limits"])
-    assert any("180° longitude" in notice for notice in doc["notices"]["limits"])
-    assert any("stay uncoloured" in notice for notice in doc["notices"]["limits"])
+    assert "1:3.75 million" in limits and "92 source maps" in limits
+    assert "180° longitude" not in limits
+
+
+def test_openlandmap_notice_keeps_the_antimeridian_and_island_sentences(cubes_dir):
+    geology = make_registry(RealSource(cubes_dir=cubes_dir))["geology"]
+    notice = " ".join(geology.notices((0, 0, 1, 1), []))
+
+    assert "1:3.75 million" in notice and "180° longitude" in notice
+    assert "stay uncoloured" in notice
 
 
 def test_geology_keeps_only_known_classes_and_zero_outside_the_area(tmp_path):
@@ -365,3 +623,9 @@ def test_geology_over_open_sea_is_refused_before_any_read(tmp_path):
 
     assert response.status_code == 422
     assert response.json()["detail"] == "Geology has no data in this area"
+
+
+def test_glim_version_cannot_match_any_openlandmap_version():
+    # Scene ids hash only source versions, so a shared version would reuse stale bundles.
+    assert SOURCES["glim"]["version"].startswith("glim-")
+    assert not SOURCES["lithology"]["version"].startswith("glim-")

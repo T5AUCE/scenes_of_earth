@@ -47,19 +47,25 @@ test("terrain summaries face live relief and contours", (context) => {
   assert.ok((summaryText(makeScene(), "ft") ?? "").includes("mi"));
 });
 
-test("geology scenes explain the rock-type scale and seams", (context) => {
+test("geology scenes explain the rock-type scale and seams of their source map", (context) => {
   const window = new Window();
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
   const plain = renderAbout(makeScene(), "m", {});
-  const geology = renderAbout(makeGeologyScene(), "m", {});
+  const glim = renderAbout(makeGeologyScene("GLiM Global Lithological Map v1.0"), "m", {});
+  const openLandMap = renderAbout(makeGeologyScene("OpenLandMap lithology 250 m"), "m", {});
 
   assert.doesNotMatch(plain.textContent ?? "", /rock type/);
-  assert.match(geology.textContent ?? "", /rock type from a global map at about 1:3\.75 million/);
-  assert.match(geology.textContent ?? "", /OpenLandMap, from GLiM/);
-  assert.match(geology.textContent ?? "", /approximate at local scale/);
-  assert.match(geology.textContent ?? "", /seams can show/);
-  assert.match(geology.textContent ?? "", /180° longitude/);
+  assert.match(glim.textContent ?? "", /rock type from the Global Lithological Map/);
+  assert.match(glim.textContent ?? "", /1:3\.75 million/);
+  assert.match(glim.textContent ?? "", /approximate at local scale/);
+  assert.match(glim.textContent ?? "", /92 source maps/);
+  assert.doesNotMatch(glim.textContent ?? "", /180° longitude/);
+  const openLandMapText = openLandMap.textContent ?? "";
+  assert.match(openLandMapText, /rock type from a global map at about 1:3\.75 million/);
+  assert.match(openLandMap.textContent ?? "", /OpenLandMap, from GLiM/);
+  assert.match(openLandMap.textContent ?? "", /seams can show/);
+  assert.match(openLandMap.textContent ?? "", /180° longitude/);
 });
 
 function makeScene(): Scene {
@@ -136,13 +142,13 @@ function makeScene(): Scene {
   } as unknown as Scene;
 }
 
-function makeGeologyScene(): Scene {
+function makeGeologyScene(sourceName: string): Scene {
   const scene = makeScene();
   const geology = {
     id: "geology",
     title: "Geology",
     units: "",
-    source: { name: "Lithology", licence: "CC BY-SA 4.0" },
+    source: { name: sourceName, licence: "CC BY-SA 4.0" },
     style: { kind: "categorical", encodings: ["fill"] },
     grid: { bbox: [0, -1, 1, 1], res: 0.01, nx: 10, ny: 10 },
     mask: { path: "mask.zarr", cells_inside: 100 },

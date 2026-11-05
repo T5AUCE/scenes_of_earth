@@ -486,33 +486,69 @@ function openLabel(position: number, value: number, isBottomOpen: boolean) {
 
 /**
  * Render a swatch and name for each class present in the area. Classes with a group are listed
- * under a heading each time the group changes.
+ * under a heading button that expands and collapses them, collapsed unless its group is in
+ * `expandedGroups`. The set keeps the state between redraws of the caller; classes without a
+ * group form a flat list.
  */
 export function classLegend(
   classes: ClassDoc[],
   presentValues: Set<number>,
   colors: Map<number, number[]>,
+  expandedGroups = new Set<string>(),
 ) {
   const element = document.createElement("div");
-  let currentGroup: string | undefined;
+  const lists = new Map<string, HTMLElement>();
   for (const { value, label, group } of classes.filter((entry) => presentValues.has(entry.value))) {
-    if (group && group !== currentGroup) element.append(groupHeading(group));
-    currentGroup = group;
-    const row = document.createElement("div");
-    const swatch = document.createElement("span");
-    swatch.className = "legend-swatch";
-    swatch.style.background = `rgb(${colors.get(value)!.join(", ")})`;
-    const name = document.createElement("span");
-    name.textContent = label;
-    row.append(swatch, name);
-    element.append(row);
+    const color = colors.get(value)!;
+    if (group && !lists.has(group)) {
+      const section = groupSection(group, color, expandedGroups);
+      lists.set(group, section.list);
+      element.append(section.element);
+    }
+    (group ? lists.get(group)! : element).append(classRow(label, color));
   }
   return element;
 }
 
-function groupHeading(group: string) {
-  const heading = document.createElement("div");
-  heading.className = "legend-group";
-  heading.textContent = group;
-  return heading;
+function classRow(label: string, color: number[]) {
+  const row = document.createElement("div");
+  const name = document.createElement("span");
+  name.textContent = label;
+  row.append(legendSwatch(color), name);
+  return row;
+}
+
+function legendSwatch(color: number[]) {
+  const swatch = document.createElement("span");
+  swatch.className = "legend-swatch";
+  swatch.style.background = `rgb(${color.join(", ")})`;
+  return swatch;
+}
+
+/** A heading button, showing the colour of the group's first class, above its hidden list. */
+function groupSection(group: string, color: number[], expandedGroups: Set<string>) {
+  const element = document.createElement("div");
+  element.className = "legend-group";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "legend-group-toggle";
+  const name = document.createElement("span");
+  name.textContent = group;
+  toggle.append(legendSwatch(color), name);
+  const list = document.createElement("div");
+  list.className = "legend-group-list";
+
+  const show = () => {
+    const isExpanded = expandedGroups.has(group);
+    toggle.setAttribute("aria-expanded", String(isExpanded));
+    list.hidden = !isExpanded;
+  };
+  toggle.addEventListener("click", () => {
+    if (expandedGroups.has(group)) expandedGroups.delete(group);
+    else expandedGroups.add(group);
+    show();
+  });
+  show();
+  element.append(toggle, list);
+  return { element, list };
 }

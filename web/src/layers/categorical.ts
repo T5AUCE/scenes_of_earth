@@ -12,7 +12,7 @@ import { createClassFieldLayer } from "../gpu/class-field-layer";
 import { layerPosition, type LayerPosition } from "../gpu/tiled-layer";
 import { classLegend } from "../legend";
 import { removeLayerAndSource } from "../map";
-import { classColors, classPalette, classPaletteOptions } from "../render/palettes";
+import { classColors, classPaletteOptions, rgbToHex } from "../render/palettes";
 import { cellClassIds } from "../render/smooth-classes";
 import type { EdgeSettings, EdgesMenu, LayerContext, LayerMenu, LayerView } from "../types";
 import type { Draw } from "./allocate";
@@ -45,6 +45,7 @@ class CategoricalView implements LayerView {
   private image: ReturnType<typeof createImagePainter> | null = null;
   private ids: Uint8Array | null = null;
   private present = new Set<number>();
+  private readonly expandedGroups = new Set<string>();
   private palette: string;
   private colors;
   private smooth = true;
@@ -147,13 +148,14 @@ class CategoricalView implements LayerView {
       title: this.context.layer.title,
       heading: "Colours",
       blocks: true,
-      palettes: classPaletteOptions(layerId).map(({ name, label }) => ({
-        name,
-        label,
-        colors: this.classes.map(
-          ({ value, color }) => classPalette(layerId, name)?.[value] ?? color,
-        ),
-      })),
+      palettes: classPaletteOptions(layerId).map(({ name, label }) => {
+        const shades = classColors(layerId, this.classes, name);
+        return {
+          name,
+          label,
+          colors: this.classes.map(({ value }) => rgbToHex(shades.get(value)!)),
+        };
+      }),
       defaultPalette: defaultPalette(this.context.layer),
       custom: false,
       updates: this.menuUpdates,
@@ -272,7 +274,9 @@ class CategoricalView implements LayerView {
       this.gpu.setColors(colors);
       this.gpu.setEdges({ smooth: this.smooth, ...this.edges });
     }
-    this.legendBox.replaceChildren(classLegend(this.classes, this.present, this.colors));
+    this.legendBox.replaceChildren(
+      classLegend(this.classes, this.present, this.colors, this.expandedGroups),
+    );
   }
 
   private async load() {

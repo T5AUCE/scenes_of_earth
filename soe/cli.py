@@ -104,7 +104,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     lithology_parser = subparsers.add_parser(
         "ingest-lithology",
-        help="download the OpenLandMap lithology map (232 MB) and write its COG for Geology",
+        help="write the Geology COG from the downloaded GLiM, else the OpenLandMap map (232 MB)",
     )
     lithology_parser.add_argument(
         "--cubes",

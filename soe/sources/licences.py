@@ -168,6 +168,26 @@ SOURCES = {
             "±180° replaced by their inner neighbours; most common class per output cell"
         ),
     },
+    "glim": {
+        "name": "GLiM Global Lithological Map v1.0 (level 1 and 2)",
+        "version": "glim-1.0",
+        "licence": (
+            "not stated by the authors; the data is for local evaluation only and must not "
+            "be published until they confirm terms"
+        ),
+        "attribution": (
+            "Geology: GLiM, Hartmann and Moosdorf (2012); licence not stated by the authors, "
+            "for local evaluation only"
+        ),
+        "citation": (
+            "Hartmann, J. and Moosdorf, N. (2012) The new global lithological map database "
+            "GLiM. Geochem. Geophys. Geosyst. 13, Q12004, doi:10.1029/2012GC004370"
+        ),
+        "modified": (
+            "level 1 and level 2 codes rasterised to 1/480° from World Eckert IV; water bodies "
+            "and no data set to no data; cropped to 60°S-60°N; most common class per output cell"
+        ),
+    },
     "geoBoundaries CGAZ": {
         "name": "geoBoundaries CGAZ",
         "licence": "CC BY 4.0",

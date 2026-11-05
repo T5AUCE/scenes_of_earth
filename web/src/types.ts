@@ -143,6 +143,8 @@ export interface ClassDoc {
   label: string;
   color: string; // #rrggbb
   group?: string; // family heading used by the legend
+  parent?: string; // family's key, such as the level 1 rock code
+  variant?: number; // position among the family's classes, which sets its shade
 }
 
 /** Per-step area means of a time-varying continuous layer, in layer units. */

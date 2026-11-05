@@ -3,6 +3,7 @@ import { registerHooks } from "node:module";
 import { test } from "node:test";
 
 import { createHarness } from "../gpu/class-field-harness.test.ts";
+import { classColors, rgbToHex } from "../render/palettes.ts";
 import type { LayerContext } from "../types.ts";
 
 const viewHooks = registerHooks({
@@ -30,7 +31,13 @@ function viewMockModule(specifier: string) {
         export const decode = (raw) => raw;
       `;
     case "../legend":
-      return "export const classLegend = () => ({});";
+      return [
+        "globalThis.__classLegendCalls = [];",
+        "export const classLegend = (...args) => {",
+        "  globalThis.__classLegendCalls.push(args);",
+        "  return {};",
+        "};",
+      ].join("\n");
     case "../map":
       return `
         export const removeLayerAndSource = (map, id) => {
@@ -116,6 +123,45 @@ test("categorical restoration applies a hide requested while the layer is remove
   }
 });
 
+test("the geology menu previews GLiM family shades instead of value colours", async () => {
+  const harness = createViewHarness(true, undefined, "geology", GLIM_LIKE_CLASSES);
+  try {
+    const view = createCategoricalView(harness.context);
+    await view.ready;
+    const painted = view.menu?.palettes.find(({ name }) => name === "painted");
+    const expected = classColors("geology", GLIM_LIKE_CLASSES, "painted");
+
+    assert.deepEqual(
+      painted?.colors,
+      GLIM_LIKE_CLASSES.map(({ value }) => rgbToHex(expected.get(value)!)),
+    );
+    assert.notEqual(painted?.colors[0], "#e7a1b0");
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("a repaint keeps the legend groups the viewer expanded", async () => {
+  const harness = createViewHarness(true);
+  try {
+    const view = createCategoricalView(harness.context);
+    await view.ready;
+    const expanded = legendCalls().at(-1)?.[3] as Set<string> | undefined;
+
+    assert.ok(expanded instanceof Set);
+    expanded.add("Sediments");
+    const repaintedCount = legendCalls().length;
+    view.show("colour");
+    const repainted = legendCalls().slice(repaintedCount);
+
+    assert.equal(repainted.length, 1);
+    assert.ok(repainted[0][3] === expanded);
+    assert.ok((repainted[0][3] as Set<string>).has("Sediments"));
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("categorical restoration keeps the fill slot while removed", async () => {
   const harness = createViewHarness(true, { fill: "fill-anchor", lines: "line-anchor" });
   try {
@@ -139,7 +185,28 @@ test("categorical restoration keeps the fill slot while removed", async () => {
   }
 });
 
-function createViewHarness(compile: boolean, slots?: { fill?: string; lines?: string }) {
+const COVER_CLASSES = [
+  { value: 10, label: "Trees", color: "#112233" },
+  { value: 20, label: "Grass", color: "#445566" },
+];
+
+const GLIM_LIKE_CLASSES = [
+  { value: 1, label: "Sediment, mixed", color: "#fdf0a8", parent: "su", variant: 0 },
+  { value: 6, label: "Sediment, alluvial", color: "#fdf0a8", parent: "su", variant: 5 },
+  { value: 11, label: "Siliciclastic, mixed", color: "#e8c33c", parent: "ss", variant: 0 },
+];
+
+function legendCalls(): unknown[][] {
+  const calls = (globalThis as { __classLegendCalls?: unknown[][] }).__classLegendCalls;
+  return calls ?? [];
+}
+
+function createViewHarness(
+  compile: boolean,
+  slots?: { fill?: string; lines?: string },
+  layerId = "cover",
+  classes = COVER_CLASSES,
+) {
   const gpu = createHarness({ compile });
   const globals = ["document", "localStorage", "ImageData"] as const;
   const original = globals.map((name) => Object.getOwnPropertyDescriptor(globalThis, name));
@@ -209,15 +276,12 @@ function createViewHarness(compile: boolean, slots?: { fill?: string; lines?: st
     map,
     store: Promise.resolve({}),
     layer: {
-      id: "cover",
+      id: layerId,
       title: "Cover",
       style: {
         kind: "categorical",
         palette: "painted",
-        classes: [
-          { value: 10, label: "Trees", color: "#112233" },
-          { value: 20, label: "Grass", color: "#445566" },
-        ],
+        classes,
       },
       arrays: { value: { path: "value" } },
       grid: { bbox: [36, -2, 37, -1], nx: 2, ny: 2 },

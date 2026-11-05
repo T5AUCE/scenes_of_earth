@@ -582,23 +582,68 @@ test("the class legend lists only the classes present, in class order", () => {
   );
 });
 
-test("the class legend adds a heading each time the group of the listed classes changes", () => {
-  const classes = [
-    { value: 1, label: "Sand", color: "#ffff00", group: "Sediments" },
-    { value: 2, label: "Clay", color: "#aaaa00", group: "Sediments" },
-    { value: 3, label: "Basalt", color: "#aa0000", group: "Volcanic" },
-    { value: 4, label: "Granite", color: "#ff0000", group: "Plutonic" },
-  ];
-  const legend = classLegend(
-    classes,
-    new Set([1, 2, 4]),
-    classColors("geology", classes),
-  ) as unknown as TestElement;
+const GROUPED_CLASSES = [
+  { value: 1, label: "Sand", color: "#ffff00", group: "Sediments" },
+  { value: 2, label: "Clay", color: "#aaaa00", group: "Sediments" },
+  { value: 3, label: "Basalt", color: "#aa0000", group: "Volcanic" },
+  { value: 4, label: "Granite", color: "#ff0000", group: "Plutonic" },
+];
 
+function groupedLegend(expandedGroups?: Set<string>) {
+  return classLegend(
+    GROUPED_CLASSES,
+    new Set([1, 2, 4]),
+    classColors("geology", GROUPED_CLASSES),
+    expandedGroups,
+  ) as unknown as TestElement;
+}
+
+test("the class legend gives each group of the listed classes one collapsed heading", () => {
+  const legend = groupedLegend();
+  const [sediments, plutonic] = legend.children;
+  const [toggle, list] = sediments.children;
+
+  assert.equal(legend.children.length, 2);
   assert.deepEqual(
-    legend.children.map((row) => row.textContent),
-    ["Sediments", "Sand", "Clay", "Plutonic", "Granite"],
+    legend.children.map((section) => section.children[0].textContent),
+    ["Sediments", "Plutonic"],
   );
+  assert.equal(toggle.tagName, "button");
+  assert.equal(toggle.type, "button");
+  assert.equal(toggle.attributes["aria-expanded"], "false");
+  assert.equal(list.hidden, true);
+  assert.deepEqual(list.children.map((row) => row.textContent), ["Sand", "Clay"]);
+  assert.deepEqual(plutonic.children[1].children.map((row) => row.textContent), ["Granite"]);
+});
+
+test("a collapsed group heading shows the swatch of its first listed class", () => {
+  const toggle = groupedLegend().children[0].children[0];
+
+  assert.equal(toggle.children[0].style.background, "rgb(255, 255, 0)");
+});
+
+test("pressing a group heading expands and collapses its classes", () => {
+  const legend = groupedLegend();
+  const [toggle, list] = legend.children[0].children;
+
+  toggle.click();
+
+  assert.equal(toggle.attributes["aria-expanded"], "true");
+  assert.equal(list.hidden, false);
+
+  toggle.click();
+
+  assert.equal(toggle.attributes["aria-expanded"], "false");
+  assert.equal(list.hidden, true);
+});
+
+test("a redrawn class legend keeps the groups the viewer expanded", () => {
+  const expanded = new Set<string>();
+  groupedLegend(expanded).children[0].children[0].click();
+  const [toggle, list] = groupedLegend(expanded).children[0].children;
+
+  assert.equal(toggle.attributes["aria-expanded"], "true");
+  assert.equal(list.hidden, false);
 });
 
 test("class legend swatches follow the active colours", () => {
@@ -638,6 +683,9 @@ class TestElement {
   readonly fills: { color: string }[] = [];
   readonly arcs: number[] = [];
   readonly scales: number[] = [];
+  hidden = false;
+  type = "";
+  private readonly clickListeners: (() => void)[] = [];
   private text = "";
 
   constructor(tagName: string) {
@@ -655,6 +703,14 @@ class TestElement {
 
   append(...children: TestElement[]) {
     this.children.push(...children);
+  }
+
+  addEventListener(_type: string, listener: () => void) {
+    this.clickListeners.push(listener);
+  }
+
+  click() {
+    for (const listener of this.clickListeners) listener();
   }
 
   setAttribute(name: string, value: string) {

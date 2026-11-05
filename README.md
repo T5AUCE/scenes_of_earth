@@ -162,9 +162,12 @@ python -m soe.cli worldcover-index
 ## Geology map
 
 The Geology layer (`geology`, not a default layer) reads one COG, `lithology.tif`, in the cubes folder, and is listed only
-when that file exists. Build it once; the command downloads the 232 MB OpenLandMap lithology map from Zenodo, crops it to
-60S-60N, turns water and the undefined class into no data (0) and writes a tiled ZSTD COG with most-common-class
-overviews (a few hundred MB, several minutes):
+when that file exists. Build it once with the command below. When the GLiM v1.0 geodatabase is unpacked at
+`data/cubes/.downloads/glim/LiMW_GIS 2015.gdb`, the COG is rasterised from it (level 1 and 2 codes, 88 classes, onto the
+1/480 degree grid from 60S to 60N; water bodies and no data become 0). Without it, the command downloads the 232 MB
+OpenLandMap lithology map from Zenodo and crops it to 60S-60N, turns water and the undefined class into no data (0) and
+repairs its edge columns. Either way the result is a tiled ZSTD COG with most-common-class overviews (a few hundred MB), and a
+`LITHOLOGY_SOURCE` tag in it names the source, so the layer's classes, source and licence follow the COG.
 
 ```
 python -m soe.cli ingest-lithology
@@ -242,10 +245,13 @@ python -m soe.cli ingest-lithology
   softer set the viewer holds by default, and its "ESA colours" option switches to the official ones. Land cover is refused
   above 400 source tiles.
 - Geology (`geology`, not a default layer) is a static `categorical` layer built like land cover, with a uint8 `value`
-  array (0 = no data, water or undefined) holding the most common rock class in each cell of the OpenLandMap lithology
-  map, read from the local COG. Its `style.classes` carry an optional `group` (Sediments, Volcanic, Plutonic, Metamorphic,
-  Ice) that the legend uses as headings. The notice states the 1:3.75 million source scale and the seams at national borders.
-  It shows rock type now, and rock age is planned inside the same layer.
+  array (0 = no data, water or undefined) holding the most common rock class in each cell of the lithology map, read from
+  the local COG: GLiM level 1 + 2 when the COG was built from it (88 classes), else the 14 OpenLandMap classes. Its
+  `style.classes` carry an optional `group` (Sediments, Volcanic, Plutonic, Metamorphic, Ice/other) that the legend uses as
+  collapsible headings, and GLiM classes also carry `parent` (the level 1 code) and `variant` (its position under the parent),
+  from which the viewer shades the sub-classes of one family. The source, and so the scene id, follows the COG. The notice
+  states the 1:3.75 million source scale and the seams where source maps meet (OpenLandMap also at 180 degrees and its
+  missing islands). It shows rock type now, and rock age is planned inside the same layer.
 - The statistics are read on cells of 0.05/k degrees (k up to 180, about 4.2 Mpx at most). Cells finer than 90 m are read
   from GLO-30 (with average resampling), others from GLO-90; tiles GLO-30 lacks come from GLO-90 as
   `layers[].fallback_sources`. Terrain is refused above 2500 existing source tiles.
@@ -323,12 +329,19 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
   Copernicus Sentinel data (2021) processed by ESA WorldCover consortium". Zanaga, D. et al. (2022) ESA WorldCover 10 m 2021
   v200. doi:10.5281/zenodo.7254221. Modified: most common class per output cell from the COG overview with at least 16
   source pixels per cell. The same text is in `soe/sources/licences.py`.
-- **Geology: OpenLandMap lithology 250 m**, CC BY-SA 4.0 (ShareAlike, so the geology array of a bundle is ShareAlike).
-  Credit: "Geology: OpenLandMap lithology, derived from the USGS Global Ecological Land Units and the GLiM lithology classes".
-  Hengl, T. (2018) Global landform and lithology class at 250 m based on the USGS global ecosystem map.
-  doi:10.5281/zenodo.1464846; Sayre, R. et al. (2014) A new map of global ecological land units, Global Ecology and
-  Conservation 2; Hartmann, J. and Moosdorf, N. (2012) GLiM, doi:10.1029/2012GC004370. Modified: cropped to 60S-60N, water and
-  undefined set to no data, most common class per output cell. The same text is in `soe/sources/licences.py`.
+- **Geology: GLiM v1.0 (level 1 and 2)**, licence not stated by the authors: the data is for local evaluation only, and
+  bundles built from it must not be published until the authors confirm terms. Credit: "Geology: GLiM, Hartmann and
+  Moosdorf (2012); licence not stated by the authors, for local evaluation only". Hartmann, J. and Moosdorf, N. (2012) The new
+  global lithological map database GLiM. Geochem. Geophys. Geosyst. 13, Q12004, doi:10.1029/2012GC004370. Modified: level 1
+  and 2 codes rasterised to 1/480 degrees from World Eckert IV, water bodies and no data set to no data, cropped to 60S-60N,
+  most common class per output cell. The same text is in `soe/sources/licences.py`.
+- **Geology (fallback): OpenLandMap lithology 250 m**, CC BY-SA 4.0 (ShareAlike, so the geology array of a bundle is ShareAlike).
+  Credit: "Geology: OpenLandMap lithology, derived from the USGS Global Ecological Land Units and the GLiM lithology classes
+  (CC BY-SA 4.0, ShareAlike)". Hengl, T. (2018) Global landform and lithology class at 250 m based on the USGS global
+  ecosystem map. doi:10.5281/zenodo.1464846; Sayre, R. et al. (2014) A new map of global ecological land units, Global Ecology
+  and Conservation 2; Hartmann, J. and Moosdorf, N. (2012) GLiM, doi:10.1029/2012GC004370. Modified: cropped to 60°S-60°N;
+  water and undefined set to no data; faulty columns at ±180° replaced by their inner neighbours; most common class per output
+  cell. The same text is in `soe/sources/licences.py`.
 - **Boundaries: geoBoundaries CGAZ**, CC BY 4.0. Runfola, D. et al. (2020) geoBoundaries: A global database of political
   administrative boundaries. PLoS ONE 15(4): e0231866. https://www.geoboundaries.org. Simplified to 0.01 degrees and
   clipped to 60S-60N. CC BY 4.0 for CGAZ itself is the repository-wide licence for geoBoundaries derivatives, not a

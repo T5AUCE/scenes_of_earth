@@ -22,7 +22,10 @@ const BASEMAP_CREDIT = "Basemap: OpenFreeMap, © OpenMapTiles, data from OpenStr
 const NO_FALLBACK_NOTE =
   "If the basemap cannot load, no other basemap is substituted; the data layers still draw.";
 const CLIPPED_NOTICE = "The area reaches beyond the data coverage and was clipped to it.";
-const GEOLOGY_DISPLAY_LINE =
+const GLIM_DISPLAY_LINE =
+  "Geology shows rock type from the Global Lithological Map (GLiM) at about 1:3.75 million, so "
+  + "boundaries are approximate at local scale and seams can show where its 92 source maps meet.";
+const OPENLANDMAP_DISPLAY_LINE =
   "Geology shows rock type from a global map at about 1:3.75 million (OpenLandMap, from "
   + "GLiM), so boundaries are approximate at local scale and seams can show where national "
   + "source maps meet and at 180° longitude.";
@@ -124,8 +127,10 @@ function appendNotices(root: HTMLElement, scene: Scene) {
 function appendDisplay(root: HTMLElement, scene: Scene) {
   makeHtmlElement("h4", "What the map draws", root);
   for (const line of DISPLAY_LINES) makeHtmlElement("p", line, root);
-  if (scene.layers.some((layer) => layer.id === "geology")) {
-    makeHtmlElement("p", GEOLOGY_DISPLAY_LINE, root);
+  const geology = scene.layers.find((layer) => layer.id === "geology");
+  if (geology) {
+    const isGlim = geology.source.name.startsWith("GLiM");
+    makeHtmlElement("p", isGlim ? GLIM_DISPLAY_LINE : OPENLANDMAP_DISPLAY_LINE, root);
   }
 }
 
