@@ -32,6 +32,11 @@ import { CLASS_FIELD_VERTEX } from "./class-field-shaders";
  * bytes come from `uParentIds`, which has the size of `uIds`. `uDots` draws the dots and `uHatch`
  * the no-data hatch, whose screen-space lines are measured through `uPixelRatio`. `uDotOpacity`
  * fades dots and halos out before float32 grid coordinates break them up at high zoom.
+ *
+ * While a step fades into the next, `uIds` and `uParentIds` hold the step it leaves and
+ * `uNextIds` and `uNextParentIds` the step it enters, laid out the same way. Each dot's area
+ * eases from one step's radius to the other's by `uStepMix`, and a step that `uHasFrom` or
+ * `uHasTo` leaves out counts as radius zero. The hatch follows the step that shows more.
  */
 export const FIELD_MARKS_VERTEX = CLASS_FIELD_VERTEX;
 
@@ -44,6 +49,8 @@ precision highp sampler2D;
 in vec2 vPosition;
 uniform usampler2D uIds;
 uniform usampler2D uParentIds;
+uniform usampler2D uNextIds;
+uniform usampler2D uNextParentIds;
 uniform sampler2D uRows;
 uniform ivec2 uIdsSize;
 uniform vec2 uWindow;
@@ -57,6 +64,9 @@ uniform float uRadiusPx;
 uniform float uParentRadiusPx;
 uniform bool uFading;
 uniform float uFade;
+uniform float uStepMix;
+uniform bool uHasFrom;
+uniform bool uHasTo;
 uniform vec3 uInk;
 uniform vec3 uHaloInk;
 uniform bool uHalo;
@@ -168,28 +178,50 @@ float valueOf(uint stored) {
   return stored >= HATCH ? NO_VALUE : float(stored) / MAX_POSITION;
 }
 
-float valueAtLevel(vec2 site) {
+float valueAtLevel(usampler2D ids, vec2 site) {
   vec2 owner = floor(site);
   if (!isInGrid(owner)) return NO_VALUE;
 
-  return valueOf(texelFetch(uIds, texelOf(owner), 0).r);
+  return valueOf(texelFetch(ids, texelOf(owner), 0).r);
 }
 
 // Below level 1 a parent site is a block of the level above, so it is read from its own bytes.
-float valueAtParentLevel(vec2 site) {
+float valueAtParentLevel(usampler2D ids, usampler2D parentIds, vec2 site) {
   vec2 owner = floor(site);
   if (!isInGrid(owner)) return NO_VALUE;
 
-  if (uSlots == 1.0) return valueOf(texelFetch(uParentIds, texelOf(owner), 0).r);
+  if (uSlots == 1.0) return valueOf(texelFetch(parentIds, texelOf(owner), 0).r);
 
-  return valueOf(texelFetch(uIds, texelOf(owner), 0).r);
+  return valueOf(texelFetch(ids, texelOf(owner), 0).r);
 }
 
+// A step that is left out, or a next step that is not fading in yet, has no dots.
+float fromValueAt(vec2 site) {
+  return uHasFrom ? valueAtLevel(uIds, site) : NO_VALUE;
+}
+
+float toValueAt(vec2 site) {
+  return uHasTo && uStepMix > 0.0 ? valueAtLevel(uNextIds, site) : NO_VALUE;
+}
+
+float fromParentValueAt(vec2 site) {
+  return uHasFrom ? valueAtParentLevel(uIds, uParentIds, site) : NO_VALUE;
+}
+
+float toParentValueAt(vec2 site) {
+  if (!uHasTo || uStepMix == 0.0) return NO_VALUE;
+
+  return valueAtParentLevel(uNextIds, uNextParentIds, site);
+}
+
+// The hatch switches at the midpoint, so that the step showing more owns it.
 bool isHatchedAt(vec2 position) {
   vec2 owner = floor(position);
   if (!isInGrid(owner)) return false;
 
-  return texelFetch(uIds, texelOf(owner), 0).r == HATCH;
+  if (uStepMix < 0.5) return uHasFrom && texelFetch(uIds, texelOf(owner), 0).r == HATCH;
+
+  return uHasTo && texelFetch(uNextIds, texelOf(owner), 0).r == HATCH;
 }
 
 float hatchCoverage() {
@@ -201,6 +233,11 @@ float hatchCoverage() {
 
 float coverage(float distancePx, float radiusPx) {
   return 1.0 - smoothstep(radiusPx - EDGE_PX, radiusPx + EDGE_PX, distancePx);
+}
+
+// Areas mix so that a radius change keeps the ink of a dot that eases.
+float areaMix(float from, float to, float amount) {
+  return sqrt(mix(from * from, to * to, amount));
 }
 
 // A dot below the minimum radius keeps that radius and fades by area instead.
@@ -240,13 +277,19 @@ void main() {
   bool isSibling = uFading && any(notEqual(mod(slot, 2.0), vec2(0.0)));
 
   Mark mark = Mark(0.0, 0.0);
-  float value = uDots && (!uFading || isSibling) ? valueAtLevel(site) : NO_VALUE;
-  if (value != NO_VALUE) {
+  float fromValue = uDots && (!uFading || isSibling) ? fromValueAt(site) : NO_VALUE;
+  float toValue = uDots && (!uFading || isSibling) ? toValueAt(site) : NO_VALUE;
+  if (fromValue != NO_VALUE || toValue != NO_VALUE) {
     vec2 jitter = siteNoise(slot, uSlots);
     vec2 center = site + jitter * POSITION_JITTER / uSlots;
     float distancePx = length(pixelsPerGrid * (position - center));
     float maxRadiusPx = containedRadiusPx(pixelsPerGrid, uSlots, uRadiusPx);
-    float radiusPx = dotRadiusPx(value, maxRadiusPx, areaNoise(slot, uSlots));
+    float noise = areaNoise(slot, uSlots);
+    float radiusPx = areaMix(
+      dotRadiusPx(fromValue, maxRadiusPx, noise),
+      dotRadiusPx(toValue, maxRadiusPx, noise),
+      uStepMix
+    );
     mark = markAt(distancePx, radiusPx, uFading ? uFade : 1.0);
   }
 
@@ -254,32 +297,32 @@ void main() {
     // The parent dots are judged on their own lattice because they outgrow the nearest fine site.
     vec2 parentSlot = floor((position - offset) * uParentSlots + 0.5);
     vec2 parentSite = parentSlot / uParentSlots + offset;
-    float wasValue = valueAtParentLevel(parentSite);
-    float willValue = valueAtLevel(parentSite);
-    if (wasValue != NO_VALUE || willValue != NO_VALUE) {
+    float wasFrom = fromParentValueAt(parentSite);
+    float willFrom = fromValueAt(parentSite);
+    float wasTo = toParentValueAt(parentSite);
+    float willTo = toValueAt(parentSite);
+    bool hasDot = wasFrom != NO_VALUE || willFrom != NO_VALUE
+      || wasTo != NO_VALUE || willTo != NO_VALUE;
+    if (hasDot) {
       vec2 jitter = siteNoise(parentSlot, uParentSlots);
       float spacing = mix(1.0 / uParentSlots, 1.0 / uSlots, uFade);
       vec2 center = parentSite + jitter * POSITION_JITTER * spacing;
       float distancePx = length(pixelsPerGrid * (position - center));
-      float wasRadiusPx = containedRadiusPx(pixelsPerGrid, uParentSlots, uParentRadiusPx);
-      float willRadiusPx = containedRadiusPx(pixelsPerGrid, uSlots, uRadiusPx);
-      float wasDotRadiusPx = dotRadiusPx(
-        wasValue,
-        wasRadiusPx,
-        areaNoise(parentSlot, uParentSlots)
-      );
-      float willDotRadiusPx = dotRadiusPx(
-        willValue,
-        willRadiusPx,
-        areaNoise(parentSlot * uSlots / uParentSlots, uSlots)
-      );
-      // Areas mix so a density change keeps the ink of a level that fades.
-      float radiusPx = sqrt(mix(
-        wasDotRadiusPx * wasDotRadiusPx,
-        willDotRadiusPx * willDotRadiusPx,
+      float wasMaxPx = containedRadiusPx(pixelsPerGrid, uParentSlots, uParentRadiusPx);
+      float willMaxPx = containedRadiusPx(pixelsPerGrid, uSlots, uRadiusPx);
+      float wasNoise = areaNoise(parentSlot, uParentSlots);
+      float willNoise = areaNoise(parentSlot * uSlots / uParentSlots, uSlots);
+      float fromPx = areaMix(
+        dotRadiusPx(wasFrom, wasMaxPx, wasNoise),
+        dotRadiusPx(willFrom, willMaxPx, willNoise),
         uFade
-      ));
-      mark = overlay(mark, markAt(distancePx, radiusPx, 1.0));
+      );
+      float toPx = areaMix(
+        dotRadiusPx(wasTo, wasMaxPx, wasNoise),
+        dotRadiusPx(willTo, willMaxPx, willNoise),
+        uFade
+      );
+      mark = overlay(mark, markAt(distancePx, areaMix(fromPx, toPx, uStepMix), 1.0));
     }
   }
 

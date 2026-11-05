@@ -33,7 +33,7 @@ import {
   setImage,
   setPairOpacities,
 } from "../map";
-import { ImageCrossfade } from "../playback";
+import { ImageCrossfade, prefersReducedMotion } from "../playback";
 import { displayStops, displayUnitFor, isUnitFor, unitOptions } from "../units";
 import { lut, paintColormap, stopsForRange } from "../render/colormap";
 import {
@@ -121,6 +121,10 @@ class FieldView implements LayerView {
   private marksStep: number | null = null;
   private readonly marksByStep = new Map<number, MarksState>();
   private readonly isolineInflight = new Set<number>();
+  private armingStep: number | null = null;
+  private readonly failedMarks = new Set<number>();
+  // Without an area mask every cell counts, and one array keeps the layer's blocks cached.
+  private solidMask: Uint8Array | null = null;
 
   constructor(context: LayerContext) {
     this.context = context;
@@ -375,6 +379,8 @@ class FieldView implements LayerView {
     this.colors = lut(gradientOf(this.palette));
     this.stops = stopsForRange(this.fittedStops, this.range);
     this.fade.invalidate();
+    this.marksByStep.clear();
+    this.failedMarks.clear();
     this.marksStep = null;
     this.isolines?.setRange(this.range);
     this.showLegend();
@@ -393,6 +399,8 @@ class FieldView implements LayerView {
       this.followDominant(this.shownStep);
     } else if (this.draw === "isolines" && this.isolines?.holds(this.shownStep)) {
       this.isolines.select(this.shownStep);
+    } else if (this.draw === "dots" && this.marksByStep.has(this.shownStep)) {
+      this.showMarks(this.marksByStep.get(this.shownStep)!);
     }
     this.drawLatestStep(this.shownStep);
   }
@@ -412,6 +420,10 @@ class FieldView implements LayerView {
       if (step < 0 && nextStep >= 0) this.isolines!.setVisible(true);
       this.isolines!.frame(step, nextStep, mix);
       this.refillIsolines(next, nextStep);
+      return;
+    }
+    if (this.draw === "dots") {
+      this.frameDots(time, step, nextStep, prefersReducedMotion() ? 0 : mix);
       return;
     }
     if (this.draw !== "colour") {
@@ -441,13 +453,68 @@ class FieldView implements LayerView {
       .finally(() => this.isolineInflight.delete(nextStep));
   }
 
+  private frameDots(time: string, step: number, nextStep: number, mix: number) {
+    if (step !== this.shownStep) {
+      this.setTime(time);
+      return;
+    }
+
+    // Equal steps hold what the shown step drew, so the layer is not touched mid-play.
+    if (step === nextStep) return;
+
+    this.keepMarksOf(step, nextStep);
+    this.armMarks(nextStep);
+    const from = this.marksByStep.get(step) ?? null;
+    const to = this.marksByStep.get(nextStep) ?? null;
+    const isMissing = (step >= 0 && !from) || (nextStep >= 0 && !to);
+    if (isMissing) return;
+
+    this.showFade(from, to, mix);
+  }
+
+  // Only the two steps in use stay, however far play looks ahead.
+  private keepMarksOf(step: number, nextStep: number) {
+    for (const cached of this.marksByStep.keys()) {
+      if (cached !== step && cached !== nextStep) this.marksByStep.delete(cached);
+    }
+  }
+
+  private armMarks(step: number) {
+    const isArmed = step < 0 || this.marksByStep.has(step) || this.failedMarks.has(step);
+    if (isArmed || this.armingStep === step) return;
+
+    this.armingStep = step;
+    void this.loadMarks(step);
+  }
+
+  private async loadMarks(step: number) {
+    try {
+      const [values, mask] = await Promise.all([this.readStep.read(step, false), this.mask]);
+      if (this.alive && this.draw === "dots") this.cacheMarks(step, this.marksOf(values, mask));
+    } catch {
+      // The draw of that step reports the failure when the viewer reaches it.
+      this.failedMarks.add(step);
+    } finally {
+      if (this.armingStep === step) this.armingStep = null;
+    }
+  }
+
   isFrameReady(time: string, next: string) {
     const step = stepAt(this.time.values, this.time.end, time);
     const nextStep = stepAt(this.time.values, this.time.end, next);
     if (this.draw === "isolines") return this.isolines!.isReady(step, nextStep);
+    if (this.draw === "dots") return this.areMarksReady(nextStep);
     if (this.draw !== "colour") return true;
 
     return this.fade.isReady(keyOf(step), keyOf(nextStep));
+  }
+
+  // A fade can start once the next step's bytes are uploaded, or when it failed to load.
+  private areMarksReady(nextStep: number) {
+    if (nextStep < 0 || this.failedMarks.has(nextStep)) return true;
+
+    const state = this.marksByStep.get(nextStep);
+    return state !== undefined && this.marks!.isReady(state.positions);
   }
 
   async prepare(time: string): Promise<void> {
@@ -492,7 +559,7 @@ class FieldView implements LayerView {
     if (this.draw && this.shownStep >= 0) this.drawLatestStep(this.shownStep);
   }
 
-  // Isolines and dots do not fade, so they cut to the label's step at the midpoint.
+  // A layer that draws nothing yet still follows the label's step.
   private cutTo(time: string) {
     const step = stepAt(this.time.values, this.time.end, time);
     if (step !== this.shownStep) this.setTime(time);
@@ -524,9 +591,9 @@ class FieldView implements LayerView {
   }
 
   private cacheMarks(step: number, state: MarksState) {
+    this.failedMarks.delete(step);
     this.marksByStep.set(step, state);
   }
-
 
   private hideStep() {
     this.fade.hide();
@@ -568,12 +635,11 @@ class FieldView implements LayerView {
     mask: ArrayLike<number> | null,
   ) {
     if (this.marks) {
-      const state = this.marksOf(values, mask);
+      const isCached = this.draw === "colour" || this.draw === "dots";
+      const state = this.marksByStep.get(step) ?? this.marksOf(values, mask);
       this.showMarks(state);
-      if (this.draw === "colour") {
-        this.cacheMarks(step, state);
-        this.marksStep = step;
-      }
+      if (isCached) this.cacheMarks(step, state);
+      if (this.draw === "colour") this.marksStep = step;
     }
     if (this.draw === "colour") {
       this.fade.show(step, () => this.paintImage(values));
@@ -596,12 +662,19 @@ class FieldView implements LayerView {
     return { positions, mask, hasHatch };
   }
 
-  private showMarks({ positions, mask, hasHatch }: MarksState) {
-    this.marks!.setMask(mask ?? new Uint8Array(positions.length).fill(1));
-    this.marks!.setPositions(positions);
+  private showMarks(state: MarksState) {
+    this.showFade(state, null, 0);
+  }
+
+  // Either end may be null, which stands for a step outside the axis and draws nothing.
+  private showFade(from: MarksState | null, to: MarksState | null, mix: number) {
+    const { positions, mask } = (from ?? to)!;
+    this.solidMask ??= new Uint8Array(positions.length).fill(1);
+    this.marks!.setMask(mask ?? this.solidMask);
+    this.marks!.setFade(from?.positions ?? null, to?.positions ?? null, mix);
     this.marks!.setDots(this.draw === "dots");
-    this.marks!.setHatch(hasHatch);
-    this.setHatched(hasHatch);
+    this.marks!.setHatch(Boolean(from?.hasHatch || to?.hasHatch));
+    this.setHatched(Boolean((mix < 0.5 ? from : to)?.hasHatch));
   }
 
   legend() {

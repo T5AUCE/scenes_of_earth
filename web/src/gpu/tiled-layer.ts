@@ -304,7 +304,7 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
     }
   }
 
-  private uploadWindow(
+  protected uploadWindow(
     gl: WebGL2RenderingContext,
     grid: TiledGrid,
     window: TextureTile["window"],

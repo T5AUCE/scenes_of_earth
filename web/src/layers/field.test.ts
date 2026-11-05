@@ -76,8 +76,16 @@ function mockModule(specifier: string) {
           setDensity() {},
           setInk() {},
           setMask() {},
-          setPositions(positions) { globalThis.markPositions.push(Array.from(positions)); },
-          setDots() {},
+          setFade(from, to, mix) {
+            globalThis.markFades.push({
+              from: from && Array.from(from),
+              to: to && Array.from(to),
+              mix,
+            });
+            if (to && globalThis.markUploads !== false) globalThis.markUploaded.add(to);
+          },
+          isReady: (positions) => globalThis.markUploaded.has(positions),
+          setDots(isOn) { globalThis.dotsCalls.push(isOn); },
           setHatch(hasHatch) { globalThis.hatchCalls.push(hasHatch); },
         });
       `;
@@ -537,6 +545,146 @@ test("isolines fading in from minus one makes the lines visible", async () => {
   assert.equal((globalThis as Record<string, unknown[]>).isolineVisible.at(-1), true);
 });
 
+test("dots fade from the shown step to the armed next step by the mix", async () => {
+  const { view, fades, flush } = mountField([COMPLETE, [4, 3, 2, 1], COMPLETE]);
+  await showDotsStep(view, flush);
+  const held = fades().at(-1)!;
+
+  view.setFrame!(TIMES[0], TIMES[1], 0.5);
+
+  const fade = fades().at(-1)!;
+  assert.deepEqual(fade.from, held.from);
+  assert.notDeepEqual(fade.to, fade.from);
+  assert.equal(fade.mix, 0.5);
+});
+
+test("dots hold the shown step while the next one is not loaded", async () => {
+  const { view, fades, flush } = mountField([COMPLETE, [4, 3, 2, 1], COMPLETE]);
+  view.show("dots");
+  view.setTime(TIMES[0]);
+  await flush();
+  const shown = fades().length;
+
+  view.setFrame!(TIMES[0], TIMES[1], 0.5);
+
+  assert.equal(fades().length, shown);
+  assert.equal(view.isFrameReady!(TIMES[0], TIMES[1]), false);
+  await flush();
+});
+
+test("dots stall until the next step is uploaded", async () => {
+  const { view, flush } = mountField([COMPLETE, [4, 3, 2, 1], COMPLETE]);
+  Object.assign(globalThis, { markUploads: false });
+  view.show("dots");
+  view.setTime(TIMES[0]);
+  await flush();
+  view.setFrame!(TIMES[0], TIMES[1], 0);
+  await flush();
+  view.setFrame!(TIMES[0], TIMES[1], 0);
+  assert.equal(view.isFrameReady!(TIMES[0], TIMES[1]), false);
+
+  Object.assign(globalThis, { markUploads: true });
+  view.setFrame!(TIMES[0], TIMES[1], 0);
+
+  assert.equal(view.isFrameReady!(TIMES[0], TIMES[1]), true);
+});
+
+test("dots with a failing next read let the fade move on", async () => {
+  const { view, flush } = mountField([COMPLETE, [4, 3, 2, 1], COMPLETE]);
+  view.show("dots");
+  view.setTime(TIMES[0]);
+  await flush();
+  failedSteps.add(1);
+
+  view.setFrame!(TIMES[0], TIMES[1], 0);
+  await flush();
+
+  assert.equal(view.isFrameReady!(TIMES[0], TIMES[1]), true);
+});
+
+test("dots with equal steps do no work and read nothing", async () => {
+  const { view, fades, flush } = mountField([COMPLETE, COMPLETE, COMPLETE]);
+  await showDotsStep(view, flush);
+  const drawn = fades().length;
+
+  view.setFrame!(TIMES[0], TIMES[0], 0.5);
+
+  assert.equal(fades().length, drawn);
+  assert.equal(pendingReads.length, 0);
+});
+
+test("dots fade out to a step outside the axis and in from one", async () => {
+  const { view, fades, flush } = mountField([COMPLETE, COMPLETE, COMPLETE], "2026-10-01");
+  view.show("dots");
+  view.setTime(TIMES[1]);
+  await flush();
+
+  view.setFrame!(TIMES[1], TIMES[2], 0.5);
+  assert.equal(fades().at(-1)!.to, null);
+  assert.equal(fades().at(-1)!.mix, 0.5);
+
+  view.setTime(TIMES[2]);
+  view.setFrame!(TIMES[2], TIMES[0], 0);
+  await flush();
+  view.setFrame!(TIMES[2], TIMES[0], 0.5);
+
+  assert.equal(fades().at(-1)!.from, null);
+  assert.deepEqual(dotsCalls().at(-1), true);
+});
+
+test("dots hatch follows the step that shows more from the midpoint", async () => {
+  const { view, hatch, flush } = mountField([COMPLETE, HAS_NO_DATA, COMPLETE]);
+  await showDotsStep(view, flush);
+  assert.equal(legendHatch(view), false);
+
+  view.setFrame!(TIMES[0], TIMES[1], 0.25);
+  assert.equal(hatch(), true);
+  assert.equal(legendHatch(view), false);
+  view.setFrame!(TIMES[0], TIMES[1], 0.75);
+  assert.equal(legendHatch(view), true);
+  view.setFrame!(TIMES[0], TIMES[1], 0.25);
+  assert.equal(legendHatch(view), false);
+});
+
+test("a pause shows the next step's dots alone before its read returns", async () => {
+  const { view, fades, flush } = mountField([COMPLETE, [4, 3, 2, 1], COMPLETE]);
+  await showDotsStep(view, flush);
+  const leaving = fades().at(-1)!.from;
+  view.setFrame!(TIMES[0], TIMES[1], 0.6);
+  const entering = fades().at(-1)!.to;
+
+  view.setTime(TIMES[1]);
+
+  assert.deepEqual(fades().at(-1), { from: entering, to: null, mix: 0 });
+  assert.notDeepEqual(entering, leaving);
+  await flush();
+});
+
+test("dots never ease under reduced motion", async () => {
+  const { view, fades, flush } = mountField([COMPLETE, [4, 3, 2, 1], COMPLETE]);
+  await showDotsStep(view, flush);
+  useReducedMotion(true);
+
+  try {
+    view.setFrame!(TIMES[0], TIMES[1], 0.75);
+    assert.equal(fades().at(-1)!.mix, 0);
+  } finally {
+    useReducedMotion(false);
+  }
+});
+
+test("dots draw a step they were handed again without rereading it", async () => {
+  const { view, fades, flush } = mountField([COMPLETE, [4, 3, 2, 1], COMPLETE]);
+  await showDotsStep(view, flush);
+  view.setFrame!(TIMES[0], TIMES[1], 0.5);
+  const entering = fades().at(-1)!.to;
+  view.setTime(TIMES[1]);
+  await flush();
+
+  assert.deepEqual(fades().at(-1), { from: entering, to: null, mix: 0 });
+  assert.equal(pendingReads.length, 0);
+});
+
 async function prepareStep(
   view: ReturnType<typeof createSeriesView>,
   flush: () => Promise<void>,
@@ -555,6 +703,18 @@ function legendHatch(view: ReturnType<typeof createSeriesView>) {
   const { children } = (view.legend() as unknown as { shown: { children: unknown[] } }).shown;
 
   return children.includes("hatch");
+}
+
+async function showDotsStep(
+  view: ReturnType<typeof createSeriesView>,
+  flush: () => Promise<void>,
+) {
+  view.show("dots");
+  view.setTime(TIMES[0]);
+  await flush();
+  view.setFrame!(TIMES[0], TIMES[1], 0);
+  await flush();
+  view.setFrame!(TIMES[0], TIMES[1], 0);
 }
 
 async function showFirstStep(
@@ -577,6 +737,10 @@ function mountField(steps: number[][], end = "2026-11-01") {
 
 function mountIsolineField(steps: number[][], end = "2026-11-01") {
   return mountWithEncodings(steps, ["ramp", "isolines"], end);
+}
+
+function dotsCalls(): boolean[] {
+  return (globalThis as Record<string, boolean[]>).dotsCalls ?? [];
 }
 
 function isolinePrepares(): number[] {
@@ -624,7 +788,10 @@ function mountWithEncodings(steps: number[][], encodings: string[], end = "2026-
     stepValues: steps.map((values) => Float32Array.from(values)),
     fieldMask: Uint8Array.of(1, 1, 1, 1),
     hatchCalls: [],
-    markPositions: [],
+    markFades: [],
+    markUploaded: new Set(),
+    markUploads: true,
+    dotsCalls: [],
     capturedOpacities: [],
     isolinePrepares: [],
     isolineFrames: [],
@@ -665,13 +832,14 @@ function mountWithEncodings(steps: number[][], encodings: string[], end = "2026-
   const captured = globalThis as unknown as {
     hatchCalls: boolean[];
     capturedOpacities: [number, number][];
-    markPositions: number[][];
+    markFades: { from: number[] | null; to: number[] | null; mix: number }[];
   };
 
   return {
     view,
     reports,
     hatch: () => captured.hatchCalls.at(-1),
+    fades: () => captured.markFades,
     opacities: () => captured.capturedOpacities,
     images: () => imageDataCount,
     async flush() {
