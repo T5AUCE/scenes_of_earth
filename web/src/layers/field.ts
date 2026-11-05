@@ -548,6 +548,7 @@ class FieldView implements LayerView {
 
   setPlaying(isPlaying: boolean) {
     this.readStep.setPlaying(isPlaying);
+    this.isolines?.setPlaying(isPlaying);
   }
 
   show(next: Draw | null) {

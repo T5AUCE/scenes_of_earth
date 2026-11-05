@@ -59,11 +59,12 @@ export interface IsolineOverlay {
   prepareStep(step: number, values: ArrayLike<number>): void;
   /**
    * Drives one frame of the fade from one step to the next by its weight. A step of -1 stands
-   * for empty, which fades to or from transparent. Returns false without changing anything when
-   * the outgoing image is not painted, so the clock stalls instead of showing a stale set.
+   * for empty, which fades to or from transparent. Returns false without changing anything while
+   * the outgoing setData has not painted, so the clock stalls instead of showing a stale set.
+   * Later reloads keep drawing the same data, so they never stall it.
    */
   frame(fromStep: number, toStep: number, mix: number): boolean;
-  /** Whether the fade from one step to another can start now, so the clock waits for the paint. */
+  /** Whether the fade can start now, waiting only for each setData paint. */
   isReady(fromStep: number, toStep: number): boolean;
   /** Shows the held step alone at full opacity without tracing, else false. */
   select(step: number): boolean;
@@ -78,6 +79,8 @@ export interface IsolineOverlay {
   setUnits(unit: string): void;
   setInk(ink: InkPaint): void;
   setVisible(visible: boolean): void;
+  /** Shows both label sets with overlap only while playing, so paused labels cull as before. */
+  setPlaying(isPlaying: boolean): void;
   destroy(): void;
 }
 
@@ -103,9 +106,12 @@ export function createIsolineOverlay(
   let smooth = true;
   let front: 0 | 1 = 0;
   let keys: [number | null, number | null] = [null, null];
+  const painted = [false, false];
   const failed = new Set<number>();
   let overallVisible = true;
   let dominantStep: number | null = null;
+  let playing = false;
+  const labelShown: [boolean | null, boolean | null] = [null, null];
 
   for (const [index, sourceId] of sourceIds.entries()) {
     map.addSource(sourceId, { type: "geojson", data: EMPTY_LINES });
@@ -143,7 +149,7 @@ export function createIsolineOverlay(
         traceKey(step, smooth),
         () => traceIsolines(values, layer.grid.nx, layer.grid.ny, levels, smooth),
       );
-      setSourceData(sourceIds[front], traced);
+      setSourceData(front, traced);
       keys[front] = step;
       failed.delete(step);
       showSingle();
@@ -271,6 +277,18 @@ export function createIsolineOverlay(
       else updateLabelVisibility();
     },
 
+    setPlaying(isPlaying) {
+      if (isPlaying === playing) return;
+
+      playing = isPlaying;
+      // Both sets show at once while playing so the hidden set cannot block the fade.
+      for (const group of groups) {
+        map.setLayoutProperty(group.labelId, "text-allow-overlap", isPlaying);
+        map.setLayoutProperty(group.labelId, "text-ignore-placement", isPlaying);
+      }
+      updateLabelVisibility();
+    },
+
     destroy() {
       for (const group of groups) {
         for (const id of Object.values(group)) {
@@ -306,7 +324,8 @@ export function createIsolineOverlay(
     if (failed.has(step)) return true;
 
     const slot = slotOfStep(step);
-    return slot !== null && isLoaded(sourceIds[slot]);
+    // A reload keeps drawing the same data so only the slot's own setData waits.
+    return slot !== null && (painted[slot] ||= isLoaded(sourceIds[slot]));
   }
 
   function paintHidden(toStep: number): void {
@@ -316,15 +335,17 @@ export function createIsolineOverlay(
     if (!cached) return;
 
     const hidden = otherSlot(front);
-    setSourceData(sourceIds[hidden], cached);
+    setSourceData(hidden, cached);
     keys[hidden] = toStep;
   }
 
-  function setSourceData(sourceId: string, traced: Isoline[]) {
+  function setSourceData(slot: 0 | 1, traced: Isoline[]) {
+    // A fresh setData needs one loaded report before the slot counts as settled.
+    painted[slot] = false;
     const features = traced.map(
       (line) => lineFeature(line, interval, layer.grid, shift, nativeUnits, displayUnit),
     );
-    (map.getSource(sourceId) as GeoJSONSource).setData({
+    (map.getSource(sourceIds[slot]) as GeoJSONSource).setData({
       type: "FeatureCollection",
       features,
     });
@@ -354,7 +375,13 @@ export function createIsolineOverlay(
   function updateLabelVisibility() {
     for (const [slot, group] of groups.entries()) {
       const showsDominant = overallVisible && dominantStep !== null && keys[slot] === dominantStep;
-      map.setLayoutProperty(group.labelId, "visibility", showsDominant ? "visible" : "none");
+      // Opacity flips labels without a reload, and paused visibility keeps culling exact.
+      map.setPaintProperty(group.labelId, "text-opacity", showsDominant ? 1 : 0);
+      const shouldShow = overallVisible && (playing || showsDominant);
+      if (labelShown[slot] !== shouldShow) {
+        labelShown[slot] = shouldShow;
+        map.setLayoutProperty(group.labelId, "visibility", shouldShow ? "visible" : "none");
+      }
     }
   }
 
@@ -410,6 +437,7 @@ function addIsothermLayers(
   );
 
   const font = textFont(map);
+  // Culling stays on while paused so labels never cover place names.
   map.addLayer(
     {
       id: labelId,
@@ -418,13 +446,19 @@ function addIsothermLayers(
       layout: {
         "symbol-placement": "line",
         "symbol-spacing": LABEL_SPACING_PX,
+        "text-allow-overlap": false,
         "text-field": ["get", "label"] as ExpressionSpecification,
+        "text-ignore-placement": false,
         "text-max-angle": LABEL_MAX_ANGLE_DEG,
         "text-size": LABEL_SIZE_PX,
         visibility: "visible",
         ...(font ? { "text-font": font } : {}),
       },
-      paint: { "text-halo-width": LABEL_HALO_WIDTH_PX, "text-opacity-transition": { duration: 0 } },
+      paint: {
+        "text-halo-width": LABEL_HALO_WIDTH_PX,
+        "text-opacity": 0,
+        "text-opacity-transition": { duration: 0 },
+      },
     },
     beforeId,
   );

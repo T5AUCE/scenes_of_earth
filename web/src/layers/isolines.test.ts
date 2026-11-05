@@ -296,20 +296,19 @@ test("the crossfade disables opacity transitions so per-frame values apply", () 
 });
 
 test("labels show only on the dominant set and flip halfway", () => {
-  const { map, layouts } = fakeMap();
+  const { map, layers } = fakeMap();
   const overlay = mountOverlay(map);
   overlay.setValues([0, 30, 30, 0], 0);
   overlay.prepareStep(1, [0, 20, 20, 0]);
-  const visibilityOf = (source: string) => layouts.get(`${source}-labels`)?.get("visibility");
   overlay.frame(0, 1, 0);
 
   overlay.frame(0, 1, 0.25);
-  assert.equal(visibilityOf("temperature-isotherms-a"), "visible");
-  assert.equal(visibilityOf("temperature-isotherms-b"), "none");
+  assert.equal(labelOpacityOf(layers, "temperature-isotherms-a-labels"), 1);
+  assert.equal(labelOpacityOf(layers, "temperature-isotherms-b-labels"), 0);
 
   overlay.frame(0, 1, 0.75);
-  assert.equal(visibilityOf("temperature-isotherms-a"), "none");
-  assert.equal(visibilityOf("temperature-isotherms-b"), "visible");
+  assert.equal(labelOpacityOf(layers, "temperature-isotherms-a-labels"), 0);
+  assert.equal(labelOpacityOf(layers, "temperature-isotherms-b-labels"), 1);
 });
 
 test("the sources swap roles after the fade ends", () => {
@@ -346,6 +345,101 @@ test("the fade waits while the hidden source has not loaded", () => {
   assert.equal(overlay.frame(0, 1, 0.5), true);
 });
 
+test("a label flip reloading the sources never stalls the fade", () => {
+  const { map, layers, setLoaded } = fakeMap();
+  const overlay = mountOverlay(map);
+  overlay.setValues([0, 30, 30, 0], 0);
+  overlay.prepareStep(1, [0, 20, 20, 0]);
+  assert.equal(overlay.frame(0, 1, 0), true);
+  assert.equal(overlay.frame(0, 1, 0.3), true);
+  assert.equal(overlay.frame(0, 1, 0.6), true);
+
+  setLoaded("temperature-isotherms-a", false);
+  setLoaded("temperature-isotherms-b", false);
+
+  assert.equal(overlay.isReady(0, 1), true);
+  assert.equal(overlay.frame(0, 1, 0.7), true);
+  const outgoing = stopAt(opacityOf(layers, "temperature-isotherms-a-lines"), 0);
+  const incoming = stopAt(opacityOf(layers, "temperature-isotherms-b-lines"), 0);
+  assert.ok(approximately(outgoing, 0.85 * 0.3));
+  assert.ok(approximately(incoming, 0.85 * 0.7));
+});
+
+test("a reload after the label flip keeps the fade ready with one source loaded", () => {
+  const { map, setLoaded } = fakeMap();
+  const overlay = mountOverlay(map);
+  overlay.setValues([0, 30, 30, 0], 0);
+  overlay.prepareStep(1, [0, 20, 20, 0]);
+  assert.equal(overlay.frame(0, 1, 0), true);
+  assert.equal(overlay.frame(0, 1, 0.3), true);
+  assert.equal(overlay.frame(0, 1, 0.6), true);
+
+  setLoaded("temperature-isotherms-b", false);
+  setLoaded("temperature-isotherms-a", true);
+
+  assert.equal(overlay.isReady(0, 1), true);
+});
+
+test("fade frames flip labels by opacity with both sets visible while playing", () => {
+  const { map, layers, layoutCalls, layoutOf } = fakeMap();
+  const overlay = mountOverlay(map);
+  overlay.setValues([0, 30, 30, 0], 0);
+  overlay.prepareStep(1, [0, 20, 20, 0]);
+  assert.equal(overlay.frame(0, 1, 0), true);
+  overlay.setPlaying(true);
+  const calls = layoutCalls();
+
+  assert.equal(overlay.frame(0, 1, 0.25), true);
+  assert.equal(labelOpacityOf(layers, "temperature-isotherms-a-labels"), 1);
+  assert.equal(labelOpacityOf(layers, "temperature-isotherms-b-labels"), 0);
+  assert.equal(layoutCalls(), calls);
+  assert.equal(layoutOf("temperature-isotherms-a-labels", "visibility"), "visible");
+  assert.equal(layoutOf("temperature-isotherms-b-labels", "visibility"), "visible");
+
+  assert.equal(overlay.frame(0, 1, 0.75), true);
+  assert.equal(labelOpacityOf(layers, "temperature-isotherms-a-labels"), 0);
+  assert.equal(labelOpacityOf(layers, "temperature-isotherms-b-labels"), 1);
+  assert.equal(layoutCalls(), calls);
+  assert.equal(layoutOf("temperature-isotherms-a-labels", "visibility"), "visible");
+  assert.equal(layoutOf("temperature-isotherms-b-labels", "visibility"), "visible");
+});
+
+test("play start shows both label sets with overlap and play stop restores paused culling", () => {
+  const { map, layers, layoutOf } = fakeMap();
+  const overlay = mountOverlay(map);
+  const flagOf = (id: string, name: string) =>
+    layoutOf(id, name) ?? layers.find((layer) => layer.id === id)!.layout![name];
+  overlay.setValues([0, 30, 30, 0], 0);
+  overlay.prepareStep(1, [0, 20, 20, 0]);
+  assert.equal(overlay.frame(0, 1, 0), true);
+
+  assert.equal(flagOf("temperature-isotherms-a-labels", "text-allow-overlap"), false);
+  assert.equal(flagOf("temperature-isotherms-a-labels", "text-ignore-placement"), false);
+  assert.equal(flagOf("temperature-isotherms-b-labels", "text-allow-overlap"), false);
+  assert.equal(flagOf("temperature-isotherms-b-labels", "text-ignore-placement"), false);
+  assert.equal(layoutOf("temperature-isotherms-a-labels", "visibility"), "visible");
+  assert.equal(layoutOf("temperature-isotherms-b-labels", "visibility"), "none");
+
+  overlay.setPlaying(true);
+
+  assert.equal(layoutOf("temperature-isotherms-a-labels", "text-allow-overlap"), true);
+  assert.equal(layoutOf("temperature-isotherms-a-labels", "text-ignore-placement"), true);
+  assert.equal(layoutOf("temperature-isotherms-b-labels", "text-allow-overlap"), true);
+  assert.equal(layoutOf("temperature-isotherms-b-labels", "text-ignore-placement"), true);
+  assert.equal(layoutOf("temperature-isotherms-a-labels", "visibility"), "visible");
+  assert.equal(layoutOf("temperature-isotherms-b-labels", "visibility"), "visible");
+
+  assert.equal(overlay.frame(0, 1, 0.75), true);
+  overlay.setPlaying(false);
+
+  assert.equal(layoutOf("temperature-isotherms-a-labels", "text-allow-overlap"), false);
+  assert.equal(layoutOf("temperature-isotherms-a-labels", "text-ignore-placement"), false);
+  assert.equal(layoutOf("temperature-isotherms-b-labels", "text-allow-overlap"), false);
+  assert.equal(layoutOf("temperature-isotherms-b-labels", "text-ignore-placement"), false);
+  assert.equal(layoutOf("temperature-isotherms-a-labels", "visibility"), "none");
+  assert.equal(layoutOf("temperature-isotherms-b-labels", "visibility"), "visible");
+});
+
 test("a failed trace lets the fade move on without it", () => {
   const { map } = fakeMap();
   const overlay = mountOverlay(map);
@@ -368,7 +462,7 @@ test("equal steps do no work and keep the single set", () => {
 });
 
 test("a step at minus one fades to and from empty", () => {
-  const { map, layers, layouts } = fakeMap();
+  const { map, layers } = fakeMap();
   const overlay = mountOverlay(map);
   overlay.setValues([0, 30, 30, 0], 0);
 
@@ -376,7 +470,7 @@ test("a step at minus one fades to and from empty", () => {
   assert.equal(overlay.frame(0, -1, 0.25), true);
   const faded = stopAt(opacityOf(layers, "temperature-isotherms-a-lines"), 0);
   assert.ok(approximately(faded, 0.85 * 0.75));
-  assert.equal(layouts.get("temperature-isotherms-a-labels")?.get("visibility"), "visible");
+  assert.equal(labelOpacityOf(layers, "temperature-isotherms-a-labels"), 1);
 
   assert.equal(overlay.isReady(-1, 0), true);
   assert.equal(overlay.frame(-1, 0, 0.5), true);
@@ -387,15 +481,15 @@ test("a step at minus one fades to and from empty", () => {
 });
 
 test("scrubbing shows one set at full opacity", () => {
-  const { map, layers, layouts } = fakeMap();
+  const { map, layers } = fakeMap();
   const overlay = mountOverlay(map);
   overlay.setValues([0, 30, 30, 0], 0);
   overlay.setValues([0, 20, 20, 0], 1);
 
   assert.ok(approximately(stopAt(opacityOf(layers, "temperature-isotherms-a-lines"), 0), 0.85));
   assert.ok(approximately(stopAt(opacityOf(layers, "temperature-isotherms-b-lines"), 0), 0));
-  assert.equal(layouts.get("temperature-isotherms-a-labels")?.get("visibility"), "visible");
-  assert.equal(layouts.get("temperature-isotherms-b-labels")?.get("visibility"), "none");
+  assert.equal(labelOpacityOf(layers, "temperature-isotherms-a-labels"), 1);
+  assert.equal(labelOpacityOf(layers, "temperature-isotherms-b-labels"), 0);
 });
 
 test("reduced motion never sets a partial opacity", () => {
@@ -509,18 +603,27 @@ test("the trace cache survives a lookahead of further steps", () => {
 function fakeMap() {
   let data: unknown;
   const datas = new Map<string, unknown>();
-  const layers: { id: string; paint?: Record<string, unknown> }[] = [];
+  const layers: {
+    id: string;
+    layout?: Record<string, unknown>;
+    paint?: Record<string, unknown>;
+  }[] = [];
   const sources = new Map<string, unknown>();
   const layouts = new Map<string, Map<string, unknown>>();
   const loaded = new Map<string, boolean>();
   let paintCalls = 0;
+  let layoutCalls = 0;
   const map = {
     addSource(id: string, source: { data: unknown }) {
       data = source.data;
       datas.set(id, source.data);
       sources.set(id, source);
     },
-    addLayer(layer: { id: string; paint?: Record<string, unknown> }) {
+    addLayer(layer: {
+      id: string;
+      layout?: Record<string, unknown>;
+      paint?: Record<string, unknown>;
+    }) {
       layers.push(layer);
     },
     getStyle: () => ({ layers: [] }),
@@ -532,6 +635,7 @@ function fakeMap() {
     }),
     isSourceLoaded: (id: string) => loaded.get(id) ?? true,
     setLayoutProperty(id: string, name: string, value: unknown) {
+      layoutCalls += 1;
       const entries = layouts.get(id) ?? new Map<string, unknown>();
       entries.set(name, value);
       layouts.set(id, entries);
@@ -554,6 +658,7 @@ function fakeMap() {
     dataOf: (id: string) => datas.get(id),
     setLoaded: (id: string, isLoaded: boolean) => void loaded.set(id, isLoaded),
     paintCalls: () => paintCalls,
+    layoutCalls: () => layoutCalls,
     layoutOf: (id: string, name: string) => layouts.get(id)?.get(name),
   };
 }
@@ -633,6 +738,13 @@ function opacityOf(
   id: string,
 ): unknown[] {
   return layers.find((layer) => layer.id === id)!.paint!["line-opacity"] as unknown[];
+}
+
+function labelOpacityOf(
+  layers: { id: string; paint?: Record<string, unknown> }[],
+  id: string,
+): unknown {
+  return layers.find((layer) => layer.id === id)!.paint!["text-opacity"];
 }
 
 function stopAt(expression: readonly unknown[], zoom: number): number {

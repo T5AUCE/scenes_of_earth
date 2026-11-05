@@ -108,6 +108,9 @@ function mockModule(specifier: string) {
                 failed.clear();
               }
             },
+            setPlaying(isPlaying) {
+              globalThis.isolinePlaying.push(isPlaying);
+            },
             setValues(values, step) {
               globalThis.isolineValues.push(step);
               if (step < 0) return;
@@ -545,6 +548,18 @@ test("isolines fading in from minus one makes the lines visible", async () => {
   assert.equal((globalThis as Record<string, unknown[]>).isolineVisible.at(-1), true);
 });
 
+test("isolines forward play state to the overlay", async () => {
+  const { view, flush } = mountIsolineField([COMPLETE, COMPLETE, COMPLETE]);
+  view.show("isolines");
+  view.setTime(TIMES[0]);
+  await flush();
+
+  view.setPlaying!(true);
+  view.setPlaying!(false);
+
+  assert.deepEqual(isolinePlaying(), [true, false]);
+});
+
 test("dots fade from the shown step to the armed next step by the mix", async () => {
   const { view, fades, flush } = mountField([COMPLETE, [4, 3, 2, 1], COMPLETE]);
   await showDotsStep(view, flush);
@@ -764,6 +779,10 @@ function isolineResets(): string[] {
   return (globalThis as Record<string, string[]>).isolineResets ?? [];
 }
 
+function isolinePlaying(): boolean[] {
+  return (globalThis as Record<string, boolean[]>).isolinePlaying ?? [];
+}
+
 function useReducedMotion(matches: boolean) {
   const target = globalThis as unknown as Record<string, unknown>;
   if (matches) {
@@ -799,6 +818,7 @@ function mountWithEncodings(steps: number[][], encodings: string[], end = "2026-
     isolineSelects: [],
     isolineResets: [],
     isolineVisible: [],
+    isolinePlaying: [],
     isolineLoaded: true,
     ImageData: class {
       constructor() {
