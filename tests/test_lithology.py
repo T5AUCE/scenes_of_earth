@@ -534,6 +534,7 @@ def test_glim_notice_states_the_scale_and_the_seams_between_source_maps(tmp_path
 
     assert "1:3.75 million" in limits and "92 source maps" in limits
     assert "180° longitude" not in limits
+    assert "hatched as no data" in limits
 
 
 def test_openlandmap_notice_keeps_the_antimeridian_and_island_sentences(cubes_dir):

@@ -30,6 +30,7 @@ const [legendModule, latticeModule] = await Promise.all([
 const {
   bivariateLegend,
   classLegend,
+  classNoDataLegend,
   contourLegendText,
   createZoomWatch,
   dotLegend,
@@ -659,6 +660,14 @@ test("class legend swatches follow the active colours", () => {
 
   assert.equal(swatchOf(), "rgb(0, 100, 0)");
   assert.equal(swatchOf("painted"), "rgb(69, 109, 59)");
+});
+
+test("the no-data legend row names its hatched swatch", () => {
+  const row = classNoDataLegend() as unknown as TestElement;
+  const [swatch, label] = row.children;
+
+  assert.equal(label.textContent, "Hatched: no data");
+  assert.equal(swatch.className, "legend-swatch legend-hatch");
 });
 
 function renderLegend(

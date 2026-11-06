@@ -525,6 +525,19 @@ function legendSwatch(color: number[]) {
   return swatch;
 }
 
+/**
+ * A hatched swatch and label for in-area cells with no class, shown only when a scene has them.
+ */
+export function classNoDataLegend() {
+  const row = document.createElement("div");
+  const swatch = document.createElement("span");
+  swatch.className = "legend-swatch legend-hatch";
+  const name = document.createElement("span");
+  name.textContent = "Hatched: no data";
+  row.append(swatch, name);
+  return row;
+}
+
 /** A heading button, showing the colour of the group's first class, above its hidden list. */
 function groupSection(group: string, color: number[], expandedGroups: Set<string>) {
   const element = document.createElement("div");

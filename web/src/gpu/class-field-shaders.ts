@@ -6,13 +6,15 @@
  * first column and column count relative to the texture, followed by its vertical start and
  * length as fractions of the grid's Mercator height.
  *
- * The fragment uniform `uIds` holds one-based class ids (0 for none) and `uIdsSize` its size.
- * `uRows` holds `uRowCount` fractional grid rows at even Mercator heights while `uWindowRow` is
- * the grid row of the texture's first row. `uPalette` is a 256 x 1 colour table by class id.
- * `uSmooth` blends competing classes from the kernel instead of painting the nearest cell.
- * `uRounding` blends bilinear weights towards a cubic B-spline. `uSoftnessCells` is the width of
- * the colour blend between competing classes in grid cells. `uOutline` enables the border while
- * `uOutlineStrength` controls its ink weight, and `uOpacity` scales the complete result.
+ * The fragment uniform `uIds` holds one-based class ids (0 outside, 255 hatched no-data)
+ * and `uIdsSize` its size. `uRows` holds `uRowCount` fractional grid rows at even Mercator
+ * heights while `uWindowRow` is the grid row of the texture's first row. `uPalette` is a
+ * 256 x 1 colour table by class id. `uSmooth` blends competing classes from the kernel instead
+ * of painting the nearest cell. `uRounding` blends bilinear weights towards a cubic B-spline.
+ * `uSoftnessCells` is the width of the colour blend between competing classes in grid cells.
+ * `uOutline` enables the border while `uOutlineStrength` controls its ink weight, `uOpacity`
+ * scales the class fills while the hatch draws at full strength, and `uPixelRatio` keeps
+ * the hatch at CSS spacing.
  */
 export const CLASS_FIELD_VERTEX = `#version 300 es
 in vec2 aCorner;
@@ -45,6 +47,7 @@ uniform float uSoftnessCells;
 uniform bool uOutline;
 uniform float uOutlineStrength;
 uniform float uOpacity;
+uniform float uPixelRatio;
 out vec4 fragColor;
 
 const float MIN_GRADIENT = 1e-6;
@@ -53,6 +56,11 @@ const vec3 INK = vec3(59.0, 48.0, 38.0) / 255.0;
 const float OUTLINE_WIDTH_PX = 0.75;
 const int KERNEL_SIZE = 4;
 const float FULL_SUPPORT_WEIGHT = 0.1;
+const uint HATCH_ID = 255u;
+const float HATCH_SPACING_PX = 6.0;
+const float HATCH_LINE_PX = 0.6;
+const float HATCH_EDGE_PX = 0.5;
+const float MIN_HATCH_ALPHA = 0.004;
 
 uint cellId(ivec2 cell) {
   return texelFetch(uIds, clamp(cell, ivec2(0), uIdsSize - 1), 0).r;
@@ -103,6 +111,14 @@ float edgeCoverage(float gap, vec2 cellGradient, vec2 screenGradient) {
   // The one-device-pixel floor keeps edges crisp at native resolution.
   float blendCells = max(uSoftnessCells, MIN_EDGE_WIDTH_PX * cellsPerPixel);
   return clamp(0.5 + gap / gradientCells / blendCells, 0.0, 1.0);
+}
+
+// The diagonal hatch matches the continuous no-data style, measured in CSS px.
+float hatchCoverage() {
+  vec2 screenPx = gl_FragCoord.xy / uPixelRatio;
+  float phase = fract((screenPx.x + screenPx.y) / HATCH_SPACING_PX);
+  float distancePx = min(phase, 1.0 - phase) * HATCH_SPACING_PX;
+  return 1.0 - smoothstep(HATCH_LINE_PX / 2.0, HATCH_LINE_PX / 2.0 + HATCH_EDGE_PX, distancePx);
 }
 
 void gatherClasses(
@@ -162,6 +178,13 @@ void main() {
 
   uint nearest = cellId(base + ivec2(step(0.5, fraction)));
   if (nearest == 0u) discard;
+  if (nearest == HATCH_ID) {
+    float hatchAlpha = hatchCoverage();
+    if (hatchAlpha < MIN_HATCH_ALPHA) discard;
+
+    fragColor = vec4(INK * hatchAlpha, hatchAlpha);
+    return;
+  }
   if (!uSmooth) {
     fragColor = vec4(classColor(nearest) * uOpacity, uOpacity);
     return;
@@ -193,11 +216,12 @@ void main() {
   float totalInfluence = 0.0;
   for (int index = 0; index < classCount; index++) {
     influences[index] = 0.0;
-    if (classIds[index] == 0u) continue;
+    if (classIds[index] == 0u || classIds[index] == HATCH_ID) continue;
 
     float influence = classSupport(classWeights[index]);
     for (int other = 0; other < classCount; other++) {
-      if (other == index || classIds[other] == 0u) continue;
+      if (other == index) continue;
+      if (classIds[other] == 0u || classIds[other] == HATCH_ID) continue;
 
       vec2 cellGradient = classGradients[index] - classGradients[other];
       float coverage = edgeCoverage(
@@ -222,10 +246,10 @@ void main() {
   if (uOutline) {
     // A pair is weighted by how far both classes lead the rest so the ink is continuous.
     for (int index = 0; index < classCount; index++) {
-      if (classIds[index] == 0u) continue;
+      if (classIds[index] == 0u || classIds[index] == HATCH_ID) continue;
 
       for (int other = index + 1; other < classCount; other++) {
-        if (classIds[other] == 0u) continue;
+        if (classIds[other] == 0u || classIds[other] == HATCH_ID) continue;
 
         vec2 cellGradient = classGradients[index] - classGradients[other];
         float gapPx = abs(classWeights[index] - classWeights[other])
@@ -237,7 +261,8 @@ void main() {
         );
         float leading = 1.0;
         for (int rival = 0; rival < classCount; rival++) {
-          if (rival == index || rival == other || classIds[rival] == 0u) continue;
+          if (rival == index || rival == other) continue;
+          if (classIds[rival] == 0u || classIds[rival] == HATCH_ID) continue;
 
           vec2 indexGradient = classGradients[index] - classGradients[rival];
           vec2 otherGradient = classGradients[other] - classGradients[rival];
@@ -266,6 +291,8 @@ const MIN_MIRROR_GRADIENT = 1e-6;
 const MIN_EDGE_WIDTH_PX = 1;
 const FULL_SUPPORT_WEIGHT = 0.1;
 const OUTLINE_WIDTH_PX = 0.75;
+/** The class id that hatches an in-area cell with no class, leaving 0 for outside. */
+export const CLASS_HATCH_ID = 255;
 /** The faint outline drawn while a categorical layer holds colour. */
 export const FILL_OUTLINE_STRENGTH = 0.25;
 
@@ -346,7 +373,7 @@ export interface ClassFieldAlpha {
 
 /**
  * Apply the fragment shader's outline weight to a sampled fragment so behaviour can be checked
- * in Node. A drawn class fill is always opaque.
+ * in Node. A drawn class fill is always opaque, and hatched no-data counts as drawn.
  */
 export function classFieldAlpha(
   result: ClassFieldResult,
@@ -360,7 +387,8 @@ export function classFieldAlpha(
 
 /**
  * Apply the fragment shader's class decision to a neighbourhood so behaviour can be checked in
- * Node. The nearest cell gates no-data and Smooth off before any kernel work, as in the shader.
+ * Node. The nearest cell gates outside, hatch and Smooth off before any kernel work, as in
+ * the shader.
  */
 export function sampleClassField(
   fragment: ClassFieldFragment,
@@ -371,6 +399,9 @@ export function sampleClassField(
   const nearestColumn = 1 + (fractionX >= 0.5 ? 1 : 0);
   const nearest = fragment.ids[nearestRow][nearestColumn];
   if (nearest === 0) return { discarded: true, nearest, weights: [], outline: 0 };
+  if (nearest === CLASS_HATCH_ID) {
+    return { discarded: false, nearest, weights: [], outline: 0 };
+  }
   if (!options.smooth) {
     return { discarded: false, nearest, weights: [{ id: nearest, weight: 1 }], outline: 0 };
   }
@@ -385,7 +416,7 @@ export function sampleClassField(
     rowWeights,
     columnSlopes,
     rowSlopes,
-  ).filter(({ id }) => id !== 0);
+  ).filter(({ id }) => id !== 0 && id !== CLASS_HATCH_ID);
   const influences = classInfluences(classes, fragment, options.softnessCells);
   const total = Math.max(
     influences.reduce((sum, influence) => sum + influence, 0),

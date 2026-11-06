@@ -51,6 +51,7 @@ test("palette and edge setters repaint without reuploading class ids", () => {
   assert.equal(harness.uniforms.get("uSoftnessCells"), 1);
   assert.equal(harness.uniforms.get("uOutline"), 1);
   assert.equal(harness.uniforms.get("uOutlineStrength"), FILL_OUTLINE_STRENGTH);
+  assert.equal(harness.uniforms.get("uPixelRatio"), 1);
   assert.equal(harness.repaints(), 2);
 });
 

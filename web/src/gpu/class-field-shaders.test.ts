@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  CLASS_HATCH_ID,
   classFieldAlpha,
   edgeCoverage,
   FILL_OUTLINE_STRENGTH,
@@ -395,6 +396,50 @@ test("a class fill is opaque and its outline uses the faint ink weight", () => {
   assert.ok(result.outline > 0.99);
   assert.equal(drawn.alpha, 1);
   assert.ok(Math.abs(drawn.ink - result.outline * FILL_OUTLINE_STRENGTH) < 1e-12);
+});
+
+test("hatched no-data is drawn instead of discarded and stays out of blends", () => {
+  const edges = { smooth: true, rounding: 0, softnessCells: 1 };
+  const hatched = sampleClassField(
+    {
+      ids: edgeNeighbourhood([CLASS_HATCH_ID, CLASS_HATCH_ID], [CLASS_HATCH_ID, CLASS_HATCH_ID]),
+      fraction: [0.5, 0.5],
+      positionDx: [0.01, 0],
+      positionDy: [0, 0.01],
+    },
+    edges,
+  );
+  const besideHatch = sampleClassField(
+    {
+      ids: edgeNeighbourhood([TREE, CLASS_HATCH_ID], [GRASS, CLASS_HATCH_ID]),
+      fraction: [0.25, 0.25],
+      positionDx: [0.0001, 0],
+      positionDy: [0, 0.0001],
+    },
+    edges,
+  );
+
+  assert.equal(hatched.discarded, false);
+  assert.equal(hatched.nearest, CLASS_HATCH_ID);
+  assert.deepEqual(hatched.weights, []);
+  assert.deepEqual(classFieldAlpha(hatched, fillAppearance()), { ink: 0, alpha: 1 });
+  assert.ok(Math.abs(weightOf(besideHatch, TREE) + weightOf(besideHatch, GRASS) - 1) < 1e-12);
+  assert.equal(weightOf(besideHatch, CLASS_HATCH_ID), 0);
+});
+
+test("hatched no-data draws without smoothing like a class fill", () => {
+  const hatched = sampleClassField(
+    {
+      ids: edgeNeighbourhood([CLASS_HATCH_ID, TREE], [TREE, TREE]),
+      fraction: [0.25, 0.25],
+      positionDx: [0.01, 0],
+      positionDy: [0, 0.01],
+    },
+    { smooth: false, rounding: 0, softnessCells: 0 },
+  );
+
+  assert.equal(hatched.discarded, false);
+  assert.equal(hatched.nearest, CLASS_HATCH_ID);
 });
 
 function edgeNeighbourhood(

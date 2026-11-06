@@ -30,8 +30,12 @@ const RGB_MAX = 255;
 const MAX_CHROMA = 0.4;
 const CHROMA_SEARCH_STEPS = 16;
 const CHROMA_CURVE = 0.8;
-// Variants step away from the nearer lightness extreme so neighbours still differ.
-const VARIANT_LIGHTNESS_STEP = 0.035;
+// Sibling variants alternate around the family hue because lightness steps alone blur together.
+const VARIANT_HUE_STEP_DEG = 12;
+// The hue spread stays within about +-35 degrees so neighbouring families keep their order.
+const VARIANT_HUE_LIMIT_DEG = 35;
+// Variants use a smaller lightness step away from the nearer extreme because hue now helps.
+const VARIANT_LIGHTNESS_STEP = 0.02;
 const LIGHT_FAMILY_LIGHTNESS = 0.65;
 const GRID_ROWS = 5;
 const FIELD_STOP_COUNT = 9;
@@ -380,9 +384,21 @@ function classFamilies(layerId: string, palette?: string) {
 }
 
 function shadedRgb(base: number[], variant: number) {
+  if (variant === 0) return [...base];
   const { lightness, chroma, hue } = rgbToOklch(base);
   const direction = lightness > LIGHT_FAMILY_LIGHTNESS ? -1 : 1;
-  return oklchRgb(lightness + direction * VARIANT_LIGHTNESS_STEP * variant, chroma, hue);
+  return oklchRgb(
+    lightness + direction * VARIANT_LIGHTNESS_STEP * variant,
+    chroma,
+    hue + variantHueOffsetDeg(variant),
+  );
+}
+
+/** The hue offset of a variant around its family base, alternating sides with growing rank. */
+function variantHueOffsetDeg(variant: number) {
+  const rank = Math.ceil(variant / 2);
+  const side = variant % 2 === 1 ? 1 : -1;
+  return side * Math.min(rank * VARIANT_HUE_STEP_DEG, VARIANT_HUE_LIMIT_DEG);
 }
 
 /** A CSS colour for an RGB triple. */

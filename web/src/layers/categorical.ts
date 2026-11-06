@@ -1,5 +1,5 @@
 /** Draw categorical classes with GPU borders and a CPU image fallback. */
-import { arrayDoc, decode, readArray } from "../data";
+import { arrayDoc, decode, readArray, readMask, type Store } from "../data";
 import {
   DEFAULT_EDGES,
   defaultPalette,
@@ -9,8 +9,9 @@ import {
   storeEdges,
 } from "../display-state";
 import { createClassFieldLayer } from "../gpu/class-field-layer";
+import { CLASS_HATCH_ID } from "../gpu/class-field-shaders";
 import { layerPosition, type LayerPosition } from "../gpu/tiled-layer";
-import { classLegend } from "../legend";
+import { classLegend, classNoDataLegend } from "../legend";
 import { removeLayerAndSource } from "../map";
 import { classColors, classPaletteOptions, rgbToHex } from "../render/palettes";
 import { cellClassIds } from "../render/smooth-classes";
@@ -45,6 +46,7 @@ class CategoricalView implements LayerView {
   private image: ReturnType<typeof createImagePainter> | null = null;
   private ids: Uint8Array | null = null;
   private present = new Set<number>();
+  private hasHatched = false;
   private readonly expandedGroups = new Set<string>();
   private palette: string;
   private colors;
@@ -269,27 +271,38 @@ class CategoricalView implements LayerView {
   private repaint() {
     const colors = this.classValues.map((value) => this.colors.get(value) ?? [0, 0, 0]);
     if (this.image) {
-      if (this.ids) this.image.paint(this.ids, colors, this.smooth);
+      if (this.ids) this.image.paint(unhatchIds(this.ids), colors, this.smooth);
     } else {
       this.gpu.setColors(colors);
       this.gpu.setEdges({ smooth: this.smooth, ...this.edges });
     }
-    this.legendBox.replaceChildren(
-      classLegend(this.classes, this.present, this.colors, this.expandedGroups),
-    );
+    const legend = classLegend(this.classes, this.present, this.colors, this.expandedGroups);
+    if (this.hasHatched && !this.image) legend.append(classNoDataLegend());
+    this.legendBox.replaceChildren(legend);
   }
 
   private async load() {
     const { layer, store } = this.context;
     const valueArray = arrayDoc(layer, "value");
-    const raw = await readArray(await store, valueArray.path, [null, null]);
+    const opened = await store;
+    const raw = await readArray(opened, valueArray.path, [null, null]);
     if (!this.alive) return;
 
     const values = decode(raw, valueArray);
     this.ids = cellClassIds(values, this.classValues);
     this.present = new Set(values);
+    await this.markNoData(opened);
     if (!this.image) this.gpu.setIds(this.ids);
     this.repaint();
+  }
+
+  private async markNoData(store: Store) {
+    try {
+      const mask = await readMask(store, this.context.layer);
+      this.hasHatched = markHatchedNoData(this.ids!, mask);
+    } catch {
+      this.hasHatched = false;
+    }
   }
 
   setTime() {}
@@ -327,4 +340,24 @@ function gpuDisabled() {
   } catch {
     return false;
   }
+}
+
+/** Mark in-area cells with no class for hatching, returning whether any were marked. */
+function markHatchedNoData(ids: Uint8Array, mask: ArrayLike<number>) {
+  let hasHatched = false;
+  for (let cell = 0; cell < ids.length; cell++) {
+    if (ids[cell] === 0 && mask[cell] === 1) {
+      ids[cell] = CLASS_HATCH_ID;
+      hasHatched = true;
+    }
+  }
+  return hasHatched;
+}
+
+/**
+ * Copy class ids with hatched no-data mapped back to outside, so the image fallback never
+ * sees the hatch sentinel and its smoothing treats those cells like other no-data cells.
+ */
+export function unhatchIds(ids: Uint8Array) {
+  return Uint8Array.from(ids, (id) => (id === CLASS_HATCH_ID ? 0 : id));
 }

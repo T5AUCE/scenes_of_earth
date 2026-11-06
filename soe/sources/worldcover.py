@@ -207,9 +207,11 @@ def warp_modes(
     north: float,
     res: float,
 ) -> None:
-    """Fill classes with the most common source class in each cell, where 0 is no data.
+    """Fill classes with the most common source class in each cell, ignoring no data.
 
-    The cells start at the north-west corner (west, north) and are res degrees square.
+    Zero stays no data and never wins a vote, so a cell with any classed source pixel takes
+    the most common class and only a cell of all zeroes stays zero. The cells start at the
+    north-west corner (west, north) and are res degrees square.
     """
     reproject(
         rasterio.band(source, 1),

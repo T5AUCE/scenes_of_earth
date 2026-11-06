@@ -804,6 +804,10 @@ body.scene-mode .maplibregl-ctrl-scale {
   vertical-align: -2px;
 }
 
+.legend-hatch {
+  background: repeating-linear-gradient(45deg, rgb(59, 48, 38) 0 0.6px, transparent 0.6px 6px);
+}
+
 .legend-group-toggle {
   display: flex;
   align-items: center;
@@ -835,6 +839,7 @@ body.scene-mode .maplibregl-ctrl-scale {
 
 .legend-group-list {
   padding-left: 1em;
+  font-size: 12px;
 }
 
 .legend-bivariate {

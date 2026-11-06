@@ -48,6 +48,7 @@ const UNIFORM_NAMES = [
   "uOutline",
   "uOutlineStrength",
   "uOpacity",
+  "uPixelRatio",
 ];
 
 /**
@@ -146,6 +147,8 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     gl.uniform1i(uniform("uOutline"), outline ? 1 : 0);
     gl.uniform1f(uniform("uOutlineStrength"), FILL_OUTLINE_STRENGTH);
     gl.uniform1f(uniform("uOpacity"), this.fieldOptions.opacity);
+    const pixelRatio = this.map?.getPixelRatio?.() ?? 1;
+    gl.uniform1f(uniform("uPixelRatio"), pixelRatio);
 
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, gpu.palette);

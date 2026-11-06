@@ -1456,6 +1456,17 @@ def test_land_cover_ignores_no_data_samples(tmp_path, monkeypatch):
     assert read.tolist() == [[30]]
 
 
+def test_land_cover_keeps_zero_only_when_all_samples_are_no_data(tmp_path, monkeypatch):
+    _write_class_tile(tmp_path / "S03E036.tif", np.zeros((120, 120), "uint8"))
+    monkeypatch.setattr(worldcover, "WORLDCOVER_URL", str(tmp_path / "{n}.tif"))
+    res = 4 * worldcover.WORLDCOVER_RES_DEG
+    part = (36.0, -3.0 + 116 * worldcover.WORLDCOVER_RES_DEG, 36.0 + res, -3.0 + 0.01)
+
+    read = _read_tile(PlacedTile("S03E036", 36, -3, 36), part, res)
+
+    assert read.tolist() == [[0]]
+
+
 def _majority_pattern(cells: int, cell_px: int) -> np.ndarray:
     """Class samples where each cell's majority class alternates 10 and 20 like a chessboard.
 

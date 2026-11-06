@@ -170,7 +170,7 @@ SOURCES = {
     },
     "glim": {
         "name": "GLiM Global Lithological Map v1.0 (level 1 and 2)",
-        "version": "glim-1.0",
+        "version": "glim-1.2",
         "licence": (
             "not stated by the authors; the data is for local evaluation only and must not "
             "be published until they confirm terms"

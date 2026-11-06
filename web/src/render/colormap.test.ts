@@ -260,6 +260,118 @@ test("later variants of a dark family are lighter and of a light family darker",
   assert.ok(lightnessOf(light.get(41)) < lightnessOf(light.get(40)));
 });
 
+const SEDIMENT_FAMILY = Array.from({ length: 10 }, (_, variant) => ({
+  value: variant,
+  label: `Sediment ${variant}`,
+  color: "#fdf0a8",
+  parent: "su",
+  variant,
+}));
+
+/** The hue offsets a ten-variant family should show, alternating sides with growing rank. */
+const EXPECTED_VARIANT_OFFSETS_DEG = [0, 12, -12, 24, -24, 35, -35, 35, -35, 35];
+/** Hues allow this much gamut rounding around the requested variant offsets. */
+const OFFSET_TOLERANCE_DEG = 3;
+/** Ten sediment variants stay at least this far apart in OKLab, with margin. */
+const MIN_SIBLING_OKLAB_DISTANCE = 0.02;
+/** Hues stay within the 35-degree family cap plus a degree of gamut rounding. */
+const HUE_LIMIT_DEG = 36;
+/** The volcanic and metamorphic bands stay this far apart, so their order cannot flip. */
+const MIN_FAMILY_HUE_GAP_DEG = 20;
+
+/** The signed hue degrees from a base hue to another, from -180 to 180. */
+function hueOffsetDeg(hue: number, baseHue: number): number {
+  return ((hue - baseHue + 540) % 360) - 180;
+}
+
+/** The circular distance in hue degrees between two colours. */
+function hueDistanceDeg(first: number, second: number): number {
+  return Math.abs(hueOffsetDeg(first, second));
+}
+
+/** The OKLab triple of an sRGB colour, for measuring perceptual distances in tests. */
+function oklabOf(rgb: number[]): [number, number, number] {
+  const { lightness, chroma, hue } = rgbToOklch(rgb);
+  const angle = (hue * Math.PI) / 180;
+  return [lightness, chroma * Math.cos(angle), chroma * Math.sin(angle)];
+}
+
+/** The hues of ten variants of one painted family, for the hue order tests. */
+function huesOfVariants(parent: string, color: string): number[] {
+  const family = Array.from({ length: 10 }, (_, variant) => ({
+    value: variant,
+    label: `${parent} ${variant}`,
+    color,
+    parent,
+    variant,
+  }));
+  return [...classColors("geology", family, "painted").values()].map((rgb) => rgbToOklch(rgb!).hue);
+}
+
+test("geology variants alternate around the family hue within about +-35 degrees", () => {
+  for (const palette of ["painted", "classic"]) {
+    const hues = [...classColors("geology", SEDIMENT_FAMILY, palette).values()].map(
+      (rgb) => rgbToOklch(rgb!).hue,
+    );
+    const offsets = hues.map((hue) => hueOffsetDeg(hue, hues[0]));
+
+    assert.equal(offsets.length, EXPECTED_VARIANT_OFFSETS_DEG.length);
+    offsets.forEach((offset, variant) => {
+      assert.ok(
+        Math.abs(offset - EXPECTED_VARIANT_OFFSETS_DEG[variant]) <= OFFSET_TOLERANCE_DEG,
+        `palette ${palette} variant ${variant}`,
+      );
+    });
+  }
+});
+
+test("ten sediment variants stay pairwise distinct and inside the sRGB gamut", () => {
+  for (const palette of ["painted", "classic"]) {
+    const rgbs = [...classColors("geology", SEDIMENT_FAMILY, palette).values()].map((rgb) => rgb!);
+    for (const rgb of rgbs) {
+      assert.equal(rgb.length, COLOR_CHANNELS);
+      assert.ok(rgb.every((channel) => channel >= 0 && channel <= 255));
+    }
+
+    const labs = rgbs.map(oklabOf);
+    for (let first = 0; first < labs.length; first++) {
+      for (let second = first + 1; second < labs.length; second++) {
+        const distance = Math.hypot(
+          labs[first][0] - labs[second][0],
+          labs[first][1] - labs[second][1],
+          labs[first][2] - labs[second][2],
+        );
+        assert.ok(
+          distance > MIN_SIBLING_OKLAB_DISTANCE,
+          `palette ${palette} pair ${first} ${second}`,
+        );
+      }
+    }
+  }
+});
+
+test("distant geology families keep their hue order across variants", () => {
+  const painted = CLASS_PALETTES.geology.families!.painted;
+  const volcanic = huesOfVariants("vb", painted.vb);
+  const metamorphic = huesOfVariants("mt", painted.mt);
+
+  for (const hue of volcanic) {
+    assert.ok(hueDistanceDeg(hue, volcanic[0]) <= HUE_LIMIT_DEG);
+  }
+  for (const hue of metamorphic) {
+    assert.ok(hueDistanceDeg(hue, metamorphic[0]) <= HUE_LIMIT_DEG);
+  }
+
+  let closestGap = Infinity;
+  for (const first of volcanic) {
+    for (const second of metamorphic) {
+      closestGap = Math.min(closestGap, hueDistanceDeg(first, second));
+    }
+  }
+
+  assert.ok(closestGap > MIN_FAMILY_HUE_GAP_DEG);
+});
+
 test("classes without a family keep the value-based palette colours", () => {
   const classes = [{ value: 14, label: "Class", color: "#102030" }];
 

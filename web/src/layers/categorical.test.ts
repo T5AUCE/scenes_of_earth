@@ -3,8 +3,10 @@ import { registerHooks } from "node:module";
 import { test } from "node:test";
 
 import { createHarness } from "../gpu/class-field-harness.test.ts";
+import { CLASS_HATCH_ID } from "../gpu/class-field-shaders.ts";
 import { classColors, rgbToHex } from "../render/palettes.ts";
-import type { LayerContext } from "../types.ts";
+import { smoothClassIds } from "../render/smooth-classes.ts";
+import type { Bbox, LayerContext } from "../types.ts";
 
 const viewHooks = registerHooks({
   resolve(specifier, context, next) {
@@ -19,7 +21,7 @@ const viewHooks = registerHooks({
     return next(specifier, context);
   },
 });
-const { createCategoricalView } = await import("./categorical.ts")
+const { createCategoricalView, unhatchIds } = await import("./categorical.ts")
   .finally(() => viewHooks.deregister());
 
 function viewMockModule(specifier: string) {
@@ -29,12 +31,18 @@ function viewMockModule(specifier: string) {
         export const arrayDoc = (layer) => layer.arrays.value;
         export const readArray = async () => Float32Array.of(10, 20, 0, 10);
         export const decode = (raw) => raw;
+        export const readMask = async () => globalThis.__mask ?? Uint8Array.of(1, 1, 0, 1);
       `;
     case "../legend":
       return [
         "globalThis.__classLegendCalls = [];",
+        "globalThis.__noDataLegendCalls = [];",
         "export const classLegend = (...args) => {",
         "  globalThis.__classLegendCalls.push(args);",
+        "  return { append: () => {} };",
+        "};",
+        "export const classNoDataLegend = (...args) => {",
+        "  globalThis.__noDataLegendCalls.push(args);",
         "  return {};",
         "};",
       ].join("\n");
@@ -185,6 +193,70 @@ test("categorical restoration keeps the fill slot while removed", async () => {
   }
 });
 
+test("in-area no-data adds a Hatched: no data legend row on the GPU path", async () => {
+  (globalThis as { __mask?: Uint8Array }).__mask = Uint8Array.of(1, 1, 1, 1);
+  (globalThis as { __noDataLegendCalls?: unknown[] }).__noDataLegendCalls = [];
+  const harness = createViewHarness(true);
+  try {
+    const view = createCategoricalView(harness.context);
+    await view.ready;
+
+    assert.equal(noDataLegendCalls().length, 1);
+    view.destroy();
+  } finally {
+    harness.cleanup();
+    Reflect.deleteProperty(globalThis, "__mask");
+  }
+});
+
+test("outside no-data adds no Hatched: no data legend row", async () => {
+  (globalThis as { __noDataLegendCalls?: unknown[] }).__noDataLegendCalls = [];
+  const harness = createViewHarness(true);
+  try {
+    const view = createCategoricalView(harness.context);
+    await view.ready;
+
+    assert.equal(noDataLegendCalls().length, 0);
+    view.destroy();
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("the image fallback shows no legend row while no-data stays transparent", async () => {
+  (globalThis as { __mask?: Uint8Array }).__mask = Uint8Array.of(1, 1, 1, 1);
+  (globalThis as { __noDataLegendCalls?: unknown[] }).__noDataLegendCalls = [];
+  const harness = createViewHarness(false);
+  try {
+    const view = createCategoricalView(harness.context);
+    await view.ready;
+
+    assert.equal(noDataLegendCalls().length, 0);
+    assert.ok(harness.map.image);
+    view.destroy();
+  } finally {
+    harness.cleanup();
+    Reflect.deleteProperty(globalThis, "__mask");
+  }
+});
+
+test("a no-data neighbour does not distort a class edge in the image fallback", () => {
+  const raw = Uint8Array.of(1, 2, CLASS_HATCH_ID, 1);
+  const painted = unhatchIds(raw);
+
+  assert.deepEqual([...painted], [1, 2, 0, 1]);
+  assert.ok(!painted.includes(CLASS_HATCH_ID));
+
+  const grid = { bbox: [36, -2, 37, -1] as Bbox, nx: 2, ny: 2 };
+  const size = { width: 2, height: 2 };
+  const smoothed = smoothClassIds(painted, grid, size, 64);
+  const eroded = smoothClassIds(raw, grid, size, 64);
+
+  assert.ok(!smoothed.ids.includes(CLASS_HATCH_ID));
+  assert.equal(smoothed.ids[35], 0);
+  assert.equal(eroded.ids[35], 1);
+});
+
 const COVER_CLASSES = [
   { value: 10, label: "Trees", color: "#112233" },
   { value: 20, label: "Grass", color: "#445566" },
@@ -198,6 +270,11 @@ const GLIM_LIKE_CLASSES = [
 
 function legendCalls(): unknown[][] {
   const calls = (globalThis as { __classLegendCalls?: unknown[][] }).__classLegendCalls;
+  return calls ?? [];
+}
+
+function noDataLegendCalls(): unknown[][] {
+  const calls = (globalThis as { __noDataLegendCalls?: unknown[][] }).__noDataLegendCalls;
   return calls ?? [];
 }
 

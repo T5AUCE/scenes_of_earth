@@ -64,21 +64,21 @@ GLIM_FAMILIES = [
     ),
     (
         "ss",
-        "Siliciclastic sedimentary rocks",
+        "Siliciclastic sedimentary",
         "Sediments",
         "#e8c33c",
         "mx ss sh py am la lo",
     ),
     (
         "sm",
-        "Mixed sedimentary rocks",
+        "Mixed sedimentary",
         "Sediments",
         "#c2ab5a",
         "mx ss sh py ad ds la lo or am gr",
     ),
     (
         "sc",
-        "Carbonate sedimentary rocks",
+        "Carbonate sedimentary",
         "Sediments",
         "#6fa8d6",
         "mx ss sh pu py ad la lo am",
@@ -99,49 +99,49 @@ GLIM_FAMILIES = [
     ),
     (
         "va",
-        "Acid volcanic rocks",
+        "Acid volcanic",
         "Volcanic",
         "#e57373",
         "__ pu py am",
     ),
     (
         "vi",
-        "Intermediate volcanic rocks",
+        "Intermediate volcanic",
         "Volcanic",
         "#c0392b",
         "__ mx pu py am",
     ),
     (
         "vb",
-        "Basic volcanic rocks",
+        "Basic volcanic",
         "Volcanic",
         "#6c3483",
         "__ mx pu py la am gr",
     ),
     (
         "pa",
-        "Acid plutonic rocks",
+        "Acid plutonic",
         "Plutonic",
         "#f194b4",
         "__ pu py am gr",
     ),
     (
         "pi",
-        "Intermediate plutonic rocks",
+        "Intermediate plutonic",
         "Plutonic",
         "#d65d8a",
         "__ pu py am gr",
     ),
     (
         "pb",
-        "Basic plutonic rocks",
+        "Basic plutonic",
         "Plutonic",
         "#8e2f5c",
         "__ pu py am",
     ),
     (
         "mt",
-        "Metamorphic rocks",
+        "Metamorphic",
         "Metamorphic",
         "#8a9a7b",
         "__ mx sh pu py la am gr",
@@ -299,7 +299,8 @@ class GeologyDataset(StaticDataset):
                 "Rock type comes from the Global Lithological Map (GLiM) at about 1:3.75 "
                 "million, so boundaries are approximate at local scale and can jump where "
                 "the 92 source maps it joins meet. Lakes and rivers "
-                "have no rock class, so they stay uncoloured.",
+                "have no rock class, so they stay uncoloured. Some islands and coastal "
+                "strips have no mapped rock type and are hatched as no data.",
             ]
 
         return [
