@@ -98,6 +98,28 @@ test("smoothing explains geology Smoothing in plain sentences", (context) => {
   assert.match(text, /staircases become smooth curves/);
 });
 
+test("geology scenes draw under water with a short coastal fill for display only", (context) => {
+  const window = new Window();
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const plain = renderAbout(makeScene(), "m", {});
+  const rock = renderAbout(makeGeologyScene("GLiM Global Lithological Map v1.0"), "m", {});
+  const age = renderAbout(
+    makeGeologyScene("Generalized geology of the world (GSC Open File 5529)", "geology_age"),
+    "m",
+    {},
+  );
+
+  assert.doesNotMatch(plain.textContent ?? "", /drawn under the map's water/);
+  for (const scene of [rock, age]) {
+    const text = scene.textContent ?? "";
+    assert.match(text, /drawn under the map's water/);
+    assert.match(text, /about 2 km/);
+    assert.match(text, /one scene cell where cells are larger/);
+    assert.match(text, /for display only/);
+  }
+});
+
 function makeScene(): Scene {
   return {
     id: "test",

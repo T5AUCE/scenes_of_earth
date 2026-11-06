@@ -78,6 +78,26 @@ def test_health_and_search(env):
     assert client.get("/api/areas/nope").status_code == 404
 
 
+def test_search_hides_sample_country_covered_by_import(env):
+    client, _, tmp_path = env
+    db_path = str(tmp_path / "soe.db")
+    db.add_boundaries(
+        db_path,
+        "synthetic",
+        [boundary_row("sample:kenya", "country", "Kenya", iso3="KEN", source="synthetic")],
+    )
+    db.add_boundaries(
+        db_path,
+        "geoBoundaries CGAZ",
+        [boundary_row("cgaz:ADM0:KEN", "country", "Kenya", iso3="KEN")],
+    )
+
+    hits = client.get("/api/areas/search", params={"q": "Kenya"}).json()
+
+    assert [hit["id"] for hit in hits] == ["cgaz:ADM0:KEN"]
+    assert client.get("/api/areas/sample:kenya").json()["name"] == "Kenya"
+
+
 def test_post_poll_and_serve(env):
     client, source, _ = env
     response = client.post("/api/scenes", json=body())

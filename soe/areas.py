@@ -52,7 +52,7 @@ def clean_polygon(obj: object) -> Polygon | MultiPolygon:
     except Exception as error:
         raise AreaError(f"invalid geometry: {error}") from error
 
-    polygons = _polygonal_parts(geometry)
+    polygons = polygonal_parts(geometry)
     if not polygons:
         raise AreaError("geometry is empty")
 
@@ -96,8 +96,11 @@ def _within_world(positions: list[Sequence[float]]) -> bool:
         return False
 
 
-def _polygonal_parts(geometry: BaseGeometry) -> list[Polygon]:
-    """Non-empty polygons of a repaired shape; stray lines and points are dropped."""
+def polygonal_parts(geometry: BaseGeometry) -> list[Polygon]:
+    """Return the non-empty polygons of `geometry` after GEOS repair.
+
+    Stray lines and points are dropped because they carry no area.
+    """
     collection = shapely.make_valid(geometry)
     # make_valid can nest a MultiPolygon in a GeometryCollection, so flatten twice.
     parts = shapely.get_parts(shapely.get_parts(collection))
@@ -114,7 +117,7 @@ def unwrap(geom: BaseGeometry) -> BaseGeometry:
     if east - west <= MAX_LONGITUDE_DEG:
         return geom
 
-    polygons = _polygonal_parts(geom)
+    polygons = polygonal_parts(geom)
     if not polygons:
         raise AreaError("geometry is empty")
 

@@ -14,6 +14,7 @@ import {
   DROPPED_NOTE,
   elevationUnitFrom,
   formatDisplayParams,
+  isGeologyLayer,
   loadStoredDensities,
   loadStoredInks,
   loadStoredPalettes,
@@ -26,6 +27,7 @@ import {
 import { makeHtmlElement } from "./html";
 import { blendPair } from "./layers/allocate";
 import { BLEND_TITLE, type BlendView, createBlendView } from "./layers/blend";
+import { addGeologyWater, removeGeologyWater } from "./layers/geology-water";
 import { LAYER_KINDS } from "./layers/registry";
 import { firstSymbolId, removeLayerAndSource, showScaleBar } from "./map";
 import { shiftLongitudes, worldShift } from "./render/mercator";
@@ -129,6 +131,7 @@ export function mountScene(
     timeline?.destroy();
     views.forEach((view) => view.destroy());
     blend?.destroy();
+    removeGeologyWater(map);
     Object.values(SLOTS).forEach((id) => removeLayerAndSource(map, id));
     removeLayerAndSource(map, OUTLINE_ID);
     timeline?.element.remove();
@@ -364,10 +367,16 @@ function mountLayerViews(
 
   const supported = layersWithKind
     .filter(({ kind }) => kind)
-    .sort((first, second) => first.kind!.stack - second.kind!.stack);
+    .sort(
+      (first, second) => first.kind!.stack - second.kind!.stack,
+    );
+
+  const geology = supported.filter(({ layer }) => isGeologyLayer(layer.id));
+  const rest = supported.filter(({ layer }) => !isGeologyLayer(layer.id));
 
   const mounted: MountedLayer[] = [];
-  for (const { layer, kind } of supported) {
+  const mountOne = (entry: (typeof supported)[number]) => {
+    const { layer, kind } = entry;
     const report = (error: unknown) => addNote(`${layer.title}: ${(error as Error).message}`);
 
     try {
@@ -387,7 +396,10 @@ function mountLayerViews(
     } catch (error) {
       report(error);
     }
-  }
+  };
+  for (const entry of geology) mountOne(entry);
+  if (mounted.some(({ layer }) => isGeologyLayer(layer.id))) addGeologyWater(map, SLOTS.fill);
+  for (const entry of rest) mountOne(entry);
   return mounted;
 }
 

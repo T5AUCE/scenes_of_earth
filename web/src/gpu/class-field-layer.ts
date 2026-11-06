@@ -136,6 +136,7 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     }
     if (this.isIdsStale) {
       const { nx, ny } = this.options.grid;
+      // Filled coastal ids arrive here, so the flags and the halos match the display.
       const flags = homogeneousFlags(this.ids!, nx, ny);
       this.uploadTiles(gl, gpu, this.options.grid, this.ids!, flags, WIDE_HALO_CELLS);
       this.isIdsStale = false;

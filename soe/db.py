@@ -55,6 +55,13 @@ CREATE TABLE IF NOT EXISTS period_revisions (
 LEVEL_RANK = (
     "CASE level WHEN 'country' THEN 0 WHEN 'state' THEN 1 WHEN 'county' THEN 2 ELSE 3 END"
 )
+# Sample countries stay in the table for offline use, so search hides each one an import covers.
+SHADOWED_SYNTHETIC_COUNTRY = (
+    "boundaries.level = 'country' AND boundaries.source = 'synthetic' "
+    "AND boundaries.iso3 IS NOT NULL AND boundaries.iso3 != '' "
+    "AND EXISTS (SELECT 1 FROM boundaries AS rival WHERE rival.level = 'country' "
+    "AND rival.source != 'synthetic' AND rival.iso3 = boundaries.iso3)"
+)
 ACTIVE_STATUSES = "('queued','running')"
 
 SQLITE_TIMEOUT_SECS = 5
@@ -114,12 +121,16 @@ def search(
     level: str | None = None,
     limit: int = 20,
 ) -> list[Record]:
-    """Boundaries whose name starts with `query`, or has a word that does; best matches first."""
+    """Boundaries whose name starts with `query`, or has a word that does; best matches first.
+
+    A sample country stays listed only while no imported country shares its iso3.
+    """
     # User text must match literally, so LIKE wildcards are escaped with '!'.
     query = query.replace("!", "!!").replace("%", "!%").replace("_", "!_")
     prefix_pattern, word_pattern = f"{query}%", f"% {query}%"
 
     where = "(name LIKE ? ESCAPE '!' OR name LIKE ? ESCAPE '!')"
+    where += f" AND NOT ({SHADOWED_SYNTHETIC_COUNTRY})"
     if level:
         where += " AND level = ?"
 

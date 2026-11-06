@@ -37,6 +37,11 @@ const SOFTNESS_STEP_CELLS = 0.05;
 const SMOOTHING_STEP_CELLS = 0.05;
 const IMAGE_EDGES_NOTE = "Edge options need WebGL drawing.";
 
+const METERS_PER_DEGREE = 111_320;
+const DEGREES_PER_RADIAN = 180 / Math.PI;
+const COASTAL_FILL_M = 2000;
+const MIN_FILL_RADIUS_CELLS = 1;
+
 /** Draw static classes with GPU edges, retaining the image painter as an automatic fallback. */
 export function createCategoricalView(context: LayerContext): LayerView {
   return new CategoricalView(context);
@@ -332,15 +337,29 @@ class CategoricalView implements LayerView {
     const values = decode(raw, valueArray);
     this.ids = cellClassIds(values, this.classValues);
     this.present = new Set(values);
-    await this.markNoData(opened);
+    await this.markAndFillNoData(opened);
     if (!this.image) this.gpu.setIds(this.ids);
     this.repaint();
   }
 
-  private async markNoData(store: Store) {
+  private async markAndFillNoData(store: Store) {
     try {
       const mask = await readMask(store, this.context.layer);
-      this.hasHatched = markHatchedNoData(this.ids!, mask);
+      markHatchedNoData(this.ids!, mask);
+      if (isGeologyLayer(this.context.layer.id)) {
+        const { bbox, nx, ny, res } = this.context.layer.grid;
+        const meanLatitude = (bbox[1] + bbox[3]) / 2;
+        this.ids = fillCoastalGaps(
+          this.ids!,
+          mask,
+          nx,
+          ny,
+          coastalFillRadiusCells(res, meanLatitude),
+          cellWidthM(res, meanLatitude),
+          cellHeightM(res),
+        );
+      }
+      this.hasHatched = this.ids!.includes(CLASS_HATCH_ID);
     } catch {
       this.hasHatched = false;
     }
@@ -388,16 +407,94 @@ function defaultSmoothing(layerId: string): number {
   return isGeologyLayer(layerId) ? GEOLOGY_SMOOTH_RADIUS_CELLS : 0;
 }
 
-/** Mark in-area cells with no class for hatching, returning whether any were marked. */
+/** Mark in-area cells with no class for hatching. */
 function markHatchedNoData(ids: Uint8Array, mask: ArrayLike<number>) {
-  let hasHatched = false;
   for (let cell = 0; cell < ids.length; cell++) {
-    if (ids[cell] === 0 && mask[cell] === 1) {
-      ids[cell] = CLASS_HATCH_ID;
-      hasHatched = true;
+    if (ids[cell] === 0 && mask[cell] === 1) ids[cell] = CLASS_HATCH_ID;
+  }
+}
+
+/**
+ * The coastal fill radius in cells for about 2 km of bundle grid.
+ * Two kilometres bridge the shoreline offset at both geology resolutions.
+ * Coarse grids fall back to a single cell so they never stretch far inland.
+ */
+export function coastalFillRadiusCells(resDeg: number, meanLatitude = 0): number {
+  if (!Number.isFinite(resDeg) || resDeg <= 0) return MIN_FILL_RADIUS_CELLS;
+
+  const meanCell = (cellWidthM(resDeg, meanLatitude) + cellHeightM(resDeg)) / 2;
+  if (!Number.isFinite(meanCell) || meanCell <= 0) return MIN_FILL_RADIUS_CELLS;
+
+  return Math.max(MIN_FILL_RADIUS_CELLS, Math.round(COASTAL_FILL_M / meanCell));
+}
+
+/** The width of a bundle cell in metres at the bundle mean latitude. */
+function cellWidthM(resDeg: number, meanLatitude: number): number {
+  return resDeg * METERS_PER_DEGREE * Math.cos(meanLatitude / DEGREES_PER_RADIAN);
+}
+
+/** The height of a bundle cell in metres. */
+function cellHeightM(resDeg: number): number {
+  return resDeg * METERS_PER_DEGREE;
+}
+
+/**
+ * Extend geology classes into neighbouring hatched cells inside the area by nearest class.
+ * The fill stays discrete and display-only. Ties go to the smallest id. Outside cells stay
+ * untouched. Cells beyond the radius stay hatched. Spill into water hides under the copy.
+ */
+export function fillCoastalGaps(
+  ids: Uint8Array,
+  mask: ArrayLike<number>,
+  nx: number,
+  ny: number,
+  radiusCells: number,
+  widthM = 1,
+  heightM = 1,
+): Uint8Array {
+  const filled = Uint8Array.from(ids);
+  if (radiusCells <= 0) return filled;
+  if (!Number.isFinite(widthM) || widthM <= 0) widthM = 1;
+  if (!Number.isFinite(heightM) || heightM <= 0) heightM = 1;
+
+  const meanCell = (widthM + heightM) / 2;
+  const maxDistance = radiusCells * meanCell;
+  const stepX = Math.max(1, Math.ceil(maxDistance / widthM));
+  const stepY = Math.max(1, Math.ceil(maxDistance / heightM));
+  for (let row = 0; row < ny; row++) {
+    for (let column = 0; column < nx; column++) {
+      const cell = row * nx + column;
+      if (mask[cell] !== 1 || filled[cell] !== CLASS_HATCH_ID) continue;
+
+      let bestDistance = Number.POSITIVE_INFINITY;
+      let bestSource = 0;
+      const minRow = Math.max(0, row - stepY);
+      const maxRow = Math.min(ny - 1, row + stepY);
+      const minColumn = Math.max(0, column - stepX);
+      const maxColumn = Math.min(nx - 1, column + stepX);
+      for (let sourceRow = minRow; sourceRow <= maxRow; sourceRow++) {
+        for (let sourceColumn = minColumn; sourceColumn <= maxColumn; sourceColumn++) {
+          const sourceCell = sourceRow * nx + sourceColumn;
+          if (mask[sourceCell] !== 1) continue;
+
+          const source = ids[sourceCell];
+          if (source === 0 || source === CLASS_HATCH_ID) continue;
+
+          const distance = Math.hypot(
+            (column - sourceColumn) * widthM,
+            (row - sourceRow) * heightM,
+          );
+          if (distance > maxDistance) continue;
+          if (distance < bestDistance || (distance === bestDistance && source < bestSource)) {
+            bestDistance = distance;
+            bestSource = source;
+          }
+        }
+      }
+      if (bestSource !== 0) filled[cell] = bestSource;
     }
   }
-  return hasHatched;
+  return filled;
 }
 
 /**

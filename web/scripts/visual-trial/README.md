@@ -66,6 +66,12 @@ lists editor options to switch on: a `"Smooth"` label uses the first editor offe
 while a `{"layer": "Land cover", "option": "Smooth"}` object pins the layer down.
 Several editors offer Smooth, so prefer the object form. Presets live in `places/`.
 
+`standard` is the default sample set: twelve views of nine areas (Kenya with Turkana and its coast, Nairobi, Fiji on both
+sides of 180°, Burkina Faso, Mauritius, Switzerland, Chile, Japan and Egypt). Every spot of one area asks for the same
+layers and period, so each area is one scene that later runs reuse. Build missing scenes with
+`npm run trial -- standard --start` and check against them with `SOE_TRIAL_EXISTING_ONLY=1`; add a view here rather than
+writing a new places file.
+
 `colour` names the layer that holds the map's colour through the link's `as=<layer>:colour`
 entry, so the trial never has to click the picker. A layer id holds that layer's colours, while
 `blend` picks the combined rainfall and temperature layer and switches its halves off through

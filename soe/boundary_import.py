@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from shapely.geometry.base import BaseGeometry
 
 from . import db
-from .areas import AreaError, unwrap
+from .areas import AreaError, polygonal_parts, unwrap
 from .sources import CELL_DEG, SOURCES, SUPPORTED_BOUNDS_DEG
 
 if TYPE_CHECKING:
@@ -49,8 +49,8 @@ def _cgaz_rows(
     country_names = dict(zip(frames[0]["shapeGroup"], frames[0]["shapeName"]))
     county_states = _county_states(counties=frames[2], states=frames[1])
     for level, frame in frames.items():
-        # ADM0 has no shapeID.
-        id_column = "shapeID" if "shapeID" in frame.columns else "id"
+        # ADM0 has no shapeID and its id column is empty, so the ISO3 group names a country.
+        id_column = "shapeID" if "shapeID" in frame.columns else "shapeGroup"
         for index, record in frame.iterrows():
             country_name = country_names.get(record["shapeGroup"], "")
             yield _row(
@@ -169,11 +169,31 @@ def _row(
     geometry: BaseGeometry,
     source: str,
 ) -> db.BoundaryValues | None:
-    """One boundaries row: geometry simplified, clipped to the supported extent (60S-60N)."""
-    from shapely.geometry import box, mapping
+    """Return a repaired boundary row simplified and clipped to the supported extent."""
+    from shapely.errors import GEOSException
+    from shapely.geometry import MultiPolygon, box, mapping
 
-    simplified = geometry.simplify(SIMPLIFY_TOLERANCE_DEG, preserve_topology=True)
-    clipped = simplified.intersection(box(*SUPPORTED_BOUNDS_DEG))
+    # A missing name breaks the NOT NULL constraint, and NaN never equals itself.
+    if not name or name != name:
+        print(f"skipping {row_id}: missing name")
+        return None
+
+    polygons = polygonal_parts(geometry)
+    if not polygons:
+        print(f"skipping {row_id}: no polygonal parts after repair")
+        return None
+    merged = MultiPolygon(polygons) if len(polygons) > 1 else polygons[0]
+    # Simplifying touching parts can invalidate them again, so repair the result too.
+    fixed = polygonal_parts(merged.simplify(SIMPLIFY_TOLERANCE_DEG, preserve_topology=True))
+    if not fixed:
+        print(f"skipping {row_id}: simplification removed every polygon")
+        return None
+    merged = MultiPolygon(fixed) if len(fixed) > 1 else fixed[0]
+    try:
+        clipped = merged.intersection(box(*SUPPORTED_BOUNDS_DEG))
+    except GEOSException as error:
+        print(f"skipping {row_id}: cannot clip to the supported extent ({error})")
+        return None
     if clipped.is_empty:
         return None
 

@@ -22,8 +22,8 @@ const viewHooks = registerHooks({
     return next(specifier, context);
   },
 });
-const { createCategoricalView, unhatchIds } = await import("./categorical.ts")
-  .finally(() => viewHooks.deregister());
+const { createCategoricalView, coastalFillRadiusCells, fillCoastalGaps, unhatchIds } =
+  await import("./categorical.ts").finally(() => viewHooks.deregister());
 
 function viewMockModule(specifier: string) {
   switch (specifier) {
@@ -357,6 +357,85 @@ test("a no-data neighbour does not distort a class edge in the image fallback", 
   assert.ok(!smoothed.ids.includes(CLASS_HATCH_ID));
   assert.equal(smoothed.ids[35], 0);
   assert.equal(eroded.ids[35], 1);
+});
+
+test("the coastal fill is about two kilometres with a one-cell floor", () => {
+  assert.equal(coastalFillRadiusCells(1 / 480), 9);
+  assert.equal(coastalFillRadiusCells(1 / 120), 2);
+  assert.equal(coastalFillRadiusCells(1 / 120, 60), 3);
+  assert.equal(coastalFillRadiusCells(0.1), 1);
+  assert.equal(coastalFillRadiusCells(NaN), 1);
+});
+
+test("the coastal fill stops at its radius and stays discrete", () => {
+  const nx = 7;
+  const ny = 1;
+  const ids = Uint8Array.of(1, 255, 255, 255, 255, 255, 2);
+  const mask = new Uint8Array(nx * ny).fill(1);
+  const filled = fillCoastalGaps(ids, mask, nx, ny, 2);
+
+  assert.deepEqual([...filled], [1, 1, 1, 255, 2, 2, 2]);
+  assert.ok([...filled].every((id) => [1, 2, CLASS_HATCH_ID].includes(id)));
+  assert.deepEqual([...ids], [1, 255, 255, 255, 255, 255, 2]);
+});
+
+test("coastal ties go to the smallest id and outside cells stay outside", () => {
+  const ids = Uint8Array.of(2, CLASS_HATCH_ID, 1, 0);
+  const mask = Uint8Array.of(1, 1, 1, 0);
+  const first = fillCoastalGaps(ids, mask, 4, 1, 1);
+  const second = fillCoastalGaps(ids, mask, 4, 1, 1);
+
+  assert.deepEqual([...first], [2, 1, 1, 0]);
+  assert.deepEqual([...second], [...first]);
+});
+
+test("the coastal fill measures a circular distance so diagonals stay hatched", () => {
+  const ids = new Uint8Array(25).fill(CLASS_HATCH_ID);
+  ids[0] = 1;
+  const mask = new Uint8Array(25).fill(1);
+  const filled = fillCoastalGaps(ids, mask, 5, 5, 2);
+
+  assert.equal(filled[2], 1);
+  assert.equal(filled[6], 1);
+  assert.equal(filled[12], CLASS_HATCH_ID);
+});
+
+test("the coastal fill picks the nearer source across unequal distances", () => {
+  const ids = new Uint8Array(16).fill(CLASS_HATCH_ID);
+  ids[0] = 1;
+  ids[3] = 2;
+  const mask = new Uint8Array(16).fill(1);
+  const filled = fillCoastalGaps(ids, mask, 4, 4, 5);
+
+  assert.equal(filled[15], 2);
+  assert.equal(filled[12], 1);
+});
+
+test("geology fill hides a coastal hatch while land cover keeps it", async () => {
+  (globalThis as { __mask?: Uint8Array }).__mask = Uint8Array.of(1, 1, 1, 1);
+  (globalThis as { __noDataLegendCalls?: unknown[] }).__noDataLegendCalls = [];
+  const geologyHarness = createViewHarness(true, undefined, "geology", COVER_CLASSES);
+  try {
+    const view = createCategoricalView(geologyHarness.context);
+    await view.ready;
+
+    assert.equal(noDataLegendCalls().length, 0);
+    view.destroy();
+  } finally {
+    geologyHarness.cleanup();
+  }
+  (globalThis as { __noDataLegendCalls?: unknown[] }).__noDataLegendCalls = [];
+  const coverHarness = createViewHarness(true, undefined, "cover", COVER_CLASSES);
+  try {
+    const view = createCategoricalView(coverHarness.context);
+    await view.ready;
+
+    assert.equal(noDataLegendCalls().length, 1);
+    view.destroy();
+  } finally {
+    coverHarness.cleanup();
+    Reflect.deleteProperty(globalThis, "__mask");
+  }
 });
 
 const COVER_CLASSES = [

@@ -576,6 +576,7 @@ export function sampleClassField(
   const classes = (
     (radiusCells > 0 ? wideClasses(fragment, radiusCells) : null)
     ?? gatherClasses(fragment.ids, columnWeights, rowWeights, columnSlopes, rowSlopes)
+  // Remaining hatch stays out of the mix so its edge stays crisp while classes smooth around it.
   ).filter(({ id }) => id !== 0 && id !== CLASS_HATCH_ID);
   const influences = classInfluences(classes, fragment, options.softnessCells);
   const total = Math.max(

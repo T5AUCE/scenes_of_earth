@@ -706,6 +706,80 @@ test("a throwing renderer keeps charts while the working layer keeps colour", as
   mounted.unmount();
 });
 
+test("a throwing geology mount adds no water copy while others still mount", async (context) => {
+  const window = new Window({ url: "https://example.test/?scene=test" });
+  context.after(async () => {
+    const { act } = await import("react");
+    await act(async () => {});
+    window.happyDOM.abort();
+  });
+  installBrowser(context, window);
+  const mountScene = await importViewWithStubs(THROWING_REGISTRY_STUB);
+  const { NO_TOKENS } = await import("./display-state.ts");
+  const { GEOLOGY_WATER_ID } = await import("./layers/geology-water.ts");
+  const rain = {
+    id: "rain",
+    title: "Rainfall",
+    units: "mm/month",
+    style: { kind: "field", encodings: ["ramp"], palette: "batlow" },
+    time: { step: "P1M", values: ["2020-01-01", "2020-02-01"], end: "2020-03-01", method: "sum" },
+    area_series: {
+      statistic: "mean",
+      weights: "cell_area_inside_outline",
+      values: [1, 2],
+      valid_fraction: [1, 1],
+    },
+    arrays: {},
+  } as unknown as Scene;
+  const geology = {
+    ...(rain as unknown as Record<string, unknown>),
+    id: "geology",
+    title: "Geology",
+    units: "",
+    style: { kind: "categorical", encodings: ["fill"] },
+  } as unknown as Scene;
+  const scene = {
+    id: "test",
+    layers: [rain, geology],
+    area: { bbox: [0, -1, 1, 1], geometry_href: "area.geojson" },
+    data: { href: "data.zarr" },
+    period: { start: "2020-01-01", end: "2020-03-01", step: "P1M" },
+  } as unknown as Scene;
+  const cards = document.createElement("div");
+  const timeBar = document.createElement("div");
+  const failedMap = makeWaterMap();
+  const failed = mountScene(failedMap as never, scene, {
+    cards,
+    timeBar,
+    display: NO_TOKENS,
+    onDisplay() {},
+    onCharts() {},
+    onTime() {},
+  });
+  assert.equal(failed.layerIds.includes("rain"), true);
+  assert.equal(failed.layerIds.includes("geology"), false);
+  assert.equal(failedMap.getLayer(GEOLOGY_WATER_ID), undefined);
+  assert.match(cards.textContent ?? "", /renderer failed/);
+  failed.unmount();
+
+  const age = { ...(geology as unknown as Record<string, unknown>), id: "geology_age" };
+  const wateredMap = makeWaterMap();
+  const watering = mountScene(wateredMap as never, {
+    ...(scene as unknown as Record<string, unknown>),
+    layers: [rain, age],
+  } as unknown as Scene, {
+    cards: document.createElement("div"),
+    timeBar: document.createElement("div"),
+    display: NO_TOKENS,
+    onDisplay() {},
+    onCharts() {},
+    onTime() {},
+  });
+  assert.equal(watering.layerIds.includes("geology_age"), true);
+  assert.ok(wateredMap.getLayer(GEOLOGY_WATER_ID));
+  watering.unmount();
+});
+
 test("a denied storage write stays visible until the retry succeeds", async (context) => {
   const window = new Window({ url: "https://example.test/a/?scene=test" });
   installBrowser(context, window);
@@ -1230,13 +1304,49 @@ function makeIntegrationScene(): Scene {
   } as unknown as Scene;
 }
 
-const THROWING_REGISTRY_STUB = "export const LAYER_KINDS=new Map([['field',{stack:0,"
-  + "create:({layer})=>{if(layer.id==='temp')throw new Error('renderer failed');"
+const THROWING_REGISTRY_STUB = "export const LAYER_KINDS=new Map(["
+  + "['field',{stack:1,create:({layer})=>{if(layer.id==='temp')throw new Error('renderer failed');"
+  + "return{parts:[{id:layer.id,label:layer.id,layerIds:[layer.id]}],"
+  + "show(){},destroy(){},setTime(){},legend:()=>null};}}],"
+  + "['categorical',{stack:0,create:({layer})=>{"
+  + "if(layer.id==='geology')throw new Error('renderer failed');"
   + "return{parts:[{id:layer.id,label:layer.id,layerIds:[layer.id]}],"
   + "show(){},destroy(){},setTime(){},legend:()=>null};}}]]);";
-const FIELD_REGISTRY_STUB = "export const LAYER_KINDS=new Map([['field',{stack:0,"
+const FIELD_REGISTRY_STUB = "export const LAYER_KINDS=new Map([['field',{stack:1,"
   + "create:()=>({parts:[{id:'rain',label:'rain',layerIds:['rain']}],"
   + "show(){},destroy(){},setTime(){},legend:()=>null})}]]);";
+
+function makeWaterMap() {
+  const order: string[] = [];
+  return {
+    getLayersOrder: () => [...order],
+    addSource() {},
+    addLayer: (spec: { id: string }, beforeId?: string) => {
+      const index = beforeId ? order.indexOf(beforeId) : order.length;
+      order.splice(index < 0 ? order.length : index, 0, spec.id);
+    },
+    setLayoutProperty() {},
+    addControl() {},
+    removeControl() {},
+    getSource() {},
+    getLayer: (id: string) => (order.includes(id) ? { id } : undefined),
+    removeLayer: (id: string) => {
+      order.splice(order.indexOf(id), 1);
+    },
+    removeSource() {},
+    getStyle: () => ({
+      layers: [
+        {
+          id: "water",
+          type: "fill",
+          source: "openmaptiles",
+          "source-layer": "water",
+          paint: { "fill-color": "rgb(158,189,255)" },
+        },
+      ],
+    }),
+  };
+}
 
 async function importViewWithStubs(registryStub: string) {
   const { registerHooks: registerInner } = await import("node:module");

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from soe import db
 from soe.scene_request import ID_CHARS
+from tests.helpers import boundary_row
 
 OLD_SCENES_TABLE = """
     CREATE TABLE scenes (
@@ -58,6 +59,70 @@ def test_resubmitting_a_failed_scene_clears_its_stage(tmp_path):
     row, _ = db.submit(path, "a", "{}", bundle_exists=False)
 
     assert row["status"] == "queued" and row["stage"] is None
+
+
+def test_search_hides_sample_country_covered_by_import(tmp_path):
+    path = tmp_path / "soe.db"
+    db.init(path)
+    db.add_boundaries(
+        path,
+        "synthetic",
+        [boundary_row("sample:kenya", "country", "Kenya", iso3="KEN", source="synthetic")],
+    )
+    db.add_boundaries(
+        path,
+        "geoBoundaries CGAZ",
+        [boundary_row("cgaz:ADM0:KEN", "country", "Kenya", iso3="KEN")],
+    )
+
+    assert [row["id"] for row in db.search(path, "Kenya")] == ["cgaz:ADM0:KEN"]
+
+
+def test_search_finds_sample_country_without_import(tmp_path):
+    path = tmp_path / "soe.db"
+    db.init(path)
+    db.add_boundaries(
+        path,
+        "synthetic",
+        [boundary_row("sample:kenya", "country", "Kenya", iso3="KEN", source="synthetic")],
+    )
+
+    assert [row["id"] for row in db.search(path, "Kenya")] == ["sample:kenya"]
+
+
+def test_imported_country_leaves_sample_lookup_by_id(tmp_path):
+    path = tmp_path / "soe.db"
+    db.init(path)
+    db.add_boundaries(
+        path,
+        "synthetic",
+        [boundary_row("sample:kenya", "country", "Kenya", iso3="KEN", source="synthetic")],
+    )
+    db.add_boundaries(
+        path,
+        "geoBoundaries CGAZ",
+        [boundary_row("cgaz:ADM0:KEN", "country", "Kenya", iso3="KEN")],
+    )
+
+    assert db.get_boundary(path, "sample:kenya")["name"] == "Kenya"
+
+
+def test_search_keeps_same_name_states(tmp_path):
+    path = tmp_path / "soe.db"
+    db.init(path)
+    db.add_boundaries(
+        path,
+        "geoBoundaries CGAZ",
+        [
+            boundary_row("cgaz:ADM1:A", "state", "Springfield", iso3="USA"),
+            boundary_row("cgaz:ADM1:B", "state", "Springfield", iso3="CAN"),
+        ],
+    )
+
+    assert {row["id"] for row in db.search(path, "Springfield")} == {
+        "cgaz:ADM1:A",
+        "cgaz:ADM1:B",
+    }
 
 
 def test_startup_marks_interrupted_and_repost_requeues(tmp_path):

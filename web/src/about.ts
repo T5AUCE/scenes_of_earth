@@ -37,6 +37,10 @@ const GEOLOGY_AGE_DISPLAY_LINE =
   + "generalised to ICS periods: each colour is the smallest period or era that holds the whole "
   + "age range of its unit. Colours follow the ICS chart.";
 
+const GEOLOGY_WATER_LINE =
+  "Geology is drawn under the map's water and stretched up to about 2 km, or one scene cell "
+  + "where cells are larger, into small coastal gaps for display only.";
+
 const DISPLAY_LINES = [
   "One layer holds the map's colour at a time. The Colour row at the top of the layer cards names "
     + "it, while the other visible layers show the same data in a quieter way.",
@@ -141,6 +145,9 @@ function appendDisplay(root: HTMLElement, scene: Scene) {
   }
   if (scene.layers.some((layer) => layer.id === "geology_age")) {
     makeHtmlElement("p", GEOLOGY_AGE_DISPLAY_LINE, root);
+  }
+  if (scene.layers.some((layer) => layer.id === "geology" || layer.id === "geology_age")) {
+    makeHtmlElement("p", GEOLOGY_WATER_LINE, root);
   }
 }
 
