@@ -1,5 +1,6 @@
 """Test offline terrain statistics, build progress and synthetic end-to-end builds."""
 import json
+import math
 import shutil
 from collections.abc import Callable
 from dataclasses import replace
@@ -1499,6 +1500,89 @@ def test_legacy_stats_keep_full_precision_without_becoming_area_means(tmp_path):
     assert len(block["values"]) == 2 and isinstance(stats["mean"], float)
     assert block["values"][0] != block["values"][1]
     assert validate(document) == []
+
+
+def test_display_simplification_tolerance_follows_the_finest_grid_cell():
+    from soe.build import _display_geometry
+
+    rain_only = plan_months(Area(NAIROBI), [RAIN])
+    expected = rain_only.geometry.simplify(0.05 / 4, preserve_topology=True)
+
+    assert _display_geometry(rain_only).equals_exact(expected, 0)
+
+    with_terrain = plan_months(Area(NAIROBI), [TERRAIN, RAIN])
+    finest = min(layer.res for layer in with_terrain.layers.values())
+    floored = with_terrain.geometry.simplify(max(0.0005, finest / 4), preserve_topology=True)
+
+    # The terrain cell is about 0.0005 degrees, so its quarter falls back to the floor.
+    assert finest / 4 < 0.0005
+    assert _display_geometry(with_terrain).equals_exact(floored, 0)
+
+
+def test_area_geojson_is_simplified_while_masks_use_the_full_outline(tmp_path):
+    from shapely.geometry import shape
+
+    wiggly = Polygon(
+        [(36.5, -1.5), (37.5, -1.5), (37.5, -0.5), (37.0, -0.49), (36.5, -0.5), (36.5, -1.5)],
+    )
+    scene_plan = plan_months(Area(wiggly), [RAIN])
+    plain_plan = plan_months(Area(box(36.5, -1.5, 37.5, -0.5)), [RAIN])
+
+    # The 0.01 degree spike is below the 0.0125 display tolerance but touches full grid cells.
+    assert scene_plan.geometry.bounds[3] == pytest.approx(-0.49)
+    inside = scene_plan.layers["chirps_monthly"].cells_inside
+    assert inside > plain_plan.layers["chirps_monthly"].cells_inside
+
+    build_scene(HASH_A, Area(wiggly), "2015-01", "2015-02", [RAIN], "Test", tmp_path)
+    outline = shape(json.loads((tmp_path / HASH_A / "area.geojson").read_text(encoding="utf-8")))
+    document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+
+    assert outline.bounds[3] == pytest.approx(-0.5)
+    assert document["layers"][0]["area_series"]["valid_fraction"] == [1.0, 1.0]
+
+
+def test_build_over_a_many_vertex_outline_validates(tmp_path):
+    build_scene(
+        HASH_A,
+        Area(_harmonic_island(20000), BOUNDARY),
+        "2015-01",
+        "2015-01",
+        [RAIN],
+        "Test",
+        tmp_path,
+    )
+
+    document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    layer = document["layers"][0]
+
+    assert validate(document) == []
+    assert layer["mask"]["cells_inside"] > 0
+    assert layer["stats"]["mean"] > 0
+
+
+def _harmonic_island(
+    vertex_count: int,
+    west: float = 35.4,
+    south: float = -2.1,
+    radius: float = 1.0,
+) -> Polygon:
+    """An island with harmonic wiggles, standing in for a detailed country outline."""
+    points = []
+    for index in range(vertex_count):
+        angle = 2 * math.pi * index / vertex_count
+        wave = (
+            1.0
+            + 0.05 * math.sin(37 * angle)
+            + 0.02 * math.sin(113 * angle + 1.0)
+            + 0.008 * math.sin(331 * angle + 2.0)
+        )
+        points.append(
+            (
+                west + radius + radius * wave * math.cos(angle),
+                south + radius + radius * wave * math.sin(angle),
+            ),
+        )
+    return Polygon(points)
 
 
 def _scripted_series(values_for: Callable[[str, int, int], np.ndarray]) -> SeriesDataset:

@@ -13,10 +13,11 @@ import numpy as np
 import zarr
 from rasterio.transform import Affine
 from shapely.geometry import mapping
+from shapely.geometry.base import BaseGeometry
 from zarr.codecs import GzipCodec
 
 from . import __version__
-from .areas import Area, AreaError
+from .areas import Area, AreaError, simplify_for_display
 from .bundle import VERSION, JsonObject, make, validate
 from .plan import MASK_INSIDE, LayerPlan, Plan, plan as make_plan
 from .sources import (
@@ -53,6 +54,11 @@ LAYERS_PROGRESS_SHARE = 0.95
 STATIC_BLOCK_COST = 1.0  # relative work, in rough seconds
 STATIC_CACHED_COST = 0.1  # a cache hit still costs the writing
 SERIES_STEP_COST = 0.2
+
+# The bundle outline is display-only, so a quarter of the finest grid cell hides the deviation.
+DISPLAY_SIMPLIFY_DIVISOR = 4
+MIN_DISPLAY_TOLERANCE_DEG = 0.0005
+
 PERCENTILE_SAMPLES_PER_BATCH = 100_000
 
 
@@ -720,7 +726,7 @@ def _write_scene_documents(
     area_feature = {
         "type": "Feature",
         "properties": {"name": area_name},
-        "geometry": mapping(scene_plan.geometry),
+        "geometry": mapping(_display_geometry(scene_plan)),
     }
 
     (temp_dir / "area.geojson").write_text(
@@ -731,6 +737,13 @@ def _write_scene_documents(
         json.dumps(scene_document, indent=1),
         encoding="utf-8",
     )
+
+
+def _display_geometry(scene_plan: Plan) -> BaseGeometry:
+    """Return the plan outline simplified with the display tolerance."""
+    finest_cell_deg = min(layer.res for layer in scene_plan.layers.values())
+    tolerance_deg = max(MIN_DISPLAY_TOLERANCE_DEG, finest_cell_deg / DISPLAY_SIMPLIFY_DIVISOR)
+    return simplify_for_display(scene_plan.geometry, tolerance_deg)
 
 
 def _publish_scene(temp_dir: Path, final_dir: Path, built_size: int) -> int:

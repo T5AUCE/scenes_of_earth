@@ -25,7 +25,7 @@ from starlette.responses import Response
 from starlette.types import Scope
 
 from . import __version__, db
-from .areas import MAX_LONGITUDE_DEG, AreaError, unwrap
+from .areas import MAX_LONGITUDE_DEG, AreaError, simplify_for_display, unwrap
 from .bundle import JsonObject
 from .jobs import SceneJobs
 from .sample_areas import seed_sample_areas
@@ -47,6 +47,7 @@ IMMUTABLE_MAX_AGE_SECS = 365 * 24 * 60 * 60
 IMMUTABLE = f"public, max-age={IMMUTABLE_MAX_AGE_SECS}, immutable"
 
 MAX_BODY_BYTES = 1_000_000
+PREVIEW_SIMPLIFY_DIVISOR = 2000  # a 2000th of the larger bbox side, so small areas stay sharp
 LEVELS = ("country", "state", "county", "city")
 MAX_SEARCH_LIMIT = 50
 
@@ -236,12 +237,21 @@ def _area_out(row: db.Record) -> JsonObject:
 
 
 def _area_geometry(row: db.Record) -> JsonObject:
-    """Return the boundary in its bbox's longitude frame to avoid splitting it at 180."""
-    geometry = json.loads(row["geom_geojson"])
-    if row["bbox_e"] <= MAX_LONGITUDE_DEG:
-        return geometry
+    """Return the boundary simplified for preview, in its bbox's longitude frame.
 
-    return mapping(unwrap(shape(geometry)))
+    A stored outline that no longer parses is returned as is, as before.
+    """
+    try:
+        geometry = shape(json.loads(row["geom_geojson"]))
+    except Exception:
+        return json.loads(row["geom_geojson"])
+    if row["bbox_e"] > MAX_LONGITUDE_DEG:
+        geometry = unwrap(geometry)
+
+    width_deg = row["bbox_e"] - row["bbox_w"]
+    height_deg = row["bbox_n"] - row["bbox_s"]
+    tolerance_deg = max(width_deg, height_deg) / PREVIEW_SIMPLIFY_DIVISOR
+    return mapping(simplify_for_display(geometry, tolerance_deg))
 
 
 async def read_body(request: Request) -> bytes:

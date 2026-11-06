@@ -991,6 +991,19 @@ def test_contract_rejects_boolean_distribution_percent(tmp_path):
         ), bad
 
 
+def test_bundle_outline_is_a_named_display_feature(tmp_path):
+    from shapely.geometry import shape
+
+    build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    feature = json.loads((tmp_path / HASH_A / "area.geojson").read_text(encoding="utf-8"))
+
+    assert doc["area"]["geometry_href"] == "area.geojson"
+    assert feature["type"] == "Feature" and feature["properties"]["name"] == "Testland"
+    assert shape(feature["geometry"]).is_valid
+    assert validate(doc) == []
+
+
 def _with_series_value(doc: dict, value: object) -> dict:
     """Return a copy of `doc` with the first area mean replaced by `value`."""
     mutated = copy.deepcopy(doc)

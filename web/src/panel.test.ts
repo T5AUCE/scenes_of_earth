@@ -36,9 +36,9 @@ test("search results show the country's kind instead of the generic level", asyn
 });
 
 for (const { level, label } of [
-  { level: "state", label: "ADM1 (state, county…)" },
-  { level: "county", label: "ADM2 (district…)" },
-  { level: "country", label: "Country/Territory" },
+  { level: "state", label: "ADM1" },
+  { level: "county", label: "ADM2" },
+  { level: "country", label: "Country" },
   { level: "city", label: "City" },
 ]) {
   test(`search results without a kind use the ${level} label`, async (context) => {
@@ -52,7 +52,7 @@ test("search results without a parent omit the empty separator", async (context)
   const country = areaHit({ name: "Kenya", parent_name: null, level: "country" });
   const root = await panelWithHits(context, [country]);
 
-  assert.deepEqual(await resultTexts(context, root), ["Kenya · Country/Territory"]);
+  assert.deepEqual(await resultTexts(context, root), ["Kenya · Country"]);
 });
 
 test("search results preserve an unfamiliar level when it has no kind", async (context) => {
@@ -70,10 +70,10 @@ test("the level dropdown shows descriptive labels and preserves API values", asy
     [...level.options].map((option) => [option.value, option.textContent]),
     [
       ["", "Any Level"],
-      ["country", "Country/Territory"],
-      ["state", "ADM1 (state, county…)"],
-      ["county", "ADM2 (district…)"],
-      ["city", "City"],
+      ["country", "ADM0 (country, territory, etc.)"],
+      ["state", "ADM1 (state, county, etc.)"],
+      ["county", "ADM2 (district, county, etc.)"],
+      ["city", "City (urban area)"],
     ],
   );
 });

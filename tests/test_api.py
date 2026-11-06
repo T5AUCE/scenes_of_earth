@@ -709,6 +709,57 @@ def test_area_geometry_is_in_the_same_frame_as_its_bbox(env):
     assert shape_east == 182
 
 
+def test_area_preview_keeps_fiji_valid_across_180(env):
+    client, _, tmp_path = env
+    fiji = boundary_row(
+        "cgaz:ADM0:FJI",
+        "country",
+        "Fiji",
+        iso3="FJI",
+        bbox=(178, -19, 182, -17),
+        geometry=json.dumps(mapping(FIJI)),
+    )
+    db.add_boundaries(str(tmp_path / "soe.db"), "geoBoundaries CGAZ", [fiji])
+
+    area = client.get("/api/areas/cgaz:ADM0:FJI").json()
+    preview = shape(area["geometry"])
+
+    assert preview.is_valid
+    assert not preview.is_empty
+    assert preview.geom_type in ("Polygon", "MultiPolygon")
+    assert preview.bounds[2] > 180
+    assert area["bbox"][2] == 182
+
+
+def test_area_preview_is_simplified_but_keeps_shape(env):
+    import math
+
+    client, _, tmp_path = env
+    points = 512
+
+    def vertex(index: int) -> tuple[float, float]:
+        """Return one vertex of a 512-gon around a half-degree circle."""
+        angle = 2 * math.pi * index / points
+        return 0.5 + 0.5 * math.cos(angle), 0.5 + 0.5 * math.sin(angle)
+
+    ring = [vertex(index) for index in range(points)]
+    circle = {"type": "Polygon", "coordinates": [ring + ring[:1]]}
+    row = boundary_row(
+        "cgaz:ADM0:CIRC",
+        "country",
+        "Circland",
+        iso3="CIR",
+        bbox=(0, 0, 1, 1),
+        geometry=json.dumps(circle),
+    )
+    db.add_boundaries(str(tmp_path / "soe.db"), "geoBoundaries CGAZ", [row])
+
+    preview = client.get("/api/areas/cgaz:ADM0:CIRC").json()["geometry"]
+
+    assert len(preview["coordinates"][0]) < len(ring)
+    assert shape(preview).area == pytest.approx(math.pi / 4, rel=1e-3)
+
+
 def test_sample_areas_seed_only_in_synthetic_mode_and_when_empty(tmp_path, monkeypatch):
     monkeypatch.delenv("SOE_SYNTHETIC", raising=False)
 

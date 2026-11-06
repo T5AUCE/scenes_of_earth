@@ -90,9 +90,11 @@ python -m soe.cli import-boundaries --cgaz <folder> --ucdb <GHS_UCDB file or zip
   open-data terms); only the type names are stored, so reuse follows the licence of the names shown
   (details under Data sources).
 
-The import is large (several hundred MB of input). CGAZ draws disputed borders to US State Department definitions.
+The import is large (several hundred MB of input, about a gigabyte in SQLite). CGAZ draws disputed borders to US State Department definitions.
 Search shows each country's own name for its levels (County, Canton) where the metadata
 names one, else the generic level; countries and cities always show the generic level.
+The stored outlines keep every CGAZ vertex, so search never reads the geometry column and stays
+fast; simplification happens only for display (see the bundle notes).
 
 ## Cubes (once, then monthly)
 
@@ -258,7 +260,10 @@ on the map.
 - Temperature is stored as int16 at 0.1 °C (fill -32768), `time.method` `mean`, on its own 0.1 degree grid whose cell
   centres lie on 0.1 degree multiples (half a cell off the rain grid). It is listed only when the cube below exists.
 - Rain and terrain are anchored to the 60S-60N grid of 0.05 degree cells that starts at 180W. `area.geojson` is the area
-  clipped to the coverage of all selected layers, so one layer's mask can reach slightly beyond the outline.
+  clipped to the coverage of all selected layers, simplified for display to a quarter of the scene's finest grid cell
+  (never below 0.0005 degrees), so one layer's mask can reach slightly beyond the outline. Masks, statistics, style
+  stops and scene ids all use the full stored outline, which is why the bundle format stays at 0.7: old bundles keep
+  their exact outline and every reader treats `area.geojson` as display-only.
 - The terrain layer holds no elevation array. The viewer draws shading and contours from the elevation tiles named by
   `layers[].tiles` (Terrarium encoding, 512 px, Mapterhorn by default), and the build keeps `stats` (`min`, `max`, `mean`,
   `p2`, `p98`, `slope_p50_deg`, `slope_p90_deg`, `cell_m`) with `distribution`, both taken on mask 1, which choose the

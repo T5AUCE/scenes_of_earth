@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from shapely.geometry import LineString, MultiPolygon, Polygon, box, mapping
 
-from soe.areas import Area, AreaError, clean_polygon, unwrap
+from soe.areas import Area, AreaError, clean_polygon, simplify_for_display, unwrap
 from soe.bundle import JsonObject
 from soe.plan import LayerPlan
 from soe.sources import RealSource, SyntheticSource, make_registry, terrain_tiles
@@ -83,6 +83,43 @@ def test_unwrap_rejects_a_shape_with_no_polygon_area():
 
     with pytest.raises(AreaError, match="empty"):
         unwrap(line_across_180)
+
+
+def test_simplify_for_display_drops_detail_below_the_tolerance():
+    import math
+
+    points = 512
+    ring = [
+        (math.cos(2 * math.pi * index / points), math.sin(2 * math.pi * index / points))
+        for index in range(points)
+    ]
+    circle = Polygon(ring)
+
+    simplified = simplify_for_display(circle, 0.01)
+
+    assert simplified.is_valid
+    assert len(simplified.exterior.coords) < len(circle.exterior.coords)
+    assert simplified.area == pytest.approx(circle.area, rel=1e-2)
+
+
+def test_simplify_for_display_keeps_a_sub_floor_polygon():
+    tiny = box(0, 0, 0.0001, 0.0001)
+    for tolerance_deg in (0.0005, 0.0125):
+        simplified = simplify_for_display(tiny, tolerance_deg)
+        assert not simplified.is_empty
+        assert simplified.is_valid
+        assert simplified.geom_type in ("Polygon", "MultiPolygon")
+        assert simplified.area > 0
+
+
+def test_simplify_for_display_keeps_fiji_valid_across_180():
+    unwrapped = unwrap(FIJI)
+    for tolerance_deg in (0.0005, 0.0125):
+        simplified = simplify_for_display(unwrapped, tolerance_deg)
+        assert simplified.is_valid
+        assert not simplified.is_empty
+        assert simplified.geom_type in ("Polygon", "MultiPolygon")
+        assert simplified.bounds[2] > 180
 
 
 def test_unwrap_and_plan_across_180():

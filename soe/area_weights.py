@@ -12,7 +12,7 @@ from shapely.geometry.base import BaseGeometry
 
 _MASK_INSIDE = 1  # mask value of cells inside the outline
 
-_CHUNK_CELLS = 10_000  # candidate cells intersected in one vectorized batch
+_CLIP_CHUNK_CELLS = 100  # edge cells per clip, so each box meets only nearby vertices
 
 
 def area_weights(
@@ -55,10 +55,10 @@ def _coverage_fractions(
     if rows.size == 0:
         return fractions
     cell_area = abs(transform.a * transform.e - transform.b * transform.d)
-    for start in range(0, rows.size, _CHUNK_CELLS):
-        stop = start + _CHUNK_CELLS
+    for start in range(0, rows.size, _CLIP_CHUNK_CELLS):
+        stop = start + _CLIP_CHUNK_CELLS
         boxes = _cell_boxes(transform, rows[start:stop], columns[start:stop])
-        areas = shapely.area(shapely.intersection(boxes, geometry))
+        areas = _clipped_areas(geometry, boxes)
         # Clipping absorbs floating point noise at shared edges.
         fractions[rows[start:stop], columns[start:stop]] = np.clip(
             areas / cell_area,
@@ -66,6 +66,26 @@ def _coverage_fractions(
             1.0,
         )
     return fractions
+
+
+def _clipped_areas(geometry: BaseGeometry, boxes: np.ndarray) -> np.ndarray:
+    """Areas of `boxes` inside `geometry`, via a rectangle clip of the chunk first.
+
+    Clipping once per chunk keeps huge outlines fast because each box then meets only the
+    nearby outline instead of every vertex.
+    """
+    bounds = shapely.bounds(boxes)
+    west, south, east, north = (
+        bounds[:, 0].min(),
+        bounds[:, 1].min(),
+        bounds[:, 2].max(),
+        bounds[:, 3].max(),
+    )
+    clip = shapely.clip_by_rect(geometry, west, south, east, north)
+    if clip.is_empty:
+        return np.zeros(len(boxes))
+
+    return shapely.area(shapely.intersection(boxes, clip))
 
 
 def _boundary_cells(

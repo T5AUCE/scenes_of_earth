@@ -35,7 +35,6 @@ KIND_OVERRIDES: dict[str, str | None] = {
 WORD_RE = re.compile(r"[^\W\d_]+")
 CONNECTORS = {"and", "or"}
 
-SIMPLIFY_TOLERANCE_DEG = 0.01
 CELL_AREA_DEG2 = CELL_DEG * CELL_DEG
 
 
@@ -237,10 +236,24 @@ def _store(
     rows: Iterable[db.BoundaryValues | None],
 ) -> int:
     """Replace the boundaries of `source` with `rows`, skipping None; returns the count stored."""
-    kept = [row for row in rows if row]
+    kept = _PresentRows(rows)
     replaced = db.add_boundaries(db_path, source, kept)
     print(f"{label}: {replaced} duplicate ids replaced")
-    return len(kept)
+    return kept.count
+
+
+class _PresentRows:
+    """Filter None rows while counting how many were kept, so the count stays with the iteration."""
+
+    def __init__(self, rows: Iterable[db.BoundaryValues | None]) -> None:
+        self._rows = rows
+        self.count = 0
+
+    def __iter__(self) -> Iterator[db.BoundaryValues]:
+        for row in self._rows:
+            if row is not None:
+                self.count += 1
+                yield row
 
 
 def _row(
@@ -252,7 +265,7 @@ def _row(
     geometry: BaseGeometry,
     source: str,
 ) -> db.BoundaryValues | None:
-    """Return a repaired boundary row simplified and clipped to the supported extent."""
+    """Return a repaired boundary row clipped to the supported extent, keeping every vertex."""
     from shapely.errors import GEOSException
     from shapely.geometry import MultiPolygon, box, mapping
 
@@ -266,12 +279,6 @@ def _row(
         print(f"skipping {row_id}: no polygonal parts after repair")
         return None
     merged = MultiPolygon(polygons) if len(polygons) > 1 else polygons[0]
-    # Simplifying touching parts can invalidate them again, so repair the result too.
-    fixed = polygonal_parts(merged.simplify(SIMPLIFY_TOLERANCE_DEG, preserve_topology=True))
-    if not fixed:
-        print(f"skipping {row_id}: simplification removed every polygon")
-        return None
-    merged = MultiPolygon(fixed) if len(fixed) > 1 else fixed[0]
     try:
         clipped = merged.intersection(box(*SUPPORTED_BOUNDS_DEG))
     except GEOSException as error:

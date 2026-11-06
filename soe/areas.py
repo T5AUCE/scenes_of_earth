@@ -126,3 +126,8 @@ def unwrap(geom: BaseGeometry) -> BaseGeometry:
         for part in polygons
     ]
     return shapely.unary_union(parts)
+
+
+def simplify_for_display(geometry: BaseGeometry, tolerance_deg: float) -> BaseGeometry:
+    """Simplify `geometry` for display; inputs are never empty, so the result is used as is."""
+    return geometry.simplify(tolerance_deg, preserve_topology=True)

@@ -43,12 +43,18 @@ const SEARCH_DEBOUNCE_MS = 300;
 const NO_AREA_TEXT = "No area selected";
 const AREA_LEVELS = [
   { value: "", label: "Any Level" },
-  { value: "country", label: "Country/Territory" },
-  { value: "state", label: "ADM1 (state, county…)" },
-  { value: "county", label: "ADM2 (district…)" },
-  { value: "city", label: "City" },
+  { value: "country", label: "ADM0 (country, territory, etc.)" },
+  { value: "state", label: "ADM1 (state, county, etc.)" },
+  { value: "county", label: "ADM2 (district, county, etc.)" },
+  { value: "city", label: "City (urban area)" },
 ];
-const LEVEL_LABELS = new Map(AREA_LEVELS.map(({ value, label }) => [value, label]));
+// Results name the level briefly; the dropdown's examples would crowd each hit.
+const LEVEL_LABELS = new Map([
+  ["country", "Country"],
+  ["state", "ADM1"],
+  ["county", "ADM2"],
+  ["city", "City"],
+]);
 
 interface SceneMode {
   enter(scene: Scene, options: EnterOptions): void;

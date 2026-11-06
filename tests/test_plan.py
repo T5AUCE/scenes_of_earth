@@ -1,7 +1,9 @@
 """Test that planning stores per-layer geometry and area weights, with a zero-area guard."""
+import math
+
 import numpy as np
 import pytest
-from shapely.geometry import MultiPolygon, box
+from shapely.geometry import MultiPolygon, Polygon, box
 
 from soe.area_weights import area_weights
 from soe.areas import Area, AreaError, unwrap
@@ -80,3 +82,62 @@ def test_zero_weights_rejected_before_source_reads(monkeypatch):
         plan(Area(box(36.5, -1.5, 37.5, -0.5)), [rain], "1990-01", "1990-02")
 
     assert source.reads == 0
+
+
+def test_plan_weights_match_the_full_outline_exactly():
+    island = _harmonic_island(2000)
+
+    layer = plan_months(Area(island), [RAIN], 1).layers["chirps_monthly"]
+    expected = area_weights(layer.geometry, layer.transform, layer.shape, layer.mask)
+
+    assert layer.geometry.equals(island)
+    np.testing.assert_allclose(layer.area_weights, expected, rtol=1e-12, atol=0.0)
+
+
+def test_plan_keeps_a_sub_tolerance_headland_and_its_cells():
+    headland = box(36.6, -0.55, 37.4, -0.5451)
+    geometry = box(36.5, -1.5, 37.5, -0.55).union(headland)
+    layer = plan_months(Area(geometry), [RAIN], 1).layers["chirps_monthly"]
+
+    for index in range(16):
+        column, row = ~layer.transform @ (36.625 + 0.05 * index, -0.5475)
+        column, row = int(column), int(row)
+        centre = layer.transform.f + (row + 0.5) * layer.transform.e
+        fraction = layer.area_weights[row, column] / math.cos(math.radians(centre))
+
+        assert layer.mask[row, column] == 1
+        assert fraction == pytest.approx(0.098, abs=1e-9)
+
+
+def test_plan_accepts_a_tiny_named_area_with_positive_overlap():
+    tiny = box(36.9999, -1.0001, 37.0, -1.0)
+
+    layer = plan_months(Area(tiny, {"name": "Tinyville"}), [RAIN], 1).layers["chirps_monthly"]
+
+    assert layer.cells_inside >= 1
+    assert float(layer.area_weights.sum()) > 0
+
+
+def _harmonic_island(
+    vertex_count: int,
+    west: float = 35.4,
+    south: float = -2.1,
+    radius: float = 1.0,
+) -> Polygon:
+    """An island with harmonic wiggles, standing in for a detailed country outline."""
+    points = []
+    for index in range(vertex_count):
+        angle = 2 * math.pi * index / vertex_count
+        wave = (
+            1.0
+            + 0.05 * math.sin(37 * angle)
+            + 0.02 * math.sin(113 * angle + 1.0)
+            + 0.008 * math.sin(331 * angle + 2.0)
+        )
+        points.append(
+            (
+                west + radius + radius * wave * math.cos(angle),
+                south + radius + radius * wave * math.sin(angle),
+            ),
+        )
+    return Polygon(points)

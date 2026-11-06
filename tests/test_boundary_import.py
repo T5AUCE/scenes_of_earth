@@ -1,10 +1,13 @@
 """Offline tests: boundary storage and the CGAZ / UCDB boundary import."""
 import json
+import sqlite3
+from collections.abc import Iterator
 
 import pytest
 from shapely.geometry import box
 
 from soe import db
+from tests.helpers import boundary_row
 
 
 def test_add_boundaries_replaces_duplicate_ids(tmp_path):
@@ -28,6 +31,93 @@ def test_add_boundaries_replaces_duplicate_ids(tmp_path):
 
     assert db.add_boundaries(path, "geoBoundaries CGAZ", [row, row, ("x:2",) + row[1:]]) == 1
     assert len(db.search(path, "Dup")) == 2
+
+
+def test_add_boundaries_counts_duplicates_across_batch_flushes(tmp_path):
+    path = str(tmp_path / "soe.db")
+    db.init(path)
+    db.add_boundaries(path, "geoBoundaries CGAZ", [boundary_row("old:1", "state", "Old")])
+    db.add_boundaries(path, "other", [boundary_row("other:1", "state", "Other", source="other")])
+    total = db.INSERT_BATCH_ROWS + 100
+
+    def rows() -> Iterator[db.BoundaryValues]:
+        yield boundary_row("new:dup", "state", "Dup")
+        for index in range(total - 2):
+            yield boundary_row(f"new:{index}", "state", f"New {index}")
+        yield boundary_row("new:dup", "state", "Dup")
+
+    assert db.add_boundaries(path, "geoBoundaries CGAZ", rows()) == 1
+    with db.connect(path) as connection:
+        stored = connection.execute(
+            "SELECT COUNT(*) FROM boundaries WHERE source = ?",
+            ("geoBoundaries CGAZ",),
+        ).fetchone()[0]
+    assert stored == total - 1
+    assert db.get_boundary(path, "old:1") is None
+    assert db.get_boundary(path, "new:dup") is not None
+    assert db.get_boundary(path, "other:1") is not None
+
+
+def test_add_boundaries_generator_failure_after_first_flush_keeps_old_rows(tmp_path):
+    path = str(tmp_path / "soe.db")
+    db.init(path)
+    db.add_boundaries(
+        path,
+        "geoBoundaries CGAZ",
+        [boundary_row("old:1", "state", "Old One"), boundary_row("old:2", "state", "Old Two")],
+    )
+    db.add_boundaries(path, "other", [boundary_row("other:1", "state", "Other", source="other")])
+
+    def failing() -> Iterator[db.BoundaryValues]:
+        for index in range(db.INSERT_BATCH_ROWS + 10):
+            yield boundary_row(f"new:{index}", "state", f"New {index}")
+        raise RuntimeError("boom after first flush")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        db.add_boundaries(path, "geoBoundaries CGAZ", failing())
+    assert db.get_boundary(path, "old:1") is not None
+    assert db.get_boundary(path, "old:2") is not None
+    assert db.get_boundary(path, "other:1") is not None
+    assert db.get_boundary(path, "new:0") is None
+
+
+def test_add_boundaries_row_failure_after_first_flush_keeps_old_rows(tmp_path):
+    path = str(tmp_path / "soe.db")
+    db.init(path)
+    db.add_boundaries(
+        path,
+        "geoBoundaries CGAZ",
+        [boundary_row("old:1", "state", "Old One"), boundary_row("old:2", "state", "Old Two")],
+    )
+    db.add_boundaries(path, "other", [boundary_row("other:1", "state", "Other", source="other")])
+
+    def bad() -> Iterator[db.BoundaryValues]:
+        for index in range(db.INSERT_BATCH_ROWS + 10):
+            if index == db.INSERT_BATCH_ROWS + 5:
+                yield (
+                    "new:bad",
+                    "state",
+                    None,
+                    "",
+                    "TST",
+                    0,
+                    0,
+                    1,
+                    1,
+                    400,
+                    "{}",
+                    "geoBoundaries CGAZ",
+                    "CC BY 4.0",
+                )
+            else:
+                yield boundary_row(f"new:{index}", "state", f"New {index}")
+
+    with pytest.raises(sqlite3.IntegrityError):
+        db.add_boundaries(path, "geoBoundaries CGAZ", bad())
+    assert db.get_boundary(path, "old:1") is not None
+    assert db.get_boundary(path, "old:2") is not None
+    assert db.get_boundary(path, "other:1") is not None
+    assert db.get_boundary(path, "new:0") is None
 
 
 def test_import_boundaries_tiny_geopackage(tmp_path):
@@ -144,14 +234,14 @@ def test_overlapping_shape_parts_are_repaired_into_a_row():
     assert tuple(row[5:9]) == pytest.approx((36.0, 4.0, 39.0, 7.0))
 
 
-def test_touching_shape_parts_are_repaired_after_simplify():
+def test_touching_shape_parts_are_kept_without_simplification():
     import json
 
     from shapely.geometry import MultiPolygon, Polygon, shape
 
     from soe.boundary_import import CGAZ_SOURCE, _row
 
-    # Simplify absorbs the shared vertex, so only the second repair keeps the stored row valid.
+    # The sliver shares one vertex with the main part, so the stored row stays a valid MultiPolygon.
     main = Polygon(
         [
             (36.0058902, 4.0005864),
@@ -205,7 +295,28 @@ def test_touching_shape_parts_are_repaired_after_simplify():
     stored = shape(json.loads(row[10]))
     assert stored.geom_type in ("Polygon", "MultiPolygon")
     assert stored.is_valid
-    assert stored.area == pytest.approx(0.0002920974)
+    assert stored.area == pytest.approx(0.00027697048897502586)
+
+
+def test_import_keeps_vertices_below_the_old_simplification_tolerance():
+    from shapely.geometry import Polygon, shape
+
+    from soe.boundary_import import CGAZ_SOURCE, _row
+
+    # A 0.005 degree spike is below the old 0.01 tolerance but must be kept now.
+    spiked = Polygon([(36, 4), (38, 4), (38, 6), (37, 6.005), (36, 6), (36, 4)])
+    row = _row(
+        "cgaz:ADM0:SPIKE",
+        "country",
+        "Spikeland",
+        "",
+        "SPI",
+        spiked,
+        CGAZ_SOURCE,
+    )
+
+    assert row is not None
+    assert shape(json.loads(row[10])).bounds[3] == pytest.approx(6.005)
 
 
 def test_shape_without_a_name_is_skipped_with_a_reason(capsys):

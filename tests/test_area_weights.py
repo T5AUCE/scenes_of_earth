@@ -1,5 +1,6 @@
 """Test fractional geometry weights on the layer grid, with cosine latitude scaling."""
 import math
+import time
 
 import numpy as np
 import pytest
@@ -150,3 +151,59 @@ def test_disjoint_geometry_gives_zero_weights():
     weights = area_weights(box(5.0, -0.5, 6.0, 0.5), transform, shape, mask)
 
     assert weights.sum() == pytest.approx(0.0)
+
+
+def test_equal_area_islands_weigh_equally_so_their_mean_is_exact():
+    square = box(36.9901, -1.0101, 36.9941, -1.0061)
+    triangle = Polygon(
+        [(37.1901, -1.0101), (37.1981, -1.0101), (37.1901, -1.0061)],
+    )
+    transform = Affine(0.05, 0.0, 36.95, 0.0, -0.05, -0.95)
+    shape = (3, 6)
+    mask = np.ones(shape, dtype="uint8")
+
+    square_weights = area_weights(square, transform, shape, mask)
+    triangle_weights = area_weights(triangle, transform, shape, mask)
+    mean = 100 * triangle_weights.sum() / (square_weights.sum() + triangle_weights.sum())
+
+    assert square_weights.sum() == pytest.approx(triangle_weights.sum(), rel=1e-9)
+    assert mean == pytest.approx(50.0, abs=1e-9)
+
+
+def test_many_vertex_outline_weights_run_under_a_time_budget():
+    island = _harmonic_island(200000, west=-20.0, south=-16.0, radius=15.0)
+    transform = Affine(0.05, 0.0, -20.0, 0.0, -0.05, 20.0)
+    shape = (800, 800)
+    mask = np.ones(shape, dtype="uint8")
+
+    started = time.monotonic()
+    weights = area_weights(island, transform, shape, mask)
+    elapsed = time.monotonic() - started
+
+    assert weights.sum() > 0
+    assert elapsed < 10
+
+
+def _harmonic_island(
+    vertex_count: int,
+    west: float = 35.4,
+    south: float = -2.1,
+    radius: float = 1.0,
+) -> Polygon:
+    """An island with harmonic wiggles, standing in for a detailed country outline."""
+    points = []
+    for index in range(vertex_count):
+        angle = 2 * math.pi * index / vertex_count
+        wave = (
+            1.0
+            + 0.05 * math.sin(37 * angle)
+            + 0.02 * math.sin(113 * angle + 1.0)
+            + 0.008 * math.sin(331 * angle + 2.0)
+        )
+        points.append(
+            (
+                west + radius + radius * wave * math.cos(angle),
+                south + radius + radius * wave * math.sin(angle),
+            ),
+        )
+    return Polygon(points)

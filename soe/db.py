@@ -1,7 +1,7 @@
 """SQLite: boundaries (search), scene jobs and source revisions; one WAL connection per call."""
 import logging
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -85,6 +85,7 @@ INSERT_BOUNDARY = """
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     )
 """
+INSERT_BATCH_ROWS = 500
 
 log = logging.getLogger("soe.db")
 
@@ -174,18 +175,31 @@ def get_boundary(path: Path | str, boundary_id: str) -> Record | None:
     return dict(row) if row else None
 
 
-def add_boundaries(path: Path | str, source: str, rows: list[BoundaryValues]) -> int:
-    """Replace all boundaries of one source. rows: tuples in column order of INSERT_BOUNDARY."""
-    replaced = len(rows) - len({row[0] for row in rows})
-    if replaced:
-        log.warning("%s: %d duplicate boundary ids replaced", source, replaced)
+def add_boundaries(path: Path | str, source: str, rows: Iterable[BoundaryValues]) -> int:
+    """Replace all boundaries of one source. Returns the number of duplicate ids replaced.
 
+    Rows insert in batches, so a full import never holds every geometry at once.
+    """
+    replaced = 0
+    seen: set[SqlValue] = set()
     with connect(path) as connection:
         connection.execute("BEGIN")
         connection.execute("DELETE FROM boundaries WHERE source = ?", (source,))
-        connection.executemany(INSERT_BOUNDARY, rows)
+        batch: list[BoundaryValues] = []
+        for row in rows:
+            if row[0] in seen:
+                replaced += 1
+            seen.add(row[0])
+            batch.append(row)
+            if len(batch) >= INSERT_BATCH_ROWS:
+                connection.executemany(INSERT_BOUNDARY, batch)
+                batch = []
+        if batch:
+            connection.executemany(INSERT_BOUNDARY, batch)
         connection.execute("COMMIT")
 
+    if replaced:
+        log.warning("%s: %d duplicate boundary ids replaced", source, replaced)
     return replaced
 
 
