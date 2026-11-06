@@ -1,4 +1,6 @@
 """Offline tests: boundary storage and the CGAZ / UCDB boundary import."""
+import json
+
 import pytest
 from shapely.geometry import box
 
@@ -223,3 +225,79 @@ def test_shape_without_a_name_is_skipped_with_a_reason(capsys):
 
     assert row is None
     assert "skipping cgaz:ADM2:NONAME" in capsys.readouterr().out
+
+
+def test_normalise_kind_depluralises_and_title_cases():
+    from soe.boundary_import import normalise_kind
+
+    assert normalise_kind("Counties") == "County"
+    assert normalise_kind("Sub-Counties") == "Sub-County"
+    assert normalise_kind("Parishes") == "Parish"
+    assert normalise_kind("Contiguous Regions") == "Contiguous Region"
+    assert normalise_kind("Contiguous") == "Contiguous"
+    assert normalise_kind("Houses") == "House"
+    assert normalise_kind("districts") == "District"
+    assert normalise_kind("States and Territories") == "State and Territory"
+    assert normalise_kind("State / Union Territory") == "State / Union Territory"
+    assert normalise_kind("Bundesländer") == "Bundesländer"
+    assert normalise_kind("Canton") == "Canton"
+
+
+def test_normalise_kind_drops_placeholders_and_long_phrases():
+    from soe.boundary_import import normalise_kind
+
+    assert normalise_kind("Unknown") is None
+    assert normalise_kind("gbOpen") is None
+    assert normalise_kind("  ") is None
+    assert normalise_kind("Counties and Unitary Authorities") is None
+    assert normalise_kind("Municipalities and Towns") == "Municipality and Town"
+
+
+def test_normalise_kind_overrides_keep_small_exceptions():
+    from soe.boundary_import import normalise_kind
+
+    assert normalise_kind("Okres") == "Okres"
+    assert normalise_kind("Regiões") == "Região"
+    assert normalise_kind("Croatia") is None
+
+
+def test_import_admin_kinds_stores_names_per_country_and_level(tmp_path):
+    from soe.boundary_import import import_admin_kinds
+
+    folder = tmp_path / "meta"
+    folder.mkdir()
+    (folder / "gbOpen-ADM1.json").write_text(
+        json.dumps(
+            [
+                {"boundaryISO": "KEN", "boundaryCanonical": "Counties"},
+                {"boundaryISO": "JPN", "boundaryCanonical": "Unknown"},
+            ],
+        ),
+        encoding="utf-8",
+    )
+    (folder / "gbOpen-ADM2.json").write_text(
+        json.dumps([{"boundaryISO": "KEN", "boundaryCanonical": "Sub-Counties"}]),
+        encoding="utf-8",
+    )
+    path = str(tmp_path / "soe.db")
+    db.init(path)
+
+    assert import_admin_kinds(path, folder) == 2
+
+    with db.connect(path) as connection:
+        stored = {
+            (row["iso3"], row["level"]): row["kind"]
+            for row in connection.execute("SELECT iso3, level, kind FROM admin_kinds")
+        }
+
+    assert stored == {("KEN", "state"): "County", ("KEN", "county"): "Sub-County"}
+
+
+def test_import_admin_kinds_without_metadata_exits(tmp_path):
+    from soe.boundary_import import import_admin_kinds
+
+    path = str(tmp_path / "soe.db")
+    db.init(path)
+
+    with pytest.raises(SystemExit):
+        import_admin_kinds(path, tmp_path)

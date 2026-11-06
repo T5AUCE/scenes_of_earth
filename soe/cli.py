@@ -1,6 +1,7 @@
 """Run the offline data jobs from the command line.
 
-The module imports country and city boundaries into SQLite. It rebuilds the Copernicus terrain
+The module imports country and city boundaries into SQLite, with each country's own names
+for its administrative levels. It rebuilds the Copernicus terrain
 tile indexes and the ESA WorldCover tile index. It also ingests ERA5-Land, ERA5 and CHIRPS
 monthly cubes, the lithology map and the rock-age map into local folders. Run
 `python -m soe.cli --help` to see the commands and their options.
@@ -17,7 +18,7 @@ from pathlib import Path
 import numpy as np
 
 from . import db
-from .boundary_import import import_cgaz, import_ucdb
+from .boundary_import import import_admin_kinds, import_cgaz, import_ucdb
 from .ingest import chirps
 from .ingest.era5 import INGEST_SPECS, ingest
 from .ingest.geology_age import ingest_geology_age
@@ -79,8 +80,8 @@ def main(argv: list[str] | None = None) -> None:
         print("Geological age COG:", ingest_geology_age(args.cubes, args.archive))
         return
 
-    if not (args.cgaz or args.ucdb):
-        parser.error("give --cgaz and/or --ucdb")
+    if not (args.cgaz or args.ucdb or args.meta):
+        parser.error("give at least one of --cgaz, --ucdb, --meta")
 
     logging.basicConfig(level=logging.INFO)
     db.init(args.db)
@@ -88,6 +89,8 @@ def main(argv: list[str] | None = None) -> None:
         print("CGAZ rows:", import_cgaz(args.db, args.cgaz))
     if args.ucdb:
         print("UCDB city rows:", import_ucdb(args.db, args.ucdb))
+    if args.meta:
+        print("Admin kind rows:", import_admin_kinds(args.db, args.meta))
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -95,10 +98,14 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     import_parser = subparsers.add_parser(
         "import-boundaries",
-        help="load CGAZ ADM0/1/2 and GHSL UCDB cities into SQLite",
+        help="load CGAZ ADM0/1/2, GHSL UCDB cities and gbOpen level names into SQLite",
     )
     import_parser.add_argument("--cgaz", help="folder with the CGAZ ADM0/ADM1/ADM2 GeoPackages")
     import_parser.add_argument("--ucdb", help="GHS UCDB R2024A GeoPackage or zip")
+    import_parser.add_argument(
+        "--meta",
+        help="folder with the gbOpen ADM1/ADM2 metadata JSON files",
+    )
     import_parser.add_argument("--db", default=os.environ.get("SOE_DB", "./data/soe.db"))
     subparsers.add_parser(
         "terrain-index",

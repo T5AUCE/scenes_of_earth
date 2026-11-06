@@ -30,6 +30,13 @@ CREATE TABLE IF NOT EXISTS boundaries (
 
 CREATE INDEX IF NOT EXISTS ix_boundaries_name ON boundaries(name COLLATE NOCASE);
 
+CREATE TABLE IF NOT EXISTS admin_kinds (
+    iso3 TEXT NOT NULL,
+    level TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    PRIMARY KEY (iso3, level)
+);
+
 CREATE TABLE IF NOT EXISTS scenes (
     id TEXT PRIMARY KEY,
     status TEXT NOT NULL,
@@ -53,7 +60,8 @@ CREATE TABLE IF NOT EXISTS period_revisions (
 """
 
 LEVEL_RANK = (
-    "CASE level WHEN 'country' THEN 0 WHEN 'state' THEN 1 WHEN 'county' THEN 2 ELSE 3 END"
+    "CASE boundaries.level WHEN 'country' THEN 0 WHEN 'state' THEN 1 "
+    "WHEN 'county' THEN 2 ELSE 3 END"
 )
 # Sample countries stay in the table for offline use, so search hides each one an import covers.
 SHADOWED_SYNTHETIC_COUNTRY = (
@@ -132,12 +140,19 @@ def search(
     where = "(name LIKE ? ESCAPE '!' OR name LIKE ? ESCAPE '!')"
     where += f" AND NOT ({SHADOWED_SYNTHETIC_COUNTRY})"
     if level:
-        where += " AND level = ?"
+        where += " AND boundaries.level = ?"
 
-    order_by = f"(name LIKE ? ESCAPE '!') DESC, {LEVEL_RANK}, cells DESC, name"
+    order_by = (
+        "(boundaries.name LIKE ? ESCAPE '!') DESC, "
+        f"{LEVEL_RANK}, boundaries.cells DESC, boundaries.name"
+    )
     sql = (
-        "SELECT id, name, level, iso3, parent_name, bbox_w, bbox_s, bbox_e, bbox_n, cells "
-        f"FROM boundaries WHERE {where} ORDER BY {order_by} LIMIT ?"
+        "SELECT boundaries.id, boundaries.name, boundaries.level, boundaries.iso3, "
+        "boundaries.parent_name, boundaries.bbox_w, boundaries.bbox_s, boundaries.bbox_e, "
+        "boundaries.bbox_n, boundaries.cells, admin_kinds.kind AS kind FROM boundaries "
+        "LEFT JOIN admin_kinds ON admin_kinds.iso3 = boundaries.iso3 "
+        "AND admin_kinds.level = boundaries.level "
+        f"WHERE {where} ORDER BY {order_by} LIMIT ?"
     )
 
     arguments = [prefix_pattern, word_pattern] + ([level] if level else [])
@@ -151,7 +166,9 @@ def get_boundary(path: Path | str, boundary_id: str) -> Record | None:
     """The full boundaries row, geometry included, or None."""
     with connect(path) as connection:
         row = connection.execute(
-            "SELECT * FROM boundaries WHERE id = ?",
+            "SELECT boundaries.*, admin_kinds.kind AS kind FROM boundaries "
+            "LEFT JOIN admin_kinds ON admin_kinds.iso3 = boundaries.iso3 "
+            "AND admin_kinds.level = boundaries.level WHERE id = ?",
             (boundary_id,),
         ).fetchone()
     return dict(row) if row else None
@@ -170,6 +187,24 @@ def add_boundaries(path: Path | str, source: str, rows: list[BoundaryValues]) ->
         connection.execute("COMMIT")
 
     return replaced
+
+
+def set_admin_kinds(path: Path | str, rows: list[tuple[str, str, str]]) -> int:
+    """Replace the per-country level names; rows hold (iso3, level, kind).
+
+    Returns the number of rows stored, so duplicate keys count once.
+    """
+    with connect(path) as connection:
+        connection.execute("BEGIN")
+        connection.execute("DELETE FROM admin_kinds")
+        connection.executemany(
+            "INSERT OR REPLACE INTO admin_kinds (iso3, level, kind) VALUES (?,?,?)",
+            rows,
+        )
+        connection.execute("COMMIT")
+        stored = connection.execute("SELECT COUNT(*) FROM admin_kinds").fetchone()[0]
+
+    return stored
 
 
 def has_boundaries_besides(path: Path | str, source: str) -> bool:

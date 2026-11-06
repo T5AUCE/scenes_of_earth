@@ -42,12 +42,13 @@ const NOT_FOUND = 404;
 const SEARCH_DEBOUNCE_MS = 300;
 const NO_AREA_TEXT = "No area selected";
 const AREA_LEVELS = [
-  { value: "", label: "any level" },
-  { value: "country", label: "country" },
-  { value: "state", label: "state" },
-  { value: "county", label: "county" },
-  { value: "city", label: "city" },
+  { value: "", label: "Any Level" },
+  { value: "country", label: "Country/Territory" },
+  { value: "state", label: "ADM1 (state, county…)" },
+  { value: "county", label: "ADM2 (district…)" },
+  { value: "city", label: "City" },
 ];
+const LEVEL_LABELS = new Map(AREA_LEVELS.map(({ value, label }) => [value, label]));
 
 interface SceneMode {
   enter(scene: Scene, options: EnterOptions): void;
@@ -138,7 +139,8 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
   }
 
   function showHit(hit: AreaHit, index: number) {
-    const text = [hit.name, hit.parent_name, hit.level].filter(Boolean).join(" · ");
+    const kind = hit.kind ?? LEVEL_LABELS.get(hit.level) ?? hit.level;
+    const text = [hit.name, hit.parent_name, kind].filter(Boolean).join(" · ");
     const item = makeHtmlElement("li", text, results);
     item.id = `${results.id}-${index}`;
     item.setAttribute("role", "option");

@@ -98,6 +98,35 @@ def test_search_hides_sample_country_covered_by_import(env):
     assert client.get("/api/areas/sample:kenya").json()["name"] == "Kenya"
 
 
+def test_search_hits_carry_each_countrys_own_level_name(env):
+    client, _, tmp_path = env
+    db_path = str(tmp_path / "soe.db")
+    db.set_admin_kinds(db_path, [("KEN", "state", "County")])
+
+    hits = client.get("/api/areas/search", params={"q": "nair"}).json()
+
+    assert hits[0]["kind"] == "County"
+    assert client.get("/api/areas/cgaz:ADM1:NBO").json()["kind"] == "County"
+
+
+def test_search_hits_without_stored_names_carry_null_kind(env):
+    client, _, _ = env
+
+    hits = client.get("/api/areas/search", params={"q": "county"}).json()
+
+    assert hits[0]["name"] == "Washington County" and hits[0]["kind"] is None
+
+
+def test_sample_search_hits_carry_null_kind(tmp_path, monkeypatch):
+    monkeypatch.setenv("SOE_SYNTHETIC", "1")
+    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(SyntheticSource()))
+
+    with TestClient(app) as client:
+        hits = client.get("/api/areas/search", params={"q": "Kenya"}).json()
+
+    assert hits and all(hit["kind"] is None for hit in hits)
+
+
 def test_post_poll_and_serve(env):
     client, source, _ = env
     response = client.post("/api/scenes", json=body())

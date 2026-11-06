@@ -227,6 +227,7 @@ def _area_out(row: db.Record) -> JsonObject:
         "id": row["id"],
         "name": row["name"],
         "level": row["level"],
+        "kind": row["kind"],
         "iso3": row["iso3"],
         "parent_name": row["parent_name"],
         "bbox": [row["bbox_w"], row["bbox_s"], row["bbox_e"], row["bbox_n"]],

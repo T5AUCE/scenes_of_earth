@@ -74,7 +74,7 @@ only, while the palettes you pick in the menu are also remembered in this browse
 Download and unzip into a folder, then:
 
 ```
-python -m soe.cli import-boundaries --cgaz <folder> --ucdb <GHS_UCDB file or zip>
+python -m soe.cli import-boundaries --cgaz <folder> --ucdb <GHS_UCDB file or zip> --meta <folder>
 ```
 
 - geoBoundaries CGAZ (ADM0, ADM1, ADM2 GeoPackages): https://www.geoboundaries.org/globalDownloads.html
@@ -82,8 +82,17 @@ python -m soe.cli import-boundaries --cgaz <folder> --ucdb <GHS_UCDB file or zip
   links, the raw links return Git LFS pointers).
 - GHS-UCDB R2024A: https://human-settlement.emergency.copernicus.eu/ghs_ucdb_2024.php (only cities of 1,000,000 or
   more people are imported).
+- geoBoundaries gbOpen level metadata (each country's own ADM1/ADM2 type names, shown in area search):
+  https://www.geoboundaries.org/api/current/gbOpen/ALL/ADM1/ and
+  https://www.geoboundaries.org/api/current/gbOpen/ALL/ADM2/ (save each response as
+  gbOpen-ADM1.json and gbOpen-ADM2.json in one folder, then pass it as `--meta`).
+  Each record names its own `boundaryLicense` (Public Domain, ODbL 1.0, CC BY variants and national
+  open-data terms); only the type names are stored, so reuse follows the licence of the names shown
+  (details under Data sources).
 
 The import is large (several hundred MB of input). CGAZ draws disputed borders to US State Department definitions.
+Search shows each country's own name for its levels (County, Canton) where the metadata
+names one, else the generic level; countries and cities always show the generic level.
 
 ## Cubes (once, then monthly)
 
@@ -377,6 +386,13 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
   administrative boundaries. PLoS ONE 15(4): e0231866. https://www.geoboundaries.org. Simplified to 0.01 degrees and
   clipped to 60S-60N. CC BY 4.0 for CGAZ itself is the repository-wide licence for geoBoundaries derivatives, not a
   statement naming CGAZ.
+- **Area search level names: geoBoundaries gbOpen metadata.** Each country's own ADM1/ADM2 type names
+  (County, Canton) come from the gbOpen API metadata (`boundaryCanonical` field); only the short names
+  are stored, no geometry. Citation: Runfola, D. et al. (2020) geoBoundaries: A global database of political
+  administrative boundaries. PLoS ONE 15(4): e0231866. https://www.geoboundaries.org. Licence: each name
+  keeps the `boundaryLicense` of its source record (Public Domain, ODbL 1.0, CC BY variants and national
+  open-data terms), so reuse follows the licence of the names shown. This covers names only and is separate
+  from the sample outlines below, whose per-feature licences cover geometry.
 - **Sample areas: geoBoundaries gbOpen** (offline mode only), per-feature licence: Kenya, Nairobi and Cusco Public Domain;
   Fiji ODbL 1.0 (OpenStreetMap, share-alike and attribution: "© OpenStreetMap contributors"); Burkina Faso CC BY 4.0
   (World Bank). Same citation as above; simplified.

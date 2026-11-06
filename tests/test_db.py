@@ -107,6 +107,35 @@ def test_imported_country_leaves_sample_lookup_by_id(tmp_path):
     assert db.get_boundary(path, "sample:kenya")["name"] == "Kenya"
 
 
+def test_search_returns_each_countrys_own_level_name(tmp_path):
+    path = tmp_path / "soe.db"
+    db.init(path)
+    db.add_boundaries(
+        path,
+        "geoBoundaries CGAZ",
+        [
+            boundary_row("cgaz:ADM1:KEN1", "state", "Nakuru", "Kenya", "KEN"),
+            boundary_row("cgaz:ADM0:KEN", "country", "Kenya", iso3="KEN"),
+            boundary_row("city:nairobi", "city", "Nairobi", "Kenya", "KEN"),
+            boundary_row("cgaz:ADM2:CHE1", "county", "Sion", "Valais", "CHE"),
+        ],
+    )
+    db.set_admin_kinds(path, [("KEN", "state", "County"), ("CHE", "county", "District")])
+
+    assert db.search(path, "Nakuru")[0]["kind"] == "County"
+    assert db.search(path, "Sion")[0]["kind"] == "District"
+    assert db.search(path, "Kenya")[0]["kind"] is None
+    assert db.search(path, "Nairobi")[0]["kind"] is None
+
+
+def test_set_admin_kinds_counts_distinct_keys_once(tmp_path):
+    path = tmp_path / "soe.db"
+    db.init(path)
+    repeated = ("IND", "state", "State / Union Territory")
+
+    assert db.set_admin_kinds(path, [repeated, repeated]) == 1
+
+
 def test_search_keeps_same_name_states(tmp_path):
     path = tmp_path / "soe.db"
     db.init(path)

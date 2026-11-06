@@ -35,6 +35,7 @@ export interface AreaHit {
   id: string;
   name: string;
   level: string;
+  kind: string | null; // each country's own name for its ADM1/ADM2 level, else null
   iso3: string | null;
   parent_name: string | null;
   bbox: Bbox;

@@ -1,5 +1,6 @@
-"""Load geoBoundaries CGAZ shapes and GHSL UCDB cities into the boundaries table."""
+"""Load geoBoundaries CGAZ shapes, GHSL UCDB cities and gbOpen level names into SQLite."""
 import json
+import re
 import zipfile
 from collections.abc import Iterable, Iterator
 from pathlib import Path
@@ -19,6 +20,20 @@ CGAZ_SOURCE = "geoBoundaries CGAZ"
 CGAZ_LEVELS = {0: "country", 1: "state", 2: "county"}
 UCDB_SOURCE = "GHSL UCDB R2024A"
 MIN_CITY_POP = 1_000_000
+
+META_FILES = {"gbOpen-ADM1.json": "state", "gbOpen-ADM2.json": "county"}
+MAX_KIND_CHARS = 24
+MISSING_KINDS = {"unknown", "gbopen"}
+KIND_OVERRIDES: dict[str, str | None] = {
+    "okres": "Okres",
+    "regiões": "Região",
+    "croatia": None,
+    "mauritania": None,
+    "chinese taipei": None,
+    "régions de côte d'ivoire": None,
+}
+WORD_RE = re.compile(r"[^\W\d_]+")
+CONNECTORS = {"and", "or"}
 
 SIMPLIFY_TOLERANCE_DEG = 0.01
 CELL_AREA_DEG2 = CELL_DEG * CELL_DEG
@@ -89,6 +104,74 @@ def _county_states(counties: "gpd.GeoDataFrame", states: "gpd.GeoDataFrame") -> 
     )
     # Overlapping states can both contain the point; keep the first.
     return joined.groupby(level=0)["shapeName_state"].first()
+
+
+def import_admin_kinds(db_path: Path | str, folder: Path | str) -> int:
+    """Import short singular type names per country and level from the gbOpen metadata files.
+
+    Reads gbOpen-ADM1.json and gbOpen-ADM2.json in `folder`, saved from the geoBoundaries
+    gbOpen API. Entries without a usable name are skipped. Returns the number of names stored.
+    """
+    rows = [
+        (iso3, level, kind)
+        for filename, level in META_FILES.items()
+        for iso3, kind in _meta_kinds(folder, filename)
+    ]
+    return db.set_admin_kinds(db_path, rows)
+
+
+def _meta_kinds(folder: Path | str, filename: str) -> Iterator[tuple[str, str]]:
+    """Yield (iso3, normalised kind) per country in one gbOpen metadata file."""
+    path = Path(folder) / filename
+    if not path.exists():
+        raise SystemExit(f"no {filename} in {folder}")
+    entries = json.loads(path.read_text(encoding="utf-8"))
+    for entry in entries:
+        kind = normalise_kind(entry.get("boundaryCanonical") or "")
+        if kind is not None:
+            yield entry["boundaryISO"], kind
+
+
+def normalise_kind(raw: str) -> str | None:
+    """Return a short singular display name for a gbOpen level type.
+
+    Placeholders, country names and long phrases fall back to no name, while short joined
+    forms stay because shortening them would misname some units.
+    """
+    text = raw.strip()
+    lowered = text.lower()
+    if not text or lowered in MISSING_KINDS:
+        return None
+    if lowered in KIND_OVERRIDES:
+        return KIND_OVERRIDES[lowered]
+    if len(text) > MAX_KIND_CHARS:
+        return None
+    named = WORD_RE.sub(_singularise_match, text.title())
+    return _connectors_lowered(named)
+
+
+def _singularise_match(match: re.Match[str]) -> str:
+    """Singularise one title-cased word, so a plural names one unit."""
+    word = match.group(0).lower()
+    if word.endswith("ies") and len(word) > 3:
+        return (word[:-3] + "y").capitalize()
+    if word.endswith("ous"):
+        return word.capitalize()
+    # Plurals of words ending in a sibilant add es, so only those lose two letters.
+    if word.endswith(("sses", "xes", "zes", "ches", "shes")) and len(word) > 4:
+        return word[:-2].capitalize()
+    if word.endswith("s") and len(word) > 2 and not word.endswith("ss"):
+        return word[:-1].capitalize()
+    return word.capitalize()
+
+
+def _connectors_lowered(named: str) -> str:
+    """Lowercase small joining words after the first, so joined forms read naturally."""
+    words = named.split(" ")
+    return " ".join(
+        word.lower() if index and word.lower() in CONNECTORS else word
+        for index, word in enumerate(words)
+    )
 
 
 def import_ucdb(db_path: Path | str, path: Path | str) -> int:
