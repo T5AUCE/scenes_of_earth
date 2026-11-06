@@ -7,12 +7,13 @@ from collections.abc import Callable
 import numpy as np
 from rasterio.transform import Affine, from_origin
 
+from ..geology_age import AGE_CLASSES, GEOLOGY_AGE_FILE, GSC_SOURCE
 from .chirps import CHIRPS_CUBE, FIRST_MONTH
 from .cubes import FINAL_EXPVER, MONTHS_PER_YEAR, PRELIMINARY_EXPVER, CubeSpec, month_index
 from .era5 import ERA5_PRECIPITATION_CUBE, ERA5_TEMPERATURE_CUBE
 from .era5land_temperature import ERA5_LAND_TEMPERATURE_CUBE
 from .grid import Bbox, CellWindow
-from .lithology import GEOLOGY_CLASSES, GLIM_SOURCE
+from .lithology import GEOLOGY_CLASSES, GLIM_SOURCE, LITHOLOGY_FILE
 from .periods import MONTH_CHARS, add_duration
 from .terrain import terrain_block_count
 from .worldcover import WORLDCOVER_CLASSES, PlacedTile, land_cover_by_tiles
@@ -23,20 +24,24 @@ class SyntheticSource:
 
     synthetic = True
     _lithology = False  # so that subclasses that skip __init__ still have no lithology map
+    _geology_age = False  # likewise for the rock-age map
 
     def __init__(
         self,
         latest: str = "2026-08",
         chirps_cube: bool = False,
         lithology: bool = False,
+        geology_age: bool = False,
     ) -> None:
         """Read rain over fake HTTP, or from a fake CHIRPS cube when `chirps_cube` is set.
 
-        The lithology map exists only when `lithology` is set.
+        The lithology map exists only when `lithology` is set, and the rock-age map only when
+        `geology_age` is.
         """
         self._latest = latest
         self._chirps_cube = chirps_cube
         self._lithology = lithology
+        self._geology_age = geology_age
         self.reads = 0
 
     def latest_month(self) -> str:
@@ -109,23 +114,25 @@ class SyntheticSource:
         """Return deterministic class bands over bounds with zeroes where no tile exists."""
         return land_cover_by_tiles(bounds, res, _synthetic_classes, on_block)
 
-    def has_lithology(self) -> bool:
-        """Return whether deterministic lithology data is enabled."""
-        return self._lithology
+    def has_lithology(self, file: str = LITHOLOGY_FILE) -> bool:
+        """Return whether deterministic data is enabled for the class COG `file`."""
+        return self._geology_age if file == GEOLOGY_AGE_FILE else self._lithology
 
-    def lithology_source(self) -> str:
-        """Return GLiM, which the deterministic offline data stands in for."""
-        return GLIM_SOURCE
+    def lithology_source(self, file: str = LITHOLOGY_FILE) -> str:
+        """Return the map the deterministic data stands in for, GLiM unless it is the age map."""
+        return GSC_SOURCE if file == GEOLOGY_AGE_FILE else GLIM_SOURCE
 
     def lithology(
         self,
         bounds: Bbox,
         res: float,
         on_block: Callable[[], None] = lambda: None,
+        file: str = LITHOLOGY_FILE,
     ) -> tuple[np.ndarray, Affine]:
         """Return deterministic class bands over bounds, with 0 as one of the bands."""
         on_block()
-        values = [0, *(entry["value"] for entry in GEOLOGY_CLASSES)]
+        classes = AGE_CLASSES if file == GEOLOGY_AGE_FILE else GEOLOGY_CLASSES
+        values = [0, *(entry["value"] for entry in classes)]
         return _class_bands(bounds, res, values), from_origin(bounds[0], bounds[3], res, res)
 
 

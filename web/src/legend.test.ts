@@ -583,6 +583,28 @@ test("the class legend lists only the classes present, in class order", () => {
   );
 });
 
+test("the flat class legend reuses the family-list column of the grouped legend", () => {
+  const classes = [
+    { value: 10, label: "Tree cover", color: "#006400" },
+    { value: 20, label: "Shrubland", color: "#ffbb22" },
+  ];
+  const legend = classLegend(
+    classes,
+    new Set([10, 20]),
+    classColors("esa_worldcover", classes),
+  ) as unknown as TestElement;
+  const grouped = groupedLegend(new Set(["Sediments"]));
+  const groupedList = grouped.children[0].children[1];
+
+  assert.equal(legend.className, "legend-group-list");
+  assert.equal(legend.className, groupedList.className);
+  assert.deepEqual(
+    legend.children.map((row) => row.textContent),
+    ["Tree cover", "Shrubland"],
+  );
+  assert.ok(legend.children.every((row) => row.children[0].className === "legend-swatch"));
+});
+
 const GROUPED_CLASSES = [
   { value: 1, label: "Sand", color: "#ffff00", group: "Sediments" },
   { value: 2, label: "Clay", color: "#aaaa00", group: "Sediments" },
@@ -615,6 +637,32 @@ test("the class legend gives each group of the listed classes one collapsed head
   assert.equal(list.hidden, true);
   assert.deepEqual(list.children.map((row) => row.textContent), ["Sand", "Clay"]);
   assert.deepEqual(plutonic.children[1].children.map((row) => row.textContent), ["Granite"]);
+});
+
+const AGE_CLASSES = [
+  { value: 1, label: "Quaternary", color: "#f9f97f", group: "Cenozoic" },
+  { value: 4, label: "Cenozoic undivided", color: "#f2f91d", group: "Cenozoic" },
+  { value: 5, label: "Cretaceous", color: "#7fc64e", group: "Mesozoic" },
+  { value: 20, label: "Archean", color: "#f0047f", group: "Precambrian" },
+];
+
+test("the age legend lists the eras that the area holds in the order of the classes", () => {
+  const legend = classLegend(
+    AGE_CLASSES,
+    new Set([20, 1, 4, 5]),
+    classColors("geology_age", AGE_CLASSES),
+  ) as unknown as TestElement;
+  const [cenozoic] = legend.children;
+
+  assert.deepEqual(
+    legend.children.map((section) => section.children[0].textContent),
+    ["Cenozoic", "Mesozoic", "Precambrian"],
+  );
+  assert.deepEqual(
+    cenozoic.children[1].children.map((row) => row.textContent),
+    ["Quaternary", "Cenozoic undivided"],
+  );
+  assert.equal(cenozoic.children[0].children[0].style.background, "rgb(249, 249, 127)");
 });
 
 test("a collapsed group heading shows the swatch of its first listed class", () => {

@@ -21,10 +21,13 @@ const {
   densityControl,
   elevationUnitFrom,
   formatDisplayParams,
+  GEOLOGY_SMOOTH_RADIUS_CELLS,
+  isGeologyLayer,
   loadStoredInks,
   loadStoredPalettes,
   loadStoredEdges,
   loadStoredDensities,
+  loadStoredSmoothing,
   loadStoredUnits,
   NO_TOKENS,
   rangeDecimals,
@@ -35,6 +38,7 @@ const {
   storePalette,
   storeEdges,
   storeDensity,
+  storeSmoothing,
   storeUnits,
 } = await import("./display-state.ts");
 const { choose, loadStoredShowAs, storeShowAs, toggle } = await import("./show-as.ts");
@@ -440,6 +444,61 @@ test("edge settings default to quarter rounding with no softness or outline", ()
     softnessCells: 0,
     outline: false,
   });
+});
+
+test("Edge smoothing defaults to geology radius and to zero elsewhere", () => {
+  useStorage();
+
+  assert.equal(isGeologyLayer("geology"), true);
+  assert.equal(isGeologyLayer("geology_age"), true);
+  assert.equal(isGeologyLayer("esa_worldcover"), false);
+  assert.equal(loadStoredSmoothing("geology"), GEOLOGY_SMOOTH_RADIUS_CELLS);
+  assert.equal(loadStoredSmoothing("geology_age"), GEOLOGY_SMOOTH_RADIUS_CELLS);
+  assert.equal(loadStoredSmoothing("esa_worldcover"), 0);
+});
+
+test("Edge smoothing persists by dataset and rejects invalid values", () => {
+  const items = useStorage();
+
+  storeSmoothing("geology", 0.5);
+  assert.equal(loadStoredSmoothing("geology"), 0.5);
+  assert.equal(loadStoredSmoothing("geology_age"), GEOLOGY_SMOOTH_RADIUS_CELLS);
+  storeSmoothing("geology", 4);
+  assert.equal(loadStoredSmoothing("geology"), 4);
+
+  for (const value of [-1, 4.5, Number.NaN, "1.5", null]) {
+    items.set("soe.smoothing.v1", JSON.stringify({ geology: value }));
+    assert.equal(loadStoredSmoothing("geology"), GEOLOGY_SMOOTH_RADIUS_CELLS);
+  }
+  items.set("soe.smoothing.v1", "broken JSON");
+  assert.equal(loadStoredSmoothing("geology"), GEOLOGY_SMOOTH_RADIUS_CELLS);
+  useBlockedStorage();
+  assert.equal(loadStoredSmoothing("geology"), GEOLOGY_SMOOTH_RADIUS_CELLS);
+  assert.doesNotThrow(() => storeSmoothing("geology", 1));
+});
+
+test("geology edge storage ignores Rounding but keeps softness and outline", () => {
+  const items = useStorage();
+  items.set("soe.edges.v1", JSON.stringify({
+    geology: { rounding: 0.6, softnessCells: 1, outline: true },
+    esa_worldcover: { rounding: 0.6, softnessCells: 1, outline: true },
+  }));
+
+  assert.deepEqual(loadStoredEdges("geology"), {
+    rounding: DEFAULT_EDGES.rounding,
+    softnessCells: 1,
+    outline: true,
+  });
+  assert.deepEqual(loadStoredEdges("esa_worldcover"), {
+    rounding: 0.6,
+    softnessCells: 1,
+    outline: true,
+  });
+
+  items.set("soe.edges.v1", JSON.stringify({
+    geology: { rounding: 0.65, softnessCells: 0, outline: false },
+  }));
+  assert.deepEqual(loadStoredEdges("geology"), DEFAULT_EDGES);
 });
 
 test("edges persist by dataset independently of palettes and share links", () => {

@@ -77,7 +77,7 @@ any false repaint check.
 
 `landcover: true` runs each spot twice in isolated browser contexts, first with the GPU enabled
 and then with `soe.debug.gpu=off`. Screenshots have `-gpu` and `-image` suffixes. The GPU also
-gets a `-gpu-rounding-0` screenshot for comparing its bilinear edges with the image fallback.
+gets a `-gpu-smoothing-0` screenshot for comparing its bilinear edges with the image fallback.
 The landcover preset covers Nairobi through z18, Taveuni at 180° and the Kenya coast.
 
 Scenes come from `POST /api/scenes`, so a bundle that matches the request is reused and nothing is

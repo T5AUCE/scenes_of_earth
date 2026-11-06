@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { createHarness } from "./class-field-harness.test.ts";
-import { FILL_OUTLINE_STRENGTH } from "./class-field-shaders.ts";
+import { FILL_OUTLINE_STRENGTH, homogeneousFlags } from "./class-field-shaders.ts";
 
 test("class fields retain ids across context loss and release resources on removal", () => {
   const harness = createHarness();
@@ -13,7 +13,7 @@ test("class fields retain ids across context loss and release resources on remov
   field.layer.render(harness.gl, harness.input);
 
   assert.equal(harness.draws.length, 3);
-  assert.equal(harness.uploads.length, 3);
+  assert.equal(harness.uploads.length, 4);
   assert.equal(harness.vertexArray(), null);
   let prevented = false;
   harness.listeners.get("webglcontextlost")!({
@@ -27,11 +27,11 @@ test("class fields retain ids across context loss and release resources on remov
   harness.listeners.get("webglcontextrestored")!({});
   field.layer.render(harness.gl, harness.input);
   assert.equal(harness.draws.length, 6);
-  assert.equal(harness.uploads.length, 6);
+  assert.equal(harness.uploads.length, 8);
   field.layer.onRemove!(harness.map, harness.gl);
   assert.equal(harness.listeners.size, 0);
   assert.equal(harness.deleted.programs.length, 1);
-  assert.equal(harness.deleted.textures.length, 3);
+  assert.equal(harness.deleted.textures.length, 4);
 });
 
 test("palette and edge setters repaint without reuploading class ids", () => {
@@ -49,10 +49,29 @@ test("palette and edge setters repaint without reuploading class ids", () => {
   assert.equal(harness.uniforms.get("uSmooth"), 0);
   assert.equal(harness.uniforms.get("uRounding"), 0.6);
   assert.equal(harness.uniforms.get("uSoftnessCells"), 1);
+  assert.equal(harness.uniforms.get("uSmoothRadiusCells"), 0);
   assert.equal(harness.uniforms.get("uOutline"), 1);
   assert.equal(harness.uniforms.get("uOutlineStrength"), FILL_OUTLINE_STRENGTH);
   assert.equal(harness.uniforms.get("uPixelRatio"), 1);
   assert.equal(harness.repaints(), 2);
+});
+
+test("the geology smoothing radius reaches the fragment shader", () => {
+  const harness = createHarness();
+  harness.field.setIds(new Uint8Array(12).fill(1));
+  harness.field.layer.onAdd!(harness.map, harness.gl);
+  harness.field.layer.render(harness.gl, harness.input);
+
+  harness.field.setEdges({
+    smooth: true,
+    rounding: 0.25,
+    softnessCells: 0,
+    smoothRadiusCells: 1.5,
+    outline: false,
+  });
+  harness.field.layer.render(harness.gl, harness.input);
+
+  assert.equal(harness.uniforms.get("uSmoothRadiusCells"), 1.5);
 });
 
 test("class field geometry uses the normalised Mercator projection, not world pixels", () => {
@@ -71,10 +90,14 @@ test("a 2048 texture limit splits a long grid into haloed uploads", () => {
   harness.field.setIds(new Uint8Array(4096 * 3).fill(1));
   harness.field.layer.onAdd!(harness.map, harness.gl);
   harness.field.layer.render(harness.gl, harness.input);
-  const idUploads = harness.uploads.slice(2);
+  const tileUploads = harness.uploads.slice(2);
+  const idUploads = tileUploads.filter((_, index) => index % 2 === 0);
+  const flagUploads = tileUploads.filter((_, index) => index % 2 === 1);
 
-  assert.deepEqual(idUploads.map((upload) => upload[3]), [2046, 2048, 10]);
+  assert.deepEqual(idUploads.map((upload) => upload[3]), [2040, 2048, 40]);
   assert.ok(idUploads.every((upload) => upload[4] === 3));
+  assert.deepEqual(flagUploads.map((upload) => upload[3]), [2040, 2048, 40]);
+  assert.ok(flagUploads.every((upload) => upload[4] === 3));
   assert.equal(harness.draws.length, 9);
 });
 
@@ -137,4 +160,32 @@ test("the outline option draws faint ink over the opaque class fill", () => {
   harness.field.layer.render(harness.gl, harness.input);
   assert.equal(harness.uniforms.get("uOutline"), 1);
   assert.equal(harness.uniforms.get("uOutlineStrength"), FILL_OUTLINE_STRENGTH);
+});
+
+test("uniform ids upload set homogeneous flags beside the ids", () => {
+  const harness = createHarness();
+  const ids = new Uint8Array(12).fill(10);
+  harness.field.setIds(ids);
+  harness.field.layer.onAdd!(harness.map, harness.gl);
+  harness.field.layer.render(harness.gl, harness.input);
+
+  assert.equal(harness.uploads.length, 4);
+  const flags = harness.uploads[3][8] as Uint8Array;
+  assert.deepEqual([...flags], [...homogeneousFlags(ids, 4, 3)]);
+  assert.ok(flags.every((flag) => flag === 1));
+  assert.equal(harness.uniforms.get("uIds"), 0);
+  assert.equal(harness.uniforms.get("uHomogeneous"), 2);
+  assert.equal(harness.uniforms.get("uPalette"), 3);
+});
+
+test("a split field uploads cleared homogeneous flags", () => {
+  const harness = createHarness();
+  const ids = new Uint8Array([10, 10, 20, 20, 10, 10, 20, 20, 10, 10, 20, 20]);
+  harness.field.setIds(ids);
+  harness.field.layer.onAdd!(harness.map, harness.gl);
+  harness.field.layer.render(harness.gl, harness.input);
+
+  const flags = harness.uploads[3][8] as Uint8Array;
+  assert.deepEqual([...flags], [...homogeneousFlags(ids, 4, 3)]);
+  assert.ok(flags.every((flag) => flag === 0));
 });

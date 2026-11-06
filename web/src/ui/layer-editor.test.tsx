@@ -554,7 +554,7 @@ test("the blend switch remembers its choice for a fresh scene", async (context) 
 
   const blendSwitch = () => {
     const cards = [...container.querySelectorAll(".card")];
-    const card = cards.find((element) => element.textContent?.includes("blended"));
+    const card = cards.find((element) => element.textContent?.includes("Blended"));
     return card!.querySelector('input[role="switch"]') as HTMLInputElement;
   };
   assert.equal(blendSwitch().checked, false);

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from ..geology_age import AGE_CLASSES, GEOLOGY_AGE_FILE, GEOLOGY_AGE_RES_DEG
 from .chirps import CHIRPS_CUBE, CHIRPS_GRID, ChirpsReader, RainDataset
 from .cubes import DEFAULT_CUBES_DIR, CubeStore
 from .datasets import Registry, Role
@@ -65,7 +66,7 @@ def make_registry(backend: RealSource | SyntheticSource) -> Registry:
 
     Rainfall and Temperature are listed only when the backend has all of their cubes, so no
     layer lacks the fallback that fills its gaps. Geology is listed only when the backend has
-    the lithology map.
+    the lithology map and Geology age only when it has the age map.
     """
     registry = {}
     if backend.has_cube(ERA5_PRECIPITATION_CUBE):
@@ -74,6 +75,8 @@ def make_registry(backend: RealSource | SyntheticSource) -> Registry:
     registry["esa_worldcover"] = _land_cover(backend)
     if backend.has_lithology():
         registry["geology"] = _geology(backend)
+    if backend.has_lithology(GEOLOGY_AGE_FILE):
+        registry["geology_age"] = _geology_age(backend)
     if backend.has_cube(ERA5_LAND_TEMPERATURE_CUBE) and backend.has_cube(ERA5_TEMPERATURE_CUBE):
         registry["era5land_temperature"] = _era5land_temperature(backend)
     return registry
@@ -134,7 +137,7 @@ def _terrain(backend: RealSource | SyntheticSource) -> TerrainDataset:
 def _land_cover(backend: RealSource | SyntheticSource) -> LandCoverDataset:
     return LandCoverDataset(
         id="esa_worldcover",
-        title="Land cover",
+        title="Land Cover",
         units="",
         resolution_deg=WORLDCOVER_RES_DEG,
         source=SOURCES["worldcover"],
@@ -170,7 +173,7 @@ def _geology(backend: RealSource | SyntheticSource) -> GeologyDataset:
         classes = OPENLANDMAP_CLASSES
     return GeologyDataset(
         id="geology",
-        title="Geology",
+        title="Rock Type",
         units="",
         resolution_deg=LITHOLOGY_RES_DEG,
         source=source,
@@ -191,6 +194,33 @@ def _geology(backend: RealSource | SyntheticSource) -> GeologyDataset:
         backend=backend,
         grid=CHIRPS_GRID,
         synthetic=backend.synthetic,
+    )
+
+
+def _geology_age(backend: RealSource | SyntheticSource) -> GeologyDataset:
+    return GeologyDataset(
+        id="geology_age",
+        title="Geological Age",
+        units="",
+        resolution_deg=GEOLOGY_AGE_RES_DEG,
+        source=SOURCES["gsc_world"],
+        roles={
+            "value": Role(
+                "class",
+                "uint8",
+                fill=0,
+                long_name="Rock age class",
+            ),
+        },
+        style={
+            "kind": "categorical",
+            "encodings": ["fill"],
+            "classes": AGE_CLASSES,
+        },
+        backend=backend,
+        grid=CHIRPS_GRID,
+        synthetic=backend.synthetic,
+        file=GEOLOGY_AGE_FILE,
     )
 
 

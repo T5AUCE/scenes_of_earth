@@ -53,22 +53,22 @@ test("colour, contours and relief keep their plain names", () => {
 
 test("a layer hidden by colour reads hidden", () => {
   assert.equal(
-    cardTitle({ title: "Land cover", units: "" }, {
+    cardTitle({ title: "Land Cover", units: "" }, {
       draw: { hidden: "Shown only in colour" },
       off: false,
     }),
-    "Land cover · Hidden",
+    "Land Cover · Hidden",
   );
   assert.equal(
     cardTitle(
-      { title: "Land cover", units: "" },
+      { title: "Land Cover", units: "" },
       {
         draw: { hidden: "Shown only in colour" },
         off: false,
         smoothed: true,
       },
     ),
-    "Land cover · Hidden",
+    "Land Cover · Hidden",
   );
 });
 

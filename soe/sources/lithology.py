@@ -2,9 +2,11 @@
 
 `soe.ingest.lithology` writes the COG from GLiM or the OpenLandMap lithology map, and a build only
 reads it. The COG records which one, and the registry takes the classes and source from that.
-Table order fixes the class values, so new codes may only be appended.
+Table order fixes the class values, so new codes may only be appended. The rock-age COG of
+`soe.ingest.geology_age` is read the same way, from its own file.
 """
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -13,8 +15,10 @@ from rasterio.errors import RasterioIOError, WarpOperationError
 from rasterio.transform import Affine, from_origin
 
 from ..areas import WORLD_WIDTH_DEG
+from ..geology_age import GSC_SOURCE
 from .datasets import StaticDataset
 from .grid import (
+    CELL_DEG,
     MAX_STATIC_DIVISIONS,
     MAX_STATIC_SIDE_PX,
     STATIC_BUDGET_PX,
@@ -57,28 +61,28 @@ WATER_CLASS = 255
 GLIM_FAMILIES = [
     (
         "su",
-        "Unconsolidated sediments",
+        "Unconsolidated",
         "Sediments",
         "#fdf0a8",
         "mx ss sh pu py ad ds la lo or",
     ),
     (
         "ss",
-        "Siliciclastic sedimentary",
+        "Siliciclastic",
         "Sediments",
         "#e8c33c",
         "mx ss sh py am la lo",
     ),
     (
         "sm",
-        "Mixed sedimentary",
+        "Mixed",
         "Sediments",
         "#c2ab5a",
         "mx ss sh py ad ds la lo or am gr",
     ),
     (
         "sc",
-        "Carbonate sedimentary",
+        "Carbonate",
         "Sediments",
         "#6fa8d6",
         "mx ss sh pu py ad la lo am",
@@ -99,42 +103,42 @@ GLIM_FAMILIES = [
     ),
     (
         "va",
-        "Acid volcanic",
+        "Acid",
         "Volcanic",
         "#e57373",
         "__ pu py am",
     ),
     (
         "vi",
-        "Intermediate volcanic",
+        "Intermediate",
         "Volcanic",
         "#c0392b",
         "__ mx pu py am",
     ),
     (
         "vb",
-        "Basic volcanic",
+        "Basic",
         "Volcanic",
         "#6c3483",
         "__ mx pu py la am gr",
     ),
     (
         "pa",
-        "Acid plutonic",
+        "Acid",
         "Plutonic",
         "#f194b4",
         "__ pu py am gr",
     ),
     (
         "pi",
-        "Intermediate plutonic",
+        "Intermediate",
         "Plutonic",
         "#d65d8a",
         "__ pu py am gr",
     ),
     (
         "pb",
-        "Basic plutonic",
+        "Basic",
         "Plutonic",
         "#8e2f5c",
         "__ pu py am",
@@ -156,18 +160,18 @@ GLIM_FAMILIES = [
 ]
 GLIM_LEVEL2_NAMES = {
     "__": "",
-    "mx": "mixed grain size",
-    "ss": "coarse grained",
-    "sh": "fine grained",
+    "mx": "mixed grain",
+    "ss": "coarse grain",
+    "sh": "fine grain",
     "pu": "pure",
-    "py": "with pyroclastics",
+    "py": "with pyroclasts",
     "ad": "alluvial",
-    "ds": "dune sands",
+    "ds": "dunes",
     "la": "lateritic",
     "lo": "loess",
     "or": "organic",
-    "am": "amphibolite facies",
-    "gr": "greenschist facies",
+    "am": "amphibolite",
+    "gr": "greenschist",
 }
 
 
@@ -199,16 +203,16 @@ class LithologyReader:
     """The lithology COG on local disk."""
 
     def __init__(self, cubes_dir: Path | str) -> None:
-        self._lithology_path = Path(cubes_dir) / LITHOLOGY_FILE
+        self._cubes_dir = Path(cubes_dir)
 
-    def has_lithology(self) -> bool:
-        """Return whether the lithology COG has been ingested."""
-        return self._lithology_path.exists()
+    def has_lithology(self, file: str = LITHOLOGY_FILE) -> bool:
+        """Return whether the COG `file` has been ingested."""
+        return (self._cubes_dir / file).exists()
 
-    def lithology_source(self) -> str:
-        """Return which map built the COG, GLIM_SOURCE or OPENLANDMAP_SOURCE."""
+    def lithology_source(self, file: str = LITHOLOGY_FILE) -> str:
+        """Return which map built the COG, GLIM_SOURCE or OPENLANDMAP_SOURCE for rock type."""
         try:
-            with rasterio.open(self._lithology_path) as source:
+            with rasterio.open(self._cubes_dir / file) as source:
                 return source.tags().get(LITHOLOGY_SOURCE_TAG, OPENLANDMAP_SOURCE)
         except RasterioIOError:
             # A read of the unreadable COG reports it, so the dataset only needs some source.
@@ -219,8 +223,9 @@ class LithologyReader:
         bounds: Bbox,
         res: float,
         on_block: Callable[[], None] = lambda: None,
+        file: str = LITHOLOGY_FILE,
     ) -> tuple[np.ndarray, Affine]:
-        """Class (uint8) on bounds at res; 0 where the map has no rock class.
+        """Class (uint8) on bounds at res from the COG `file`; 0 where the map has no class.
 
         Longitudes above 180 wrap, so bounds may cross the antimeridian. on_block() is called
         once, after the read. Returns (array, transform).
@@ -228,9 +233,12 @@ class LithologyReader:
         west, south, east, north = bounds
         height, width = round((north - south) / res), round((east - west) / res)
         classes = np.zeros((height, width), "uint8")
-        level = overview_level(overview_factor(res, LITHOLOGY_RES_DEG))
+        path = self._cubes_dir / file
         try:
-            with rasterio.open(self._lithology_path, overview_level=level) as source:
+            with rasterio.open(path) as full:
+                native_res = full.res[0]
+            level = overview_level(overview_factor(res, native_res))
+            with rasterio.open(path, overview_level=level) as source:
                 for part_west, part_east, file_shift in _split_at_antimeridian(west, east):
                     column = round((part_west - west) / res)
                     part = np.zeros((height, round((part_east - part_west) / res)), "uint8")
@@ -254,20 +262,19 @@ def _split_at_antimeridian(west: float, east: float) -> list[tuple[float, float,
     ]
 
 
+@dataclass
 class GeologyDataset(StaticDataset):
-    """The most common rock class in each cell, at a size set by the area."""
+    """The most common rock class (type or age) in each cell, at a size set by the area."""
+
+    file: str = LITHOLOGY_FILE  # the class COG in the cubes folder
 
     def __post_init__(self) -> None:
         """Remember which map built the COG for the notices and require land tiles.
 
-        Offline data stands in for GLiM. Land tiles make open sea refused early.
+        Offline data stands in for the real map. Land tiles make open sea refused early.
         """
         self.needs_tiles = True
-        self.lithology_source = (
-            self.backend.lithology_source()
-            if isinstance(self.backend, LithologyReader)
-            else GLIM_SOURCE
-        )
+        self.lithology_source = self.backend.lithology_source(self.file)
 
     def tile_count(self, bbox: Bbox) -> int:
         """Return the land tile count of bbox, which is zero over open sea."""
@@ -275,8 +282,14 @@ class GeologyDataset(StaticDataset):
         return len(worldcover_tiles(bbox))
 
     def res_for(self, bbox: Bbox) -> float:
-        """Return the cell size in degrees that fits bbox within the static pixel budget."""
-        return budget_res(bbox, STATIC_BUDGET_PX, MAX_STATIC_SIDE_PX, MAX_STATIC_DIVISIONS)
+        """Return the cell size in degrees that fits bbox within the static pixel budget.
+
+        The grid never goes finer than the COG's native cells, so geology keeps one
+        source class per cell instead of replicating staircases.
+        """
+        native_divisions = round(CELL_DEG / self.resolution_deg)
+        max_divisions = min(MAX_STATIC_DIVISIONS, native_divisions)
+        return budget_res(bbox, STATIC_BUDGET_PX, MAX_STATIC_SIDE_PX, max_divisions)
 
     def read(
         self,
@@ -289,11 +302,22 @@ class GeologyDataset(StaticDataset):
             tuple(bbox),
             res,
             on_block or (lambda: None),
+            self.file,
         )
         return {"value": classes}, transform
 
     def notices(self, bbox: Bbox, steps: list[str]) -> list[str]:
         """Return notices about the scale of the source map, its seams and its gaps."""
+        if self.lithology_source == GSC_SOURCE:
+            return [
+                "Rock age comes from the Geological Survey of Canada world geology map at about "
+                "1:35 million, the worldwide fallback, so boundaries are approximate by tens of "
+                "kilometres. About a third of the mapped area is dated only to an era or wider, "
+                "and ages are generalised to ICS periods, so each colour is the smallest period "
+                "or era that holds the whole age range of its unit. Lakes, rivers and unmapped "
+                "islands have no rock age and are hatched as no data.",
+            ]
+
         if self.lithology_source == GLIM_SOURCE:
             return [
                 "Rock type comes from the Global Lithological Map (GLiM) at about 1:3.75 "

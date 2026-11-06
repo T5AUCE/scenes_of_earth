@@ -23,12 +23,19 @@ const NO_FALLBACK_NOTE =
   "If the basemap cannot load, no other basemap is substituted; the data layers still draw.";
 const CLIPPED_NOTICE = "The area reaches beyond the data coverage and was clipped to it.";
 const GLIM_DISPLAY_LINE =
-  "Geology shows rock type from the Global Lithological Map (GLiM) at about 1:3.75 million, so "
+  "The Rock type layer comes from the Global Lithological Map (GLiM) at about 1:3.75 million, so "
   + "boundaries are approximate at local scale and seams can show where its 92 source maps meet.";
 const OPENLANDMAP_DISPLAY_LINE =
-  "Geology shows rock type from a global map at about 1:3.75 million (OpenLandMap, from "
+  "The Rock type layer comes from a global map at about 1:3.75 million (OpenLandMap, from "
   + "GLiM), so boundaries are approximate at local scale and seams can show where national "
   + "source maps meet and at 180° longitude.";
+
+const GEOLOGY_AGE_DISPLAY_LINE =
+  "The Geological age layer comes from the Geological Survey of Canada world geology map, the "
+  + "worldwide fallback, at about 1:35 million, so boundaries are approximate by tens of "
+  + "kilometres. About a third of the mapped area is dated only to an era or wider, and ages are "
+  + "generalised to ICS periods: each colour is the smallest period or era that holds the whole "
+  + "age range of its unit. Colours follow the ICS chart.";
 
 const DISPLAY_LINES = [
   "One layer holds the map's colour at a time. The Colour row at the top of the layer cards names "
@@ -117,7 +124,7 @@ export function renderAbout(
 function appendNotices(root: HTMLElement, scene: Scene) {
   if (!noticeCount(scene)) return;
 
-  const heading = makeHtmlElement("h4", "Notices and limits", root);
+  const heading = makeHtmlElement("h4", "Notices and Limits", root);
   heading.id = NOTICES_HEADING_ID;
   const list = makeHtmlElement("ul", "", root);
   if (scene.area.clipped_to_coverage) makeHtmlElement("li", CLIPPED_NOTICE, list);
@@ -125,17 +132,20 @@ function appendNotices(root: HTMLElement, scene: Scene) {
 }
 
 function appendDisplay(root: HTMLElement, scene: Scene) {
-  makeHtmlElement("h4", "What the map draws", root);
+  makeHtmlElement("h4", "What the Map Draws", root);
   for (const line of DISPLAY_LINES) makeHtmlElement("p", line, root);
   const geology = scene.layers.find((layer) => layer.id === "geology");
   if (geology) {
     const isGlim = geology.source.name.startsWith("GLiM");
     makeHtmlElement("p", isGlim ? GLIM_DISPLAY_LINE : OPENLANDMAP_DISPLAY_LINE, root);
   }
+  if (scene.layers.some((layer) => layer.id === "geology_age")) {
+    makeHtmlElement("p", GEOLOGY_AGE_DISPLAY_LINE, root);
+  }
 }
 
 function appendSmoothing(root: HTMLElement, elevationUnit = "m") {
-  makeHtmlElement("h4", "How the map is smoothed", root);
+  makeHtmlElement("h4", "How the Map Is Smoothed", root);
   for (const line of smoothingLines(elevationUnit)) makeHtmlElement("p", line, root);
 }
 
@@ -164,10 +174,13 @@ function smoothingLines(elevationUnit: string) {
     "Field cells without data are see-through, so smoothing fades the colour out at their edges "
       + "and at the border of the area instead of inventing values there.",
     "Land-cover Smooth draws edges smoothly from per-cell classes while keeping class colours "
-      + "separate. Rounding can shrink small patches, but it adds no data. Edge softness blends "
+      + "separate. Smoothing can shrink small patches, but it adds no data. Softness blends "
       + "colours at their borders over a distance measured in grid cells, so the blend widens on "
       + "screen as you zoom in; 0 leaves a one-pixel anti-aliased border. Without WebGL drawing, "
       + "an image provides smooth edges at a fixed resolution instead.",
+    "On Rock Type and Geological Age, Smoothing is measured in grid cells and looks beyond "
+      + "the nearby cells, so long staircases become smooth curves, and larger values cut "
+      + "corners further while small patches may shrink.",
     "Terrain shading is a live picture drawn by your graphics card from Mapterhorn elevation "
       + "tiles, so it gains detail as you zoom in and may show finer relief than the stored "
       + "summaries.",

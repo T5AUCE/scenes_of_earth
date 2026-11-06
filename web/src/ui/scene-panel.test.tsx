@@ -498,7 +498,7 @@ test("a notice from Credits commits About before scrolling to notices", async (c
   ) as HTMLButtonElement;
   assertSameNode(document.activeElement, aboutTab);
   assert.equal(main.scrollTop, 0);
-  assert.equal(dialog.querySelector("#notices-heading")?.textContent, "Notices and limits");
+  assert.equal(dialog.querySelector("#notices-heading")?.textContent, "Notices and Limits");
   assert.ok(scrolled.includes("notices-heading"));
 
   await act(async () => panel!.destroy());

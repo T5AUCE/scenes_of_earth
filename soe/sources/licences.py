@@ -153,7 +153,7 @@ SOURCES = {
         "licence": "CC BY-SA 4.0",
         "licence_url": "https://creativecommons.org/licenses/by-sa/4.0/",
         "attribution": (
-            "Geology: OpenLandMap lithology, derived from the USGS Global Ecological Land Units "
+            "Rock type: OpenLandMap lithology, derived from the USGS Global Ecological Land Units "
             "and the GLiM lithology classes (CC BY-SA 4.0, ShareAlike)"
         ),
         "citation": (
@@ -170,13 +170,13 @@ SOURCES = {
     },
     "glim": {
         "name": "GLiM Global Lithological Map v1.0 (level 1 and 2)",
-        "version": "glim-1.2",
+        "version": "glim-1.3",
         "licence": (
             "not stated by the authors; the data is for local evaluation only and must not "
             "be published until they confirm terms"
         ),
         "attribution": (
-            "Geology: GLiM, Hartmann and Moosdorf (2012); licence not stated by the authors, "
+            "Rock type: GLiM, Hartmann and Moosdorf (2012); licence not stated by the authors, "
             "for local evaluation only"
         ),
         "citation": (
@@ -186,6 +186,28 @@ SOURCES = {
         "modified": (
             "level 1 and level 2 codes rasterised to 1/480° from World Eckert IV; water bodies "
             "and no data set to no data; cropped to 60°S-60°N; most common class per output cell"
+        ),
+    },
+    "gsc_world": {
+        "name": "Generalized geology of the world (GSC Open File 5529)",
+        "version": "of5529-1",
+        "licence": "Open Government Licence - Canada 2.0",
+        "licence_url": "https://open.canada.ca/en/open-government-licence-canada",
+        "attribution": (
+            "Geological age: Contains information licensed under the Open Government Licence – "
+            "Canada (Chorlton 2007, GSC Open File 5529); colours: ICS chart via Macrostrat "
+            "(CC BY 4.0)"
+        ),
+        "citation": (
+            "Chorlton, L.B. (2007) Generalized geology of the world: bedrock domains and major "
+            "faults in GIS format. Geological Survey of Canada Open File 5529. "
+            "doi:10.4095/223767; ICS chart colours from Macrostrat, https://macrostrat.org "
+            "(CC BY 4.0)"
+        ),
+        "modified": (
+            "age names of each unit classed as the smallest ICS period or era that holds its "
+            "whole age range; rasterised to 1/120° and cropped to 60°S-60°N; most common class "
+            "per output cell"
         ),
     },
     "geoBoundaries CGAZ": {

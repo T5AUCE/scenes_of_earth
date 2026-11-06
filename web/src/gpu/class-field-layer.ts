@@ -5,8 +5,10 @@ import {
   CLASS_FIELD_FRAGMENT,
   CLASS_FIELD_VERTEX,
   FILL_OUTLINE_STRENGTH,
+  homogeneousFlags,
 } from "./class-field-shaders";
 import { deleteResources, uploadTexture } from "./gl";
+import { WIDE_HALO_CELLS } from "./grid-geometry";
 import {
   TiledGpuLayer,
   type TiledGpu,
@@ -21,6 +23,8 @@ export interface ClassEdges {
   rounding: number;
   /** The width of the colour blend between two classes in grid cells; 0 keeps a one-pixel edge. */
   softnessCells: number;
+  /** Wider class-presence scale in grid cells with support twice the radius. */
+  smoothRadiusCells?: number;
   /** Draw a faint ink line between two classes. */
   outline: boolean;
 }
@@ -39,12 +43,14 @@ const PALETTE_SIZE = 256;
 const CHANNELS = 4;
 const UNIFORM_NAMES = [
   "uIds",
+  "uHomogeneous",
   "uPalette",
   "uIdsSize",
   "uWindowRow",
   "uSmooth",
   "uRounding",
   "uSoftnessCells",
+  "uSmoothRadiusCells",
   "uOutline",
   "uOutlineStrength",
   "uOpacity",
@@ -129,7 +135,9 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
       this.isPaletteStale = false;
     }
     if (this.isIdsStale) {
-      this.uploadTiles(gl, gpu, this.options.grid, this.ids!);
+      const { nx, ny } = this.options.grid;
+      const flags = homogeneousFlags(this.ids!, nx, ny);
+      this.uploadTiles(gl, gpu, this.options.grid, this.ids!, flags, WIDE_HALO_CELLS);
       this.isIdsStale = false;
     }
   }
@@ -139,18 +147,21 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     const { rounding, softnessCells, outline } = this.edges;
 
     this.beginDraw(gl, gpu);
+    gl.bindSampler(3, null);
     gl.uniform1i(uniform("uIds"), 0);
-    gl.uniform1i(uniform("uPalette"), 2);
+    gl.uniform1i(uniform("uHomogeneous"), 2);
+    gl.uniform1i(uniform("uPalette"), 3);
     gl.uniform1i(uniform("uSmooth"), this.edges.smooth ? 1 : 0);
     gl.uniform1f(uniform("uRounding"), rounding);
     gl.uniform1f(uniform("uSoftnessCells"), softnessCells);
+    gl.uniform1f(uniform("uSmoothRadiusCells"), this.edges.smoothRadiusCells ?? 0);
     gl.uniform1i(uniform("uOutline"), outline ? 1 : 0);
     gl.uniform1f(uniform("uOutlineStrength"), FILL_OUTLINE_STRENGTH);
     gl.uniform1f(uniform("uOpacity"), this.fieldOptions.opacity);
     const pixelRatio = this.map?.getPixelRatio?.() ?? 1;
     gl.uniform1f(uniform("uPixelRatio"), pixelRatio);
 
-    gl.activeTexture(gl.TEXTURE2);
+    gl.activeTexture(gl.TEXTURE3);
     gl.bindTexture(gl.TEXTURE_2D, gpu.palette);
     gl.activeTexture(gl.TEXTURE0);
 

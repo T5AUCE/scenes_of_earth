@@ -174,6 +174,37 @@ test("reset layer returns units to the bundle default", () => {
   assert.deepEqual(changes.slice(-2), ["units", "reset"]);
 });
 
+test("the edges section shows a smoothing radius with its cells unit", () => {
+  const { menu } = fieldMenu(false);
+  menu.edges = {
+    controls: [
+      { label: "Smoothing", min: 0, max: 0.6, step: 0.05, value: 0.25, set: () => {} },
+      {
+        label: "Wide smoothing",
+        unit: "cells",
+        min: 0,
+        max: 2,
+        step: 0.05,
+        value: 1.5,
+        set: () => {},
+      },
+    ],
+    outline: { value: false, set: () => {} },
+    get isDefault() {
+      return false;
+    },
+    reset: () => {},
+  };
+  const sections = sectionsOf(menu);
+  const rows = descendants(sections).filter(
+    (element) => element.className === "edge-control",
+  );
+  const smoothing = rows.find((row) => row.textContent.startsWith("Wide smoothing"))!;
+  const input = descendants([smoothing]).find((element) => element.type === "range")!;
+
+  assert.equal(input.value, "1.5");
+});
+
 function fieldMenu(isDrawn: boolean, ink = "navy", palette = "ink-blue") {
   let isInk = isDrawn;
   let value = ink;

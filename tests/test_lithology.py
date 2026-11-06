@@ -37,6 +37,7 @@ from soe.sources.lithology import (
     GLIM_SOURCE,
     GLIM_VALUES,
     LITHOLOGY_FILE,
+    LITHOLOGY_RES_DEG,
     OPENLANDMAP_CLASSES,
     OPENLANDMAP_SOURCE,
     WATER_CLASS,
@@ -53,8 +54,7 @@ POLL_INTERVAL_SECS = 0.1
 
 @pytest.fixture(autouse=True)
 def coarse_source(monkeypatch):
-    """Make the test rasters, which have 0.5 degree cells, count as the native resolution."""
-    monkeypatch.setattr(lithology, "LITHOLOGY_RES_DEG", SOURCE_RES_DEG)
+    """Make the ingest write 0.5 degree cells, like the test rasters."""
     monkeypatch.setattr(ingest, "LITHOLOGY_RES_DEG", SOURCE_RES_DEG)
 
 
@@ -357,6 +357,20 @@ def test_lithology_version_change_only_renames_geology_scenes(monkeypatch, cubes
     assert _layered_scene_id(bumped, plain_layers) == plain_id
 
 
+def test_glim_version_change_only_renames_geology_scenes(monkeypatch, glim_cubes_dir):
+    plain_layers = ["terrain", "esa_worldcover"]
+    registry = make_registry(RealSource(cubes_dir=glim_cubes_dir))
+    plain_id = _layered_scene_id(registry, plain_layers)
+    geology_id = _layered_scene_id(registry, ["geology"])
+
+    bumped_version = SOURCES["glim"]["version"] + "-bumped"
+    monkeypatch.setitem(SOURCES["glim"], "version", bumped_version)
+    bumped = make_registry(RealSource(cubes_dir=glim_cubes_dir))
+
+    assert _layered_scene_id(bumped, ["geology"]) != geology_id
+    assert _layered_scene_id(bumped, plain_layers) == plain_id
+
+
 def test_glim_and_openlandmap_geology_scenes_get_different_ids(cubes_dir, glim_cubes_dir):
     plain_layers = ["terrain", "esa_worldcover"]
     openlandmap = make_registry(RealSource(cubes_dir=cubes_dir))
@@ -509,6 +523,13 @@ def test_glim_values_follow_the_family_table_in_order():
     assert list(GLIM_VALUES.values()) == list(range(1, len(GLIM_VALUES) + 1))
 
 
+def test_geology_res_for_never_finer_than_the_native_cog(cubes_dir):
+    geology = make_registry(RealSource(cubes_dir=cubes_dir))["geology"]
+
+    assert geology.res_for((0.0, 0.0, 0.01, 0.01)) == LITHOLOGY_RES_DEG
+    assert geology.res_for((36.5, -1.5, 37.5, -0.5)) >= LITHOLOGY_RES_DEG
+
+
 def build_geology(tmp_path: Path, area: Area) -> JsonObject:
     registry = make_registry(SyntheticSource(lithology=True))
     build_scene(HASH_A, area, None, None, [registry["geology"]], "Test", tmp_path)
@@ -520,7 +541,7 @@ def test_geology_layer_is_valid_and_credits_glim_as_unpublishable(tmp_path):
     layer = doc["layers"][0]
 
     assert validate(doc) == []
-    assert layer["id"] == "geology" and layer["title"] == "Geology"
+    assert layer["id"] == "geology" and layer["title"] == "Rock Type"
     assert layer["style"]["kind"] == "categorical" and layer["style"]["palette"] == "painted"
     assert layer["style"]["classes"][0]["group"] == "Sediments"
     assert layer["style"]["classes"][0]["parent"] == "su"
@@ -623,7 +644,7 @@ def test_geology_over_open_sea_is_refused_before_any_read(tmp_path):
         )
 
     assert response.status_code == 422
-    assert response.json()["detail"] == "Geology has no data in this area"
+    assert response.json()["detail"] == "Rock Type has no data in this area"
 
 
 def test_glim_version_cannot_match_any_openlandmap_version():

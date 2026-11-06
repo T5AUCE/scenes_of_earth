@@ -348,7 +348,7 @@ test("the owner and real panel keep history through Back and Forward", async (co
   assertSameNode(document.activeElement, aboutTab);
   const main = dialog.querySelector("main") as HTMLElement;
   assert.equal(main.scrollTop, 0);
-  assert.equal(dialog.querySelector("#notices-heading")?.textContent, "Notices and limits");
+  assert.equal(dialog.querySelector("#notices-heading")?.textContent, "Notices and Limits");
   assert.ok(scrolled.includes("notices-heading"));
 
   main.scrollTop = 123;

@@ -4,6 +4,7 @@ import { test } from "node:test";
 
 import { createHarness } from "../gpu/class-field-harness.test.ts";
 import { CLASS_HATCH_ID } from "../gpu/class-field-shaders.ts";
+import { GEOLOGY_SMOOTH_RADIUS_CELLS } from "../display-state.ts";
 import { classColors, rgbToHex } from "../render/palettes.ts";
 import { smoothClassIds } from "../render/smooth-classes.ts";
 import type { Bbox, LayerContext } from "../types.ts";
@@ -149,6 +150,107 @@ test("the geology menu previews GLiM family shades instead of value colours", as
   }
 });
 
+test("the geology age menu offers the ICS colours of the bundle", async () => {
+  const harness = createViewHarness(true, undefined, "geology_age", AGE_LIKE_CLASSES);
+  try {
+    const view = createCategoricalView(harness.context);
+    await view.ready;
+
+    assert.deepEqual(view.menu?.palettes, [
+      { name: "esa", label: "ICS colours", colors: ["#f9f97f", "#7fc64e"] },
+    ]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("geology layers offer Edge smoothing at the geology default", async () => {
+  for (const layerId of ["geology", "geology_age"]) {
+    const harness = createViewHarness(true, undefined, layerId, GLIM_LIKE_CLASSES);
+    try {
+      const view = createCategoricalView(harness.context);
+      await view.ready;
+      const smoothing = view.menu?.edges?.controls.find(
+        (control) => control.label === "Smoothing",
+      );
+
+      assert.ok(smoothing, layerId);
+      assert.equal(smoothing.value, GEOLOGY_SMOOTH_RADIUS_CELLS);
+
+      smoothing.set(0.5);
+      assert.equal(smoothing.value, 0.5);
+      assert.equal(view.menu?.edges?.isDefault, false);
+
+      view.menu?.edges?.reset();
+      assert.equal(smoothing.value, GEOLOGY_SMOOTH_RADIUS_CELLS);
+      assert.equal(view.menu?.edges?.isDefault, true);
+      view.destroy();
+    } finally {
+      harness.cleanup();
+    }
+  }
+});
+
+test("geology Edge smoothing menu reaches the fragment shader for both ids", async () => {
+  for (const layerId of ["geology", "geology_age"]) {
+    const harness = createViewHarness(true, undefined, layerId, GLIM_LIKE_CLASSES);
+    try {
+      const view = createCategoricalView(harness.context);
+      await view.ready;
+      const smoothing = view.menu?.edges?.controls.find(
+        (control) => control.label === "Smoothing",
+      );
+      const layer = harness.custom.get(`${layerId}-classes`)!;
+
+      assert.ok(smoothing, layerId);
+      layer.render!(harness.gpu.gl, harness.gpu.input);
+      assert.equal(harness.gpu.uniforms.get("uSmoothRadiusCells"), GEOLOGY_SMOOTH_RADIUS_CELLS);
+
+      smoothing.set(0.5);
+      layer.render!(harness.gpu.gl, harness.gpu.input);
+      assert.equal(harness.gpu.uniforms.get("uSmoothRadiusCells"), 0.5);
+
+      view.menu?.edges?.reset();
+      layer.render!(harness.gpu.gl, harness.gpu.input);
+      assert.equal(harness.gpu.uniforms.get("uSmoothRadiusCells"), GEOLOGY_SMOOTH_RADIUS_CELLS);
+      view.destroy();
+    } finally {
+      harness.cleanup();
+    }
+  }
+});
+
+test("land cover keeps only Rounding and softness with a default edge menu", async () => {
+  const harness = createViewHarness(true);
+  try {
+    const view = createCategoricalView(harness.context);
+    await view.ready;
+    const labels = view.menu?.edges?.controls.map((control) => control.label) ?? [];
+
+    assert.deepEqual(labels, ["Smoothing", "Softness"]);
+    assert.equal(view.menu?.edges?.isDefault, true);
+    view.destroy();
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("geology layers offer softness and smoothing without Rounding", async () => {
+  for (const layerId of ["geology", "geology_age"]) {
+    const harness = createViewHarness(true, undefined, layerId, GLIM_LIKE_CLASSES);
+    try {
+      const view = createCategoricalView(harness.context);
+      await view.ready;
+      const labels = view.menu?.edges?.controls.map((control) => control.label) ?? [];
+
+      assert.deepEqual(labels, ["Softness", "Smoothing"], layerId);
+      view.destroy();
+    } finally {
+      harness.cleanup();
+    }
+  }
+});
+
 test("a repaint keeps the legend groups the viewer expanded", async () => {
   const harness = createViewHarness(true);
   try {
@@ -260,6 +362,11 @@ test("a no-data neighbour does not distort a class edge in the image fallback", 
 const COVER_CLASSES = [
   { value: 10, label: "Trees", color: "#112233" },
   { value: 20, label: "Grass", color: "#445566" },
+];
+
+const AGE_LIKE_CLASSES = [
+  { value: 1, label: "Quaternary", color: "#f9f97f", group: "Cenozoic" },
+  { value: 5, label: "Cretaceous", color: "#7fc64e", group: "Mesozoic" },
 ];
 
 const GLIM_LIKE_CLASSES = [
@@ -375,6 +482,8 @@ function createViewHarness(
     map,
     body,
     capture,
+    gpu,
+    custom,
     cleanup: () => globals.forEach((name, index) => {
       const descriptor = original[index];
       if (descriptor) Object.defineProperty(globalThis, name, descriptor);

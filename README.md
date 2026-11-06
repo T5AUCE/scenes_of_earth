@@ -173,6 +173,25 @@ repairs its edge columns. Either way the result is a tiled ZSTD COG with most-co
 python -m soe.cli ingest-lithology
 ```
 
+## Geology age map
+
+The Geology age layer (`geology_age`, not a default layer) reads one COG, `geology_age.tif`, in the cubes folder, and is
+listed only when that file exists. Build it once with the command below. It fetches five small members (about 27 MB) of the
+577 MB archive of Geological Survey of Canada Open File 5529 (Chorlton 2007) by HTTP range reads into
+`data/cubes/.downloads/gsc-of5529/`, gives each map unit the class of its age range, and rasterises the units onto the
+1/120 degree grid from 60S to 60N (0 = no data). The result is a few-MB tiled ZSTD COG with most-common-class overviews and
+a `LITHOLOGY_SOURCE` tag set to `gsc-of5529`. `--archive of_5529.zip` takes a local copy instead of fetching.
+
+```
+python -m soe.cli ingest-geology-age
+```
+
+A unit's class is the smallest ICS unit that holds its whole age range: a period, else its era marked undivided, else
+Phanerozoic, Proterozoic or Precambrian undivided, else "Precambrian to Phanerozoic" (23 classes, in `soe/geology_age.py`).
+Ranges come from the age names of the source and never from Ma, because GSC uses the 1989 time scale. An age name without a
+class fails the ingest and lists every such name. The cross-eon class uses grey instead of white so it stays visible
+on the map.
+
 ## Area contract notes
 
 - `area.bbox` is `[W, S, E, N]` with W < E always. A shape across the antimeridian is unwrapped into one frame, so E may be
@@ -252,6 +271,12 @@ python -m soe.cli ingest-lithology
   from which the viewer shades the sub-classes of one family. The source, and so the scene id, follows the COG. The notice
   states the 1:3.75 million source scale and the seams where source maps meet (OpenLandMap also at 180 degrees and its
   missing islands). It shows rock type now, and rock age is planned inside the same layer.
+- Geology age (`geology_age`, not a default layer) is a static `categorical` layer built exactly like Geology from its own
+  COG: a uint8 `value` array (0 = no data) holding the most common age class in each cell of the world map GSC Open File 5529
+  (23 classes, see "Geology age map"). `style.classes` carry the ICS chart colours and a `group` for the era (Cenozoic,
+  Mesozoic, Paleozoic, Precambrian, Several eras), and the layer has no `style.palette`, so the viewer shows those colours.
+  The notice states the 1:35 million scale, the tens of kilometres of boundary error, the share dated only to an era and the
+  generalisation to ICS periods. Adding the COG changes no existing scene id.
 - The statistics are read on cells of 0.05/k degrees (k up to 180, about 4.2 Mpx at most). Cells finer than 90 m are read
   from GLO-30 (with average resampling), others from GLO-90; tiles GLO-30 lacks come from GLO-90 as
   `layers[].fallback_sources`. Terrain is refused above 2500 existing source tiles.
@@ -342,6 +367,12 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
   and Conservation 2; Hartmann, J. and Moosdorf, N. (2012) GLiM, doi:10.1029/2012GC004370. Modified: cropped to 60°S-60°N;
   water and undefined set to no data; faulty columns at ±180° replaced by their inner neighbours; most common class per output
   cell. The same text is in `soe/sources/licences.py`.
+- **Geology age: GSC Open File 5529**, Open Government Licence - Canada 2.0. Credit: "Geology age: Contains information
+  licensed under the Open Government Licence – Canada (Chorlton 2007, GSC Open File 5529); colours: ICS chart via Macrostrat
+  (CC BY 4.0)". Chorlton, L.B. (2007) Generalized geology of the world: bedrock domains and major faults in GIS format.
+  Geological Survey of Canada Open File 5529, doi:10.4095/223767. Modified: the age names of each unit classed as the
+  smallest ICS period or era that holds its whole age range, rasterised to 1/120 degrees, cropped to 60S-60N, most common
+  class per output cell. The same text is in `soe/sources/licences.py`.
 - **Boundaries: geoBoundaries CGAZ**, CC BY 4.0. Runfola, D. et al. (2020) geoBoundaries: A global database of political
   administrative boundaries. PLoS ONE 15(4): e0231866. https://www.geoboundaries.org. Simplified to 0.01 degrees and
   clipped to 60S-60N. CC BY 4.0 for CGAZ itself is the repository-wide licence for geoBoundaries derivatives, not a

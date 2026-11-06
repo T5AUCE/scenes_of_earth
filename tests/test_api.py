@@ -811,4 +811,4 @@ def test_land_cover_over_open_sea_is_refused_before_any_read(tmp_path):
         )
 
     assert response.status_code == 422
-    assert response.json()["detail"] == "Land cover has no data in this area"
+    assert response.json()["detail"] == "Land Cover has no data in this area"

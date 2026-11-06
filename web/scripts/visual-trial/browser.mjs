@@ -58,6 +58,11 @@ const HTTP_CACHE_DIR = path.resolve(import.meta.dirname, "../../.trial-cache/htt
 export const VIEW_TIMEOUT_MS = 60 * 1000;
 
 const LANDCOVER_COLOUR = "esa_worldcover";
+/** Land Cover selectors accept old and new bundle title casing. */
+export const LANDCOVER_CARD_TEXT = /Land [Cc]over/;
+export const LANDCOVER_EDIT_BUTTON = /^Edit Land [Cc]over(?: ·|$)/;
+export const LANDCOVER_SHOW_SWITCH = /^Show Land [Cc]over(?: ·|$)/;
+export const LANDCOVER_EDIT_MENU = /^Edit Land [Cc]over$/;
 const BLEND_UNIT = "blend";
 const BLEND_HALVES = ["chirps_monthly", "era5land_temperature"];
 
@@ -1539,11 +1544,11 @@ function ownerMismatch(spot, sample) {
 }
 
 // False repaint readings fail the record, because a hidden layer repaints nothing.
-function displayFailures(checks, renderer) {
+export function displayFailures(checks, renderer) {
   const failures = [];
   if (!checks.visibility) failures.push("land cover visibility check did not repaint");
   if (!checks.palette_repaints) failures.push("land cover palette check did not repaint");
-  if (renderer === "gpu" && checks.edges_available && !checks.edges_repaint) {
+  if (renderer === "gpu" && (!checks.edges_available || !checks.edges_repaint)) {
     failures.push("land cover edges check did not repaint");
   }
   if (renderer === "image" && !checks.fallback_note) {
@@ -1560,43 +1565,43 @@ async function landcoverScreens(page, spot, zoom, options) {
   await page.screenshot({ path: path.join(options.out, `${prefix}-${options.renderer}.png`) });
   if (options.renderer !== "gpu") return;
 
-  await page.getByRole("button", { name: /^Edit Land cover(?: ·|$)/ }).click();
-  const rounding = page.getByRole("slider", { name: "Rounding", exact: true });
-  if (await rounding.count()) {
-    await rounding.fill("0");
+  await page.getByRole("button", { name: LANDCOVER_EDIT_BUTTON }).click();
+  const smoothing = page.getByRole("slider", { name: "Smoothing", exact: true });
+  if (await smoothing.count()) {
+    await smoothing.fill("0");
     await page.getByRole("button", { name: "Close", exact: true }).click();
     await page.evaluate(nextFrame);
-    await page.screenshot({ path: path.join(options.out, `${prefix}-gpu-rounding-0.png`) });
-    await page.getByRole("button", { name: /^Edit Land cover(?: ·|$)/ }).click();
-    await rounding.fill("0.25");
+    await page.screenshot({ path: path.join(options.out, `${prefix}-gpu-smoothing-0.png`) });
+    await page.getByRole("button", { name: LANDCOVER_EDIT_BUTTON }).click();
+    await smoothing.fill("0.25");
   }
   await page.getByRole("button", { name: "Close", exact: true }).click();
 }
 
 async function checkDisplay(page, renderer) {
-  const card = page.locator("section.card").filter({ hasText: "Land cover" });
-  const master = card.getByRole("switch", { name: /^Show Land cover(?: ·|$)/ });
+  const card = page.locator("section.card").filter({ hasText: LANDCOVER_CARD_TEXT });
+  const master = card.getByRole("switch", { name: LANDCOVER_SHOW_SWITCH });
   const before = await page.evaluate(frameHash);
   await master.uncheck();
   const hidden = await page.evaluate(frameHash);
   await master.check();
   const shown = await page.evaluate(frameHash);
-  await page.getByRole("button", { name: /^Edit Land cover(?: ·|$)/ }).click();
-  const menu = page.getByRole("complementary", { name: "Edit Land cover", exact: true });
+  await page.getByRole("button", { name: LANDCOVER_EDIT_BUTTON }).click();
+  const menu = page.getByRole("complementary", { name: LANDCOVER_EDIT_MENU });
   const original = await menu.locator(".palette-choice input[type=radio]:checked").inputValue();
   await menu.getByRole("radio", { name: "ESA", exact: false }).check();
   const recoloured = await page.evaluate(frameHash);
   await menu.locator(`.palette-choice input[type=radio][value="${original}"]`).check();
-  const rounding = menu.getByRole("slider", { name: "Rounding", exact: true });
-  const hasEdges = await rounding.count() > 0;
+  const smoothing = menu.getByRole("slider", { name: "Smoothing", exact: true });
+  const hasEdges = await smoothing.count() > 0;
   let edgesRepaint = null;
   if (hasEdges) {
-    await rounding.fill("0.6");
-    await menu.getByRole("slider", { name: "Edge softness", exact: true }).fill("1");
+    await smoothing.fill("0.6");
+    await menu.getByRole("slider", { name: "Softness", exact: true }).fill("1");
     await menu.getByRole("checkbox", { name: "Faint outline" }).check();
     edgesRepaint = await page.evaluate(frameHash) !== shown;
-    await rounding.fill("0.25");
-    await menu.getByRole("slider", { name: "Edge softness", exact: true }).fill("0");
+    await smoothing.fill("0.25");
+    await menu.getByRole("slider", { name: "Softness", exact: true }).fill("0");
     await menu.getByRole("checkbox", { name: "Faint outline" }).uncheck();
   }
   const fallbackNote = await menu.getByText("Edge options need WebGL drawing.", {

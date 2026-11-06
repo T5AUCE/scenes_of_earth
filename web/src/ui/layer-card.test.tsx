@@ -65,7 +65,7 @@ test("a card without Edit keeps only its switch", async (context) => {
   const root = createRoot(container);
 
   await act(async () => root.render(
-    <LayerCard title="Area outline" checked onToggle={() => {}} legend={null} />,
+    <LayerCard title="Area Outline" checked onToggle={() => {}} legend={null} />,
   ));
 
   assert.equal(container.querySelectorAll("button").length, 0);

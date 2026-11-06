@@ -2,8 +2,8 @@
 
 The module imports country and city boundaries into SQLite. It rebuilds the Copernicus terrain
 tile indexes and the ESA WorldCover tile index. It also ingests ERA5-Land, ERA5 and CHIRPS
-monthly cubes and the lithology map into local folders. Run `python -m soe.cli --help` to see
-the commands and their options.
+monthly cubes, the lithology map and the rock-age map into local folders. Run
+`python -m soe.cli --help` to see the commands and their options.
 """
 import argparse
 import json
@@ -20,6 +20,7 @@ from . import db
 from .boundary_import import import_cgaz, import_ucdb
 from .ingest import chirps
 from .ingest.era5 import INGEST_SPECS, ingest
+from .ingest.geology_age import ingest_geology_age
 from .ingest.lithology import ingest_lithology
 from .sources import (
     CHIRPS_CUBE,
@@ -73,6 +74,11 @@ def main(argv: list[str] | None = None) -> None:
         print("Lithology COG:", ingest_lithology(args.cubes))
         return
 
+    if args.command == "ingest-geology-age":
+        logging.basicConfig(level=logging.INFO)
+        print("Geological age COG:", ingest_geology_age(args.cubes, args.archive))
+        return
+
     if not (args.cgaz or args.ucdb):
         parser.error("give --cgaz and/or --ucdb")
 
@@ -104,9 +110,22 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     lithology_parser = subparsers.add_parser(
         "ingest-lithology",
-        help="write the Geology COG from the downloaded GLiM, else the OpenLandMap map (232 MB)",
+        help="write the Rock type COG from the downloaded GLiM, else the OpenLandMap map (232 MB)",
     )
     lithology_parser.add_argument(
+        "--cubes",
+        default=os.environ.get("SOE_CUBES_DIR", DEFAULT_CUBES_DIR),
+        help="folder of the cubes (default: SOE_CUBES_DIR or ./data/cubes)",
+    )
+    age_parser = subparsers.add_parser(
+        "ingest-geology-age",
+        help="write the Geological age COG from the GSC world geology map (fetches 27 MB)",
+    )
+    age_parser.add_argument(
+        "--archive",
+        help="a local copy of GSC Open File 5529 (of_5529.zip), instead of fetching it",
+    )
+    age_parser.add_argument(
         "--cubes",
         default=os.environ.get("SOE_CUBES_DIR", DEFAULT_CUBES_DIR),
         help="folder of the cubes (default: SOE_CUBES_DIR or ./data/cubes)",

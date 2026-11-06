@@ -150,57 +150,59 @@ test("the first view keeps failures emitted before the outline is ready", async 
 });
 
 test("categorical records include only the class labels shown in each view", async () => {
-  const labels = [
-    { innerText: "Tree cover", checkVisibility: () => true },
-    { innerText: "Shrubland", checkVisibility: () => false },
-    { innerText: " Grassland ", checkVisibility: () => true },
-  ];
-  const card = {
-    innerText: "Land cover\nTree cover\nGrassland",
-    getAttribute: (name) => (name === "aria-label" ? "Land cover" : null),
-    querySelector: () => null,
-    querySelectorAll: (selector) => {
-      assert.equal(selector, ".legend-swatch + span");
-      return labels;
-    },
-  };
-  const sandbox = {
-    document: { querySelectorAll: () => [card], querySelector: () => null },
-    window: {
-      __trialMaskReady: true,
-      __trialLayersReady: true,
-      __map: {
-        getStyle: () => ({ layers: [] }),
-        getCanvas: () => ({ clientWidth: 1280, clientHeight: 800 }),
-        getZoom: () => 8,
-        areTilesLoaded: () => true,
+  for (const title of ["Land cover", "Land Cover"]) {
+    const labels = [
+      { innerText: "Tree cover", checkVisibility: () => true },
+      { innerText: "Shrubland", checkVisibility: () => false },
+      { innerText: " Grassland ", checkVisibility: () => true },
+    ];
+    const card = {
+      innerText: `${title}\nTree cover\nGrassland`,
+      getAttribute: (name) => (name === "aria-label" ? title : null),
+      querySelector: () => null,
+      querySelectorAll: (selector) => {
+        assert.equal(selector, ".legend-swatch + span");
+        return labels;
       },
-    },
-  };
-  const page = {
-    on: () => {},
-    goto: async () => {},
-    waitForFunction: async () => {},
-    evaluate: async (callback, patterns) => {
-      if (callback.name === "waitForIdle") return true;
-      if (callback.name !== "takeSample") return [];
+    };
+    const sandbox = {
+      document: { querySelectorAll: () => [card], querySelector: () => null },
+      window: {
+        __trialMaskReady: true,
+        __trialLayersReady: true,
+        __map: {
+          getStyle: () => ({ layers: [] }),
+          getCanvas: () => ({ clientWidth: 1280, clientHeight: 800 }),
+          getZoom: () => 8,
+          areTilesLoaded: () => true,
+        },
+      },
+    };
+    const page = {
+      on: () => {},
+      goto: async () => {},
+      waitForFunction: async () => {},
+      evaluate: async (callback, patterns) => {
+        if (callback.name === "waitForIdle") return true;
+        if (callback.name !== "takeSample") return [];
 
-      const sample = runInNewContext(`(${callback})(patterns)`, { ...sandbox, patterns });
-      return JSON.parse(JSON.stringify(sample));
-    },
-    close: async () => {},
-  };
-  const records = await trialSpot(
-    { newPage: async () => page },
-    "https://example.test",
-    { name: "Land cover", enable: [], zooms: ["fitted"] },
-    "scene",
-    { screens: false },
-  );
+        const sample = runInNewContext(`(${callback})(patterns)`, { ...sandbox, patterns });
+        return JSON.parse(JSON.stringify(sample));
+      },
+      close: async () => {},
+    };
+    const records = await trialSpot(
+      { newPage: async () => page },
+      "https://example.test",
+      { name: title, enable: [], zooms: ["fitted"] },
+      "scene",
+      { screens: false },
+    );
 
-  assert.deepEqual(records[0].legend_classes, ["Tree cover", "Grassland"]);
-  assert.equal(records[0].legend, null);
-  assert.equal(records[0].timed_out, false);
+    assert.deepEqual(records[0].legend_classes, ["Tree cover", "Grassland"], title);
+    assert.equal(records[0].legend, null, title);
+    assert.equal(records[0].timed_out, false, title);
+  }
 });
 
 test("a colour spot sets the pick through the scene link", async () => {

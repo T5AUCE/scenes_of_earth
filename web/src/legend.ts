@@ -507,6 +507,8 @@ export function classLegend(
     }
     (group ? lists.get(group)! : element).append(classRow(label, color));
   }
+  // Without families the flat list reuses the family column so its boxes align with geology rows.
+  if (lists.size === 0) element.className = "legend-group-list";
   return element;
 }
 

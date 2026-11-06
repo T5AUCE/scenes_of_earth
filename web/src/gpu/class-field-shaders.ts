@@ -12,7 +12,10 @@
  * 256 x 1 colour table by class id. `uSmooth` blends competing classes from the kernel instead
  * of painting the nearest cell. `uRounding` blends bilinear weights towards a cubic B-spline.
  * `uSoftnessCells` is the width of the colour blend between competing classes in grid cells.
- * `uOutline` enables the border while `uOutlineStrength` controls its ink weight, `uOpacity`
+ * `uSmoothRadiusCells` scales a cubic B-spline kernel with support twice the radius
+ * in grid cells to round staircases, while 0 keeps the legacy kernel. Radii above 2 sample
+ * every second cell over a 16 x 16 window so the cost stays 64 taps. `uOutline`
+ * enables the border while `uOutlineStrength` controls its ink weight, `uOpacity`
  * scales the class fills while the hatch draws at full strength, and `uPixelRatio` keeps
  * the hatch at CSS spacing.
  */
@@ -36,6 +39,7 @@ precision highp sampler2D;
 
 in vec2 vPosition;
 uniform usampler2D uIds;
+uniform usampler2D uHomogeneous;
 uniform sampler2D uRows;
 uniform sampler2D uPalette;
 uniform ivec2 uIdsSize;
@@ -44,6 +48,7 @@ uniform float uWindowRow;
 uniform bool uSmooth;
 uniform float uRounding;
 uniform float uSoftnessCells;
+uniform float uSmoothRadiusCells;
 uniform bool uOutline;
 uniform float uOutlineStrength;
 uniform float uOpacity;
@@ -55,6 +60,11 @@ const float MIN_EDGE_WIDTH_PX = 1.0;
 const vec3 INK = vec3(59.0, 48.0, 38.0) / 255.0;
 const float OUTLINE_WIDTH_PX = 0.75;
 const int KERNEL_SIZE = 4;
+const int MAX_CLASS_COUNT = 24;
+const int WIDE_FIRST_OFFSET = -3;
+const int WIDE_SPAN = 8;
+const int WIDE_LARGE_FIRST_OFFSET = -6;
+const float WIDE_SUPPORT_RADII = 2.0;
 const float FULL_SUPPORT_WEIGHT = 0.1;
 const uint HATCH_ID = 255u;
 const float HATCH_SPACING_PX = 8.0;
@@ -130,9 +140,9 @@ void gatherClasses(
   vec4 rowWeights,
   vec4 columnSlopes,
   vec4 rowSlopes,
-  out uint classIds[16],
-  out float classWeights[16],
-  out vec2 classGradients[16],
+  out uint classIds[MAX_CLASS_COUNT],
+  out float classWeights[MAX_CLASS_COUNT],
+  out vec2 classGradients[MAX_CLASS_COUNT],
   out int classCount
 ) {
   classCount = 0;
@@ -160,6 +170,101 @@ void gatherClasses(
       );
     }
   }
+}
+
+vec2 wideAxis(float offset, float radiusCells);
+
+void gatherWideClasses(
+  vec2 position,
+  ivec2 base,
+  float radiusCells,
+  out uint classIds[MAX_CLASS_COUNT],
+  out float classWeights[MAX_CLASS_COUNT],
+  out vec2 classGradients[MAX_CLASS_COUNT],
+  out int classCount,
+  out bool overflowed
+) {
+  vec2 columnAxes[WIDE_SPAN];
+  vec2 rowAxes[WIDE_SPAN];
+  // Radii above 2 sample every second cell over a 16 x 16 window so the cost stays 64 taps.
+  // The taps align to globally even cells so the sampled set slides without popping.
+  int firstX = WIDE_FIRST_OFFSET;
+  int firstY = WIDE_FIRST_OFFSET;
+  int stride = 1;
+  if (radiusCells > 2.0) {
+    firstX = WIDE_LARGE_FIRST_OFFSET - (base.x & 1);
+    firstY = WIDE_LARGE_FIRST_OFFSET - (base.y & 1);
+    stride = 2;
+  }
+  for (int tap = 0; tap < WIDE_SPAN; tap++) {
+    vec2 cell = vec2(base + ivec2(firstX + tap * stride, firstY + tap * stride));
+    columnAxes[tap] = wideAxis(position.x - cell.x, radiusCells);
+    rowAxes[tap] = wideAxis(position.y - cell.y, radiusCells);
+  }
+
+  classCount = 0;
+  overflowed = false;
+  float totalWeight = 0.0;
+  vec2 totalGradient = vec2(0.0);
+  for (int row = 0; row < WIDE_SPAN; row++) {
+    for (int column = 0; column < WIDE_SPAN; column++) {
+      float weight = columnAxes[column].x * rowAxes[row].x;
+      if (weight <= 0.0) continue;
+
+      vec2 gradient = vec2(
+        columnAxes[column].y * rowAxes[row].x,
+        columnAxes[column].x * rowAxes[row].y
+      );
+      totalWeight += weight;
+      totalGradient += gradient;
+
+      uint id = cellId(base + ivec2(firstX + column * stride, firstY + row * stride));
+      int index = -1;
+      for (int known = 0; known < classCount; known++) {
+        if (classIds[known] == id) {
+          index = known;
+          break;
+        }
+      }
+      if (index < 0) {
+        if (classCount >= MAX_CLASS_COUNT) {
+          overflowed = true;
+          continue;
+        }
+
+        index = classCount;
+        classIds[index] = id;
+        classWeights[index] = 0.0;
+        classGradients[index] = vec2(0.0);
+        classCount++;
+      }
+      classWeights[index] += weight;
+      classGradients[index] += gradient;
+    }
+  }
+
+  // Shares keep the outside and hatch taps in the denominator so the mask edge does not move.
+  float totalSquared = totalWeight * totalWeight;
+  for (int index = 0; index < classCount; index++) {
+    classGradients[index] = (
+      classGradients[index] * totalWeight - classWeights[index] * totalGradient
+    ) / totalSquared;
+    classWeights[index] /= totalWeight;
+  }
+}
+
+// The radius scales the kernel so the support stays twice the radius.
+vec2 wideAxis(float offset, float radiusCells) {
+  float x = abs(offset) / radiusCells;
+  if (x >= WIDE_SUPPORT_RADII) return vec2(0.0);
+
+  float weight = x < 1.0
+    ? (4.0 - 6.0 * x * x + 3.0 * x * x * x) / 6.0
+    : pow(2.0 - x, 3.0) / 6.0;
+  float slope = x < 1.0
+    ? (-12.0 * x + 9.0 * x * x) / 6.0
+    : -0.5 * (2.0 - x) * (2.0 - x);
+  return vec2(weight, slope * sign(offset) / radiusCells);
 }
 
 float gridRow() {
@@ -193,29 +298,64 @@ void main() {
     return;
   }
 
-  vec4 columnWeights = axisWeights(fraction.x);
-  vec4 rowWeights = axisWeights(fraction.y);
-  vec4 columnSlopes = axisSlopes(fraction.x);
-  vec4 rowSlopes = axisSlopes(fraction.y);
-
-  uint classIds[16];
-  float classWeights[16];
-  vec2 classGradients[16];
+  uint classIds[MAX_CLASS_COUNT];
+  float classWeights[MAX_CLASS_COUNT];
+  vec2 classGradients[MAX_CLASS_COUNT];
   int classCount = 0;
-  gatherClasses(
-    base,
-    columnWeights,
-    rowWeights,
-    columnSlopes,
-    rowSlopes,
-    classIds,
-    classWeights,
-    classGradients,
-    classCount
-  );
+  if (uSmoothRadiusCells > 0.0) {
+    // Uniform interiors skip the gather because the wide result equals the nearest colour.
+    if (
+      base.x >= 0
+      && base.y >= 0
+      && base.x < uIdsSize.x
+      && base.y < uIdsSize.y
+      && texelFetch(uHomogeneous, base, 0).r == 1u
+    ) {
+      fragColor = vec4(classColor(nearest) * uOpacity, uOpacity);
+      return;
+    }
+
+    bool wideOverflowed = false;
+    gatherWideClasses(
+      position,
+      base,
+      uSmoothRadiusCells,
+      classIds,
+      classWeights,
+      classGradients,
+      classCount,
+      wideOverflowed
+    );
+    // An empty or overflowing wide gather falls back to the legacy kernel as a safe default.
+    if (wideOverflowed || classCount == 0) {
+      gatherClasses(
+        base,
+        axisWeights(fraction.x),
+        axisWeights(fraction.y),
+        axisSlopes(fraction.x),
+        axisSlopes(fraction.y),
+        classIds,
+        classWeights,
+        classGradients,
+        classCount
+      );
+    }
+  } else {
+    gatherClasses(
+      base,
+      axisWeights(fraction.x),
+      axisWeights(fraction.y),
+      axisSlopes(fraction.x),
+      axisSlopes(fraction.y),
+      classIds,
+      classWeights,
+      classGradients,
+      classCount
+    );
+  }
 
   // A class fades out with its kernel support so classes entering the stencil change nothing.
-  float influences[16];
+  float influences[MAX_CLASS_COUNT];
   float totalInfluence = 0.0;
   for (int index = 0; index < classCount; index++) {
     influences[index] = 0.0;
@@ -294,6 +434,13 @@ const MIN_MIRROR_GRADIENT = 1e-6;
 const MIN_EDGE_WIDTH_PX = 1;
 const FULL_SUPPORT_WEIGHT = 0.1;
 const OUTLINE_WIDTH_PX = 0.75;
+const WIDE_FIRST_OFFSET = -3;
+const WIDE_SPAN = 8;
+const WIDE_LARGE_FIRST_OFFSET = -6;
+const WIDE_LARGE_FIRST = -7;
+const WIDE_LARGE_SPAN = 16;
+const WIDE_SUPPORT_RADII = 2;
+const MAX_CLASS_COUNT = 24;
 /** The class id that hatches an in-area cell with no class, leaving 0 for outside. */
 export const CLASS_HATCH_ID = 255;
 /** The faint outline drawn while a categorical layer holds colour. */
@@ -341,6 +488,12 @@ export interface ClassFieldFragment {
   positionDx: readonly [number, number];
   /** Change in grid cells per screen pixel along screen y. */
   positionDy: readonly [number, number];
+  /** Absolute cell coordinates of the fragment for wide taps, ignored when radius is 0. */
+  position?: readonly [number, number];
+  /** Grid lookup mirroring the shader cell fetch; required when the radius is positive. */
+  sampleId?: (cellX: number, cellY: number) => number;
+  /** Homogeneous-neighbourhood flag for the fragment base; only used when radius is positive. */
+  homogeneous?: boolean;
 }
 
 /** The edge choices that change the fragment shader's result. */
@@ -348,6 +501,8 @@ export interface EdgeOptions {
   smooth: boolean;
   rounding: number;
   softnessCells: number;
+  /** Wider class-presence scale in grid cells with support twice the radius. */
+  smoothRadiusCells?: number;
 }
 
 /** The class mix and outline ink that the fragment shader makes for one fragment. */
@@ -408,17 +563,19 @@ export function sampleClassField(
   if (!options.smooth) {
     return { discarded: false, nearest, weights: [{ id: nearest, weight: 1 }], outline: 0 };
   }
+  const radiusCells = options.smoothRadiusCells ?? 0;
+  // Uniform interiors skip the gather because the wide result equals the nearest colour.
+  if (radiusCells > 0 && fragment.homogeneous) {
+    return { discarded: false, nearest, weights: [{ id: nearest, weight: 1 }], outline: 0 };
+  }
 
   const columnWeights = axisWeights(fractionX, options.rounding);
   const rowWeights = axisWeights(fractionY, options.rounding);
   const columnSlopes = axisSlopes(fractionX, options.rounding);
   const rowSlopes = axisSlopes(fractionY, options.rounding);
-  const classes = gatherClasses(
-    fragment.ids,
-    columnWeights,
-    rowWeights,
-    columnSlopes,
-    rowSlopes,
+  const classes = (
+    (radiusCells > 0 ? wideClasses(fragment, radiusCells) : null)
+    ?? gatherClasses(fragment.ids, columnWeights, rowWeights, columnSlopes, rowSlopes)
   ).filter(({ id }) => id !== 0 && id !== CLASS_HATCH_ID);
   const influences = classInfluences(classes, fragment, options.softnessCells);
   const total = Math.max(
@@ -489,6 +646,89 @@ function gatherClasses(
     }
   }
   return classes;
+}
+
+/**
+ * Replace the kernel sums with a wide B-spline so staircases become smooth curves. Outside and
+ * hatch taps stay in the denominator so the mask edge does not move.
+ */
+function wideClasses(
+  fragment: ClassFieldFragment,
+  radiusCells: number,
+): ClassSum[] | null {
+  const position = fragment.position;
+  const sample = fragment.sampleId;
+  if (!position || !sample) return null;
+
+  const base = [Math.floor(position[0]), Math.floor(position[1])];
+  // Radii above 2 sample every second cell over a 16 x 16 window so the cost stays 64 taps.
+  // The taps align to globally even cells so the sampled set slides without popping.
+  const large = radiusCells > 2;
+  const stride = large ? 2 : 1;
+  const firstX = large ? WIDE_LARGE_FIRST_OFFSET - parity(base[0]) : WIDE_FIRST_OFFSET;
+  const firstY = large ? WIDE_LARGE_FIRST_OFFSET - parity(base[1]) : WIDE_FIRST_OFFSET;
+  const columns = Array.from(
+    { length: WIDE_SPAN },
+    (_, tap) => wideAxis(position[0] - (base[0] + firstX + tap * stride), radiusCells),
+  );
+  const rows = Array.from(
+    { length: WIDE_SPAN },
+    (_, tap) => wideAxis(position[1] - (base[1] + firstY + tap * stride), radiusCells),
+  );
+  const classes: ClassSum[] = [];
+  let totalWeight = 0;
+  const totalGradient: [number, number] = [0, 0];
+  let overflowed = false;
+  rows.forEach(([rowWeight, rowSlope], row) => {
+    columns.forEach(([columnWeight, columnSlope], column) => {
+      const weight = columnWeight * rowWeight;
+      if (weight <= 0) return;
+
+      const gradient: [number, number] = [columnSlope * rowWeight, columnWeight * rowSlope];
+      totalWeight += weight;
+      totalGradient[0] += gradient[0];
+      totalGradient[1] += gradient[1];
+      const id = sample(base[0] + firstX + column * stride, base[1] + firstY + row * stride);
+      let current = classes.find((entry) => entry.id === id);
+      if (!current) {
+        if (classes.length >= MAX_CLASS_COUNT) {
+          overflowed = true;
+          return;
+        }
+        current = { id, weight: 0, gradient: [0, 0] };
+        classes.push(current);
+      }
+      current.weight += weight;
+      current.gradient[0] += gradient[0];
+      current.gradient[1] += gradient[1];
+    });
+  });
+  if (overflowed || classes.length === 0) return null;
+
+  const totalSquared = totalWeight * totalWeight;
+  for (const current of classes) {
+    current.gradient = [
+      (current.gradient[0] * totalWeight - current.weight * totalGradient[0]) / totalSquared,
+      (current.gradient[1] * totalWeight - current.weight * totalGradient[1]) / totalSquared,
+    ];
+    current.weight /= totalWeight;
+  }
+  return classes;
+}
+
+/** The mathematical parity of a possibly negative cell index, matching the shader's bit test. */
+function parity(index: number): number {
+  return ((index % 2) + 2) % 2;
+}
+
+/** The radius scales the kernel so the support stays twice the radius. */
+function wideAxis(offset: number, radiusCells: number): [number, number] {
+  const x = Math.abs(offset) / radiusCells;
+  if (x >= WIDE_SUPPORT_RADII) return [0, 0];
+
+  const weight = x < 1 ? (4 - 6 * x * x + 3 * x ** 3) / 6 : (2 - x) ** 3 / 6;
+  const slope = x < 1 ? (-12 * x + 9 * x * x) / 6 : -0.5 * (2 - x) * (2 - x);
+  return [weight, (slope * Math.sign(offset)) / radiusCells];
 }
 
 // A class fades out with its kernel support so classes entering the stencil change nothing.
@@ -562,4 +802,49 @@ function distancePx(current: ClassSum, other: ClassSum, fragment: ClassFieldFrag
 function smoothstep(fraction: number): number {
   const clamped = Math.min(1, Math.max(0, fraction));
   return clamped * clamped * (3 - 2 * clamped);
+}
+
+/**
+ * Mark base cells whose maximum 16 x 16 support holds one id so uniform interiors skip
+ * the gather. Clamped edge fetches match the shader so the flag stays exact.
+ */
+export function homogeneousFlags(
+  cells: Uint8Array | readonly number[],
+  nx: number,
+  ny: number,
+): Uint8Array {
+  const flags = new Uint8Array(nx * ny);
+  for (let row = 0; row < ny; row++) {
+    for (let column = 0; column < nx; column++) {
+      flags[row * nx + column] = isUniformNeighbourhood(cells, nx, ny, column, row) ? 1 : 0;
+    }
+  }
+  return flags;
+}
+
+function isUniformNeighbourhood(
+  cells: Uint8Array | readonly number[],
+  nx: number,
+  ny: number,
+  column: number,
+  row: number,
+): boolean {
+  const first = cells[clampRow(row + WIDE_LARGE_FIRST, ny) * nx
+    + clampColumn(column + WIDE_LARGE_FIRST, nx)];
+  for (let tapRow = 0; tapRow < WIDE_LARGE_SPAN; tapRow++) {
+    const cellRow = clampRow(row + WIDE_LARGE_FIRST + tapRow, ny);
+    for (let tapColumn = 0; tapColumn < WIDE_LARGE_SPAN; tapColumn++) {
+      const cellColumn = clampColumn(column + WIDE_LARGE_FIRST + tapColumn, nx);
+      if (cells[cellRow * nx + cellColumn] !== first) return false;
+    }
+  }
+  return true;
+}
+
+function clampRow(row: number, ny: number): number {
+  return Math.min(ny - 1, Math.max(0, row));
+}
+
+function clampColumn(column: number, nx: number): number {
+  return Math.min(nx - 1, Math.max(0, column));
 }

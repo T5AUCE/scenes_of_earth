@@ -3,10 +3,15 @@ import { arrayDoc, decode, readArray, readMask, type Store } from "../data";
 import {
   DEFAULT_EDGES,
   defaultPalette,
+  GEOLOGY_SMOOTH_RADIUS_CELLS,
+  isGeologyLayer,
   loadStoredEdges,
+  loadStoredSmoothing,
   MAX_ROUNDING,
+  MAX_SMOOTH_RADIUS_CELLS,
   MAX_SOFTNESS_CELLS,
   storeEdges,
+  storeSmoothing,
 } from "../display-state";
 import { createClassFieldLayer } from "../gpu/class-field-layer";
 import { CLASS_HATCH_ID } from "../gpu/class-field-shaders";
@@ -15,13 +20,21 @@ import { classLegend, classNoDataLegend } from "../legend";
 import { removeLayerAndSource } from "../map";
 import { classColors, classPaletteOptions, rgbToHex } from "../render/palettes";
 import { cellClassIds } from "../render/smooth-classes";
-import type { EdgeSettings, EdgesMenu, LayerContext, LayerMenu, LayerView } from "../types";
+import type {
+  EdgeSettings,
+  EdgesMenu,
+  LayerContext,
+  LayerControl,
+  LayerMenu,
+  LayerView,
+} from "../types";
 import type { Draw } from "./allocate";
 import { createImagePainter } from "./categorical-image";
 
 const CATEGORICAL_OPACITY = 0.8;
 const ROUNDING_STEP = 0.05;
 const SOFTNESS_STEP_CELLS = 0.05;
+const SMOOTHING_STEP_CELLS = 0.05;
 const IMAGE_EDGES_NOTE = "Edge options need WebGL drawing.";
 
 /** Draw static classes with GPU edges, retaining the image painter as an automatic fallback. */
@@ -52,6 +65,7 @@ class CategoricalView implements LayerView {
   private colors;
   private smooth = true;
   private edges: EdgeSettings;
+  private smoothing: number;
   private alive = true;
   private readonly context: LayerContext;
   private restorePosition: LayerPosition | null = null;
@@ -68,12 +82,13 @@ class CategoricalView implements LayerView {
     this.palette = context.display?.palette ?? defaultPalette(layer);
     this.colors = classColors(layer.id, this.classes, this.palette);
     this.edges = loadStoredEdges(layer.id);
+    this.smoothing = loadStoredSmoothing(layer.id);
     this.gpu = createClassFieldLayer({
       id: this.id,
       grid: layer.grid,
       shift: context.shift,
       opacity: CATEGORICAL_OPACITY,
-      edges: { smooth: this.smooth, ...this.edges },
+      edges: { smooth: this.smooth, ...this.edges, smoothRadiusCells: this.smoothing },
       onFail: () => this.useImage(),
     });
     this.edgeMenu = this.createEdgesMenu();
@@ -86,7 +101,7 @@ class CategoricalView implements LayerView {
         set: (on: boolean) => {
           this.smooth = on;
           if (this.image) this.repaint();
-          else this.gpu.setEdges({ smooth: on, ...this.edges });
+          else this.gpu.setEdges({ smooth: on, ...this.edges, smoothRadiusCells: this.smoothing });
         },
       },
     ];
@@ -96,50 +111,76 @@ class CategoricalView implements LayerView {
 
   private createEdgesMenu(): EdgesMenu {
     const view = this;
+    const layerId = this.context.layer.id;
+    // Geology smooths widely and keeps the default rounding internally, so its menu hides it.
+    const controls: LayerControl[] = isGeologyLayer(layerId) ? [] : [
+      {
+        label: "Smoothing",
+        min: 0,
+        max: MAX_ROUNDING,
+        step: ROUNDING_STEP,
+        get value() {
+          return view.edges.rounding;
+        },
+        set: (rounding: number) => this.setEdges({ ...this.edges, rounding }),
+      },
+    ];
+    controls.push({
+      label: "Softness",
+      unit: "cells",
+      min: 0,
+      max: MAX_SOFTNESS_CELLS,
+      step: SOFTNESS_STEP_CELLS,
+      get value() {
+        return view.edges.softnessCells;
+      },
+      set: (softnessCells: number) => this.setEdges({ ...this.edges, softnessCells }),
+    });
+    if (isGeologyLayer(layerId)) {
+      controls.push({
+        label: "Smoothing",
+        unit: "cells",
+        min: 0,
+        max: MAX_SMOOTH_RADIUS_CELLS,
+        step: SMOOTHING_STEP_CELLS,
+        get value() {
+          return view.smoothing;
+        },
+        set: (smoothRadiusCells: number) => this.setSmoothing(smoothRadiusCells),
+      });
+    }
 
     return {
-      controls: [
-        {
-          label: "Rounding",
-          min: 0,
-          max: MAX_ROUNDING,
-          step: ROUNDING_STEP,
-          get value() {
-            return view.edges.rounding;
-          },
-          set: (rounding) => this.setEdges({ ...this.edges, rounding }),
-        },
-        {
-          label: "Edge softness",
-          unit: "cells",
-          min: 0,
-          max: MAX_SOFTNESS_CELLS,
-          step: SOFTNESS_STEP_CELLS,
-          get value() {
-            return view.edges.softnessCells;
-          },
-          set: (softnessCells) => this.setEdges({ ...this.edges, softnessCells }),
-        },
-      ],
+      controls,
       outline: {
         get value() {
           return view.edges.outline;
         },
-        set: (outline) => this.setEdges({ ...this.edges, outline }),
+        set: (outline: boolean) => this.setEdges({ ...this.edges, outline }),
       },
       get isDefault() {
         return view.edges.rounding === DEFAULT_EDGES.rounding
           && view.edges.softnessCells === DEFAULT_EDGES.softnessCells
-          && view.edges.outline === DEFAULT_EDGES.outline;
+          && view.edges.outline === DEFAULT_EDGES.outline
+          && view.smoothing === defaultSmoothing(layerId);
       },
-      reset: () => this.setEdges({ ...DEFAULT_EDGES }),
+      reset: () => {
+        this.setEdges({ ...DEFAULT_EDGES });
+        this.setSmoothing(defaultSmoothing(layerId));
+      },
     };
   }
 
   private setEdges(edges: EdgeSettings) {
     this.edges = edges;
     storeEdges(this.context.layer.id, edges);
-    this.gpu.setEdges({ smooth: this.smooth, ...edges });
+    this.gpu.setEdges({ smooth: this.smooth, ...edges, smoothRadiusCells: this.smoothing });
+  }
+
+  private setSmoothing(smoothRadiusCells: number) {
+    this.smoothing = smoothRadiusCells;
+    storeSmoothing(this.context.layer.id, smoothRadiusCells);
+    this.gpu.setEdges({ smooth: this.smooth, ...this.edges, smoothRadiusCells });
   }
 
   private createMenu(): LayerMenu {
@@ -274,7 +315,7 @@ class CategoricalView implements LayerView {
       if (this.ids) this.image.paint(unhatchIds(this.ids), colors, this.smooth);
     } else {
       this.gpu.setColors(colors);
-      this.gpu.setEdges({ smooth: this.smooth, ...this.edges });
+      this.gpu.setEdges({ smooth: this.smooth, ...this.edges, smoothRadiusCells: this.smoothing });
     }
     const legend = classLegend(this.classes, this.present, this.colors, this.expandedGroups);
     if (this.hasHatched && !this.image) legend.append(classNoDataLegend());
@@ -340,6 +381,11 @@ function gpuDisabled() {
   } catch {
     return false;
   }
+}
+
+/** The Edge smoothing radius a layer starts with. Only geology layers smooth widely. */
+function defaultSmoothing(layerId: string): number {
+  return isGeologyLayer(layerId) ? GEOLOGY_SMOOTH_RADIUS_CELLS : 0;
 }
 
 /** Mark in-area cells with no class for hatching, returning whether any were marked. */

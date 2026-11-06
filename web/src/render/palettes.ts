@@ -223,6 +223,10 @@ export const CLASS_PALETTES: Record<string, ClassPaletteSet> = {
       },
     },
   },
+  geology_age: {
+    options: [{ name: "esa", label: "ICS colours" }],
+    colors: {},
+  },
   geology: {
     options: [
       { name: "painted", label: "Painted" },

@@ -12,6 +12,7 @@ import shutil
 import tempfile
 import urllib.request
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -48,7 +49,7 @@ DOWNLOAD_CHUNK_BYTES = 1 << 20
 GLIM_DIR = "glim"  # in the downloads folder
 GLIM_FILE = "LiMW_GIS 2015.gdb"
 GLIM_CRS = "ESRI:54012"  # World Eckert IV
-GLIM_TILE_DEG = 10
+TILE_DEG = 10
 GLIM_CODE_CHARS = 4  # level 1 and level 2 of the 6-character Litho code
 GLIM_SEGMENT_M = 20_000  # longest polygon edge kept before reprojection, so edges bend right
 NORTH_EDGE_DEG = 60
@@ -81,7 +82,7 @@ def ingest_lithology(cubes_dir: Path | str) -> Path:
 
 def build_lithology_cog(source_path: Path | str, cog_path: Path | str) -> None:
     """Write the cropped, cleaned COG of the OpenLandMap map, replacing cog_path when complete."""
-    _publish_cog(
+    publish_cog(
         lambda cleaned: _write_cleaned(source_path, cleaned),
         OPENLANDMAP_SOURCE,
         Path(cog_path),
@@ -90,14 +91,14 @@ def build_lithology_cog(source_path: Path | str, cog_path: Path | str) -> None:
 
 def build_glim_cog(glim_path: Path | str, cog_path: Path | str) -> None:
     """Write the COG of GLiM level 1 and 2 classes, replacing cog_path only when complete."""
-    _publish_cog(
+    publish_cog(
         lambda rasterised: _write_glim_raster(glim_path, rasterised),
         GLIM_SOURCE,
         Path(cog_path),
     )
 
 
-def _publish_cog(write_raster: Callable[[Path], None], source_id: str, cog_path: Path) -> None:
+def publish_cog(write_raster: Callable[[Path], None], source_id: str, cog_path: Path) -> None:
     """Write a plain raster with write_raster, tag its source and convert it to the COG."""
     cleaned = cog_path.with_suffix(".cleaned.tif")
     partial = cog_path.with_suffix(".partial.tif")
@@ -188,8 +189,24 @@ def _repair_edge_columns(values: np.ndarray, edge_pixels: int) -> None:
 
 def _write_glim_raster(glim_path: Path | str, raster_path: Path) -> None:
     """Rasterise the GLiM codes tile by tile onto the 60°S-60°N grid of LITHOLOGY_RES_DEG."""
-    width = round(WORLD_WIDTH_DEG / LITHOLOGY_RES_DEG)
-    height = round((NORTH_EDGE_DEG - SOUTH_EDGE_DEG) / LITHOLOGY_RES_DEG)
+    write_tiled_raster(
+        raster_path,
+        LITHOLOGY_RES_DEG,
+        partial(_rasterize_glim_tile, glim_path),
+    )
+
+
+def write_tiled_raster(
+    raster_path: Path,
+    res_deg: float,
+    rasterize_tile: Callable[[Bbox, Affine, tuple[int, int]], np.ndarray],
+) -> None:
+    """Write the uint8 classes of the 60°S-60°N world at res_deg, one TILE_DEG tile at a time.
+
+    rasterize_tile(bounds, transform, shape) returns the classes of one tile, 0 where it has none.
+    """
+    width = round(WORLD_WIDTH_DEG / res_deg)
+    height = round((NORTH_EDGE_DEG - SOUTH_EDGE_DEG) / res_deg)
     profile = {
         "driver": "GTiff",
         "dtype": "uint8",
@@ -198,20 +215,19 @@ def _write_glim_raster(glim_path: Path | str, raster_path: Path) -> None:
         "crs": "EPSG:4326",
         "width": width,
         "height": height,
-        "transform": from_origin(-WORLD_WIDTH_DEG / 2, NORTH_EDGE_DEG, *[LITHOLOGY_RES_DEG] * 2),
+        "transform": from_origin(-WORLD_WIDTH_DEG / 2, NORTH_EDGE_DEG, res_deg, res_deg),
         "tiled": True,
         "blockxsize": BLOCK_PX,
         "blockysize": BLOCK_PX,
         "compress": "zstd",
         "BIGTIFF": "IF_SAFER",
     }
-    tile_px = round(GLIM_TILE_DEG / LITHOLOGY_RES_DEG)
+    tile_px = round(TILE_DEG / res_deg)
     with rasterio.open(raster_path, "w", **profile) as raster:
         for row in range(0, height, tile_px):
             for column in range(0, width, tile_px):
                 tile = Window(column, row, min(tile_px, width - column), min(tile_px, height - row))
-                classes = _rasterize_glim_tile(
-                    glim_path,
+                classes = rasterize_tile(
                     raster.window_bounds(tile),
                     raster.window_transform(tile),
                     (tile.height, tile.width),

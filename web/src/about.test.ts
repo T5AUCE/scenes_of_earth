@@ -56,16 +56,46 @@ test("geology scenes explain the rock-type scale and seams of their source map",
   const openLandMap = renderAbout(makeGeologyScene("OpenLandMap lithology 250 m"), "m", {});
 
   assert.doesNotMatch(plain.textContent ?? "", /rock type/);
-  assert.match(glim.textContent ?? "", /rock type from the Global Lithological Map/);
+  assert.match(glim.textContent ?? "", /Rock type layer comes from the Global Lithological Map/);
   assert.match(glim.textContent ?? "", /1:3\.75 million/);
   assert.match(glim.textContent ?? "", /approximate at local scale/);
   assert.match(glim.textContent ?? "", /92 source maps/);
   assert.doesNotMatch(glim.textContent ?? "", /180° longitude/);
   const openLandMapText = openLandMap.textContent ?? "";
-  assert.match(openLandMapText, /rock type from a global map at about 1:3\.75 million/);
+  assert.match(openLandMapText, /Rock type layer comes from a global map at about 1:3\.75 million/);
   assert.match(openLandMap.textContent ?? "", /OpenLandMap, from GLiM/);
   assert.match(openLandMap.textContent ?? "", /seams can show/);
   assert.match(openLandMap.textContent ?? "", /180° longitude/);
+});
+
+test("geology age scenes explain the scale, era-only share and ICS generalisation", (context) => {
+  const window = new Window();
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const age = renderAbout(
+    makeGeologyScene("Generalized geology of the world (GSC Open File 5529)", "geology_age"),
+    "m",
+    {},
+  );
+  const text = age.textContent ?? "";
+
+  assert.match(text, /Geological age layer comes from the Geological Survey of Canada/);
+  assert.match(text, /worldwide fallback/);
+  assert.match(text, /1:35 million/);
+  assert.match(text, /tens of kilometres/);
+  assert.match(text, /only to an era or wider/);
+  assert.match(text, /generalised to ICS periods/);
+  assert.doesNotMatch(text, /rock type/);
+});
+
+test("smoothing explains geology Smoothing in plain sentences", (context) => {
+  const window = new Window();
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const text = (renderAbout(makeScene(), "m", {}).textContent ?? "");
+
+  assert.match(text, /Smoothing is measured in grid cells/);
+  assert.match(text, /staircases become smooth curves/);
 });
 
 function makeScene(): Scene {
@@ -142,10 +172,10 @@ function makeScene(): Scene {
   } as unknown as Scene;
 }
 
-function makeGeologyScene(sourceName: string): Scene {
+function makeGeologyScene(sourceName: string, id = "geology"): Scene {
   const scene = makeScene();
   const geology = {
-    id: "geology",
+    id,
     title: "Geology",
     units: "",
     source: { name: sourceName, licence: "CC BY-SA 4.0" },

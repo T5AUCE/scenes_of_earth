@@ -30,6 +30,8 @@ export interface QuadExtent {
 
 /** A shader samples this many cells beyond a tile's core on every side. */
 export const HALO_CELLS = 2;
+/** Wide kernels at radius 4 sample eight cells beyond a tile's core. */
+export const WIDE_HALO_CELLS = 8;
 
 const MATRIX_SIZE = 4;
 const WORLD_WIDTH_DEG = 360;

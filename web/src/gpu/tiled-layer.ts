@@ -263,6 +263,7 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
 
   /**
    * Upload one-byte grid cells with tile halos and an optional companion grid of the same size.
+   * A layer passes its own halo so wide kernels stay inside one texture without changing others.
    */
   protected uploadTiles(
     gl: WebGL2RenderingContext,
@@ -270,13 +271,14 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
     grid: TiledGrid,
     cells: Uint8Array,
     companionCells?: Uint8Array,
+    halo?: number,
   ) {
     deleteResources(gl, {
       textures: gpu.tiles.flatMap(({ texture, companion }) => [texture, companion]),
     });
     gpu.tiles = [];
     const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
-    for (const tile of textureTiles(grid.nx, grid.ny, maxTextureSize)) {
+    for (const tile of textureTiles(grid.nx, grid.ny, maxTextureSize, halo)) {
       const texture = this.uploadWindow(gl, grid, tile.window, cells);
       gpu.tiles.push({
         texture,

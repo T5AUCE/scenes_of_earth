@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { Bbox } from "../types.ts";
-import { localMatrix, quadExtent, rowTable, textureTiles } from "./grid-geometry.ts";
+import {
+  localMatrix,
+  quadExtent,
+  rowTable,
+  textureTiles,
+  WIDE_HALO_CELLS,
+} from "./grid-geometry.ts";
 
 const MAX_TEXTURE_SIZE_PX = 4096;
 const HALO_CELLS = 2;
@@ -155,4 +161,25 @@ test("tile halo is clamped at grid edges", () => {
   assert.equal(last.window.column + last.window.width, 20);
   assert.equal(last.window.row + last.window.height, 5);
   assert.equal(first.window.width, first.core.width + HALO_CELLS);
+});
+
+test("split tiles cover every cell once with eight cell halo", () => {
+  const [nx, ny, maxSize] = [40, 24, 24];
+  const tiles = textureTiles(nx, ny, maxSize, WIDE_HALO_CELLS);
+  const covered = new Uint8Array(nx * ny);
+
+  assert.ok(tiles.length > 1);
+  for (const { core, window } of tiles) {
+    assert.ok(window.width <= maxSize && window.height <= maxSize);
+    assert.ok(core.column - window.column === Math.min(WIDE_HALO_CELLS, core.column));
+    assert.ok(core.row - window.row === Math.min(WIDE_HALO_CELLS, core.row));
+    assert.equal(window.column % 2, 0);
+    assert.equal(window.row % 2, 0);
+    for (let row = core.row; row < core.row + core.height; row++) {
+      for (let column = core.column; column < core.column + core.width; column++) {
+        covered[row * nx + column] += 1;
+      }
+    }
+  }
+  assert.ok(covered.every((count) => count === 1));
 });

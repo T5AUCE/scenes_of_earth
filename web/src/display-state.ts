@@ -40,6 +40,7 @@ const EDGES_STORAGE_KEY = "soe.edges.v1";
 const INK_STORAGE_KEY = "soe.ink.v1";
 const DENSITY_STORAGE_KEY = "soe.density.v1";
 const UNITS_STORAGE_KEY = "soe.units.v1";
+const SMOOTHING_STORAGE_KEY = "soe.smoothing.v1";
 
 const PALETTE_FIELDS = 2;
 const INK_FIELDS = 2;
@@ -71,10 +72,15 @@ export const DEFAULT_EDGES: Readonly<EdgeSettings> = {
   outline: false,
 };
 
+/** Geology Edge smoothing rounds staircases over this many grid cells by default. */
+export const GEOLOGY_SMOOTH_RADIUS_CELLS = 1.5;
+
 /** The strongest rounding that retains small class patches. */
 export const MAX_ROUNDING = 0.6;
 /** The widest optional blend between class colours, in grid cells. */
 export const MAX_SOFTNESS_CELLS = 1;
+/** The widest Edge smoothing radius, in grid cells. */
+export const MAX_SMOOTH_RADIUS_CELLS = 4;
 const MAX_LEGACY_SOFTNESS_PX = 1.5; // old storage measured softness in screen pixels
 
 interface StoredEdges {
@@ -87,12 +93,14 @@ interface StoredEdges {
 /** Read valid edge choices for one dataset without changing its shared-link display. */
 export function loadStoredEdges(datasetId: string): EdgeSettings {
   const value = storedEdges()[datasetId];
-  if (!value || !isStoredRounding(value.rounding) || typeof value.outline !== "boolean") {
-    return { ...DEFAULT_EDGES };
-  }
+  if (!value || typeof value.outline !== "boolean") return { ...DEFAULT_EDGES };
 
   const softnessCells = storedSoftness(value);
   if (softnessCells === null) return { ...DEFAULT_EDGES };
+
+  // Stored Rounding is ignored because geology hides that control but keeps its default.
+  if (isGeologyLayer(datasetId)) return { ...DEFAULT_EDGES, softnessCells, outline: value.outline };
+  if (!isStoredRounding(value.rounding)) return { ...DEFAULT_EDGES };
 
   return { rounding: value.rounding, softnessCells, outline: value.outline };
 }
@@ -142,6 +150,48 @@ export function storeEdges(datasetId: string, edges: EdgeSettings) {
     const stored = storedEdges();
     stored[datasetId] = edges;
     localStorage.setItem(EDGES_STORAGE_KEY, JSON.stringify(stored));
+  } catch {
+    // Blocked storage must not prevent this visit's display changes.
+  }
+}
+
+/** Return whether a layer smooths staircases over a wider radius than the legacy kernel. */
+export function isGeologyLayer(datasetId: string): boolean {
+  return datasetId === "geology" || datasetId === "geology_age";
+}
+
+/** Read the stored Edge smoothing radius without changing shared-link display. */
+export function loadStoredSmoothing(datasetId: string): number {
+  if (!isGeologyLayer(datasetId)) return 0;
+
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(SMOOTHING_STORAGE_KEY) ?? "{}");
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const value = (parsed as Record<string, unknown>)[datasetId];
+      if (isSmoothing(value)) return value;
+    }
+  } catch {
+    // Blocked storage falls back to the default below.
+  }
+  return GEOLOGY_SMOOTH_RADIUS_CELLS;
+}
+
+function isSmoothing(value: unknown): value is number {
+  return typeof value === "number"
+    && Number.isFinite(value)
+    && value >= 0
+    && value <= MAX_SMOOTH_RADIUS_CELLS;
+}
+
+/** Remember the Edge smoothing radius per dataset, leaving links untouched. */
+export function storeSmoothing(datasetId: string, radiusCells: number): void {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(SMOOTHING_STORAGE_KEY) ?? "{}");
+    const stored = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, number>
+      : {};
+    stored[datasetId] = radiusCells;
+    localStorage.setItem(SMOOTHING_STORAGE_KEY, JSON.stringify(stored));
   } catch {
     // Blocked storage must not prevent this visit's display changes.
   }

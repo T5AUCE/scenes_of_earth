@@ -18,8 +18,13 @@ import {
   chartReferenceBounds,
   chartTickBounds,
   chartWorkflowState,
+  displayFailures,
   hitTestAttribution,
   hitTestControl,
+  LANDCOVER_CARD_TEXT,
+  LANDCOVER_EDIT_BUTTON,
+  LANDCOVER_EDIT_MENU,
+  LANDCOVER_SHOW_SWITCH,
   layoutPageChecks,
   layoutViewport,
   openChartsGallery,
@@ -34,6 +39,40 @@ import {
   LAYOUT_EDITOR,
 } from "./layout.mjs";
 import { ensureScenes } from "./scenes.mjs";
+
+test("land cover selectors accept old and new title casing", () => {
+  for (const title of ["Land cover", "Land Cover"]) {
+    assert.equal(LANDCOVER_EDIT_BUTTON.test(`Edit ${title}`), true);
+    assert.equal(LANDCOVER_EDIT_BUTTON.test(`Edit ${title} · Colour`), true);
+    assert.equal(LANDCOVER_SHOW_SWITCH.test(`Show ${title}`), true);
+    assert.equal(LANDCOVER_SHOW_SWITCH.test(`Show ${title} · Colour`), true);
+    assert.equal(LANDCOVER_EDIT_MENU.test(`Edit ${title}`), true);
+    assert.equal(LANDCOVER_CARD_TEXT.test(title), true);
+  }
+
+  assert.equal(LANDCOVER_EDIT_BUTTON.test("Edit Rock Type"), false);
+  assert.equal(LANDCOVER_CARD_TEXT.test("Rock Type"), false);
+});
+
+test("gpu display checks require the smoothing edge controls", () => {
+  const painted = {
+    visibility: true,
+    palette_repaints: true,
+    edges_available: true,
+    edges_repaint: true,
+    fallback_note: null,
+  };
+
+  assert.deepEqual(displayFailures(painted, "gpu"), []);
+  assert.deepEqual(
+    displayFailures({ ...painted, edges_available: false, edges_repaint: null }, "gpu"),
+    ["land cover edges check did not repaint"],
+  );
+  assert.deepEqual(
+    displayFailures({ ...painted, edges_repaint: false }, "gpu"),
+    ["land cover edges check did not repaint"],
+  );
+});
 
 test("a successful contour run returns exit code 0 and writes its records", async (context) => {
   const out = temporaryDir(context);

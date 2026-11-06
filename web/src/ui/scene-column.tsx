@@ -15,7 +15,7 @@ import { LayerEditor, type EditorTarget } from "./layer-editor";
 import { isMasterOn, masterChangedUnits } from "./master-switch";
 import { useSceneStore } from "./use-scene-store";
 
-const OUTLINE_TITLE = "Area outline";
+const OUTLINE_TITLE = "Area Outline";
 
 const LAST_FIELD = "field";
 

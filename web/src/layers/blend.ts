@@ -29,7 +29,7 @@ const BLEND_OPACITY = 0.8;
 const SMOOTH_NOTE = "Smoothed for display; values are per cell.";
 
 /** The title of the blended layer, as its card and the colour picker name it. */
-export const BLEND_TITLE = "Rainfall + temperature (blended)";
+export const BLEND_TITLE = "Rainfall + Temperature (Blended)";
 const BLEND_COLORS = lut2d(RAIN_TEMPERATURE_GRID);
 
 /** What the blend needs from the scene beyond its two layers. */
