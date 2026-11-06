@@ -19,6 +19,7 @@ from zarr.codecs import GzipCodec
 from . import __version__
 from .areas import Area, AreaError, simplify_for_display
 from .bundle import VERSION, JsonObject, make, validate
+from .geology_regional import CODE_MEANINGS, CODE_VALUES
 from .plan import MASK_INSIDE, LayerPlan, Plan, plan as make_plan
 from .sources import (
     FROM_FALLBACK,
@@ -185,7 +186,7 @@ def _write_layers(
             arrays, _, result = prefetched[dataset.id]
             if not isinstance(dataset, StaticDataset):
                 raise TypeError(f"{dataset.id}: prefetched a non-static layer")
-            _write_static_arrays(layer_group, dataset, layer_plan, arrays)
+            _write_static_arrays(layer_group, dataset, layer_plan, arrays, result)
             metadata[dataset.id] = result
         elif isinstance(dataset, SeriesDataset):
             metadata[dataset.id] = _write_time_series(
@@ -334,8 +335,13 @@ def _write_static_arrays(
     dataset: StaticDataset,
     layer_plan: LayerPlan,
     arrays: dict[str, np.ndarray],
+    result: JsonObject,
 ) -> None:
-    """Write every role of prefetched static arrays because the summary was already validated."""
+    """Write every role of prefetched static arrays because the summary was already validated.
+
+    Geology layers also carry the per-cell source codes of their regional patchwork when a
+    regional source gave a value, reusing the series provenance encoding (0 outside the area).
+    """
     for role, spec in dataset.roles.items():
         _write_array(
             layer_group,
@@ -344,6 +350,19 @@ def _write_static_arrays(
             ["lat", "lon"],
             _attributes(spec),
             spec.fill,
+        )
+    if result.get("regional_used"):
+        _write_array(
+            layer_group,
+            SOURCE_ROLE.name,
+            np.where(layer_plan.mask == MASK_INSIDE, arrays["source"], 0).astype("uint8"),
+            ["lat", "lon"],
+            {
+                **_attributes(SOURCE_ROLE),
+                "flag_values": list(CODE_VALUES),
+                "flag_meanings": list(CODE_MEANINGS),
+            },
+            SOURCE_ROLE.fill,
         )
 
 

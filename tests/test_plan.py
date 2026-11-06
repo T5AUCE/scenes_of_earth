@@ -3,13 +3,13 @@ import math
 
 import numpy as np
 import pytest
-from shapely.geometry import MultiPolygon, Polygon, box
+from shapely.geometry import MultiPolygon, box
 
 from soe.area_weights import area_weights
 from soe.areas import Area, AreaError, unwrap
 from soe.plan import plan
 from soe.sources import SyntheticSource, make_registry
-from tests.helpers import FIJI, NAIROBI, RAIN, plan_months
+from tests.helpers import FIJI, NAIROBI, RAIN, harmonic_island, plan_months
 
 
 def test_layer_plan_stores_geometry_and_area_weights():
@@ -85,7 +85,7 @@ def test_zero_weights_rejected_before_source_reads(monkeypatch):
 
 
 def test_plan_weights_match_the_full_outline_exactly():
-    island = _harmonic_island(2000)
+    island = harmonic_island(2000)
 
     layer = plan_months(Area(island), [RAIN], 1).layers["chirps_monthly"]
     expected = area_weights(layer.geometry, layer.transform, layer.shape, layer.mask)
@@ -116,28 +116,3 @@ def test_plan_accepts_a_tiny_named_area_with_positive_overlap():
 
     assert layer.cells_inside >= 1
     assert float(layer.area_weights.sum()) > 0
-
-
-def _harmonic_island(
-    vertex_count: int,
-    west: float = 35.4,
-    south: float = -2.1,
-    radius: float = 1.0,
-) -> Polygon:
-    """An island with harmonic wiggles, standing in for a detailed country outline."""
-    points = []
-    for index in range(vertex_count):
-        angle = 2 * math.pi * index / vertex_count
-        wave = (
-            1.0
-            + 0.05 * math.sin(37 * angle)
-            + 0.02 * math.sin(113 * angle + 1.0)
-            + 0.008 * math.sin(331 * angle + 2.0)
-        )
-        points.append(
-            (
-                west + radius + radius * wave * math.cos(angle),
-                south + radius + radius * wave * math.sin(angle),
-            ),
-        )
-    return Polygon(points)

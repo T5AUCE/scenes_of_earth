@@ -1,6 +1,5 @@
 """Test offline terrain statistics, build progress and synthetic end-to-end builds."""
 import json
-import math
 import shutil
 from collections.abc import Callable
 from dataclasses import replace
@@ -42,6 +41,7 @@ from tests.helpers import (
     TERRAIN,
     ReingestedSource,
     build_nairobi,
+    harmonic_island,
     plan_months,
 )
 
@@ -1544,7 +1544,7 @@ def test_area_geojson_is_simplified_while_masks_use_the_full_outline(tmp_path):
 def test_build_over_a_many_vertex_outline_validates(tmp_path):
     build_scene(
         HASH_A,
-        Area(_harmonic_island(20000), BOUNDARY),
+        Area(harmonic_island(20000), BOUNDARY),
         "2015-01",
         "2015-01",
         [RAIN],
@@ -1558,31 +1558,6 @@ def test_build_over_a_many_vertex_outline_validates(tmp_path):
     assert validate(document) == []
     assert layer["mask"]["cells_inside"] > 0
     assert layer["stats"]["mean"] > 0
-
-
-def _harmonic_island(
-    vertex_count: int,
-    west: float = 35.4,
-    south: float = -2.1,
-    radius: float = 1.0,
-) -> Polygon:
-    """An island with harmonic wiggles, standing in for a detailed country outline."""
-    points = []
-    for index in range(vertex_count):
-        angle = 2 * math.pi * index / vertex_count
-        wave = (
-            1.0
-            + 0.05 * math.sin(37 * angle)
-            + 0.02 * math.sin(113 * angle + 1.0)
-            + 0.008 * math.sin(331 * angle + 2.0)
-        )
-        points.append(
-            (
-                west + radius + radius * wave * math.cos(angle),
-                south + radius + radius * wave * math.sin(angle),
-            ),
-        )
-    return Polygon(points)
 
 
 def _scripted_series(values_for: Callable[[str, int, int], np.ndarray]) -> SeriesDataset:

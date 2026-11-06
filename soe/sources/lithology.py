@@ -13,9 +13,10 @@ import numpy as np
 import rasterio
 from rasterio.errors import RasterioIOError, WarpOperationError
 from rasterio.transform import Affine, from_origin
+from shapely.geometry.base import BaseGeometry
 
 from ..areas import WORLD_WIDTH_DEG
-from ..geology_age import GSC_SOURCE
+from ..geology_age import GEOLOGY_AGE_FILE, GSC_SOURCE
 from .datasets import StaticDataset
 from .grid import (
     CELL_DEG,
@@ -25,6 +26,7 @@ from .grid import (
     Bbox,
     budget_res,
 )
+from .licences import SOURCES
 from .remote import SourceUnavailable
 from .worldcover import overview_factor, overview_level, warp_modes, worldcover_tiles
 
@@ -56,6 +58,16 @@ OPENLANDMAP_CLASSES = [
 ]
 UNDEFINED_CLASS = 15
 WATER_CLASS = 255
+
+# The per-cell source behind a geology value: 1 for the global base map, one code per
+# regional source, 0 where no map has a value. Static layers cannot reuse the series
+# `source` array name, which the contract reserves for layers with a fallback.
+PROVENANCE_ROLE = Role(
+    "provenance",
+    "uint8",
+    fill=0,
+    long_name="Source of the values: 1 base map, 2 and above regional sources, 0 outside",
+)
 
 # Each family lists its level 2 codes in value order, with "__" for no level 2 code.
 GLIM_FAMILIES = [
@@ -264,7 +276,12 @@ def _split_at_antimeridian(west: float, east: float) -> list[tuple[float, float,
 
 @dataclass
 class GeologyDataset(StaticDataset):
-    """The most common rock class (type or age) in each cell, at a size set by the area."""
+    """The most common rock class (type or age) in each cell, at a size set by the area.
+
+    The global base map fills every cell first and each present regional COG overrides it in
+    priority order, so a missing regional file only loses its patch. Every cell also keeps
+    the code of the source behind its value for the bundle's provenance array.
+    """
 
     file: str = LITHOLOGY_FILE  # the class COG in the cubes folder
 
@@ -297,14 +314,59 @@ class GeologyDataset(StaticDataset):
         res: float,
         on_block: Callable[[], None] | None = None,
     ) -> tuple[dict[str, np.ndarray], Affine]:
-        """Return uint8 classes over bbox at cell size `res`."""
-        classes, transform = self.backend.lithology(
+        """Return uint8 classes over bbox at cell size `res` with their source codes.
+
+        Regional COGs override the base map in priority order; the codes array holds 0 where
+        no map has a value, 1 for the base and one code per regional source.
+        """
+        from ..geology_regional import read_composited
+
+        classes, codes, transform = read_composited(
+            self.backend,
+            self.kind,
+            self.file,
             tuple(bbox),
             res,
             on_block or (lambda: None),
-            self.file,
         )
-        return {"value": classes}, transform
+        return {"value": classes, "source": codes}, transform
+
+    @property
+    def kind(self) -> str:
+        """Return "age" for the rock-age COG and "type" for the rock-type one."""
+        return "age" if self.file == GEOLOGY_AGE_FILE else "type"
+
+    def sources_for(self, bbox: Bbox) -> list[dict]:
+        """Return the base source with the regional ones whose footprint meets bbox."""
+        from ..geology_regional import candidates_for
+
+        regionals = candidates_for(self.kind, tuple(bbox), self.backend.has_lithology)
+        return [self.source, *(SOURCES[source["licence"]] for source in regionals)]
+
+    def summary(
+        self,
+        arrays: dict[str, np.ndarray],
+        weights: np.ndarray,
+        transform: Affine,
+        geometry: BaseGeometry,
+    ) -> dict[str, object]:
+        """Return the regional provenance of the build for the bundle's source array.
+
+        `fallback_used` reuses the series key so the bundle carries the per-cell source codes
+        in its `source` array without a new contract field. Notices name only the regional
+        sources behind weighted cells.
+        """
+        from ..geology_regional import regional_notices, used_in
+
+        used = used_in(arrays["source"], weights)
+        regional = tuple(source_id for source_id in used if source_id != "global_base")
+        if not regional:
+            return {}
+        return {
+            "fallback_used": True,
+            "regional_used": True,
+            "notices": regional_notices(regional, self.kind),
+        }
 
     def notices(self, bbox: Bbox, steps: list[str]) -> list[str]:
         """Return notices about the scale of the source map, its seams and its gaps."""

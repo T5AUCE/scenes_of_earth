@@ -115,7 +115,12 @@ class SyntheticSource:
         return land_cover_by_tiles(bounds, res, _synthetic_classes, on_block)
 
     def has_lithology(self, file: str = LITHOLOGY_FILE) -> bool:
-        """Return whether deterministic data is enabled for the class COG `file`."""
+        """Return whether deterministic data is enabled for the class COG `file`.
+
+        Regional patchwork COGs never exist offline, so synthetic builds always use the base.
+        """
+        if file not in (LITHOLOGY_FILE, GEOLOGY_AGE_FILE):
+            return False
         return self._geology_age if file == GEOLOGY_AGE_FILE else self._lithology
 
     def lithology_source(self, file: str = LITHOLOGY_FILE) -> str:

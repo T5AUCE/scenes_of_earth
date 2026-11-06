@@ -25,8 +25,7 @@ from .lithology import (
     GeologyDataset,
     LithologyReader,
 )
-from .synthetic import SyntheticSource
-from .terrain import GLO30_RES_DEG, CopernicusDemReader, TerrainDataset, terrain_tiles_block
+from .synthetic import SyntheticSourcefrom .terrain import GLO30_RES_DEG, CopernicusDemReader, TerrainDataset, terrain_tiles_block
 from .worldcover import (
     WORLDCOVER_CLASSES,
     WORLDCOVER_RES_DEG,

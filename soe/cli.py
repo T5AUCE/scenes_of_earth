@@ -22,6 +22,7 @@ from .boundary_import import import_admin_kinds, import_cgaz, import_ucdb
 from .ingest import chirps
 from .ingest.era5 import INGEST_SPECS, ingest
 from .ingest.geology_age import ingest_geology_age
+from .ingest.geology_regional import SOURCE_IDS, ingest_geology_regional
 from .ingest.lithology import ingest_lithology
 from .sources import (
     CHIRPS_CUBE,
@@ -80,6 +81,12 @@ def main(argv: list[str] | None = None) -> None:
         print("Geological age COG:", ingest_geology_age(args.cubes, args.archive))
         return
 
+    if args.command == "ingest-geology-regional":
+        logging.basicConfig(level=logging.INFO)
+        published = ingest_geology_regional(args.cubes, args.source, args.archive)
+        print("Regional geology COGs:", *published)
+        return
+
     if not (args.cgaz or args.ucdb or args.meta):
         parser.error("give at least one of --cgaz, --ucdb, --meta")
 
@@ -133,6 +140,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="a local copy of GSC Open File 5529 (of_5529.zip), instead of fetching it",
     )
     age_parser.add_argument(
+        "--cubes",
+        default=os.environ.get("SOE_CUBES_DIR", DEFAULT_CUBES_DIR),
+        help="folder of the cubes (default: SOE_CUBES_DIR or ./data/cubes)",
+    )
+    regional_parser = subparsers.add_parser(
+        "ingest-geology-regional",
+        help="write one regional geology patchwork source's class COGs (age and/or type)",
+    )
+    regional_parser.add_argument("source", choices=SOURCE_IDS, help="the regional source to build")
+    regional_parser.add_argument(
+        "--archive",
+        help="a local copy of the source archive (zip, geodatabase folder or raster)",
+    )
+    regional_parser.add_argument(
         "--cubes",
         default=os.environ.get("SOE_CUBES_DIR", DEFAULT_CUBES_DIR),
         help="folder of the cubes (default: SOE_CUBES_DIR or ./data/cubes)",

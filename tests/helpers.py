@@ -1,11 +1,12 @@
 """Shared test shapes, synthetic datasets, boundary rows and plan and build shortcuts."""
 import json
+import math
 from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import zarr
-from shapely.geometry import MultiPolygon, box
+from shapely.geometry import MultiPolygon, Polygon, box
 
 from soe import db
 from soe.areas import Area
@@ -139,3 +140,28 @@ class ReingestedSource(SyntheticSource):
             self.reingest()
 
         return values
+
+
+def harmonic_island(
+    vertex_count: int,
+    west: float = 35.4,
+    south: float = -2.1,
+    radius: float = 1.0,
+) -> Polygon:
+    """Return an island with harmonic wiggles that stands in for a detailed country outline."""
+    points = []
+    for index in range(vertex_count):
+        angle = 2 * math.pi * index / vertex_count
+        wave = (
+            1.0
+            + 0.05 * math.sin(37 * angle)
+            + 0.02 * math.sin(113 * angle + 1.0)
+            + 0.008 * math.sin(331 * angle + 2.0)
+        )
+        points.append(
+            (
+                west + radius + radius * wave * math.cos(angle),
+                south + radius + radius * wave * math.sin(angle),
+            ),
+        )
+    return Polygon(points)

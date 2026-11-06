@@ -149,7 +149,7 @@ SOURCES = {
     },
     "lithology": {
         "name": "OpenLandMap lithology 250 m (USGS Global Ecosystem Map)",
-        "version": "1.1",
+        "version": "1.2",
         "licence": "CC BY-SA 4.0",
         "licence_url": "https://creativecommons.org/licenses/by-sa/4.0/",
         "attribution": (
@@ -170,7 +170,7 @@ SOURCES = {
     },
     "glim": {
         "name": "GLiM Global Lithological Map v1.0 (level 1 and 2)",
-        "version": "glim-1.3",
+        "version": "glim-1.4",
         "licence": (
             "not stated by the authors; the data is for local evaluation only and must not "
             "be published until they confirm terms"
@@ -190,7 +190,7 @@ SOURCES = {
     },
     "gsc_world": {
         "name": "Generalized geology of the world (GSC Open File 5529)",
-        "version": "of5529-1",
+        "version": "of5529-2",
         "licence": "Open Government Licence - Canada 2.0",
         "licence_url": "https://open.canada.ca/en/open-government-licence-canada",
         "attribution": (
@@ -208,6 +208,81 @@ SOURCES = {
             "age names of each unit classed as the smallest ICS period or era that holds its "
             "whole age range; rasterised to 1/120° and cropped to 60°S-60°N; most common class "
             "per output cell"
+        ),
+    },
+    "canada_5m": {
+        "name": "Geological map of Canada 1:5M (GSC Map 1860A)",
+        "version": "canada-5m-1",
+        "licence": "Open Government Licence - Canada 2.0",
+        "licence_url": "https://open.canada.ca/en/open-government-licence-canada",
+        "attribution": (
+            "Rock type and age (Canada): Contains information licensed under the Open "
+            "Government Licence – Canada (Wheeler et al. 1996, GSC Map 1860A)"
+        ),
+        "citation": (
+            "Wheeler, J.O. et al. (1996) Geological map of Canada, Map 1860A. Geological "
+            "Survey of Canada. doi:10.4095/208175; geodatabase updated 2024-12"
+        ),
+        "modified": (
+            "offshore polygons omitted; ages classed as the smallest ICS period or era that "
+            "holds the whole range; rock types mapped to GLiM families; rasterised to the "
+            "geology grids and cropped to 60°S-60°N; most common class per output cell"
+        ),
+    },
+    "us_sgmc": {
+        "name": "USGS State Geologic Map Compilation (SGMC) DS 1052 v1.1",
+        "version": "sgmc-1.1-1",
+        "licence": "Public domain (US Government work)",
+        "attribution": "Rock type and age (conterminous US): USGS SGMC (public domain)",
+        "citation": (
+            "Horton, J.D. et al. (2017) The State Geologic Map Compilation (SGMC) "
+            "geodatabase of the conterminous United States, U.S. Geological Survey Data "
+            "Series 1052 v1.1"
+        ),
+        "modified": (
+            "polygons read from the geodatabase joined to the CSV age and lithology tables "
+            "on UNIT_LINK; first Major rank row per unit, then Indeterminate-major; ages "
+            "classed as the smallest ICS period or era that holds the whole range; rock "
+            "types mapped to GLiM families; rasterised to the geology grids"
+        ),
+    },
+    "europe_igme5000": {
+        "name": "IGME5000 1:5M (BGR/CGMW, pre-Quaternary bedrock)",
+        "version": "igme5000-2024-1",
+        "licence": "GeoNutzV (Datenlizenz Deutschland – Namensnennung)",
+        "licence_url": "https://www.gesetze-im-internet.de/geonutzv/",
+        "attribution": (
+            "Rock type and age (Europe): BGR IGME5000 1:5,000,000 "
+            "(GeoNutzV, source: BGR, Hannover)"
+        ),
+        "citation": (
+            "Asch, K. (2003) The 1:5 Million International Geological Map of Europe and "
+            "Adjacent Areas; 2024 BGR release under the Commission for the Geological Map "
+            "of the World (CGMW)"
+        ),
+        "modified": (
+            "pre-Quaternary bedrock kept as mapped; AgeName classed as the smallest ICS "
+            "period or era that holds the whole range; rock types mapped to GLiM families "
+            "where mappable, else left to the base map; rasterised to the geology grids"
+        ),
+    },
+    "europe_egdi": {
+        "name": "EGDI surface lithology 250 m (OpenGeoHub/GeoZS)",
+        "version": "egdi-2024-1",
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": (
+            "Rock type (Europe): EGDI/OneGeology surface lithology raster by "
+            "OpenGeoHub/GeoZS (CC BY 4.0)"
+        ),
+        "citation": (
+            "Isik, S., Minarik, R. and Hengl, T. (2024) Continental Europe surface "
+            "lithology based on EGDI/OneGeology map at 1:1M scale. "
+            "doi:10.5281/zenodo.12607973"
+        ),
+        "modified": (
+            "original (non-gap-filled) raster reprojected from EPSG:3035 with mode "
+            "resampling; INSPIRE lithology classes mapped to GLiM families"
         ),
     },
     "geoBoundaries CGAZ": {
