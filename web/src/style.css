@@ -805,7 +805,7 @@ body.scene-mode .maplibregl-ctrl-scale {
 }
 
 .legend-hatch {
-  background: repeating-linear-gradient(45deg, rgb(59, 48, 38) 0 0.6px, transparent 0.6px 6px);
+  background: repeating-linear-gradient(45deg, rgb(59, 48, 38, 0.45) 0 0.6px, transparent 0.6px 8px);
 }
 
 .legend-group-toggle {
@@ -824,7 +824,7 @@ body.scene-mode .maplibregl-ctrl-scale {
 
 .legend-group-toggle::before {
   content: "\25B8";
-  width: 1em;
+  width: 14px;
   flex: none;
 }
 
@@ -832,14 +832,53 @@ body.scene-mode .maplibregl-ctrl-scale {
   content: "\25BE";
 }
 
+.legend-group + .legend-group {
+  margin-top: 3px;
+}
+
 .legend-group-toggle:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 2px;
 }
 
+/* Class rows sit a little below their family line, and wrapped names keep to their own column. */
 .legend-group-list {
-  padding-left: 1em;
+  display: grid;
+  gap: 2px;
+  margin: 3px 0 5px;
+  padding-left: 16px;
   font-size: 12px;
+}
+
+/* The grid display above would otherwise override the hidden attribute of a collapsed family. */
+.legend-group-list[hidden] {
+  display: none;
+}
+
+.legend-group-list > div {
+  display: flex;
+  align-items: flex-start;
+}
+
+/* Family boxes are larger, and class boxes are centred under them with the names aligned. */
+.legend-group-toggle .legend-swatch,
+.legend-group ~ .legend-nodata .legend-swatch {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.legend-group-list .legend-swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  margin: 2px 8px 0 0;
+}
+
+/* Beside family headings the no-data row lines up with the family boxes. */
+.legend-group ~ .legend-nodata {
+  margin-top: 3px;
+  padding-left: 14px;
 }
 
 .legend-bivariate {

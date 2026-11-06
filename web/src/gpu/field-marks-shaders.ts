@@ -91,7 +91,9 @@ const float HALO_ALPHA = 0.7;
 const float HALO_WIDTH_PX = ${glslFloat(HALO_WIDTH_PX)};
 const float EDGE_PX = ${glslFloat(EDGE_PX)};
 const float MIN_ALPHA = 0.004;
-const float HATCH_SPACING_PX = 6.0;
+const float HATCH_SPACING_PX = 8.0;
+// Hatch lines stay faint so large unmapped areas don't strain the eye.
+const float HATCH_STRENGTH = 0.45;
 const float HATCH_LINE_PX = 0.6;
 
 struct Mark {
@@ -228,7 +230,8 @@ float hatchCoverage() {
   vec2 screenPx = gl_FragCoord.xy / uPixelRatio;
   float phase = fract((screenPx.x + screenPx.y) / HATCH_SPACING_PX);
   float distancePx = min(phase, 1.0 - phase) * HATCH_SPACING_PX;
-  return 1.0 - smoothstep(HATCH_LINE_PX / 2.0, HATCH_LINE_PX / 2.0 + EDGE_PX, distancePx);
+  float line = 1.0 - smoothstep(HATCH_LINE_PX / 2.0, HATCH_LINE_PX / 2.0 + EDGE_PX, distancePx);
+  return HATCH_STRENGTH * line;
 }
 
 float coverage(float distancePx, float radiusPx) {

@@ -57,7 +57,9 @@ const float OUTLINE_WIDTH_PX = 0.75;
 const int KERNEL_SIZE = 4;
 const float FULL_SUPPORT_WEIGHT = 0.1;
 const uint HATCH_ID = 255u;
-const float HATCH_SPACING_PX = 6.0;
+const float HATCH_SPACING_PX = 8.0;
+// Hatch lines stay faint so large unmapped areas don't strain the eye.
+const float HATCH_STRENGTH = 0.45;
 const float HATCH_LINE_PX = 0.6;
 const float HATCH_EDGE_PX = 0.5;
 const float MIN_HATCH_ALPHA = 0.004;
@@ -118,7 +120,8 @@ float hatchCoverage() {
   vec2 screenPx = gl_FragCoord.xy / uPixelRatio;
   float phase = fract((screenPx.x + screenPx.y) / HATCH_SPACING_PX);
   float distancePx = min(phase, 1.0 - phase) * HATCH_SPACING_PX;
-  return 1.0 - smoothstep(HATCH_LINE_PX / 2.0, HATCH_LINE_PX / 2.0 + HATCH_EDGE_PX, distancePx);
+  float line = 1.0 - smoothstep(HATCH_LINE_PX / 2.0, HATCH_LINE_PX / 2.0 + HATCH_EDGE_PX, distancePx);
+  return HATCH_STRENGTH * line;
 }
 
 void gatherClasses(

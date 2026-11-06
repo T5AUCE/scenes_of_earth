@@ -531,6 +531,7 @@ function legendSwatch(color: number[]) {
 export function classNoDataLegend() {
   const row = document.createElement("div");
   const swatch = document.createElement("span");
+  row.className = "legend-nodata";
   swatch.className = "legend-swatch legend-hatch";
   const name = document.createElement("span");
   name.textContent = "Hatched: no data";

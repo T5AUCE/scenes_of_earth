@@ -49,7 +49,7 @@ function appendLayerBoxes(layerBox: HTMLElement, layers: Layer[], defaultIds: st
     box.type = "checkbox";
     box.value = layer.id;
     box.checked = defaultIds.includes(layer.id);
-    label.append(box, ` ${layer.title} (${layer.units})`);
+    label.append(box, ` ${layer.title}`);
   }
 }
 
