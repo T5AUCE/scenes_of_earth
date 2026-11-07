@@ -7,6 +7,7 @@ import { Window } from "happy-dom";
 import type { Map as MapLibreMap } from "maplibre-gl";
 
 import type { AreaHit } from "./types.ts";
+import { assertSameNode } from "./testing/dom-assert.ts";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -76,6 +77,230 @@ test("the level dropdown shows descriptive labels and preserves API values", asy
       ["city", "City (urban area)"],
     ],
   );
+});
+
+test("build shows Starting build… before the POST resolves", async (context) => {
+  const window = new Window();
+  context.after(() => window.happyDOM.abort());
+  installBrowser(context, window);
+  const previousStyle = (globalThis as { getComputedStyle?: unknown }).getComputedStyle;
+  (globalThis as { getComputedStyle: unknown }).getComputedStyle = () => ({
+    getPropertyValue: () => "",
+  });
+  context.after(() => {
+    if (previousStyle) {
+      (globalThis as { getComputedStyle: unknown }).getComputedStyle = previousStyle;
+    } else {
+      delete (globalThis as { getComputedStyle?: unknown }).getComputedStyle;
+    }
+  });
+  let resolvePost!: (response: Response) => void;
+  const postGate = new Promise<Response>((resolve) => {
+    resolvePost = resolve;
+  });
+  context.after(() => resolvePost(Response.json({ id: "a", status: "failed", error: "aborted" })));
+  context.mock.method(globalThis, "fetch", async (url: string, init?: RequestInit) => {
+    if (url === "/api/layers") {
+      return Response.json({
+        request_step: "P1M",
+        default: ["terrain"],
+        layers: [{ id: "terrain", title: "Terrain", time_varying: false, time: null }],
+      });
+    }
+    if (url.startsWith("/api/areas/search?")) {
+      return Response.json([areaHit()]);
+    }
+    if (url === "/api/areas/cgaz:ADM1:NAKURU") {
+      return Response.json({
+        ...areaHit(),
+        geometry: {
+          type: "Polygon",
+          coordinates: [[[35, -1], [36, -1], [36, 1], [35, 1], [35, -1]]],
+        },
+      });
+    }
+    if (url === "/api/scenes" && init?.method === "POST") {
+      return postGate;
+    }
+    assert.fail(`Unexpected request: ${url} ${init?.method ?? "GET"}`);
+  });
+  const map = {
+    fitBounds() {},
+    getLayer() {
+      return undefined;
+    },
+    getSource() {
+      return undefined;
+    },
+    addSource() {},
+    addLayer() {},
+  } as unknown as MapLibreMap;
+  const root = document.createElement("div");
+  document.body.append(root);
+  await createPanel(root, map, { enter() {} });
+
+  const search = root.querySelector<HTMLInputElement>("[role=combobox]");
+  assert.ok(search);
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  search.value = "Nakuru";
+  search.dispatchEvent(new search.ownerDocument.defaultView!.Event("input"));
+  context.mock.timers.tick(SEARCH_DEBOUNCE_MS);
+  await new Promise((resolve) => setImmediate(resolve));
+  const option = root.querySelector("[role=option]");
+  assert.ok(option);
+  option.dispatchEvent(
+    new search.ownerDocument.defaultView!.Event("mousedown", { bubbles: true, cancelable: true }),
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const build = [...root.querySelectorAll("button")].find(
+    (button) => button.textContent === "Build scene",
+  );
+  assert.ok(build);
+  const status = root.querySelector(".status");
+  assert.ok(status);
+  assertSameNode(status, root.querySelector(".status"));
+
+  build.click();
+
+  assert.equal(status.textContent, "Starting build…");
+});
+
+test("repick clears a build and a stale 503 never overwrites a newer run", async (context) => {
+  const window = new Window();
+  context.after(() => window.happyDOM.abort());
+  installBrowser(context, window);
+  const previousStyle = (globalThis as { getComputedStyle?: unknown }).getComputedStyle;
+  (globalThis as { getComputedStyle: unknown }).getComputedStyle = () => ({
+    getPropertyValue: () => "",
+  });
+  context.after(() => {
+    if (previousStyle) {
+      (globalThis as { getComputedStyle: unknown }).getComputedStyle = previousStyle;
+    } else {
+      delete (globalThis as { getComputedStyle?: unknown }).getComputedStyle;
+    }
+  });
+  let resolveFirst!: (response: Response) => void;
+  let resolveSecond!: (response: Response) => void;
+  const firstGate = new Promise<Response>((resolve) => {
+    resolveFirst = resolve;
+  });
+  const secondGate = new Promise<Response>((resolve) => {
+    resolveSecond = resolve;
+  });
+  context.after(() => {
+    resolveFirst(Response.json({ id: "a", status: "failed", error: "aborted" }));
+    resolveSecond(Response.json({ id: "b", status: "failed", error: "aborted" }));
+  });
+  let postCalls = 0;
+  context.mock.method(globalThis, "fetch", async (url: string, init?: RequestInit) => {
+    if (url === "/api/layers") {
+      return Response.json({
+        request_step: "P1M",
+        default: ["terrain"],
+        layers: [{ id: "terrain", title: "Terrain", time_varying: false, time: null }],
+      });
+    }
+    if (url.startsWith("/api/areas/search?")) {
+      return Response.json([areaHit()]);
+    }
+    if (url === "/api/areas/cgaz:ADM1:NAKURU") {
+      return Response.json({
+        ...areaHit(),
+        geometry: {
+          type: "Polygon",
+          coordinates: [[[35, -1], [36, -1], [36, 1], [35, 1], [35, -1]]],
+        },
+      });
+    }
+    if (url === "/api/scenes" && init?.method === "POST") {
+      postCalls += 1;
+      if (postCalls === 1) return firstGate;
+      if (postCalls === 2) return secondGate;
+    }
+    assert.fail(`Unexpected request: ${url} ${init?.method ?? "GET"}`);
+  });
+  const map = {
+    fitBounds() {},
+    getLayer() {
+      return undefined;
+    },
+    getSource() {
+      return undefined;
+    },
+    addSource() {},
+    addLayer() {},
+  } as unknown as MapLibreMap;
+  const root = document.createElement("div");
+  document.body.append(root);
+  await createPanel(root, map, { enter() {} });
+
+  const search = root.querySelector<HTMLInputElement>("[role=combobox]");
+  assert.ok(search);
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const pickFirstHit = async () => {
+    search.value = "Nakuru";
+    search.dispatchEvent(new search.ownerDocument.defaultView!.Event("input"));
+    context.mock.timers.tick(SEARCH_DEBOUNCE_MS);
+    await new Promise((resolve) => setImmediate(resolve));
+    const option = root.querySelector("[role=option]");
+    assert.ok(option);
+    option.dispatchEvent(
+      new search.ownerDocument.defaultView!.Event("mousedown", {
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  await pickFirstHit();
+
+  const build = [...root.querySelectorAll("button")].find(
+    (button) => button.textContent === "Build scene",
+  );
+  assert.ok(build);
+  const status = root.querySelector(".status");
+  assert.ok(status);
+  assertSameNode(status, root.querySelector(".status"));
+
+  build.click();
+  assert.equal(status.textContent, "Starting build…");
+  assert.equal(status.classList.contains("busy"), true);
+
+  await pickFirstHit();
+  assertSameNode(status, root.querySelector(".status"));
+  assert.equal(status.textContent, "");
+  assert.equal(status.classList.contains("busy"), false);
+  assert.equal(build.disabled, false);
+
+  build.click();
+  assert.equal(status.textContent, "Starting build…");
+  assert.equal(status.classList.contains("busy"), true);
+
+  resolveFirst(
+    new Response(JSON.stringify({ detail: "old server busy" }), {
+      status: 503,
+      headers: { "Retry-After": "1" },
+    }),
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  context.mock.timers.tick(1000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assertSameNode(status, root.querySelector(".status"));
+  assert.equal(status.textContent, "Starting build…");
+
+  resolveSecond(
+    new Response(JSON.stringify({ detail: "new error" }), { status: 422 }),
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assertSameNode(status, root.querySelector(".status"));
+  assert.equal(status.textContent, "Error 422: new error");
+  assert.equal(build.disabled, false);
+  assert.equal(status.classList.contains("busy"), false);
+  assert.equal(postCalls, 2);
 });
 
 async function panelWithHits(context: TestContext, hits: AreaHit[]): Promise<HTMLElement> {

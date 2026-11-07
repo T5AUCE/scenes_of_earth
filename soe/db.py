@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .country_names import OFFICIAL_NAMES
+
 SqlValue = str | int | float | None
 Record = dict[str, Any]  # one table row as column -> value
 BoundaryValues = tuple[SqlValue, ...]  # one boundaries row in INSERT_BOUNDARY column order
@@ -132,19 +134,30 @@ def search(
 ) -> list[Record]:
     """Boundaries whose name starts with `query`, or has a word that does; best matches first.
 
+    Countries also match their official long name under the same rules, after direct matches.
     A sample country stays listed only while no imported country shares its iso3.
     """
     # User text must match literally, so LIKE wildcards are escaped with '!'.
+    needle = query.strip().lower()
     query = query.replace("!", "!!").replace("%", "!%").replace("_", "!_")
     prefix_pattern, word_pattern = f"{query}%", f"% {query}%"
+    official_iso3s = _official_matches(needle)
 
-    where = "(name LIKE ? ESCAPE '!' OR name LIKE ? ESCAPE '!')"
+    where = "(name LIKE ? ESCAPE '!' OR name LIKE ? ESCAPE '!'"
+    if official_iso3s:
+        placeholders = ", ".join("?" for _ in official_iso3s)
+        where += (
+            " OR (boundaries.level = 'country' "
+            f"AND boundaries.iso3 IN ({placeholders}))"
+        )
+    where += ")"
     where += f" AND NOT ({SHADOWED_SYNTHETIC_COUNTRY})"
     if level:
         where += " AND boundaries.level = ?"
 
     order_by = (
         "(boundaries.name LIKE ? ESCAPE '!') DESC, "
+        "((boundaries.name LIKE ? ESCAPE '!') OR (boundaries.name LIKE ? ESCAPE '!')) DESC, "
         f"{LEVEL_RANK}, boundaries.cells DESC, boundaries.name"
     )
     sql = (
@@ -156,11 +169,24 @@ def search(
         f"WHERE {where} ORDER BY {order_by} LIMIT ?"
     )
 
-    arguments = [prefix_pattern, word_pattern] + ([level] if level else [])
-    arguments += [prefix_pattern, limit]
+    arguments: list[SqlValue] = [prefix_pattern, word_pattern, *official_iso3s]
+    arguments += [level] if level else []
+    arguments += [prefix_pattern, prefix_pattern, word_pattern, limit]
 
     with connect(path) as connection:
         return [dict(row) for row in connection.execute(sql, arguments)]
+
+
+def _official_matches(needle: str) -> list[str]:
+    """Iso3s whose official long name starts with `needle` or has a word that does."""
+    if not needle:
+        return []
+
+    return [
+        iso3
+        for iso3, official in OFFICIAL_NAMES.items()
+        if official.lower().startswith(needle) or f" {needle}" in official.lower()
+    ]
 
 
 def get_boundary(path: Path | str, boundary_id: str) -> Record | None:

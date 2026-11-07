@@ -163,6 +163,8 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
     area = hit;
     run++;
     build.disabled = false;
+    status.textContent = "";
+    status.classList.remove("busy");
     closeResults();
     chosen.textContent = hit.name;
     search.value = hit.name;
@@ -269,6 +271,8 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
     }
 
     build.disabled = true;
+    status.textContent = "Starting build…";
+    status.classList.add("busy");
     const thisRun = ++run;
 
     try {
@@ -290,7 +294,10 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
         ? `Error ${error.status}: ${error.message}`
         : `Error: ${(error as Error).message}`;
     } finally {
-      if (thisRun === run) build.disabled = false;
+      if (thisRun === run) {
+        build.disabled = false;
+        status.classList.remove("busy");
+      }
     }
   }
 
@@ -332,6 +339,7 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
       return await postScene(body);
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== SERVER_BUSY) throw error;
+      if (thisRun !== run) return null;
 
       const retrySeconds = error.retryAfterSecs ?? DEFAULT_RETRY_SECS;
       status.textContent = `${error.message} Retrying in ${retrySeconds} s…`;

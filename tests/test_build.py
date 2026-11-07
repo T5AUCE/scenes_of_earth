@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import zarr
 from rasterio.transform import Affine
-from shapely.geometry import Polygon, box, mapping, shape
+from shapely.geometry import MultiPolygon, Polygon, box, mapping, shape
 
 from soe import db
 from soe.areas import Area, AreaError
@@ -1697,3 +1697,28 @@ def _scripted_series(values_for: Callable[[str, int, int], np.ndarray]) -> Serie
         step="P1M",
         cell_method="sum",
     )
+
+
+def test_multi_part_area_spanning_an_empty_bbox_builds_from_touched_tiles_only(tmp_path):
+    outline = MultiPolygon(
+        [
+            box(36.5, -1.5, 37.5, -0.5),
+            box(42.6, 10.8, 43.8, 11.9),
+        ],
+    )
+    terrain = replace(TERRAIN, max_tiles=10)
+    cover = replace(LAND_COVER, max_tiles=3)
+    build_scene(HASH_A, Area(outline, BOUNDARY), None, None, [terrain, cover], "Test", tmp_path)
+
+    doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    root = zarr.open_group(tmp_path / HASH_A / "data.zarr", mode="r")
+
+    assert validate(doc) == []
+    terrain_mask = root["terrain/mask"][...]
+    cover_mask = root["esa_worldcover/mask"][...]
+    cover = root["esa_worldcover/class"][...]
+
+    assert (terrain_mask == 1).any() and (terrain_mask == 0).any()
+    assert (cover_mask == 1).any() and (cover_mask == 0).any()
+    assert (cover[cover_mask == 1] != 0).all()
+    assert (cover[cover_mask == 0] == 0).all()

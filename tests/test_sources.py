@@ -61,6 +61,7 @@ from soe.sources.terrain import (
 from soe.sources.worldcover import (
     PlacedTile,
     _read_tile,
+    land_cover_by_tiles,
     overview_factor,
     worldcover_tiles,
 )
@@ -1598,3 +1599,111 @@ def _references_for_geometry(geometry: BaseGeometry) -> list[dict]:
         geometry,
     )
     return result["distribution"]["reference_values"]
+
+
+TWO_ISLANDS = MultiPolygon(
+    [
+        box(36.5, -1.5, 37.5, -0.5),
+        box(42.6, 10.8, 43.8, 11.9),
+    ],
+)
+TWO_ISLANDS_BOUNDS = (36.0, -2.0, 45.0, 12.0)
+
+
+def test_terrain_tiles_with_geometry_count_only_touched_tiles():
+    whole = placed_terrain_tiles(TWO_ISLANDS_BOUNDS, "glo30")
+    touched = placed_terrain_tiles(TWO_ISLANDS_BOUNDS, "glo30", TWO_ISLANDS)
+
+    assert {(tile.lon, tile.lat) for tile in touched} == {
+        (36, -2),
+        (36, -1),
+        (37, -2),
+        (37, -1),
+        (42, 10),
+        (42, 11),
+        (43, 10),
+        (43, 11),
+    }
+    assert len(whole) > len(touched) == 8
+
+
+def test_terrain_tiles_with_geometry_keep_the_fallback_product_only_where_touched():
+    bounds = (42.8, 40.0, 43.2, 40.3)
+    whole = terrain_tiles(bounds, "glo30")
+    touched = terrain_tiles(bounds, "glo30", box(42.85, 40.05, 42.95, 40.15))
+
+    assert [product for product, _ in whole] == ["glo30", "glo90"]
+    assert touched == [whole[0]]
+    assert TERRAIN.sources_for(bounds, box(42.85, 40.05, 42.95, 40.15)) == [SOURCES["glo30"]]
+
+
+def test_terrain_tiles_with_geometry_keep_a_tile_just_outside_the_outline():
+    res = terrain_res(TWO_ISLANDS_BOUNDS)
+    inside_ring = box(37.0 + res, -1.5, 37.5, -0.5)
+    outside_ring = box(37.0 + 4 * res, -1.5, 37.5, -0.5)
+    inside = placed_terrain_tiles(TWO_ISLANDS_BOUNDS, "glo30", inside_ring)
+    outside = placed_terrain_tiles(TWO_ISLANDS_BOUNDS, "glo30", outside_ring)
+
+    assert any(tile.lon == 36 for tile in inside)
+    assert all(tile.lon != 36 for tile in outside)
+
+
+def test_terrain_tiles_with_geometry_wrap_past_180():
+    outline = box(179.2, -18.8, 179.8, -17.2)
+    touched = placed_terrain_tiles((179.0, -19.0, 181.0, -17.0), "glo30", outline)
+
+    assert {(tile.lon, tile.lat) for tile in touched} == {(179, -19), (179, -18)}
+
+
+def test_warp_block_with_geometry_leaves_untouched_tiles_as_no_data(fake_terrain):
+    add_tile, _ = fake_terrain
+    for lon in (10, 11, 12):
+        add_tile(lon, 0)
+    bounds = (10.0, 0.0, 13.0, 1.0)
+    outline = box(10.2, 0.2, 10.8, 0.8).union(box(12.2, 0.2, 12.8, 0.8))
+
+    whole = _warp_block(bounds, CELL_DEG)
+    assert whole is not None
+    filtered = _warp_block(bounds, CELL_DEG, outline)
+    assert filtered is not None
+
+    assert np.isnan(filtered[:, 22:38]).all()
+    assert np.isfinite(whole[:, 2:18]).all() and np.isfinite(whole[:, 42:58]).all()
+    assert np.array_equal(filtered[:, 2:18], whole[:, 2:18], equal_nan=True)
+    assert np.array_equal(filtered[:, 42:58], whole[:, 42:58], equal_nan=True)
+
+
+def test_worldcover_tiles_with_geometry_count_only_touched_tiles():
+    whole = worldcover_tiles(TWO_ISLANDS_BOUNDS)
+    touched = worldcover_tiles(TWO_ISLANDS_BOUNDS, TWO_ISLANDS)
+
+    assert [tile.name for tile in touched] == ["S03E036", "N09E042"]
+    assert len(whole) > len(touched) == 2
+
+
+def test_land_cover_by_tiles_with_geometry_reads_only_touched_tiles():
+    seen = []
+
+    def read_tile(tile: PlacedTile, part: Bbox, tile_res: float) -> np.ndarray:
+        """Record the tile and return its part filled with the tile's longitude."""
+        seen.append(tile.name)
+        west, south, east, north = part
+        height = round((north - south) / tile_res)
+        width = round((east - west) / tile_res)
+        return np.full((height, width), tile.lon % 100, "uint8")
+
+    classes, transform = land_cover_by_tiles(
+        TWO_ISLANDS_BOUNDS,
+        CELL_DEG,
+        read_tile,
+        geometry=TWO_ISLANDS,
+    )
+
+    assert sorted(seen) == ["N09E042", "S03E036"]
+    assert classes.shape == (280, 180)
+    assert (transform.c, transform.f) == (36.0, 12.0)
+    assert (classes[:60, 120:180] == 42).all()
+    assert (classes[240:, :60] == 36).all()
+    assert (classes[60:240, :] == 0).all()
+    assert (classes[:60, :120] == 0).all()
+    assert (classes[240:, 60:] == 0).all()

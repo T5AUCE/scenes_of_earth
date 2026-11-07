@@ -11,9 +11,10 @@ import rasterio
 from rasterio.enums import Resampling
 from rasterio.transform import Affine, from_origin
 from rasterio.warp import reproject
+from shapely.geometry.base import BaseGeometry
 
 from ..areas import WORLD_WIDTH_DEG
-from .datasets import StaticDataset
+from .datasets import StaticDataset, expanded_tile, touch_target
 from .grid import (
     MAX_STATIC_DIVISIONS,
     MAX_STATIC_SIDE_PX,
@@ -64,23 +65,42 @@ class PlacedTile(NamedTuple):
     file_lon: int  # west edge in the tile's own frame, -180 to 177
 
 
-def worldcover_tiles(bounds: Bbox) -> list[PlacedTile]:
+def worldcover_tiles(
+    bounds: Bbox,
+    geometry: BaseGeometry | None = None,
+    res: float | None = None,
+) -> list[PlacedTile]:
     """The existing 3 degree tiles covering bounds (W, S, E, N).
 
-    Longitudes above 180 wrap, so bounds may cross the antimeridian.
+    Longitudes above 180 wrap, so bounds may cross the antimeridian. With geometry, only tiles
+    meeting the outline or its rendering ring are listed, buffered by the output cell size.
     """
     west, south, east, north = bounds
     first_lat = _tile_edge(max(south + TILE_EDGE_TOLERANCE_DEG, -90))
     last_lat = min(math.ceil(north - TILE_EDGE_TOLERANCE_DEG), 90)
     first_lon = _tile_edge(west + TILE_EDGE_TOLERANCE_DEG)
     last_lon = math.ceil(east - TILE_EDGE_TOLERANCE_DEG)
+    target = touch_target(geometry)
+    margin = _buffer_res(bounds, res) if target is not None else 0
     tiles = []
     for lat in range(first_lat, last_lat, TILE_DEG):
         for lon in range(first_lon, last_lon, TILE_DEG):
             file_lon = (lon + 180) % WORLD_WIDTH_DEG - 180
             if _tile_index()[index_cell(lat, file_lon)]:
-                tiles.append(PlacedTile(_tile_name(lat, file_lon), lon, lat, file_lon))
+                tile = PlacedTile(_tile_name(lat, file_lon), lon, lat, file_lon)
+                if target is None or target.intersects(
+                    expanded_tile(tile.lon, tile.lat, TILE_DEG, margin),
+                ):
+                    tiles.append(tile)
     return tiles
+
+
+def _buffer_res(bounds: Bbox, res: float | None) -> float:
+    """Output cell size growing each tile box; the bounds budget when the read size is unknown."""
+    if res is not None:
+        return res
+
+    return budget_res(bounds, STATIC_BUDGET_PX, MAX_STATIC_SIDE_PX, MAX_STATIC_DIVISIONS)
 
 
 def _tile_edge(degrees: float) -> int:
@@ -121,12 +141,13 @@ def land_cover_by_tiles(
     res: float,
     read_tile: Callable[[PlacedTile, Bbox, float], np.ndarray],
     on_block: Callable[[], None] = lambda: None,
+    geometry: BaseGeometry | None = None,
 ) -> tuple[np.ndarray, Affine]:
     """Land cover on bounds, read in parallel with one call of read_tile per 3 degree tile.
 
     read_tile(tile, part, res) returns the classes of the part of the bounds that the tile
     covers. Cells without a tile stay 0. on_block() is called in the calling thread each time a
-    tile has been read.
+    tile has been read. With geometry, only tiles meeting the outline or its ring are read.
     """
     west, south, east, north = bounds
     height, width = round((north - south) / res), round((east - west) / res)
@@ -134,7 +155,7 @@ def land_cover_by_tiles(
     with ThreadPoolExecutor(WORLDCOVER_THREADS) as executor:
         parts = {
             executor.submit(read_tile, tile, part, res): part
-            for tile in worldcover_tiles(bounds)
+            for tile in worldcover_tiles(bounds, geometry, res)
             for part in [_tile_part(tile, bounds)]
         }
         for future in as_completed(parts):
@@ -165,13 +186,14 @@ class WorldCoverReader:
         bounds: Bbox,
         res: float,
         on_block: Callable[[], None] = lambda: None,
+        geometry: BaseGeometry | None = None,
     ) -> tuple[np.ndarray, Affine]:
         """Class (uint8) on bounds at res; 0 where WorldCover has no tile or no value.
 
-        on_block() is called each time one of the dataset's block_count(bounds) tiles has been
-        read. Returns (array, transform).
+        on_block() is called each time one of the read tiles has been read. With geometry,
+        only tiles meeting the outline or its rendering ring are read. Returns (array, transform).
         """
-        return land_cover_by_tiles(bounds, res, _read_tile, on_block)
+        return land_cover_by_tiles(bounds, res, _read_tile, on_block, geometry)
 
 
 def _read_tile(tile: PlacedTile, part: Bbox, res: float) -> np.ndarray:
@@ -227,25 +249,55 @@ def warp_modes(
 class LandCoverDataset(StaticDataset):
     """The most common ESA WorldCover class in each cell, at a size set by the area."""
 
-    def tile_count(self, bbox: Bbox) -> int:
-        """Return the number of available WorldCover tiles intersecting bbox."""
-        return len(worldcover_tiles(bbox))
+    def tile_count(self, bbox: Bbox, geometry: BaseGeometry | None = None) -> int:
+        """Return the number of available WorldCover tiles a read of bbox needs.
+
+        With geometry, only tiles meeting the outline or its rendering ring count.
+        """
+        return len(worldcover_tiles(bbox, geometry, self.res_for(bbox)))
 
     def res_for(self, bbox: Bbox) -> float:
         """Return the cell size in degrees that fits bbox within the static pixel budget."""
         return budget_res(bbox, STATIC_BUDGET_PX, MAX_STATIC_SIDE_PX, MAX_STATIC_DIVISIONS)
 
-    def block_count(self, bbox: Bbox) -> int:
+    def block_count(self, bbox: Bbox, geometry: BaseGeometry | None = None) -> int:
         """Return the number of tile reads used to report build progress."""
-        return self.tile_count(bbox)
+        return self.tile_count(bbox, geometry)
 
     def read(
         self,
         bbox: Bbox,
         res: float,
         on_block: Callable[[], None] | None = None,
+        geometry: BaseGeometry | None = None,
     ) -> tuple[dict[str, np.ndarray], Affine]:
-        """Return uint8 classes over bbox at cell size `res`."""
+        """Return uint8 classes over bbox at cell size `res`.
+
+        With geometry, only tiles meeting the outline or its rendering ring are read. Tile-free
+        backends ignore it because they compute every cell anyway.
+        """
+        if geometry is None:
+            return self._read_without_geometry(bbox, res, on_block)
+
+        backend = self.backend
+        if isinstance(backend, WorldCoverReader):
+            classes, transform = backend.land_cover(
+                tuple(bbox),
+                res,
+                on_block or (lambda: None),
+                geometry,
+            )
+            return {"value": classes}, transform
+
+        return self._read_without_geometry(bbox, res, on_block)
+
+    def _read_without_geometry(
+        self,
+        bbox: Bbox,
+        res: float,
+        on_block: Callable[[], None] | None,
+    ) -> tuple[dict[str, np.ndarray], Affine]:
+        """Return uint8 classes over bbox, reading every tile the bounds cover."""
         classes, transform = self.backend.land_cover(
             tuple(bbox),
             res,

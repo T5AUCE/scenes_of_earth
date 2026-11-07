@@ -14,8 +14,11 @@ const SCENE_ID_CHARS = 20; // Must match ID_CHARS in soe/scene_request.py.
 const SCENE_ID_PATTERN = new RegExp(`^[0-9a-f]{${SCENE_ID_CHARS}}$`);
 
 const REQUEST_TIMEOUT_MS = 10 * 1000;
-/** Build request timeout; the backend may first wait up to 15 s on the CHIRPS revision lookup. */
-export const BUILD_REQUEST_TIMEOUT_MS = 30 * 1000;
+/**
+ * Build request timeout; huge-country planning takes a while.
+ * The backend may also wait up to 15 s on the CHIRPS revision lookup.
+ */
+export const BUILD_REQUEST_TIMEOUT_MS = 120 * 1000;
 
 /** A failed API response, with its HTTP status and any Retry-After delay. */
 export class ApiError extends Error {

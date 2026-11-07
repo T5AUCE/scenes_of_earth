@@ -94,6 +94,21 @@ def _boundary_cells(
     shape: tuple[int, int],
 ) -> np.ndarray:
     """Return True for cells grazed by the outline boundary, including holes."""
+    if geometry.geom_type in ("Polygon", "MultiPolygon"):
+        boundary = geometry.boundary
+        if boundary.is_empty:
+            return np.zeros(shape, dtype=bool)
+        # all_touched catches every grazed cell, so the rest need no exact test.
+        burned = rasterize(
+            [(mapping(boundary), 1)],
+            out_shape=shape,
+            transform=transform,
+            fill=0,
+            all_touched=True,
+            dtype="uint8",
+        )
+        return burned.astype(bool)
+
     boundaries = _polygonal_boundaries(geometry)
     if not boundaries:
         return np.zeros(shape, dtype=bool)
@@ -122,6 +137,17 @@ def _centre_inside(
     shape: tuple[int, int],
 ) -> np.ndarray:
     """Return True for cells whose centre lies inside the polygonal members."""
+    if geometry.geom_type in ("Polygon", "MultiPolygon"):
+        if geometry.is_empty:
+            return np.zeros(shape, dtype=bool)
+        return geometry_mask(
+            [mapping(geometry)],
+            shape,
+            transform,
+            invert=True,
+            all_touched=False,
+        )
+
     members = _polygonal_parts(geometry)
     if not members:
         return np.zeros(shape, dtype=bool)

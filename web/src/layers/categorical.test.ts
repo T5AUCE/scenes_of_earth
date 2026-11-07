@@ -160,13 +160,14 @@ test("the geology menu previews GLiM family shades instead of value colours", as
   }
 });
 
-test("the geology age menu offers the ICS colours of the bundle", async () => {
+test("the geology age menu offers painted colours before the ICS colours of the bundle", async () => {
   const harness = createViewHarness(true, undefined, "geology_age", AGE_LIKE_CLASSES);
   try {
     const view = createCategoricalView(harness.context);
     await view.ready;
 
     assert.deepEqual(view.menu?.palettes, [
+      { name: "painted", label: "Painted", colors: ["#f4efb6", "#9fc079"] },
       { name: "esa", label: "ICS colours", colors: ["#f9f97f", "#7fc64e"] },
     ]);
   } finally {

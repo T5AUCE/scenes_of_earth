@@ -8,7 +8,9 @@ from typing import ClassVar, NamedTuple
 
 import numpy as np
 from rasterio.transform import Affine
+from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
+from shapely.prepared import PreparedGeometry, prep
 
 from .cubes import CubeSpec
 from .fallback import read_bilinear
@@ -22,6 +24,8 @@ SUPPORTED_BOUNDS_DEG = (-180, -60, 180, 84)  # W, S, E, N; supported extent
 STOP_COUNT = 9  # colour stops of a series layer, one per palette colour
 STOP_DIGITS = 2  # significant digits of the stops span that a stop keeps
 TOP_PERCENTILE = 98  # the last stop; values above it share the top colour
+
+RING_BUFFER_CELLS = 3  # tile reads keep tiles within this many output cells of the outline
 
 REVISION_HEX_CHARS = 12
 FROM_MAIN = 1  # bit of a cell's code in the `source` array; both bits set make 3
@@ -92,8 +96,11 @@ class Dataset(ABC):
     def __post_init__(self) -> None:
         """Runs after construction; subclasses check their invariants here."""
 
-    def tile_count(self, bbox: Bbox) -> int:
-        """Number of source tiles a read of bbox needs (0 for untiled data)."""
+    def tile_count(self, bbox: Bbox, geometry: BaseGeometry | None = None) -> int:
+        """Number of source tiles a read of bbox needs (0 for untiled data).
+
+        With geometry, only tiles meeting the outline or its rendering ring count.
+        """
         return 0
 
     def res_for(self, bbox: Bbox) -> float:
@@ -145,8 +152,11 @@ class Dataset(ABC):
         """The first colour stop of a series layer."""
         return stats["min"]
 
-    def sources_for(self, bbox: Bbox) -> list[dict]:
-        """The sources a read of bbox uses, the main one first."""
+    def sources_for(self, bbox: Bbox, geometry: BaseGeometry | None = None) -> list[dict]:
+        """The sources a read of bbox uses, the main one first.
+
+        With geometry, only sources of tiles meeting the outline or its ring are listed.
+        """
         return [self.source]
 
     def notices(self, bbox: Bbox, steps: list[str]) -> list[str]:
@@ -261,6 +271,29 @@ class SeriesDataset(Dataset):
 def revision_digest(*markers: str) -> str:
     """Return a short revision that changes whenever any of the markers does."""
     return hashlib.sha256("|".join(markers).encode()).hexdigest()[:REVISION_HEX_CHARS]
+
+
+def expanded_tile(west: float, south: float, size_deg: float, res: float) -> BaseGeometry:
+    """Tile square grown by a few output cells, so the ring around the outline still meets it."""
+    margin_deg = RING_BUFFER_CELLS * res
+    return box(
+        west - margin_deg,
+        south - margin_deg,
+        west + size_deg + margin_deg,
+        south + size_deg + margin_deg,
+    )
+
+
+def touch_target(geometry: BaseGeometry | None) -> PreparedGeometry | None:
+    """Prepared outline, or None without geometry.
+
+    Each candidate tile is grown by the rendering ring before the test, which is cheaper than
+    growing a detailed outline.
+    """
+    if geometry is None or geometry.is_empty:
+        return None
+
+    return prep(geometry)
 
 
 def _check_series_fill(dataset_id: str, spec: Role) -> None:

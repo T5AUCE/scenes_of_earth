@@ -130,6 +130,32 @@ body {
   color: #444;
 }
 
+/* A turning ring before the status text while a build runs. */
+#panel .status.busy::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  border: 2px solid #ccc;
+  border-top-color: #444;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #panel .status.busy::before {
+    animation: none;
+  }
+}
+
 #panel ul {
   padding-left: 18px;
   margin: 4px 0;

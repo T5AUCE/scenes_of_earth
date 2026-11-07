@@ -1,9 +1,11 @@
 """Test that planning stores per-layer geometry and area weights, with a zero-area guard."""
 import math
+from dataclasses import replace
 
 import numpy as np
 import pytest
-from shapely.geometry import MultiPolygon, box
+import shapely
+from shapely.geometry import MultiPolygon, Polygon, box
 
 from soe.area_weights import area_weights
 from soe.areas import Area, AreaError, unwrap
@@ -164,3 +166,111 @@ def test_area_crossing_60_north_reads_beyond_60_for_terrain_and_land_cover():
 
     assert scene_plan.layers["terrain"].bbox[3] > 60
     assert scene_plan.layers["esa_worldcover"].bbox[3] > 60
+
+
+TWO_ISLANDS = MultiPolygon(
+    [
+        box(36.5, -1.5, 37.5, -0.5),
+        box(42.6, 10.8, 43.8, 11.9),
+    ],
+)
+
+
+def test_tile_cap_counts_only_tiles_the_outline_touches():
+    area = Area(TWO_ISLANDS)
+
+    scene_plan = plan(area, [TERRAIN, LAND_COVER], None, None)
+    terrain_layer = scene_plan.layers["terrain"]
+    cover_layer = scene_plan.layers["esa_worldcover"]
+
+    assert TERRAIN.tile_count(terrain_layer.bbox) > TERRAIN.tile_count(
+        terrain_layer.bbox,
+        terrain_layer.geometry,
+    )
+    assert LAND_COVER.tile_count(cover_layer.bbox) > LAND_COVER.tile_count(
+        cover_layer.bbox,
+        cover_layer.geometry,
+    )
+
+
+def test_tile_cap_passes_when_only_touched_tiles_fit_and_fails_on_them():
+    area = Area(TWO_ISLANDS)
+
+    assert plan(area, [replace(TERRAIN, max_tiles=10)], None, None)
+    with pytest.raises(AreaError, match="needs more than 7 source tiles"):
+        plan(area, [replace(TERRAIN, max_tiles=7)], None, None)
+
+    assert plan(area, [replace(LAND_COVER, max_tiles=2)], None, None)
+    with pytest.raises(AreaError, match="needs more than 1 source tiles"):
+        plan(area, [replace(LAND_COVER, max_tiles=1)], None, None)
+
+
+def test_plan_keeps_edge_only_contact_across_outline_sizes():
+    inside = box(36.0, 58.0, 37.0, 59.0)
+    touching = box(38.0, 60.0, 39.0, 61.0)
+    small = MultiPolygon([inside, touching])
+    large = shapely.segmentize(small, 0.005)
+
+    small_layer = plan_months(Area(small), [RAIN], 1).layers["chirps_monthly"]
+    large_layer = plan_months(Area(large), [RAIN], 1).layers["chirps_monthly"]
+
+    assert small_layer.geometry.bounds == pytest.approx((36.0, 58.0, 39.0, 60.0))
+    assert small_layer.transform == large_layer.transform
+    assert small_layer.shape == large_layer.shape
+    assert small_layer.bbox == large_layer.bbox
+    np.testing.assert_array_equal(small_layer.mask, large_layer.mask)
+    np.testing.assert_allclose(
+        small_layer.area_weights,
+        large_layer.area_weights,
+        rtol=1e-12,
+        atol=0.0,
+    )
+    assert small_layer.sources == large_layer.sources
+    assert small_layer.geometry.equals(large_layer.geometry)
+
+
+def test_plan_keeps_hole_crossing_coverage_edge_across_outline_sizes():
+    outer = box(36.0, 58.0, 38.0, 62.0)
+    hole = box(36.5, 59.5, 37.5, 60.5)
+    small = Polygon(outer.exterior.coords, [hole.exterior.coords])
+    large = shapely.segmentize(small, 0.005)
+
+    small_layer = plan_months(Area(small), [RAIN], 1).layers["chirps_monthly"]
+    large_layer = plan_months(Area(large), [RAIN], 1).layers["chirps_monthly"]
+
+    assert small_layer.transform == large_layer.transform
+    assert small_layer.shape == large_layer.shape
+    assert small_layer.bbox == large_layer.bbox
+    np.testing.assert_array_equal(small_layer.mask, large_layer.mask)
+    np.testing.assert_allclose(
+        small_layer.area_weights,
+        large_layer.area_weights,
+        rtol=1e-12,
+        atol=0.0,
+    )
+    assert small_layer.sources == large_layer.sources
+    assert small_layer.geometry.equals(large_layer.geometry)
+
+
+def test_plan_keeps_touching_parts_across_outline_sizes():
+    lower = box(36.0, 58.0, 37.0, 60.0)
+    upper = box(37.0, 60.0, 38.0, 62.0)
+    small = MultiPolygon([lower, upper])
+    large = shapely.segmentize(small, 0.005)
+
+    small_layer = plan_months(Area(small), [RAIN], 1).layers["chirps_monthly"]
+    large_layer = plan_months(Area(large), [RAIN], 1).layers["chirps_monthly"]
+
+    assert small_layer.geometry.bounds == pytest.approx((36.0, 58.0, 38.0, 60.0))
+    assert small_layer.transform == large_layer.transform
+    assert small_layer.shape == large_layer.shape
+    assert small_layer.bbox == large_layer.bbox
+    np.testing.assert_array_equal(small_layer.mask, large_layer.mask)
+    np.testing.assert_allclose(
+        small_layer.area_weights,
+        large_layer.area_weights,
+        rtol=1e-12,
+        atol=0.0,
+    )
+    assert small_layer.sources == large_layer.sources
+    assert small_layer.geometry.equals(large_layer.geometry)

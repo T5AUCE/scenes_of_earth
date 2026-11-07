@@ -4,9 +4,10 @@ from dataclasses import dataclass, field
 from math import ceil
 
 import numpy as np
+import shapely
 from rasterio.features import geometry_mask
 from rasterio.transform import Affine
-from shapely.geometry import box, mapping
+from shapely.geometry import mapping
 from shapely.geometry.base import BaseGeometry
 
 from .area_weights import area_weights
@@ -71,6 +72,15 @@ class Plan:
     notices: list[str] = field(default_factory=list)
 
 
+@dataclass
+class _PlanCaches:
+    """Reused GeoJSON, ring grids and weights of one plan() call, so shared layers cost once."""
+
+    geojson: dict[int, dict] = field(default_factory=dict)
+    rings: dict[tuple, tuple] = field(default_factory=dict)
+    weights: dict[tuple, np.ndarray] = field(default_factory=dict)
+
+
 def plan(area: Area, datasets: list[Dataset], start: str | None, end: str | None) -> Plan:
     """Work out each layer's grid, mask and time steps, with an aggregation factor per series.
 
@@ -86,6 +96,7 @@ def plan(area: Area, datasets: list[Dataset], start: str | None, end: str | None
     layer_geometries, layer_notices, shared_geometry, clipped = _clip_to_coverage(
         geometry,
         datasets,
+        beyond,
     )
     # Below 60N the outline stays as clipped before, so the bundle bytes do not change.
     outline = geometry if beyond else shared_geometry
@@ -98,9 +109,15 @@ def plan(area: Area, datasets: list[Dataset], start: str | None, end: str | None
     _check_steps_exist(steps)
     _check_source_size(windows, steps)
 
-    notices += _small_area_notices(area, outline)
+    caches = _PlanCaches()
+    notices += _small_area_notices(area, outline, caches)
 
-    budget_for_series = _budget_after_static_layers(datasets, windows, layer_geometries)
+    budget_for_series = _budget_after_static_layers(
+        datasets,
+        windows,
+        layer_geometries,
+        caches,
+    )
     factors = {}
     if series:
         factors, series_windows = _aggregation_factors(
@@ -109,6 +126,7 @@ def plan(area: Area, datasets: list[Dataset], start: str | None, end: str | None
             steps,
             budget_for_series,
             layer_geometries,
+            caches,
         )
         windows.update(series_windows)
         _check_source_size(windows, steps)
@@ -121,6 +139,7 @@ def plan(area: Area, datasets: list[Dataset], start: str | None, end: str | None
             factors.get(dataset.id, 1),
             steps.get(dataset.id, []),
             layer_notices[dataset.id],
+            caches,
         )
         for dataset in datasets
     }
@@ -160,33 +179,72 @@ def _check_longitude_span(geometry: BaseGeometry) -> None:
 def _clip_to_coverage(
     geometry: BaseGeometry,
     datasets: list[Dataset],
+    beyond: bool,
 ) -> tuple[dict[str, BaseGeometry], dict[str, list[str]], BaseGeometry, bool]:
     """Clip the outline to each layer's coverage and to the coverage all layers share.
 
-    Also returns each layer's notices and whether any layer was clipped.
+    Also returns each layer's notices and whether any layer was clipped. One intersection
+    per distinct coverage keeps huge outlines fast while preserving exact edge contacts.
     """
-    layer_geometries = {}
-    layer_notices = {}
-    shared_geometry = geometry
+    layer_geometries: dict[str, BaseGeometry] = {}
+    layer_notices: dict[str, list[str]] = {}
     clipped = False
+    clips: dict[Bbox, BaseGeometry] = {}
+    outline_area = geometry.area
     for dataset in datasets:
-        part = geometry.intersection(box(*_extent(dataset.coverage)))
+        extent = _extent(dataset.coverage)
+        part = clips.get(extent)
+        if part is None:
+            part = geometry.intersection(shapely.box(*extent))
+            clips[extent] = part
         if part.is_empty or part.area == 0:
             raise AreaError(f"area is outside {dataset.title} coverage")
 
         layer_notices[dataset.id] = []
-        if part.area < geometry.area * (1 - AREA_TOLERANCE):
+        if part.area < outline_area * (1 - AREA_TOLERANCE):
             clipped = True
             layer_notices[dataset.id].append(
                 f"Part of the area lies outside {dataset.title} coverage and has no data there.",
             )
         layer_geometries[dataset.id] = part
-        shared_geometry = shared_geometry.intersection(part)
 
+    if beyond:
+        shared_geometry = _shared_coverage_clip(geometry, clips)
+    else:
+        # Legacy scenes keep the old intersection order, so their bundles stay identical.
+        shared_geometry = geometry
+        for part in layer_geometries.values():
+            shared_geometry = shared_geometry.intersection(part)
     if shared_geometry.is_empty or shared_geometry.area == 0:
         raise AreaError("area is outside the coverage shared by the selected layers")
 
     return layer_geometries, layer_notices, shared_geometry, clipped
+
+
+def _shared_coverage_clip(
+    geometry: BaseGeometry,
+    clips: dict[Bbox, BaseGeometry],
+) -> BaseGeometry:
+    """Clip the outline once to the rectangle all coverages share, reusing a cached clip."""
+    shared = _intersect_extents(list(clips))
+    if shared is None:
+        return shapely.GeometryCollection()
+    if shared in clips:
+        return clips[shared]
+
+    return geometry.intersection(shapely.box(*shared))
+
+
+def _intersect_extents(extents: list[Bbox]) -> Bbox | None:
+    """Intersect coverage extents, or None when they share no area."""
+    west = max(extent[0] for extent in extents)
+    south = max(extent[1] for extent in extents)
+    east = min(extent[2] for extent in extents)
+    north = min(extent[3] for extent in extents)
+    if west >= east or south >= north:
+        return None
+
+    return west, south, east, north
 
 
 def _extent(coverage: Bbox) -> Bbox:
@@ -261,10 +319,19 @@ def _source_cells(windows: dict[str, CellSpan], steps: dict[str, list[str]]) -> 
     )
 
 
-def _small_area_notices(area: Area, geometry: BaseGeometry) -> list[str]:
+def _small_area_notices(
+    area: Area,
+    geometry: BaseGeometry,
+    caches: _PlanCaches,
+) -> list[str]:
     c0, c1, r0, r1 = WORLD_GRID.span(geometry.bounds)
     window_transform = WORLD_GRID.transform @ Affine.translation(c0, r0)
-    native_mask = _cell_mask(geometry, window_transform, (r1 - r0, c1 - c0))
+    native_mask = _cell_mask(
+        geometry,
+        window_transform,
+        (r1 - r0, c1 - c0),
+        geojson_cache=caches.geojson,
+    )
     if int(native_mask.sum()) >= MIN_CELLS:
         return []
 
@@ -282,6 +349,7 @@ def _budget_after_static_layers(
     datasets: list[Dataset],
     windows: dict[str, CellSpan],
     geometries: dict[str, BaseGeometry],
+    caches: _PlanCaches,
 ) -> int:
     """Output bytes left for series; static layers have a fixed cost, so they are budgeted first."""
     budget = MAX_OUTPUT_BYTES
@@ -294,8 +362,9 @@ def _budget_after_static_layers(
             geometries[dataset.id],
             windows[dataset.id],
             1,
+            caches,
         )
-        tile_count = dataset.tile_count(bbox)
+        tile_count = _tile_count(dataset, bbox, geometries[dataset.id])
         if dataset.needs_tiles and tile_count == 0:
             raise AreaError(f"{dataset.title} has no data in this area")
 
@@ -312,19 +381,44 @@ def _budget_after_static_layers(
     return budget
 
 
+def _tile_count(dataset: Dataset, bbox: Bbox, geometry: BaseGeometry) -> int:
+    """Tiles meeting the outline for capped datasets, else tiles of the whole bbox.
+
+    Only the capped datasets filter by the outline; the rest keep their bbox behaviour.
+    """
+    if dataset.max_tiles is None:
+        return dataset.tile_count(bbox)
+
+    return dataset.tile_count(bbox, geometry)
+
+
 def _ring_grid(
     dataset: Dataset,
     geometry: BaseGeometry,
     window: CellSpan,
     factor: int,
+    caches: _PlanCaches,
 ) -> tuple[Affine, tuple[int, int], list[float], float, np.ndarray]:
     """Grow touched edges within source coverage, then add real-data support around the area."""
     limits = dataset.grid.span(_extent(dataset.coverage))
     if dataset.time_varying:
         window = _fit_series_window(window, limits, factor)
+    probe_bbox = dataset.grid.bbox(window)
+    probe_res = dataset.grid.res * factor if dataset.time_varying else dataset.res_for(probe_bbox)
+    key = _ring_key(dataset, geometry, window, factor, probe_res)
+    cached = caches.rings.get(key)
+    if cached is not None:
+        return cached
+
     for _ in range(MAX_RING_GRID_PASSES):
         transform, shape, bbox, res = _layer_grid(dataset, window, factor)
-        inside = _cell_mask(geometry, transform, shape, all_touched=True)
+        inside = _cell_mask(
+            geometry,
+            transform,
+            shape,
+            all_touched=True,
+            geojson_cache=caches.geojson,
+        )
         native_cells = factor if dataset.time_varying else ceil(res / dataset.grid.res)
         grown = _grow_window(window, limits, inside, native_cells)
         if dataset.time_varying:
@@ -334,7 +428,13 @@ def _ring_grid(
         window = grown
 
     transform, shape, bbox, res = _layer_grid(dataset, window, factor)
-    inside = _cell_mask(geometry, transform, shape, all_touched=True)
+    inside = _cell_mask(
+        geometry,
+        transform,
+        shape,
+        all_touched=True,
+        geojson_cache=caches.geojson,
+    )
     neighbours = np.zeros(shape, bool)
     neighbours[1:] |= inside[:-1]
     neighbours[:-1] |= inside[1:]
@@ -342,7 +442,28 @@ def _ring_grid(
     neighbours[:, :-1] |= inside[:, 1:]
     mask = inside.astype("uint8")
     mask[neighbours & ~inside] = MASK_RING
-    return transform, shape, bbox, res, mask
+    result = transform, shape, bbox, res, mask
+    caches.rings[key] = result
+    return result
+
+
+def _ring_key(
+    dataset: Dataset,
+    geometry: BaseGeometry,
+    window: CellSpan,
+    factor: int,
+    res: float,
+) -> tuple:
+    """Cache key of a ring grid; layers sharing grid, coverage and window share the work."""
+    return (
+        id(geometry),
+        window,
+        factor,
+        dataset.grid,
+        dataset.coverage,
+        dataset.time_varying,
+        res,
+    )
 
 
 def _fit_series_window(window: CellSpan, limits: CellSpan, factor: int) -> CellSpan:
@@ -422,6 +543,7 @@ def _aggregation_factors(
     steps: dict[str, list[str]],
     budget: int,
     geometries: dict[str, BaseGeometry],
+    caches: _PlanCaches,
 ) -> tuple[dict[str, int], dict[str, CellSpan]]:
     """Block-mean factor of each series so all fit the budget, and the windows snapped to them.
 
@@ -433,7 +555,7 @@ def _aggregation_factors(
             dataset.id: _snap_window(windows[dataset.id], factors[dataset.id])
             for dataset in series
         }
-        if _series_bytes(series, snapped, steps, factors, geometries) <= budget:
+        if _series_bytes(series, snapped, steps, factors, geometries, caches) <= budget:
             return factors, snapped
 
         finest = _finest_coarsenable(series, factors)
@@ -484,6 +606,7 @@ def _series_bytes(
     steps: dict[str, list[str]],
     factors: dict[str, int],
     geometries: dict[str, BaseGeometry],
+    caches: _PlanCaches,
 ) -> int:
     """Output bytes of all series once each window is averaged over its factor x factor blocks."""
     total_bytes = 0
@@ -493,6 +616,7 @@ def _series_bytes(
             geometries[dataset.id],
             windows[dataset.id],
             factors[dataset.id],
+            caches,
         )
         total_bytes += _layer_bytes(dataset, grid_shape, len(steps[dataset.id]))
     return total_bytes
@@ -505,8 +629,15 @@ def _layer_plan(
     factor: int,
     steps: list[str],
     clip_notices: list[str],
+    caches: _PlanCaches,
 ) -> LayerPlan:
-    transform, grid_shape, bbox, res, mask = _ring_grid(dataset, geometry, window, factor)
+    transform, grid_shape, bbox, res, mask = _ring_grid(
+        dataset,
+        geometry,
+        window,
+        factor,
+        caches,
+    )
     notices = list(clip_notices)
     if factor > 1:
         notices.append(
@@ -517,7 +648,11 @@ def _layer_plan(
     if not (mask == MASK_INSIDE).any():
         raise AreaError(f"area does not cover any {dataset.title} cells")
 
-    weights = area_weights(geometry, transform, grid_shape, mask)
+    key = (id(geometry), id(mask))
+    weights = caches.weights.get(key)
+    if weights is None:
+        weights = area_weights(geometry, transform, grid_shape, mask)
+        caches.weights[key] = weights
     # Weights are planned before any source read, so empty overlap fails fast.
     if not weights.sum() > 0:
         raise AreaError(f"area has no positive overlap with {dataset.title} cells")
@@ -534,12 +669,20 @@ def _layer_plan(
         mask,
         int((mask == MASK_INSIDE).sum()),
         steps,
-        dataset.sources_for(bbox),
+        _sources_for(dataset, bbox, geometry),
         geometry,
         weights,
         dataset.coverage,
         notices,
     )
+
+
+def _sources_for(dataset: Dataset, bbox: Bbox, geometry: BaseGeometry) -> list[dict]:
+    """Sources of the tiles meeting the outline for capped datasets, else of the bbox."""
+    if dataset.max_tiles is None:
+        return dataset.sources_for(bbox)
+
+    return dataset.sources_for(bbox, geometry)
 
 
 def _enclosing_bbox(bboxes: list[list[float]]) -> list[float]:
@@ -557,9 +700,20 @@ def _cell_mask(
     window_transform: Affine,
     grid_shape: tuple[int, int],
     all_touched: bool = False,
+    geojson_cache: dict[int, dict] | None = None,
 ) -> np.ndarray:
+    """Inside cells of `geometry` on the grid; the GeoJSON is reused across grid shapes."""
+    if geojson_cache is None:
+        geojson: dict = mapping(geometry)
+    else:
+        key = id(geometry)
+        cached = geojson_cache.get(key)
+        if cached is None:
+            cached = mapping(geometry)
+            geojson_cache[key] = cached
+        geojson = cached
     return geometry_mask(
-        [mapping(geometry)],
+        [geojson],
         grid_shape,
         window_transform,
         invert=True,

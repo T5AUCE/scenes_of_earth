@@ -169,3 +169,37 @@ def test_startup_marks_interrupted_and_repost_requeues(tmp_path):
     assert start and row["status"] == "queued" and row["error"] is None
 
     assert db.submit(path, scene_id, "{}", True)[1] is False
+
+
+def test_search_matches_official_long_name_for_america(tmp_path):
+    path = tmp_path / "soe.db"
+    db.init(path)
+    db.add_boundaries(
+        path,
+        "geoBoundaries CGAZ",
+        [
+            boundary_row("cgaz:ADM0:USA", "country", "United States", iso3="USA"),
+            boundary_row("cgaz:ADM0:GBR", "country", "United Kingdom", iso3="GBR"),
+        ],
+    )
+
+    assert [row["id"] for row in db.search(path, "america")] == ["cgaz:ADM0:USA"]
+
+
+def test_search_matches_official_long_name_for_kingdom(tmp_path):
+    path = tmp_path / "soe.db"
+    db.init(path)
+    db.add_boundaries(
+        path,
+        "geoBoundaries CGAZ",
+        [
+            boundary_row("cgaz:ADM0:USA", "country", "United States", iso3="USA"),
+            boundary_row("cgaz:ADM0:GBR", "country", "United Kingdom", iso3="GBR"),
+            boundary_row("cgaz:ADM0:SAU", "country", "Saudi Arabia", iso3="SAU"),
+        ],
+    )
+    hits = [row["id"] for row in db.search(path, "kingdom")]
+
+    assert "cgaz:ADM0:GBR" in hits
+    assert "cgaz:ADM0:SAU" in hits
+    assert hits[0] == "cgaz:ADM0:GBR"
