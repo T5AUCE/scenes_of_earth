@@ -234,6 +234,23 @@ def test_overlapping_shape_parts_are_repaired_into_a_row():
     assert tuple(row[5:9]) == pytest.approx((36.0, 4.0, 39.0, 7.0))
 
 
+def test_shape_is_clipped_to_the_supported_extent_at_84_north_and_60_south():
+    from soe.boundary_import import CGAZ_SOURCE, _row
+
+    row = _row(
+        "cgaz:ADM1:TST",
+        "state",
+        "Tall State",
+        "Testland",
+        "TST",
+        box(10, -70, 20, 88),
+        CGAZ_SOURCE,
+    )
+
+    assert row is not None
+    assert tuple(row[5:9]) == pytest.approx((10.0, -60.0, 20.0, 84.0))
+
+
 def test_touching_shape_parts_are_kept_without_simplification():
     import json
 

@@ -292,10 +292,12 @@ with the full unmapped list, as for the global maps.
   factor (the finest output coarsened first, never beyond 0.4 degrees).
 - Temperature is stored as int16 at 0.1 °C (fill -32768), `time.method` `mean`, on its own 0.1 degree grid whose cell
   centres lie on 0.1 degree multiples (half a cell off the rain grid). It is listed only when the cube below exists.
-- Rain and terrain are anchored to the 60S-60N grid of 0.05 degree cells that starts at 180W. `area.geojson` is the area
-  clipped to the coverage of all selected layers, simplified for display to a quarter of the scene's finest grid cell
-  (never below 0.0005 degrees), so one layer's mask can reach slightly beyond the outline. Masks, statistics, style
-  stops and scene ids all use the full stored outline, which is why the bundle format stays at 0.7: old bundles keep
+- Terrain, land cover and geology are anchored to the 60S-84N grid of 0.05 degree cells that starts at 180W, and rain
+  to the 60S-60N CHIRPS grid whose cells coincide with it. The supported extent is 60S-84N. A layer whose data stops
+  short of part of the area (rain, temperature and geology end at 60N until their cubes are re-ingested) keeps its own
+  clipped outline and gets a notice, while `area.geojson` is the whole area, simplified for display to a quarter of the
+  scene's finest grid cell (never below 0.0005 degrees), so one layer's mask can reach slightly beyond the outline.
+  Masks, statistics, style stops and scene ids all use the full stored outline, which is why the bundle format stays at 0.7: old bundles keep
   their exact outline and every reader treats `area.geojson` as display-only.
 - The terrain layer holds no elevation array. The viewer draws shading and contours from the elevation tiles named by
   `layers[].tiles` (Terrarium encoding, 512 px, Mapterhorn by default), and the build keeps `stats` (`min`, `max`, `mean`,
@@ -309,7 +311,7 @@ with the full unmapped list, as for the global maps.
   in each cell. It reads the tile's COG overview with at least 16 source pixels per cell (the 0.5 degree spike agreed with
   full resolution on 96.7-97.8 % of cells). `style.classes` holds the official colours; `style.palette: "painted"` names the
   softer set the viewer holds by default, and its "ESA colours" option switches to the official ones. Land cover is refused
-  above 400 source tiles.
+  above 2500 source tiles (about the size of Brazil).
 - Geology (`geology`, not a default layer) is a static `categorical` layer built like land cover, with a uint8 `value`
   array (0 = no data, water or undefined) holding the most common rock class in each cell of the lithology map, read from
   the local COG: GLiM level 1 + 2 when the COG was built from it (88 classes), else the 14 OpenLandMap classes. Its
@@ -445,7 +447,7 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
   The same text is in `soe/sources/licences.py`.
 - **Boundaries: geoBoundaries CGAZ**, CC BY 4.0. Runfola, D. et al. (2020) geoBoundaries: A global database of political
   administrative boundaries. PLoS ONE 15(4): e0231866. https://www.geoboundaries.org. Simplified to 0.01 degrees and
-  clipped to 60S-60N. CC BY 4.0 for CGAZ itself is the repository-wide licence for geoBoundaries derivatives, not a
+  clipped to 60S-84N. CC BY 4.0 for CGAZ itself is the repository-wide licence for geoBoundaries derivatives, not a
   statement naming CGAZ.
 - **Area search level names: geoBoundaries gbOpen metadata.** Each country's own ADM1/ADM2 type names
   (County, Canton) come from the gbOpen API metadata (`boundaryCanonical` field); only the short names

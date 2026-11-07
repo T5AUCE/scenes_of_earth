@@ -59,9 +59,16 @@ const dependencies = {
   "./scene-camera": `
     export const flightDuration = () => 0;
     export function flyIn(map, scene, roots, onLanded) {
-      globalThis.sceneModeTest.land = onLanded;
-      if (globalThis.sceneModeTest.landImmediately) onLanded();
-      return globalThis.sceneModeTest.flight;
+      const flight = globalThis.sceneModeTest.flight;
+      return {
+        get zoom() { return flight.zoom; },
+        refit() { flight.refit(); },
+        stopClamp() { flight.stopClamp(); },
+        start() {
+          globalThis.sceneModeTest.land = onLanded;
+          if (globalThis.sceneModeTest.landImmediately) onLanded();
+        },
+      };
     }
     export function watchResize(onResize) {
       globalThis.sceneModeTest.resize = onResize;
@@ -147,7 +154,18 @@ const dependencies = {
         },
         layerIds,
         store: mountStore,
-        addNote: (note) => globalThis.sceneModeTest.notes.push(note),
+        addNote: (note) => {
+          globalThis.sceneModeTest.notes.push(note);
+          return () => {
+            const notes = globalThis.sceneModeTest.notes;
+            const index = notes.indexOf(note);
+            if (index >= 0) notes.splice(index, 1);
+          };
+        },
+        whenFirstDataReady: () => {
+          const data = globalThis.sceneModeTest.data;
+          return { ready: data.promise, cancel: () => {} };
+        },
         unmount() {
           for (const id of this.layerIds) map.removeLayer(id);
         },
@@ -207,6 +225,7 @@ export function createHarness() {
     map,
     roots,
     geometry: deferred(),
+    data: deferredSignal(),
     notes: [] as string[],
     times: [] as [string | null, string | null][],
     panelStore: null as unknown,
@@ -254,6 +273,18 @@ export function deferred() {
   let resolve!: (feature: typeof FEATURE) => void;
   let reject!: (error: Error) => void;
   const promise = new Promise<typeof FEATURE>((accept, fail) => {
+    resolve = accept;
+    reject = fail;
+  });
+
+  return { promise, resolve, reject };
+}
+
+/** Create a manually settled data promise for the harness. */
+export function deferredSignal() {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((accept, fail) => {
     resolve = accept;
     reject = fail;
   });

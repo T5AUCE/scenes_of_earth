@@ -1,4 +1,5 @@
 """Plan a scene by choosing each layer's grid window, aggregation factor, mask and time steps."""
+from copy import copy
 from dataclasses import dataclass, field
 from math import ceil
 
@@ -11,7 +12,6 @@ from shapely.geometry.base import BaseGeometry
 from .area_weights import area_weights
 from .areas import MAX_LONGITUDE_DEG, WORLD_WIDTH_DEG, Area, AreaError, unwrap
 from .sources import (
-    CHIRPS_GRID,
     REQUEST_STEP,
     SOURCE_ROLE,
     Bbox,
@@ -20,6 +20,7 @@ from .sources import (
     SeriesDataset,
     request_range,
 )
+from .sources.grid import WORLD_GRID
 
 MIN_CELLS = 25  # drawn shapes smaller than this are rejected
 PAD_DEG = 0.5  # each layer's window is padded to at least this size
@@ -30,6 +31,8 @@ MAX_SOURCE_CELL_STEPS = 100_000_000  # summed over series before any read
 MAX_OUTPUT_BYTES = 50_000_000  # raw arrays after aggregation
 MAX_SERIES_RES_DEG = 0.4  # coarsest cell size a series may be averaged to
 RES_TOLERANCE_DEG = 1e-9
+
+LEGACY_EXTENT_DEG = 60  # scenes wholly within this latitude are planned as before 84N support
 
 MASK_INSIDE = 1
 MASK_RING = 2
@@ -50,8 +53,9 @@ class LayerPlan:
     cells_inside: int
     steps: list[str]  # ISO dates; empty for static layers
     sources: list[dict]  # source dicts the layer reads, the main one first
-    geometry: BaseGeometry  # coverage-clipped outline in the layer grid frame
+    geometry: BaseGeometry  # outline clipped to this layer's coverage, in its grid frame
     area_weights: np.ndarray  # float64 cosine times covered fraction
+    coverage: Bbox  # [W, S, E, N] the dataset covers, 60N-limited for scenes wholly below it
     notices: list[str] = field(default_factory=list)
 
 
@@ -59,10 +63,10 @@ class LayerPlan:
 class Plan:
     """The result of plan(), holding one LayerPlan per dataset and what the layers share."""
 
-    geometry: BaseGeometry  # clipped to the coverage shared by all layers
+    geometry: BaseGeometry  # the whole outline, including parts some layers do not cover
     layers: dict[str, LayerPlan]  # dataset id -> LayerPlan
     bbox: list[float]  # [W, S, E, N] around all layers
-    clipped: bool
+    clipped: bool  # some layer lacks coverage of part of the outline
     period: tuple[str, str] | None  # ISO dates (first day, day after the last); None without series
     notices: list[str] = field(default_factory=list)
 
@@ -75,11 +79,16 @@ def plan(area: Area, datasets: list[Dataset], start: str | None, end: str | None
     """
     geometry = unwrap(area.geom)
     _check_longitude_span(geometry)
+    beyond = beyond_legacy_extent(geometry)
+    if not beyond:
+        datasets = [_limited_to_legacy_extent(dataset) for dataset in datasets]
 
     layer_geometries, layer_notices, shared_geometry, clipped = _clip_to_coverage(
         geometry,
         datasets,
     )
+    # Below 60N the outline stays as clipped before, so the bundle bytes do not change.
+    outline = geometry if beyond else shared_geometry
     windows, padded = _layer_windows(datasets, layer_geometries)
     notices = [PADDED_NOTICE] if padded else []
 
@@ -89,7 +98,7 @@ def plan(area: Area, datasets: list[Dataset], start: str | None, end: str | None
     _check_steps_exist(steps)
     _check_source_size(windows, steps)
 
-    notices += _small_area_notices(area, shared_geometry)
+    notices += _small_area_notices(area, outline)
 
     budget_for_series = _budget_after_static_layers(datasets, windows, layer_geometries)
     factors = {}
@@ -123,9 +132,23 @@ def plan(area: Area, datasets: list[Dataset], start: str | None, end: str | None
         raise AreaError(
             "area and period are too large to read; choose a smaller area or fewer months",
         )
-    bbox = _enclosing_bbox([layer.bbox for layer in layers.values()])
+    bbox = _enclosing_bbox([*(layer.bbox for layer in layers.values()), list(geometry.bounds)])
 
-    return Plan(shared_geometry, layers, bbox, clipped, period, notices)
+    return Plan(outline, layers, bbox, clipped, period, notices)
+
+
+def beyond_legacy_extent(geometry: BaseGeometry) -> bool:
+    """Whether the geometry reaches past +-60 degrees latitude, where planning changed."""
+    _, south, _, north = geometry.bounds
+    return south < -LEGACY_EXTENT_DEG or north > LEGACY_EXTENT_DEG
+
+
+def _limited_to_legacy_extent(dataset: Dataset) -> Dataset:
+    """A copy of the dataset whose coverage ends at 60N, so a scene wholly below it is unchanged."""
+    west, south, east, north = dataset.coverage
+    limited = copy(dataset)
+    limited.coverage = (west, south, east, min(north, LEGACY_EXTENT_DEG))
+    return limited
 
 
 def _check_longitude_span(geometry: BaseGeometry) -> None:
@@ -138,7 +161,10 @@ def _clip_to_coverage(
     geometry: BaseGeometry,
     datasets: list[Dataset],
 ) -> tuple[dict[str, BaseGeometry], dict[str, list[str]], BaseGeometry, bool]:
-    """Per-layer clipped geometry, per-layer notices, the geometry all layers share, was clipped."""
+    """Clip the outline to each layer's coverage and to the coverage all layers share.
+
+    Also returns each layer's notices and whether any layer was clipped.
+    """
     layer_geometries = {}
     layer_notices = {}
     shared_geometry = geometry
@@ -152,7 +178,7 @@ def _clip_to_coverage(
         if part.area < geometry.area * (1 - AREA_TOLERANCE):
             clipped = True
             layer_notices[dataset.id].append(
-                f"Part of the area lies outside {dataset.title} coverage and was clipped.",
+                f"Part of the area lies outside {dataset.title} coverage and has no data there.",
             )
         layer_geometries[dataset.id] = part
         shared_geometry = shared_geometry.intersection(part)
@@ -235,10 +261,10 @@ def _source_cells(windows: dict[str, CellSpan], steps: dict[str, list[str]]) -> 
     )
 
 
-def _small_area_notices(area: Area, shared_geometry: BaseGeometry) -> list[str]:
-    c0, c1, r0, r1 = CHIRPS_GRID.span(shared_geometry.bounds)
-    window_transform = CHIRPS_GRID.transform @ Affine.translation(c0, r0)
-    native_mask = _cell_mask(shared_geometry, window_transform, (r1 - r0, c1 - c0))
+def _small_area_notices(area: Area, geometry: BaseGeometry) -> list[str]:
+    c0, c1, r0, r1 = WORLD_GRID.span(geometry.bounds)
+    window_transform = WORLD_GRID.transform @ Affine.translation(c0, r0)
+    native_mask = _cell_mask(geometry, window_transform, (r1 - r0, c1 - c0))
     if int(native_mask.sum()) >= MIN_CELLS:
         return []
 
@@ -511,6 +537,7 @@ def _layer_plan(
         dataset.sources_for(bbox),
         geometry,
         weights,
+        dataset.coverage,
         notices,
     )
 

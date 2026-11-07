@@ -49,3 +49,32 @@ test("a failed companion upload frees the primary texture uploaded just before i
   assert.equal(harness.deleted.textures.length, 2);
   assert.equal(gpu.tiles.length, 0);
 });
+
+test("a hidden layer does not compile until shown", () => {
+  const harness = createHarness();
+  let compiles = 0;
+  const createProgram = harness.gl.createProgram.bind(harness.gl);
+  harness.gl.createProgram = (() => {
+    compiles++;
+    return createProgram();
+  }) as WebGL2RenderingContext["createProgram"];
+  const map = harness.map as unknown as {
+    getLayoutProperty: (id: string, name: string) => string;
+  };
+  let visibility = "none";
+  map.getLayoutProperty = () => visibility;
+  const layer = new UploadingLayer();
+
+  layer.onAdd(harness.map, harness.gl);
+  assert.equal(compiles, 0);
+
+  layer.render(harness.gl, harness.input);
+  assert.equal(compiles, 0);
+
+  visibility = "visible";
+  layer.render(harness.gl, harness.input);
+  assert.equal(compiles, 1);
+
+  layer.render(harness.gl, harness.input);
+  assert.equal(compiles, 1);
+});

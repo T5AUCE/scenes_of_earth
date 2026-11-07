@@ -807,7 +807,8 @@ function smoothstep(fraction: number): number {
 
 /**
  * Mark base cells whose maximum 16 x 16 support holds one id so uniform interiors skip
- * the gather. Clamped edge fetches match the shader so the flag stays exact.
+ * the gather. A summed-area table of neighbour differences answers each window in O(1)
+ * so the whole grid costs one pass, and clipped edges match the shader exactly.
  */
 export function homogeneousFlags(
   cells: Uint8Array | readonly number[],
@@ -815,37 +816,97 @@ export function homogeneousFlags(
   ny: number,
 ): Uint8Array {
   const flags = new Uint8Array(nx * ny);
+  if (nx <= 0 || ny <= 0) {
+    return flags;
+  }
+  const horizontal = summedHorizontal(cells, nx, ny);
+  const vertical = summedVertical(cells, nx, ny);
+  const lastOffset = WIDE_LARGE_FIRST + WIDE_LARGE_SPAN - 1;
   for (let row = 0; row < ny; row++) {
+    const top = Math.max(0, row + WIDE_LARGE_FIRST);
+    const bottom = Math.min(ny - 1, row + lastOffset);
     for (let column = 0; column < nx; column++) {
-      flags[row * nx + column] = isUniformNeighbourhood(cells, nx, ny, column, row) ? 1 : 0;
+      const left = Math.max(0, column + WIDE_LARGE_FIRST);
+      const right = Math.min(nx - 1, column + lastOffset);
+      flags[row * nx + column] = isUniformWindow(
+        horizontal,
+        vertical,
+        nx,
+        top,
+        bottom,
+        left,
+        right,
+      ) ? 1 : 0;
     }
   }
   return flags;
 }
 
-function isUniformNeighbourhood(
+function isUniformWindow(
+  horizontal: Int32Array,
+  vertical: Int32Array,
+  nx: number,
+  top: number,
+  bottom: number,
+  left: number,
+  right: number,
+): boolean {
+  if (left < right && rectangleSum(horizontal, nx, top, bottom, left, right - 1) > 0) {
+    return false;
+  }
+  return !(top < bottom && rectangleSum(vertical, nx, top, bottom - 1, left, right) > 0);
+}
+
+function summedHorizontal(
   cells: Uint8Array | readonly number[],
   nx: number,
   ny: number,
-  column: number,
-  row: number,
-): boolean {
-  const first = cells[clampRow(row + WIDE_LARGE_FIRST, ny) * nx
-    + clampColumn(column + WIDE_LARGE_FIRST, nx)];
-  for (let tapRow = 0; tapRow < WIDE_LARGE_SPAN; tapRow++) {
-    const cellRow = clampRow(row + WIDE_LARGE_FIRST + tapRow, ny);
-    for (let tapColumn = 0; tapColumn < WIDE_LARGE_SPAN; tapColumn++) {
-      const cellColumn = clampColumn(column + WIDE_LARGE_FIRST + tapColumn, nx);
-      if (cells[cellRow * nx + cellColumn] !== first) return false;
+): Int32Array {
+  const table = new Int32Array(nx * ny);
+  for (let row = 0; row < ny; row++) {
+    for (let column = 0; column < nx; column++) {
+      const differs = column + 1 < nx && cells[row * nx + column] !== cells[row * nx + column + 1]
+        ? 1
+        : 0;
+      table[row * nx + column] = differs
+        + (row > 0 ? table[(row - 1) * nx + column] : 0)
+        + (column > 0 ? table[row * nx + column - 1] : 0)
+        - (row > 0 && column > 0 ? table[(row - 1) * nx + column - 1] : 0);
     }
   }
-  return true;
+  return table;
 }
 
-function clampRow(row: number, ny: number): number {
-  return Math.min(ny - 1, Math.max(0, row));
+function summedVertical(
+  cells: Uint8Array | readonly number[],
+  nx: number,
+  ny: number,
+): Int32Array {
+  const table = new Int32Array(nx * ny);
+  for (let row = 0; row < ny; row++) {
+    for (let column = 0; column < nx; column++) {
+      const differs = row + 1 < ny && cells[row * nx + column] !== cells[(row + 1) * nx + column]
+        ? 1
+        : 0;
+      table[row * nx + column] = differs
+        + (row > 0 ? table[(row - 1) * nx + column] : 0)
+        + (column > 0 ? table[row * nx + column - 1] : 0)
+        - (row > 0 && column > 0 ? table[(row - 1) * nx + column - 1] : 0);
+    }
+  }
+  return table;
 }
 
-function clampColumn(column: number, nx: number): number {
-  return Math.min(nx - 1, Math.max(0, column));
+function rectangleSum(
+  table: Int32Array,
+  nx: number,
+  top: number,
+  bottom: number,
+  left: number,
+  right: number,
+): number {
+  return table[bottom * nx + right]
+    - (top > 0 ? table[(top - 1) * nx + right] : 0)
+    - (left > 0 ? table[bottom * nx + left - 1] : 0)
+    + (top > 0 && left > 0 ? table[(top - 1) * nx + left - 1] : 0);
 }

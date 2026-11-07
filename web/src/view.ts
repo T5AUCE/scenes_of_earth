@@ -25,7 +25,7 @@ import {
   setLayerDisplay,
 } from "./display-state";
 import { makeHtmlElement } from "./html";
-import { blendPair } from "./layers/allocate";
+import { BLEND, blendPair } from "./layers/allocate";
 import { BLEND_TITLE, type BlendView, createBlendView } from "./layers/blend";
 import { addGeologyWater, removeGeologyWater } from "./layers/geology-water";
 import { LAYER_KINDS } from "./layers/registry";
@@ -276,10 +276,98 @@ export function mountScene(
 
   const layerIds = views.flatMap((view) => view.parts.flatMap((part) => part.layerIds));
   if (blend) layerIds.push(...blend.parts[0].layerIds);
+  // The scene waits for this before flying in, so decoding moves out of the flight.
+  const whenFirstDataReady = (getTime: () => string | null) => waitForFirstData(
+    sceneStore as SceneStore,
+    views,
+    blend,
+    timeline,
+    getTime,
+  );
 
   // The try block assigns the store, so reaching here means it exists.
-  return { unmount, addNote, timeline, layerIds, store: sceneStore as SceneStore };
+  return {
+    unmount,
+    addNote,
+    timeline,
+    layerIds,
+    store: sceneStore as SceneStore,
+    whenFirstDataReady,
+  };
 }
+
+// Resolve once the drawn layers hold their opening data, following allocation and time changes.
+// Views without a warmable step count as ready because their tiles stream on their own.
+function waitForFirstData(
+  store: SceneStore,
+  views: LayerView[],
+  blend: BlendView | null,
+  timeline: ReturnType<typeof createSceneTimeline>,
+  getTime: () => string | null,
+): { ready: Promise<void>; cancel(): void } {
+  const settled = new Map<LayerView, string | undefined>();
+  const pending = new Set<LayerView>();
+  let isDone = false;
+  let stopStore = () => {};
+  let finish = () => {};
+  const ready = new Promise<void>((resolve) => {
+    finish = () => {
+      if (isDone) return;
+      isDone = true;
+      stopStore();
+      resolve();
+    };
+    stopStore = store.subscribe(reconcile);
+    reconcile();
+  });
+
+  return { ready, cancel: () => finish() };
+
+  function reconcile() {
+    if (isDone) return;
+    const current = getTime() ?? timeline?.times[0];
+    const drawn = drawnViews();
+    for (const view of drawn) {
+      const settledTime = settled.get(view);
+      const isStale = !settled.has(view) || settledTime !== current;
+      if (!pending.has(view) && isStale) awaitView(view, current);
+    }
+    for (const view of [...pending]) {
+      if (!drawn.includes(view)) pending.delete(view);
+    }
+    if (pending.size === 0) finish();
+  }
+
+  function drawnViews() {
+    const drawn = views.filter((view) => isDrawn(store, view));
+    if (blend && typeof store.getSnapshot().allocation.draws.get(BLEND) === "string") {
+      drawn.push(blend);
+    }
+
+    return drawn;
+  }
+
+  function awaitView(view: LayerView, time: string | undefined) {
+    pending.add(view);
+    settleView(view, time).then(() => {
+      pending.delete(view);
+      if (isDone) return;
+      settled.set(view, time);
+      reconcile();
+    });
+  }
+}
+
+function settleView(view: LayerView, time: string | undefined): Promise<void> {
+  const decoded = view.ready ? view.ready.then(noop, noop) : Promise.resolve();
+  if (time === undefined || typeof view.prepare !== "function") return decoded;
+  // The receiver stays attached because preparation reads the renderer's own state.
+  const prepare = view.prepare.bind(view);
+
+  return decoded.then(() => prepare(time).then(noop, noop));
+}
+
+function noop() {}
 
 function displayUnitsFrom(display: SceneDisplay, layers: readonly LayerDoc[]) {
   return Object.fromEntries(

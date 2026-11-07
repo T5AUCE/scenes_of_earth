@@ -573,7 +573,7 @@ def test_layers(env):
     assert (terrain["kind"], terrain["time_varying"], terrain["time"]) == ("terrain", False, None)
     assert rain["title"] == "Rainfall" and rain["units"] == "mm/month"
     assert rain["coverage"] == [-180, -60, 180, 60]
-    assert terrain["coverage"] == [-180, -60, 180, 60]
+    assert terrain["coverage"] == [-180, -60, 180, 84]
 
 
 def test_layers_list_omits_rain_and_temperature_without_their_cubes(tmp_path):

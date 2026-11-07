@@ -71,6 +71,10 @@ class Grid:
         return col, row, width, height
 
 
+# Anchors the static layers; its cell edges coincide with CHIRPS_GRID.
+WORLD_GRID = Grid(-180, 84, CELL_DEG, 7200, 2880)
+
+
 def budget_res(
     bounds: Bbox,
     budget_px: int,

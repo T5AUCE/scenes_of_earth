@@ -9,6 +9,7 @@ test("class fields retain ids across context loss and release resources on remov
   const field = harness.field;
   field.setIds(new Uint8Array(12).fill(1));
   field.setColors([[10, 20, 30]]);
+  field.setEdges(smoothingEdges());
   field.layer.onAdd!(harness.map, harness.gl);
   field.layer.render(harness.gl, harness.input);
 
@@ -88,6 +89,7 @@ test("class field geometry uses the normalised Mercator projection, not world pi
 test("a 2048 texture limit splits a long grid into haloed uploads", () => {
   const harness = createHarness({ nx: 4096, maxTextureSize: 2048 });
   harness.field.setIds(new Uint8Array(4096 * 3).fill(1));
+  harness.field.setEdges(smoothingEdges());
   harness.field.layer.onAdd!(harness.map, harness.gl);
   harness.field.layer.render(harness.gl, harness.input);
   const tileUploads = harness.uploads.slice(2);
@@ -103,8 +105,10 @@ test("a 2048 texture limit splits a long grid into haloed uploads", () => {
 
 test("shader failures report once outside onAdd and free partially created resources", async () => {
   const harness = createHarness({ compile: false });
+  harness.field.setIds(new Uint8Array(12).fill(1));
   harness.field.layer.onAdd!(harness.map, harness.gl);
   assert.equal(harness.failures.length, 0);
+  harness.field.layer.render(harness.gl, harness.input);
   await Promise.resolve();
 
   assert.match(harness.failures[0].message, /Cannot compile.*driver log/);
@@ -116,7 +120,9 @@ test("shader failures report once outside onAdd and free partially created resou
 
 test("link failures report fallback with the driver log and free both shaders", async () => {
   const harness = createHarness({ link: false });
+  harness.field.setIds(new Uint8Array(12).fill(1));
   harness.field.layer.onAdd!(harness.map, harness.gl);
+  harness.field.layer.render(harness.gl, harness.input);
   await Promise.resolve();
 
   assert.match(harness.failures[0].message, /Cannot link.*driver log/);
@@ -126,7 +132,9 @@ test("link failures report fallback with the driver log and free both shaders", 
 
 test("a failed texture upload reports fallback and frees the failed texture", async () => {
   const harness = createHarness({ uploadError: 1285 });
+  harness.field.setIds(new Uint8Array(12).fill(1));
   harness.field.layer.onAdd!(harness.map, harness.gl);
+  harness.field.layer.render(harness.gl, harness.input);
   await Promise.resolve();
 
   assert.match(harness.failures[0].message, /GL error 1285/);
@@ -166,6 +174,7 @@ test("uniform ids upload set homogeneous flags beside the ids", () => {
   const harness = createHarness();
   const ids = new Uint8Array(12).fill(10);
   harness.field.setIds(ids);
+  harness.field.setEdges(smoothingEdges());
   harness.field.layer.onAdd!(harness.map, harness.gl);
   harness.field.layer.render(harness.gl, harness.input);
 
@@ -182,6 +191,7 @@ test("a split field uploads cleared homogeneous flags", () => {
   const harness = createHarness();
   const ids = new Uint8Array([10, 10, 20, 20, 10, 10, 20, 20, 10, 10, 20, 20]);
   harness.field.setIds(ids);
+  harness.field.setEdges(smoothingEdges());
   harness.field.layer.onAdd!(harness.map, harness.gl);
   harness.field.layer.render(harness.gl, harness.input);
 
@@ -189,3 +199,126 @@ test("a split field uploads cleared homogeneous flags", () => {
   assert.deepEqual([...flags], [...homogeneousFlags(ids, 4, 3)]);
   assert.ok(flags.every((flag) => flag === 0));
 });
+
+test("a zero smoothing radius uploads ids without flags", () => {
+  const harness = createHarness();
+  harness.field.setIds(new Uint8Array(12).fill(10));
+  harness.field.layer.onAdd!(harness.map, harness.gl);
+  harness.field.layer.render(harness.gl, harness.input);
+
+  assert.equal(harness.uploads.length, 3);
+  assert.equal(harness.draws.length, 3);
+});
+
+test("flags are built once per data set and reused across edge and radius changes", () => {
+  const harness = createHarness();
+  const ids = new Uint8Array(12).fill(10);
+  harness.field.setIds(ids);
+  harness.field.setEdges(smoothingEdges());
+  harness.field.layer.onAdd!(harness.map, harness.gl);
+  harness.field.layer.render(harness.gl, harness.input);
+  assert.equal(harness.uploads.length, 4);
+
+  harness.field.layer.render(harness.gl, harness.input);
+  assert.equal(harness.uploads.length, 4);
+
+  // Editing the shared ids in place makes a rebuilt flag set differ from the cached one.
+  ids.set([20, 20, 20, 20], 4);
+  harness.field.setEdges({ ...smoothingEdges(), rounding: 0.5 });
+  harness.field.setEdges({ ...smoothingEdges(), smoothRadiusCells: 3 });
+  harness.field.setEdges({ ...smoothingEdges(), smoothRadiusCells: 0 });
+  harness.field.setEdges(smoothingEdges());
+  harness.field.layer.render(harness.gl, harness.input);
+  assert.equal(harness.uploads.length, 6);
+  assert.ok((harness.uploads[5][8] as Uint8Array).every((flag) => flag === 1));
+
+  harness.field.setIds(ids);
+  harness.field.layer.render(harness.gl, harness.input);
+  assert.equal(harness.uploads.length, 8);
+  assert.ok((harness.uploads[7][8] as Uint8Array).every((flag) => flag === 0));
+});
+
+test("the flag sampler stays on an integer texture when no flags are uploaded", () => {
+  const cases = [
+    { name: "zero radius", edges: { ...smoothingEdges(), smoothRadiusCells: 0 } },
+    { name: "smooth off", edges: { ...smoothingEdges(), smooth: false } },
+  ];
+  for (const { name, edges } of cases) {
+    const harness = createHarness();
+    const bindings = trackBindings(harness);
+    harness.field.setIds(new Uint8Array(12).fill(10));
+    harness.field.setEdges(edges);
+    harness.field.layer.onAdd!(harness.map, harness.gl);
+    harness.field.layer.render(harness.gl, harness.input);
+
+    assert.equal(bindings.homogeneousIsInteger(), true, name);
+    assert.equal(harness.uniforms.get("uHomogeneous"), 0, name);
+  }
+});
+
+test("the flag sampler follows the companion through positive and zero radius", () => {
+  const harness = createHarness();
+  const bindings = trackBindings(harness);
+  harness.field.setIds(new Uint8Array(12).fill(10));
+  harness.field.setEdges(smoothingEdges());
+  harness.field.layer.onAdd!(harness.map, harness.gl);
+  harness.field.layer.render(harness.gl, harness.input);
+  assert.equal(bindings.homogeneousIsInteger(), true);
+  assert.equal(harness.uniforms.get("uHomogeneous"), 2);
+
+  harness.field.setEdges({ ...smoothingEdges(), smoothRadiusCells: 0 });
+  harness.field.layer.render(harness.gl, harness.input);
+  assert.equal(bindings.homogeneousIsInteger(), true);
+  assert.equal(harness.uniforms.get("uHomogeneous"), 0);
+
+  harness.field.setEdges(smoothingEdges());
+  harness.field.layer.render(harness.gl, harness.input);
+  assert.equal(bindings.homogeneousIsInteger(), true);
+  assert.equal(harness.uniforms.get("uHomogeneous"), 2);
+});
+
+/** Records which texture backs the flag sampler at each draw, starting with a foreign one on unit 2. */
+function trackBindings(harness: ReturnType<typeof createHarness>) {
+  const { gl, uniforms } = harness;
+  const units: unknown[] = [];
+  const integerTextures = new Set<unknown>();
+  const sampled: unknown[] = [];
+  let activeUnit = 0;
+  const upload = gl.texImage2D;
+  const draw = gl.drawArrays;
+  Object.assign(gl, {
+    TEXTURE0: FIRST_UNIT,
+    TEXTURE2: FIRST_UNIT + 2,
+    TEXTURE3: FIRST_UNIT + 3,
+    activeTexture: (unit: number) => {
+      activeUnit = unit - FIRST_UNIT;
+    },
+    bindTexture: (_target: number, texture: unknown) => {
+      units[activeUnit] = texture;
+    },
+    texImage2D: (...args: unknown[]) => {
+      if ((args[8] as Uint8Array).byteLength !== PALETTE_BYTES) {
+        integerTextures.add(units[activeUnit]);
+      }
+      return upload.apply(gl, args as Parameters<typeof upload>);
+    },
+    drawArrays: (...args: unknown[]) => {
+      sampled.push(units[uniforms.get("uHomogeneous") as number]);
+      return draw.apply(gl, args as Parameters<typeof draw>);
+    },
+  });
+  // MapLibre leaves its own non-integer image textures on the units it used last.
+  units[2] = {};
+  return {
+    homogeneousIsInteger: () => sampled.length > 0 && sampled.every((texture) => (
+      integerTextures.has(texture)
+    )),
+  };
+}
+
+const PALETTE_BYTES = 256 * 4;
+const FIRST_UNIT = 100; // arbitrary base for the fake texture unit constants
+
+function smoothingEdges() {
+  return { smooth: true, rounding: 0.25, softnessCells: 0, smoothRadiusCells: 1.5, outline: false };
+}

@@ -9,7 +9,7 @@ from soe.area_weights import area_weights
 from soe.areas import Area, AreaError, unwrap
 from soe.plan import plan
 from soe.sources import SyntheticSource, make_registry
-from tests.helpers import FIJI, NAIROBI, RAIN, harmonic_island, plan_months
+from tests.helpers import FIJI, LAND_COVER, NAIROBI, RAIN, TERRAIN, harmonic_island, plan_months
 
 
 def test_layer_plan_stores_geometry_and_area_weights():
@@ -116,3 +116,51 @@ def test_plan_accepts_a_tiny_named_area_with_positive_overlap():
 
     assert layer.cells_inside >= 1
     assert float(layer.area_weights.sum()) > 0
+
+
+def test_area_crossing_60_north_keeps_its_outline_and_each_layer_its_own_coverage():
+    crossing = box(36.0, 58.0, 38.0, 62.0)
+
+    scene_plan = plan_months(Area(crossing), [RAIN, TERRAIN], 1)
+    rain, terrain = scene_plan.layers["chirps_monthly"], scene_plan.layers["terrain"]
+
+    assert scene_plan.geometry.equals(crossing)
+    assert scene_plan.clipped
+    assert rain.bbox[3] == 60 and rain.geometry.equals(box(36.0, 58.0, 38.0, 60.0))
+    assert terrain.bbox[3] >= 62 and terrain.geometry.equals(crossing)
+    assert any("outside Rainfall coverage" in note for note in rain.notices)
+    assert terrain.notices == []
+    assert terrain.coverage[3] == 84
+    assert scene_plan.bbox[3] == terrain.bbox[3]
+
+
+def test_area_wholly_beyond_the_rain_cube_is_refused_for_rain_only():
+    arctic = box(36.0, 70.0, 38.0, 72.0)
+
+    with pytest.raises(AreaError, match="outside Rainfall coverage"):
+        plan_months(Area(arctic), [RAIN, TERRAIN], 1)
+
+    assert plan_months(Area(arctic), [TERRAIN], 1).layers["terrain"].bbox[3] >= 72
+
+
+def test_area_beyond_84_north_is_outside_every_layer():
+    with pytest.raises(AreaError, match="outside Terrain coverage"):
+        plan_months(Area(box(36.0, 85.0, 38.0, 86.0)), [TERRAIN], 1)
+
+
+def test_area_just_below_60_north_keeps_its_windows_below_60():
+    edge = box(36.0, 59.0, 37.0, 59.9999)
+
+    scene_plan = plan_months(Area(edge), [RAIN, TERRAIN, LAND_COVER], 1)
+
+    assert scene_plan.bbox[3] == 60
+    assert scene_plan.geometry.equals(edge)
+
+
+def test_area_crossing_60_north_reads_beyond_60_for_terrain_and_land_cover():
+    crossing = box(36.0, 59.0, 37.0, 60.5)
+
+    scene_plan = plan_months(Area(crossing), [TERRAIN, LAND_COVER], 1)
+
+    assert scene_plan.layers["terrain"].bbox[3] > 60
+    assert scene_plan.layers["esa_worldcover"].bbox[3] > 60

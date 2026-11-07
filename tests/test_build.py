@@ -1,4 +1,5 @@
 """Test offline terrain statistics, build progress and synthetic end-to-end builds."""
+import hashlib
 import json
 import shutil
 from collections.abc import Callable
@@ -9,12 +10,14 @@ import numpy as np
 import pytest
 import zarr
 from rasterio.transform import Affine
-from shapely.geometry import Polygon, box
+from shapely.geometry import Polygon, box, mapping, shape
 
+from soe import db
 from soe.areas import Area, AreaError
 from soe.build import SourceChanged, _fill_outside, build_scene, encode_values
 from soe.bundle import JsonObject, validate
 from soe.plan import plan
+from soe.scene_request import prepare_scene, resolve_area
 from soe.sources import (
     SOURCES,
     Bbox,
@@ -44,6 +47,8 @@ from tests.helpers import (
     harmonic_island,
     plan_months,
 )
+
+GZIP_HEADER = b"\x1f\x8b\x08"  # Bytes 4 to 7 after it hold the time stamp.
 
 ProgressEvent = tuple[float, str | None]  # (fraction done, stage text) of one progress call
 
@@ -353,9 +358,113 @@ def test_layer_outside_its_coverage_is_refused_before_read(tmp_path):
     # Half of this area is inside the terrain coverage.
     scene_plan = plan_months(Area(box(36, 28, 38, 33)), [narrow, registry["chirps_monthly"]])
 
-    assert any("clipped" in note for note in scene_plan.layers["terrain"].notices)
+    assert any("no data" in note for note in scene_plan.layers["terrain"].notices)
     assert scene_plan.layers["chirps_monthly"].notices == []
     assert scene_plan.clipped and scene_plan.layers["terrain"].bbox[3] <= 30
+    assert scene_plan.geometry.equals(box(36, 28, 38, 30))
+
+
+def test_area_crossing_60_north_builds_with_the_whole_outline_and_rain_below_60(tmp_path):
+    crossing = box(36.0, 58.0, 38.0, 62.0)
+
+    build_scene(HASH_A, Area(crossing), "2015-01", "2015-02", [RAIN, TERRAIN], "T", tmp_path)
+    document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    outline = shape(json.loads((tmp_path / HASH_A / "area.geojson").read_text(encoding="utf-8")))
+    layers = {layer["id"]: layer for layer in document["layers"]}
+
+    assert outline.bounds[3] == pytest.approx(62)
+    assert layers["chirps_monthly"]["grid"]["bbox"][3] == 60
+    assert layers["terrain"]["grid"]["bbox"][3] >= 62
+    assert any("outside Rainfall coverage" in note for note in document["notices"]["limits"])
+    assert validate(document) == []
+
+
+IN_RANGE_AREAS = {
+    "nairobi": (36.5, -1.5, 37.5, -0.5),
+    "below_60_north": (36, 59, 37, 59.9999),
+}
+IN_RANGE_LAYERS = ["terrain", "chirps_monthly", "esa_worldcover"]
+# Made by bundle_manifest over bundles of the `git archive HEAD` sources of 2026-11-07.
+IN_RANGE_MANIFEST_PATH = Path(__file__).parent / "data" / "in_range_bundle_manifest.json"
+
+
+@pytest.mark.parametrize("name", IN_RANGE_AREAS)
+def test_scene_wholly_below_60_north_matches_the_bundle_built_before_84_north(tmp_path, name):
+    scene_dir = build_prepared_polygon(tmp_path, IN_RANGE_AREAS[name])
+    golden = json.loads(IN_RANGE_MANIFEST_PATH.read_text(encoding="utf-8"))[name]
+
+    assert bundle_manifest(scene_dir) == golden
+
+
+def build_prepared_polygon(tmp_path: Path, bounds: tuple[float, float, float, float]) -> Path:
+    """Build a two-month polygon scene under its computed id and return its directory."""
+    db_path = str(tmp_path / "soe.db")
+    db.init(db_path)
+    registry = make_registry(SyntheticSource())
+    area = {"type": "polygon", "geometry": mapping(box(*bounds))}
+    body = json.dumps(
+        {"area": area, "start": "2015-01", "end": "2015-02", "layers": IN_RANGE_LAYERS},
+    )
+    prepared = prepare_scene(db_path, registry, body)
+    request = json.loads(prepared.request_json)
+    build_scene(
+        prepared.scene_id,
+        resolve_area(db_path, area),
+        request["start"],
+        request["end"],
+        [registry[layer_id] for layer_id in request["layers"]],
+        request["title"],
+        tmp_path / "scenes",
+    )
+    return tmp_path / "scenes" / prepared.scene_id
+
+
+def bundle_manifest(scene_dir: Path) -> dict[str, str]:
+    """Map the scene id and every stored file of the bundle to a content digest.
+
+    The creation time is dropped from scene.json and the gzip time stamp from compressed files.
+    The boundary credit names the 84N reach that the grid has now, which bundles built before
+    it do not state.
+    """
+    manifest = {"scene_id": scene_dir.name}
+    for path in sorted(scene_dir.rglob("*")):
+        if path.is_file():
+            manifest[path.relative_to(scene_dir).as_posix()] = _file_digest(path)
+    return manifest
+
+
+def _file_digest(path: Path) -> str:
+    content = path.read_bytes()
+    if path.name == "scene.json":
+        document = json.loads(content)
+        del document["created"]
+        text = json.dumps(document, sort_keys=True)
+        content = text.replace("60\\u00b0S-84\\u00b0N", "60\\u00b0S-60\\u00b0N").encode()
+    else:
+        content = _without_gzip_time_stamps(content)
+    return hashlib.sha256(content).hexdigest()
+
+
+def _without_gzip_time_stamps(content: bytes) -> bytes:
+    """Zero the time stamp of every gzip stream, which includes those inside shards."""
+    stamped = bytearray(content)
+    start = stamped.find(GZIP_HEADER)
+    while start != -1:
+        stamped[start + 4 : start + 8] = bytes(4)
+        start = stamped.find(GZIP_HEADER, start + len(GZIP_HEADER))
+    return bytes(stamped)
+
+
+def test_rain_only_area_crossing_60_north_publishes_bounds_around_its_whole_outline(tmp_path):
+    crossing = box(36.0, 58.0, 38.0, 62.0)
+
+    build_scene(HASH_A, Area(crossing), "2015-01", "2015-02", [RAIN], "T", tmp_path)
+    document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    outline = shape(json.loads((tmp_path / HASH_A / "area.geojson").read_text(encoding="utf-8")))
+
+    assert document["area"]["bbox"][3] >= 62
+    assert box(*document["area"]["bbox"]).contains(outline)
+    assert validate(document) == []
 
 
 def test_negative_values_survive_int16_encoding():
@@ -1520,8 +1629,6 @@ def test_display_simplification_tolerance_follows_the_finest_grid_cell():
 
 
 def test_area_geojson_is_simplified_while_masks_use_the_full_outline(tmp_path):
-    from shapely.geometry import shape
-
     wiggly = Polygon(
         [(36.5, -1.5), (37.5, -1.5), (37.5, -0.5), (37.0, -0.49), (36.5, -0.5), (36.5, -1.5)],
     )

@@ -17,11 +17,11 @@ import type { Scene } from "./types.ts";
 
 afterEach(resetHarness);
 
-test("delayed geometry and mask tiles keep data hidden through landing and resize", async () => {
+test("delayed geometry and mask tiles keep data hidden through resize until ready", async () => {
   const harness = createHarness();
   harness.enter();
+  harness.data.resolve();
   assertDataHidden(harness.map);
-  harness.land();
   harness.resize();
   assertDataHidden(harness.map);
 
@@ -38,14 +38,67 @@ test("delayed geometry and mask tiles keep data hidden through landing and resiz
 
   harness.map.finishMask();
   await settle();
-  assertRanges(harness.map, [[0, 24], [6, 12], [0, 24], [1, 4]]);
+  assertRanges(harness.map, [[4.75, 24], [6, 12], [4.75, 24], [4, 4]]);
   assert.equal(harness.labelMoves, 1);
+  assertListenersRemoved(harness.map);
+});
+
+test("the flight waits for the mask and the first data", async () => {
+  const harness = createHarness();
+  harness.enter();
+  const waitingLand = harness.land;
+  assert.ok(harness.notes.includes("Preparing scene..."));
+
+  harness.geometry.resolve(FEATURE);
+  harness.data.resolve();
+  await settle();
+  assert.equal(harness.land, waitingLand);
+  assert.ok(harness.notes.includes("Preparing scene..."));
+
+  harness.map.finishMask();
+  await settle();
+
+  assert.notEqual(harness.land, waitingLand);
+  assert.ok(!harness.notes.includes("Preparing scene..."));
+  assertRanges(harness.map, [[4.75, 24], [6, 12], [4.75, 24], [4, 4]]);
+});
+
+test("the flight starts at the cap when readiness never comes", async () => {
+  const harness = createHarness();
+  harness.enter();
+  const waitingLand = harness.land;
+
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(harness.land, waitingLand);
+
+  await new Promise((resolve) => setTimeout(resolve, 1600));
+
+  assert.notEqual(harness.land, waitingLand);
+  assert.ok(!harness.notes.includes("Preparing scene..."));
+});
+
+test("closing during the wait starts no flight", async () => {
+  const harness = createHarness();
+  harness.enter();
+  const waitingLand = harness.land;
+  harness.mode.exit();
+  const writes = harness.map.rangeWrites;
+  harness.geometry.resolve(FEATURE);
+  harness.data.resolve();
+  harness.map.finishMask();
+  await settle();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  assert.equal(harness.land, waitingLand);
+  assert.deepEqual(harness.notes, []);
+  assert.equal(harness.map.rangeWrites, writes);
   assertListenersRemoved(harness.map);
 });
 
 test("rejected geometry keeps data hidden after landing and refitting", async () => {
   const harness = createHarness();
   harness.enter();
+  harness.data.resolve();
   harness.geometry.reject(new Error("geometry unavailable"));
   await settle();
   harness.land();
@@ -60,6 +113,7 @@ test("rejected geometry keeps data hidden after landing and refitting", async ()
 test("mask worker failure stays hidden even if later events claim readiness", async () => {
   const harness = createHarness();
   harness.enter();
+  harness.data.resolve();
   harness.geometry.resolve(FEATURE);
   await settle();
   harness.map.emit("error", { sourceId: MASK_ID, error: new Error("worker failed") });
@@ -77,6 +131,7 @@ test("mask worker failure stays hidden even if later events claim readiness", as
 test("mask readiness preserves own ranges and toggles through refits and landing", async () => {
   const harness = createHarness();
   harness.enter();
+  harness.data.resolve();
   harness.map.getLayer("relief")!.layout.visibility = "none";
   harness.geometry.resolve(FEATURE);
   await settle();
@@ -101,6 +156,7 @@ test("an already loaded mask restores ranges without another source event", asyn
   const harness = createHarness();
   harness.map.readyOnAdd = true;
   harness.enter();
+  harness.data.resolve();
   harness.geometry.resolve(FEATURE);
   await settle();
 
@@ -112,6 +168,7 @@ test("a synchronous landing cannot bypass pending mask readiness", async () => {
   const harness = createHarness();
   harness.landImmediately = true;
   harness.enter();
+  harness.data.resolve();
   assertDataHidden(harness.map);
   harness.geometry.resolve(FEATURE);
   await settle();
@@ -172,6 +229,7 @@ test("synchronous mask setup failure leaves data hidden and removes listeners", 
   const harness = createHarness();
   harness.map.failMaskLayer = true;
   harness.enter();
+  harness.data.resolve();
   harness.geometry.resolve(FEATURE);
   await settle();
   harness.land();

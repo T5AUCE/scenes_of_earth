@@ -17,7 +17,7 @@ from shapely.geometry import mapping, shape
 from . import __version__, db
 from .areas import Area, AreaError, clean_polygon
 from .bundle import VERSION, JsonObject
-from .plan import Plan, plan
+from .plan import Plan, beyond_legacy_extent, plan
 from .sources import (
     REQUEST_FORMATS,
     REQUEST_STEP,
@@ -36,6 +36,8 @@ ID_CHARS = 20  # hex characters of the sha256 kept as the id (80 bits; short Win
 
 DRAWN_AREA_TITLE = "Drawn area"
 MAX_TITLE_CHARS = 120
+
+HIGH_LATITUDE_ID_MARK = ":north-84"  # separates scenes that reach past 60 degrees latitude
 
 REVISION_FRESH_SECS = 6 * 60 * 60  # reuse a revision without another source probe
 
@@ -175,14 +177,20 @@ def request_bounds(dataset: SeriesDataset) -> tuple[str, str]:
 
 
 def _area_identity(area: Area) -> tuple[str, JsonObject]:
-    """(id that changes when the geometry does, area spec stored in the job's request)."""
+    """(id that changes when the geometry does, area spec stored in the job's request).
+
+    An area reaching past 60 degrees latitude is marked so that its scene is rebuilt with the whole
+    outline, while every other area keeps the id of its existing bundle.
+    """
+    mark = HIGH_LATITUDE_ID_MARK if beyond_legacy_extent(area.geom) else ""
     if area.named:
         boundary = area.boundary
         geometry_hash = hashlib.sha256(boundary["geom_geojson"].encode()).hexdigest()
-        return boundary["id"] + ":" + geometry_hash, {"type": "boundary", "id": boundary["id"]}
+        geometry_id = boundary["id"] + ":" + geometry_hash + mark
+        return geometry_id, {"type": "boundary", "id": boundary["id"]}
 
     geometry_hash = hashlib.sha256(area.geom.wkb).hexdigest()
-    return "poly:" + geometry_hash, {"type": "polygon", "geometry": mapping(area.geom)}
+    return "poly:" + geometry_hash + mark, {"type": "polygon", "geometry": mapping(area.geom)}
 
 
 def _current_revisions(

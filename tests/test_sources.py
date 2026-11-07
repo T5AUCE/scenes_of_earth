@@ -40,13 +40,16 @@ from soe.sources import (
 )
 from soe.sources import remote, worldcover
 from soe.sources.fallback import read_bilinear
-from soe.sources.grid import CELL_DEG, block_mean
+from soe.sources.grid import CELL_DEG, WORLD_GRID, block_mean
 from soe.sources.periods import add_duration
 from soe.sources.terrain import (
     LATITUDE_DEGREE_M,
+    PlacedTile as TerrainTile,
+    TERRAIN_PRODUCTS,
     TerrainProduct,
     _tile_index,
     _tile_name,
+    _tile_source_xml,
     _warp_block,
     _weighted_percentiles,
     placed_terrain_tiles,
@@ -71,6 +74,8 @@ from tests.helpers import (
 
 TILE_PX = 60  # the fake terrain tiles are small, 1 / 60 degree per pixel
 NARROW_TILE_PX = 40  # tiles from 50 degrees poleward have 2/3 of the pixels in x
+# (from latitude, width in pixels) of the fake tiles, as 1 / 1.5 / 2 / 3 / 5 of TILE_PX
+TILE_WIDTHS_PX = ((80, 12), (70, 20), (60, 30), (50, NARROW_TILE_PX), (0, TILE_PX))
 CUBE_SHAPE = (ERA5_LAND_TEMPERATURE_GRID.rows, ERA5_LAND_TEMPERATURE_GRID.columns)
 
 
@@ -123,6 +128,20 @@ def test_block_mean_is_nan_aware():
     means = block_mean(values, 2)
 
     assert means[0, 0] == 3 and np.isnan(means[0, 1])
+
+
+def test_world_grid_cells_coincide_with_the_chirps_cells():
+    bbox = [36.5, -1.5, 37.5, -0.5]
+    world_c0, world_c1, world_r0, world_r1 = WORLD_GRID.span(bbox)
+    chirps_c0, chirps_c1, chirps_r0, chirps_r1 = CHIRPS_GRID.span(bbox)
+    row_offset = round((WORLD_GRID.north_deg - CHIRPS_GRID.north_deg) / CELL_DEG)
+
+    assert (world_c0, world_c1) == (chirps_c0, chirps_c1)
+    assert (world_r0 - row_offset, world_r1 - row_offset) == (chirps_r0, chirps_r1)
+    assert WORLD_GRID.bbox((world_c0, world_c1, world_r0, world_r1)) == CHIRPS_GRID.bbox(
+        (chirps_c0, chirps_c1, chirps_r0, chirps_r1),
+    )
+    assert WORLD_GRID.bbox((0, WORLD_GRID.columns, 0, WORLD_GRID.rows)) == [-180, -60, 180, 84]
 
 
 def test_chirps_grid_window_and_bbox_round_trip():
@@ -1093,10 +1112,10 @@ def fake_terrain(tmp_path, monkeypatch):
         nodata: float = float("nan"),
     ) -> None:
         if values is None:
-            width = NARROW_TILE_PX if abs(lat + 0.5) >= 50 else TILE_PX
+            width = next(px for from_deg, px in TILE_WIDTHS_PX if abs(lat + 0.5) >= from_deg)
             values = random.integers(0, 3000, (TILE_PX, width)).astype("float32")
             # Random pixels would exaggerate the stretch of the narrow tiles.
-            if width == NARROW_TILE_PX:
+            if width != TILE_PX:
                 ramp = np.add.outer(np.arange(TILE_PX) * 5.0, np.arange(width) * 7.0)
                 values = ramp.astype("float32")
         else:
@@ -1235,6 +1254,45 @@ def test_narrow_tiles_at_50_degrees_equal_the_area_mean(
     assert np.array_equal(np.isnan(elevation), np.isnan(expected))
     assert np.nanmax(np.abs(elevation - expected)) <= 1e-6
     assert np.isnan(elevation[missing_rows, 21:]).all()
+
+
+@pytest.mark.parametrize(
+    ("south", "latitudes", "widths"),
+    [
+        (62, (62, 63), {30}),
+        (72, (72, 73), {20}),
+        (80, (80, 81), {12}),
+        (59, (59, 60), {40, 30}),
+        (69, (69, 70), {30, 20}),
+        (79, (79, 80), {20, 12}),
+    ],
+    ids=["60-70", "70-80", "80-85", "mixed-59-61", "mixed-69-71", "mixed-79-81"],
+)
+def test_high_latitude_tiles_equal_the_area_mean(fake_terrain, south, latitudes, widths):
+    add_tile, tiles = fake_terrain
+    for lat in latitudes:
+        for lon in (10, 11):
+            add_tile(lon, lat)
+    bounds = (10.0, south, 12.0, south + 2)
+
+    elevation, _ = RealSource().terrain(bounds, CELL_DEG)
+    expected = area_mean(tiles, bounds)
+
+    assert {values.shape[1] for values in tiles.values()} == widths
+    assert np.isfinite(elevation).all()
+    assert np.nanmax(np.abs(elevation - expected)) <= 1e-6
+
+
+@pytest.mark.parametrize(
+    ("product", "name", "width_px"),
+    [("glo30", "N80E010", 720), ("glo90", "N80E010", 240), ("glo30", "N70E010", 1200)],
+)
+def test_source_rectangle_uses_the_provider_tile_width(product, name, width_px):
+    tile = TerrainTile(product, name, 10, int(name[1:3]))
+
+    xml = _tile_source_xml(tile, 9.0, 83.0, 0.001, 0.001)
+
+    assert f'xSize="{width_px}" ySize="{TERRAIN_PRODUCTS[product].tile_px}"' in xml
 
 
 def test_real_zero_elevation_survives_while_a_missing_tile_stays_nan(fake_terrain):

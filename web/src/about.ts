@@ -21,7 +21,7 @@ const BASEMAP_CREDIT = "Basemap: OpenFreeMap, © OpenMapTiles, data from OpenStr
 // The basemap is the only layer that is not part of the bundle, so its failure is stated here.
 const NO_FALLBACK_NOTE =
   "If the basemap cannot load, no other basemap is substituted; the data layers still draw.";
-const CLIPPED_NOTICE = "The area reaches beyond the data coverage and was clipped to it.";
+const CLIPPED_NOTICE = "Some layers cover only part of the area; their notices say which.";
 const GLIM_DISPLAY_LINE =
   "The Rock type layer comes from the Global Lithological Map (GLiM) at about 1:3.75 million, so "
   + "boundaries are approximate at local scale and seams can show where its 92 source maps meet.";

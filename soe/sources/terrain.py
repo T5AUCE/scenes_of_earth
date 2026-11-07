@@ -50,9 +50,9 @@ TILE_GRID_SHAPE = (180, 360)
 TILE_ROW_OFFSET_DEG = 90  # tile index row = lat + 90
 TILE_COL_OFFSET_DEG = 180  # tile index column = lon + 180
 TILE_EDGE_TOLERANCE_DEG = 1e-9  # a bound exactly on a tile edge must not pull in the next tile
-NARROW_TILE_FROM_LAT_DEG = 50  # tiles from this latitude poleward have fewer pixels in x
-NARROW_PIXEL_WIDTH_RATIO = 1.5  # their pixels are this much wider than the tile's height
-# Wide tile edges sit 1/2 and narrow ones 3/4 of a pixel height off whole degrees; 1/4 fits both.
+# Poleward tiles have fewer pixels in x; each entry is (from latitude, pixel width / height).
+PIXEL_WIDTH_RATIOS = ((0, 1), (50, 1.5), (60, 2), (70, 3), (80, 5))  # valid up to 85 degrees
+# A tile's edges sit ratio / 2 pixel heights off whole degrees, so quarters fit every ratio.
 MIXED_BAND_PIXEL_DIVISOR = 4
 CANVAS_MARGIN_DEG = 1  # the mosaic canvas reaches this far beyond the block, for overhangs
 
@@ -76,7 +76,7 @@ class TerrainProduct:
     index: Path  # bitmap of the tiles that exist
     tile_code: str  # the number in the tile name that tells the products apart
     res_deg: float  # native cell size
-    tile_px: int  # tile height in pixels, and width below NARROW_TILE_FROM_LAT_DEG
+    tile_px: int  # tile height in pixels, and width where the pixel width ratio is 1
 
 
 # The products run finest first, which is also the order of a mixed scene's sources.
@@ -311,7 +311,7 @@ def _mosaic_xml(tiles: list[PlacedTile], bounds: Bbox, product: str) -> str:
     """
     west, south, east, north = bounds
     pixel_height = TERRAIN_PRODUCTS[product].res_deg
-    pixel_width, origin_shift = _canvas_pixel(tiles, south, north, pixel_height)
+    pixel_width, origin_shift = _canvas_pixel(tiles, pixel_height)
     left = math.floor(west) - CANVAS_MARGIN_DEG - origin_shift
     top = math.ceil(north) + CANVAS_MARGIN_DEG + pixel_height / 2
     width_deg = math.ceil(east) - math.floor(west) + 2 * CANVAS_MARGIN_DEG
@@ -332,38 +332,25 @@ def _mosaic_xml(tiles: list[PlacedTile], bounds: Bbox, product: str) -> str:
     )
 
 
-def _canvas_pixel(
-    tiles: list[PlacedTile],
-    south: float,
-    north: float,
-    pixel_height: float,
-) -> tuple[float, float]:
+def _canvas_pixel(tiles: list[PlacedTile], pixel_height: float) -> tuple[float, float]:
     """(canvas pixel width, west shift of the canvas origin from whole degrees).
 
-    The pixels are as wide as the block's latitude band has, so that band's tiles land on whole
-    canvas pixels. A block with tiles of both bands uses a pixel that divides both tile widths and
-    edge offsets exactly, with the origin on whole degrees.
+    The pixels are as wide as the tiles' pixels, so the tiles land on whole canvas pixels. Tiles
+    of several latitude bands use a pixel that divides all their widths and edge offsets exactly,
+    with the origin on whole degrees.
     """
-    if {_is_narrow_tile(tile) for tile in tiles} == {False, True}:
+    ratios = {_pixel_width_ratio(tile) for tile in tiles}
+    if len(ratios) > 1:
         return pixel_height / MIXED_BAND_PIXEL_DIVISOR, 0
 
-    narrow = _is_narrow_band(south, north)
-    pixel_width = pixel_height * (NARROW_PIXEL_WIDTH_RATIO if narrow else 1)
+    pixel_width = pixel_height * ratios.pop()
     return pixel_width, pixel_width / 2
 
 
-def _is_narrow_band(south: float, north: float) -> bool:
-    """Whether a block lies in the latitudes whose tiles have fewer pixels in x.
-
-    Blocks start and end on even degrees, so each lies on one side of the 50-degree boundary,
-    but the tiles it reads, margin included, can come from both sides.
-    """
-    return abs(south + north) / 2 >= NARROW_TILE_FROM_LAT_DEG
-
-
-def _is_narrow_tile(tile: PlacedTile) -> bool:
-    """Whether a tile has fewer pixels in x; its centre latitude decides the band."""
-    return abs(tile.lat + 0.5) >= NARROW_TILE_FROM_LAT_DEG
+def _pixel_width_ratio(tile: PlacedTile) -> float:
+    """How many times wider than high a tile's pixels are; its centre latitude decides."""
+    centre_deg = abs(tile.lat + 0.5)
+    return max(ratio for from_deg, ratio in PIXEL_WIDTH_RATIOS if centre_deg >= from_deg)
 
 
 def _tile_source_xml(
@@ -375,8 +362,7 @@ def _tile_source_xml(
 ) -> str:
     """VRT ComplexSource that draws one tile at its footprint on the canvas."""
     tile_px = TERRAIN_PRODUCTS[tile.product].tile_px
-    narrow = _is_narrow_tile(tile)
-    width_px = round(tile_px / NARROW_PIXEL_WIDTH_RATIO) if narrow else tile_px
+    width_px = round(tile_px / _pixel_width_ratio(tile))
     url = "/vsicurl/" + TERRAIN_PRODUCTS[tile.product].url.format(n=tile.name)
     column = (tile.lon - 0.5 / width_px - left) / pixel_width
     row = (top - (tile.lat + 1 + 0.5 / tile_px)) / pixel_height

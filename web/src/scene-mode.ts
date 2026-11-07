@@ -41,6 +41,9 @@ const MASK_FADE_START_ZOOM = 1.5;
 const MASK_FADE_END_ZOOM = 0.25;
 // Data layers appear once the mask is opaque, so their uncropped bbox never shows through it.
 const DATA_APPEARS_ZOOM = MASK_FADE_END_ZOOM;
+// The flight waits for the mask and the first data, but never longer than this.
+const READINESS_CAP_MS = 1500;
+const PREPARING_NOTE = "Preparing scene...";
 const PAGE_BACKGROUND_PROPERTY = "--page-background";
 const HALF_WORLD_DEG = 180;
 // Mercator has no poles.
@@ -233,23 +236,19 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     const maskLoad = new AbortController();
     // Once landed, nothing depends on zoom, so the elastic zoom-out dip stays clean.
     let isLanded = false;
-    const fadeZoom = () => (isLanded ? undefined : flight.zoom);
-
+    // The flight lifts off after the mask and the first data, so the fade reads its fit meanwhile.
     const flight = flyIn(map, scene, roots, () => {
       isLanded = true;
       dataLayers.update(undefined);
       refreshMaskAndLabels(undefined);
     });
+    const fadeZoom = () => (isLanded ? undefined : flight.zoom);
+    let isGone = false;
 
     dataLayers.update(fadeZoom());
 
-    showAreaMask(scene, fadeZoom, maskLoad.signal)
-      .then((isReady) => {
-        if (isReady && !maskLoad.signal.aborted) dataLayers.show();
-      })
-      .catch((error) => {
-        if (!maskLoad.signal.aborted) mounted.addNote(error.message);
-      });
+    const removePreparing = mounted.addNote(PREPARING_NOTE);
+    const stopWaiting = waitForReadiness(startFlight);
 
     const stopWatchingResize = watchResize(() => {
       flight.refit();
@@ -267,6 +266,9 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
         dataLayers.sync(layerIds);
       },
       close() {
+        isGone = true;
+        stopWaiting();
+        removePreparing();
         maskLoad.abort();
         stopWatchingResize();
         stopDocking();
@@ -283,6 +285,48 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
         document.body.classList.remove("scene-mode");
       },
     };
+
+    function startFlight() {
+      if (isGone) return;
+
+      stopWaiting();
+      removePreparing();
+      flight.start();
+      dataLayers.update(fadeZoom());
+    }
+
+    function waitForReadiness(onReady: () => void) {
+      let isDone = false;
+      let settled = 0;
+      const finish = () => {
+        if (isDone || isGone) return;
+        isDone = true;
+        clearTimeout(capTimer);
+        onReady();
+      };
+      const settleOne = () => {
+        settled += 1;
+        if (settled >= 2) finish();
+      };
+      const capTimer = setTimeout(finish, READINESS_CAP_MS);
+      // The clock already holds the restored time, so a shared link warms its own month.
+      const firstData = mounted.whenFirstDataReady(() => clock.time);
+      firstData.ready.then(settleOne, settleOne);
+      showAreaMask(scene, fadeZoom, maskLoad.signal)
+        .then((isReady) => {
+          if (isReady && !maskLoad.signal.aborted) dataLayers.show();
+        })
+        .catch((error) => {
+          if (!maskLoad.signal.aborted) mounted.addNote(error.message);
+        })
+        .then(settleOne);
+
+      return () => {
+        isDone = true;
+        firstData.cancel();
+        clearTimeout(capTimer);
+      };
+    }
   }
 
   // Back goes through history when this page pushed the entry, so Back and the button agree.

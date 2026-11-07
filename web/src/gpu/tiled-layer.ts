@@ -92,6 +92,7 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
   protected readonly options: TiledLayerOptions;
   private readonly program: TiledProgram;
   private isFailed = false;
+  private isContextLost = false;
 
   constructor(options: TiledLayerOptions, program: TiledProgram) {
     this.options = options;
@@ -105,16 +106,18 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
     const canvas = map.getCanvas();
     canvas.addEventListener("webglcontextlost", this.onContextLost);
     canvas.addEventListener("webglcontextrestored", this.onContextRestored);
-    this.build();
+    // The first visible draw compiles, so hidden layers never pay for a program.
   }
 
   private readonly onContextLost = (event: Event) => {
     event.preventDefault();
     this.gpu = null;
+    this.isContextLost = true;
   };
 
   private readonly onContextRestored = () => {
-    this.build();
+    // The next visible draw rebuilds, so hidden layers stay uncompiled.
+    this.isContextLost = false;
     this.map?.triggerRepaint();
   };
 
@@ -205,7 +208,12 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
   }
 
   render(gl: WebGL2RenderingContext, input: CustomRenderMethodInput) {
-    if (this.isFailed || !this.gpu || !this.hasData()) return;
+    if (this.isFailed || this.isContextLost) return;
+    if (!this.map || !this.gl || this.isHidden() || !this.hasData()) return;
+    if (!this.gpu) {
+      this.build();
+      if (!this.gpu) return;
+    }
 
     try {
       if (this.map?.getProjection()?.type === "globe") {
@@ -218,6 +226,15 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
       this.fail(error as Error);
     } finally {
       gl.bindVertexArray(null);
+    }
+  }
+
+  private isHidden(): boolean {
+    try {
+      // A style without the lookup reads as visible so tests without layers still draw.
+      return this.map?.getLayoutProperty?.(this.id, "visibility") === "none";
+    } catch {
+      return false;
     }
   }
 

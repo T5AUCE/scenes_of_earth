@@ -17,7 +17,7 @@ from .periods import MONTH_CHARS, add_duration
 
 Registry = dict[str, "Dataset"]  # dataset id -> dataset
 
-SUPPORTED_BOUNDS_DEG = (-180, -60, 180, 60)  # W, S, E, N; supported v1 extent
+SUPPORTED_BOUNDS_DEG = (-180, -60, 180, 84)  # W, S, E, N; supported extent
 
 STOP_COUNT = 9  # colour stops of a series layer, one per palette colour
 STOP_DIGITS = 2  # significant digits of the stops span that a stop keeps

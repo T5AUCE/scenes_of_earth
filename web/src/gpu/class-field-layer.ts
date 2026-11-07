@@ -73,6 +73,7 @@ export function createClassFieldLayer(options: ClassFieldOptions) {
 
 class ClassFieldLayer extends TiledGpuLayer<Gpu> {
   private ids: Uint8Array | null = null;
+  private flags: Uint8Array | null = null;
   private paletteBytes = new Uint8Array(PALETTE_SIZE * CHANNELS);
   private edges: ClassEdges;
   private isIdsStale = false;
@@ -92,6 +93,8 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
 
   setIds(ids: Uint8Array) {
     this.ids = ids;
+    this.flags = null;
+    this.buildMissingFlags();
     this.isIdsStale = true;
     this.map?.triggerRepaint();
   }
@@ -106,8 +109,26 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
   }
 
   setEdges(edges: ClassEdges) {
+    const hadFlags = this.needsFlags();
     this.edges = edges;
+    this.buildMissingFlags();
+    // A new companion texture needs an upload, while a radius change within use does not.
+    if (this.ids && hadFlags !== this.needsFlags()) {
+      this.isIdsStale = true;
+    }
     this.map?.triggerRepaint();
+  }
+
+  private needsFlags(): boolean {
+    return this.edges.smooth && (this.edges.smoothRadiusCells ?? 0) > 0;
+  }
+
+  private buildMissingFlags(): void {
+    if (!this.ids || this.flags || !this.needsFlags()) return;
+
+    // Flags are built at load so the draw frame only uploads the cached pair.
+    const { nx, ny } = this.options.grid;
+    this.flags = homogeneousFlags(this.ids, nx, ny);
   }
 
   protected hasData() {
@@ -135,9 +156,8 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
       this.isPaletteStale = false;
     }
     if (this.isIdsStale) {
-      const { nx, ny } = this.options.grid;
-      // Filled coastal ids arrive here, so the flags and the halos match the display.
-      const flags = homogeneousFlags(this.ids!, nx, ny);
+      // A zero radius never samples the flags, so land cover uploads ids alone.
+      const flags = this.needsFlags() ? this.flags! : undefined;
       this.uploadTiles(gl, gpu, this.options.grid, this.ids!, flags, WIDE_HALO_CELLS);
       this.isIdsStale = false;
     }
@@ -150,7 +170,8 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     this.beginDraw(gl, gpu);
     gl.bindSampler(3, null);
     gl.uniform1i(uniform("uIds"), 0);
-    gl.uniform1i(uniform("uHomogeneous"), 2);
+    // Unit 0 holds an integer texture, which keeps the unsigned sampler valid without flags.
+    gl.uniform1i(uniform("uHomogeneous"), this.needsFlags() ? 2 : 0);
     gl.uniform1i(uniform("uPalette"), 3);
     gl.uniform1i(uniform("uSmooth"), this.edges.smooth ? 1 : 0);
     gl.uniform1f(uniform("uRounding"), rounding);

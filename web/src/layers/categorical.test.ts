@@ -72,6 +72,16 @@ test("categorical fallback keeps layer order and mask zoom gates when a shader f
     map.setLayerZoomRange("cover-classes", 8, 22);
     map.addLayer({ id: "field", type: "raster" }, "outline");
     await view.ready;
+    const field = harness.custom.get("cover-classes")!;
+    field.render(harness.gpu.gl, harness.gpu.input);
+    await Promise.resolve();
+
+    assert.equal(map.getLayer("cover-classes")?.type, "custom");
+    assert.equal(harness.gpu.failures.length, 0);
+    map.setLayoutProperty("cover-classes", "visibility", "visible");
+    field.render(harness.gpu.gl, harness.gpu.input);
+    map.setLayoutProperty("cover-classes", "visibility", "none");
+    await Promise.resolve();
 
     assert.deepEqual(map.getLayersOrder(), ["cover-classes", "field", "outline"]);
     assert.equal(map.getLayer("cover-classes")?.type, "raster");
@@ -332,8 +342,12 @@ test("the image fallback shows no legend row while no-data stays transparent", a
   try {
     const view = createCategoricalView(harness.context);
     await view.ready;
+    harness.custom.get("cover-classes")!.render(harness.gpu.gl, harness.gpu.input);
+    const gpuHatchCalls = noDataLegendCalls().length;
+    await Promise.resolve();
 
-    assert.equal(noDataLegendCalls().length, 0);
+    assert.equal(harness.body.dataset.landcoverRenderer, "image");
+    assert.equal(noDataLegendCalls().length, gpuHatchCalls);
     assert.ok(harness.map.image);
     view.destroy();
   } finally {
@@ -491,6 +505,7 @@ function createViewHarness(
     : [{ id: "outline", type: "line" }];
   const visibility = new Map<string, string>();
   const custom = new Map<string, typeof gpu.field.layer>();
+  const gpuMap = { ...gpu.map, getLayoutProperty: (id: string) => visibility.get(id) };
   const map = {
     image: null as ImageData | null,
     getCanvas: () => ({
@@ -522,7 +537,7 @@ function createViewHarness(
 
       const field = layer as typeof gpu.field.layer;
       custom.set(layer.id, field);
-      field.onAdd!(gpu.map, gpu.gl);
+      field.onAdd!(gpuMap as typeof gpu.map, gpu.gl);
     },
     removeLayer: (id: string) => {
       layers.splice(layers.findIndex((layer) => layer.id === id), 1);

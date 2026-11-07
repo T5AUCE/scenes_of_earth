@@ -15,7 +15,7 @@ from .era5land_temperature import (
     ERA5_LAND_TEMPERATURE_GRID,
     Era5LandTemperatureDataset,
 )
-from .grid import CELL_DEG
+from .grid import CELL_DEG, WORLD_GRID
 from .licences import SOURCES
 from .lithology import (
     GEOLOGY_CLASSES,
@@ -42,6 +42,9 @@ CUBE_SPECS = (
     ERA5_PRECIPITATION_CUBE,
     CHIRPS_CUBE,
 )
+
+# The cubes and the geology rasters end at 60N until they are re-ingested.
+CUBE_COVERAGE_DEG = (-180, -60, 180, 60)
 
 
 class RealSource(ChirpsReader, CopernicusDemReader, WorldCoverReader, LithologyReader, CubeStore):
@@ -107,6 +110,7 @@ def _chirps_monthly(backend: RealSource | SyntheticSource) -> RainDataset:
         },
         backend=backend,
         grid=CHIRPS_GRID,
+        coverage=CUBE_COVERAGE_DEG,
         step="P1M",
         cell_method="sum",
         synthetic=backend.synthetic,
@@ -128,7 +132,7 @@ def _terrain(backend: RealSource | SyntheticSource) -> TerrainDataset:
             "parts": ["contours"],
         },
         backend=backend,
-        grid=CHIRPS_GRID,
+        grid=WORLD_GRID,
         max_tiles=2500,
         synthetic=backend.synthetic,
         tiles=terrain_tiles_block(),
@@ -157,8 +161,8 @@ def _land_cover(backend: RealSource | SyntheticSource) -> LandCoverDataset:
             "classes": WORLDCOVER_CLASSES,
         },
         backend=backend,
-        grid=CHIRPS_GRID,
-        max_tiles=400,
+        grid=WORLD_GRID,
+        max_tiles=2500,
         needs_tiles=True,
         synthetic=backend.synthetic,
     )
@@ -194,7 +198,8 @@ def _geology(backend: RealSource | SyntheticSource) -> GeologyDataset:
             "classes": classes,
         },
         backend=backend,
-        grid=CHIRPS_GRID,
+        grid=WORLD_GRID,
+        coverage=CUBE_COVERAGE_DEG,
         synthetic=backend.synthetic,
     )
 
@@ -221,7 +226,8 @@ def _geology_age(backend: RealSource | SyntheticSource) -> GeologyDataset:
             "classes": AGE_CLASSES,
         },
         backend=backend,
-        grid=CHIRPS_GRID,
+        grid=WORLD_GRID,
+        coverage=CUBE_COVERAGE_DEG,
         synthetic=backend.synthetic,
         file=GEOLOGY_AGE_FILE,
     )
@@ -251,6 +257,7 @@ def _era5land_temperature(backend: RealSource | SyntheticSource) -> Era5LandTemp
         },
         backend=backend,
         grid=ERA5_LAND_TEMPERATURE_GRID,
+        coverage=CUBE_COVERAGE_DEG,
         step="P1M",
         cell_method="mean",
         synthetic=backend.synthetic,

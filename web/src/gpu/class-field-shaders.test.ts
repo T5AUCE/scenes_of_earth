@@ -1014,3 +1014,97 @@ function fillAppearance(): ClassFieldAppearance {
 function strongest(result: ClassFieldResult): number {
   return result.weights.reduce((best, entry) => (entry.weight > best.weight ? entry : best)).id;
 }
+
+test("the single-pass flags equal the naive scan on random and edge-case grids", () => {
+  for (const { cells, nx, ny } of flagCases()) {
+    const fast = [...homogeneousFlags(cells, nx, ny)];
+    assert.deepEqual(fast, [...naiveHomogeneousFlags(cells, nx, ny)]);
+  }
+});
+
+test("flags on a 1000 x 1000 grid stay under the generous regression limit", () => {
+  const nx = 1000;
+  const ny = 1000;
+  const cells = randomCells(nx, ny, 20261107);
+  const start = performance.now();
+  const flags = homogeneousFlags(cells, nx, ny);
+  const elapsed = performance.now() - start;
+
+  assert.equal(flags.length, nx * ny);
+  assert.ok(elapsed < MAX_FLAG_BUILD_MS, `homogeneousFlags took ${elapsed} ms`);
+});
+
+// Generous so slow machines pass while a return to the per-cell scan still fails.
+const MAX_FLAG_BUILD_MS = 1500;
+
+// A verbatim copy of the previous 16 x 16 scan, kept as the oracle for the fast pass.
+const NAIVE_FIRST_OFFSET_CELLS = -7;
+const NAIVE_SPAN_CELLS = 16;
+
+function naiveHomogeneousFlags(cells: Uint8Array, nx: number, ny: number): Uint8Array {
+  const flags = new Uint8Array(nx * ny);
+  for (let row = 0; row < ny; row++) {
+    for (let column = 0; column < nx; column++) {
+      flags[row * nx + column] = isNaiveUniform(cells, nx, ny, column, row) ? 1 : 0;
+    }
+  }
+  return flags;
+}
+
+function isNaiveUniform(
+  cells: Uint8Array,
+  nx: number,
+  ny: number,
+  column: number,
+  row: number,
+): boolean {
+  const firstRow = naiveClamp(row + NAIVE_FIRST_OFFSET_CELLS, ny);
+  const firstColumn = naiveClamp(column + NAIVE_FIRST_OFFSET_CELLS, nx);
+  const first = cells[firstRow * nx + firstColumn];
+  for (let tapRow = 0; tapRow < NAIVE_SPAN_CELLS; tapRow++) {
+    const cellRow = naiveClamp(row + NAIVE_FIRST_OFFSET_CELLS + tapRow, ny);
+    for (let tapColumn = 0; tapColumn < NAIVE_SPAN_CELLS; tapColumn++) {
+      if (cells[cellRow * nx + naiveClamp(column + NAIVE_FIRST_OFFSET_CELLS + tapColumn, nx)] !== first) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function naiveClamp(value: number, size: number): number {
+  return Math.min(size - 1, Math.max(0, value));
+}
+
+function flagCases(): { cells: Uint8Array; nx: number; ny: number }[] {
+  const alphabet = [0, TREE, GRASS, COVER, CLASS_HATCH_ID];
+  const cases: { cells: Uint8Array; nx: number; ny: number }[] = [
+    { cells: Uint8Array.of(TREE), nx: 1, ny: 1 },
+    { cells: Uint8Array.of(0), nx: 1, ny: 1 },
+    { cells: new Uint8Array(4 * 3).fill(TREE), nx: 4, ny: 3 },
+    { cells: new Uint8Array(4 * 3).fill(0), nx: 4, ny: 3 },
+    { cells: new Uint8Array(4 * 3).fill(CLASS_HATCH_ID), nx: 4, ny: 3 },
+    { cells: Uint8Array.from([TREE, GRASS, 0, CLASS_HATCH_ID]), nx: 2, ny: 2 },
+    { cells: Uint8Array.from([TREE, TREE, TREE, 0]), nx: 2, ny: 2 },
+  ];
+  const sizes: [number, number][] = [[3, 3], [5, 4], [16, 16], [17, 17], [24, 20], [33, 9]];
+  sizes.forEach(([nx, ny], index) => {
+    cases.push({ cells: randomCells(nx, ny, 1000 + index, alphabet), nx, ny });
+    cases.push({ cells: new Uint8Array(nx * ny).fill(GRASS), nx, ny });
+  });
+  return cases;
+}
+
+function randomCells(nx: number, ny: number, seed: number, alphabet?: number[]): Uint8Array {
+  const values = alphabet ?? [0, TREE, GRASS, COVER, 30, 40, 50, CLASS_HATCH_ID];
+  let state = seed >>> 0;
+  const cells = new Uint8Array(nx * ny);
+  for (let cell = 0; cell < cells.length; cell++) {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let mixed = state;
+    mixed = Math.imul(mixed ^ (mixed >>> 15), mixed | 1);
+    mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61);
+    cells[cell] = values[((mixed ^ (mixed >>> 14)) >>> 0) % values.length];
+  }
+  return cells;
+}

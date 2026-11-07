@@ -35,13 +35,11 @@ export function flyIn(
   roots: CameraRoots,
   onLanded: () => void,
 ) {
-  const padding = scenePadding(roots);
-  const camera = fitCamera(map, scene.area.bbox, padding);
-
-  fitToBbox(map, scene.area.bbox, { padding, duration: flightDuration() });
-
-  const hold = camera ? holdView(map, camera, onLanded) : null;
+  let padding = scenePadding(roots);
+  let camera = fitCamera(map, scene.area.bbox, padding);
   let fitted = camera;
+  let hold: ReturnType<typeof holdView> | null = null;
+  let isStarted = false;
 
   return {
     get zoom() {
@@ -52,11 +50,26 @@ export function flyIn(
 
     // The window changed size, so the area is centred again in the space that is left.
     refit() {
-      const next = fitCamera(map, scene.area.bbox, scenePadding(roots));
-      if (!next || !hold) return;
+      const nextPadding = scenePadding(roots);
+      const next = fitCamera(map, scene.area.bbox, nextPadding);
+      if (!next) return;
+      padding = nextPadding;
+      camera = next;
+      if (!hold) {
+        fitted = next;
+        return;
+      }
 
       hold.refit(next);
       fitted = next;
+    },
+
+    // The opening waits for the mask and the first data, so the flight lifts off here.
+    start() {
+      if (isStarted) return;
+      isStarted = true;
+      fitToBbox(map, scene.area.bbox, { padding, duration: flightDuration() });
+      hold = camera ? holdView(map, camera, onLanded) : null;
     },
   };
 }

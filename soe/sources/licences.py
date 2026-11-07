@@ -295,7 +295,7 @@ SOURCES = {
             "administrative boundaries. PLoS ONE 15(4): e0231866. "
             "https://doi.org/10.1371/journal.pone.0231866"
         ),
-        "modified": "simplified 0.01°, clipped to 60°S-60°N",
+        "modified": "simplified 0.01°, clipped to 60°S-84°N",
     },
     "synthetic": {
         "name": "Sample areas",
@@ -309,6 +309,6 @@ SOURCES = {
         "licence": "CC BY 4.0",
         "licence_url": "https://human-settlement.emergency.copernicus.eu/ghs_ucdb_2024.php",
         "attribution": "© European Union, 1995-2026, GHS-UCDB R2024A",
-        "modified": "reprojected from Mollweide, simplified 0.01°, clipped to 60°S-60°N",
+        "modified": "reprojected from Mollweide, simplified 0.01°, clipped to 60°S-84°N",
     },
 }

@@ -32,6 +32,8 @@ from tests.helpers import RAIN, write_cube
 SQUARE = mapping(box(36.5, -1.5, 37.5, -0.5))
 PINNED_REVISION = "Tue, 01 Sep 2015 00:00:00 GMT"
 PINNED_SCENE_ID = "bdafee6364463965855c"  # Computed for soe 0.9.1 and scene format 0.7.
+IN_RANGE_SCENE_ID = "22136ea1c3d6ca07ce8b"  # Nairobi square, as built before 84N support.
+EDGE_SCENE_ID = "263edbc91e2eb67d8d83"  # A polygon ending just below 60N, built before 84N support.
 PREVIOUS_SCENE_ID = "51c67b0430f967920733"  # The same inputs under soe 0.9.0.
 
 
@@ -134,6 +136,24 @@ def test_changed_revision_after_recovery_gives_a_new_scene_id(
 
 def test_scene_id_is_unchanged_for_known_inputs(tmp_path):
     assert known_scene_id(tmp_path) == PINNED_SCENE_ID
+
+
+def polygon_scene_id(db_path: str, bounds: tuple[float, float, float, float]) -> str:
+    area = {"type": "polygon", "geometry": mapping(box(*bounds))}
+    registry = make_registry(SyntheticSource())
+    return prepare_scene(db_path, registry, request_body(area=area)).scene_id
+
+
+def test_polygons_wholly_below_60_north_keep_their_scene_id(db_path):
+    assert polygon_scene_id(db_path, (36.5, -1.5, 37.5, -0.5)) == IN_RANGE_SCENE_ID
+    assert polygon_scene_id(db_path, (36, 59, 37, 59.9999)) == EDGE_SCENE_ID
+
+
+def test_polygon_crossing_60_north_gets_a_new_scene_id(db_path):
+    crossing = polygon_scene_id(db_path, (36, 58, 38, 62))
+
+    assert crossing != polygon_scene_id(db_path, (36, 58, 38, 60))
+    assert crossing != "706ce67fff9b7f9455f4"  # The id it had when its outline was clipped.
 
 
 def known_scene_id(tmp_path: Path) -> str:

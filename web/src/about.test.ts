@@ -88,6 +88,18 @@ test("geology age scenes explain the scale, era-only share and ICS generalisatio
   assert.doesNotMatch(text, /rock type/);
 });
 
+test("a scene with partial layer coverage keeps the whole area and says layers cover part", (context) => {
+  const window = new Window();
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const scene = makeScene();
+  scene.area.clipped_to_coverage = true;
+  const root = renderAbout(scene, "m", {});
+
+  assert.match(root.textContent ?? "", /Some layers cover only part of the area/);
+  assert.doesNotMatch(root.textContent ?? "", /was clipped/);
+});
+
 test("smoothing explains geology Smoothing in plain sentences", (context) => {
   const window = new Window();
   context.after(() => window.happyDOM.abort());

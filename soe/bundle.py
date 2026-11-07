@@ -115,7 +115,7 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
         "time_varying": dataset.time_varying,
         "source": dict(sources[0]),
         "style": dict(dataset.style),
-        "coverage": list(dataset.coverage),
+        "coverage": list(layer_plan.coverage),
         "grid": grid,
         "mask": {
             "path": f"{dataset.id}/mask",
