@@ -17,7 +17,7 @@ from shapely.geometry.base import BaseGeometry
 
 from ..areas import WORLD_WIDTH_DEG
 from ..geology_age import GEOLOGY_AGE_FILE, GSC_SOURCE
-from .datasets import StaticDataset
+from .datasets import Role, StaticDataset
 from .grid import (
     CELL_DEG,
     MAX_STATIC_DIVISIONS,
@@ -59,9 +59,7 @@ OPENLANDMAP_CLASSES = [
 UNDEFINED_CLASS = 15
 WATER_CLASS = 255
 
-# The per-cell source behind a geology value: 1 for the global base map, one code per
-# regional source, 0 where no map has a value. Static layers cannot reuse the series
-# `source` array name, which the contract reserves for layers with a fallback.
+# Static layers cannot reuse the series `source` array name, which is reserved for fallbacks.
 PROVENANCE_ROLE = Role(
     "provenance",
     "uint8",
@@ -316,8 +314,8 @@ class GeologyDataset(StaticDataset):
     ) -> tuple[dict[str, np.ndarray], Affine]:
         """Return uint8 classes over bbox at cell size `res` with their source codes.
 
-        Regional COGs override the base map in priority order; the codes array holds 0 where
-        no map has a value, 1 for the base and one code per regional source.
+        Regional COGs override the base map in priority order; the provenance codes hold 0
+        where no map has a value, 1 for the base and one code per regional source.
         """
         from ..geology_regional import read_composited
 
@@ -329,7 +327,7 @@ class GeologyDataset(StaticDataset):
             res,
             on_block or (lambda: None),
         )
-        return {"value": classes, "source": codes}, transform
+        return {"value": classes, "provenance": codes}, transform
 
     @property
     def kind(self) -> str:
@@ -343,6 +341,14 @@ class GeologyDataset(StaticDataset):
         regionals = candidates_for(self.kind, tuple(bbox), self.backend.has_lithology)
         return [self.source, *(SOURCES[source["licence"]] for source in regionals)]
 
+    def regional_versions(self) -> list[str]:
+        """Return "id:version" of each regional source installed for this layer."""
+        from ..geology_regional import candidates_for
+
+        everywhere = (-WORLD_WIDTH_DEG / 2, -90.0, WORLD_WIDTH_DEG / 2, 90.0)
+        installed = candidates_for(self.kind, everywhere, self.backend.has_lithology)
+        return [f"{source['id']}:{SOURCES[source['licence']]['version']}" for source in installed]
+
     def summary(
         self,
         arrays: dict[str, np.ndarray],
@@ -350,21 +356,19 @@ class GeologyDataset(StaticDataset):
         transform: Affine,
         geometry: BaseGeometry,
     ) -> dict[str, object]:
-        """Return the regional provenance of the build for the bundle's source array.
+        """Return the sources and notices of the cells the build keeps.
 
-        `fallback_used` reuses the series key so the bundle carries the per-cell source codes
-        in its `source` array without a new contract field. Notices name only the regional
-        sources behind weighted cells.
+        The build passes only provenance codes of kept cells, so credits and notices follow
+        the sources that really supplied the bundle; build.py writes the codes themselves.
         """
-        from ..geology_regional import regional_notices, used_in
+        from ..geology_regional import REGIONAL_SOURCES, regional_notices, used_in
 
-        used = used_in(arrays["source"], weights)
+        used = used_in(arrays["provenance"])
         regional = tuple(source_id for source_id in used if source_id != "global_base")
-        if not regional:
-            return {}
+        licences = {source["id"]: source["licence"] for source in REGIONAL_SOURCES}
+        base = [self.source] if "global_base" in used else []
         return {
-            "fallback_used": True,
-            "regional_used": True,
+            "used_sources": [*base, *(SOURCES[licences[source_id]] for source_id in regional)],
             "notices": regional_notices(regional, self.kind),
         }
 

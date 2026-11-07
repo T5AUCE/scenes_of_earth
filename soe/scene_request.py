@@ -22,6 +22,7 @@ from .sources import (
     REQUEST_FORMATS,
     REQUEST_STEP,
     Dataset,
+    GeologyDataset,
     Registry,
     SeriesDataset,
     SourceUnavailable,
@@ -271,6 +272,11 @@ def compute_scene_id(
 
 
 def _source_versions(dataset: Dataset) -> list[str | None]:
-    """Return the main and fallback versions, using None for an unconfigured fallback."""
+    """Return the main and fallback versions, using None for an unconfigured fallback.
+
+    A geology layer adds the id and version of each installed regional source, because they
+    change its content; a layer without any keeps the plain pair.
+    """
     fallback_version = dataset.fallback.source.get("version") if dataset.fallback else None
-    return [dataset.source.get("version"), fallback_version]
+    regional = dataset.regional_versions() if isinstance(dataset, GeologyDataset) else []
+    return [dataset.source.get("version"), fallback_version, *regional]

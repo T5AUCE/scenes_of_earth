@@ -33,6 +33,7 @@ from .sources import (
     SeriesDataset,
     StaticDataset,
 )
+from .sources.lithology import PROVENANCE_ROLE
 from .statistics import AreaSeriesAccumulator
 from .terrain_cache import is_cached, read_cached
 
@@ -286,6 +287,8 @@ def _read_static_dataset(
         block_read,
     )
     progress(1, f"{dataset.title} {block_count}/{block_count}")
+    if "provenance" in arrays:
+        arrays = {**arrays, "provenance": _kept_provenance(arrays["provenance"], layer_plan)}
     result = dataset.summary(
         arrays,
         layer_plan.area_weights,
@@ -293,6 +296,11 @@ def _read_static_dataset(
         layer_plan.geometry,
     )
     return arrays, transform, result
+
+
+def _kept_provenance(codes: np.ndarray, layer_plan: LayerPlan) -> np.ndarray:
+    """Zero the source codes of cells outside the area and its ring of real values."""
+    return np.where(layer_plan.mask != 0, codes, 0).astype("uint8")
 
 
 def _write_coordinates_and_mask(layer_group: zarr.Group, layer_plan: LayerPlan) -> None:
@@ -339,10 +347,12 @@ def _write_static_arrays(
 ) -> None:
     """Write every role of prefetched static arrays because the summary was already validated.
 
-    Geology layers also carry the per-cell source codes of their regional patchwork when a
-    regional source gave a value, reusing the series provenance encoding (0 outside the area).
+    Geology layers also carry the per-cell source codes of their patchwork, zero outside the
+    area and its ring.
     """
     for role, spec in dataset.roles.items():
+        if role == "provenance":
+            continue
         _write_array(
             layer_group,
             spec.name,
@@ -351,18 +361,18 @@ def _write_static_arrays(
             _attributes(spec),
             spec.fill,
         )
-    if result.get("regional_used"):
+    if "used_sources" in result:
         _write_array(
             layer_group,
-            SOURCE_ROLE.name,
-            np.where(layer_plan.mask == MASK_INSIDE, arrays["source"], 0).astype("uint8"),
+            PROVENANCE_ROLE.name,
+            arrays["provenance"],
             ["lat", "lon"],
             {
-                **_attributes(SOURCE_ROLE),
+                **_attributes(PROVENANCE_ROLE),
                 "flag_values": list(CODE_VALUES),
                 "flag_meanings": list(CODE_MEANINGS),
             },
-            SOURCE_ROLE.fill,
+            PROVENANCE_ROLE.fill,
         )
 
 

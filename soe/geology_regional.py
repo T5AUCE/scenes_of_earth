@@ -13,7 +13,7 @@ import numpy as np
 from rasterio.transform import Affine
 
 from .geology_age import TIMELINE, smallest_containing_class
-from .sources.lithology import GLIM_VALUES
+from .sources.lithology import GEOLOGY_CLASSES, GLIM_VALUES, OPENLANDMAP_SOURCE
 
 BASE_CODE = 1  # the global base map (GSC for age, GLiM or OpenLandMap for type)
 CANADA_CODE = 3
@@ -84,6 +84,24 @@ SOURCE_CODES = {
     "us_sgmc": SGMC_CODE,
 }
 
+# The OpenLandMap class value of each GLiM family, for type layers whose base is OpenLandMap.
+OPENLANDMAP_FAMILY_VALUES = {
+    "ev": 6,
+    "ig": 7,
+    "mt": 10,
+    "pa": 1,
+    "pb": 3,
+    "pi": 8,
+    "py": 12,
+    "sc": 5,
+    "sm": 11,
+    "ss": 13,
+    "su": 14,
+    "va": 2,
+    "vb": 4,
+    "vi": 9,
+}
+
 NO_DATA_NAMES = {"", " ", "unknown", "undifferentiated"}  # blank-ish names mean no data
 
 
@@ -99,7 +117,11 @@ def footprint_intersects(source: dict, bbox: tuple[float, ...]) -> bool:
     return bbox[0] < east and bbox[2] > west and bbox[1] < north and bbox[3] > south
 
 
-def candidates_for(kind: str, bbox: tuple[float, ...], present: Callable[[str], bool]) -> list[dict]:
+def candidates_for(
+    kind: str,
+    bbox: tuple[float, ...],
+    present: Callable[[str], bool],
+) -> list[dict]:
     """Return the sources supplying `kind` whose footprint meets bbox and whose COG is present."""
     key = "age_file" if kind == "age" else "type_file"
     return [
@@ -127,9 +149,9 @@ def composite_values(
     return value, codes
 
 
-def used_in(codes: np.ndarray, weights: np.ndarray) -> tuple[str, ...]:
-    """Return the ids of the sources behind the weighted cells, base first, then by priority."""
-    present = set(np.unique(codes[(weights > 0) & (codes > 0)]).tolist())
+def used_in(codes: np.ndarray) -> tuple[str, ...]:
+    """Return the ids of the sources behind the nonzero codes, base first, then by priority."""
+    present = set(np.unique(codes[codes > 0]).tolist())
     ids = ["global_base"] if BASE_CODE in present else []
     ids += [source["id"] for source in REGIONAL_SOURCES if SOURCE_CODES[source["id"]] in present]
     return tuple(ids)
@@ -352,7 +374,7 @@ CANADA_EPOCH_NAMES: dict[str, tuple[str, str] | None] = {
     "undivided Silurian-Devonian": ("Silurian", "Devonian"),
     "undivided Tertiary": ("Paleogene", "Neogene"),
     "undivided Triassic": ("Triassic", "Triassic"),
-    "undivided Triassic-Jurassic": ("Triassic", "Triassic"),
+    "undivided Triassic-Jurassic": ("Triassic", "Jurassic"),
     "upper Cambrian": ("Cambrian", "Cambrian"),
     "upper Carboniferous-Jurassic": ("Carboniferous", "Jurassic"),
     "upper Cretaceous": ("Cretaceous", "Cretaceous"),
@@ -402,8 +424,6 @@ def _canada_age_value(era: str, period: str, epoch: str) -> int | None:
     return smallest_containing_class(*_timeline_span(*span))
 
 
-# Rock types map to the undivided variant of their GLiM family, keyed by SUBRXTP with an
-# RXTP fallback for units whose subtype is blank. A missing entry means the base map fills in.
 CANADA_TYPE_NAMES: dict[str, str | None] = {
     "alkaline gabbro and syenite": "pb",
     "alkaline intrusive rocks": "pi",
@@ -466,8 +486,10 @@ CANADA_RXTP_FALLBACK: dict[str, str | None] = {
 def canada_type_batch(records: list[tuple[str, str]]) -> list[int | None]:
     """Return the rock-type class of each (rxtp, subrxtp) record, None where the base fills in.
 
-    Any subtype or rock type missing from the tables fails the whole call and lists every such
-    name, except blank and unknown names which fall back or mean no data.
+    The Canadian source stores the detailed unit in SUBRXTP and the broader group in RXTP,
+    so a blank detailed unit falls back to the group. Any subtype or rock type missing
+    from the tables fails the whole call and lists every such name, except blank and
+    unknown names which fall back or mean no data.
     """
     unmapped = {
         name
@@ -485,11 +507,7 @@ def canada_type_batch(records: list[tuple[str, str]]) -> list[int | None]:
     return values
 
 
-# Each side of an IGME5000 AgeName range (names around " - ") maps to one TIMELINE unit. The
-# Proterozoic I-III scheme is the older Harland-era split into Paleo, Meso and Neoproterozoic.
-# Orogeny names are judgements from their mapped Ma ranges: Alpine units span Triassic to
-# Quaternary, Cadomian ones are Neoproterozoic to earliest Cambrian, Caledonian ones are
-# Ordovician to Devonian by convention, and Variscan ones are Devonian to Permian.
+# Orogeny names are judged from their mapped Ma ranges; Proterozoic I-III is the Harland-era split.
 IGME_AGE_SIDES: dict[str, tuple[str, str] | None] = {
     "Alpine": ("Cretaceous", "Quaternary"),
     "Archean": ("Archean", "Archean"),
@@ -561,8 +579,11 @@ def igme_age_batch(names: list[str]) -> list[int | None]:
     Early or Middle carries no period on its own. Any other name missing from the side table
     fails the whole call and lists every such name.
     """
-    sides = {side for agename in names for side in _split_igme_range(agename)}
-    _fail_unmapped("IGME5000 age names", {side for side in sides if side not in IGME_AGE_SIDES})
+    sides = {side for agename in names for side in _normalize_igme_range(agename)}
+    _fail_unmapped(
+        "IGME5000 age names",
+        {side for side in sides if side not in NO_DATA_NAMES and side not in IGME_AGE_SIDES},
+    )
     return [_igme_age_value(agename) for agename in names]
 
 
@@ -571,14 +592,20 @@ def _split_igme_range(agename: str) -> list[str]:
     return [side.strip() for side in agename.split(" - ")]
 
 
+def _normalize_igme_range(agename: str) -> list[str]:
+    """Collapse "Early - Middle X" style ranges onto X, since a bare qualifier names no unit."""
+    sides = _split_igme_range(agename)
+    if len(sides) == 2 and all(side.split()[0] in ("Early", "Middle", "Late") for side in sides):
+        first, second = sides[0].split(), sides[1].split()
+        if len(first) == 1 and len(second) == 2:
+            return [second[1]]
+    return sides
+
+
 def _igme_age_value(agename: str) -> int | None:
     if agename in NO_DATA_NAMES:
         return None
-    sides = _split_igme_range(agename)
-    if len(sides) == 2 and all(side.split()[0] in ("Early", "Middle", "Late") for side in sides):
-        first_words = sides[0].split()
-        if len(first_words) == 1 and len(sides[1].split()) == 2:
-            sides = [sides[1].split()[1]]
+    sides = _normalize_igme_range(agename)
     if any(side in NO_DATA_NAMES for side in sides):
         return None
     reaches = [IGME_AGE_SIDES[side] for side in sides if side in IGME_AGE_SIDES]
@@ -589,13 +616,13 @@ def _igme_age_value(agename: str) -> int | None:
     return smallest_containing_class(*_timeline_span(oldest, newest))
 
 
-# Main petrography (Portr_Petr) maps to GLiM families; meta-prefixed rocks all count as
-# metamorphic. A missing entry leaves the cell to the base map, as do the fallbacks for the
-# few hundred units whose main petrography is blank (volcanites count as basic like the
-# Precambrian greenstones that dominate them, plutonites as acid granitoids).
+# Volcanites without a petrography count as basic like Precambrian greenstones, plutonites as acid.
 IGME_TYPE_NAMES: dict[str, str | None] = {
     "Ice": "ig",
+    "Qtz andesite": "vi",
+    "agglomerate/breccia group": "py",
     "alkali basalt": "vb",
+    "ophiolite complex": "vb",
     "alkali granite": "pa",
     "alkali rhyolite": "va",
     "alkali syenite": "pi",
@@ -603,9 +630,13 @@ IGME_TYPE_NAMES: dict[str, str | None] = {
     "andesite": "vi",
     "andesite agglomerate": "vi",
     "andesite group": "vi",
+    "andesite tuff": "py",
     "andesite tuffite": "py",
+    "anhydrite": "ev",
     "basalt": "vb",
+    "basalt agglomerate": "py",
     "basalt group": "vb",
+    "basalt tuffite": "py",
     "blueschist": "mt",
     "carbonates": "sc",
     "carbonates, consolidated": "sc",
@@ -634,8 +665,11 @@ IGME_TYPE_NAMES: dict[str, str | None] = {
     "gravel": "ss",
     "greenschist": "mt",
     "gypsum": "ev",
+    "gypsum, anhydrite": "ev",
+    "hawaiite": "vb",
     "lamprophyre": "vb",
     "latite": "vi",
+    "latite andesite": "vi",
     "limestone": "sc",
     "marble": "mt",
     "marl": "sm",
@@ -643,8 +677,12 @@ IGME_TYPE_NAMES: dict[str, str | None] = {
     "meta-andesite": "mt",
     "meta-basalt": "mt",
     "meta-basalt group": "mt",
+    "meta-basalt tuff": "mt",
     "meta-carbonate": "mt",
     "meta-claystone": "mt",
+    "meta-conglomerate": "mt",
+    "meta-dacite": "mt",
+    "meta-dolerite": "mt",
     "meta-gabbro": "mt",
     "meta-gabbro group": "mt",
     "meta-granite": "mt",
@@ -656,23 +694,35 @@ IGME_TYPE_NAMES: dict[str, str | None] = {
     "meta-rhyodacite": "mt",
     "meta-rhyolite": "mt",
     "meta-rhyolite group": "mt",
+    "meta-rhyolite tuffite": "mt",
     "meta-sandstone": "mt",
     "meta-sediment group": "mt",
+    "meta-tonalite": "mt",
+    "meta-tuffite group": "mt",
     "meta-volcanic rock group": "mt",
     "mica schist": "mt",
     "migmatite/anatexite": "mt",
     "miscellaneous metamorphic rock group": "mt",
+    "monzodiorite": "pi",
+    "monzonite": "pi",
     "mud": "ss",
     "mudstone": "ss",
+    "mylonite": "mt",
+    "nephelinic, leucitic and analcitic rocks": "va",
+    "olivine basalt": "vb",
     "peridotite": "pb",
     "phonolite": "va",
+    "phonolitic tephrite, tephritic phonolite": "vb",
     "phyllite": "mt",
     "plutonic alkaline group": "pi",
     "plutonic ultramafic group": "pb",
+    "pyroxenite": "pb",
     "quartzite": "mt",
     "rhyodacite": "va",
     "rhyolite": "va",
     "rhyolite group": "va",
+    "rhyolite tuff": "py",
+    "rhyolite tuffite": "py",
     "rock salt": "ev",
     "sand": "ss",
     "sandstone": "ss",
@@ -682,6 +732,7 @@ IGME_TYPE_NAMES: dict[str, str | None] = {
     "siliclastics, consolidated": "ss",
     "silt": "ss",
     "siltstone": "ss",
+    "siliceous ooze": "ss",
     "syenite": "pi",
     "syenite-monzonite group": "pi",
     "tephrite, basanite": "vb",
@@ -721,18 +772,22 @@ IGME_MARI_FALLBACK: dict[str, str | None] = {
 }
 
 
-def igme_type_batch(records: list[tuple[str | None, str | None, str | None]]) -> list[int | None]:
-    """Return the rock-type class of each (petr, igne, mari) record, None for the base map.
+def igme_type_batch(
+    records: list[tuple[str | None, str | None, str | None, str | None]],
+) -> list[int | None]:
+    """Return the rock-type class of each record, None where the base map fills in.
 
-    The main petrography wins; blank units fall back to the igneous then marine fields, and
-    ice ("Ice" in the IceO field, passed as petr) counts as ice. Ice and blank names never
-    fail, while any other name missing from the tables fails the whole call with every one.
+    Records hold the main petrography with its secondary lithology and the igneous and
+    marine fields as fallbacks. Ice ("Ice" in the IceO field, passed as petr) counts as ice,
+    and blank names never fail, while any other name missing from the tables fails the whole
+    call and lists every such name.
     """
     unmapped = {
         name
-        for petr, igne, mari in records
+        for petr, secondary, igne, mari in records
         for name, table in (
             (petr, IGME_TYPE_NAMES),
+            (secondary, IGME_TYPE_NAMES),
             (igne, IGME_IGNE_FALLBACK),
             (mari, IGME_MARI_FALLBACK),
         )
@@ -740,9 +795,11 @@ def igme_type_batch(records: list[tuple[str | None, str | None, str | None]]) ->
     }
     _fail_unmapped("IGME5000 rock names", unmapped)
     values = []
-    for petr, igne, mari in records:
+    for petr, secondary, igne, mari in records:
         family = IGME_TYPE_NAMES.get(petr or "")
         if family is None and (not petr or petr in NO_DATA_NAMES):
+            family = IGME_TYPE_NAMES.get(secondary or "")
+        if family is None and (not secondary or secondary in NO_DATA_NAMES):
             family = IGME_IGNE_FALLBACK.get(igne or "")
         if family is None and (not igne or igne in NO_DATA_NAMES):
             family = IGME_MARI_FALLBACK.get(mari or "")
@@ -750,9 +807,7 @@ def igme_type_batch(records: list[tuple[str | None, str | None, str | None]]) ->
     return values
 
 
-# SGMC age leaves (the last name of an AGE_MIN or AGE_MAX path) map to TIMELINE spans. Ages
-# come from names and never from Ma, because the state maps use older time scales. Note that
-# in the tables MIN names the younger bound (smaller Ma) and MAX the older one.
+# Ages come from names and never from Ma, because the state maps use older time scales.
 SGMC_BASE_NAMES: dict[str, tuple[str, str] | None] = {
     "Archean": ("Archean", "Archean"),
     "Cambrian": ("Cambrian", "Cambrian"),
@@ -795,8 +850,7 @@ SGMC_BASE_NAMES: dict[str, tuple[str, str] | None] = {
     "preCambrian-Proterozoic": ("Archean", "Neoproterozoic"),
 }
 
-# ICS stages to their periods; an Early, Middle or Late prefix narrows nothing because the
-# class is the whole period anyway.
+# An Early, Middle or Late prefix narrows nothing because the class is the whole period anyway.
 SGMC_STAGE_PERIODS: dict[str, str] = {
     "Aeronian": "Silurian",
     "Albian": "Cretaceous",
@@ -945,77 +999,252 @@ def _sgmc_age_value(age_min: str, age_max: str) -> int | None:
     return smallest_containing_class(*_timeline_span(oldest, newest))
 
 
-# SGMC lithology walks the LITH1 to LITH5 hierarchy of the first Major row of each unit.
-# Families are judged by composition: felsic plutonic and volcanic rocks count as acid,
-# intermediate ones (diorite, syenite, andesite, trachyte) as intermediate, and mafic ones
-# (basalt, gabbro, ultramafic) as basic. Anything the rules below do not reach falls back to
-# its LITH1 default, and an unknown LITH1 fails loudly.
-SGMC_ACID_KEYWORDS = (
-    "granite",
-    "granitic",
-    "rhyolit",
-    "felsic",
-    "aplite",
-    "alaskite",
-    "tonalite",
-    "trondhjemite",
-    "dacite",
-    "trachyte",
-    "phonolite",
-    "quartz",
+# Exact archive names keep invented substrings from matching real lithologies.
+SGMC_EVAPORITE_NAMES = (
+    "Anhydrite",
+    "Evaporite",
+    "Gypsum",
+    "Salt",
 )
-SGMC_INTERMEDIATE_KEYWORDS = (
-    "andesite",
-    "diorit",
-    "syenite",
-    "monzonite",
-    "trachy",
-    "latite",
-    "hypabyssal",
+SGMC_CARBONATE_NAMES = (
+    "Calcarenite",
+    "Carbonate",
+    "Chalk",
+    "Coquina",
+    "Coral",
+    "Dolostone",
+    "Limestone",
 )
-SGMC_BASIC_KEYWORDS = (
-    "basalt",
-    "gabbro",
-    "mafic",
-    "ultramafic",
-    "dunite",
-    "peridotite",
-    "pyroxenite",
-    "norite",
-    "troctolite",
-    "anorthosite",
-    "diabase",
-    "dolerite",
-    "kimberlite",
-    "hornblendite",
+SGMC_MIXED_NAMES = (
+    "Marlstone",
+    "Mixed-clastic",
 )
-SGMC_CARBONATE_KEYWORDS = (
-    "carbonate",
-    "limestone",
-    "dolostone",
-    "dolomite",
-    "chalk",
-    "marble",
-    "calcarenite",
-    "coquina",
-    "coral",
+SGMC_COAL_NAMES = (
+    "Anthracite",
+    "Bituminous",
+    "Coal",
+    "Lignite",
+    "Peat",
+    "Sub-bituminous",
 )
-SGMC_CLASTIC_KEYWORDS = (
-    "sandstone",
-    "siltstone",
-    "shale",
-    "claystone",
-    "mudstone",
-    "argillite",
-    "arkose",
-    "arenite",
-    "graywacke",
-    "metagraywacke",
-    "conglomerate",
-    "breccia",
-    "boulders",
-    "gravel",
-    "till",
+SGMC_SILICEOUS_NAMES = (
+    "Chert",
+    "Diatomite",
+    "Novaculite",
+)
+SGMC_CLASTIC_NAMES = (
+    "Arenite",
+    "Arkose",
+    "Bentonite",
+    "Black-shale",
+    "Clastic",
+    "Claystone",
+    "Conglomerate",
+    "Conglomerate-mudstone",
+    "Conglomerate-sandstone",
+    "Graywacke",
+    "Mudstone",
+    "Oil-shale",
+    "Phosphatic-shale",
+    "Sandstone",
+    "Sandstone-mudstone",
+    "Sedimentary-breccia",
+    "Shale",
+    "Siltstone",
+    "Siltstone-mudstone",
+)
+SGMC_CHEMICAL_OTHER_NAMES = (
+    "Banded-iron-formation",
+    "Phosphorite",
+)
+SGMC_SEDIMENTARY_GROUP_NAMES = (
+    "Chemical",
+)
+
+SGMC_BASIC_NAMES = (
+    "Anorthosite",
+    "Basalt",
+    "Basaltic-andesite",
+    "Basanite",
+    "Dunite",
+    "Foidite",
+    "Gabbro",
+    "Gabbroic",
+    "Hornblendite",
+    "Hypabyssal-basalt",
+    "Hypabyssal-basaltic-andesite",
+    "Hypabyssal-mafic-alkaline",
+    "Kimberlite",
+    "Komatiite",
+    "Lamprophyre",
+    "Mafic-hypabyssal",
+    "Mafic-volcanic",
+    "Norite",
+    "Peridotite",
+    "Picrite",
+    "Pyroxenite",
+    "Quartz-gabbro",
+    "Troctolite",
+    "Ultramafic",
+)
+SGMC_INTERMEDIATE_NAMES = (
+    "Alkali-feldspar-syenite",
+    "Andesite",
+    "Diorite",
+    "Dioritic",
+    "Felsic-hypabyssal",
+    "Foid-syenite",
+    "Foidal-syenitic",
+    "Granodiorite",
+    "Hypabyssal-andesite",
+    "Hypabyssal-dacite",
+    "Hypabyssal-felsic-alkaline",
+    "Hypabyssal-latite",
+    "Hypabyssal-quartz-latite",
+    "Hypabyssal-quartz-trachyte",
+    "Hypabyssal-rhyolite",
+    "Hypabyssal-trachyte",
+    "Latite",
+    "Monzodiorite",
+    "Monzonite",
+    "Nepheline-syenite",
+    "Quartz-alkali-feldspar-syenite",
+    "Quartz-diorite",
+    "Quartz-latite",
+    "Quartz-monzodiorite",
+    "Quartz-monzonite",
+    "Quartz-syenite",
+    "Quartz-trachyte",
+    "Syenite",
+    "Syenitic",
+    "Trachyte",
+)
+SGMC_ACID_NAMES = (
+    "Alaskite",
+    "Alkali-feldspar-granite",
+    "Alkali-granite",
+    "Aplite",
+    "Charnockite",
+    "Dacite",
+    "Felsic-volcanic",
+    "Granite",
+    "Granitic",
+    "Leucocratic-granitic",
+    "Monzogranite",
+    "Pegmatite",
+    "Phonolite",
+    "Rhyolite",
+    "Syenogranite",
+    "Tonalite",
+    "Trondhjemite",
+)
+SGMC_CARBONATITE_NAMES = (
+    "Intrusive-carbonatite",
+)
+SGMC_IGNEOUS_GROUP_NAMES = (
+    "Alkalic-volcanic",
+    "Hypabyssal",
+    "Plutonic",
+    "Volcanic",
+)
+
+SGMC_METAMORPHIC_NAMES = (
+    "Amphibole-schist",
+    "Amphibolite",
+    "Argillite",
+    "Biotite-gneiss",
+    "Biotite-schist",
+    "Calc-silicate-gneiss",
+    "Calc-silicate-rock",
+    "Calc-silicate-schist",
+    "Eclogite",
+    "Gneiss",
+    "Granoblastic",
+    "Granofels",
+    "Granulite",
+    "Greenstone",
+    "Hornblende-gneiss",
+    "Hornfels",
+    "Hydrothermally-altered",
+    "Marble",
+    "Metaandesite",
+    "Metaanorthosite",
+    "Metabasalt",
+    "Metacarbonate",
+    "Metaclastic",
+    "Metaconglomerate",
+    "Metadacite",
+    "Metadiabase",
+    "Metadiorite",
+    "Metadunite",
+    "Metagabbro",
+    "Metagranite",
+    "Metagraywacke",
+    "Metaigneous",
+    "Metaintrusive",
+    "Metaperidotite",
+    "Metapyroxenite",
+    "Metarhyolite",
+    "Metasandstone",
+    "Metasedimentary",
+    "Metasiltstone",
+    "Metatonalite",
+    "Metatrondhjemite",
+    "Metaultramafic",
+    "Metavolcanic",
+    "Mica-schist",
+    "Migmatite",
+    "Muscovite-gneiss",
+    "Muscovite-schist",
+    "Orthogneiss",
+    "Paragneiss",
+    "Pelitic-schist",
+    "Phyllite",
+    "Quartz-feldspar-schist",
+    "Quartzite",
+    "Schist",
+    "Serpentinite",
+    "Skarn",
+    "Slate",
+    "Spilite",
+)
+SGMC_UNCONSOLIDATED_NAMES = (
+    "Boulders",
+    "Clay",
+    "Coarse-detrital",
+    "Coral",
+    "Fine-detrital",
+    "Gravel",
+    "Marl",
+    "Peat",
+    "Sand",
+    "Silt",
+)
+SGMC_TECTONITE_NAMES = (
+    "Cataclasite",
+    "Melange",
+    "Mylonite",
+    "Phyllonite",
+)
+SGMC_KNOWN_NAMES = frozenset(
+    (
+        *SGMC_EVAPORITE_NAMES,
+        *SGMC_CARBONATE_NAMES,
+        *SGMC_MIXED_NAMES,
+        *SGMC_COAL_NAMES,
+        *SGMC_SILICEOUS_NAMES,
+        *SGMC_CLASTIC_NAMES,
+        *SGMC_CHEMICAL_OTHER_NAMES,
+        *SGMC_SEDIMENTARY_GROUP_NAMES,
+        *SGMC_BASIC_NAMES,
+        *SGMC_INTERMEDIATE_NAMES,
+        *SGMC_ACID_NAMES,
+        *SGMC_CARBONATITE_NAMES,
+        *SGMC_IGNEOUS_GROUP_NAMES,
+        *SGMC_METAMORPHIC_NAMES,
+        *SGMC_UNCONSOLIDATED_NAMES,
+        *SGMC_TECTONITE_NAMES,
+    ),
 )
 SGMC_LITH1_DEFAULTS: dict[str, str] = {
     "Ice": "ig",
@@ -1035,55 +1264,187 @@ def sgmc_family(lith1: str, lith2: str, lith3: str, lith4: str, lith5: str) -> s
         return "ig"
     if lith1 == "Unconsolidated":
         return "su"
-    if lith1 == "Tectonite":
+    if lith1 in ("Metamorphic", "Tectonite"):
         return "mt"
-    names = " ".join((lith2, lith3, lith4, lith5)).lower()
+    finer = {lith2, lith3, lith4, lith5}
     if lith1 == "Sedimentary":
-        if "evaporite" in names or "gypsum" in names or "anhydrite" in names or "salt" in names:
+        if finer & set(SGMC_EVAPORITE_NAMES):
             return "ev"
-        if any(word in names for word in SGMC_CARBONATE_KEYWORDS):
-            if "marl" in names or "mixed" in names or "turbidite" in names or "flysch" in names:
+        if finer & set(SGMC_CARBONATE_NAMES):
+            if finer & set(SGMC_MIXED_NAMES):
                 return "sm"
             return "sc"
-        if "coal" in names or "peat" in names or "organic" in names:
+        if finer & set(SGMC_COAL_NAMES):
             return "sm"
-        if any(word in names for word in SGMC_CLASTIC_KEYWORDS):
+        if finer & (set(SGMC_SILICEOUS_NAMES) | set(SGMC_CLASTIC_NAMES)):
             return "ss"
         return "sm"
-    if lith1 == "Metamorphic":
-        return "mt"
-    lowered = names
-    if any(word in lowered for word in SGMC_BASIC_KEYWORDS):
-        return "vb" if "volcanic" in lith2.lower() else "pb"
-    if any(word in lowered for word in SGMC_INTERMEDIATE_KEYWORDS):
-        return "vi" if "volcanic" in lith2.lower() else "pi"
-    if any(word in lowered for word in SGMC_ACID_KEYWORDS):
-        return "va" if "volcanic" in lith2.lower() else "pa"
-    if "pyroclastic" in lowered or "tuff" in lowered or "ash" in lowered:
-        return "py"
+    if finer & set(SGMC_CARBONATITE_NAMES):
+        return "sc"
+    if finer & set(SGMC_BASIC_NAMES):
+        return "vb" if lith2 == "Volcanic" else "pb"
+    if finer & set(SGMC_INTERMEDIATE_NAMES):
+        return "vi" if lith2 == "Volcanic" else "pi"
+    if finer & set(SGMC_ACID_NAMES):
+        return "va" if lith2 == "Volcanic" else "pa"
     return SGMC_LITH1_DEFAULTS[lith1]
 
 
 def sgmc_type_batch(records: list[tuple[str, str, str, str, str]]) -> list[int | None]:
-    """Return the rock-type class of each SGMC hierarchy, failing loudly on unknown LITH1."""
-    unmapped = {lith1 for lith1, *_ in records if lith1 not in SGMC_LITH1_DEFAULTS}
+    """Return the rock-type class of each SGMC hierarchy.
+
+    Every nonblank finer name must belong to the verified archive vocabulary, so a new
+    spelling fails the whole call and lists every such name.
+    """
+    unmapped = set()
+    for lith1, *finer in records:
+        if lith1 not in SGMC_LITH1_DEFAULTS:
+            unmapped.add(lith1)
+        else:
+            unmapped.update(name for name in finer if name and name not in SGMC_KNOWN_NAMES)
     _fail_unmapped("SGMC lithology", unmapped)
     return [family_value(sgmc_family(*record)) for record in records]
 
 
-# INSPIRE lithology values of the EGDI raster to GLiM families, filled from the raster legend.
-# The legend maps integer cells to INSPIRE URIs, so this table is keyed by cell value.
-EGDI_TYPE_NAMES: dict[int, str] = {}
+# INSPIRE lithology classes of the EGDI raster by cell value; None leaves the cell to the base.
+EGDI_TYPE_NAMES: dict[int, str | None] = {
+    1: "vb",  # alkaliOlivineBasalt
+    2: "mt",  # amphibolite
+    3: "vi",  # andesite
+    4: "pb",  # anorthositicRock
+    5: "ss",  # arenite
+    6: "py",  # ashBrecciaBombOrBlockTephra
+    7: "py",  # ashTuffLapillistoneAndLapilliTuff
+    8: "vb",  # basalt
+    9: "vb",  # basanite
+    10: "ss",  # biogenicSilicaSedimentaryRock
+    11: "ss",  # breccia
+    12: "mt",  # brecciaGougeSeries
+    13: "su",  # carbonateMud
+    14: "su",  # carbonateOoze
+    15: "sc",  # carbonateSedimentaryRock
+    16: None,  # carbonatite
+    17: "sc",  # chalk
+    18: "mt",  # chloriteActinoliteEpidoteMetamorphicRock
+    19: "ss",  # clasticSandstone
+    20: "su",  # clasticSediment
+    21: "sm",  # clasticSedimentaryMaterial
+    22: "ss",  # clasticSedimentaryRock
+    23: "su",  # clay
+    24: "ss",  # claystone
+    25: "ss",  # conglomerate
+    26: "va",  # dacite
+    27: "sm",  # diamictite
+    28: "su",  # diamicton
+    29: "pi",  # diorite
+    30: "pi",  # dioriticRock
+    31: "vb",  # doleriticRock
+    32: "sc",  # dolomite
+    33: "sc",  # dolomiticOrMagnesianSedimentaryRock
+    34: "mt",  # eclogite
+    35: None,  # exoticCompositionIgneousRock
+    36: None,  # fineGrainedIgneousRock
+    37: "pi",  # foidBearingSyenite
+    38: "pi",  # foidSyenitoid
+    39: "mt",  # foliatedMetamorphicRock
+    40: "py",  # fragmentalIgneousMaterial
+    41: "pb",  # gabbro
+    42: "pb",  # gabbroicRock
+    43: "pb",  # gabbroid
+    44: "mt",  # glaucophaneLawsoniteEpidoteMetamorphicRock
+    45: "mt",  # gneiss
+    46: "pa",  # granite
+    47: "pa",  # granitoid
+    48: "pa",  # granodiorite
+    49: "mt",  # granulite
+    50: "su",  # gravel
+    51: "ev",  # gypsumOrAnhydrite
+    52: "mt",  # hornfels
+    53: None,  # igneousMaterial
+    54: None,  # igneousRock
+    55: None,  # impactGeneratedMaterial
+    56: "su",  # impureCarbonateSediment
+    57: "sm",  # impureCarbonateSedimentaryRock
+    58: "sm",  # impureDolomite
+    59: "sm",  # impureLimestone
+    60: "vb",  # komatiiticRock
+    61: "sc",  # limestone
+    62: "mt",  # marble
+    63: "mt",  # metamorphicRock
+    64: "mt",  # metasomaticRock
+    65: "mt",  # micaSchist
+    66: "mt",  # migmatite
+    67: "pa",  # monzogranite
+    68: "pi",  # monzonite
+    69: "su",  # mud
+    70: "ss",  # mudstone
+    71: "mt",  # myloniticRock
+    72: "ss",  # nonClasticSiliceousSedimentaryRock
+    73: "ss",  # organicBearingMudstone
+    74: "su",  # organicRichSediment
+    75: "sm",  # organicRichSedimentaryMaterial
+    76: "mt",  # orthogneiss
+    77: "mt",  # paragneiss
+    78: "su",  # peat
+    79: "pb",  # peridotite
+    80: None,  # phaneriticIgneousRock
+    81: "va",  # phonolite
+    82: "mt",  # phyllite
+    83: "mt",  # phyllonite
+    84: None,  # porphyry
+    85: "py",  # pyroclasticMaterial
+    86: "py",  # pyroclasticRock
+    87: "pb",  # pyroxenite
+    88: "pi",  # quartzDiorite
+    89: "mt",  # quartzite
+    90: "su",  # residualMaterial
+    91: "va",  # rhyolite
+    92: "va",  # rhyolitoid
+    93: None,  # rock
+    94: "su",  # sand
+    95: "ss",  # sandstone
+    96: "mt",  # schist
+    97: "su",  # sediment
+    98: "sm",  # sedimentaryMaterial
+    99: "sm",  # sedimentaryRock
+    100: "mt",  # serpentinite
+    101: "ss",  # shale
+    102: "su",  # silicateMud
+    103: "su",  # silt
+    104: "ss",  # siltstone
+    105: "mt",  # skarn
+    106: "mt",  # slate
+    107: "vb",  # spilite
+    108: "pi",  # syenite
+    109: "pi",  # syeniticRock
+    110: "pa",  # syenogranite
+    111: "vb",  # tephrite
+    112: "vb",  # tholeiiticBasalt
+    113: "pa",  # tonalite
+    114: "va",  # trachyte
+    115: "va",  # trachyticRock
+    116: "va",  # trachytoid
+    117: "sc",  # travertine
+    118: "py",  # tuffBrecciaAgglomerateOrPyroclasticBreccia
+    119: "pb",  # ultramaficIgneousRock
+    120: "ss",  # wacke
+    121: None,  # waste
+    122: None,  # Unknown
+    123: None,  # Unpopulated
+}
 
 
 def egdi_type_batch(values: list[int]) -> list[int | None]:
-    """Return the rock-type class of each EGDI raster value, None for no data (0).
+    """Return the rock-type class of each EGDI raster value, None where the base map fills in.
 
     A value missing from the legend table fails the whole call and lists every such value.
     """
-    unmapped = {value for value in values if value != 0 and value not in EGDI_TYPE_NAMES}
-    _fail_unmapped("EGDI lithology values", {str(value) for value in unmapped})
-    return [family_value(EGDI_TYPE_NAMES[value]) if value != 0 else None for value in values]
+    unmapped = {value for value in values if value not in EGDI_TYPE_NAMES}
+    _fail_unmapped("EGDI lithology values", {str(value) for value in sorted(unmapped)})
+    return [
+        family_value(EGDI_TYPE_NAMES[value]) if EGDI_TYPE_NAMES[value] else None
+        for value in values
+    ]
 
 
 def read_composited(
@@ -1097,14 +1458,26 @@ def read_composited(
     """Return the composited classes, their source codes and the transform over bounds at res.
 
     The base COG fills every cell first and each present regional COG overrides it in priority
-    order.     Regional COGs missing on disk are skipped silently, while an unreadable one still
+    order. Regional COGs missing on disk are skipped silently, while an unreadable one still
     fails. Codes are 0 where no map has a value, 1 for the base and one per regional source.
+    Regional types hold GLiM values, so an OpenLandMap base takes them as its own classes.
     """
-    base, transform = backend.lithology(bounds, res, on_block or (lambda: None), base_file)  # type: ignore[union-attr]
+    base, transform = backend.lithology(bounds, res, on_block or (lambda: None), base_file)
+    translate = kind == "type" and backend.lithology_source(base_file) == OPENLANDMAP_SOURCE
     overlays = []
-    for source in candidates_for(kind, bounds, backend.has_lithology):  # type: ignore[union-attr]
+    for source in candidates_for(kind, bounds, backend.has_lithology):
         key = "age_file" if kind == "age" else "type_file"
-        regional, _ = backend.lithology(bounds, res, lambda: None, source[key])  # type: ignore[union-attr]
+        regional, _ = backend.lithology(bounds, res, lambda: None, source[key])
+        if translate:
+            regional = _glim_to_openlandmap(regional)
         overlays.append((SOURCE_CODES[source["id"]], regional))
     value, codes = composite_values(base, overlays)
     return value, codes, transform
+
+
+def _glim_to_openlandmap(classes: np.ndarray) -> np.ndarray:
+    """Return GLiM class values as the OpenLandMap class of their family, 0 staying 0."""
+    lookup = np.zeros(256, "uint8")
+    for entry in GEOLOGY_CLASSES:
+        lookup[entry["value"]] = OPENLANDMAP_FAMILY_VALUES[entry["parent"]]
+    return lookup[classes]

@@ -16,8 +16,11 @@ from functools import partial
 from pathlib import Path
 
 import numpy as np
+import rasterio
 from rasterio.features import rasterize
+from rasterio.io import DatasetReader
 from rasterio.transform import Affine
+from rasterio.warp import Resampling, reproject, transform_bounds
 from shapely.geometry import box
 
 from ..geology_age import GEOLOGY_AGE_RES_DEG
@@ -40,7 +43,7 @@ from ..geology_regional import (
 from ..sources.grid import Bbox
 from ..sources.lithology import LITHOLOGY_RES_DEG
 from .cubes import DOWNLOADS_DIR
-from .lithology import publish_cog, write_tiled_raster
+from .lithology import BLOCK_PX, publish_cog, write_tiled_raster
 
 log = logging.getLogger(__name__)
 
@@ -106,9 +109,11 @@ def ingest_canada(cubes_dir: Path, archive_path: Path | str | None = None) -> li
     gdb = _ensure_member(CANADA_URL, folder, CANADA_GDB, archive_path)
     log.info("Classifying the Canada map units")
     classified = _read_canada_units(gdb)
+    age_cog = cubes_dir / CANADA_AGE_FILE
+    type_cog = cubes_dir / CANADA_TYPE_FILE
     return [
-        _publish_units(classified, "age", GEOLOGY_AGE_RES_DEG, cubes_dir / CANADA_AGE_FILE, "canada-5m"),
-        _publish_units(classified, "type", LITHOLOGY_RES_DEG, cubes_dir / CANADA_TYPE_FILE, "canada-5m"),
+        _publish_units(classified, "age", GEOLOGY_AGE_RES_DEG, age_cog, "canada-5m"),
+        _publish_units(classified, "type", LITHOLOGY_RES_DEG, type_cog, "canada-5m"),
     ]
 
 
@@ -118,9 +123,11 @@ def ingest_igme(cubes_dir: Path, archive_path: Path | str | None = None) -> list
     shape = _ensure_member(IGME_URL, folder, IGME_SHAPE, archive_path)
     log.info("Classifying the IGME5000 units")
     classified = _read_igme_units(shape)
+    age_cog = cubes_dir / IGME_AGE_FILE
+    type_cog = cubes_dir / IGME_TYPE_FILE
     return [
-        _publish_units(classified, "age", GEOLOGY_AGE_RES_DEG, cubes_dir / IGME_AGE_FILE, "igme5000"),
-        _publish_units(classified, "type", LITHOLOGY_RES_DEG, cubes_dir / IGME_TYPE_FILE, "igme5000"),
+        _publish_units(classified, "age", GEOLOGY_AGE_RES_DEG, age_cog, "igme5000"),
+        _publish_units(classified, "type", LITHOLOGY_RES_DEG, type_cog, "igme5000"),
     ]
 
 
@@ -231,17 +238,22 @@ def _read_igme_units(shape_path: Path) -> "object":
 
     frame = pyogrio.read_dataframe(
         shape_path,
-        columns=["AgeName", "Portr_Petr", "Portr_IGNE", "Portr_MARI", "Portr_IceO"],
+        columns=["AgeName", "Portr_Petr", "Portr_Pe_1", "Portr_IGNE", "Portr_MARI", "Portr_IceO"],
     )
     ages = igme_age_batch(frame["AgeName"].fillna("unknown").tolist())
     # Ice-only units name their cover in the IceO field instead of the petrography one.
     petr = frame["Portr_Petr"].where(frame["Portr_Petr"].notna(), frame["Portr_IceO"])
-    records = list(zip(petr, frame["Portr_IGNE"], frame["Portr_MARI"]))
+    records = list(zip(petr, frame["Portr_Pe_1"], frame["Portr_IGNE"], frame["Portr_MARI"]))
 
     def cleaned(value: object) -> str | None:
         return value if isinstance(value, str) else None
 
-    types = igme_type_batch([(cleaned(petr), cleaned(igne), cleaned(mari)) for petr, igne, mari in records])
+    types = igme_type_batch(
+        [
+            (cleaned(first), cleaned(secondary), cleaned(igne), cleaned(mari))
+            for first, secondary, igne, mari in records
+        ],
+    )
     frame["age"] = [value or 0 for value in ages]
     frame["type"] = [value or 0 for value in types]
     frame.geometry = frame.geometry.segmentize(IGME_SEGMENT_M)
@@ -391,30 +403,80 @@ def _write_egdi_raster(source_path: Path | str, raster_path: Path) -> None:
     Classes are mapped before resampling, so each output cell takes the most common GLiM
     family around it rather than the most common INSPIRE code.
     """
-    import rasterio
-    from rasterio.warp import Resampling, reproject
+    families_path = raster_path.with_suffix(".families.tif")
+    try:
+        with rasterio.open(source_path) as source:
+            footprint = transform_bounds(source.crs, "EPSG:4326", *source.bounds)
+            _write_egdi_families(source, families_path)
 
-    with rasterio.open(source_path) as source:
-        raw = source.read(1)
-        nodata = source.nodata
-        unique = sorted({int(value) for value in np.unique(raw) if value != nodata})
-        classes = egdi_type_batch(unique)
-        lookup = np.zeros(max(unique, default=0) + 1, "uint8")
-        for value, cls in zip(unique, classes):
-            lookup[value] = cls or 0
-        families = lookup[np.where(raw == nodata, 0, raw)]
-
-        def rasterize_tile(bounds: Bbox, transform: Affine, shape: tuple[int, int]) -> np.ndarray:
-            tile = np.zeros(shape, "uint8")
-            reproject(
-                families,
-                tile,
-                src_transform=source.transform,
-                src_crs=source.crs,
-                dst_transform=transform,
-                dst_crs="EPSG:4326",
-                resampling=Resampling.mode,
+        with rasterio.open(families_path) as families:
+            write_tiled_raster(
+                raster_path,
+                LITHOLOGY_RES_DEG,
+                partial(_reproject_egdi_tile, families, footprint),
             )
-            return tile
+    finally:
+        families_path.unlink(missing_ok=True)
 
-        write_tiled_raster(raster_path, LITHOLOGY_RES_DEG, rasterize_tile)
+
+def _reproject_egdi_tile(
+    families: DatasetReader,
+    footprint: Bbox,
+    bounds: Bbox,
+    transform: Affine,
+    shape: tuple[int, int],
+) -> np.ndarray:
+    """Return the most common family of the source cells under each cell of the tile."""
+    tile = np.zeros(shape, "uint8")
+    west, south, east, north = footprint
+    if bounds[0] >= east or bounds[2] <= west or bounds[1] >= north or bounds[3] <= south:
+        return tile
+
+    reproject(
+        rasterio.band(families, 1),
+        tile,
+        dst_transform=transform,
+        dst_crs="EPSG:4326",
+        src_nodata=0,
+        dst_nodata=0,
+        resampling=Resampling.mode,
+    )
+    return tile
+
+
+def _write_egdi_families(source: DatasetReader, families_path: Path) -> None:
+    """Write the GLiM class of every source cell, block by block because the raster is huge."""
+    lookup = _egdi_lookup(source)
+    profile = {
+        "driver": "GTiff",
+        "dtype": "uint8",
+        "count": 1,
+        "crs": source.crs,
+        "width": source.width,
+        "height": source.height,
+        "transform": source.transform,
+        "nodata": 0,
+        "tiled": True,
+        "blockxsize": BLOCK_PX,
+        "blockysize": BLOCK_PX,
+        "compress": "zstd",
+        "BIGTIFF": "IF_SAFER",
+    }
+    with rasterio.open(families_path, "w", **profile) as families:
+        for _, window in source.block_windows(1):
+            values = source.read(1, window=window)
+            indexes = np.where(values == source.nodata, 0, values).astype(int)
+            families.write(lookup[indexes], 1, window=window)
+
+
+def _egdi_lookup(source: DatasetReader) -> np.ndarray:
+    """Return the GLiM class of each EGDI value as an array indexed by value, 0 for no data."""
+    present: set[int] = set()
+    for _, window in source.block_windows(1):
+        present.update(np.unique(source.read(1, window=window)).astype(int).tolist())
+    present.discard(int(source.nodata))
+    values = sorted(present)
+    lookup = np.zeros(values[-1] + 1, "uint8")
+    for value, cls in zip(values, egdi_type_batch(values)):
+        lookup[value] = cls or 0
+    return lookup

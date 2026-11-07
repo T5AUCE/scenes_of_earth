@@ -22,10 +22,12 @@ from .lithology import (
     GLIM_SOURCE,
     LITHOLOGY_RES_DEG,
     OPENLANDMAP_CLASSES,
+    PROVENANCE_ROLE,
     GeologyDataset,
     LithologyReader,
 )
-from .synthetic import SyntheticSourcefrom .terrain import GLO30_RES_DEG, CopernicusDemReader, TerrainDataset, terrain_tiles_block
+from .synthetic import SyntheticSource
+from .terrain import GLO30_RES_DEG, CopernicusDemReader, TerrainDataset, terrain_tiles_block
 from .worldcover import (
     WORLDCOVER_CLASSES,
     WORLDCOVER_RES_DEG,
@@ -183,6 +185,7 @@ def _geology(backend: RealSource | SyntheticSource) -> GeologyDataset:
                 fill=0,
                 long_name="Lithology class",
             ),
+            "provenance": PROVENANCE_ROLE,
         },
         style={
             "kind": "categorical",
@@ -210,6 +213,7 @@ def _geology_age(backend: RealSource | SyntheticSource) -> GeologyDataset:
                 fill=0,
                 long_name="Rock age class",
             ),
+            "provenance": PROVENANCE_ROLE,
         },
         style={
             "kind": "categorical",

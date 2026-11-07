@@ -203,6 +203,39 @@ Ranges come from the age names of the source and never from Ma, because GSC uses
 class fails the ingest and lists every such name. The cross-eon class uses grey instead of white so it stays visible
 on the map.
 
+## Geology regional patchwork
+
+Four verified regional maps override the global geology maps inside their footprints, for rock age and rock type
+together (Europe type also has a raster source). Each source is ingested once to its own uint8 class COGs on the same
+grids (age 1/120 degree, type 1/480 degree), and a build composites them in priority order over the global base
+(age: GSC Open File 5529; type: GLiM, else OpenLandMap). Missing regional files are skipped silently, so the base maps
+still work on their own. Every cell keeps the code of the source behind its value in the bundle's `provenance` array
+(0 outside the area or no data, 1 the base, then one code per regional source), and notices and attribution list only
+the sources actually used.
+
+```
+python -m soe.cli ingest-geology-regional canada_5m
+python -m soe.cli ingest-geology-regional us_sgmc
+python -m soe.cli ingest-geology-regional europe_igme5000
+python -m soe.cli ingest-geology-regional europe_egdi
+```
+
+- `canada_5m`: Geological map of Canada 1:5M (GSC Map 1860A, OGL-Canada, 13 MB download), surface geology; offshore
+  polygons omitted. Ages from the ERA/PERIOD/EPOCH names, rock types from RXTP/SUBRXTP mapped to GLiM families.
+- `us_sgmc`: USGS State Geologic Map Compilation (SGMC, DS 1052 v1.1, public domain, 436 MB geodatabase zip),
+  conterminous US surface geology at 1:50,000-1:1,000,000 source scales. Polygons join the age and lithology tables on
+  UNIT_LINK (first Major rank row per unit). A direct range read of the members is impractical (the query-string
+  download URL breaks remote reads), so the zip is downloaded once.
+- `europe_igme5000`: BGR IGME5000 1:5M (GeoNutzV), pre-Quaternary bedrock of Europe, Turkey and the Caucasus (47.5 MB).
+  Age from AgeName (names, never Ma); rock types from the petrography fields where mappable, else left to the base map.
+- `europe_egdi`: EGDI 1:1M surface lithology 250 m raster (CC BY 4.0, OpenGeoHub/GeoZS, Zenodo 12607973, 10.5 MB),
+  rock type only; the original (non-gap-filled) raster is reprojected from EPSG:3035 with mode resampling and its
+  INSPIRE classes mapped to GLiM families. Generic classes (rock, igneous rock, waste, unknown) stay no data so the
+  base maps fill them.
+
+`--archive` takes a local copy of the source archive instead of fetching. Unknown age or rock names fail the ingest
+with the full unmapped list, as for the global maps.
+
 ## Area contract notes
 
 - `area.bbox` is `[W, S, E, N]` with W < E always. A shape across the antimeridian is unwrapped into one frame, so E may be
@@ -284,13 +317,17 @@ on the map.
   collapsible headings, and GLiM classes also carry `parent` (the level 1 code) and `variant` (its position under the parent),
   from which the viewer shades the sub-classes of one family. The source, and so the scene id, follows the COG. The notice
   states the 1:3.75 million source scale and the seams where source maps meet (OpenLandMap also at 180 degrees and its
-  missing islands). It shows rock type now, and rock age is planned inside the same layer.
+  missing islands). Regional patchwork COGs override the base map inside their footprints (see "Geology regional
+  patchwork"); each cell's source stays in a uint8 `provenance` array (0 outside the area or no data, 1 the base, then one
+  code per regional source with `flag_values` and `flag_meanings`), and `fallback_sources` with the notices name only the
+  regional sources actually used.
 - Geology age (`geology_age`, not a default layer) is a static `categorical` layer built exactly like Geology from its own
   COG: a uint8 `value` array (0 = no data) holding the most common age class in each cell of the world map GSC Open File 5529
   (23 classes, see "Geology age map"). `style.classes` carry the ICS chart colours and a `group` for the era (Cenozoic,
   Mesozoic, Paleozoic, Precambrian, Several eras), and the layer has no `style.palette`, so the viewer shows those colours.
   The notice states the 1:35 million scale, the tens of kilometres of boundary error, the share dated only to an era and the
-  generalisation to ICS periods. Adding the COG changes no existing scene id.
+  generalisation to ICS periods. Adding the COG changes no existing scene id. The same regional patchwork and `provenance`
+  array apply as for Geology.
 - The statistics are read on cells of 0.05/k degrees (k up to 180, about 4.2 Mpx at most). Cells finer than 90 m are read
   from GLO-30 (with average resampling), others from GLO-90; tiles GLO-30 lacks come from GLO-90 as
   `layers[].fallback_sources`. Terrain is refused above 2500 existing source tiles.
@@ -387,6 +424,25 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
   Geological Survey of Canada Open File 5529, doi:10.4095/223767. Modified: the age names of each unit classed as the
   smallest ICS period or era that holds its whole age range, rasterised to 1/120 degrees, cropped to 60S-60N, most common
   class per output cell. The same text is in `soe/sources/licences.py`.
+- **Geology patchwork: Geological map of Canada 1:5M**, Open Government Licence - Canada 2.0. Credit: "Rock type and age
+  (Canada): Contains information licensed under the Open Government Licence – Canada (Wheeler et al. 1996, GSC Map 1860A)".
+  Citation: Wheeler, J.O. et al. (1996) Geological map of Canada, Map 1860A, doi:10.4095/208175. Modified: offshore polygons
+  omitted; ages classed to ICS; rock types mapped to GLiM families. The same text is in `soe/sources/licences.py`.
+- **Geology patchwork: USGS SGMC DS 1052 v1.1**, public domain (US Government work). Credit: "Rock type and age
+  (conterminous US): USGS SGMC (public domain)". Citation: Horton, J.D. et al. (2017) The State Geologic Map Compilation
+  (SGMC) geodatabase of the conterminous United States, Data Series 1052 v1.1. Modified: polygons joined to the CSV age and
+  lithology tables on UNIT_LINK (Major rank first); ages classed to ICS; rock types mapped to GLiM families. The same text
+  is in `soe/sources/licences.py`.
+- **Geology patchwork: IGME5000 1:5M**, GeoNutzV (Datenlizenz Deutschland). Credit: "Rock type and age (Europe):
+  BGR IGME5000 1:5,000,000 (GeoNutzV, source: BGR, Hannover)". Citation: Asch, K. (2003) The 1:5 Million International
+  Geological Map of Europe and Adjacent Areas; 2024 BGR release. Modified: pre-Quaternary bedrock kept as mapped; AgeName
+  classed to ICS; rock types mapped to GLiM families where mappable, else left to the base map. The same text is in
+  `soe/sources/licences.py`.
+- **Geology patchwork: EGDI surface lithology 250 m**, CC BY 4.0. Credit: "Rock type (Europe): EGDI/OneGeology surface
+  lithology raster by OpenGeoHub/GeoZS (CC BY 4.0)". Citation: Isik, S., Minarik, R. and Hengl, T. (2024) Continental Europe
+  surface lithology based on EGDI/OneGeology map at 1:1M scale, doi:10.5281/zenodo.12607973. Modified: original
+  (non-gap-filled) raster reprojected from EPSG:3035 with mode resampling; INSPIRE classes mapped to GLiM families.
+  The same text is in `soe/sources/licences.py`.
 - **Boundaries: geoBoundaries CGAZ**, CC BY 4.0. Runfola, D. et al. (2020) geoBoundaries: A global database of political
   administrative boundaries. PLoS ONE 15(4): e0231866. https://www.geoboundaries.org. Simplified to 0.01 degrees and
   clipped to 60S-60N. CC BY 4.0 for CGAZ itself is the repository-wide licence for geoBoundaries derivatives, not a

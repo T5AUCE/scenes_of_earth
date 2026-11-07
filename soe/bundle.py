@@ -105,12 +105,15 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
         "nx": layer_plan.shape[1],
         "ny": layer_plan.shape[0],
     }
+    sources = layer_plan.sources
+    if "used_sources" in result:
+        sources = result["used_sources"] or layer_plan.sources[:1]
     layer = {
         "id": dataset.id,
         "title": dataset.title,
         "units": dataset.units,
         "time_varying": dataset.time_varying,
-        "source": dict(layer_plan.sources[0]),
+        "source": dict(sources[0]),
         "style": dict(dataset.style),
         "coverage": list(dataset.coverage),
         "grid": grid,
@@ -123,7 +126,7 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
         "arrays": _array_blocks(dataset, result),
     }
 
-    fallback_sources = layer_plan.sources[1:]
+    fallback_sources = sources[1:]
     if result.get("fallback_used"):
         fallback_sources = [*fallback_sources, dataset.fallback.source]
     if fallback_sources:
