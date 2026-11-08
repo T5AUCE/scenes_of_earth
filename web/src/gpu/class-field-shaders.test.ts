@@ -710,6 +710,68 @@ test("wide tiles with an eight-cell halo match unsplit sampling across a vertica
   }
 });
 
+test("radius-sized tiles match unsplit sampling across a horizontal join", () => {
+  const nx = 40;
+  const ny = 16;
+  const tiles = textureTiles(nx, ny, 24, WIDE_HALO_CELLS);
+
+  assert.ok(tiles.length > 1);
+  for (const positionX of tiledPositions(nx)) {
+    const tiled = sampleClassField(
+      fragmentAt(tiledDiagonal(tiles, nx, ny, positionX, 8.5), positionX, 8.5, 0.001),
+      {
+        smooth: true,
+        rounding: 0.25,
+        softnessCells: 1,
+        smoothRadiusCells: GEOLOGY_SMOOTH_RADIUS_CELLS,
+      },
+    );
+    const direct = sampleClassField(
+      fragmentAt(globalDiagonal(nx, ny), positionX, 8.5, 0.001),
+      {
+        smooth: true,
+        rounding: 0.25,
+        softnessCells: 1,
+        smoothRadiusCells: GEOLOGY_SMOOTH_RADIUS_CELLS,
+      },
+    );
+
+    assert.ok(Math.abs(weightOf(tiled, TREE) - weightOf(direct, TREE)) < 1e-12, `${positionX}`);
+    assert.ok(Math.abs(tiled.outline - direct.outline) < 1e-12, `${positionX}`);
+  }
+});
+
+test("radius-sized tiles match unsplit sampling across a vertical join", () => {
+  const nx = 16;
+  const ny = 40;
+  const tiles = textureTiles(nx, ny, 24, WIDE_HALO_CELLS);
+
+  assert.ok(tiles.length > 1);
+  for (const positionY of tiledPositions(ny)) {
+    const tiled = sampleClassField(
+      fragmentAt(tiledDiagonal(tiles, nx, ny, 8.5, positionY), 8.5, positionY, 0.001),
+      {
+        smooth: true,
+        rounding: 0.25,
+        softnessCells: 1,
+        smoothRadiusCells: GEOLOGY_SMOOTH_RADIUS_CELLS,
+      },
+    );
+    const direct = sampleClassField(
+      fragmentAt(globalDiagonal(nx, ny), 8.5, positionY, 0.001),
+      {
+        smooth: true,
+        rounding: 0.25,
+        softnessCells: 1,
+        smoothRadiusCells: GEOLOGY_SMOOTH_RADIUS_CELLS,
+      },
+    );
+
+    assert.ok(Math.abs(weightOf(tiled, TREE) - weightOf(direct, TREE)) < 1e-12, `${positionY}`);
+    assert.ok(Math.abs(tiled.outline - direct.outline) < 1e-12, `${positionY}`);
+  }
+});
+
 test("wide sampling at radius 4 turns a staircase into a gradual slope", () => {
   const largestJump = (radius: number | undefined) => {
     const edge = [6, 6.25, 6.5, 6.75, 7, 7.25, 7.5, 7.75, 8, 8.25, 8.5, 8.75, 9, 9.25, 9.5]
@@ -1015,10 +1077,54 @@ function strongest(result: ClassFieldResult): number {
   return result.weights.reduce((best, entry) => (entry.weight > best.weight ? entry : best)).id;
 }
 
+test("radius-sized flags skip interiors the kernel cannot reach", () => {
+  const size = 24;
+  const centre = 12;
+  const uniform = new Uint8Array(size * size).fill(TREE);
+  assert.ok(homogeneousFlags(uniform, size, size, GEOLOGY_SMOOTH_RADIUS_CELLS).every((flag) => (
+    flag === 1
+  )));
+
+  const near = new Uint8Array(size * size).fill(TREE);
+  near[centre * size + (centre + 4)] = GRASS;
+  assert.equal(homogeneousFlags(near, size, size, GEOLOGY_SMOOTH_RADIUS_CELLS)[centre * size + centre], 0);
+
+  const far = new Uint8Array(size * size).fill(TREE);
+  far[centre * size + (centre + 5)] = GRASS;
+  assert.equal(homogeneousFlags(far, size, size, GEOLOGY_SMOOTH_RADIUS_CELLS)[centre * size + centre], 1);
+  assert.equal(homogeneousFlags(far, size, size)[centre * size + centre], 0);
+});
+
+test("the radius-sized skip renders the same colour as the wide gather", () => {
+  // Five cells left of the edge the small window is uniform while the large one is not.
+  const at = (homogeneous: boolean) => sampleClassField(
+    { ...fragmentAt(straightId, -5.5, 5.5, 0.01), homogeneous },
+    {
+      smooth: true,
+      rounding: 0.25,
+      softnessCells: 0,
+      smoothRadiusCells: GEOLOGY_SMOOTH_RADIUS_CELLS,
+    },
+  );
+  const flagged = at(true);
+  const plain = at(false);
+
+  assert.equal(flagged.nearest, TREE);
+  assert.deepEqual(flagged.weights, plain.weights);
+  assert.equal(flagged.outline, plain.outline);
+});
+
 test("the single-pass flags equal the naive scan on random and edge-case grids", () => {
   for (const { cells, nx, ny } of flagCases()) {
     const fast = [...homogeneousFlags(cells, nx, ny)];
     assert.deepEqual(fast, [...naiveHomogeneousFlags(cells, nx, ny)]);
+  }
+});
+
+test("the radius-sized flags equal the naive 8 x 8 scan", () => {
+  for (const { cells, nx, ny } of flagCases()) {
+    const fast = [...homogeneousFlags(cells, nx, ny, GEOLOGY_SMOOTH_RADIUS_CELLS)];
+    assert.deepEqual(fast, [...naiveSmallHomogeneousFlags(cells, nx, ny)]);
   }
 });
 
@@ -1040,12 +1146,31 @@ const MAX_FLAG_BUILD_MS = 1500;
 // A verbatim copy of the previous 16 x 16 scan, kept as the oracle for the fast pass.
 const NAIVE_FIRST_OFFSET_CELLS = -7;
 const NAIVE_SPAN_CELLS = 16;
+// The radius-sized window the small kernel samples, kept as its own oracle.
+const NAIVE_SMALL_FIRST_OFFSET_CELLS = -3;
+const NAIVE_SMALL_SPAN_CELLS = 8;
 
 function naiveHomogeneousFlags(cells: Uint8Array, nx: number, ny: number): Uint8Array {
+  return naiveWindowFlags(cells, nx, ny, NAIVE_FIRST_OFFSET_CELLS, NAIVE_SPAN_CELLS);
+}
+
+function naiveSmallHomogeneousFlags(cells: Uint8Array, nx: number, ny: number): Uint8Array {
+  return naiveWindowFlags(cells, nx, ny, NAIVE_SMALL_FIRST_OFFSET_CELLS, NAIVE_SMALL_SPAN_CELLS);
+}
+
+function naiveWindowFlags(
+  cells: Uint8Array,
+  nx: number,
+  ny: number,
+  firstOffset: number,
+  span: number,
+): Uint8Array {
   const flags = new Uint8Array(nx * ny);
   for (let row = 0; row < ny; row++) {
     for (let column = 0; column < nx; column++) {
-      flags[row * nx + column] = isNaiveUniform(cells, nx, ny, column, row) ? 1 : 0;
+      flags[row * nx + column] = isNaiveUniform(cells, nx, ny, column, row, firstOffset, span)
+        ? 1
+        : 0;
     }
   }
   return flags;
@@ -1057,14 +1182,16 @@ function isNaiveUniform(
   ny: number,
   column: number,
   row: number,
+  firstOffset: number = NAIVE_FIRST_OFFSET_CELLS,
+  span: number = NAIVE_SPAN_CELLS,
 ): boolean {
-  const firstRow = naiveClamp(row + NAIVE_FIRST_OFFSET_CELLS, ny);
-  const firstColumn = naiveClamp(column + NAIVE_FIRST_OFFSET_CELLS, nx);
+  const firstRow = naiveClamp(row + firstOffset, ny);
+  const firstColumn = naiveClamp(column + firstOffset, nx);
   const first = cells[firstRow * nx + firstColumn];
-  for (let tapRow = 0; tapRow < NAIVE_SPAN_CELLS; tapRow++) {
-    const cellRow = naiveClamp(row + NAIVE_FIRST_OFFSET_CELLS + tapRow, ny);
-    for (let tapColumn = 0; tapColumn < NAIVE_SPAN_CELLS; tapColumn++) {
-      if (cells[cellRow * nx + naiveClamp(column + NAIVE_FIRST_OFFSET_CELLS + tapColumn, nx)] !== first) {
+  for (let tapRow = 0; tapRow < span; tapRow++) {
+    const cellRow = naiveClamp(row + firstOffset + tapRow, ny);
+    for (let tapColumn = 0; tapColumn < span; tapColumn++) {
+      if (cells[cellRow * nx + naiveClamp(column + firstOffset + tapColumn, nx)] !== first) {
         return false;
       }
     }

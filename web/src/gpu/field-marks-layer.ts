@@ -18,6 +18,7 @@ import {
   type TiledGpu,
   type TiledGrid,
   type TiledLayerOptions,
+  timedGpuDraw,
 } from "./tiled-layer";
 
 /** What createFieldMarksLayer needs to place and report on a layer. */
@@ -333,11 +334,11 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
     gl.uniform1f(uniform("uDotOpacity"), dotOpacity);
 
     let tileIndex = 0;
-    this.drawTiles(gl, gpu, mainMatrix, (tile) => {
+    timedGpuDraw(gl, this.id, () => this.drawTiles(gl, gpu, mainMatrix, (tile) => {
       this.bindNextTile(gl, gpu, tileIndex++);
       gl.uniform2i(uniform("uIdsSize"), tile.window.width, tile.window.height);
       gl.uniform2f(uniform("uWindow"), tile.window.column, tile.window.row);
-    });
+    }));
   }
 
   // Without a step to fade into, the next samplers read the shown step so that they stay complete.

@@ -22,6 +22,7 @@ import {
   FEATURE,
   MASK_ID,
   resetHarness,
+  SCENE,
 } from "./testing/scene-mode-harness.ts";
 import type { TestMap } from "./testing/scene-mode-harness.ts";
 import type { Scene } from "./types.ts";
@@ -169,8 +170,164 @@ test("basemap geometry stays below scene data with the mask above both", async (
   ]);
 });
 
-test("exiting a scene removes the fade and shows details again", async () => {
+test("scene entry hides fully-outside basemap features and exit restores filters", async () => {
   const harness = createHarness();
+  (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
+    layers: [
+      { id: "background", type: "background" },
+      { id: "road_minor", type: "line" },
+      { id: "building_3d", type: "fill-extrusion" },
+      { id: "label_city", type: "symbol" },
+    ],
+  });
+  for (const id of ["background", "road_minor", "building_3d", "label_city"]) {
+    harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
+  }
+  const filters = new Map<string, unknown>([
+    ["road_minor", ["==", ["get", "class"], "minor"]],
+  ]);
+  const writes: [string, unknown][] = [];
+  const stub = harness.map as unknown as Record<string, unknown>;
+  stub.getFilter = (id: string) => filters.get(id);
+  stub.setFilter = (id: string, filter: unknown) => {
+    writes.push([id, filter]);
+    if (filter === null || filter === undefined) filters.delete(id);
+    else filters.set(id, filter);
+  };
+  harness.enter();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+  harness.map.finishMask();
+  await settle();
+
+  const clipped = new Map(writes);
+  for (const id of ["background", "road_minor", "building_3d", "label_city"]) {
+    assert.ok(JSON.stringify(clipped.get(id)).includes("within"), id);
+  }
+  assert.ok(JSON.stringify(clipped.get("road_minor")).includes("minor"));
+  assert.ok(!clipped.has("relief") && !clipped.has(MASK_ID) && !clipped.has(FADE_ID));
+
+  writes.length = 0;
+  harness.mode.exit();
+  await settle();
+
+  const restored = new Map(writes);
+  assert.deepEqual(restored.get("road_minor"), ["==", ["get", "class"], "minor"]);
+  assert.equal(restored.get("background"), null);
+  assert.equal(restored.get("label_city"), null);
+});
+
+test("the basemap clip keeps an area crossing 180 in its 0 to 360 frame", async () => {
+  const harness = createHarness();
+  (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
+    layers: [
+      { id: "background", type: "background" },
+      { id: "label_city", type: "symbol" },
+    ],
+  });
+  for (const id of ["background", "label_city"]) {
+    harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
+  }
+  const writes: [string, unknown][] = [];
+  const stub = harness.map as unknown as Record<string, unknown>;
+  stub.getFilter = () => undefined;
+  stub.setFilter = (id: string, filter: unknown) => {
+    writes.push([id, filter]);
+  };
+  const crossing = {
+    ...(SCENE as unknown as Record<string, unknown>),
+    area: { bbox: [179, -5, 181, 5], geometry_href: "/area.geojson" },
+  } as unknown as Scene;
+  harness.mode.enter(crossing, { time: null, entry: "replace" });
+  harness.geometry.resolve({
+    ...FEATURE,
+    geometry: {
+      type: "Polygon",
+      coordinates: [[[179, -5], [181, -5], [181, 5], [179, 5], [179, -5]]],
+    },
+  });
+  await settle();
+  harness.map.finishMask();
+  await settle();
+
+  const clipped = new Map(writes);
+  for (const id of ["background", "label_city"]) {
+    const dumped = JSON.stringify(clipped.get(id));
+    assert.ok(dumped.includes("within"), id);
+    assert.ok(dumped.includes("179"), id);
+    assert.ok(dumped.includes("181"), id);
+  }
+  assert.ok(!clipped.has("relief") && !clipped.has(MASK_ID) && !clipped.has(FADE_ID));
+});
+
+test("the basemap clip covers every part of a multi-part area", async () => {
+  const harness = createHarness();
+  (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
+    layers: [
+      { id: "background", type: "background" },
+      { id: "label_city", type: "symbol" },
+    ],
+  });
+  for (const id of ["background", "label_city"]) {
+    harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
+  }
+  const writes: [string, unknown][] = [];
+  const stub = harness.map as unknown as Record<string, unknown>;
+  stub.getFilter = () => undefined;
+  stub.setFilter = (id: string, filter: unknown) => {
+    writes.push([id, filter]);
+  };
+  const scattered = {
+    ...(SCENE as unknown as Record<string, unknown>),
+    area: { bbox: [0, 0, 11, 11], geometry_href: "/area.geojson" },
+  } as unknown as Scene;
+  harness.mode.enter(scattered, { time: null, entry: "replace" });
+  // A hole exercises the multi-ring path through the stubbed polygon parts.
+  harness.geometry.resolve({
+    ...FEATURE,
+    geometry: {
+      type: "Polygon",
+      coordinates: [
+        [[0, 0], [11, 0], [11, 11], [0, 11], [0, 0]],
+        [[4, 4], [6, 4], [6, 6], [4, 6], [4, 4]],
+      ],
+    },
+  });
+  await settle();
+  harness.map.finishMask();
+  await settle();
+
+  const clipped = new Map(writes);
+  for (const id of ["background", "label_city"]) {
+    const dumped = JSON.stringify(clipped.get(id));
+    assert.ok(dumped.includes("within"), id);
+    assert.ok(dumped.includes("11"), id);
+  }
+  const mask = (clipped.get("background") as unknown[])[1] as unknown[];
+  const vertices = JSON.stringify(mask).split("[").length;
+  assert.ok(vertices < 100, `the bbox clip stays cheap, got ${vertices} brackets`);
+  assert.ok(!clipped.has("relief") && !clipped.has(MASK_ID) && !clipped.has(FADE_ID));
+});
+
+test("the world mask keeps both halves of a true multi-part area", async () => {
+  const { polygonParts } = await import("./label-filter.ts");
+  const { buildMaskRings } = await import("./mask-ring.ts");
+  const firstRing = [[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]];
+  const secondRing = [[10, 10], [11, 10], [11, 11], [10, 11], [10, 10]];
+  const coordinates = [[firstRing], [secondRing]];
+  const parts = polygonParts("MultiPolygon", coordinates as never);
+  const rings = buildMaskRings(
+    parts.map((part) => part[0]),
+    parts.flatMap((part) => part.slice(1)),
+  );
+  const dumped = JSON.stringify(rings);
+
+  assert.ok(dumped.includes("[0,0]") || dumped.includes("0,0"));
+  assert.ok(dumped.includes("11"));
+  assert.equal(parts.length, 2);
+});
+
+test("exiting a scene removes the fade and shows details again", async () => {  const harness = createHarness();
   const layouts: [string, string | undefined][] = [];
   (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
     layers: [

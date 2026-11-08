@@ -60,6 +60,7 @@ const float MIN_EDGE_WIDTH_PX = 1.0;
 const vec3 INK = vec3(59.0, 48.0, 38.0) / 255.0;
 const float OUTLINE_WIDTH_PX = 0.75;
 const int KERNEL_SIZE = 4;
+// 24 stays because 88 GLiM level-2 classes can put more than 16 ids in one window.
 const int MAX_CLASS_COUNT = 24;
 const int WIDE_FIRST_OFFSET = -3;
 const int WIDE_SPAN = 8;
@@ -440,6 +441,7 @@ const WIDE_LARGE_FIRST_OFFSET = -6;
 const WIDE_LARGE_FIRST = -7;
 const WIDE_LARGE_SPAN = 16;
 const WIDE_SUPPORT_RADII = 2;
+// 24 stays because 88 GLiM level-2 classes can put more than 16 ids in one window.
 const MAX_CLASS_COUNT = 24;
 /** The class id that hatches an in-area cell with no class, leaving 0 for outside. */
 export const CLASS_HATCH_ID = 255;
@@ -806,14 +808,17 @@ function smoothstep(fraction: number): number {
 }
 
 /**
- * Mark base cells whose maximum 16 x 16 support holds one id so uniform interiors skip
- * the gather. A summed-area table of neighbour differences answers each window in O(1)
- * so the whole grid costs one pass, and clipped edges match the shader exactly.
+ * Mark base cells whose kernel support holds one id so uniform interiors skip
+ * the gather. A summed-area table of neighbour differences answers each window
+ * in O(1) so the whole grid costs one pass, and clipped edges match the shader
+ * exactly. Small radii use the 8 x 8 window the kernel reaches, so more interiors
+ * skip with pixel-identical output.
  */
 export function homogeneousFlags(
   cells: Uint8Array | readonly number[],
   nx: number,
   ny: number,
+  smoothRadiusCells?: number,
 ): Uint8Array {
   const flags = new Uint8Array(nx * ny);
   if (nx <= 0 || ny <= 0) {
@@ -821,12 +826,13 @@ export function homogeneousFlags(
   }
   const horizontal = summedHorizontal(cells, nx, ny);
   const vertical = summedVertical(cells, nx, ny);
-  const lastOffset = WIDE_LARGE_FIRST + WIDE_LARGE_SPAN - 1;
+  const { first, span } = homogeneousWindow(smoothRadiusCells);
+  const lastOffset = first + span - 1;
   for (let row = 0; row < ny; row++) {
-    const top = Math.max(0, row + WIDE_LARGE_FIRST);
+    const top = Math.max(0, row + first);
     const bottom = Math.min(ny - 1, row + lastOffset);
     for (let column = 0; column < nx; column++) {
-      const left = Math.max(0, column + WIDE_LARGE_FIRST);
+      const left = Math.max(0, column + first);
       const right = Math.min(nx - 1, column + lastOffset);
       flags[row * nx + column] = isUniformWindow(
         horizontal,
@@ -840,6 +846,17 @@ export function homogeneousFlags(
     }
   }
   return flags;
+}
+
+/**
+ * Match the flag window to the kernel the shader samples. Radii above 2 sample
+ * every second cell over the large window, following the shader's stride branch.
+ */
+export function homogeneousWindow(smoothRadiusCells?: number): { first: number; span: number } {
+  if (smoothRadiusCells !== undefined && smoothRadiusCells > 0 && smoothRadiusCells <= 2) {
+    return { first: WIDE_FIRST_OFFSET, span: WIDE_SPAN };
+  }
+  return { first: WIDE_LARGE_FIRST, span: WIDE_LARGE_SPAN };
 }
 
 function isUniformWindow(

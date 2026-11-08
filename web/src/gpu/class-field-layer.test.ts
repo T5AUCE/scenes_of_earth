@@ -210,10 +210,9 @@ test("a zero smoothing radius uploads ids without flags", () => {
   assert.equal(harness.draws.length, 3);
 });
 
-test("flags are built once per data set and reused across edge and radius changes", () => {
+test("flags are built once per data set and reused within one window", () => {
   const harness = createHarness();
-  const ids = new Uint8Array(12).fill(10);
-  harness.field.setIds(ids);
+  harness.field.setIds(new Uint8Array(12).fill(10));
   harness.field.setEdges(smoothingEdges());
   harness.field.layer.onAdd!(harness.map, harness.gl);
   harness.field.layer.render(harness.gl, harness.input);
@@ -222,15 +221,29 @@ test("flags are built once per data set and reused across edge and radius change
   harness.field.layer.render(harness.gl, harness.input);
   assert.equal(harness.uploads.length, 4);
 
-  // Editing the shared ids in place makes a rebuilt flag set differ from the cached one.
-  ids.set([20, 20, 20, 20], 4);
+  // Rounding and a radius within the small window reuse the cached pair.
   harness.field.setEdges({ ...smoothingEdges(), rounding: 0.5 });
-  harness.field.setEdges({ ...smoothingEdges(), smoothRadiusCells: 3 });
-  harness.field.setEdges({ ...smoothingEdges(), smoothRadiusCells: 0 });
+  harness.field.setEdges({ ...smoothingEdges(), smoothRadiusCells: 2 });
+  harness.field.layer.render(harness.gl, harness.input);
+  assert.equal(harness.uploads.length, 4);
+  assert.ok((harness.uploads[3][8] as Uint8Array).every((flag) => flag === 1));
+});
+
+test("a radius crossing the stride threshold rebuilds the flags", () => {
+  const harness = createHarness();
+  const ids = new Uint8Array(12).fill(10);
+  harness.field.setIds(ids);
   harness.field.setEdges(smoothingEdges());
+  harness.field.layer.onAdd!(harness.map, harness.gl);
+  harness.field.layer.render(harness.gl, harness.input);
+  assert.equal(harness.uploads.length, 4);
+
+  // Editing the shared ids in place makes the rebuilt flags differ from the cached ones.
+  ids.set([20, 20, 20, 20], 4);
+  harness.field.setEdges({ ...smoothingEdges(), smoothRadiusCells: 3 });
   harness.field.layer.render(harness.gl, harness.input);
   assert.equal(harness.uploads.length, 6);
-  assert.ok((harness.uploads[5][8] as Uint8Array).every((flag) => flag === 1));
+  assert.ok((harness.uploads[5][8] as Uint8Array).every((flag) => flag === 0));
 
   harness.field.setIds(ids);
   harness.field.layer.render(harness.gl, harness.input);

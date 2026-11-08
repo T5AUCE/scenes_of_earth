@@ -13,9 +13,11 @@ from rasterio.transform import Affine
 from shapely.geometry import MultiPolygon, Polygon, box, mapping, shape
 from shapely.geometry.base import BaseGeometry
 
-from soe import db
+from soe import build as build_module, db
 from soe.areas import Area, AreaError
-from soe.build import SourceChanged, _fill_outside, build_scene, encode_values
+from soe.build import SourceChanged, build_scene
+from soe.layer_writer import _fill_outside
+from soe.zarr_encoding import COMPRESSION, DeterministicGzipCodec, encode_values
 from soe.bundle import JsonObject, validate
 from soe.plan import plan
 from soe.scene_request import prepare_scene, resolve_area
@@ -507,6 +509,9 @@ def test_rain_only_area_crossing_60_north_publishes_bounds_around_its_whole_outl
 def test_negative_values_survive_int16_encoding():
     values = np.array([-5.5, 0, 20, np.nan])
 
+    assert build_module.encode_values is encode_values
+    assert build_module.COMPRESSION is COMPRESSION
+    assert build_module.DeterministicGzipCodec is DeterministicGzipCodec
     encoded = encode_values(values, "int16", 0.01, 0, -32768)
 
     assert encoded.tolist() == [-550, 0, 2000, -32768]
@@ -964,7 +969,7 @@ def test_empty_terrain_fails_before_any_bundle_writer_and_reads_once(tmp_path, m
         opens.append("open")
         return original_open(*args, **kwargs)
 
-    monkeypatch.setattr("soe.build._write_array", record_write)
+    monkeypatch.setattr("soe.layer_writer._write_array", record_write)
     monkeypatch.setattr(zarr, "open_group", record_open)
 
     with pytest.raises(AreaError):
@@ -1595,9 +1600,9 @@ def test_sub_packing_differences_survive_serialization(tmp_path):
 def test_batch_boundaries_do_not_change_area_series(tmp_path, monkeypatch):
     rain = rain_with_gaps(lambda step: [(3, 4)])
     area = Area(NAIROBI, BOUNDARY)
-    monkeypatch.setattr("soe.build.BATCH_SIZE", 1)
+    monkeypatch.setattr("soe.layer_writer.BATCH_SIZE", 1)
     build_scene(HASH_A, area, "2015-01", "2015-03", [rain], "Test", tmp_path / "split")
-    monkeypatch.setattr("soe.build.BATCH_SIZE", 12)
+    monkeypatch.setattr("soe.layer_writer.BATCH_SIZE", 12)
     build_scene(HASH_A, area, "2015-01", "2015-03", [rain], "Test", tmp_path / "whole")
 
     split = json.loads((tmp_path / "split" / HASH_A / "scene.json").read_text(encoding="utf-8"))

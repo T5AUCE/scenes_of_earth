@@ -75,6 +75,13 @@ const WORLD_COPIES = [-1, 0, 1];
 const CORNERS = Float32Array.of(0, 0, 1, 0, 0, 1, 1, 1);
 const TILE_UNIFORM_NAMES = ["uMatrix", "uTile", "uRows", "uRowCount"];
 
+const NS_PER_MS = 1e6;
+const GPU_QUERY_ATTEMPTS = 30;
+// Without a frame scheduler the poll waits one frame interval before checking again.
+const NEXT_FRAME_FALLBACK_MS = 16;
+// The WebGL timer extension keeps its registry name across browsers.
+const TIMER_QUERY_EXTENSION = "EXT_disjoint_timer_query_webgl2";
+
 /**
  * Draw a cell grid as textured quads through the MapLibre custom-layer lifecycle.
  * Subclasses supply shaders and data while this class manages shared GPU resources.
@@ -118,6 +125,8 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
   private readonly onContextRestored = () => {
     // The next visible draw rebuilds, so hidden layers stay uncompiled.
     this.isContextLost = false;
+    clearGpuMs(this.options.id);
+    clearGpuUnavailable();
     this.map?.triggerRepaint();
   };
 
@@ -220,8 +229,9 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
         throw new Error(`${this.program.name} need Mercator drawing`);
       }
       this.uploadStaleData(gl, this.gpu);
+      const gpu = this.gpu;
       // MapLibre's model-view matrix uses world pixels rather than normalised Mercator coordinates.
-      this.draw(gl, this.gpu, input.defaultProjectionData.mainMatrix);
+      this.draw(gl, gpu, input.defaultProjectionData.mainMatrix);
     } catch (error) {
       this.fail(error as Error);
     } finally {
@@ -441,4 +451,131 @@ export function layerPosition(
     minzoom: layer?.minzoom ?? 0,
     maxzoom: layer?.maxzoom ?? map.getMaxZoom(),
   };
+}
+
+/** The timer query of one custom-layer draw, kept small because it runs every frame. */
+interface GpuTimerExtension {
+  TIME_ELAPSED_EXT: number;
+  GPU_DISJOINT_EXT: number;
+}
+
+/** Whether this build and address may spend GPU time queries on the dev readout. */
+export function isGpuTimingEnabled(): boolean {
+  try {
+    const dev = (import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV;
+    if (dev) return true;
+    return new URLSearchParams(location.search).has("debug");
+  } catch {
+    return false;
+  }
+}
+
+/** Run a layer draw inside a disjoint timer query when the dev readout allows it. */
+export function timedGpuDraw(
+  gl: WebGL2RenderingContext,
+  layerId: string,
+  run: () => void,
+): void {
+  if (!isGpuTimingEnabled()) {
+    run();
+    return;
+  }
+  timeWithQuery(gl, layerId, run);
+}
+
+function timeWithQuery(gl: WebGL2RenderingContext, layerId: string, run: () => void): void {
+  const extension = gl.getExtension(TIMER_QUERY_EXTENSION) as unknown as GpuTimerExtension | null;
+  if (!extension) {
+    markGpuUnavailable();
+    run();
+    return;
+  }
+  const query = gl.createQuery();
+  if (!query) {
+    run();
+    return;
+  }
+  gl.beginQuery(extension.TIME_ELAPSED_EXT, query);
+  try {
+    run();
+  } finally {
+    gl.endQuery(extension.TIME_ELAPSED_EXT);
+  }
+  pollGpuQuery(gl, extension, query, layerId);
+}
+
+function pollGpuQuery(
+  gl: WebGL2RenderingContext,
+  extension: GpuTimerExtension,
+  query: WebGLQuery,
+  layerId: string,
+): void {
+  let attempts = 0;
+  const check = (): void => {
+    attempts += 1;
+    const available = gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE) as boolean;
+    const disjoint = gl.getParameter(extension.GPU_DISJOINT_EXT) as boolean;
+    if (available && !disjoint) {
+      const elapsedNs = gl.getQueryParameter(query, gl.QUERY_RESULT) as number;
+      recordGpuMs(layerId, elapsedNs / NS_PER_MS);
+      gl.deleteQuery(query);
+      return;
+    }
+    if (disjoint || attempts >= GPU_QUERY_ATTEMPTS) {
+      gl.deleteQuery(query);
+      return;
+    }
+    nextFrame(check);
+  };
+  nextFrame(check);
+}
+
+/** Wait for the next frame before polling again, so one layer costs one check per frame. */
+function nextFrame(callback: () => void): void {
+  try {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => callback());
+      return;
+    }
+  } catch {
+    // A missing frame scheduler falls through to the timer below.
+  }
+  setTimeout(callback, NEXT_FRAME_FALLBACK_MS);
+}
+
+function recordGpuMs(layerId: string, elapsedMs: number): void {
+  try {
+    const scope = globalThis as unknown as { __gpuMs?: Record<string, number> };
+    scope.__gpuMs ??= {};
+    scope.__gpuMs[layerId] = elapsedMs;
+  } catch {
+    // A missing window must not break the draw it timed.
+  }
+}
+
+function markGpuUnavailable(): void {
+  try {
+    (globalThis as unknown as { __gpuUnavailable?: boolean }).__gpuUnavailable = true;
+  } catch {
+    // A missing window must not break the draw it timed.
+  }
+}
+
+/** Drop one layer's timing after a context restore, so the badge shows no stale value. */
+export function clearGpuMs(layerId: string): void {
+  try {
+    const scope = globalThis as unknown as { __gpuMs?: Record<string, number> };
+    if (scope.__gpuMs) delete scope.__gpuMs[layerId];
+  } catch {
+    // A missing window must not break the restore it cleans up after.
+  }
+}
+
+/** Clear the missing-extension flag after a context restore, so a new GPU can time again. */
+export function clearGpuUnavailable(): void {
+  try {
+    delete (globalThis as unknown as { __gpuUnavailable?: boolean }).__gpuUnavailable;
+  } catch {
+    // A missing window must not break the restore it cleans up after.
+  }
 }

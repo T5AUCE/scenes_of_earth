@@ -32,9 +32,16 @@ import {
   CONTOUR_LINE_PATTERN,
   classifyFailure,
   contourLegend,
+  deltaZoomBands,
   isSettled,
+  medianZoomBands,
   slug,
+  summarizeZoomSweep,
   viewRecord,
+  ZOOM_END_OFFSET,
+  ZOOM_START_OFFSET,
+  ZOOM_STEP,
+  zoomBandRecord,
   zoomLabel,
 } from "./measure.mjs";
 
@@ -224,10 +231,296 @@ async function exposeLayerReadiness(context) {
 
 /** Measures every zoom of the spot in a new page of the context; returns one record per zoom. */
 export async function trialSpot(context, appUrl, spot, sceneId, options) {
+  if (spot.zoom) return trialZoomSpot(context, appUrl, spot, sceneId, options);
   if (spot.layout) return trialLayout(context, appUrl, spot, sceneId, options);
   if (spot.landcover) return trialLandcover(context, appUrl, spot, sceneId, options);
 
   return trialPage(context, appUrl, spot, sceneId, options);
+}
+
+// One sweep per variant on the same bundle, so only the named difference varies.
+export const ZOOM_VARIANTS = [
+  "all",
+  "labels-on",
+  "no-terrain",
+  "colour-swap",
+  "mask-hidden",
+  "pixel-ratio-2",
+];
+const ZOOM_BASELINE = "all";
+const ZOOM_REPEATS_FALLBACK = 3;
+const MAP_DETAILS_SWITCH = "Show Map details";
+const MASK_LAYER_ID = "soe-scene-mask";
+const FADE_LAYER_ID = "soe-scene-fade";
+
+/** Sweeps one spot through every zoom variant; returns one record per band and variant. */
+export async function trialZoomSpot(context, appUrl, spot, sceneId, options) {
+  const page = await context.newPage();
+  const requests = trackRequests(page);
+  try {
+    const medians = {};
+    const counts = {};
+    for (const variant of ZOOM_VARIANTS) {
+      try {
+        await openZoomScene(page, appUrl, sceneId, spot, variant);
+        const { sample, timedOut } = await settledSample(page);
+        if (!sample || timedOut) {
+          medians[variant] = null;
+          counts[variant] = zoomFailedRecord(spot, sceneId, variant, "never settled");
+          continue;
+        }
+        await setupZoomVariant(page, variant);
+        const repeats = [];
+        const requestCounts = [];
+        for (let repeat = 0; repeat < zoomRepeats(); repeat += 1) {
+          requests.take();
+          const sweep = await page.evaluate(
+            zoomSweep,
+            [sample.zoom + ZOOM_START_OFFSET, sample.zoom + ZOOM_END_OFFSET, ZOOM_STEP],
+          );
+          requestCounts.push(requests.take());
+          repeats.push(summarizeZoomSweep({ ...sweep, fittedZoom: sample.zoom }));
+        }
+        medians[variant] = medianZoomBands(repeats);
+        counts[variant] = medianCounts(requestCounts, repeats.length);
+      } catch (error) {
+        medians[variant] = null;
+        counts[variant] = zoomFailedRecord(
+          spot,
+          sceneId,
+          variant,
+          error.message.split("\n")[0],
+        );
+      }
+    }
+    return zoomVariantRecords(spot, sceneId, medians, counts);
+  } finally {
+    requests.stop();
+    await page.close();
+  }
+}
+
+/** Counts the requests of each sweep so tile churn shows next to frame times. */
+function trackRequests(page) {
+  const urls = [];
+  const handler = (request) => {
+    try {
+      urls.push(request.url());
+    } catch {
+      // A stubbed request without a URL must not break the sweep.
+    }
+  };
+  try {
+    page.on("request", handler);
+  } catch {
+    // Fake pages in tests may not observe requests.
+  }
+  return {
+    take: () => urls.splice(0).length,
+    stop: () => {
+      try {
+        page.off("request", handler);
+      } catch {
+        // Fake pages in tests may not observe requests.
+      }
+    },
+  };
+}
+
+function medianCounts(requestCounts, repeats) {
+  if (!requestCounts.length) return { requests: null, repeats };
+  const sorted = [...requestCounts].sort((first, second) => first - second);
+  const middle = Math.floor(sorted.length / 2);
+  const requests = sorted.length % 2 === 1
+    ? sorted[middle]
+    : Number(((sorted[middle - 1] + sorted[middle]) / 2).toFixed(2));
+  return { requests, repeats };
+}
+
+/** Opens a scene with the variant's link differences, keeping the same bundle. */
+async function openZoomScene(page, appUrl, sceneId, spot, variant) {
+  await page.goto(zoomSceneUrl(appUrl, sceneId, spot, variant));
+  await page.waitForFunction(
+    (layerId) => window.__map?.getLayer(layerId),
+    OUTLINE_LAYER_ID,
+    { timeout: SCENE_READY_TIMEOUT_MS },
+  );
+}
+
+/** Builds the scene link of a zoom variant, differing from the baseline only as named. */
+export function zoomSceneUrl(appUrl, sceneId, spot, variant) {
+  let query = allocationQuery(spot);
+  if (variant === "no-terrain") query = withOff(query, "terrain");
+  if (variant === "colour-swap") query = withSwappedColour(query, spot);
+  if (variant === "pixel-ratio-2") query += "&pixelRatio=2";
+
+  return `${appUrl}/?scene=${sceneId}${query}`;
+}
+
+function withOff(query, unit) {
+  const found = /&off=([^&]*)/.exec(query);
+  if (!found) return `${query}&off=${unit}`;
+  const units = new Set([...found[1].split(",").filter(Boolean), unit]);
+
+  return query.replace(/&off=[^&]*/, `&off=${[...units].join(",")}`);
+}
+
+function withSwappedColour(query, spot) {
+  // A blend already switches its halves off, which would also switch the swap off.
+  const cleaned = query.replace(/&off=[^&]*/, "");
+  const swapped = swappedZoomColour(spot);
+  if (/&as=[^&]*:colour/.test(cleaned)) {
+    return cleaned.replace(/&as=[^&]*:colour/, `&as=${swapped}:colour`);
+  }
+
+  return `${cleaned}&as=${swapped}:colour`;
+}
+
+/** Swaps the colour owner between temperature and geology, which every zoom scene holds. */
+export function swappedZoomColour(spot) {
+  if (effectiveColour(spot) === "era5land_temperature") return "geology";
+
+  return "era5land_temperature";
+}
+
+/** Applies the in-page half of a zoom variant after the scene settles. */
+async function setupZoomVariant(page, variant) {
+  if (variant === "labels-on") await ensureMapDetails(page, true);
+  if (variant === "mask-hidden") await hideMask(page);
+}
+
+async function ensureMapDetails(page, shown) {
+  const toggle = page.getByRole("switch", { name: MAP_DETAILS_SWITCH, exact: true });
+  if (await toggle.count() !== 1) throw new Error("Map details switch not found");
+  if (await toggle.isChecked() === shown) return;
+  if (shown) await toggle.check();
+  else await toggle.uncheck();
+  await page.evaluate(nextFrame);
+}
+
+async function hideMask(page) {
+  await page.evaluate(([maskId, fadeId]) => {
+    const map = window.__map;
+    for (const id of [maskId, fadeId]) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "none");
+    }
+    if (typeof map.getFilter !== "function" || typeof map.setFilter !== "function") return;
+    let layers = [];
+    try {
+      layers = (map.getStyle?.()?.layers ?? []).map((layer) => layer.id);
+    } catch {
+      return;
+    }
+    for (const id of layers) {
+      let filter;
+      try {
+        filter = map.getFilter(id);
+      } catch {
+        continue;
+      }
+      const lifted = liftClipFilter(filter);
+      if (lifted !== filter) {
+        try {
+          map.setFilter(id, lifted ?? null);
+        } catch {
+          // A layer without a filter setter must not block the rest.
+        }
+      }
+    }
+    function liftClipFilter(filter) {
+      if (!Array.isArray(filter)) return filter;
+      if (isClipKeep(filter)) return null;
+      if (filter[0] !== "all") return filter;
+      const kept = filter.slice(1).filter((part) => !isClipKeep(part));
+      if (kept.length === filter.length - 1) return filter;
+      if (kept.length === 0) return null;
+      if (kept.length === 1) return kept[0];
+      return ["all", ...kept];
+    }
+    function isClipKeep(part) {
+      return Array.isArray(part)
+        && part.length === 2
+        && part[0] === "!"
+        && Array.isArray(part[1])
+        && part[1][0] === "within";
+    }
+  }, [MASK_LAYER_ID, FADE_LAYER_ID]);
+}
+
+/**
+ * Removes the scene clip from a basemap filter, returning the filter to use instead.
+ * Returns the same value when no clip is present, so callers can skip the write.
+ */
+export function withoutClipFilter(filter) {
+  if (!Array.isArray(filter)) return filter;
+  if (isClipKeepFilter(filter)) return null;
+  if (filter[0] !== "all") return filter;
+  const kept = filter.slice(1).filter((part) => !isClipKeepFilter(part));
+  if (kept.length === filter.length - 1) return filter;
+  if (kept.length === 0) return null;
+  if (kept.length === 1) return kept[0];
+
+  return ["all", ...kept];
+}
+
+function isClipKeepFilter(part) {
+  return Array.isArray(part)
+    && part.length === 2
+    && part[0] === "!"
+    && Array.isArray(part[1])
+    && part[1][0] === "within";
+}
+
+/** Merges variant medians into band records with deltas against the baseline. */
+function zoomVariantRecords(spot, sceneId, medians, counts) {
+  const records = [];
+  const baseline = medians[ZOOM_BASELINE] ?? {};
+  for (const variant of ZOOM_VARIANTS) {
+    const summary = medians[variant];
+    const count = counts[variant];
+    if (!summary) {
+      records.push(count);
+      continue;
+    }
+    const deltas = variant === ZOOM_BASELINE ? {} : deltaZoomBands(baseline, summary);
+    for (const [band, stats] of Object.entries(summary)) {
+      records.push(zoomBandRecord({
+        spot: spot.name,
+        scene: sceneId,
+        variant,
+        band,
+        stats,
+        deltas: deltas[band],
+        requests: count.requests,
+        repeats: count.repeats,
+      }));
+    }
+  }
+  return records;
+}
+
+function zoomFailedRecord(spot, sceneId, variant, reason) {
+  return {
+    mode: "zoom",
+    spot: spot.name,
+    scene: sceneId,
+    variant,
+    band: "all",
+    repeats: 0,
+    requests_during_sweep: null,
+    frames: 0,
+    frame_ms_p50: null,
+    frame_ms_p95: null,
+    timed_out: true,
+    error: reason,
+  };
+}
+
+/** Repeats default to three and stay configurable for a quicker smoke run. */
+function zoomRepeats() {
+  const repeats = Number(process.env.SOE_ZOOM_REPEATS ?? ZOOM_REPEATS_FALLBACK);
+
+  return repeats >= 1 ? Math.floor(repeats) : ZOOM_REPEATS_FALLBACK;
 }
 
 async function trialLandcover(context, appUrl, spot, sceneId, options) {
@@ -1670,6 +1963,74 @@ function failedRecord(spot, sceneId, error, watcher, mapErrors) {
 }
 
 // Playwright serializes these callbacks, so their dependencies must stay inside each function.
+
+/**
+ * Zooms one step per frame from the fitted view upward, recording each frame's
+ * rAF delta, the render it triggered and whether tiles had loaded. Long tasks
+ * keep the zoom of the frame they started in, so the trial bins them per band.
+ */
+function zoomSweep([startZoom, endZoom, stepZoom]) {
+  const map = window.__map;
+  const center = map.getCenter();
+  const frames = [];
+  const tasks = [];
+  const marks = [];
+  let observer = null;
+  try {
+    observer = new PerformanceObserver((entries) => {
+      for (const entry of entries.getEntries()) {
+        tasks.push({ startTime: entry.startTime, duration: entry.duration });
+      }
+    });
+    observer.observe({ entryTypes: ["longtask"] });
+  } catch {
+    observer = null;
+  }
+  map.jumpTo({ center, zoom: startZoom });
+  return new Promise((resolve) => {
+    let previous;
+    let zoom = startZoom;
+    const frame = (now) => {
+      const begun = performance.now();
+      const delta = previous === undefined ? 0 : now - previous;
+      previous = now;
+      marks.push({ time: begun, zoom });
+      map.once("render", () => {
+        frames.push({
+          zoom,
+          deltaMs: delta,
+          renderMs: performance.now() - begun,
+          tilesLoaded: map.areTilesLoaded(),
+        });
+        zoom += stepZoom;
+        if (zoom > endZoom + 1e-9) {
+          try {
+            observer?.disconnect();
+          } catch {
+            // A missing observer leaves the task list as it is.
+          }
+          resolve({ frames, longtasks: tasksWithZoom(tasks, marks) });
+          return;
+        }
+        map.jumpTo({ center, zoom });
+        requestAnimationFrame(frame);
+      });
+      map.triggerRepaint();
+    };
+    requestAnimationFrame(frame);
+  });
+
+  function tasksWithZoom(pending, seen) {
+    return pending.map((task) => {
+      let at = seen.length ? seen[0].zoom : startZoom;
+      for (const mark of seen) {
+        if (mark.time > task.startTime) break;
+        at = mark.zoom;
+      }
+      return { zoom: at, durationMs: task.duration };
+    });
+  }
+}
 
 function nextFrame() {
   return new Promise((resolve) => {

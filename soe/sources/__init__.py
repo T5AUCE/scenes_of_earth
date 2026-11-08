@@ -43,7 +43,8 @@ from .era5land_temperature import (
 )
 from .grid import CELL_DEG, Bbox, CellSpan, CellWindow, Grid, read_wrapped
 from .licences import SOURCES
-from .lithology import GeologyDataset, LithologyReader
+from .geology import GeologyDataset
+from .lithology import LithologyReader
 from .periods import (
     REQUEST_FORMATS,
     REQUEST_STEP,

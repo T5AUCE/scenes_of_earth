@@ -16,6 +16,7 @@ import rasterio.shutil
 import zarr
 from rasterio.transform import Affine, from_origin
 
+from soe import zarr_encoding
 from soe.ingest import cubes, era5
 from soe.ingest.cubes import MonthField, write_months
 from soe.ingest.era5 import INGEST_SPECS, grib_expvers, ingest, open_grib, read_months
@@ -385,6 +386,8 @@ def test_failed_batch_changes_neither_data_nor_marker(tmp_path):
 
 
 def test_published_marker_matches_the_stored_bytes(tmp_path):
+    assert cubes.encode_values is zarr_encoding.encode_values
+    assert cubes.COMPRESSION is zarr_encoding.COMPRESSION
     write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(20), "0001")])
     stored = zarr.open_group(tmp_path / CUBE_NAME, mode="r")[CUBE_ARRAY][month_index("2016-01")]
 

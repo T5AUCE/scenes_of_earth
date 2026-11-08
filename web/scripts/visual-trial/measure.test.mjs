@@ -12,16 +12,102 @@ import { installCache, isFresh, readEntry, writeEntry } from "./cache.mjs";
 import {
   classifyFailure,
   contourLegend,
+  deltaZoomBands,
   frameStats,
   isSettled,
+  medianZoomBands,
   nearestPx,
   pickArea,
   sameSample,
   slug,
+  summarizeZoomSweep,
   viewRecord,
+  zoomBand,
+  zoomBandRecord,
+  zoomStats,
 } from "./measure.mjs";
 import { getRemainingMs, getRetryDelayMs, postScene } from "./scenes.mjs";
 import { isOpen, stopServers } from "./servers.mjs";
+
+test("zoomBand names bands from the fitted zoom", () => {
+  assert.equal(zoomBand(5.5, 5.0), "approach");
+  assert.equal(zoomBand(5.5, 5.5), "+0-1");
+  assert.equal(zoomBand(5.5, 6.49), "+0-1");
+  assert.equal(zoomBand(5.5, 6.5), "+1-2");
+  assert.equal(zoomBand(5.5, 11.5), "+5-6");
+  assert.equal(zoomBand(5.5, 20), "+5-6");
+});
+
+test("zoomStats reports nearest-rank percentiles", () => {
+  assert.deepEqual(zoomStats([3, 1, 2]), { p50: 2, p95: 3 });
+  assert.deepEqual(zoomStats([]), { p50: null, p95: null });
+  assert.deepEqual(zoomStats([0, -1, NaN, Infinity]), { p50: null, p95: null });
+});
+
+test("summarizeZoomSweep bins frames and longtasks per band", () => {
+  const summary = summarizeZoomSweep({
+    fittedZoom: 5,
+    frames: [
+      { zoom: 5.0, deltaMs: 0, renderMs: 5, tilesLoaded: true },
+      { zoom: 5.0, deltaMs: 16.7, renderMs: 8, tilesLoaded: true },
+      { zoom: 5.9, deltaMs: 50, renderMs: 20, tilesLoaded: false },
+      { zoom: 6.1, deltaMs: 33.4, renderMs: 12, tilesLoaded: true },
+    ],
+    longtasks: [{ zoom: 5.9, durationMs: 60 }],
+  });
+
+  assert.equal(summary["+0-1"].frames, 2);
+  assert.equal(summary["+0-1"].frame_ms_p50, 16.7);
+  assert.equal(summary["+0-1"].over_33ms, 1);
+  assert.equal(summary["+0-1"].waiting_frames, 1);
+  assert.equal(summary["+0-1"].longtasks, 1);
+  assert.equal(summary["+0-1"].longtask_ms_total, 60);
+  assert.equal(summary["+1-2"].frames, 1);
+  assert.equal(summary["+1-2"].longtasks, 0);
+});
+
+test("medianZoomBands takes the median across repeats", () => {
+  const medians = medianZoomBands([
+    { "+0-1": { frames: 10, frame_ms_p50: 16, frame_ms_p95: 30 } },
+    { "+0-1": { frames: 12, frame_ms_p50: 18, frame_ms_p95: null } },
+    { "+0-1": { frames: 14, frame_ms_p50: 20, frame_ms_p95: 40 } },
+  ]);
+
+  assert.equal(medians["+0-1"].frames, 12);
+  assert.equal(medians["+0-1"].frame_ms_p50, 18);
+  assert.equal(medians["+0-1"].frame_ms_p95, 35);
+});
+
+test("deltaZoomBands subtracts the baseline band numbers", () => {
+  const deltas = deltaZoomBands(
+    { "+0-1": { frame_ms_p50: 16, frame_ms_p95: null } },
+    { "+0-1": { frame_ms_p50: 20, frame_ms_p95: 40 } },
+  );
+
+  assert.equal(deltas["+0-1"].frame_ms_p50_delta, 4);
+  assert.equal(deltas["+0-1"].frame_ms_p95_delta, null);
+});
+
+test("zoomBandRecord carries the band with its variant baseline", () => {
+  const record = zoomBandRecord({
+    spot: "Kenya",
+    scene: "scene",
+    variant: "no-terrain",
+    band: "+0-1",
+    stats: { frames: 70, frame_ms_p50: 16.7 },
+    deltas: { frame_ms_p50_delta: -3 },
+    requests: 12,
+    repeats: 3,
+  });
+
+  assert.equal(record.mode, "zoom");
+  assert.equal(record.variant, "no-terrain");
+  assert.equal(record.band, "+0-1");
+  assert.equal(record.frame_ms_p50, 16.7);
+  assert.equal(record.frame_ms_p50_delta, -3);
+  assert.equal(record.requests_during_sweep, 12);
+  assert.equal(record.repeats, 3);
+});
 
 test("nearestPx measures to the closest point of a segment, not only its ends", () => {
   const line = [

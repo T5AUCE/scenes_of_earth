@@ -1,6 +1,7 @@
 /** Switch one map between the world and a single scene, holding the camera and masking the rest. */
 import type {
   ExpressionSpecification,
+  FilterSpecification,
   GeoJSONSource,
   Map as MapLibreMap,
   MapEventType,
@@ -91,6 +92,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   let worldCamera: Camera | null = null;
   let sceneLayerIds: string[] = [];
   let savedBasemapOrder: string[] | null = null;
+  let savedBasemapFilters: Map<string, FilterSpecification | undefined> | null = null;
 
   return { enter, exit, sceneId: () => current?.id ?? null, showFullscreen };
 
@@ -284,6 +286,8 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
         stopDetails();
         removeLayerAndSource(map, FADE_ID);
         removeLayerAndSource(map, MASK_ID);
+        restoreBasemapFilters(map, savedBasemapFilters);
+        savedBasemapFilters = null;
         restoreBasemapOrder(map, savedBasemapOrder);
         savedBasemapOrder = null;
         restoreBasemapSymbols(map, symbolBaseline);
@@ -387,6 +391,8 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       sceneLayerIds,
     );
     if (!isReady || signal.aborted) return false;
+    // Outside the opaque mask nothing shows, so fully-outside features skip drawing entirely.
+    savedBasemapFilters = clipBasemapToArea(map, scene.area.bbox, new Set(sceneLayerIds));
 
     return true;
   }
@@ -806,6 +812,64 @@ function restoreBasemapOrder(map: MapLibreMap, order: readonly string[] | null):
   for (const id of order) {
     if (map.getLayer(id)) map.moveLayer(id);
   }
+}
+
+/**
+ * Hide fully-outside basemap features while a scene is open. Intersecting features stay
+ * because the bbox test keeps anything not fully outside the bbox, so inside pixels match.
+ * The bbox mask has a dozen vertices while a full outline can exceed ten thousand, so the
+ * per-feature test stays cheap on every tile load while zooming.
+ */
+function clipBasemapToArea(
+  map: MapLibreMap,
+  bbox: Bbox,
+  sceneIds: ReadonlySet<string>,
+): Map<string, FilterSpecification | undefined> {
+  const baseline = new Map<string, FilterSpecification | undefined>();
+  if (typeof map.getFilter !== "function" || typeof map.setFilter !== "function") return baseline;
+  const keep = ["!", ["within", bboxMaskGeometry(bbox)]] as unknown as FilterSpecification;
+  for (const id of basemapLayers(map, sceneIds).all) {
+    if (!map.getLayer(id)) continue;
+    try {
+      const previous: FilterSpecification | undefined = map.getFilter(id) ?? undefined;
+      baseline.set(id, previous);
+      map.setFilter(id, previous ? ["all", previous, keep] as FilterSpecification : keep);
+    } catch {
+      baseline.delete(id);
+    }
+  }
+  return baseline;
+}
+
+/** Return each basemap layer to its own filter, clearing overrides the scene added. */
+function restoreBasemapFilters(
+  map: MapLibreMap,
+  baseline: ReadonlyMap<string, FilterSpecification | undefined> | null,
+): void {
+  if (!baseline || typeof map.setFilter !== "function") return;
+  for (const [id, previous] of baseline) {
+    if (!map.getLayer(id)) continue;
+    try {
+      map.setFilter(id, previous ?? null);
+    } catch {
+      // A missing layer must not block the remaining restores.
+    }
+  }
+}
+
+/** The world outside the bbox, which safely contains every fully-outside feature. */
+function bboxMaskGeometry([west, south, east, north]: Bbox) {
+  const ring = [
+    [west, south],
+    [east, south],
+    [east, north],
+    [west, north],
+    [west, south],
+  ];
+  return {
+    type: "MultiPolygon",
+    coordinates: buildMaskRings([ring], []).map((ring) => [ring]),
+  };
 }
 
 /** Scene symbols stay above the fade so their own labels keep full strength. */

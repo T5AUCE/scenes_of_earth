@@ -11,6 +11,7 @@ const BYTES_PER_KB = 1024;
 const BYTES_PER_MB = 1024 * 1024;
 
 const DEV_STATS_CLASS = "has-dev-stats";
+const LONGTASK_ENTRY = "longtask";
 
 /** Opening start and open-to-drawn time for the current scene. */
 export const sceneLoadStats = { startMs: 0, loadMs: null as number | null };
@@ -70,6 +71,8 @@ export class DevStatsLoop {
   private renderedMs = 0;
   private readonly stamps: number[] = [];
   private isRunning = false;
+  private longtasks = 0;
+  private observer: PerformanceObserver | null = null;
 
   constructor(
     private readonly element: HTMLElement,
@@ -81,6 +84,7 @@ export class DevStatsLoop {
     this.isRunning = true;
     this.element.hidden = false;
     document.body.classList.add(DEV_STATS_CLASS);
+    this.startLongtasks();
     this.frameId = requestAnimationFrame(this.tick);
   }
 
@@ -88,6 +92,7 @@ export class DevStatsLoop {
     if (!this.isRunning) return;
     this.isRunning = false;
     cancelAnimationFrame(this.frameId);
+    this.stopLongtasks();
     this.element.hidden = true;
     document.body.classList.remove(DEV_STATS_CLASS);
   }
@@ -97,10 +102,33 @@ export class DevStatsLoop {
     recordFrame(this.stamps, nowMs);
     if (nowMs - this.renderedMs >= REFRESH_MS) {
       this.renderedMs = nowMs;
-      renderDevStats(this.element, formatDevStats(snapshot(this.stamps, nowMs, this.map)));
+      const text = formatDevStats(snapshot(this.stamps, nowMs, this.map, this.longtasks));
+      renderDevStats(this.element, text);
     }
     this.frameId = requestAnimationFrame(this.tick);
   };
+
+  private startLongtasks(): void {
+    try {
+      if (typeof PerformanceObserver === "undefined") return;
+      const observer = new PerformanceObserver((entries) => {
+        this.longtasks += entries.getEntries().length;
+      });
+      observer.observe({ entryTypes: [LONGTASK_ENTRY] });
+      this.observer = observer;
+    } catch {
+      this.observer = null;
+    }
+  }
+
+  private stopLongtasks(): void {
+    try {
+      this.observer?.disconnect();
+    } catch {
+      // A missing observer must not keep the badge visible.
+    }
+    this.observer = null;
+  }
 }
 
 /** Start the frame loop and refresh the badge about twice a second. */
@@ -122,7 +150,9 @@ function snapshot(
   stamps: readonly number[],
   nowMs: number,
   map: Pick<MapLibreMap, "getZoom">,
+  longtasks: number,
 ): DevStatsSnapshot {
+  const gpu = readGpuSnapshot();
   return {
     fps: framesPerSecond(stamps, nowMs),
     worstMs: worstFrameMs(stamps),
@@ -130,6 +160,9 @@ function snapshot(
     loadMs: sceneLoadStats.loadMs,
     requests: fetchStats.requests,
     bytes: fetchStats.bytes,
+    gpuMs: gpu.msByLayer,
+    gpuUnavailable: gpu.unavailable,
+    longtasks,
   };
 }
 
@@ -166,6 +199,12 @@ export interface DevStatsSnapshot {
   loadMs: number | null;
   requests: number;
   bytes: number;
+  /** Last per-custom-layer GPU milliseconds from disjoint timer queries. */
+  gpuMs: Record<string, number>;
+  /** Whether the timer extension is absent, so the badge shows n/a. */
+  gpuUnavailable: boolean;
+  /** Count of main-thread tasks over 50 ms since the loop started. */
+  longtasks: number;
 }
 
 /** Build the compact badge line from one snapshot. */
@@ -173,7 +212,30 @@ export function formatDevStats(snapshot: DevStatsSnapshot): string {
   const load = snapshot.loadMs === null ? "—" : `${Math.round(snapshot.loadMs)} ms`;
   return `${snapshot.fps} fps · worst ${snapshot.worstMs.toFixed(0)} ms`
     + ` · z ${snapshot.zoom.toFixed(1)} · load ${load}`
-    + ` · ${snapshot.requests} req ${formatBytes(snapshot.bytes)}`;
+    + ` · ${snapshot.requests} req ${formatBytes(snapshot.bytes)}`
+    + ` · ${formatGpuPart(snapshot.gpuMs, snapshot.gpuUnavailable)}`
+    + ` · ${snapshot.longtasks} long`;
+}
+
+/** Build the badge's GPU part from the last per-layer timings. */
+export function formatGpuPart(msByLayer: Record<string, number>, unavailable: boolean): string {
+  const names = Object.keys(msByLayer).sort();
+  if (names.length === 0 || unavailable) return "gpu n/a";
+  return `gpu ${names.map((name) => `${name} ${msByLayer[name].toFixed(1)} ms`).join(" ")}`;
+}
+
+/** Read the timer-query timings without creating extension work when disabled. */
+function readGpuSnapshot(): { msByLayer: Record<string, number>; unavailable: boolean } {
+  try {
+    const scope = globalThis as unknown as {
+      __gpuMs?: Record<string, number>;
+      __gpuUnavailable?: boolean;
+    };
+    const msByLayer = { ...(scope.__gpuMs ?? {}) };
+    return { msByLayer, unavailable: scope.__gpuUnavailable ?? false };
+  } catch {
+    return { msByLayer: {}, unavailable: false };
+  }
 }
 
 /** Format a byte count for the badge. */

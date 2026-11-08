@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 const PLACES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "places");
 const DEFAULT_PARALLEL_VIEWS = 3;
 const LAYOUT_PRESET = "layout";
+const ZOOM_PRESET = "zoom";
 
 /**
  * The layout command checks one fixed scene. It bundles four layers over a period, so Play,
@@ -71,6 +72,7 @@ function valueAfter(argv, index, flag) {
 /** Reads a places file given by path or by preset name and checks its shape. */
 export function loadPlaces(text) {
   if (text === LAYOUT_PRESET) return checkPlaces(LAYOUT_PLACES, LAYOUT_PRESET);
+  if (text === ZOOM_PRESET) return zoomSpots();
 
   const direct = path.resolve(text);
   const preset = path.join(PLACES_DIR, text.endsWith(".json") ? text : `${text}.json`);
@@ -78,6 +80,20 @@ export function loadPlaces(text) {
   if (!file) throw new Error(`no places file or preset named ${text}`);
 
   return checkPlaces(JSON.parse(fs.readFileSync(file, "utf8")), file);
+}
+
+/**
+ * Reuses the standard areas for the zoom sweep, sweeping each view instead of
+ * visiting its listed zooms. Variants run on the same bundle, so scenes match.
+ */
+function zoomSpots() {
+  const file = path.join(PLACES_DIR, "standard.json");
+  const data = JSON.parse(fs.readFileSync(file, "utf8"));
+
+  return checkPlaces(
+    { spots: data.spots.map((spot) => ({ ...spot, zoom: true })) },
+    ZOOM_PRESET,
+  );
 }
 
 /** Validates places and fills defaults. Throws an error that names the invalid field. */
@@ -105,6 +121,9 @@ export function checkPlaces(data, file = "places") {
     if (spot.layout !== undefined && typeof spot.layout !== "boolean") {
       throw new Error(`${where} "layout" must be a boolean`);
     }
+    if (spot.zoom !== undefined && typeof spot.zoom !== "boolean") {
+      throw new Error(`${where} "zoom" must be a boolean`);
+    }
 
     return {
       name: spot.name,
@@ -118,6 +137,7 @@ export function checkPlaces(data, file = "places") {
       start: spot.start,
       end: spot.end,
       layout: spot.layout === true,
+      zoom: spot.zoom === true,
     };
   });
 }

@@ -30,7 +30,12 @@ import {
   openChartsGallery,
   openLayoutEditor,
   preflightWebGL,
+  swappedZoomColour,
   trialLayout,
+  trialZoomSpot,
+  withoutClipFilter,
+  zoomSceneUrl,
+  ZOOM_VARIANTS,
 } from "./browser.mjs";
 import {
   CHART_EDITOR_CONTROLS,
@@ -72,6 +77,148 @@ test("gpu display checks require the smoothing edge controls", () => {
     displayFailures({ ...painted, edges_repaint: false }, "gpu"),
     ["land cover edges check did not repaint"],
   );
+});
+
+test("zoom variants differ from the baseline only as named", () => {
+  const spot = {
+    name: "Kenya",
+    layers: ["terrain", "era5land_temperature", "geology"],
+    colour: "geology",
+  };
+  const base = zoomSceneUrl("http://example.test", "scene", spot, "all");
+
+  assert.equal(base, "http://example.test/?scene=scene&as=geology:colour");
+  assert.equal(zoomSceneUrl("http://example.test", "scene", spot, "labels-on"), base);
+  assert.equal(zoomSceneUrl("http://example.test", "scene", spot, "mask-hidden"), base);
+  assert.equal(
+    zoomSceneUrl("http://example.test", "scene", spot, "no-terrain"),
+    `${base}&off=terrain`,
+  );
+  assert.equal(
+    zoomSceneUrl("http://example.test", "scene", spot, "colour-swap"),
+    "http://example.test/?scene=scene&as=era5land_temperature:colour",
+  );
+  assert.ok(
+    zoomSceneUrl("http://example.test", "scene", spot, "pixel-ratio-2").endsWith("&pixelRatio=2"),
+  );
+});
+
+test("swappedZoomColour exchanges temperature and geology", () => {
+  assert.equal(swappedZoomColour({ colour: "geology" }), "era5land_temperature");
+  assert.equal(swappedZoomColour({ colour: "era5land_temperature" }), "geology");
+  assert.equal(swappedZoomColour({ colour: null }), "era5land_temperature");
+});
+
+test("a blend baseline swaps colour without keeping the halves off", () => {
+  const spot = {
+    name: "Egypt",
+    layers: ["terrain", "chirps_monthly", "era5land_temperature"],
+    colour: "blend",
+  };
+  const swapped = zoomSceneUrl("http://example.test", "scene", spot, "colour-swap");
+
+  assert.ok(swapped.includes("&as=era5land_temperature:colour"));
+  assert.ok(!swapped.includes("off="));
+});
+
+test("the zoom sweep labels its variants with the details-on difference", () => {
+  assert.ok(ZOOM_VARIANTS.includes("labels-on"));
+  assert.ok(!ZOOM_VARIANTS.includes("no-labels"));
+});
+
+test("withoutClipFilter lifts the scene clip back to the previous filter", () => {
+  const mask = { type: "MultiPolygon", coordinates: [] };
+  const keep = ["!", ["within", mask]];
+  const previous = ["==", ["get", "class"], "minor"];
+
+  assert.equal(withoutClipFilter(keep), null);
+  assert.equal(withoutClipFilter(["all", previous, keep]), previous);
+  assert.equal(withoutClipFilter(null), null);
+  assert.equal(withoutClipFilter(undefined), undefined);
+
+  const plain = ["==", ["get", "class"], "major"];
+  assert.equal(withoutClipFilter(plain), plain);
+  const blended = ["all", previous, ["==", ["get", "other"], 1]];
+  assert.equal(withoutClipFilter(blended), blended);
+});
+
+test("a zoom sweep records band medians with deltas against the baseline", async (context) => {
+  silenceTrial(context);
+  const urls = [];
+  const sweeps = [];
+  const page = {
+    on: () => {},
+    off: () => {},
+    goto: async (url) => {
+      urls.push(url);
+    },
+    waitForFunction: async () => {},
+    getByRole: () => ({
+      count: async () => 1,
+      isChecked: async () => false,
+      check: async () => {},
+      uncheck: async () => {},
+    }),
+    evaluate: async (callback, argument) => {
+      if (callback.name === "zoomSweep") {
+        sweeps.push(argument);
+        return {
+          frames: [
+            { zoom: argument[0], deltaMs: 0, renderMs: 5, tilesLoaded: true },
+            { zoom: argument[0] + 0.5, deltaMs: 16.7, renderMs: 8, tilesLoaded: true },
+            { zoom: argument[0] + 1.5, deltaMs: 50, renderMs: 20, tilesLoaded: false },
+          ],
+          longtasks: [{ zoom: argument[0] + 0.5, durationMs: 60 }],
+        };
+      }
+      if (callback.name === "waitForIdle") return true;
+      if (callback.name === "takeSample") {
+        return {
+          sceneReady: true,
+          tilesLoaded: true,
+          zoom: 5,
+          labelCount: 0,
+          lineCount: 0,
+          labelLines: [],
+          centre: [0, 0],
+          cardText: "",
+          classLabels: [],
+        };
+      }
+      return undefined;
+    },
+    close: async () => {},
+  };
+  const spot = {
+    name: "Kenya",
+    area: "sample:kenya",
+    centre: [37.9, 0.2],
+    layers: ["terrain", "era5land_temperature", "geology"],
+    colour: "geology",
+  };
+  const records = await trialZoomSpot(
+    { newPage: async () => page },
+    "http://example.test",
+    spot,
+    "scene",
+    {},
+  );
+
+  assert.equal(sweeps.length, ZOOM_VARIANTS.length * 3);
+  assert.ok(urls.some((url) => url.includes("&off=terrain")));
+  assert.ok(urls.some((url) => url.includes("&pixelRatio=2")));
+  assert.equal(records.length, ZOOM_VARIANTS.length * 2);
+  const baseline = records.find((record) => record.variant === "all" && record.band === "+0-1");
+  assert.equal(baseline.frame_ms_p50, 16.7);
+  assert.equal(baseline.longtasks, 1);
+  assert.equal(baseline.requests_during_sweep, 0);
+  assert.equal(baseline.repeats, 3);
+  assert.ok(!("frame_ms_p50_delta" in baseline));
+  const swapped = records.find(
+    (record) => record.variant === "colour-swap" && record.band === "+0-1",
+  );
+  assert.equal(swapped.frame_ms_p50_delta, 0);
+  assert.equal(swapped.requests_during_sweep, 0);
 });
 
 test("a successful contour run returns exit code 0 and writes its records", async (context) => {

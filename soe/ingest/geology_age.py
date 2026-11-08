@@ -30,7 +30,7 @@ from ..geology_age import (
 )
 from ..sources.grid import Bbox
 from .cubes import DOWNLOADS_DIR
-from .lithology import publish_cog, write_tiled_raster
+from .cog import publish_cog, write_tiled_raster
 
 if TYPE_CHECKING:
     import geopandas as gpd

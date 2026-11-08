@@ -19,6 +19,17 @@ from soe.api import create_app
 from soe.areas import Area
 from soe.build import build_scene
 from soe.bundle import JsonObject, validate
+from soe.geology_type import (
+    GEOLOGY_CLASSES,
+    GLIM_SOURCE,
+    GLIM_VALUES,
+    LITHOLOGY_FILE,
+    LITHOLOGY_RES_DEG,
+    OPENLANDMAP_CLASSES,
+    OPENLANDMAP_SOURCE,
+    WATER_CLASS,
+)
+from soe.ingest import cog
 from soe.ingest.cubes import DOWNLOADS_DIR
 from soe.ingest import lithology as ingest
 from soe.ingest.lithology import (
@@ -32,16 +43,7 @@ from soe.ingest.lithology import (
 from soe.scene_request import compute_scene_id
 from soe.sources import RealSource, Registry, SourceUnavailable, SyntheticSource, make_registry
 from soe.sources import lithology
-from soe.sources.lithology import (
-    GEOLOGY_CLASSES,
-    GLIM_SOURCE,
-    GLIM_VALUES,
-    LITHOLOGY_FILE,
-    LITHOLOGY_RES_DEG,
-    OPENLANDMAP_CLASSES,
-    OPENLANDMAP_SOURCE,
-    WATER_CLASS,
-)
+from soe.sources.geology import GeologyDataset
 from soe.sources.licences import SOURCES
 from tests.helpers import BOUNDARY, FIJI, HASH_A, NAIROBI, write_cube
 
@@ -203,6 +205,8 @@ def test_glim_cog_holds_level_two_classes_and_leaves_water_and_no_data_at_zero(g
 
 
 def test_cog_records_which_map_built_it(cubes_dir, glim_cubes_dir):
+    assert ingest.publish_cog is cog.publish_cog
+    assert ingest.write_tiled_raster is cog.write_tiled_raster
     assert RealSource(cubes_dir=cubes_dir).lithology_source() == OPENLANDMAP_SOURCE
     assert RealSource(cubes_dir=glim_cubes_dir).lithology_source() == GLIM_SOURCE
 
@@ -384,6 +388,11 @@ def test_geology_source_and_classes_follow_the_cog(cubes_dir, glim_cubes_dir):
     openlandmap = make_registry(RealSource(cubes_dir=cubes_dir))["geology"]
     glim = make_registry(RealSource(cubes_dir=glim_cubes_dir))["geology"]
 
+    assert lithology.GeologyDataset is GeologyDataset
+    assert isinstance(glim, GeologyDataset)
+    assert lithology.GEOLOGY_CLASSES is GEOLOGY_CLASSES
+    assert lithology.OPENLANDMAP_CLASSES is OPENLANDMAP_CLASSES
+    assert lithology.GLIM_VALUES is GLIM_VALUES
     assert openlandmap.source is SOURCES["lithology"]
     assert openlandmap.style["classes"] == OPENLANDMAP_CLASSES
     assert glim.source is SOURCES["glim"]

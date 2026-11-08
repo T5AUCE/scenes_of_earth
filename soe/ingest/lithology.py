@@ -11,7 +11,6 @@ import os
 import shutil
 import tempfile
 import urllib.request
-from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,13 +18,11 @@ from typing import TYPE_CHECKING
 import numpy as np
 import rasterio
 from rasterio.features import rasterize
-from rasterio.shutil import copy as copy_raster
-from rasterio.transform import Affine, from_origin
+from rasterio.transform import Affine
 from rasterio.windows import Window, from_bounds
 
-from ..areas import WORLD_WIDTH_DEG
 from ..sources.grid import Bbox
-from ..sources.lithology import (
+from ..geology_type import (
     GLIM_SOURCE,
     GLIM_VALUES,
     LITHOLOGY_FILE,
@@ -34,6 +31,14 @@ from ..sources.lithology import (
     OPENLANDMAP_SOURCE,
     UNDEFINED_CLASS,
     WATER_CLASS,
+)
+from .cog import (
+    BLOCK_PX,
+    NORTH_EDGE_DEG,
+    SOUTH_EDGE_DEG,
+    TILE_DEG,
+    publish_cog,
+    write_tiled_raster,
 )
 from .cubes import DOWNLOADS_DIR
 
@@ -49,14 +54,10 @@ DOWNLOAD_CHUNK_BYTES = 1 << 20
 GLIM_DIR = "glim"  # in the downloads folder
 GLIM_FILE = "LiMW_GIS 2015.gdb"
 GLIM_CRS = "ESRI:54012"  # World Eckert IV
-TILE_DEG = 10
 GLIM_CODE_CHARS = 4  # level 1 and level 2 of the 6-character Litho code
 GLIM_SEGMENT_M = 20_000  # longest polygon edge kept before reprojection, so edges bend right
-NORTH_EDGE_DEG = 60
-SOUTH_EDGE_DEG = -60
 EDGE_REPAIR_WIDTH_DEG = 0.01  # half-width of the repaired band at each antimeridian edge
 STRIP_ROWS = 512
-BLOCK_PX = 512
 
 log = logging.getLogger(__name__)
 
@@ -96,29 +97,6 @@ def build_glim_cog(glim_path: Path | str, cog_path: Path | str) -> None:
         GLIM_SOURCE,
         Path(cog_path),
     )
-
-
-def publish_cog(write_raster: Callable[[Path], None], source_id: str, cog_path: Path) -> None:
-    """Write a plain raster with write_raster, tag its source and convert it to the COG."""
-    cleaned = cog_path.with_suffix(".cleaned.tif")
-    partial = cog_path.with_suffix(".partial.tif")
-    try:
-        write_raster(cleaned)
-        with rasterio.open(cleaned, "r+") as raster:
-            raster.update_tags(**{LITHOLOGY_SOURCE_TAG: source_id})
-        copy_raster(
-            cleaned,
-            partial,
-            driver="COG",
-            BLOCKSIZE=BLOCK_PX,
-            COMPRESS="ZSTD",
-            OVERVIEW_RESAMPLING="MODE",
-            BIGTIFF="IF_SAFER",
-        )
-        os.replace(partial, cog_path)
-    finally:
-        cleaned.unlink(missing_ok=True)
-        partial.unlink(missing_ok=True)
 
 
 def _download(url: str, target: Path) -> None:
@@ -194,46 +172,6 @@ def _write_glim_raster(glim_path: Path | str, raster_path: Path) -> None:
         LITHOLOGY_RES_DEG,
         partial(_rasterize_glim_tile, glim_path),
     )
-
-
-def write_tiled_raster(
-    raster_path: Path,
-    res_deg: float,
-    rasterize_tile: Callable[[Bbox, Affine, tuple[int, int]], np.ndarray],
-) -> None:
-    """Write the uint8 classes of the 60°S-60°N world at res_deg, one TILE_DEG tile at a time.
-
-    rasterize_tile(bounds, transform, shape) returns the classes of one tile, 0 where it has none.
-    """
-    width = round(WORLD_WIDTH_DEG / res_deg)
-    height = round((NORTH_EDGE_DEG - SOUTH_EDGE_DEG) / res_deg)
-    profile = {
-        "driver": "GTiff",
-        "dtype": "uint8",
-        "count": 1,
-        "nodata": 0,
-        "crs": "EPSG:4326",
-        "width": width,
-        "height": height,
-        "transform": from_origin(-WORLD_WIDTH_DEG / 2, NORTH_EDGE_DEG, res_deg, res_deg),
-        "tiled": True,
-        "blockxsize": BLOCK_PX,
-        "blockysize": BLOCK_PX,
-        "compress": "zstd",
-        "BIGTIFF": "IF_SAFER",
-    }
-    tile_px = round(TILE_DEG / res_deg)
-    with rasterio.open(raster_path, "w", **profile) as raster:
-        for row in range(0, height, tile_px):
-            for column in range(0, width, tile_px):
-                tile = Window(column, row, min(tile_px, width - column), min(tile_px, height - row))
-                classes = rasterize_tile(
-                    raster.window_bounds(tile),
-                    raster.window_transform(tile),
-                    (tile.height, tile.width),
-                )
-                if classes.any():
-                    raster.write(classes, 1, window=tile)
 
 
 def _rasterize_glim_tile(

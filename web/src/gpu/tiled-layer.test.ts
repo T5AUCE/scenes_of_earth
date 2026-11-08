@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { createHarness, TiledGpuLayer } from "./class-field-harness.test.ts";
+import {
+  clearGpuMs,
+  clearGpuUnavailable,
+  timedGpuDraw,
+} from "./tiled-layer.ts";
 import type { TiledGpu } from "./tiled-layer.ts";
 
 class UploadingLayer extends TiledGpuLayer {
@@ -77,4 +82,76 @@ test("a hidden layer does not compile until shown", () => {
 
   layer.render(harness.gl, harness.input);
   assert.equal(compiles, 1);
+});
+
+test("a pending timer query waits for the next frame instead of spinning", () => {
+  const previousLocation = (globalThis as Record<string, unknown>).location;
+  const previousFrame = (globalThis as Record<string, unknown>).requestAnimationFrame;
+  (globalThis as Record<string, unknown>).location = { search: "?debug" };
+  const frames: (() => void)[] = [];
+  (globalThis as Record<string, unknown>).requestAnimationFrame = (callback: () => void) => {
+    frames.push(callback);
+    return frames.length;
+  };
+  const timeouts: number[] = [];
+  const previousTimeout = globalThis.setTimeout;
+  (globalThis as unknown as Record<string, unknown>).setTimeout = (
+    callback: () => void,
+    delay?: number,
+  ) => {
+    timeouts.push(delay ?? 0);
+    return previousTimeout(callback, 0);
+  };
+  try {
+    let polls = 0;
+    const gl = {
+      QUERY_RESULT_AVAILABLE: 1,
+      QUERY_RESULT: 2,
+      TIME_ELAPSED_EXT: 3,
+      GPU_DISJOINT_EXT: 4,
+      getExtension: () => ({ TIME_ELAPSED_EXT: 3, GPU_DISJOINT_EXT: 4 }),
+      createQuery: () => ({}),
+      beginQuery: () => {},
+      endQuery: () => {},
+      getQueryParameter: (query: unknown, name: number) => {
+        if (name === 1) {
+          polls += 1;
+          return polls > 1;
+        }
+        return 2e6;
+      },
+      getParameter: () => false,
+      deleteQuery: () => {},
+    } as unknown as WebGL2RenderingContext;
+    timedGpuDraw(gl, "uploading", () => {});
+
+    assert.equal(polls, 0);
+    assert.equal(frames.length, 1);
+    assert.ok(!timeouts.includes(0));
+    frames[0]();
+
+    assert.equal(polls, 1);
+  } finally {
+    (globalThis as Record<string, unknown>).location = previousLocation;
+    (globalThis as Record<string, unknown>).requestAnimationFrame = previousFrame;
+    globalThis.setTimeout = previousTimeout;
+    delete (globalThis as Record<string, unknown>).__gpuMs;
+  }
+});
+
+test("context restore clears stale timings and the unavailable flag", () => {
+  const harness = createHarness();
+  const layer = new UploadingLayer();
+  layer.onAdd(harness.map, harness.gl);
+  (globalThis as Record<string, unknown>).__gpuMs = { uploading: 5 };
+  (globalThis as Record<string, unknown>).__gpuUnavailable = true;
+
+  const restored = harness.listeners.get("webglcontextrestored");
+  assert.ok(restored);
+  restored!({});
+
+  assert.deepEqual((globalThis as Record<string, unknown>).__gpuMs, {});
+  assert.equal((globalThis as Record<string, unknown>).__gpuUnavailable, undefined);
+  clearGpuMs("uploading");
+  clearGpuUnavailable();
 });

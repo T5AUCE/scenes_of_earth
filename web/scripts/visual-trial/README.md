@@ -133,6 +133,37 @@ those same local bundles, not a remote app with a different bundle collection.
 Scene POST retries and build polling share a ten-minute deadline. Requests are aborted when
 their remaining budget expires, and `Retry-After` waits cannot extend the deadline.
 
+## Zoom mode
+
+`SOE_TRIAL_EXISTING_ONLY=1 npm run trial -- zoom --start` sweeps every standard view from
+half a level below its fitted zoom to six levels above it, stepping the zoom by 0.03 per
+frame at 1280x800 with `--parallel 1` and three repeats per variant. `SOE_ZOOM_REPEATS`
+changes the repeat count for a quicker smoke run. The sweep keeps the fitted centre and
+never pans, so each frame isolates zoom cost from pan cost.
+
+Each repeat records per frame the rAF delta, the span from the frame callback to the next
+`render` event, and whether tiles had loaded, plus every main-thread task over 50 ms with
+the zoom it started at. Frames bin into one level bands from the fitted zoom (`+0-1` up to
+`+5-6`, with `approach` below it). One JSON line per band reports frame p50 and p95, the
+count of frames over a 30 fps budget, the render span p50, the frames still waiting for
+tiles, the long-task count and total, and the requests seen during the sweep. Repeats
+report medians per band.
+
+Variants run on the same bundle and differ only as named: `all` is the baseline,
+`labels-on` switches the Map details toggle on, `no-terrain` switches Terrain off through
+the link, `colour-swap` exchanges the colour owner between temperature and geology,
+`mask-hidden` hides the two mask fills and lifts the entry-time basemap clip, and
+`pixel-ratio-2` forces `&pixelRatio=2` through the trial-only address option. Non-baseline
+bands also carry `_delta` fields against `all`, so the verdict is the delta between
+variants per band, not absolute milliseconds. Scenes default to details off, so `labels-on`
+measures label placement cost against the unlabelled baseline. Hiding the mask and lifting
+its clip reveals the basemap outside, so its delta is the mask and the clip against the
+basemap they cover.
+
+The headless browser uses SwiftShader, so its frames cannot rank GPU fill; they measure
+main-thread work such as label placement and tile churn while zooming. The dev readout's
+per-layer GPU timings answer the real-GPU question in a desktop browser instead.
+
 ## Result fields
 
 - `label_features` counts the contour label features MapLibre renders.
@@ -158,6 +189,13 @@ their remaining budget expires, and `Retry-After` waits cannot extend the deadli
   an 8 ms GPU draw budget. The current headless browser also uses SwiftShader, not hardware GL.
 - `marks_frame_ms_p50` and `marks_frame_ms_p95` summarise the same pan for colour spots, where the
   dots layer is usually the heaviest draw, and carry the same caveats as `frame_ms_*`.
+- Zoom records carry `mode: "zoom"` with `variant` and `band` instead of `zoom`. `frames`
+  counts the band's sweep frames, `over_33ms` counts frames over a 30 fps budget,
+  `render_ms_p50` and `render_ms_p95` summarise the callback-to-render span, `waiting_frames`
+  counts frames where tiles were still loading, `longtasks` and `longtask_ms_total` summarise
+  tasks over 50 ms, `requests_during_sweep` counts requests seen during the sweep, and
+  `repeats` counts the merged repeats. Non-baseline bands add one `_delta` field per number
+  against the `all` variant of the same spot and band.
 - `gl_errors` lists nonzero errors observed through WebGL2 `getError`, including upload checks.
 - `display_checks` reports visibility and palette repaint checks from frame readbacks. It also
   reports whether Edges are available and repaint, or whether the image fallback has its single

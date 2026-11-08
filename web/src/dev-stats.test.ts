@@ -9,6 +9,7 @@ import {
   DevStatsLoop,
   formatBytes,
   formatDevStats,
+  formatGpuPart,
   framesPerSecond,
   noteSceneOpen,
   noteSceneReady,
@@ -73,9 +74,12 @@ test("the badge line stays compact with a missing load", () => {
     loadMs: null,
     requests: 2,
     bytes: 1536,
+    gpuMs: {},
+    gpuUnavailable: true,
+    longtasks: 0,
   });
 
-  assert.equal(text, "60 fps · worst 33 ms · z 5.3 · load — · 2 req 1.5 KB");
+  assert.equal(text, "60 fps · worst 33 ms · z 5.3 · load — · 2 req 1.5 KB · gpu n/a · 0 long");
 });
 
 test("the badge line rounds the load time", () => {
@@ -86,9 +90,29 @@ test("the badge line rounds the load time", () => {
     loadMs: 842.4,
     requests: 14,
     bytes: 512,
+    gpuMs: { "geology-classes": 6.14, "rain-dots": 0.94 },
+    gpuUnavailable: false,
+    longtasks: 3,
   });
 
-  assert.equal(text, "59 fps · worst 50 ms · z 4.0 · load 842 ms · 14 req 512 B");
+  assert.equal(
+    text,
+    "59 fps · worst 50 ms · z 4.0 · load 842 ms · 14 req 512 B"
+      + " · gpu geology-classes 6.1 ms rain-dots 0.9 ms · 3 long",
+  );
+});
+
+test("the gpu part shows n/a without timings or the extension", () => {
+  assert.equal(formatGpuPart({}, false), "gpu n/a");
+  assert.equal(formatGpuPart({}, true), "gpu n/a");
+  assert.equal(formatGpuPart({ "rain-dots": 1 }, true), "gpu n/a");
+});
+
+test("the gpu part lists per-layer timings in name order", () => {
+  assert.equal(
+    formatGpuPart({ "rain-dots": 0.94, "geology-classes": 6.14 }, false),
+    "gpu geology-classes 6.1 ms rain-dots 0.9 ms",
+  );
 });
 
 test("the scene timing measures open to drawn", () => {

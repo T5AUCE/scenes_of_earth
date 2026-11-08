@@ -33,8 +33,9 @@ from ..geology_regional import (
     SGMC_AGE_FILE,
     SGMC_TYPE_FILE,
 )
+from ..geology_type import LITHOLOGY_RES_DEG
 from ..sources.grid import Bbox
-from ..sources.lithology import LITHOLOGY_RES_DEG
+from .cog import BLOCK_PX, publish_cog, write_tiled_raster
 from .cubes import DOWNLOADS_DIR
 from .geology_classification import (
     canada_age_batch,
@@ -45,7 +46,6 @@ from .geology_classification import (
     sgmc_age_batch,
     sgmc_type_batch,
 )
-from .lithology import BLOCK_PX, publish_cog, write_tiled_raster
 
 log = logging.getLogger(__name__)
 

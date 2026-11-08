@@ -13,10 +13,10 @@ from pathlib import Path
 import numpy as np
 import zarr
 
-from ..build import COMPRESSION, encode_values
 from ..sources import CubeSpec
 from ..sources.cubes import CUBE_TIME_ORIGIN, month_index
 from ..sources.periods import MONTH_CHARS, add_duration
+from ..zarr_encoding import COMPRESSION, encode_values
 
 DOWNLOADS_DIR = ".downloads"  # holds each downloaded file until it has been stored
 

@@ -10,7 +10,7 @@ import numpy as np
 from rasterio.transform import Affine
 
 from .areas import WORLD_WIDTH_DEG
-from .sources.lithology import GEOLOGY_CLASSES, OPENLANDMAP_SOURCE
+from .geology_type import GEOLOGY_CLASSES, OPENLANDMAP_SOURCE
 
 BASE_CODE = 1  # the global base map (GSC for age, GLiM or OpenLandMap for type)
 CANADA_CODE = 3

@@ -9,12 +9,12 @@ from rasterio.transform import Affine, from_origin
 from shapely.geometry.base import BaseGeometry
 
 from ..geology_age import AGE_CLASSES, GEOLOGY_AGE_FILE, GSC_SOURCE
+from ..geology_type import GEOLOGY_CLASSES, GLIM_SOURCE, LITHOLOGY_FILE
 from .chirps import CHIRPS_CUBE, FIRST_MONTH
 from .cubes import FINAL_EXPVER, MONTHS_PER_YEAR, PRELIMINARY_EXPVER, CubeSpec, month_index
 from .era5 import ERA5_PRECIPITATION_CUBE, ERA5_TEMPERATURE_CUBE
 from .era5land_temperature import ERA5_LAND_TEMPERATURE_CUBE
 from .grid import Bbox, CellWindow
-from .lithology import GEOLOGY_CLASSES, GLIM_SOURCE, LITHOLOGY_FILE
 from .periods import MONTH_CHARS, add_duration
 from .terrain import terrain_block_count
 from .worldcover import WORLDCOVER_CLASSES, PlacedTile, land_cover_by_tiles

@@ -2,6 +2,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from ..geology_age import AGE_CLASSES, GEOLOGY_AGE_FILE, GEOLOGY_AGE_RES_DEG
+from ..geology_type import GEOLOGY_CLASSES, GLIM_SOURCE, LITHOLOGY_RES_DEG, OPENLANDMAP_CLASSES
 from .chirps import CHIRPS_CUBE, CHIRPS_GRID, ChirpsReader, RainDataset
 from .cubes import DEFAULT_CUBES_DIR, HIGH_LATITUDE_FIRST_MONTH, CubeSpec, CubeStore
 from .datasets import Registry, Role
@@ -24,16 +25,9 @@ from .era5land_temperature import (
     Era5LandTemperatureDataset,
 )
 from .grid import CELL_DEG, WORLD_GRID
+from .geology import PROVENANCE_ROLE, GeologyDataset
 from .licences import SOURCES
-from .lithology import (
-    GEOLOGY_CLASSES,
-    GLIM_SOURCE,
-    LITHOLOGY_RES_DEG,
-    OPENLANDMAP_CLASSES,
-    PROVENANCE_ROLE,
-    GeologyDataset,
-    LithologyReader,
-)
+from .lithology import LithologyReader
 from .remote import SourceUnavailable
 from .synthetic import SyntheticSource
 from .terrain import GLO30_RES_DEG, CopernicusDemReader, TerrainDataset, terrain_tiles_block

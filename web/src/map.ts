@@ -46,6 +46,10 @@ const PICKED_LINE_WIDTH_PX = 3;
 // An imageless source never reports loaded, so dormant renderers seed this pixel.
 const PLACEHOLDER_SIZE_PX = 1;
 
+// The trial-only pixel ratio stays within normal device ratios.
+const MIN_TRIAL_PIXEL_RATIO = 0.5;
+const MAX_TRIAL_PIXEL_RATIO = 3;
+
 // Projection round-off must not trigger another synchronous move event at the pan limit.
 const CENTRE_TOLERANCE_WORLDS = 1e-12;
 
@@ -56,16 +60,32 @@ interface DrawableImage {
 /** Creates the basemap, with its attribution at the bottom left. */
 export function createMap(container: string): MapLibreMap {
   ensureWorkerCount();
+  const ratio = trialPixelRatio(location.search);
   const map = new MapLibreMap({
     container,
     style: BASEMAP_STYLE,
     ...WORLD_VIEW,
+    ...(ratio === undefined ? {} : { pixelRatio: ratio }),
     attributionControl: false,
   });
 
   // Bottom right belongs to the scene column.
   map.addControl(new AttributionControl({ compact: false }), "bottom-left");
   return map;
+}
+
+/**
+ * Reads the trial-only pixel-ratio override from the address bar, so the zoom
+ * trial compares device ratios without a new build. Returns undefined when absent.
+ */
+export function trialPixelRatio(search: string): number | undefined {
+  const value = new URLSearchParams(search).get("pixelRatio");
+  if (value === null) return undefined;
+  const ratio = Number(value);
+  if (!Number.isFinite(ratio) || ratio < MIN_TRIAL_PIXEL_RATIO || ratio > MAX_TRIAL_PIXEL_RATIO) {
+    return undefined;
+  }
+  return ratio;
 }
 
 /** Set the worker count once, before the first map starts its workers. */

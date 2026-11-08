@@ -6,6 +6,7 @@ import {
   CLASS_FIELD_VERTEX,
   FILL_OUTLINE_STRENGTH,
   homogeneousFlags,
+  homogeneousWindow,
 } from "./class-field-shaders";
 import { deleteResources, uploadTexture } from "./gl";
 import { WIDE_HALO_CELLS } from "./grid-geometry";
@@ -13,6 +14,7 @@ import {
   TiledGpuLayer,
   type TiledGpu,
   type TiledLayerOptions,
+  timedGpuDraw,
 } from "./tiled-layer";
 
 /** How the edges between classes are drawn. */
@@ -74,6 +76,7 @@ export function createClassFieldLayer(options: ClassFieldOptions) {
 class ClassFieldLayer extends TiledGpuLayer<Gpu> {
   private ids: Uint8Array | null = null;
   private flags: Uint8Array | null = null;
+  private flagsWindow: { first: number; span: number } | null = null;
   private paletteBytes = new Uint8Array(PALETTE_SIZE * CHANNELS);
   private edges: ClassEdges;
   private isIdsStale = false;
@@ -111,9 +114,14 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
   setEdges(edges: ClassEdges) {
     const hadFlags = this.needsFlags();
     this.edges = edges;
+    // A radius crossing the stride threshold needs a new flag window, so drop the cached pair.
+    if (this.flags !== null && !sameWindow(this.flagsWindow, this.wantedWindow())) {
+      this.flags = null;
+    }
+    const hadBuiltFlags = this.flags !== null;
     this.buildMissingFlags();
     // A new companion texture needs an upload, while a radius change within use does not.
-    if (this.ids && hadFlags !== this.needsFlags()) {
+    if (this.ids && (hadFlags !== this.needsFlags() || (!hadBuiltFlags && this.flags !== null))) {
       this.isIdsStale = true;
     }
     this.map?.triggerRepaint();
@@ -123,12 +131,19 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     return this.edges.smooth && (this.edges.smoothRadiusCells ?? 0) > 0;
   }
 
+  private wantedWindow(): { first: number; span: number } | null {
+    if (!this.needsFlags()) return null;
+    return homogeneousWindow(this.edges.smoothRadiusCells);
+  }
+
   private buildMissingFlags(): void {
     if (!this.ids || this.flags || !this.needsFlags()) return;
 
     // Flags are built at load so the draw frame only uploads the cached pair.
     const { nx, ny } = this.options.grid;
-    this.flags = homogeneousFlags(this.ids, nx, ny);
+    const radius = this.edges.smoothRadiusCells ?? 0;
+    this.flags = homogeneousFlags(this.ids, nx, ny, radius);
+    this.flagsWindow = homogeneousWindow(radius);
   }
 
   protected hasData() {
@@ -187,9 +202,16 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     gl.bindTexture(gl.TEXTURE_2D, gpu.palette);
     gl.activeTexture(gl.TEXTURE0);
 
-    this.drawTiles(gl, gpu, mainMatrix, ({ window }) => {
+    timedGpuDraw(gl, this.id, () => this.drawTiles(gl, gpu, mainMatrix, ({ window }) => {
       gl.uniform2i(uniform("uIdsSize"), window.width, window.height);
       gl.uniform1f(uniform("uWindowRow"), window.row);
-    });
+    }));
   }
+}
+
+function sameWindow(
+  first: { first: number; span: number } | null,
+  second: { first: number; span: number } | null,
+): boolean {
+  return first?.first === second?.first && first?.span === second?.span;
 }

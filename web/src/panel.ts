@@ -1,60 +1,13 @@
 import type { Map as MapLibreMap } from "maplibre-gl";
 
-import {
-  ApiError,
-  getArea,
-  getSceneStatus,
-  loadScene,
-  postScene,
-  searchAreas,
-} from "./api";
-import { nextOptionIndex } from "./combobox";
+import { ApiError, getSceneStatus, loadScene } from "./api";
+import { bindAreaSearch, createSearchControls, NO_AREA_TEXT } from "./area-search";
 import { makeHtmlElement } from "./html";
 import { loadLayerChoices } from "./layer-picker";
-import {
-  BROWSE_MAX_ZOOM,
-  BROWSE_PADDING_PX,
-  clearPickedOutline,
-  fitToBbox,
-  showPickedOutline,
-} from "./map";
 import { createMonthSelect } from "./month-select";
-import { shiftLongitudes, worldShift } from "./render/mercator";
+import { submitAndPoll } from "./scene-build";
 import type { EnterOptions } from "./scene-mode";
-import type {
-  AreaFeature,
-  AreaHit,
-  Bbox,
-  Layer,
-  Scene,
-  SceneRequest,
-  SceneStatus,
-} from "./types";
-
-const POLL_INTERVAL_MS = 1500;
-const MAX_POLL_FAILURES = 3;
-const DEFAULT_RETRY_SECS = 30;
-const MS_PER_SECOND = 1000;
-
-const SERVER_BUSY = 503;
-const NOT_FOUND = 404;
-
-const SEARCH_DEBOUNCE_MS = 300;
-const NO_AREA_TEXT = "No area selected";
-const AREA_LEVELS = [
-  { value: "", label: "Any Level" },
-  { value: "country", label: "ADM0 (country, territory, etc.)" },
-  { value: "state", label: "ADM1 (state, county, etc.)" },
-  { value: "county", label: "ADM2 (district, county, etc.)" },
-  { value: "city", label: "City (urban area)" },
-];
-// Results name the level briefly; the dropdown's examples would crowd each hit.
-const LEVEL_LABELS = new Map([
-  ["country", "Country"],
-  ["state", "ADM1"],
-  ["county", "ADM2"],
-  ["city", "City"],
-]);
+import type { AreaHit, Layer, Scene, SceneRequest } from "./types";
 
 interface SceneMode {
   enter(scene: Scene, options: EnterOptions): void;
@@ -83,25 +36,12 @@ export async function createPanel(
   layerBox.onchange = updateMonths;
   updateMonths();
 
-  let searchTimer: ReturnType<typeof setTimeout> | undefined;
-  let searchCount = 0;
-  let pickCount = 0;
-  let shownHits: AreaHit[] = [];
-  let hitItems: HTMLElement[] = [];
-  let activeIndex = -1;
-
-  const scheduleSearch = () => {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(runSearch, SEARCH_DEBOUNCE_MS);
-  };
-
-  search.oninput = () => {
-    if (!search.value.trim()) deselectArea();
-    scheduleSearch();
-  };
-  search.onkeydown = handleSearchKey;
-  search.onblur = closeResults;
-  level.onchange = scheduleSearch;
+  const areaSearch = bindAreaSearch(
+    { search, level, results, chosen },
+    map,
+    handlePick,
+    handleClear,
+  );
 
   build.onclick = buildScene;
 
@@ -128,130 +68,16 @@ export async function createPanel(
     status.textContent = text;
   }
 
-  async function runSearch() {
-    const thisSearch = ++searchCount;
-    const query = search.value.trim();
-    closeResults();
-    if (!query) return;
-
-    try {
-      const hits = await searchAreas(query, level.value);
-      // A newer search has started, so these hits are stale.
-      if (thisSearch !== searchCount) return;
-
-      if (!hits.length) showMessage("No matches");
-
-      shownHits = hits;
-      hitItems = hits.map(showHit);
-      openResults();
-    } catch (error) {
-      if (thisSearch !== searchCount) return;
-
-      showMessage(`Search failed: ${(error as Error).message}`);
-    }
-  }
-
-  function showMessage(text: string) {
-    const item = makeHtmlElement("li", text, results);
-    item.className = "none";
-    item.setAttribute("role", "presentation");
-    openResults();
-  }
-
-  function showHit(hit: AreaHit, index: number) {
-    const kind = hit.kind ?? LEVEL_LABELS.get(hit.level) ?? hit.level;
-    const text = [hit.name, hit.parent_name, kind].filter(Boolean).join(" · ");
-    const item = makeHtmlElement("li", text, results);
-    item.id = `${results.id}-${index}`;
-    item.setAttribute("role", "option");
-
-    // Mouse down, not click, so the pick happens before the input loses focus.
-    item.onmousedown = (event) => {
-      event.preventDefault();
-      pick(hit);
-    };
-    return item;
-  }
-
-  function pick(hit: AreaHit) {
+  function handlePick(hit: AreaHit) {
     area = hit;
     run++;
     build.disabled = false;
     status.textContent = "";
     status.classList.remove("busy");
-    closeResults();
-    chosen.textContent = hit.name;
-    search.value = hit.name;
-    fitToBbox(map, hit.bbox, { padding: BROWSE_PADDING_PX, maxZoom: BROWSE_MAX_ZOOM });
-    drawPickedOutline(hit);
   }
 
-  // The outline is the stored geometry; the bbox rectangle stands in when it cannot be fetched.
-  async function drawPickedOutline(hit: AreaHit) {
-    const thisPick = ++pickCount;
-    const geometry = await getArea(hit.id).then(
-      (detail) => detail.geometry,
-      () => bboxGeometry(hit.bbox),
-    );
-    if (thisPick !== pickCount) return;
-
-    const shifted = shiftLongitudes(geometry.coordinates, worldShift(hit.bbox));
-    showPickedOutline(map, { ...geometry, coordinates: shifted } as GeoJSON.Geometry);
-  }
-
-  // Clearing the search forgets the area, so Build asks for a new pick.
-  function deselectArea() {
+  function handleClear() {
     area = null;
-    pickCount++;
-    chosen.textContent = NO_AREA_TEXT;
-    clearPickedOutline(map);
-  }
-
-  function handleSearchKey(event: KeyboardEvent) {
-    if (event.key === "Escape") closeResults();
-    else if (event.key === "Enter") pickActive(event);
-    else moveActive(event);
-  }
-
-  function pickActive(event: KeyboardEvent) {
-    if (activeIndex < 0) return;
-
-    event.preventDefault();
-    pick(shownHits[activeIndex]);
-  }
-
-  function moveActive(event: KeyboardEvent) {
-    const next = nextOptionIndex(event.key, activeIndex, hitItems.length);
-    if (next === activeIndex) return;
-
-    event.preventDefault();
-    openResults();
-    setActive(next);
-  }
-
-  function setActive(index: number) {
-    hitItems[activeIndex]?.setAttribute("aria-selected", "false");
-    activeIndex = index;
-
-    const item = hitItems[index];
-    item.setAttribute("aria-selected", "true");
-    item.scrollIntoView({ block: "nearest" });
-    search.setAttribute("aria-activedescendant", item.id);
-  }
-
-  function openResults() {
-    results.hidden = false;
-    search.setAttribute("aria-expanded", "true");
-  }
-
-  function closeResults() {
-    results.replaceChildren();
-    results.hidden = true;
-    shownHits = [];
-    hitItems = [];
-    activeIndex = -1;
-    search.setAttribute("aria-expanded", "false");
-    search.removeAttribute("aria-activedescendant");
   }
 
   async function openScene(id: string, options: EnterOptions) {
@@ -290,7 +116,11 @@ export async function createPanel(
     const thisRun = ++run;
 
     try {
-      const finished = await submitAndPoll(thisRun);
+      const finished = await submitAndPoll(
+        captureRequest,
+        () => thisRun === run,
+        showStatus,
+      );
       if (!finished) return;
 
       if (finished.status === "failed") {
@@ -315,33 +145,7 @@ export async function createPanel(
     }
   }
 
-  // Returns null when a newer run has cancelled this one.
-  async function submitAndPoll(thisRun: number) {
-    const submitted = await submit(thisRun);
-    if (!submitted || thisRun !== run) return null;
-
-    let current = submitted;
-    let failures = 0;
-
-    while (current.status === "queued" || current.status === "running") {
-      showProgress(current);
-      await wait(POLL_INTERVAL_MS);
-      if (thisRun !== run) return null;
-
-      try {
-        current = await getSceneStatus(current.id);
-        failures = 0;
-      } catch (error) {
-        const isMissing = error instanceof ApiError && error.status === NOT_FOUND;
-        if (isMissing || ++failures >= MAX_POLL_FAILURES) throw error;
-      }
-    }
-
-    return thisRun === run ? current : null;
-  }
-
-  // Registers the request; one automatic retry after Retry-After when the server is busy.
-  async function submit(thisRun: number): Promise<SceneStatus | null> {
+  function captureRequest(): SceneRequest {
     const body: SceneRequest = {
       area: { type: "boundary", id: area!.id },
       layers: selectedLayerIds(),
@@ -349,38 +153,14 @@ export async function createPanel(
 
     if (usesMonths()) Object.assign(body, { start: start.value, end: end.value });
 
-    try {
-      return await postScene(body);
-    } catch (error) {
-      if (!(error instanceof ApiError) || error.status !== SERVER_BUSY) throw error;
-      if (thisRun !== run) return null;
-
-      const retrySeconds = error.retryAfterSecs ?? DEFAULT_RETRY_SECS;
-      status.textContent = `${error.message} Retrying in ${retrySeconds} s…`;
-      await wait(retrySeconds * MS_PER_SECOND);
-
-      return thisRun === run ? postScene(body) : null;
-    }
-  }
-
-  function showProgress(sceneStatus: SceneStatus) {
-    if (sceneStatus.status !== "running") {
-      status.textContent = `Scene ${sceneStatus.status}…`;
-      return;
-    }
-
-    const percent = Math.round(sceneStatus.progress * 100);
-    status.textContent = sceneStatus.stage
-      ? `Building… ${percent}% (${sceneStatus.stage})`
-      : `Building… ${percent}%`;
+    return body;
   }
 
   // The scene draws its own outline.
   async function enterScene(scene: Scene, options: EnterOptions, thisRun: number) {
     const ready = typeof sceneMode === "function" ? await sceneMode() : sceneMode;
     if (thisRun !== run) return;
-    pickCount++;
-    clearPickedOutline(map);
+    areaSearch.clearOutline();
     ready.enter(scene, options);
   }
 }
@@ -401,31 +181,6 @@ function createControls(root: HTMLElement) {
   return { search, level, results, chosen, layerBox, start, end, build, status };
 }
 
-function createSearchControls(root: HTMLElement) {
-  const searchBox = makeHtmlElement("div", "", root);
-  searchBox.className = "search-box";
-
-  const search = makeHtmlElement("input", "", searchBox);
-  search.placeholder = "Search an area";
-  search.setAttribute("role", "combobox");
-  search.setAttribute("aria-label", "Search an area");
-  search.setAttribute("aria-autocomplete", "list");
-  search.setAttribute("aria-controls", "area-results");
-  search.setAttribute("aria-expanded", "false");
-  search.autocomplete = "off";
-
-  const level = makeHtmlElement("select", "", root);
-  for (const { value, label } of AREA_LEVELS) level.append(new Option(label, value));
-
-  const results = makeHtmlElement("ul", "", searchBox);
-  results.id = "area-results";
-  results.className = "results";
-  results.setAttribute("role", "listbox");
-  results.hidden = true;
-
-  return { search, level, results };
-}
-
 function createMonthInputs(root: HTMLElement) {
   const months = makeHtmlElement("div", "", root);
   months.className = "months";
@@ -435,17 +190,3 @@ function createMonthInputs(root: HTMLElement) {
 
   return { start, end };
 }
-
-function bboxGeometry([west, south, east, north]: Bbox): AreaFeature["geometry"] {
-  const ring = [
-    [west, south],
-    [east, south],
-    [east, north],
-    [west, north],
-    [west, south],
-  ];
-  return { type: "Polygon", coordinates: [ring] };
-}
-
-const wait = (milliseconds: number) =>
-  new Promise((resolve) => setTimeout(resolve, milliseconds));

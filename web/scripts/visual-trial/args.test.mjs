@@ -48,6 +48,27 @@ test("checkPlaces fills defaults and rejects bad spots", () => {
   );
 });
 
+test("the zoom preset reuses the standard areas for sweeping", () => {
+  const spots = loadPlaces("zoom");
+
+  assert.ok(spots.length >= 3);
+  assert.ok(spots.every((spot) => spot.zoom));
+  assert.ok(spots.every((spot) => spot.layers.includes("geology")));
+});
+
+test("checkPlaces keeps the zoom flag and rejects a non-boolean", () => {
+  const [spot] = checkPlaces({
+    spots: [{ name: "A", area: "x", centre: [1, 2], zoom: true }],
+  });
+
+  assert.equal(spot.zoom, true);
+  assert.equal(checkPlaces({ spots: [{ name: "B", area: "x", centre: [1, 2] }] })[0].zoom, false);
+  assert.throws(
+    () => checkPlaces({ spots: [{ name: "C", area: "x", centre: [1, 2], zoom: "yes" }] }),
+    /zoom/,
+  );
+});
+
 test("the contours preset loads", () => {
   const spots = loadPlaces("contours");
 

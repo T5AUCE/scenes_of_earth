@@ -13,6 +13,7 @@ from soe.areas import Area
 from soe.build import build_scene
 from soe.bundle import validate
 from soe.geology_age import AGE_VALUES
+from soe.geology_type import GLIM_VALUES, LITHOLOGY_SOURCE_TAG, OPENLANDMAP_SOURCE
 from soe.geology_regional import (
     BASE_CODE,
     CANADA_AGE_FILE,
@@ -32,7 +33,6 @@ from soe.geology_regional import (
     used_in,
 )
 from soe.ingest.geology_classification import (
-    EGDI_TYPE_NAMES,
     canada_age_batch,
     canada_type_batch,
     class_value,
@@ -43,6 +43,7 @@ from soe.ingest.geology_classification import (
     sgmc_age_batch,
     sgmc_type_batch,
 )
+from soe.ingest.geology_names import EGDI_TYPE_NAMES
 from soe.ingest.geology_regional import (
     _reproject_egdi_tile,
     _write_egdi_classes,
@@ -52,7 +53,6 @@ from soe.ingest.geology_regional import (
 from soe.scene_request import compute_scene_id
 from soe.sources import RealSource, SyntheticSource, make_registry
 from soe.sources.licences import SOURCES
-from soe.sources.lithology import GLIM_VALUES, LITHOLOGY_SOURCE_TAG, OPENLANDMAP_SOURCE
 from tests.helpers import BOUNDARY, HASH_A, NAIROBI
 
 SWITZERLAND = (5.9, 45.8, 10.5, 47.8)  # in the IGME5000 and EGDI footprints
