@@ -4,6 +4,9 @@ import type * as zarr from "zarrita";
 const REQUEST_MAX_BYTES = 8 * 1024 * 1024;
 const REQUEST_GAP_BYTES = 64 * 1024; // chunks closer than this share one request
 
+/** Every store read and its returned bytes for the dev readout; failures count without bytes. */
+export const fetchStats = { requests: 0, bytes: 0 };
+
 type FetchOptions = Parameters<zarr.AsyncReadable["get"]>[1];
 
 /** A caller's byte range of a shard, settled with exactly those bytes. */
@@ -41,11 +44,18 @@ export function mergingStore(
   };
 
   return {
-    get(key, options) {
-      return fetching.get(key, options);
+    async get(key, options) {
+      try {
+        const bytes = await fetching.get(key, options);
+        noteFetch(bytes?.byteLength ?? 0);
+        return bytes;
+      } catch (error) {
+        noteFailedFetch();
+        throw error;
+      }
     },
     getRange(key, range, options) {
-      if (!("offset" in range)) return getRange(key, range, options);
+      if (!("offset" in range)) return fetchSuffix(getRange, key, range, options);
 
       return new Promise((resolve, reject) => {
         const wanted = { offset: range.offset, length: range.length, resolve, reject };
@@ -89,12 +99,47 @@ async function fetchGroup(
   const length = group.end - group.start;
   try {
     const bytes = await getRange(key, { offset: group.start, length }, options);
+    noteFetch(bytes?.byteLength ?? 0);
     for (const range of group.wanted) {
       // A copy keeps the bytes aligned at the start of their own buffer for the codecs.
       const from = range.offset - group.start;
       range.resolve(bytes?.slice(from, from + range.length));
     }
   } catch (error) {
+    noteFailedFetch();
     group.wanted.forEach((range) => range.reject(error));
   }
+}
+
+async function fetchSuffix(
+  getRange: NonNullable<zarr.AsyncReadable["getRange"]>,
+  key: zarr.AbsolutePath,
+  range: Extract<zarr.RangeQuery, { suffixLength: number }>,
+  options: FetchOptions,
+): Promise<Uint8Array | undefined> {
+  try {
+    const bytes = await getRange(key, range, options);
+    noteFetch(bytes?.byteLength ?? 0);
+    return bytes;
+  } catch (error) {
+    noteFailedFetch();
+    throw error;
+  }
+}
+
+/** Records one successful read with the bytes it returned. */
+export function noteFetch(byteCount: number): void {
+  fetchStats.requests += 1;
+  fetchStats.bytes += byteCount;
+}
+
+/** Records one failed read without crediting bytes. */
+export function noteFailedFetch(): void {
+  fetchStats.requests += 1;
+}
+
+/** Restarts the dev counts for the next scene. */
+export function resetFetchStats(): void {
+  fetchStats.requests = 0;
+  fetchStats.bytes = 0;
 }

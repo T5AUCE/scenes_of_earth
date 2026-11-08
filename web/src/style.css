@@ -41,6 +41,15 @@ body {
   color: #b42318;
 }
 
+#dev-stats {
+  top: 34px;
+}
+
+body.has-dev-stats #panel {
+  top: 64px;
+  max-height: calc(100% - 80px);
+}
+
 #panel {
   position: absolute;
   top: 40px;

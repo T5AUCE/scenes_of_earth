@@ -9,6 +9,7 @@ from collections.abc import Callable
 import numpy as np
 from rasterio.transform import Affine
 
+from .areas import WORLD_WIDTH_DEG
 from .sources.lithology import GEOLOGY_CLASSES, OPENLANDMAP_SOURCE
 
 BASE_CODE = 1  # the global base map (GSC for age, GLiM or OpenLandMap for type)
@@ -156,9 +157,17 @@ def sources_for_kind(kind: str) -> tuple[dict, ...]:
 
 
 def footprint_intersects(source: dict, bbox: tuple[float, ...]) -> bool:
-    """Return whether the bbox (W, S, E, N) overlaps the source footprint."""
+    """Return whether the bbox (W, S, E, N) overlaps the source footprint.
+
+    Scene bboxes may run 0 to 360 past the antimeridian while footprints stay
+    within -180 to 180, so each footprint is also tried one world width away.
+    """
     west, south, east, north = source["footprint"]
-    return bbox[0] < east and bbox[2] > west and bbox[1] < north and bbox[3] > south
+    latitudes_overlap = bbox[1] < north and bbox[3] > south
+    return latitudes_overlap and any(
+        bbox[0] < east + shift and bbox[2] > west + shift
+        for shift in (-WORLD_WIDTH_DEG, 0, WORLD_WIDTH_DEG)
+    )
 
 
 def composite_values(

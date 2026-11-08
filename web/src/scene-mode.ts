@@ -9,6 +9,7 @@ import type {
 } from "maplibre-gl";
 
 import { loadAreaFeature } from "./api";
+import { noteSceneOpen, noteSceneReady } from "./dev-stats";
 import {
   loadMapDetailsShown,
   subscribeMapDetails,
@@ -16,6 +17,7 @@ import {
 import { makeHtmlElement } from "./html";
 import { polygonParts } from "./label-filter";
 import { MAX_ZOOM, removeLayerAndSource, WORLD_VIEW } from "./map";
+import { resetFetchStats } from "./merging-store";
 import { shiftLongitudes, worldShift } from "./render/mercator";
 import { UNSYNCED_CHARTS_NOTICE, isCompleteUrlOversized } from "./charts/state";
 import { flightDuration, flyIn, watchResize } from "./scene-camera";
@@ -96,6 +98,8 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
   function enter(scene: Scene, { time: linkedTime, entry, display }: EnterOptions) {
     leaveCurrentScene();
+    noteSceneOpen(performance.now());
+    resetFetchStats();
 
     const cards = openColumn(scene, entry);
     const clock = createSceneClock(scene.id);
@@ -305,18 +309,27 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
     function waitForReadiness(onReady: () => void) {
       let isDone = false;
+      let isTimed = false;
       let settled = 0;
-      const finish = () => {
+      const finishFlight = () => {
         if (isDone || isGone) return;
         isDone = true;
         clearTimeout(capTimer);
         onReady();
       };
+      // The cap starts the flight while data is still loading, so the timer stays silent then.
+      const finishLoad = () => {
+        if (isTimed || isGone) return;
+        isTimed = true;
+        noteSceneReady(performance.now());
+      };
       const settleOne = () => {
         settled += 1;
-        if (settled >= 2) finish();
+        if (settled < 2) return;
+        finishLoad();
+        finishFlight();
       };
-      const capTimer = setTimeout(finish, READINESS_CAP_MS);
+      const capTimer = setTimeout(finishFlight, READINESS_CAP_MS);
       // The clock already holds the restored time, so a shared link warms its own month.
       const firstData = mounted.whenFirstDataReady(() => clock.time);
       firstData.ready.then(settleOne, settleOne);
@@ -331,6 +344,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
       return () => {
         isDone = true;
+        isTimed = true;
         firstData.cancel();
         clearTimeout(capTimer);
       };

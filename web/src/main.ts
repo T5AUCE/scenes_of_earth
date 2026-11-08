@@ -22,6 +22,7 @@ reportMapErrors(map, (message) => showBadge(`Map error: ${message}`, "down"));
 openSharedScene("replace");
 window.addEventListener("popstate", followHistory);
 showBackendStatus();
+maybeShowDevStats();
 
 // ?scene= comes from the address bar, so it is checked before it reaches a request.
 function openSharedScene(entry: SceneEntry) {
@@ -84,4 +85,13 @@ function showBadge(text: string, state: "ok" | "down") {
   badge.textContent = text;
   badge.classList.remove("ok", "down");
   badge.classList.add(state);
+}
+
+// The gate lives in the dev chunk because only a module can read import.meta.env.
+function maybeShowDevStats() {
+  void import("./dev-stats")
+    .then(({ startDevStatsWhenEnabled }) => {
+      startDevStatsWhenEnabled(document.getElementById("dev-stats"), map);
+    })
+    .catch(() => undefined);
 }

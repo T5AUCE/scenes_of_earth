@@ -130,6 +130,20 @@ def test_candidates_need_a_footprint_hit_and_a_file_on_disk(tmp_path):
     assert candidates_for("type", (-100.0, 40.0, -99.0, 41.0), set().__contains__) == []
 
 
+def test_candidates_find_regional_sources_for_a_zero_to_360_bbox():
+    present = {"geology_age_canada.tif", "geology_age_sgmc.tif"}
+    found = candidates_for("age", (235.0, 24.0, 294.0, 50.0), present.__contains__)
+
+    assert [source["id"] for source in found] == ["canada_5m", "us_sgmc"]
+
+
+@pytest.mark.parametrize("bbox", [(144.0, 40.0, 146.0, 41.0), (-180.0, 40.0, -175.0, 41.0)])
+def test_candidates_ignore_a_bbox_east_or_west_of_every_footprint(bbox):
+    found = candidates_for("type", bbox, lambda file: True)
+
+    assert found == []
+
+
 def test_later_sources_win_and_missing_cells_keep_the_earlier_value():
     base = np.array([[1, 0], [1, 1]], "uint8")
     low = np.array([[0, 0], [2, 0]], "uint8")
@@ -385,6 +399,37 @@ def test_read_composited_overlays_the_regional_patch(patchwork_cubes):
 
     assert value.tolist() == [[AGE_VALUES["Cambrian"], 0], [AGE_VALUES["Cretaceous"], 0]]
     assert codes.tolist() == [[BASE_CODE, 0], [CANADA_CODE, 0]]
+
+
+def test_read_composited_applies_the_patch_past_the_antimeridian(patchwork_cubes):
+    backend = RealSource(cubes_dir=patchwork_cubes)
+    west, east, resolution = 170.0, 262.0, 1.0
+    patch_west = -100.0 + 360.0
+    antimeridian_column = round((180.0 - west) / resolution)
+    patch_column = round((patch_west - west) / resolution)
+
+    value, codes, _ = read_composited(
+        backend,
+        "age",
+        "geology_age.tif",
+        (west, 40.0, east, 42.0),
+        resolution,
+    )
+
+    assert value.shape == (2, 92)
+    assert value[:, patch_column:patch_column + 2].tolist() == [
+        [AGE_VALUES["Cambrian"], 0],
+        [AGE_VALUES["Cretaceous"], 0],
+    ]
+    assert codes[:, patch_column:patch_column + 2].tolist() == [
+        [BASE_CODE, 0],
+        [CANADA_CODE, 0],
+    ]
+    # Mode resampling copies edge cells outward, so only the far part is asserted zero.
+    assert (value[:, :antimeridian_column] == 0).all()
+    assert (codes[:, :antimeridian_column] == 0).all()
+    assert set(np.unique(value)) <= {0, AGE_VALUES["Cambrian"], AGE_VALUES["Cretaceous"]}
+    assert set(np.unique(codes)) <= {0, BASE_CODE, CANADA_CODE}
 
 
 def test_missing_regional_files_are_skipped_silently(patchwork_cubes):
