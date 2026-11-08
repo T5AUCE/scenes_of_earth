@@ -1,4 +1,6 @@
 """Build immutable scene bundles containing raster data and metadata."""
+import gzip
+import io
 import json
 import os
 import shutil
@@ -7,10 +9,13 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import date
+from functools import cached_property
 from pathlib import Path
 
 import numpy as np
 import zarr
+from numcodecs.compat import ensure_contiguous_ndarray
+from numcodecs.gzip import GZip
 from rasterio.transform import Affine
 from shapely.geometry import mapping
 from shapely.geometry.base import BaseGeometry
@@ -40,13 +45,40 @@ from .terrain_cache import is_cached, read_cached
 ProgressCallback = Callable[[float, str | None], None]  # build fraction done 0-1, stage text
 LayerProgress = Callable[[float, str], None]  # the same for one layer: its fraction done, stage
 
+
+class DeterministicGzipCodec(GzipCodec):
+    """GzipCodec with a zeroed header timestamp; its zarr.json codec name stays "gzip"."""
+
+    # Overrides a private zarr attribute (checked with zarr 3.4.2); if a zarr upgrade renames it,
+    # test_rebuilding_a_scene_writes_byte_identical_bundles fails instead of builds drifting.
+    @cached_property
+    def _gzip_codec(self) -> GZip:
+        return _DeterministicGZip(self.level)
+
+
+class _DeterministicGZip(GZip):
+    """GZip with a zeroed header timestamp, so rebuilding a scene writes identical bytes."""
+
+    def encode(self, buf: np.ndarray) -> bytes:
+        normalized = ensure_contiguous_ndarray(buf)
+        compressed = io.BytesIO()
+        with gzip.GzipFile(
+            fileobj=compressed,
+            mode="wb",
+            compresslevel=self.level,
+            mtime=0,
+        ) as member:
+            member.write(normalized)
+        return compressed.getvalue()
+
+
 MAX_WORKERS = 8
 MEMORY_BUDGET_BYTES = 500_000_000
 ESTIMATED_BYTES_PER_CELL = 13
 
 BATCH_SIZE = 12
 TILE_SIZE_CELLS = 512
-COMPRESSION = GzipCodec(level=5)
+COMPRESSION = DeterministicGzipCodec(level=5)
 UNIX_EPOCH = date(1970, 1, 1)
 MONTH_LABEL_CHARS = 7  # "YYYY-MM" of an ISO date, for stage texts
 CACHE_DIR_NAME = ".cache"  # in the scenes directory; the leading dot keeps it unserved

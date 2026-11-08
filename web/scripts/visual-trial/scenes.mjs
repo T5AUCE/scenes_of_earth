@@ -45,10 +45,15 @@ function existingScene(spot) {
     const hasLayers = spot.layers.every((id) => scene.layers.some((layer) => layer.id === id));
     const samePeriod = (!spot.start || scene.period?.start.startsWith(spot.start))
       && (!spot.end || periodEndMatches(scene.period?.end, spot.end));
-    if (sameArea && hasLayers && samePeriod) matches.push(scene);
+    if (sameArea && hasLayers && samePeriod) {
+      matches.push({
+        ...scene,
+        builtMs: fs.statSync(file).mtimeMs,
+      });
+    }
   }
   matches.sort((first, second) => first.layers.length - second.layers.length
-    || second.created.localeCompare(first.created));
+    || second.builtMs - first.builtMs);
   if (!matches.length) throw new Error(`no local built scene for ${spot.area}`);
 
   return matches[0].id;

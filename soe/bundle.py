@@ -1,6 +1,4 @@
 """Assemble scene.json from a plan and expose its contract validator."""
-from datetime import datetime, timezone
-
 from . import __version__
 from .areas import Area
 # Existing importers must keep using bundle.validate and its contract names.
@@ -52,7 +50,6 @@ def make(
         "id": scene_id,
         "title": title,
         "generator": {"name": "soe", "version": __version__},
-        "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "area": {
             "type": "boundary" if area.named else "polygon",
             "boundary": boundary,

@@ -1565,7 +1565,6 @@ function writeExistingScene(directory, scene) {
       area: { boundary: { id: scene.area, name: scene.area } },
       layers: scene.layers.map((id) => ({ id })),
       period: { start: scene.start, end: scene.end },
-      created: "2026-11-02T22:00:43+00:00",
     }),
   );
 }

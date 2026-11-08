@@ -14,7 +14,6 @@ import type { Scene } from "./types";
 
 /** Id of the notices heading; the docked panel scrolls the About tab to it. */
 export const NOTICES_HEADING_ID = "notices-heading";
-const ISO_MINUTE_CHARS = 16; // "YYYY-MM-DDTHH:MM"
 const WEB_LINK_PATTERN = /^https?:\/\//;
 
 const BASEMAP_CREDIT = "Basemap: OpenFreeMap, © OpenMapTiles, data from OpenStreetMap.";
@@ -203,12 +202,9 @@ function smoothingLines(elevationUnit: string) {
 }
 
 function versionRows(scene: Scene): [string, string][] {
-  const built = new Date(scene.created).toISOString().slice(0, ISO_MINUTE_CHARS).replace("T", " ");
-
   const rows: [string, string][] = [
     ["Scenes of Earth", scene.generator.version],
     ["Bundle format", scene.version],
-    ["Built", `${built} UTC`],
   ];
   for (const layer of scene.layers) {
     const { name, version } = layer.source;

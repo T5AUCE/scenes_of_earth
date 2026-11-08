@@ -208,7 +208,6 @@ export interface Scene {
   id: string;
   title: string;
   generator: { name: string; version: string };
-  created: string; // ISO 8601 with UTC offset
   area: {
     boundary: BoundaryDoc | null; // null for a drawn polygon
     bbox: Bbox;

@@ -115,6 +115,35 @@ def test_terrain_cache_hit_builds_identical_arrays(tmp_path):
     assert "terrain/mask" in cold and cold == warm
 
 
+def bundle_files(scene_dir: Path) -> dict[str, bytes]:
+    """Map every file of the bundle to its raw bytes."""
+    return {
+        path.relative_to(scene_dir).as_posix(): path.read_bytes()
+        for path in sorted(scene_dir.rglob("*"))
+        if path.is_file()
+    }
+
+
+def test_rebuilding_a_scene_writes_byte_identical_bundles(tmp_path):
+    for run in ("first", "second"):
+        build_scene(
+            HASH_A,
+            Area(NAIROBI, BOUNDARY),
+            "2015-01",
+            "2015-02",
+            [TERRAIN, RAIN],
+            "Test",
+            tmp_path / run,
+        )
+
+    first = bundle_files(tmp_path / "first" / HASH_A)
+    second = bundle_files(tmp_path / "second" / HASH_A)
+
+    assert sorted(first) == sorted(second)
+    for name, content in first.items():
+        assert second[name] == content, name
+
+
 def test_progress_increases_to_one_with_terrain_then_rain_stages(tmp_path):
     events = record_progress(tmp_path)
     fractions = [fraction for fraction, _ in events]
@@ -429,7 +458,8 @@ def build_prepared_polygon(tmp_path: Path, bounds: tuple[float, float, float, fl
 def bundle_manifest(scene_dir: Path) -> dict[str, str]:
     """Map the scene id and every stored file of the bundle to a content digest.
 
-    The creation time is dropped from scene.json and the gzip time stamp from compressed files.
+    Only bundles built before the timestamp removal carry a creation time; it is dropped
+    from scene.json while the gzip time stamp is dropped from compressed files.
     The boundary credit names the 84N reach that the grid has now, which bundles built before
     it do not state.
     """
@@ -444,7 +474,7 @@ def _file_digest(path: Path) -> str:
     content = path.read_bytes()
     if path.name == "scene.json":
         document = json.loads(content)
-        del document["created"]
+        document.pop("created", None)
         text = json.dumps(document, sort_keys=True)
         content = text.replace("60\\u00b0S-84\\u00b0N", "60\\u00b0S-60\\u00b0N").encode()
     else:
