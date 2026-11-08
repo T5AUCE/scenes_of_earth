@@ -137,11 +137,11 @@ test("basemap geometry stays below scene data with the mask above both", async (
   assert.deepEqual(order, [
     "background",
     "landcover_wood",
+    "bridge_motorway",
+    "boundary_2",
     "relief",
     "rain",
     "overview",
-    "bridge_motorway",
-    "boundary_2",
     MASK_ID,
     "road_one_way_arrow",
     "highway-shield-non-us",

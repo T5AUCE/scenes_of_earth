@@ -731,6 +731,9 @@ function addMask(
   });
 
   const basemap = basemapLayers(map, new Set(sceneLayerIds));
+  // Late basemap lines would overpaint scene data, so they drop below it while keeping order.
+  const nonSymbols = basemap.all.filter((id) => !basemap.symbols.includes(id));
+  lowerBasemapGeometry(map, sceneLayerIds, nonSymbols);
   // The fade shares the mask source so outside labels dim without a second geometry.
   map.addLayer({
     id: FADE_ID,
@@ -745,6 +748,26 @@ function addMask(
   }
 
   liftSceneSymbols(map, sceneLayerIds);
+}
+
+/** Drop basemap geometry below the lowest scene layer, keeping every relative order. */
+function lowerBasemapGeometry(
+  map: MapLibreMap,
+  sceneLayerIds: readonly string[],
+  nonSymbols: readonly string[],
+): void {
+  if (typeof map.getStyle !== "function") return;
+  const layers = map.getStyle()?.layers ?? [];
+  const anchor = layers.find(
+    (layer) => sceneLayerIds.includes(layer.id) && map.getLayer(layer.id),
+  )?.id;
+  if (!anchor) return;
+  const anchorIndex = layers.findIndex((layer) => layer.id === anchor);
+  for (const id of nonSymbols) {
+    const index = layers.findIndex((layer) => layer.id === id);
+    if (index < 0 || index < anchorIndex || !map.getLayer(id)) continue;
+    map.moveLayer(id, anchor);
+  }
 }
 
 /** Basemap symbols in style order, plus the full basemap order for the exit restore. */
