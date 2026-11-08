@@ -60,8 +60,12 @@ interface SceneMode {
   enter(scene: Scene, options: EnterOptions): void;
 }
 
-/** The area search and build panel; ready once the layer choices have loaded. */
-export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode: SceneMode) {
+/** The area search and build panel; search works while the layer choices load. */
+export async function createPanel(
+  root: HTMLElement,
+  map: MapLibreMap,
+  sceneMode: SceneMode | (() => Promise<SceneMode>),
+) {
   const controls = createControls(root);
   const { search, level, results, chosen, layerBox, start, end, build, status } = controls;
 
@@ -69,13 +73,6 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
   // Changing the run id cancels the running poll.
   let run = 0;
   let layers: Layer[] = [];
-
-  try {
-    layers = await loadLayerChoices(controls);
-  } catch (error) {
-    status.textContent = `Could not load layers: ${(error as Error).message}`;
-    build.disabled = true;
-  }
 
   const selectedLayerIds = () =>
     [...layerBox.querySelectorAll("input:checked")].map((box) => (box as HTMLInputElement).value);
@@ -108,7 +105,24 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
 
   build.onclick = buildScene;
 
-  return { openScene, showStatus };
+  // Search stays live while the layer list loads, so handlers attach before this fetch.
+  try {
+    layers = await loadLayerChoices(controls);
+  } catch (error) {
+    status.textContent = `Could not load layers: ${(error as Error).message}`;
+    build.disabled = true;
+  }
+  updateMonths();
+
+  return { openScene, showStatus, cancelOpen };
+
+  function cancelOpen() {
+    run++;
+    if (status.classList.contains("busy")) {
+      build.disabled = false;
+      status.classList.remove("busy");
+    }
+  }
 
   function showStatus(text: string) {
     status.textContent = text;
@@ -251,7 +265,7 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
       }
 
       const scene = await loadScene(sceneStatus.bundle_url!);
-      if (thisRun === run) enterScene(scene, options);
+      if (thisRun === run) await enterScene(scene, options, thisRun);
     } catch (error) {
       if (thisRun === run) {
         status.textContent = `Could not open scene ${id}: ${(error as Error).message}`;
@@ -286,7 +300,7 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
 
       status.textContent = "Bundle ready.";
       const scene = await loadScene(finished.bundle_url!);
-      if (thisRun === run) enterScene(scene, { time: null, entry: "push" });
+      if (thisRun === run) await enterScene(scene, { time: null, entry: "push" }, thisRun);
     } catch (error) {
       if (thisRun !== run) return;
 
@@ -362,10 +376,12 @@ export async function createPanel(root: HTMLElement, map: MapLibreMap, sceneMode
   }
 
   // The scene draws its own outline.
-  function enterScene(scene: Scene, options: EnterOptions) {
+  async function enterScene(scene: Scene, options: EnterOptions, thisRun: number) {
+    const ready = typeof sceneMode === "function" ? await sceneMode() : sceneMode;
+    if (thisRun !== run) return;
     pickCount++;
     clearPickedOutline(map);
-    sceneMode.enter(scene, options);
+    ready.enter(scene, options);
   }
 }
 

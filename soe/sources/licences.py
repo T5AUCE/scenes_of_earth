@@ -312,3 +312,29 @@ SOURCES = {
         "modified": "reprojected from Mollweide, simplified 0.01°, clipped to 60°S-84°N",
     },
 }
+
+# The 84N cubes carry the same terms as the 60N ones, so a scene beyond 60N or S states its own
+# extent and, for rain, that ERA5-Land supplies it north of CHIRPS. Scenes inside 60N keep the
+# entries above, so their scene.json does not change.
+_ERA5_LAND = SOURCES["era5land"]
+_ERA5 = SOURCES["era5"]
+SOURCES["era5land_84n"] = {
+    **_ERA5_LAND,
+    "modified": _ERA5_LAND["modified"].replace("60°S-60°N", "60°S-84°N"),
+}
+SOURCES["era5land_rain_84n"] = {
+    **_ERA5_LAND,
+    "attribution": (
+        "Rainfall north of CHIRPS: contains modified Copernicus Climate Change Service "
+        "information 2026 (ERA5-Land)"
+    ),
+    "modified": (
+        "converted from m per day to mm per month; cropped to 60°S-84°N; used only north of "
+        "the CHIRPS grid; block-mean aggregation when stated in the layer resolution; "
+        "preliminary (ERA5-Land-T) months flagged"
+    ),
+}
+SOURCES["era5_84n"] = {
+    **_ERA5,
+    "modified": _ERA5["modified"].replace("60°S-60°N", "60°S-84°N"),
+}

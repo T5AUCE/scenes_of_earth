@@ -3,8 +3,8 @@
 Each source is ingested once to its own uint8 class COGs on the existing geology grids (age at
 1/120 degrees, type at 1/480 degrees), with 0 for no data. The per-source builders below fetch
 the published archives, keep only the needed records, classify them through the name tables in
-`soe.geology_regional` and rasterise the units. Unknown age or rock names fail the ingest with
-the full unmapped list before any COG is published.
+`soe.ingest.geology_classification` and rasterise the units. Unknown age or rock names fail the
+ingest with the full unmapped list before any COG is published.
 """
 import logging
 import os
@@ -32,6 +32,11 @@ from ..geology_regional import (
     IGME_TYPE_FILE,
     SGMC_AGE_FILE,
     SGMC_TYPE_FILE,
+)
+from ..sources.grid import Bbox
+from ..sources.lithology import LITHOLOGY_RES_DEG
+from .cubes import DOWNLOADS_DIR
+from .geology_classification import (
     canada_age_batch,
     canada_type_batch,
     egdi_type_batch,
@@ -40,9 +45,6 @@ from ..geology_regional import (
     sgmc_age_batch,
     sgmc_type_batch,
 )
-from ..sources.grid import Bbox
-from ..sources.lithology import LITHOLOGY_RES_DEG
-from .cubes import DOWNLOADS_DIR
 from .lithology import BLOCK_PX, publish_cog, write_tiled_raster
 
 log = logging.getLogger(__name__)

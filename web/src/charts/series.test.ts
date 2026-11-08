@@ -12,6 +12,7 @@ import {
   rowAtTime,
   SEASONAL_MIN_STEPS,
   shapesForLayer,
+  unionDomainFor,
   unionIntervals,
 } from "./series.ts";
 import type { LayerDoc } from "../types.ts";
@@ -117,6 +118,17 @@ test("union intervals never invent a common period for unlike layers", () => {
   assert.deepEqual(intervals[0], { start: "2019-01-01", end: "2019-02-01" });
   assert.ok(intervals.some(({ start }) => start === "2021-01-01"));
   assert.equal(new Set(intervals.map(({ start }) => start)).size, intervals.length);
+  assert.deepEqual(unionDomainFor([monthly, other, terrainLayer()]), [
+    Date.parse("2019-01-01"),
+    Date.parse("2021-02-01"),
+  ]);
+  assert.equal(unionDomainFor([]), null);
+  assert.equal(unionDomainFor([terrainLayer()]), null);
+  const invalid = {
+    ...other,
+    time: { ...other.time!, values: ["not a date"] },
+  };
+  assert.equal(unionDomainFor([invalid]), null);
 });
 
 test("distribution tables keep exact summaries and sea-level references", () => {

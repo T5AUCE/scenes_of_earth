@@ -154,7 +154,7 @@ export function allocate(
   }
   if (owner === BLEND) {
     as.set(BLEND, "colour");
-    draws.set(BLEND, claim(blendUnit(), "colour", claimed));
+    draws.set(BLEND, claim("colour", claimed));
   } else if (blendOn) {
     draws.set(BLEND, { hidden: ONLY_IN_COLOUR });
   }
@@ -255,10 +255,10 @@ function drawUnit(
     return;
   }
 
-  draws.set(unit.id, claim(unit, draw, claimed));
+  draws.set(unit.id, claim(draw, claimed));
 }
 
-function claim(unit: Unit, draw: Draw, claimed: Map<Claim, string>): Draw | Hidden {
+function claim(draw: Draw, claimed: Map<Claim, string>): Draw | Hidden {
   const claims = CLAIMS[draw];
   if (claims.length === 0) return draw;
 

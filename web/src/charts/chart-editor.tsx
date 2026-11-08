@@ -20,8 +20,7 @@ import {
   type ChartOptions,
   type SupportedShape,
 } from "./definitions";
-import { HypsometryChart } from "./hypsometry-chart";
-import { SeriesChart } from "./series-chart";
+import { ChartPreview } from "./chart-preview";
 import { isSeasonalEligible, shapesForLayer } from "./series";
 import { validateYRange } from "./ticks";
 import { isChartType, type ChartType } from "./table";
@@ -206,9 +205,18 @@ export function ChartEditor({
           )}
         </div>
         <div className="editor-preview">
-          {layer
-            ? previewFor(layer, draft, currentTime, viewerUnit, effectivePalette, effectiveInk)
-            : <p>{"Choose a layer to preview the chart."}</p>}
+          {layer ? (
+            <ChartPreview
+              layer={layer}
+              shape={draft.source.shape}
+              chartType={draft.chartType}
+              options={draft.options}
+              currentTime={currentTime}
+              viewerUnit={viewerUnit}
+              effectivePalette={effectivePalette}
+              effectiveInk={effectiveInk}
+            />
+          ) : <p>{"Choose a layer to preview the chart."}</p>}
         </div>
       </div>
       {confirming && (
@@ -630,41 +638,6 @@ function categoricalNote(layers: readonly LayerDoc[]) {
   if (!hasCategorical) return null;
 
   return <p className="chart-note">{"Categorical shares arrive later."}</p>;
-}
-
-function previewFor(
-  layer: LayerDoc,
-  draft: ChartDraft,
-  currentTime: string | null,
-  viewerUnit: string | null,
-  effectivePalette: string | null,
-  effectiveInk: string | null,
-) {
-  if (draft.source.shape === "distribution") {
-    return (
-      <HypsometryChart
-        layer={layer}
-        chartType={draft.chartType}
-        options={draft.options}
-        viewerUnit={viewerUnit}
-        effectivePalette={effectivePalette}
-        effectiveInk={effectiveInk}
-      />
-    );
-  }
-
-  return (
-    <SeriesChart
-      layer={layer}
-      shape={draft.source.shape}
-      chartType={draft.chartType}
-      options={draft.options}
-      currentTime={currentTime}
-      viewerUnit={viewerUnit}
-      effectivePalette={effectivePalette}
-      effectiveInk={effectiveInk}
-    />
-  );
 }
 
 function compatibleDraft(draft: ChartDraft, layer: LayerDoc) {

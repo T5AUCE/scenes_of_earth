@@ -12,6 +12,7 @@ import {
 import { openStore, type Store } from "./data";
 import {
   DROPPED_NOTE,
+  displayUnitsFrom,
   elevationUnitFrom,
   formatDisplayParams,
   isGeologyLayer,
@@ -368,12 +369,6 @@ function settleView(view: LayerView, time: string | undefined): Promise<void> {
 }
 
 function noop() {}
-
-function displayUnitsFrom(display: SceneDisplay, layers: readonly LayerDoc[]) {
-  return Object.fromEntries(
-    layers.map((layer) => [layer.id, display.layers[layer.id]?.units ?? layer.units]),
-  );
-}
 
 function unitsEqual(first: Record<string, string>, second: Record<string, string>) {
   const keys = Object.keys(first);

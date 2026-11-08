@@ -206,7 +206,7 @@ const hooks = registerHooks({
 const { ContourOverlay, sharedDemSource, terrainTileBounds } =
   await import("./layers/contour-overlay.ts");
 const { createTerrainView } = await import("./layers/terrain.ts");
-const { SceneDataLayers, movePlaceLabels } = await import("./scene-mode.ts");
+const { SceneDataLayers } = await import("./scene-mode.ts");
 const { contourLegendText } = await import("./legend.ts");
 hooks.deregister();
 Reflect.deleteProperty(globalThis, "contourTestDemSource");
@@ -444,7 +444,7 @@ test("shared relief and contour layers keep their mask-gated zoom bounds", (cont
   const map = new TestMap();
   const view = createTerrainView(layerContext(map));
   const relief = map.sources.get("terrain-relief")!;
-  assert.deepEqual(relief.tiles, [sharedDemSource(TILES).sharedDemProtocolUrl]);
+  assert.deepEqual(relief.tiles, [TILES.url]);
   assert.equal(relief.tileSize, 512);
   assert.equal(relief.maxzoom, 11);
   const ids = view.parts.flatMap((part) => part.layerIds);
@@ -454,12 +454,8 @@ test("shared relief and contour layers keep their mask-gated zoom bounds", (cont
   gate.update(5);
   gate.show();
   for (const { id, min } of native) assert.equal(map.layers.get(id).minzoom, Math.max(min, 4.75));
-  const restore = movePlaceLabels(map as unknown as MapLibreMap, {} as never, 4.75, ids);
-  assert.ok(!map.layers.has("terrain-contours-labels-soe-scene-label"));
-  assert.ok(map.layers.has("places-soe-scene-label"));
   gate.update(undefined);
   for (const { id, min } of native) assert.equal(map.layers.get(id).minzoom, min);
-  restore();
   view.destroy();
   assert.equal(map.layers.size, 1);
   assert.equal(map.sources.size, 0);

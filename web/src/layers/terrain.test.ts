@@ -212,6 +212,55 @@ function failure() {
   return { name: "Error", message: "Network request failed" };
 }
 
+test("relief loads Mapterhorn tiles directly instead of the contour protocol", () => {
+  const sources = new Map<string, { tiles?: unknown }>();
+  const map = {
+    addSource(id: string, source: { tiles?: unknown }) {
+      sources.set(id, source);
+    },
+    addLayer() {},
+    on() {},
+    off() {},
+    setPaintProperty() {},
+  };
+  const tiles = {
+    url: "https://example.test/{z}/{x}/{y}",
+    encoding: "terrarium",
+    tile_size: 512,
+    maxzoom: 11,
+    source: { name: "DEM", licence: "open" },
+  };
+  const view = createTerrainView({
+    map,
+    store: Promise.resolve({}),
+    layer: {
+      id: "terrain",
+      title: "Terrain",
+      units: "m",
+      grid: { bbox: [0, 0, 1, 1], res: 1, nx: 2, ny: 2 },
+      tiles,
+      stats: {
+        min: 0,
+        max: 100,
+        mean: 50,
+        p2: 5,
+        p98: 95,
+        slope_p50_deg: 5,
+        slope_p90_deg: 10,
+        cell_m: 500,
+      },
+    },
+    shift: 0,
+    slots: { fill: "fill", shade: "shade", marks: "marks", lines: "lines" },
+    beforeId: undefined,
+    report: () => () => {},
+  } as unknown as Parameters<typeof createTerrainView>[0]);
+
+  assert.deepEqual(sources.get("terrain-relief")?.tiles, [tiles.url]);
+
+  view.destroy();
+});
+
 test("terrain offers metres and feet and forwards the choice to contours", () => {
   const map = {
     addSource() {},

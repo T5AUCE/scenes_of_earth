@@ -2,40 +2,41 @@
 import type {
   ExpressionSpecification,
   GeoJSONSource,
-  LayerSpecification,
   Map as MapLibreMap,
   MapEventType,
   MapSourceDataEvent,
+  VisibilitySpecification,
 } from "maplibre-gl";
 
 import { loadAreaFeature } from "./api";
-import { makeHtmlElement } from "./html";
-import * as labelFilters from "./label-filter";
-import type { TileArea } from "./label-filter";
 import {
-  MAX_ZOOM,
-  moveLabelsIntoArea,
-  removeLayerAndSource,
-  WORLD_VIEW,
-} from "./map";
+  loadMapDetailsShown,
+  subscribeMapDetails,
+} from "./display-state";
+import { makeHtmlElement } from "./html";
+import { polygonParts } from "./label-filter";
+import { MAX_ZOOM, removeLayerAndSource, WORLD_VIEW } from "./map";
 import { shiftLongitudes, worldShift } from "./render/mercator";
 import { UNSYNCED_CHARTS_NOTICE, isCompleteUrlOversized } from "./charts/state";
 import { flightDuration, flyIn, watchResize } from "./scene-camera";
 import type { SceneStore } from "./scene-store";
 import { sceneUrl, timeForPrefix, withChartsToken } from "./scene-url";
 import type { AreaFeature, Bbox, DisplayTokens, Scene } from "./types";
+import { createScenePanel } from "./ui/scene-panel";
 import {
-  createScenePanel,
   PANEL_TABS,
   type FullOpenOptions,
   type PanelTab,
-} from "./ui/scene-panel";
+} from "./ui/panel-contract";
 import { mountScene, OUTLINE_ID } from "./view";
 
 type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
 
 const MASK_ID = "soe-scene-mask";
+const FADE_ID = "soe-scene-fade";
 const MASK_OPACITY = 1;
+// Outside labels show through this much of the page background, so they read as faded.
+const FADE_OPACITY = 0.6;
 // The mask fades in between these distances (in zoom levels) below the fitted zoom.
 const MASK_FADE_START_ZOOM = 1.5;
 const MASK_FADE_END_ZOOM = 0.25;
@@ -88,9 +89,8 @@ interface ActiveScene {
 export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   let current: ActiveScene | null = null;
   let worldCamera: Camera | null = null;
-  let restoreLabels = () => {};
-  let labelArea: TileArea | null = null;
   let sceneLayerIds: string[] = [];
+  let savedBasemapOrder: string[] | null = null;
 
   return { enter, exit, sceneId: () => current?.id ?? null, showFullscreen };
 
@@ -233,6 +233,11 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     clock: SceneClock,
   ): ActiveScene {
     const dataLayers = new SceneDataLayers(map, mounted.layerIds);
+    const symbolBaseline = snapshotBasemapSymbols(map, new Set(sceneLayerIds));
+    const stopDetails = subscribeMapDetails((shown) =>
+      setBasemapSymbolsVisible(map, shown, symbolBaseline)
+    );
+    setBasemapSymbolsVisible(map, loadMapDetailsShown(), symbolBaseline);
     const maskLoad = new AbortController();
     // Once landed, nothing depends on zoom, so the elastic zoom-out dip stays clean.
     let isLanded = false;
@@ -264,6 +269,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       syncLayers(layerIds) {
         sceneLayerIds = [...layerIds];
         dataLayers.sync(layerIds);
+        liftSceneSymbols(map, sceneLayerIds);
       },
       close() {
         isGone = true;
@@ -273,10 +279,12 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
         stopWatchingResize();
         stopDocking();
         flight.stopClamp();
-        labelArea = null;
-        restoreLabels();
-        restoreLabels = () => {};
+        stopDetails();
+        removeLayerAndSource(map, FADE_ID);
         removeLayerAndSource(map, MASK_ID);
+        restoreBasemapOrder(map, savedBasemapOrder);
+        savedBasemapOrder = null;
+        restoreBasemapSymbols(map, symbolBaseline);
         panel.destroy();
         mounted.unmount();
         sceneLayerIds = [];
@@ -341,11 +349,9 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     if (map.getLayer(MASK_ID)) {
       map.setPaintProperty(MASK_ID, "fill-opacity", maskOpacity(fittedZoom));
     }
-
-    if (!labelArea) return;
-
-    restoreLabels();
-    restoreLabels = movePlaceLabels(map, labelArea, dataMinZoom(fittedZoom), sceneLayerIds);
+    if (map.getLayer(FADE_ID)) {
+      map.setPaintProperty(FADE_ID, "fill-opacity", fadeOpacity(fittedZoom));
+    }
   }
 
   async function showAreaMask(
@@ -358,11 +364,18 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     });
     if (signal.aborted) return false;
 
-    const isReady = await loadMask(map, feature, scene.area.bbox, fadeZoom(), signal);
+    const basemap = basemapLayers(map, new Set(sceneLayerIds));
+    savedBasemapOrder = basemap.all;
+    const isReady = await loadMask(
+      map,
+      feature,
+      scene.area.bbox,
+      fadeZoom(),
+      signal,
+      sceneLayerIds,
+    );
     if (!isReady || signal.aborted) return false;
 
-    labelArea = labelFilters.tileAreaGeometry(feature.geometry);
-    restoreLabels = movePlaceLabels(map, labelArea, dataMinZoom(fadeZoom()), sceneLayerIds);
     return true;
   }
 }
@@ -428,43 +441,6 @@ function bottomExtent(element: Element | null): number {
   }
 
   return Math.max(0, window.innerHeight - rect.top);
-}
-
-/** Move only basemap labels above the mask so scene labels keep their native visibility. */
-export function movePlaceLabels(
-  map: MapLibreMap,
-  area: TileArea,
-  fromZoom: number,
-  sceneLayerIds: string[],
-) {
-  const hasSceneSymbols = sceneLayerIds.some((id) => map.getLayer(id)?.type === "symbol");
-  if (!hasSceneSymbols) return moveLabelsIntoArea(map, area, fromZoom);
-
-  const labels = map.getStyle().layers
-    .filter((layer) => layer.type === "symbol")
-    .filter((layer) => !sceneLayerIds.includes(layer.id));
-  const originals = labels.map((layer) => {
-    const minzoom = layer.minzoom ?? 0;
-    const maxzoom = layer.maxzoom ?? MAX_ZOOM;
-    const switchZoom = Math.min(Math.max(minzoom, fromZoom), maxzoom);
-    map.setLayerZoomRange(layer.id, minzoom, switchZoom);
-    const copyId = `${layer.id}-soe-scene-label`;
-    map.addLayer({
-      ...layer,
-      id: copyId,
-      filter: labelFilters.areaFilter(layer.filter, area, Boolean(layer.layout?.["icon-image"])),
-      minzoom: switchZoom,
-      maxzoom,
-    } as LayerSpecification);
-    return { id: layer.id, copyId, minzoom, maxzoom };
-  });
-
-  return () => {
-    for (const { id, copyId, minzoom, maxzoom } of originals) {
-      map.removeLayer(copyId);
-      map.setLayerZoomRange(id, minzoom, maxzoom);
-    }
-  };
 }
 
 /** Gate scene data until the mask is ready without changing visibility or native zoom bounds. */
@@ -675,13 +651,14 @@ function loadMask(
   bbox: Bbox,
   fittedZoom: number | undefined,
   signal: AbortSignal,
+  sceneLayerIds: readonly string[],
 ): Promise<boolean> {
   return new Promise((resolve, reject) => {
     map.on("sourcedata", onData);
     map.on("error", onError);
     signal.addEventListener("abort", onAbort, { once: true });
     try {
-      addMask(map, feature, bbox, fittedZoom);
+      addMask(map, feature, bbox, fittedZoom, sceneLayerIds);
       checkReady();
     } catch (error) {
       cleanup();
@@ -722,7 +699,13 @@ function loadMask(
 }
 
 // Everything outside the area is blanked, which also crops the cell edges of the layers below.
-function addMask(map: MapLibreMap, feature: AreaFeature, bbox: Bbox, fittedZoom?: number) {
+function addMask(
+  map: MapLibreMap,
+  feature: AreaFeature,
+  bbox: Bbox,
+  fittedZoom: number | undefined,
+  sceneLayerIds: readonly string[],
+) {
   const shift = worldShift(bbox);
   const { exteriors, interiors } = outlines(feature.geometry);
   const holes = exteriors.map((ring) => shiftLongitudes(ring, shift) as number[][]);
@@ -736,20 +719,114 @@ function addMask(map: MapLibreMap, feature: AreaFeature, bbox: Bbox, fittedZoom?
   };
 
   map.addSource(MASK_ID, { type: "geojson", data: maskFeature as GeoJsonData });
+  // Appended last, the mask already covers every basemap layer beneath it.
   map.addLayer({
     id: MASK_ID,
     type: "fill",
     source: MASK_ID,
-    paint: { "fill-color": pageBackground(), "fill-opacity": maskOpacity(fittedZoom) },
+    paint: {
+      "fill-color": pageBackground(),
+      "fill-opacity": maskOpacity(fittedZoom),
+    },
   });
 
-  // The mask also covers the basemap labels; the outline stays on top of it.
+  const basemap = basemapLayers(map, new Set(sceneLayerIds));
+  // The fade shares the mask source so outside labels dim without a second geometry.
+  map.addLayer({
+    id: FADE_ID,
+    type: "fill",
+    source: MASK_ID,
+    paint: { "fill-color": pageBackground(), "fill-opacity": fadeOpacity(fittedZoom) },
+  });
+
+  // Basemap labels sit above the mask in their original relative order.
+  for (const id of basemap.symbols) {
+    if (map.getLayer(id)) map.moveLayer(id, FADE_ID);
+  }
+
+  liftSceneSymbols(map, sceneLayerIds);
+}
+
+/** Basemap symbols in style order, plus the full basemap order for the exit restore. */
+function basemapLayers(
+  map: MapLibreMap,
+  sceneIds: ReadonlySet<string>,
+): { symbols: string[]; all: string[] } {
+  const symbols: string[] = [];
+  const all: string[] = [];
+  if (typeof map.getStyle !== "function") return { symbols, all };
+  for (const layer of map.getStyle()?.layers ?? []) {
+    if (sceneIds.has(layer.id) || layer.id.startsWith("soe-")) continue;
+    all.push(layer.id);
+    if (layer.type === "symbol") symbols.push(layer.id);
+  }
+  return { symbols, all };
+}
+
+/** Return the basemap to its pre-scene order, leaving scene leftovers for unmount. */
+function restoreBasemapOrder(map: MapLibreMap, order: readonly string[] | null): void {
+  if (!order) return;
+  for (const id of order) {
+    if (map.getLayer(id)) map.moveLayer(id);
+  }
+}
+
+/** Scene symbols stay above the fade so their own labels keep full strength. */
+function liftSceneSymbols(map: MapLibreMap, sceneLayerIds: readonly string[]): void {
+  for (const id of sceneSymbols(map, sceneLayerIds)) map.moveLayer(id);
   if (map.getLayer(OUTLINE_ID)) map.moveLayer(OUTLINE_ID);
+}
+
+function sceneSymbols(map: MapLibreMap, sceneLayerIds: readonly string[]): string[] {
+  return sceneLayerIds.filter((id) => map.getLayer(id)?.type === "symbol");
+}
+
+/** Remember each basemap symbol's own visibility so scenes restore it exactly. */
+function snapshotBasemapSymbols(
+  map: MapLibreMap,
+  sceneIds: ReadonlySet<string>,
+): Map<string, VisibilitySpecification | undefined> {
+  const baseline = new Map<string, VisibilitySpecification | undefined>();
+  if (typeof map.getStyle !== "function" || typeof map.getLayoutProperty !== "function") {
+    return baseline;
+  }
+  for (const layer of map.getStyle()?.layers ?? []) {
+    if (layer.type !== "symbol" || sceneIds.has(layer.id) || layer.id.startsWith("soe-")) continue;
+    if (!map.getLayer(layer.id)) continue;
+    baseline.set(layer.id, map.getLayoutProperty(layer.id, "visibility"));
+  }
+  return baseline;
+}
+
+/** The toggle governs every basemap symbol, so off hides all text and on shows it all. */
+function setBasemapSymbolsVisible(
+  map: MapLibreMap,
+  visible: boolean,
+  baseline: ReadonlyMap<string, VisibilitySpecification | undefined>,
+): void {
+  if (typeof map.setLayoutProperty !== "function") return;
+  for (const [id] of baseline) {
+    if (!map.getLayer(id)) continue;
+    map.setLayoutProperty(id, "visibility", visible ? "visible" : ("none" as const));
+  }
+}
+
+/** Return each basemap symbol to its own visibility, clearing overrides the scene added. */
+function restoreBasemapSymbols(
+  map: MapLibreMap,
+  baseline: ReadonlyMap<string, VisibilitySpecification | undefined>,
+): void {
+  if (typeof map.setLayoutProperty !== "function") return;
+  for (const [id, original] of baseline) {
+    if (!map.getLayer(id)) continue;
+    // An unset original clears the property back to the style default.
+    map.setLayoutProperty(id, "visibility", original as VisibilitySpecification);
+  }
 }
 
 function outlines(geometry: AreaFeature["geometry"]) {
   const coordinates = geometry.coordinates as number[][][] | number[][][][];
-  const parts = labelFilters.polygonParts(geometry.type, coordinates);
+  const parts = polygonParts(geometry.type, coordinates);
   return {
     exteriors: parts.map((part) => part[0]),
     interiors: parts.flatMap((part) => part.slice(1)),
@@ -781,8 +858,20 @@ function pageBackground() {
 }
 
 // Fades in while zooming toward the area, and is complete once the view is held to it.
-function maskOpacity(fittedZoom?: number): number | ExpressionSpecification {
-  if (fittedZoom === undefined) return MASK_OPACITY;
+function maskOpacity(fittedZoom: number | undefined): number | ExpressionSpecification {
+  return opacityFor(MASK_OPACITY, fittedZoom);
+}
+
+// The fade dims outside labels with the same zoom behaviour as the mask beneath them.
+function fadeOpacity(fittedZoom?: number): number | ExpressionSpecification {
+  return opacityFor(FADE_OPACITY, fittedZoom);
+}
+
+function opacityFor(
+  maximum: number,
+  fittedZoom: number | undefined,
+): number | ExpressionSpecification {
+  if (fittedZoom === undefined) return maximum;
 
   return [
     "interpolate",
@@ -791,7 +880,7 @@ function maskOpacity(fittedZoom?: number): number | ExpressionSpecification {
     fittedZoom - MASK_FADE_START_ZOOM,
     0,
     fittedZoom - MASK_FADE_END_ZOOM,
-    MASK_OPACITY,
+    maximum,
   ];
 }
 

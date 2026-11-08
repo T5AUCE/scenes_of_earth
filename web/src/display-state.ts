@@ -41,6 +41,9 @@ const INK_STORAGE_KEY = "soe.ink.v1";
 const DENSITY_STORAGE_KEY = "soe.density.v1";
 const UNITS_STORAGE_KEY = "soe.units.v1";
 const SMOOTHING_STORAGE_KEY = "soe.smoothing.v1";
+const MAP_DETAILS_STORAGE_KEY = "soe.map-details.v1";
+
+const mapDetailsListeners = new Set<(shown: boolean) => void>();
 
 const PALETTE_FIELDS = 2;
 const INK_FIELDS = 2;
@@ -107,8 +110,7 @@ export function loadStoredEdges(datasetId: string): EdgeSettings {
 
 function storedEdges(): Record<string, StoredEdges> {
   try {
-    const parsed = JSON.parse(localStorage.getItem(EDGES_STORAGE_KEY) ?? "{}");
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    return readStoredRecord(EDGES_STORAGE_KEY) as Record<string, StoredEdges>;
   } catch {
     return {};
   }
@@ -165,11 +167,8 @@ export function loadStoredSmoothing(datasetId: string): number {
   if (!isGeologyLayer(datasetId)) return 0;
 
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(SMOOTHING_STORAGE_KEY) ?? "{}");
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const value = (parsed as Record<string, unknown>)[datasetId];
-      if (isSmoothing(value)) return value;
-    }
+    const value = readStoredRecord(SMOOTHING_STORAGE_KEY)[datasetId];
+    if (isSmoothing(value)) return value;
   } catch {
     // Blocked storage falls back to the default below.
   }
@@ -186,10 +185,7 @@ function isSmoothing(value: unknown): value is number {
 /** Remember the Edge smoothing radius per dataset, leaving links untouched. */
 export function storeSmoothing(datasetId: string, radiusCells: number): void {
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(SMOOTHING_STORAGE_KEY) ?? "{}");
-    const stored = parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, number>
-      : {};
+    const stored = readStoredRecord(SMOOTHING_STORAGE_KEY);
     stored[datasetId] = radiusCells;
     localStorage.setItem(SMOOTHING_STORAGE_KEY, JSON.stringify(stored));
   } catch {
@@ -235,6 +231,16 @@ export function elevationUnitFrom(display: SceneDisplay, layers: readonly LayerD
   if (!terrain) return "m";
 
   return display.layers[terrain.id]?.units ?? terrain.units;
+}
+
+/** Derive each layer's effective units without changing the scene display snapshot. */
+export function displayUnitsFrom(
+  display: SceneDisplay,
+  layers: readonly LayerDoc[],
+): Record<string, string> {
+  return Object.fromEntries(
+    layers.map((layer) => [layer.id, display.layers[layer.id]?.units ?? layer.units]),
+  );
 }
 
 /** A dot-density slider whose value uses the same normalisation as a density in a link. */
@@ -578,11 +584,40 @@ export function storeUnits(layerId: string, unit: string | null) {
   storeName(UNITS_STORAGE_KEY, layerId, unit);
 }
 
+/** Whether scenes show the dense basemap details, off until the viewer opts in. */
+export function loadMapDetailsShown(): boolean {
+  try {
+    return localStorage.getItem(MAP_DETAILS_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+/** Remember the dense detail choice in this browser, leaving share links untouched. */
+export function storeMapDetailsShown(shown: boolean): void {
+  try {
+    localStorage.setItem(MAP_DETAILS_STORAGE_KEY, shown ? "true" : "false");
+  } catch {
+    // Blocked storage must not prevent this visit's display changes.
+  }
+  for (const listener of [...mapDetailsListeners]) {
+    listener(shown);
+  }
+}
+
+/** Follow dense detail changes while a scene is open and stop on cleanup. */
+export function subscribeMapDetails(listener: (shown: boolean) => void): () => void {
+  mapDetailsListeners.add(listener);
+
+  return () => {
+    mapDetailsListeners.delete(listener);
+  };
+}
+
 /** The dot densities this browser remembers by layer id; empty when storage is unavailable. */
 export function loadStoredDensities(): Record<string, number> {
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(DENSITY_STORAGE_KEY) ?? "{}");
-    if (!isRecord(parsed)) return {};
+    const parsed = readStoredRecord(DENSITY_STORAGE_KEY);
 
     return Object.fromEntries(
       Object.entries(parsed)
@@ -613,8 +648,7 @@ function isStoredDensity(value: unknown): value is number {
 
 function loadStoredNames(key: string): Record<string, string> {
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? "{}");
-    if (!isRecord(parsed)) return {};
+    const parsed = readStoredRecord(key);
 
     return Object.fromEntries(
       Object.entries(parsed).filter((entry): entry is [string, string] =>
@@ -624,6 +658,12 @@ function loadStoredNames(key: string): Record<string, string> {
   } catch {
     return {};
   }
+}
+
+// Write callers must retain their no-write path when reading or parsing storage throws.
+function readStoredRecord(key: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? "{}");
+  return isRecord(parsed) ? parsed : {};
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

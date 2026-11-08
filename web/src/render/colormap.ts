@@ -39,23 +39,6 @@ export function stopsForRange(fitted: number[], range: [number, number] | null) 
   return range ? evenStops(...range, fitted.length) : fitted;
 }
 
-/** Colour nearest values by class; NaN and values without a colour stay transparent. */
-export function paintClasses(
-  values: Float32Array,
-  table: SampleTable,
-  colorsByValue: Map<number, number[]>,
-) {
-  const rgba = new Uint8ClampedArray(table.src.length * RGBA_CHANNELS);
-  for (let pixel = 0; pixel < table.src.length; pixel++) {
-    const color = colorsByValue.get(values[table.src[pixel]]);
-    if (!color) continue;
-
-    rgba.set(color, pixel * RGBA_CHANNELS);
-    rgba[pixel * RGBA_CHANNELS + COLOR_CHANNELS] = OPAQUE;
-  }
-  return rgba;
-}
-
 /**
  * A square table of opaque RGBA entries, row-major with the first axis as rows. It interpolates
  * the colour grid bilinearly in OKLab, so the steps between its colours look even.

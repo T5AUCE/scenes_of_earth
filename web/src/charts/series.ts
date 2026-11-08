@@ -215,6 +215,17 @@ export function buildDistributionTable(layer: LayerDoc): DistributionTable {
   };
 }
 
+/** The shared time domain uses the first and last interval starts, not the final end. */
+export function unionDomainFor(layers: readonly LayerDoc[]): [number, number] | null {
+  const intervals = unionIntervals(layers);
+  if (intervals.length === 0) return null;
+  const first = Date.parse(intervals[0].start);
+  const last = Date.parse(intervals[intervals.length - 1].start);
+  if (!Number.isFinite(first) || !Number.isFinite(last)) return null;
+
+  return [first, last];
+}
+
 /** The distinct period intervals of time-varying layers, sorted without inventing a common one. */
 export function unionIntervals(layers: readonly LayerDoc[]) {
   const seen = new Map<string, { start: string; end: string }>();

@@ -898,7 +898,7 @@ def test_land_cover_builds_offline_and_is_not_a_default_layer(env):
 
 def test_land_cover_over_open_sea_is_refused_before_any_read(tmp_path):
     class NoReads(SyntheticSource):
-        def land_cover(self, *args: object) -> None:
+        def land_cover(self, *args: object, **kwargs: object) -> None:
             raise AssertionError("read before the refusal")
 
     sea = mapping(box(-150, 0, -148, 2))

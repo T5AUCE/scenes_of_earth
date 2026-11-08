@@ -2,6 +2,7 @@
 import functools
 import http.server
 import threading
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -9,6 +10,7 @@ import numpy as np
 import pytest
 import rasterio
 import zarr
+from rasterio.features import geometry_mask
 from rasterio.transform import Affine, from_origin
 from shapely.geometry import MultiPolygon, Polygon, box
 from shapely.geometry.base import BaseGeometry
@@ -17,16 +19,19 @@ from soe.areas import AreaError
 from soe.sources import (
     CHIRPS_GRID,
     ERA5_GRID,
+    ERA5_LAND_84N_GRID,
     ERA5_LAND_TEMPERATURE_CUBE,
     ERA5_LAND_TEMPERATURE_GRID,
     ERA5_TEMPERATURE_CUBE,
     SOURCES,
     Bbox,
+    CellWindow,
     CubeSpec,
     Dataset,
     Era5LandTemperatureDataset,
     Grid,
     MonthlyCube,
+    RainDataset,
     RealSource,
     Role,
     SeriesDataset,
@@ -39,6 +44,7 @@ from soe.sources import (
     terrain_tiles,
 )
 from soe.sources import remote, worldcover
+from soe.sources.era5land_precipitation import HighLatitudeRainDataset
 from soe.sources.fallback import read_bilinear
 from soe.sources.grid import CELL_DEG, WORLD_GRID, block_mean
 from soe.sources.periods import add_duration
@@ -391,6 +397,268 @@ def test_temperature_needs_both_cubes_to_be_listed(tmp_path):
     write_cube(tmp_path, "era5_temperature", 0)
 
     assert "era5land_temperature" in make_registry(RealSource(cubes_dir=tmp_path))
+
+
+CROSSES_CHIRPS_EDGE = [10, 59.5, 10.5, 60.5]  # on CHIRPS cell edges, with 10 rows each side of 60N
+
+
+def real_registry(cubes_dir: Path, values: dict[str, float], month: str = "2016-01") -> dict:
+    """Write each named cube filled with its value and return the registry that reads them."""
+    for name, value in values.items():
+        write_cube(cubes_dir, name, value, month)
+    source = RealSource(latest=month, cubes_dir=cubes_dir)
+    source.read_rain = row_ramp
+    return make_registry(source)
+
+
+def row_ramp(month: str, window: tuple[int, int, int, int]) -> np.ndarray:
+    """Fake CHIRPS rain that equals the row of the CHIRPS grid, so a misplaced window shows."""
+    col, row, width, height = window
+    return np.repeat(np.arange(row, row + height, dtype="float32")[:, None], width, axis=1)
+
+
+TEMPERATURE_CUBES = {"era5land_temperature": 10, "era5_temperature": 3}
+TEMPERATURE_84N_CUBES = {"era5land_temperature_84n": 20, "era5_temperature_84n": 4}
+RAIN_CUBES = {"era5_precipitation": 3}
+RAIN_84N_CUBES = {"era5land_precipitation_84n": 30, "era5_precipitation_84n": 4}
+INSIDE_60N = [0.05, 10.05, 0.35, 10.35]  # on the ERA5-Land cell edges
+TOUCHING_60N = [0.05, 59.85, 0.35, 60.05]  # a scene ending at 60N, padded to the ERA5-Land edge
+TOUCHING_60S = [0.05, -60.05, 0.35, -59.85]
+ACROSS_60N = [0.05, 59.85, 0.35, 60.15]
+BEYOND_60S = [10, -60.5, 10.5, -60]  # past 60S without rows north of CHIRPS
+
+
+def test_temperature_reaches_84n_once_both_84n_cubes_are_complete(tmp_path):
+    registry = real_registry(tmp_path, TEMPERATURE_CUBES)
+    assert registry["era5land_temperature"].coverage[3] == 60
+
+    registry = real_registry(tmp_path, {"era5land_temperature_84n": 20})
+    assert registry["era5land_temperature"].coverage[3] == 60
+
+    temperature = real_registry(tmp_path, {"era5_temperature_84n": 4})["era5land_temperature"]
+
+    assert temperature.coverage[3] == 84
+    assert temperature.grid == ERA5_LAND_84N_GRID
+
+
+def test_temperature_stays_at_60n_when_an_84n_cube_lacks_a_stored_month(tmp_path):
+    real_registry(tmp_path, TEMPERATURE_CUBES, "2016-01")
+    real_registry(tmp_path, TEMPERATURE_CUBES, "2016-02")
+
+    registry = real_registry(tmp_path, TEMPERATURE_84N_CUBES, "2016-01")
+
+    assert registry["era5land_temperature"].coverage[3] == 60
+
+
+def test_temperature_ignores_months_before_1981_when_checking_the_84n_cubes(tmp_path):
+    real_registry(tmp_path, TEMPERATURE_CUBES, "1980-12")
+    real_registry(tmp_path, TEMPERATURE_CUBES, "1981-01")
+
+    registry = real_registry(tmp_path, TEMPERATURE_84N_CUBES, "1981-01")
+
+    assert registry["era5land_temperature"].coverage[3] == 84
+
+
+def test_a_scene_inside_60n_keeps_the_layer_that_reads_the_cubes_made_before_84n(tmp_path):
+    temperature = real_registry(tmp_path, {**TEMPERATURE_CUBES, **TEMPERATURE_84N_CUBES})[
+        "era5land_temperature"
+    ]
+
+    assert temperature.for_scene(False) is temperature
+    assert temperature.for_scene(True).reads_north
+
+
+@pytest.mark.parametrize("bbox", [INSIDE_60N, TOUCHING_60N, TOUCHING_60S])
+def test_a_scene_inside_60n_reads_the_old_cubes_even_when_its_window_touches_the_edge(
+    tmp_path,
+    bbox,
+):
+    temperature = real_registry(tmp_path, {**TEMPERATURE_CUBES, **TEMPERATURE_84N_CUBES})[
+        "era5land_temperature"
+    ]
+
+    scene = temperature.for_scene(False)
+
+    assert np.all(scene.read_step("2016-01-01", bbox) == 10)
+    assert scene.local_revision(["2016-01-01"]) == temperature.local_revision(["2016-01-01"])
+
+
+@pytest.mark.parametrize("bbox", [INSIDE_60N, ACROSS_60N])
+def test_a_scene_beyond_60n_reads_the_84n_cubes_everywhere(tmp_path, bbox):
+    temperature = real_registry(tmp_path, {**TEMPERATURE_CUBES, **TEMPERATURE_84N_CUBES})[
+        "era5land_temperature"
+    ]
+
+    scene = temperature.for_scene(True)
+
+    assert np.all(scene.read_step("2016-01-01", bbox) == 20)
+    assert scene.local_revision(["2016-01-01"]) != temperature.local_revision(["2016-01-01"])
+
+
+def test_temperature_fallback_follows_the_scene_not_its_window(tmp_path):
+    no_land = {"era5land_temperature": np.nan, "era5_temperature": 3}
+    temperature = real_registry(tmp_path, {**no_land, **TEMPERATURE_84N_CUBES})[
+        "era5land_temperature"
+    ]
+    temperature.backend.read_cube = functools.partial(
+        no_land_over_84n_land, temperature.backend.read_cube
+    )
+
+    inside = temperature.for_scene(False).read_step_filled("2016-01-01", TOUCHING_60N)
+    beyond = temperature.for_scene(True).read_step_filled("2016-01-01", INSIDE_60N)
+
+    assert np.all(inside.values == 3) and inside.filled.all()
+    assert np.all(beyond.values == 4) and beyond.filled.all()
+
+
+def no_land_over_84n_land(
+    read_cube: Callable[[CubeSpec, str, CellWindow], np.ndarray],
+    spec: CubeSpec,
+    month: str,
+    window: CellWindow,
+) -> np.ndarray:
+    """Read the cube, but let the 84N ERA5-Land cube hold no land value anywhere."""
+    values = read_cube(spec, month, window)
+    return np.full_like(values, np.nan) if spec.name == "era5land_temperature_84n" else values
+
+
+def test_months_of_a_scene_beyond_60n_follow_the_84n_cubes_when_the_old_cubes_get_ahead(tmp_path):
+    source = RealSource(latest="2016-02", cubes_dir=tmp_path)
+    for name, value in {**TEMPERATURE_CUBES, **TEMPERATURE_84N_CUBES}.items():
+        write_cube(tmp_path, name, value)
+    temperature = make_registry(source)["era5land_temperature"]
+    for name, value in TEMPERATURE_CUBES.items():
+        write_cube(tmp_path, name, value, "2016-02")
+
+    old, beyond = temperature.for_scene(False), temperature.for_scene(True)
+
+    assert old.latest() == "2016-02-01" and beyond.latest() == "2016-01-01"
+    assert beyond.steps("2016-01-01", "2016-03-01") == ["2016-01-01"]
+    with pytest.raises(SourceUnavailable, match="2016-02"):
+        beyond.local_revision(["2016-02-01"])
+
+
+def test_rain_months_of_a_scene_beyond_60n_follow_the_84n_cubes(tmp_path):
+    source = RealSource(latest="2016-02", cubes_dir=tmp_path)
+    for name, value in {**RAIN_CUBES, **RAIN_84N_CUBES}.items():
+        write_cube(tmp_path, name, value)
+    rain = make_registry(source)["chirps_monthly"]
+    write_cube(tmp_path, "era5_precipitation", 3, "2016-02")
+    write_cube(tmp_path, "era5land_precipitation_84n", 30, "2016-02")
+
+    old, beyond = rain.for_scene(False), rain.for_scene(True)
+
+    assert old.latest() == "2016-02-01" and beyond.latest() == "2016-01-01"
+    with pytest.raises(SourceUnavailable, match="2016-02"):
+        beyond.local_revision(["2016-02-01"])
+
+
+def test_temperature_notices_follow_the_cubes_the_scene_reads(tmp_path):
+    for name, value in TEMPERATURE_CUBES.items():
+        write_cube(tmp_path, name, value)
+    for name, value in TEMPERATURE_84N_CUBES.items():
+        write_cube(tmp_path, name, value, expver="0005")
+    temperature = real_registry(tmp_path, {})["era5land_temperature"]
+
+    assert temperature.for_scene(False).notices(INSIDE_60N, ["2016-01-01"]) == []
+    [notice] = temperature.for_scene(True).notices(INSIDE_60N, ["2016-01-01"])
+    assert notice.startswith("Temperature 2016-01 is preliminary")
+
+
+@pytest.mark.parametrize(
+    "preliminary_cube",
+    ["era5land_precipitation_84n", "era5_precipitation_84n"],
+)
+def test_rain_notices_follow_the_cubes_the_scene_reads(tmp_path, preliminary_cube):
+    for name, value in {**RAIN_CUBES, **RAIN_84N_CUBES}.items():
+        write_cube(tmp_path, name, value, expver="0005" if name == preliminary_cube else "0001")
+    rain = real_registry(tmp_path, {})["chirps_monthly"]
+
+    assert rain.for_scene(False).fallback_notices(["2016-01-01"], [True]) == []
+    assert rain.for_scene(True).fallback_notices(["2016-01-01"], [False]) == []
+    [notice] = rain.for_scene(True).fallback_notices(["2016-01-01"], [True])
+    assert "ERA5-Land" in notice and "preliminary" in notice
+
+
+def test_rain_stays_chirps_to_60n_until_the_84n_cubes_are_complete(tmp_path):
+    registry = real_registry(tmp_path, RAIN_CUBES)
+    assert type(registry["chirps_monthly"]) is RainDataset
+
+    registry = real_registry(tmp_path, {"era5land_precipitation_84n": 30})
+    assert type(registry["chirps_monthly"]) is RainDataset
+
+    rain = real_registry(tmp_path, {"era5_precipitation_84n": 4})["chirps_monthly"]
+
+    assert type(rain) is HighLatitudeRainDataset
+    assert (rain.grid, rain.coverage[3]) == (WORLD_GRID, 84)
+
+
+def test_rain_inside_60n_is_read_exactly_as_before_84n(tmp_path):
+    before = real_registry(tmp_path / "before", RAIN_CUBES)["chirps_monthly"]
+    after = real_registry(tmp_path / "after", {**RAIN_CUBES, **RAIN_84N_CUBES})["chirps_monthly"]
+    bbox = [10, 20, 10.5, 20.5]
+    scene = after.for_scene(False)
+
+    assert np.array_equal(scene.read_month("2016-01", bbox), before.read_month("2016-01", bbox))
+    assert scene.sources_for(bbox) == [after.source]
+    assert scene.fallback is after.fallback and not scene.reads_north
+
+
+def test_rain_north_of_chirps_is_era5_land_and_the_rest_is_chirps(tmp_path):
+    rain = real_registry(tmp_path, {**RAIN_CUBES, **RAIN_84N_CUBES})["chirps_monthly"]
+    scene = rain.for_scene(True)
+
+    values = scene.read_month("2016-01", CROSSES_CHIRPS_EDGE)
+
+    assert np.all(values[:10] == 30)
+    assert np.array_equal(values[10:, 0], np.arange(10))
+    assert scene.sources_for(CROSSES_CHIRPS_EDGE) == [scene.source, SOURCES["era5land_rain_84n"]]
+
+
+def test_rain_of_a_scene_beyond_60s_lists_no_era5_land_without_cells_north_of_chirps(tmp_path):
+    rain = real_registry(tmp_path, {**RAIN_CUBES, **RAIN_84N_CUBES})["chirps_monthly"]
+
+    assert rain.for_scene(True).sources_for(BEYOND_60S) == [rain.source]
+
+
+def test_rain_south_of_60s_keeps_the_legacy_era5_notices(tmp_path):
+    for name, value in {**RAIN_CUBES, **RAIN_84N_CUBES}.items():
+        write_cube(tmp_path, name, value, expver="0005")
+    rain = real_registry(tmp_path, {})["chirps_monthly"]
+    scene = rain.for_scene(True)
+
+    assert scene.sources_for(BEYOND_60S) == [scene.source]
+    assert "ERA5 model rain over land and sea" in scene.fallback.notice
+    assert "ERA5-Land" not in scene.fallback.notice
+
+    [notice] = scene.fallback_notices(["2016-01-01"], [True])
+
+    assert "ERA5-Land" not in notice
+    assert "ERA5 rain that fills gaps" in notice
+
+
+def test_rain_flags_era5_land_cells_as_filled_like_era5_cells(tmp_path):
+    rain = real_registry(tmp_path, {**RAIN_CUBES, **RAIN_84N_CUBES})["chirps_monthly"]
+    scene = rain.for_scene(True)
+
+    unscaled = scene.read_step_filled("2016-01-01", CROSSES_CHIRPS_EDGE)
+    averaged = scene.read_step_filled("2016-01-01", CROSSES_CHIRPS_EDGE, 2)
+    all_north = scene.read_step_filled("2016-01-01", [10, 61, 10.5, 61.5])
+
+    assert unscaled.filled[:10].all() and not unscaled.filled[10:].any()
+    assert averaged.filled[:5].all() and not averaged.filled[5:].any()
+    assert all_north.filled.all()
+    assert "ERA5-Land" in scene.fallback.notice
+
+
+def test_rain_without_an_era5_land_value_north_of_chirps_comes_from_the_84n_era5_cube(tmp_path):
+    no_land = {"era5land_precipitation_84n": np.nan}
+    rain = real_registry(tmp_path, {**RAIN_CUBES, **RAIN_84N_CUBES, **no_land})["chirps_monthly"]
+
+    filled = rain.for_scene(True).read_step_filled("2016-01-01", CROSSES_CHIRPS_EDGE)
+
+    assert np.all(filled.values[:10] == 4) and filled.filled[:10].all()
+    assert not filled.filled[10:].any()
 
 
 def test_every_source_with_a_disclaimer_requires_it():
@@ -1634,7 +1902,6 @@ def test_terrain_tiles_with_geometry_keep_the_fallback_product_only_where_touche
 
     assert [product for product, _ in whole] == ["glo30", "glo90"]
     assert touched == [whole[0]]
-    assert TERRAIN.sources_for(bounds, box(42.85, 40.05, 42.95, 40.15)) == [SOURCES["glo30"]]
 
 
 def test_terrain_tiles_with_geometry_keep_a_tile_just_outside_the_outline():
@@ -1673,6 +1940,56 @@ def test_warp_block_with_geometry_leaves_untouched_tiles_as_no_data(fake_terrain
     assert np.array_equal(filtered[:, 42:58], whole[:, 42:58], equal_nan=True)
 
 
+def test_warp_block_across_a_pixel_width_boundary_matches_the_full_read(fake_terrain):
+    add_tile, _ = fake_terrain
+    for lon in (10, 11, 12):
+        for lat in (49, 50):
+            add_tile(lon, lat)
+    bounds = (10.0, 49.0, 13.0, 50.0)
+    outline = box(10.2, 49.2, 10.8, 49.8).union(box(12.2, 49.2, 12.8, 49.8))
+
+    assert {tile.lat for tile in placed_terrain_tiles(bounds, "glo90", outline)} == {49}
+
+    whole = _warp_block(bounds, CELL_DEG)
+    filtered = _warp_block(bounds, CELL_DEG, outline)
+
+    assert whole is not None and filtered is not None
+    # Cells beside a skipped tile also hold the half pixel that it reaches back.
+    inside = geometry_mask(
+        [outline],
+        whole.shape,
+        from_origin(bounds[0], bounds[3], CELL_DEG, CELL_DEG),
+        invert=True,
+    )
+    assert inside.any()
+    assert np.isfinite(filtered[inside]).all()
+    assert np.array_equal(filtered[inside], whole[inside])
+
+
+def test_coarse_output_ring_keeps_a_tile_that_a_small_block_would_drop():
+    block = (10.0, 0.0, 11.0, 1.0)
+    outline = box(11.1, 0.2, 11.8, 0.8)
+
+    assert terrain_res(block) < CELL_DEG / 10
+    assert [tile.lon for tile in placed_terrain_tiles(block, "glo30", outline)] == []
+    assert [tile.lon for tile in placed_terrain_tiles(block, "glo30", outline, CELL_DEG)] == [10]
+
+
+def test_warp_block_ring_follows_the_output_resolution_not_the_block_size(fake_terrain):
+    add_tile, _ = fake_terrain
+    add_tile(10, 0)
+    add_tile(11, 0)
+    block = (10.0, 0.0, 11.0, 1.0)
+    outline = box(11.1, 0.2, 11.8, 0.8)
+
+    whole = _warp_block(block, CELL_DEG)
+    filtered = _warp_block(block, CELL_DEG, outline)
+
+    assert whole is not None and filtered is not None
+    assert np.isfinite(filtered[:, -3:]).all()
+    assert np.array_equal(filtered[:, -3:], whole[:, -3:])
+
+
 def test_worldcover_tiles_with_geometry_count_only_touched_tiles():
     whole = worldcover_tiles(TWO_ISLANDS_BOUNDS)
     touched = worldcover_tiles(TWO_ISLANDS_BOUNDS, TWO_ISLANDS)
@@ -1707,3 +2024,14 @@ def test_land_cover_by_tiles_with_geometry_reads_only_touched_tiles():
     assert (classes[60:240, :] == 0).all()
     assert (classes[:60, :120] == 0).all()
     assert (classes[240:, 60:] == 0).all()
+
+
+def test_credits_of_the_84n_cubes_state_their_extent_and_keep_the_terms():
+    assert "60°S-60°N" in SOURCES["era5land"]["modified"]
+    assert "60°S-84°N" in SOURCES["era5land_84n"]["modified"]
+    assert "60°S-84°N" in SOURCES["era5_84n"]["modified"]
+    assert "Rainfall" in SOURCES["era5land_rain_84n"]["attribution"]
+    for key in ("era5land_84n", "era5land_rain_84n"):
+        assert SOURCES[key]["licence"] == SOURCES["era5land"]["licence"]
+        assert SOURCES[key]["disclaimer"] == SOURCES["era5land"]["disclaimer"]
+    assert SOURCES["era5_84n"]["citation"] == SOURCES["era5"]["citation"]

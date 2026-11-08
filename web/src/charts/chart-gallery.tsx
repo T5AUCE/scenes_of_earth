@@ -11,10 +11,9 @@ import {
   unavailableTemplates,
   type ChartDefinition,
 } from "./definitions";
-import { HypsometryChart } from "./hypsometry-chart";
+import { ChartPreview } from "./chart-preview";
 import { chartNotesFor } from "./notes";
-import { SeriesChart } from "./series-chart";
-import { unionIntervals } from "./series";
+import { unionDomainFor } from "./series";
 
 /** Where the gallery sends the viewer; detail and editor keep the same dialog entry. */
 export interface ChartGalleryProps {
@@ -131,16 +130,6 @@ function effectiveInkFor(
   return display.layers[layer.id]?.ink ?? null;
 }
 
-function unionDomainFor(layers: readonly LayerDoc[]): [number, number] | null {
-  const intervals = unionIntervals(layers);
-  if (intervals.length === 0) return null;
-  const first = Date.parse(intervals[0].start);
-  const last = Date.parse(intervals[intervals.length - 1].start);
-  if (!Number.isFinite(first) || !Number.isFinite(last)) return null;
-
-  return [first, last];
-}
-
 interface GalleryCardProps {
   scene: Scene;
   store: SceneStore;
@@ -199,14 +188,20 @@ function GalleryCard({
         )}
       </h4>
       <div className="gallery-preview" onClick={onOpen} onKeyDown={previewKey(onOpen)}>
-        {layer && previewFor(
-          layer,
-          definition,
-          currentTime,
-          viewerUnit,
-          effectivePalette,
-          effectiveInk,
-          xDomain,
+        {layer && (
+          <ChartPreview
+            layer={layer}
+            shape={definition.source.shape}
+            chartType={definition.chartType}
+            options={definition.options}
+            currentTime={currentTime}
+            showTable={false}
+            showNotes={false}
+            viewerUnit={viewerUnit}
+            effectivePalette={effectivePalette}
+            effectiveInk={effectiveInk}
+            xDomain={definition.source.shape === "time_series" ? xDomain : null}
+          />
         )}
       </div>
       <div className="gallery-actions">
@@ -243,45 +238,4 @@ function previewKey(onOpen: () => void) {
       onOpen();
     }
   };
-}
-
-function previewFor(
-  layer: LayerDoc,
-  definition: ChartDefinition,
-  currentTime: string | null,
-  viewerUnit: string | null,
-  effectivePalette: string | null,
-  effectiveInk: string | null,
-  xDomain: [number, number] | null,
-) {
-  if (definition.source.shape === "distribution") {
-    return (
-      <HypsometryChart
-        layer={layer}
-        chartType={definition.chartType}
-        options={definition.options}
-        showTable={false}
-        showNotes={false}
-        viewerUnit={viewerUnit}
-        effectivePalette={effectivePalette}
-        effectiveInk={effectiveInk}
-      />
-    );
-  }
-
-  return (
-    <SeriesChart
-      layer={layer}
-      shape={definition.source.shape}
-      chartType={definition.chartType}
-      options={definition.options}
-      currentTime={currentTime}
-      showTable={false}
-      showNotes={false}
-      viewerUnit={viewerUnit}
-      effectivePalette={effectivePalette}
-      effectiveInk={effectiveInk}
-      xDomain={definition.source.shape === "time_series" ? xDomain : null}
-    />
-  );
 }

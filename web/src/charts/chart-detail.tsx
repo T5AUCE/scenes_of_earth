@@ -10,9 +10,8 @@ import {
   buildLayerAreaMeansCsv,
   downloadCsv,
 } from "./csv";
-import { HypsometryChart } from "./hypsometry-chart";
-import { SeriesChart } from "./series-chart";
-import { unionIntervals } from "./series";
+import { ChartPreview } from "./chart-preview";
+import { unionDomainFor } from "./series";
 
 /** Props of the close-up; the dialog entry stays Charts while detail shows. */
 export interface ChartDetailProps {
@@ -90,32 +89,17 @@ export function ChartDetail({
           {syncNotice}
         </p>
       )}
-      {definition.source.shape === "distribution"
-        ? (
-          <HypsometryChart
-            layer={layer}
-            chartType={definition.chartType}
-            options={definition.options}
-            viewerUnit={viewerUnit}
-            effectivePalette={effectivePalette}
-            effectiveInk={effectiveInk}
-          />
-        )
-        : (
-          <SeriesChart
-            layer={layer}
-            shape={definition.source.shape}
-            chartType={definition.chartType}
-            options={definition.options}
-            currentTime={currentTime}
-            viewerUnit={viewerUnit}
-            effectivePalette={effectivePalette}
-            effectiveInk={effectiveInk}
-            xDomain={definition.source.shape === "time_series"
-              ? unionDomainFor(scene)
-              : null}
-          />
-        )}
+      <ChartPreview
+        layer={layer}
+        shape={definition.source.shape}
+        chartType={definition.chartType}
+        options={definition.options}
+        currentTime={currentTime}
+        viewerUnit={viewerUnit}
+        effectivePalette={effectivePalette}
+        effectiveInk={effectiveInk}
+        xDomain={definition.source.shape === "time_series" ? unionDomainFor(scene.layers) : null}
+      />
       <div className="detail-actions">
         <button type="button" data-detail-edit={true} onClick={() => onEdit(definition.id)}>
           {"Edit"}
@@ -162,14 +146,4 @@ function downloadByMonth(scene: Scene, layer: LayerDoc): void {
 function downloadElevation(scene: Scene, layer: LayerDoc): void {
   const file = buildElevationCsv(scene, layer);
   downloadCsv(file.filename, file.content);
-}
-
-function unionDomainFor(scene: Scene): [number, number] | null {
-  const intervals = unionIntervals(scene.layers);
-  if (intervals.length === 0) return null;
-  const first = Date.parse(intervals[0].start);
-  const last = Date.parse(intervals[intervals.length - 1].start);
-  if (!Number.isFinite(first) || !Number.isFinite(last)) return null;
-
-  return [first, last];
 }

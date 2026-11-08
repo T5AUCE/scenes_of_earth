@@ -96,6 +96,14 @@ class Dataset(ABC):
     def __post_init__(self) -> None:
         """Runs after construction; subclasses check their invariants here."""
 
+    def for_scene(self, beyond_legacy_extent: bool) -> "Dataset":
+        """Return the layer as a scene reads it; `beyond_legacy_extent` is the scene's own decision.
+
+        A layer with data that depends on whether the scene goes beyond 60 degrees latitude
+        overrides this to switch to it.
+        """
+        return self
+
     def tile_count(self, bbox: Bbox, geometry: BaseGeometry | None = None) -> int:
         """Number of source tiles a read of bbox needs (0 for untiled data).
 
@@ -152,11 +160,8 @@ class Dataset(ABC):
         """The first colour stop of a series layer."""
         return stats["min"]
 
-    def sources_for(self, bbox: Bbox, geometry: BaseGeometry | None = None) -> list[dict]:
-        """The sources a read of bbox uses, the main one first.
-
-        With geometry, only sources of tiles meeting the outline or its ring are listed.
-        """
+    def sources_for(self, bbox: Bbox) -> list[dict]:
+        """The sources a read of bbox uses, the main one first."""
         return [self.source]
 
     def notices(self, bbox: Bbox, steps: list[str]) -> list[str]:
@@ -179,9 +184,19 @@ class StaticDataset(Dataset):
         """Return build-result blocks with none by default for datasets without statistics."""
         return {}
 
-    def block_count(self, bbox: Bbox) -> int:
+    def block_count(self, bbox: Bbox, geometry: BaseGeometry | None = None) -> int:
         """Number of parts a read of bbox reports through on_block; the weight of its progress."""
         return 1
+
+    def read_geometry(self, bbox: Bbox, geometry: BaseGeometry) -> BaseGeometry | None:
+        """The outline to read by when that spares source tiles of a capped dataset, else None."""
+        if self.max_tiles is None:
+            return None
+
+        if self.tile_count(bbox, geometry) == self.tile_count(bbox):
+            return None
+
+        return geometry
 
     @abstractmethod
     def read(
@@ -189,11 +204,13 @@ class StaticDataset(Dataset):
         bbox: Bbox,
         res: float,
         on_block: Callable[[], None] | None = None,
+        geometry: BaseGeometry | None = None,
     ) -> tuple[dict[str, np.ndarray], Affine]:
         """Return the values over bbox at cell size `res` and their transform.
 
         The values map each role to a 2D array in the stored dtype. `on_block` is called each
-        time one of the block_count(bbox) parts has been read.
+        time one of the block_count(bbox, geometry) parts has been read. With a geometry from
+        read_geometry, cells farther than the rendering ring from the outline may stay missing.
         """
 
 

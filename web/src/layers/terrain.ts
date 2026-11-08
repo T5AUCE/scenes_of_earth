@@ -47,7 +47,8 @@ export function createTerrainView(context: LayerContext): LayerView {
   // Separate translucent hillshades would darken loaded areas while other tiles are pending.
   map.addSource(id, {
     type: "raster-dem",
-    tiles: [dem.sharedDemProtocolUrl],
+    // Relief fetches tiles directly so it never waits behind contour tracing.
+    tiles: [tiles.url],
     encoding: tiles.encoding,
     tileSize: tiles.tile_size,
     maxzoom: tiles.maxzoom,

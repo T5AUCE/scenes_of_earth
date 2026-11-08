@@ -3,11 +3,12 @@
 Months are requested from the Climate Data Store one year at a time as GRIB. Each file is checked
 against the cube grid and converted to the cube's units. A cube is written in a way that lets
 readers see new data only together with its revision marker. Months that are still preliminary
-are fetched again on later runs, so that final data replaces them.
+are fetched again on later runs, so that final data replaces them. Year files that were
+downloaded beforehand can be stored without a request.
 """
 import calendar
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,13 +18,22 @@ import numpy as np
 import rasterio
 
 from ..sources import (
+    ERA5_LAND_PRECIPITATION_84N_CUBE,
+    ERA5_LAND_TEMPERATURE_84N_CUBE,
     ERA5_LAND_TEMPERATURE_CUBE,
+    ERA5_PRECIPITATION_84N_CUBE,
     ERA5_PRECIPITATION_CUBE,
+    ERA5_TEMPERATURE_84N_CUBE,
     ERA5_TEMPERATURE_CUBE,
     CubeSpec,
     Grid,
 )
-from ..sources.cubes import FINAL_EXPVER, PRELIMINARY_EXPVER, is_preliminary
+from ..sources.cubes import (
+    FINAL_EXPVER,
+    HIGH_LATITUDE_SUFFIX,
+    PRELIMINARY_EXPVER,
+    is_preliminary,
+)
 from ..sources.periods import MONTH_CHARS
 from .cubes import (
     DOWNLOADS_DIR,
@@ -63,6 +73,8 @@ EXPVER_CHARS = 4
 CENTRE_TOLERANCE_CELLS = 1e-6  # how far a cell centre may lie from a multiple of the cell size
 CELSIUS_ZERO_K = 273.15
 MM_PER_M = 1000
+YEAR_CHARS = 4
+AREA_DECIMALS = 3  # of the request area, which absorbs float noise in the grid edges
 
 log = logging.getLogger("soe")
 
@@ -77,37 +89,118 @@ class IngestSpec(NamedTuple):
     convert: Callable[[np.ndarray, str], np.ndarray]  # (values in grib_unit, month) -> cube units
     complete: bool  # the source has a value in every cell, so a gap marks a damaged file
 
+    @property
+    def files_name(self) -> str:
+        """The name that precedes the year in the year files downloaded beforehand."""
+        return self.cube.name.removesuffix(HIGH_LATITUDE_SUFFIX)
+
 
 def ingest(
     cube_dir: Path | str,
     spec: IngestSpec,
     start_month: str,
     client: "cdsapi.Client | None" = None,
+    files_dir: Path | str | None = None,
 ) -> None:
     """Add the published months from `start_month` to the cube, and refresh preliminary ones.
 
     The first run starts at `start_month`; later runs continue after the last stored month. A
     `start_month` before the first stored month adds the earlier months, newest year first, so the
-    stored months stay contiguous. The ingest requires the `cdsapi` package and a CDS key in
-    `~/.cdsapirc` unless a client is supplied.
+    stored months stay contiguous. With `files_dir`, each year's months that the cube lacks are
+    stored from its year file where they join the stored months, and the files stay where they
+    are. All other months are requested from the Climate Data Store, which needs the `cdsapi`
+    package and a CDS key in `~/.cdsapirc` unless a client is supplied.
     """
-    if client is None:
-        import cdsapi
-
-        client = cdsapi.Client()
-
     cube_dir = Path(cube_dir)
     newest = newest_month()
     attrs = cube_attrs(cube_dir, spec.cube)
     stored = attrs.get("months", {})
     months = _wanted_months(stored, attrs.get("pending", []), start_month, newest)
+    batches = year_batches(months, newest, min(stored, default=None))
+    year_files = _year_files(Path(files_dir), spec) if files_dir is not None else {}
     downloads = cube_dir / DOWNLOADS_DIR
-    downloads.mkdir(parents=True, exist_ok=True)
+    for batch in batches:
+        year_file = year_files.get(int(batch[0][:YEAR_CHARS]))
+        to_request = _store_from_year_file(cube_dir, spec, batch, start_month, year_file)
+        if not to_request:
+            continue
 
-    for batch in year_batches(months, newest, min(stored, default=None)):
-        log.info("%s: requesting %s to %s", spec.cube.title, batch[0], batch[-1])
-        _ingest_batch(client, cube_dir, spec, batch, downloads, batch == [newest])
+        if client is None:
+            import cdsapi
 
+            client = cdsapi.Client()
+
+        downloads.mkdir(parents=True, exist_ok=True)
+        log.info("%s: requesting %s to %s", spec.cube.title, to_request[0], to_request[-1])
+        _ingest_batch(client, cube_dir, spec, to_request, downloads, to_request == [newest])
+
+
+def _year_files(files_dir: Path, spec: IngestSpec) -> dict[int, Path]:
+    """Return the finished year files by year.
+
+    A file that is still downloading ends in `.part` instead of `.grib`, so it never matches.
+    """
+    pattern = f"{spec.files_name}-[0-9][0-9][0-9][0-9].grib"
+    return {int(path.stem[-YEAR_CHARS:]): path for path in files_dir.glob(pattern)}
+
+
+def _store_from_year_file(
+    cube_dir: Path,
+    spec: IngestSpec,
+    batch: list[str],
+    start_month: str,
+    year_file: Path | None,
+) -> list[str]:
+    """Store the months of the batch that the year file holds and the cube can take now.
+
+    A month is stored only if it joins the stored months without a gap, which earlier batches may
+    have just made possible. A stored month is never replaced, so that final data fetched later is
+    not overwritten by an older file. Return the months of the batch that still need fetching.
+    """
+    if year_file is None:
+        return batch
+
+    attrs = cube_attrs(cube_dir, spec.cube)
+    stored = attrs.get("months", {})
+    kept = stored.keys() - set(attrs.get("pending", []))
+    replaceable = set(batch) - kept
+    fields = {
+        field[0]: field
+        for field in read_grib_months(year_file, spec)
+        if field[0] in replaceable
+    }
+    joining = _joining_months(stored, fields.keys(), start_month)
+    if joining:
+        log.info("%s: storing %d months from %s", spec.cube.title, len(joining), year_file.name)
+        write_months(cube_dir, spec.cube, spec.complete, [fields[month] for month in joining])
+    return [month for month in batch if month not in joining]
+
+
+def _joining_months(stored: dict[str, str], candidates: Iterable[str], first: str) -> set[str]:
+    """Return the candidates that replace a stored month or extend the stored months.
+
+    An empty cube is extended from `first`.
+    """
+    candidates = set(candidates)
+    joining = candidates & stored.keys()
+    forward = next_month(max(stored)) if stored else first
+    joining |= _consecutive_from(forward, next_month, candidates)
+    if stored:
+        joining |= _consecutive_from(previous_month(min(stored)), previous_month, candidates)
+    return joining
+
+
+def _consecutive_from(
+    month: str,
+    following: Callable[[str], str],
+    candidates: set[str],
+) -> set[str]:
+    """Return the candidates from `month` on, stopping at the first month that is not one."""
+    run = set()
+    while month in candidates:
+        run.add(month)
+        month = following(month)
+    return run
 
 
 def _wanted_months(
@@ -176,8 +269,20 @@ def _request(spec: IngestSpec, batch: list[str]) -> dict:
         "time": ["00:00"],
         "data_format": "grib",
         "download_format": "unarchived",
-        "area": [60, -180, -60, 180],  # N, W, S, E
+        "area": _area(spec.cube.grid),
     }
+
+
+def _area(grid: Grid) -> list[float]:
+    """The request area N, W, S, E that spans the centres of the grid's first and last rows."""
+    north, south = _row_extent_deg(grid)
+    return [north, -180, south, 180]
+
+
+def _row_extent_deg(grid: Grid) -> tuple[float, float]:
+    """Latitudes of the centres of the grid's first and last rows."""
+    north = round(grid.north_deg - grid.res / 2, AREA_DECIMALS)
+    return north, round(north - (grid.rows - 1) * grid.res, AREA_DECIMALS)
 
 
 def read_grib_months(path: Path | str, spec: IngestSpec) -> Iterator[MonthField]:
@@ -356,9 +461,11 @@ def _cube_positions(dataset: rasterio.DatasetReader, grid: Grid) -> tuple[np.nda
     if not np.array_equal(np.unique(columns), np.arange(grid.columns)):
         raise ValueError("the raster does not cover all longitudes")
     if not np.array_equal(rows, np.arange(grid.rows)):
-        raise ValueError("the raster rows must run from 60N to 60S")
+        north, south = _row_extent_deg(grid)
+        raise ValueError(f"the raster rows must run from {north:g}N to {abs(south):g}S")
 
     return rows, columns
+
 
 def _kelvin_to_celsius(values: np.ndarray, month: str) -> np.ndarray:
     return values - CELSIUS_ZERO_K
@@ -392,6 +499,38 @@ INGEST_SPECS = {
         ),
         IngestSpec(
             ERA5_PRECIPITATION_CUBE,
+            "reanalysis-era5-single-levels-monthly-means",
+            "total_precipitation",
+            "[m]",
+            _metres_per_day_to_mm_per_month,
+            complete=True,
+        ),
+        IngestSpec(
+            ERA5_LAND_TEMPERATURE_84N_CUBE,
+            "reanalysis-era5-land-monthly-means",
+            "2m_temperature",
+            "[K]",
+            _kelvin_to_celsius,
+            complete=False,
+        ),
+        IngestSpec(
+            ERA5_LAND_PRECIPITATION_84N_CUBE,
+            "reanalysis-era5-land-monthly-means",
+            "total_precipitation",
+            "[m]",
+            _metres_per_day_to_mm_per_month,
+            complete=False,
+        ),
+        IngestSpec(
+            ERA5_TEMPERATURE_84N_CUBE,
+            "reanalysis-era5-single-levels-monthly-means",
+            "2m_temperature",
+            "[K]",
+            _kelvin_to_celsius,
+            complete=True,
+        ),
+        IngestSpec(
+            ERA5_PRECIPITATION_84N_CUBE,
             "reanalysis-era5-single-levels-monthly-means",
             "total_precipitation",
             "[m]",

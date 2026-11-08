@@ -4,6 +4,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from shapely.geometry.base import BaseGeometry
 
 from soe import terrain_cache
 from soe.sources import RealSource, Role, SyntheticSource, make_registry
@@ -23,9 +24,10 @@ class CountingSource(SyntheticSource):
         bounds: tuple,
         res: float,
         on_block: Callable[[], None] | None = None,
+        geometry: BaseGeometry | None = None,
     ) -> tuple[np.ndarray, object]:
         self.reads += 1
-        return super().terrain(bounds, res, on_block or (lambda: None))
+        return super().terrain(bounds, res, on_block or (lambda: None), geometry)
 
 
 def test_cache_hit_equals_the_miss_byte_for_byte(tmp_path):
@@ -51,11 +53,13 @@ def test_floating_nans_round_trip_through_the_cache(tmp_path):
             bounds: tuple,
             res: float,
             on_block: Callable[[], None] | None = None,
+            geometry: BaseGeometry | None = None,
         ) -> tuple[np.ndarray, object]:
             elevation, transform = super().terrain(
                 bounds,
                 res,
                 on_block or (lambda: None),
+                geometry,
             )
             elevation[:2, :2] = np.nan
             return elevation, transform
@@ -124,6 +128,7 @@ def test_failed_read_leaves_nothing_in_the_cache(tmp_path):
             bounds: tuple,
             res: float,
             on_block: Callable[[], None] | None = None,
+            geometry: BaseGeometry | None = None,
         ) -> tuple[np.ndarray, object]:
             raise RuntimeError("boom")
 

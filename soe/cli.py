@@ -66,9 +66,12 @@ def main(argv: list[str] | None = None) -> None:
 
         logging.basicConfig(level=logging.INFO)
         if args.cube == CHIRPS_CUBE.name:
+            if args.from_files:
+                parser.error("--from-files holds ERA5 year files, not CHIRPS")
+
             chirps.ingest(args.cubes, args.start)
         else:
-            ingest(args.cubes, INGEST_SPECS[args.cube], args.start)
+            ingest(args.cubes, INGEST_SPECS[args.cube], args.start, files_dir=args.from_files)
         return
 
     if args.command == "ingest-lithology":
@@ -173,6 +176,12 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         metavar="YYYY-MM",
         help="first month of a new cube, or an earlier month to extend it; later runs continue on",
+    )
+    ingest_parser.add_argument(
+        "--from-files",
+        metavar="DIR",
+        help="store the months of the finished <name>-<year>.grib files in DIR before asking "
+        "the CDS for the rest; the files are kept",
     )
     ingest_parser.add_argument(
         "--cubes",

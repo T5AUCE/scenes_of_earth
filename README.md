@@ -106,6 +106,14 @@ Builds read monthly Zarr cubes from local disk (`SOE_CUBES_DIR`). Reading the cu
 | ERA5 2 m temperature | `era5_temperature.zarr` | Temperature cells where ERA5-Land has no land value |
 | ERA5 total precipitation | `era5_precipitation.zarr` | Rainfall cells where CHIRPS has no value |
 | CHIRPS monthly rain | `chirps_monthly.zarr` | Rainfall (main source), optional |
+| ERA5-Land 2 m temperature to 84N | `era5land_temperature_84n.zarr` | Temperature (main source) in scenes beyond 60°N or S |
+| ERA5 2 m temperature to 84N | `era5_temperature_84n.zarr` | Temperature cells where ERA5-Land has no land value, beyond 60°N or S |
+| ERA5-Land total precipitation to 84N | `era5land_precipitation_84n.zarr` | Rainfall north of CHIRPS (60°N) in scenes beyond 60°N or S |
+| ERA5 total precipitation to 84N | `era5_precipitation_84n.zarr` | Rainfall cells where CHIRPS and ERA5-Land have no value, beyond 60°N or S |
+
+A scene whose area reaches past 60°N or S (the same rule that adds `:north-84` to its id) reads only the four 84N cubes for
+temperature and rain; every other scene reads the cubes above, so its id and bytes do not change. Rainfall and Temperature
+reach 84N only when all four 84N cubes hold every month of the 60N cubes since 1981-01; until then they keep their 60N extent.
 
 Rainfall and Temperature are listed only when their ERA5 cubes exist, so no layer lacks the data that fills its gaps. The fill
 is automatic. ERA5-Land and CHIRPS values are never changed, except that a CHIRPS value above 6553.4 mm/month, which the
@@ -124,7 +132,15 @@ https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels-monthly
 python -m soe.cli ingest-cube era5land_temperature --from 1981-01
 python -m soe.cli ingest-cube era5_temperature --from 1981-01
 python -m soe.cli ingest-cube era5_precipitation --from 1981-01
+python -m soe.cli ingest-cube era5land_temperature_84n --from 1981-01
+python -m soe.cli ingest-cube era5_temperature_84n --from 1981-01
+python -m soe.cli ingest-cube era5land_precipitation_84n --from 1981-01
+python -m soe.cli ingest-cube era5_precipitation_84n --from 1981-01
 ```
+
+`--from-files DIR` stores the months of finished `<name>-<year>.grib` files in `DIR` (one CDS year per file) before asking the
+CDS for the rest, and keeps the files. It stores only months that join the stored months without a gap and never replaces a
+stored month; the CDS is asked for the others, and the client is created only when a request is needed.
 
 The CHIRPS cube needs no account. Its first run downloads about 16 GB (1981-01 onward, about 1.5 hours) and stores about
 3 to 5 GB. CHIRPS v3.0 covers 60°S to 60°N. Negative fill and values above 6553.4 mm/month are stored as no value. Implausible
@@ -381,14 +397,19 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
   the Copernicus information or data it contains." Citation: Muñoz Sabater, J. (2019): ERA5-Land monthly averaged data
   from 1950 to present. Copernicus Climate Change Service (C3S) Climate Data Store (CDS), doi:10.24381/cds.68d2bb30;
   Muñoz-Sabater, J. et al. (2021) Earth Syst. Sci. Data 13, 4349-4383, doi:10.5194/essd-13-4349-2021. Converted from K to
-  °C and cropped to 60S-60N; preliminary (ERA5-Land-T) months carry a notice. The same text is in `soe/sources/licences.py`.
+  °C and cropped to 60S-60N; preliminary (ERA5-Land-T) months carry a notice. A scene beyond 60N or S takes the 84N cube
+  instead and says 60S-84N. The same text is in `soe/sources/licences.py`.
+- **Rain north of CHIRPS: ERA5-Land total precipitation** (same terms, disclaimer and citation as ERA5-Land above), used
+  for cells north of 60N in scenes beyond 60N or S. Required attribution: "contains modified Copernicus Climate Change
+  Service information 2026 (ERA5-Land)". Converted from m per day to mm per month and cropped to 60S-84N. The bundle credit
+  says "Rainfall north of CHIRPS: ..." and ERA5-Land is listed only when the window has rows north of CHIRPS.
 - **Gap fill for temperature and rain: ERA5 monthly averaged data on single levels from 1940 to present** (ECMWF,
   Copernicus Climate Change Service), CC BY 4.0. Required attribution: "contains modified Copernicus Climate Change
   Service information 2026 (ERA5)". The disclaimer is the one given for ERA5-Land. Citation: Hersbach, H. et al. (2023):
   ERA5 monthly averaged data on single levels from 1940 to present. Copernicus Climate Change Service (C3S) Climate Data
   Store (CDS), doi:10.24381/cds.f17050d7; Hersbach, H. et al. (2020) Q. J. R. Meteorol. Soc. 146, 1999-2049,
-  doi:10.1002/qj.3803. Converted from K to °C or from m per day to mm per month, cropped to 60S-60N and sampled at the
-  centre of each native layer cell where the main source has no value. Rainfall carries a notice for preliminary (ERA5T)
+  doi:10.1002/qj.3803. Converted from K to °C or from m per day to mm per month, cropped to 60S-60N (60S-84N for a scene beyond 60N or S)
+  and sampled at the centre of each native layer cell where the main source has no value. Rainfall carries a notice for preliminary (ERA5T)
   months only where ERA5 filled an in-area cell. Temperature flags requested months that are preliminary in either cube.
   The credit appears in a bundle only when it holds filled cells. The same text is in `soe/sources/licences.py`.
 - **Terrain: Copernicus DEM GLO-30 Public and GLO-90** (Copernicus WorldDEM-30 / -90 licences, free and open; GLO-90 is

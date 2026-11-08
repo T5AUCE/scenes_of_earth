@@ -388,22 +388,14 @@ body.scene-mode #panel {
   margin-bottom: 4px;
 }
 
-.layer-editor .show-as-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-}
-
-.layer-editor .show-as-options label {
-  margin-bottom: 0;
-}
-
+.layer-editor .show-as-options,
 .layer-editor .units-options {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
 }
 
+.layer-editor .show-as-options label,
 .layer-editor .units-options label {
   margin-bottom: 0;
 }
@@ -1225,14 +1217,7 @@ body.scene-mode .maplibregl-ctrl-scale {
   color: #666;
 }
 
-.chart-confirm {
-  border: 1px solid #e6a000;
-  background: rgba(230, 160, 0, 0.15);
-  border-radius: 4px;
-  padding: 8px;
-  margin-top: 8px;
-}
-
+.chart-confirm,
 .editor-confirm {
   border: 1px solid #e6a000;
   background: rgba(230, 160, 0, 0.15);

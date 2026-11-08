@@ -2,7 +2,9 @@
 
 Importers use these names, while the modules hold the code. Each of chirps.py,
 era5land_temperature.py, lithology.py, terrain.py and worldcover.py reads one source.
-The era5.py module holds the general ERA5 cubes that fill the gaps of the first two.
+The era5.py module holds the general ERA5 cubes that fill the gaps of the first two, and
+era5land_precipitation.py adds ERA5-Land rain north of CHIRPS. Each ERA5 cube has a twin that
+reaches 84N.
 The synthetic.py module stands in for all of them offline. The registry.py module lists the
 datasets.
 """
@@ -23,8 +25,18 @@ from .datasets import (
     SeriesDataset,
     StaticDataset,
 )
-from .era5 import ERA5_GRID, ERA5_PRECIPITATION_CUBE, ERA5_TEMPERATURE_CUBE
+from .era5 import (
+    ERA5_84N_GRID,
+    ERA5_GRID,
+    ERA5_PRECIPITATION_84N_CUBE,
+    ERA5_PRECIPITATION_CUBE,
+    ERA5_TEMPERATURE_84N_CUBE,
+    ERA5_TEMPERATURE_CUBE,
+)
+from .era5land_precipitation import ERA5_LAND_PRECIPITATION_84N_CUBE
 from .era5land_temperature import (
+    ERA5_LAND_84N_GRID,
+    ERA5_LAND_TEMPERATURE_84N_CUBE,
     ERA5_LAND_TEMPERATURE_CUBE,
     ERA5_LAND_TEMPERATURE_GRID,
     Era5LandTemperatureDataset,
@@ -60,10 +72,16 @@ __all__ = [
     "CHIRPS_CUBE",
     "CHIRPS_GRID",
     "DEFAULT_CUBES_DIR",
+    "ERA5_84N_GRID",
     "ERA5_GRID",
+    "ERA5_LAND_84N_GRID",
+    "ERA5_LAND_PRECIPITATION_84N_CUBE",
+    "ERA5_LAND_TEMPERATURE_84N_CUBE",
     "ERA5_LAND_TEMPERATURE_CUBE",
     "ERA5_LAND_TEMPERATURE_GRID",
+    "ERA5_PRECIPITATION_84N_CUBE",
     "ERA5_PRECIPITATION_CUBE",
+    "ERA5_TEMPERATURE_84N_CUBE",
     "ERA5_TEMPERATURE_CUBE",
     "FROM_FALLBACK",
     "FROM_MAIN",

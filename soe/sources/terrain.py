@@ -118,8 +118,13 @@ def placed_terrain_tiles(
     bounds: Bbox,
     product: str,
     geometry: BaseGeometry | None = None,
+    res: float | None = None,
 ) -> list[PlacedTile]:
-    """The tiles of terrain_tiles with their position in the frame of the bounds."""
+    """The tiles of terrain_tiles with their position in the frame of the bounds.
+
+    The rendering ring around the outline is res wide, the output cell size of the whole read.
+    It defaults to the cell size of the bounds, which is right only when they are the whole read.
+    """
     west, south, east, north = bounds
     candidates = list(dict.fromkeys([product, "glo90"]))
     first_lat = max(math.floor(south + TILE_EDGE_TOLERANCE_DEG), -TILE_ROW_OFFSET_DEG)
@@ -127,7 +132,7 @@ def placed_terrain_tiles(
     first_lon = math.floor(west + TILE_EDGE_TOLERANCE_DEG)
     last_lon = math.ceil(east - TILE_EDGE_TOLERANCE_DEG)
     target = touch_target(geometry)
-    res = terrain_res(bounds)
+    ring_res = terrain_res(bounds) if res is None else res
     tiles = []
     for lat in range(first_lat, last_lat):
         for lon in range(first_lon, last_lon):
@@ -135,7 +140,7 @@ def placed_terrain_tiles(
             if tile is None:
                 continue
 
-            if target is None or target.intersects(expanded_tile(tile.lon, tile.lat, 1, res)):
+            if target is None or target.intersects(expanded_tile(tile.lon, tile.lat, 1, ring_res)):
                 tiles.append(tile)
     return tiles
 
@@ -241,15 +246,17 @@ def terrain_by_blocks(
     res: float,
     read_block: Callable[[Bbox, float], np.ndarray | None],
     on_block: Callable[[], None] = lambda: None,
+    geometry: BaseGeometry | None = None,
 ) -> tuple[np.ndarray, Affine]:
     """Terrain on bounds, read in parallel in blocks of whole degrees.
 
     read_block returns float64 with NaN where the source has no data, or None for
-    a block without terrain (left missing). on_block runs after each block read.
+    a block without terrain (left missing). on_block runs after each block read. With geometry,
+    only blocks holding a tile that meets the outline or its rendering ring are read.
     """
     west, south, east, north = bounds
     height, width = round((north - south) / res), round((east - west) / res)
-    blocks = _terrain_blocks(bounds)
+    blocks = _terrain_blocks(bounds, res, geometry)
     with ThreadPoolExecutor(TERRAIN_THREADS) as executor:
         futures = [executor.submit(read_block, block, res) for block in blocks]
         for future in as_completed(futures):
@@ -265,19 +272,28 @@ def terrain_by_blocks(
     return elevation, from_origin(west, north, res, res)
 
 
-def terrain_block_count(bounds: Bbox) -> int:
-    """How many blocks terrain_by_blocks reads for bounds."""
-    return len(_terrain_blocks(bounds))
+def terrain_block_count(bounds: Bbox, geometry: BaseGeometry | None = None) -> int:
+    """How many blocks terrain_by_blocks reads for bounds at their own terrain_res."""
+    return len(_terrain_blocks(bounds, terrain_res(bounds), geometry))
 
 
-def _terrain_blocks(bounds: Bbox) -> list[Bbox]:
+def _terrain_blocks(bounds: Bbox, res: float, geometry: BaseGeometry | None) -> list[Bbox]:
     west, south, east, north = bounds
     x_edges = _block_edges(west, east)
     y_edges = _block_edges(south, north)
-    return [
+    blocks = [
         (x0, y0, x1, y1)
         for x0, x1 in zip(x_edges, x_edges[1:])
         for y0, y1 in zip(y_edges, y_edges[1:])
+    ]
+    if geometry is None:
+        return blocks
+
+    product = terrain_product(res)
+    return [
+        block
+        for block in blocks
+        if placed_terrain_tiles(with_margin(block, res), product, geometry, res)
     ]
 
 
@@ -299,14 +315,15 @@ class CopernicusDemReader:
     ) -> tuple[np.ndarray, Affine]:
         """Float64 elevation on bounds at res, NaN where no tile covers the cell.
 
-        on_block runs after each of terrain_block_count(bounds) blocks. With geometry, only tiles
-        meeting the outline or its rendering ring are read; other cells stay missing.
+        on_block runs after each of terrain_block_count(bounds, geometry) blocks. With geometry,
+        only tiles meeting the outline or its rendering ring are read; other cells stay missing.
         """
         return terrain_by_blocks(
             bounds,
             res,
             lambda block, block_res: _warp_block(block, block_res, geometry),
             on_block,
+            geometry,
         )
 
 
@@ -317,26 +334,35 @@ def _warp_block(
 ) -> np.ndarray | None:
     """One block of float64 elevation with NaN for gaps, or None with no tile."""
     product = terrain_product(res)
-    tiles = placed_terrain_tiles(with_margin(bounds, res), product, geometry)
+    margin_bounds = with_margin(bounds, res)
+    tiles = placed_terrain_tiles(margin_bounds, product, geometry, res)
     if not tiles:
         return None
 
-    mosaic = _mosaic_xml(tiles, bounds, product)
+    # The canvas lattice must not depend on the outline, or averages shift by rounding noise.
+    canvas_tiles = placed_terrain_tiles(margin_bounds, product, None, res) if geometry else tiles
+    mosaic = _mosaic_xml(tiles, bounds, product, canvas_tiles)
     return read_with_retries(
         lambda: _average_onto_grid(mosaic, bounds, res),
         "Copernicus DEM tiles did not answer",
     )
 
 
-def _mosaic_xml(tiles: list[PlacedTile], bounds: Bbox, product: str) -> str:
+def _mosaic_xml(
+    tiles: list[PlacedTile],
+    bounds: Bbox,
+    product: str,
+    canvas_tiles: list[PlacedTile],
+) -> str:
     """VRT that lays the tiles side by side at their true footprints, in the frame of bounds.
 
     A tile's pixel centres sit on whole degrees, so its footprint reaches half a pixel beyond its
-    name. The canvas origin is on the half-pixel grid of the scene's product.
+    name. The canvas origin is on the half-pixel grid of the scene's product. The canvas pixel
+    follows canvas_tiles, which are every tile of the block, so skipping tiles never moves it.
     """
     west, south, east, north = bounds
     pixel_height = TERRAIN_PRODUCTS[product].res_deg
-    pixel_width, origin_shift = _canvas_pixel(tiles, pixel_height)
+    pixel_width, origin_shift = _canvas_pixel(canvas_tiles, pixel_height)
     left = math.floor(west) - CANVAS_MARGIN_DEG - origin_shift
     top = math.ceil(north) + CANVAS_MARGIN_DEG + pixel_height / 2
     width_deg = math.ceil(east) - math.floor(west) + 2 * CANVAS_MARGIN_DEG
@@ -431,13 +457,14 @@ class TerrainDataset(StaticDataset):
     def res_for(self, bbox: Bbox) -> float:
         return terrain_res(bbox)
 
-    def sources_for(self, bbox: Bbox, geometry: BaseGeometry | None = None) -> list[dict]:
-        used = {product for product, _ in self._tiles(bbox, geometry)}
+    def sources_for(self, bbox: Bbox) -> list[dict]:
+        used = {product for product, _ in self._tiles(bbox)}
         products = [product for product in TERRAIN_PRODUCTS if product in used]
         return [SOURCES[product] for product in products or [terrain_product(terrain_res(bbox))]]
 
-    def block_count(self, bbox: Bbox) -> int:
-        return terrain_block_count(tuple(bbox))
+    def block_count(self, bbox: Bbox, geometry: BaseGeometry | None = None) -> int:
+        """Number of blocks a read of bbox makes; with geometry, only those with a touched tile."""
+        return terrain_block_count(tuple(bbox), geometry)
 
     def _tiles(
         self,
@@ -455,19 +482,18 @@ class TerrainDataset(StaticDataset):
     ) -> tuple[dict[str, np.ndarray], Affine]:
         """Return float64 elevation over bbox at cell size `res`, NaN where missing.
 
-        With geometry, only tiles meeting the outline or its rendering ring are read. Tile-free
-        backends ignore it because they compute every cell anyway.
+        With geometry, only tiles meeting the outline or its rendering ring are read.
         """
         if geometry is None:
             return self._read_without_geometry(bbox, res, on_block)
 
-        backend = self.backend
-        if isinstance(backend, CopernicusDemReader):
-            on_read = on_block or (lambda: None)
-            elevation, transform = backend.terrain(tuple(bbox), res, on_read, geometry)
-            return {"elevation": elevation}, transform
-
-        return self._read_without_geometry(bbox, res, on_block)
+        elevation, transform = self.backend.terrain(
+            tuple(bbox),
+            res,
+            on_block or (lambda: None),
+            geometry,
+        )
+        return {"elevation": elevation}, transform
 
     def _read_without_geometry(
         self,

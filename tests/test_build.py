@@ -11,6 +11,7 @@ import pytest
 import zarr
 from rasterio.transform import Affine
 from shapely.geometry import MultiPolygon, Polygon, box, mapping, shape
+from shapely.geometry.base import BaseGeometry
 
 from soe import db
 from soe.areas import Area, AreaError
@@ -31,6 +32,11 @@ from soe.sources import (
     make_registry,
     terrain_res,
 )
+from soe.sources import terrain as terrain_module
+from soe.sources.synthetic import _synthetic_classes
+from soe.sources.terrain import CopernicusDemReader, PlacedTile as TerrainTile
+from soe.sources.worldcover import PlacedTile, land_cover_by_tiles
+from soe.terrain_cache import is_cached, read_cached
 from tests.helpers import (
     BOUNDARY,
     COARSE,
@@ -47,6 +53,7 @@ from tests.helpers import (
     harmonic_island,
     plan_months,
 )
+from tests.test_sources import fake_terrain  # noqa: F401  # pytest fixture
 
 GZIP_HEADER = b"\x1f\x8b\x08"  # Bytes 4 to 7 after it hold the time stamp.
 
@@ -1722,3 +1729,140 @@ def test_multi_part_area_spanning_an_empty_bbox_builds_from_touched_tiles_only(t
     assert (cover_mask == 1).any() and (cover_mask == 0).any()
     assert (cover[cover_mask == 1] != 0).all()
     assert (cover[cover_mask == 0] == 0).all()
+
+
+L_SHAPE = box(42.3, 39.3, 43.0, 39.7).union(box(42.3, 39.3, 42.7, 40.2))  # misses tile E043 N40
+TWO_ISLANDS = MultiPolygon([box(36.5, -1.5, 37.5, -0.5), box(42.6, 10.8, 43.8, 11.9)])
+
+
+class RecordingTiles(CopernicusDemReader, SyntheticSource):
+    """Read terrain and land cover tile by tile like production, noting each tile it reads."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cover_tiles: list[str] = []
+
+    def land_cover(
+        self,
+        bounds: Bbox,
+        res: float,
+        on_block: Callable[[], None] = lambda: None,
+        geometry: BaseGeometry | None = None,
+    ) -> tuple[np.ndarray, Affine]:
+        def read_tile(tile: PlacedTile, part: Bbox, tile_res: float) -> np.ndarray:
+            self.cover_tiles.append(tile.name)
+            return _synthetic_classes(tile, part, tile_res)
+
+        return land_cover_by_tiles(bounds, res, read_tile, on_block, geometry)
+
+
+@pytest.mark.parametrize(
+    ("outline", "spares_cover_tiles"),
+    [(L_SHAPE, False), (TWO_ISLANDS, True)],
+    ids=["l-shape", "two-islands"],
+)
+def test_build_reading_only_touched_tiles_matches_a_full_bbox_read(
+    tmp_path,
+    monkeypatch,
+    outline,
+    spares_cover_tiles,
+):
+    terrain_blocks = []
+
+    def note_mosaic(
+        tiles: list[TerrainTile],
+        bounds: Bbox,
+        product: str,
+        canvas_tiles: list[TerrainTile],
+    ) -> str:
+        terrain_blocks.append([tile.name for tile in tiles])
+        return ""
+
+    def synthetic_elevation(mosaic: str, bounds: Bbox, res: float) -> np.ndarray:
+        return SyntheticSource().terrain(bounds, res)[0]
+
+    monkeypatch.setattr(terrain_module, "_mosaic_xml", note_mosaic)
+    monkeypatch.setattr(terrain_module, "_average_onto_grid", synthetic_elevation)
+    reads = {}
+    block_counts = {}
+    manifests = {}
+    stages = {}
+    for mode, max_tiles in (("full", None), ("touched", 2500)):
+        terrain_blocks.clear()
+        backend = RecordingTiles()
+        registry = make_registry(backend)
+        datasets = [
+            replace(registry["terrain"], max_tiles=max_tiles),
+            replace(registry["esa_worldcover"], max_tiles=max_tiles),
+        ]
+        progress = []
+        build_scene(
+            HASH_A,
+            Area(outline, BOUNDARY),
+            None,
+            None,
+            datasets,
+            "Test",
+            tmp_path / mode,
+            lambda fraction, stage: progress.append((fraction, stage)),
+        )
+        terrain_tiles = {name for block in terrain_blocks for name in block}
+        reads[mode] = (terrain_tiles, set(backend.cover_tiles))
+        block_counts[mode] = len(terrain_blocks)
+        manifests[mode] = bundle_manifest(tmp_path / mode / HASH_A)
+        stages[mode] = [stage for _, stage in progress]
+        assert max(fraction for fraction, _ in progress) <= 1
+
+    layer_plan = plan(Area(outline), [TERRAIN, LAND_COVER], None, None).layers
+    assert len(reads["touched"][0]) == TERRAIN.tile_count(
+        layer_plan["terrain"].bbox,
+        layer_plan["terrain"].geometry,
+    )
+    assert len(reads["touched"][1]) == LAND_COVER.tile_count(
+        layer_plan["esa_worldcover"].bbox,
+        layer_plan["esa_worldcover"].geometry,
+    )
+    assert reads["touched"][0] < reads["full"][0]
+    assert (reads["touched"][1] < reads["full"][1]) == spares_cover_tiles
+    cover_reads = len(reads["touched"][1])
+    assert f"Land Cover {cover_reads}/{cover_reads}" in stages["touched"]
+    blocks = block_counts["touched"]
+    assert f"Terrain {blocks}/{blocks}" in stages["touched"]
+    assert manifests["touched"] == manifests["full"]
+
+
+def test_real_warp_bundle_across_50_north_is_identical_with_filtered_tiles(
+    tmp_path,
+    monkeypatch,
+    fake_terrain,
+):
+    add_tile, _ = fake_terrain
+    for lon in (10, 11, 12):
+        for lat in (49, 50):
+            add_tile(lon, lat)
+    monkeypatch.setattr(terrain_module, "terrain_product", lambda res: "glo90")
+    outline = MultiPolygon([box(10.2, 49.2, 10.8, 49.8), box(12.2, 50.2, 12.8, 50.8)])
+    manifests = {}
+    for mode, max_tiles in (("full", None), ("filtered", 2500)):
+        terrain_dataset = replace(make_registry(RecordingTiles())["terrain"], max_tiles=max_tiles)
+        build_scene(
+            HASH_A,
+            Area(outline, BOUNDARY),
+            None,
+            None,
+            [terrain_dataset],
+            "Test",
+            tmp_path / mode,
+        )
+        manifests[mode] = bundle_manifest(tmp_path / mode / HASH_A)
+
+    assert manifests["filtered"] == manifests["full"]
+
+
+def test_read_of_an_outline_is_cached_apart_from_the_full_read(tmp_path):
+    bbox = (36.0, -2.0, 38.0, 0.0)
+    read_cached(TERRAIN, bbox, 0.01, tmp_path)
+
+    assert is_cached(TERRAIN, bbox, 0.01, tmp_path)
+    assert not is_cached(TERRAIN, bbox, 0.01, tmp_path, NAIROBI)
+    assert not is_cached(TERRAIN, bbox, 0.01, tmp_path, box(36.5, -1.5, 36.6, -1.4))

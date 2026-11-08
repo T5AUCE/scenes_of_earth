@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 import numpy as np
 from rasterio.transform import Affine, from_origin
+from shapely.geometry.base import BaseGeometry
 
 from ..geology_age import AGE_CLASSES, GEOLOGY_AGE_FILE, GSC_SOURCE
 from .chirps import CHIRPS_CUBE, FIRST_MONTH
@@ -92,8 +93,12 @@ class SyntheticSource:
         bounds: Bbox,
         res: float,
         on_block: Callable[[], None] = lambda: None,
+        geometry: BaseGeometry | None = None,
     ) -> tuple[np.ndarray, Affine]:
-        """Fractional float64 elevation on bounds at res with its transform."""
+        """Fractional float64 elevation on bounds at res with its transform.
+
+        The geometry only sets how many blocks are reported, so progress matches a tiled read.
+        """
         west, south, east, north = bounds
         width, height = round((east - west) / res), round((north - south) / res)
         transform = from_origin(west, north, res, res)
@@ -101,7 +106,7 @@ class SyntheticSource:
         cols, rows = np.meshgrid(np.arange(width) + 0.5, np.arange(height) + 0.5)
         lon, lat = transform @ (cols, rows)
         elevation = 1000 + 800 * np.sin(lon * 20) * np.cos(lat * 20)
-        for _ in range(terrain_block_count(bounds)):
+        for _ in range(terrain_block_count(bounds, geometry)):
             on_block()
         return elevation.astype("float64"), transform
 
@@ -110,9 +115,10 @@ class SyntheticSource:
         bounds: Bbox,
         res: float,
         on_block: Callable[[], None] = lambda: None,
+        geometry: BaseGeometry | None = None,
     ) -> tuple[np.ndarray, Affine]:
-        """Return deterministic class bands over bounds with zeroes where no tile exists."""
-        return land_cover_by_tiles(bounds, res, _synthetic_classes, on_block)
+        """Return deterministic class bands over bounds with zeroes where no tile is read."""
+        return land_cover_by_tiles(bounds, res, _synthetic_classes, on_block, geometry)
 
     def has_lithology(self, file: str = LITHOLOGY_FILE) -> bool:
         """Return whether deterministic data is enabled for the class COG `file`.

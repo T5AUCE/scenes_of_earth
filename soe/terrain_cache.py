@@ -8,11 +8,13 @@ from pathlib import Path
 
 import numpy as np
 from rasterio.transform import Affine
+from shapely.geometry.base import BaseGeometry
 
 from . import __version__
 from .sources import Bbox, StaticDataset
 
 KEY_HEX_CHARS = 32
+OUTLINE_KEY_VERSION = 2  # 1 read terrain on a canvas that depended on the outline
 
 
 def read_cached(
@@ -21,34 +23,60 @@ def read_cached(
     res: float,
     cache_dir: Path,
     on_block: Callable[[], None] | None = None,
+    geometry: BaseGeometry | None = None,
 ) -> tuple[dict[str, np.ndarray], Affine]:
-    """dataset.read(bbox, res, on_block), from cache_dir when the same rasters were read before.
+    """dataset.read(bbox, res, on_block, geometry), from cache_dir when read before.
 
     The arrays are loaded fresh from disk each time, so callers never share memory. A cache hit
-    calls on_block never.
+    calls on_block never. A geometry leaves cells far from the outline missing, so it is part of
+    the key.
     """
-    path = _cache_path(dataset, bbox, res, cache_dir)
+    path = _cache_path(dataset, bbox, res, cache_dir, geometry)
     if path.is_file():
         with np.load(path) as stored:
             arrays = {name: stored[name] for name in stored.files if name != "transform"}
             return arrays, Affine(*stored["transform"].tolist())
 
-    arrays, transform = dataset.read(bbox, res, on_block)
+    if geometry is None:
+        arrays, transform = dataset.read(bbox, res, on_block)
+    else:
+        arrays, transform = dataset.read(bbox, res, on_block, geometry)
     _store(path, arrays, transform)
     return arrays, transform
 
 
-def is_cached(dataset: StaticDataset, bbox: Bbox, res: float, cache_dir: Path) -> bool:
+def is_cached(
+    dataset: StaticDataset,
+    bbox: Bbox,
+    res: float,
+    cache_dir: Path,
+    geometry: BaseGeometry | None = None,
+) -> bool:
     """Whether read_cached would find this raster on disk."""
-    return _cache_path(dataset, bbox, res, cache_dir).is_file()
+    return _cache_path(dataset, bbox, res, cache_dir, geometry).is_file()
 
 
-def _cache_path(dataset: StaticDataset, bbox: Bbox, res: float, cache_dir: Path) -> Path:
-    return cache_dir / f"{_cache_key(dataset, bbox, res)}.npz"
+def _cache_path(
+    dataset: StaticDataset,
+    bbox: Bbox,
+    res: float,
+    cache_dir: Path,
+    geometry: BaseGeometry | None,
+) -> Path:
+    return cache_dir / f"{_cache_key(dataset, bbox, res, geometry)}.npz"
 
 
-def _cache_key(dataset: StaticDataset, bbox: Bbox, res: float) -> str:
-    """Hash of everything that determines the raster."""
+def _cache_key(
+    dataset: StaticDataset,
+    bbox: Bbox,
+    res: float,
+    geometry: BaseGeometry | None = None,
+) -> str:
+    """Hash of everything that determines the raster.
+
+    Without a geometry the key is the one used before geometry reads existed, so those rasters stay
+    valid.
+    """
     request = {
         "dataset": dataset.id,
         "style": dataset.style,
@@ -59,6 +87,9 @@ def _cache_key(dataset: StaticDataset, bbox: Bbox, res: float) -> str:
         "res": res,
         "soe": __version__,
     }
+    if geometry is not None:
+        request["outline"] = hashlib.sha256(geometry.wkb).hexdigest()
+        request["outline_version"] = OUTLINE_KEY_VERSION
     encoded = json.dumps(request, sort_keys=True).encode()
     return hashlib.sha256(encoded).hexdigest()[:KEY_HEX_CHARS]
 

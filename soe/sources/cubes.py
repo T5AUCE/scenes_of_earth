@@ -23,6 +23,9 @@ MONTHS_PER_YEAR = 12
 PRELIMINARY_EXPVER = "0005"  # ERA5T and ERA5-Land-T, replaced by final data about two months later
 FINAL_EXPVER = "0001"
 
+HIGH_LATITUDE_SUFFIX = "_84n"  # ends the name of each cube that reaches 84N
+HIGH_LATITUDE_FIRST_MONTH = "1981-01"  # of those cubes
+
 
 class CubeSpec(NamedTuple):
     """Describe a cube's variable and grid together with its encoding."""

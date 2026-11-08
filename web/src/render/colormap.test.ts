@@ -13,7 +13,7 @@ import {
   LUT2D_SIZE,
   oklchToRgb,
   paintBivariate,
-  paintClasses,
+  paintClassIds,
   paintColormap,
   RGBA_CHANNELS,
   rgbToOklch,
@@ -21,6 +21,7 @@ import {
   stopsForRange,
 } from "./colormap.ts";
 import { crossSampleTable, mercY, sampleTable, type SampleTable } from "./mercator.ts";
+import { cellClassIds } from "./smooth-classes.ts";
 import {
   CLASS_PALETTES,
   classColors,
@@ -378,9 +379,9 @@ test("classes without a family keep the value-based palette colours", () => {
   assert.deepEqual(classColors("geology", classes, "painted").get(14), [0xed, 0xe3, 0xc8]);
 });
 
-test("paintClasses colours known classes and leaves fill and unknown values transparent", () => {
-  const colors = new Map([[10, [1, 2, 3]]]);
-  const rgba = paintClasses(Float32Array.of(10, NaN, 99), table([0, 1, 2]), colors);
+test("class IDs colour known classes and leave fill and unknown values transparent", () => {
+  const ids = cellClassIds(Float32Array.of(10, NaN, 99), [10]);
+  const rgba = paintClassIds(ids, [[1, 2, 3]]);
 
   assert.deepEqual([...rgba], [1, 2, 3, 255, 0, 0, 0, 0, 0, 0, 0, 0]);
 });

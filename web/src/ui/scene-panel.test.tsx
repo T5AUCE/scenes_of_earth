@@ -33,6 +33,7 @@ test("the collapsed panel keeps its label and switches its preview", async (cont
   assert.equal(region.getAttribute("role"), "region");
   assert.equal(region.getAttribute("aria-label"), "Scene details");
   assert.match(region.textContent ?? "", /km²/);
+  assert.equal(dialog.childElementCount, 0);
 
   const charts = [...region.querySelectorAll("button")].find(
     (button) => button.textContent === "Charts",
@@ -355,7 +356,7 @@ test("an immediate Charts open wins before the first commit", async (context) =>
   await act(async () => panel!.destroy());
 });
 
-test("the first About open focuses its tab and resets scroll", async (context) => {
+test("reopening About after another tab focuses its tab and resets scroll", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
@@ -373,7 +374,9 @@ test("the first About open focuses its tab and resets scroll", async (context) =
     });
     document.body.append(panel.element);
     document.body.append(dialog);
+    panel.openFull("credits");
   });
+  await act(async () => panel!.closeFull());
 
   const main = dialog.querySelector("main") as HTMLElement;
   main.scrollTop = 123;
@@ -394,6 +397,108 @@ test("the first About open focuses its tab and resets scroll", async (context) =
 
   await act(async () => panel!.destroy());
 });
+
+test("a cold About open focuses its tab after the lazy load", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createScenePanel } = await import("./scene-panel.tsx");
+  const scene = makeScene();
+  const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
+    });
+    document.body.append(panel.element);
+    document.body.append(dialog);
+    panel.openFull("about");
+  });
+
+  assert.equal(panel!.isOpen, true);
+  assert.match(dialog.textContent ?? "", /Test scene/);
+  const aboutTab = [...dialog.querySelectorAll('[role="tab"]')].find(
+    (button) => button.textContent === "About",
+  ) as HTMLButtonElement;
+  assert.equal(
+    dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
+    "About",
+  );
+  assertSameNode(document.activeElement, aboutTab);
+  assert.equal((dialog.querySelector("main") as HTMLElement).scrollTop, 0);
+
+  await act(async () => panel!.destroy());
+});
+
+test(
+  "a failed full-dialog load keeps the panel usable and retries on the next open",
+  async (context) => {
+    const window = new Window({ url: "http://localhost" });
+    context.after(() => window.happyDOM.abort());
+    installBrowser(window);
+    const { act } = await import("react");
+    const {
+      createScenePanel,
+      panelChunkLoaders,
+      resetPanelChunkCacheForTest,
+    } = await import("./scene-panel.tsx");
+    resetPanelChunkCacheForTest();
+    const originalFull = panelChunkLoaders.full;
+    let attempts = 0;
+    panelChunkLoaders.full = () => {
+      attempts += 1;
+      if (attempts === 1) return Promise.reject(new Error("chunk failed"));
+
+      return originalFull();
+    };
+    context.after(() => {
+      panelChunkLoaders.full = originalFull;
+    });
+    const scene = makeScene();
+    const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
+    const dialog = makeDialog();
+    let panel: ReturnType<typeof createScenePanel> | null = null;
+    await act(async () => {
+      panel = createScenePanel(scene, dialog, store, {
+        requestOpen: () => {},
+        requestClose: () => {},
+        stepTime: () => {},
+      });
+      document.body.append(panel.element);
+      document.body.append(dialog);
+      panel.openFull("about");
+    });
+
+    assert.equal(panel!.isOpen, true);
+    assert.match(dialog.textContent ?? "", /Could not load the full view/);
+    assert.ok(panel!.element.querySelector(".panel-header"));
+    assert.ok(panel!.element.querySelector(".panel-footer"));
+    assert.match(panel!.element.textContent ?? "", /km²/);
+
+    await act(async () => {
+      panel!.closeFull();
+    });
+    await act(async () => {
+      panel!.openFull("about");
+    });
+
+    assert.match(dialog.textContent ?? "", /Test scene/);
+    const aboutTab = [...dialog.querySelectorAll('[role="tab"]')].find(
+      (button) => button.textContent === "About",
+    ) as HTMLButtonElement;
+    assert.equal(
+      dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
+      "About",
+    );
+    assertSameNode(document.activeElement, aboutTab);
+
+    await act(async () => panel!.destroy());
+  },
+);
 
 test("reopening the same tab refocuses and resets scroll", async (context) => {
   const window = new Window({ url: "http://localhost" });
@@ -686,6 +791,65 @@ test("the chip previews the main chart and follows time and units", async (conte
 
   await act(async () => panel!.destroy());
 });
+
+test(
+  "a failed chart chip load keeps the panel usable and retries on the next Charts click",
+  async (context) => {
+    const window = new Window({ url: "http://localhost" });
+    context.after(() => window.happyDOM.abort());
+    installBrowser(window);
+    const { act } = await import("react");
+    const {
+      createScenePanel,
+      panelChunkLoaders,
+      resetPanelChunkCacheForTest,
+    } = await import("./scene-panel.tsx");
+    resetPanelChunkCacheForTest();
+    const originalChip = panelChunkLoaders.chip;
+    let attempts = 0;
+    panelChunkLoaders.chip = () => {
+      attempts += 1;
+      if (attempts === 1) return Promise.reject(new Error("chunk failed"));
+
+      return originalChip();
+    };
+    context.after(() => {
+      panelChunkLoaders.chip = originalChip;
+      resetPanelChunkCacheForTest();
+    });
+    const scene = makeChartableScene();
+    const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+    const dialog = makeDialog();
+    let panel: ReturnType<typeof createScenePanel> | null = null;
+    await act(async () => {
+      panel = createScenePanel(scene, dialog, store, {
+        requestOpen: () => {},
+        requestClose: () => {},
+        stepTime: () => {},
+      });
+      document.body.append(panel.element);
+    });
+    const tab = (label: string) =>
+      [...panel!.element.querySelectorAll("button")].find(
+        (button) => button.textContent === label,
+      )!;
+    const click = (button: HTMLElement) =>
+      act(async () => {
+        button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+      });
+
+    await click(tab("Charts"));
+    assert.match(panel!.element.textContent ?? "", /Could not load the chart preview/);
+    assert.ok(tab("About"));
+    assert.ok(panel!.element.querySelector(".expand"));
+
+    await click(tab("About"));
+    await click(tab("Charts"));
+    assert.ok(panel!.element.querySelector("svg"));
+
+    await act(async () => panel!.destroy());
+  },
+);
 
 test("gallery opens detail and edit with focus restoration", async (context) => {
   const window = new Window({ url: "http://localhost" });

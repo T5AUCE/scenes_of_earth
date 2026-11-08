@@ -261,7 +261,10 @@ class LandCoverDataset(StaticDataset):
         return budget_res(bbox, STATIC_BUDGET_PX, MAX_STATIC_SIDE_PX, MAX_STATIC_DIVISIONS)
 
     def block_count(self, bbox: Bbox, geometry: BaseGeometry | None = None) -> int:
-        """Return the number of tile reads used to report build progress."""
+        """Return the number of tile reads used to report build progress.
+
+        With geometry, only the tiles a read of that outline makes are counted.
+        """
         return self.tile_count(bbox, geometry)
 
     def read(
@@ -273,23 +276,18 @@ class LandCoverDataset(StaticDataset):
     ) -> tuple[dict[str, np.ndarray], Affine]:
         """Return uint8 classes over bbox at cell size `res`.
 
-        With geometry, only tiles meeting the outline or its rendering ring are read. Tile-free
-        backends ignore it because they compute every cell anyway.
+        With geometry, only tiles meeting the outline or its rendering ring are read.
         """
         if geometry is None:
             return self._read_without_geometry(bbox, res, on_block)
 
-        backend = self.backend
-        if isinstance(backend, WorldCoverReader):
-            classes, transform = backend.land_cover(
-                tuple(bbox),
-                res,
-                on_block or (lambda: None),
-                geometry,
-            )
-            return {"value": classes}, transform
-
-        return self._read_without_geometry(bbox, res, on_block)
+        classes, transform = self.backend.land_cover(
+            tuple(bbox),
+            res,
+            on_block or (lambda: None),
+            geometry,
+        )
+        return {"value": classes}, transform
 
     def _read_without_geometry(
         self,

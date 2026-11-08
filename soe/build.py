@@ -20,7 +20,7 @@ from . import __version__
 from .areas import Area, AreaError, simplify_for_display
 from .bundle import VERSION, JsonObject, make, validate
 from .geology_regional import CODE_MEANINGS, CODE_VALUES
-from .plan import MASK_INSIDE, LayerPlan, Plan, plan as make_plan
+from .plan import MASK_INSIDE, LayerPlan, Plan, plan as make_plan, scene_datasets
 from .sources import (
     FROM_FALLBACK,
     FROM_MAIN,
@@ -95,6 +95,7 @@ def build_scene(
         progress(1.0, None)
         return size
 
+    datasets = scene_datasets(area, datasets)
     scene_plan = make_plan(area, datasets, start, end)
     _check_local_revisions(datasets, scene_plan, local_revisions)
 
@@ -184,7 +185,7 @@ def _write_layers(
         layer_group = root.create_group(dataset.id)
         _write_coordinates_and_mask(layer_group, layer_plan)
         if dataset.id in prefetched:
-            arrays, _, result = prefetched[dataset.id]
+            arrays, result = prefetched[dataset.id]
             if not isinstance(dataset, StaticDataset):
                 raise TypeError(f"{dataset.id}: prefetched a non-static layer")
             _write_static_arrays(layer_group, dataset, layer_plan, arrays, result)
@@ -206,10 +207,11 @@ def _layer_cost(dataset: Dataset, layer_plan: LayerPlan, cache_dir: Path) -> flo
     if isinstance(dataset, SeriesDataset):
         return len(layer_plan.steps) * SERIES_STEP_COST
 
-    if is_cached(dataset, layer_plan.bbox, layer_plan.res, cache_dir):
+    read_geometry = _read_geometry(dataset, layer_plan)
+    if is_cached(dataset, layer_plan.bbox, layer_plan.res, cache_dir, read_geometry):
         return STATIC_CACHED_COST
 
-    return dataset.block_count(layer_plan.bbox) * STATIC_BLOCK_COST
+    return dataset.block_count(layer_plan.bbox, read_geometry) * STATIC_BLOCK_COST
 
 
 class _ProgressShares:
@@ -245,20 +247,19 @@ def _prefetch_statics(
     scene_plan: Plan,
     cache_dir: Path,
     shares: _ProgressShares,
-) -> dict[str, tuple[dict[str, np.ndarray], Affine, JsonObject]]:
+) -> dict[str, tuple[dict[str, np.ndarray], JsonObject]]:
     """Read static rasters and validate their summaries before any bundle writer runs."""
     prefetched = {}
     for dataset in ordered:
         if not isinstance(dataset, StaticDataset):
             continue
         layer_plan = scene_plan.layers[dataset.id]
-        arrays, transform, result = _read_static_dataset(
+        prefetched[dataset.id] = _read_static_dataset(
             dataset,
             layer_plan,
             cache_dir,
             shares.for_layer(dataset.id),
         )
-        prefetched[dataset.id] = (arrays, transform, result)
     return prefetched
 
 
@@ -267,9 +268,10 @@ def _read_static_dataset(
     layer_plan: LayerPlan,
     cache_dir: Path,
     progress: LayerProgress,
-) -> tuple[dict[str, np.ndarray], Affine, JsonObject]:
+) -> tuple[dict[str, np.ndarray], JsonObject]:
     """Return the cached static read with its validated summary result."""
-    block_count = dataset.block_count(layer_plan.bbox)
+    read_geometry = _read_geometry(dataset, layer_plan)
+    block_count = dataset.block_count(layer_plan.bbox, read_geometry)
     blocks_read = 0
 
     def block_read() -> None:
@@ -277,7 +279,7 @@ def _read_static_dataset(
         blocks_read += 1
         progress(blocks_read / block_count, f"{dataset.title} {blocks_read}/{block_count}")
 
-    if not is_cached(dataset, layer_plan.bbox, layer_plan.res, cache_dir):
+    if not is_cached(dataset, layer_plan.bbox, layer_plan.res, cache_dir, read_geometry):
         progress(0, f"{dataset.title} 0/{block_count}")
     arrays, transform = read_cached(
         dataset,
@@ -285,6 +287,7 @@ def _read_static_dataset(
         layer_plan.res,
         cache_dir,
         block_read,
+        read_geometry,
     )
     progress(1, f"{dataset.title} {block_count}/{block_count}")
     if "provenance" in arrays:
@@ -295,7 +298,12 @@ def _read_static_dataset(
         transform,
         layer_plan.geometry,
     )
-    return arrays, transform, result
+    return arrays, result
+
+
+def _read_geometry(dataset: StaticDataset, layer_plan: LayerPlan) -> BaseGeometry | None:
+    """The outline to read by, so only the tiles the plan's tile cap counted are fetched."""
+    return dataset.read_geometry(layer_plan.bbox, layer_plan.geometry)
 
 
 def _kept_provenance(codes: np.ndarray, layer_plan: LayerPlan) -> np.ndarray:

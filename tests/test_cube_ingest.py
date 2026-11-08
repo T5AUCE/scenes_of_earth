@@ -20,6 +20,7 @@ from soe.ingest import cubes, era5
 from soe.ingest.cubes import MonthField, write_months
 from soe.ingest.era5 import INGEST_SPECS, grib_expvers, ingest, open_grib, read_months
 from soe.sources import (
+    ERA5_84N_GRID,
     ERA5_GRID,
     ERA5_LAND_TEMPERATURE_CUBE,
     ERA5_LAND_TEMPERATURE_GRID,
@@ -38,6 +39,8 @@ SHAPE = (ERA5_LAND_TEMPERATURE_GRID.rows, ERA5_LAND_TEMPERATURE_GRID.columns)
 LAND = INGEST_SPECS["era5land_temperature"]
 ERA5_TEMPERATURE = INGEST_SPECS["era5_temperature"]
 ERA5_PRECIPITATION = INGEST_SPECS["era5_precipitation"]
+LAND_84N = INGEST_SPECS["era5land_temperature_84n"]
+ERA5_TEMPERATURE_84N = INGEST_SPECS["era5_temperature_84n"]
 ERA5_SHAPE = (ERA5_GRID.rows, ERA5_GRID.columns)
 FEB_2016_SECS = 1454284800
 CUBE_NAME = "era5land_temperature.zarr"
@@ -924,3 +927,220 @@ def test_ingest_from_an_earlier_month_adds_the_earlier_years_newest_year_first(t
     assert requested[:3] == [("2016", "01"), ("2015", "01"), ("2014", "11")]
     months = list(land_cube(tmp_path).months())
     assert (months[0], months[-1], len(months)) == ("2014-11", "2017-02", 28)
+
+
+def test_raster_of_an_84n_cube_must_start_at_84n(tmp_path):
+    path = tmp_path / "field.tif"
+    shape = (ERA5_84N_GRID.rows, ERA5_84N_GRID.columns)
+    write_raster(
+        path,
+        ERA5_84N_GRID.west_deg,
+        ERA5_84N_GRID.res,
+        shape[1],
+        shape[0],
+        np.full(shape, 273.15),
+        north_edge=ERA5_84N_GRID.north_deg,
+    )
+
+    with rasterio.open(path) as dataset:
+        [(_, values, _)] = read_months(dataset, ["0001"], ERA5_TEMPERATURE_84N)
+
+    assert values.shape == shape and values[0, 0] == pytest.approx(0, abs=1e-3)
+
+
+def test_raster_that_ends_at_60n_is_refused_for_an_84n_cube(tmp_path):
+    path = tmp_path / "field.tif"
+    write_raster(path, -180.05, 0.1, SHAPE[1], SHAPE[0], np.zeros(SHAPE))
+
+    with rasterio.open(path) as dataset, pytest.raises(ValueError, match="84N to 60S"):
+        list(read_months(dataset, ["0001"], LAND_84N))
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "era5land_temperature_84n",
+        "era5land_precipitation_84n",
+        "era5_temperature_84n",
+        "era5_precipitation_84n",
+    ],
+)
+def test_ingest_of_an_84n_cube_requests_the_area_up_to_84n(tmp_path, monkeypatch, name):
+    monkeypatch.setattr(era5, "read_grib_months", lambda path, spec: iter(()))
+    monkeypatch.setattr(era5, "newest_month", lambda: "2016-02")
+    client = FakeClient()
+
+    ingest(tmp_path, INGEST_SPECS[name], "2016-01", client)
+
+    assert all(request["area"] == [84, -180, -60, 180] for _, request in client.requests)
+
+
+def write_year_file(files_dir: Path, year: int, months: list[str]) -> Path:
+    """Write a finished year file in the form that the `fake_grib` fixture reads."""
+    path = files_dir / f"era5land_temperature-{year}.grib"
+    path.write_text(json.dumps(months))
+    return path
+
+
+def year_months(year: int, last: int = 12) -> list[str]:
+    return [f"{year}-{month:02d}" for month in range(1, last + 1)]
+
+
+def test_year_files_are_stored_without_a_request_and_kept(tmp_path, fake_grib, monkeypatch):
+    monkeypatch.setattr(era5, "newest_month", lambda: "2016-12")
+    files = tmp_path / "files"
+    files.mkdir()
+    write_year_file(files, 2015, year_months(2015))
+    write_year_file(files, 2016, year_months(2016))
+    (files / "era5land_temperature-2017.part").write_text(json.dumps(["2017-01"]))
+    client = FakeClient()
+
+    ingest(tmp_path / "cubes", LAND, "2015-01", client, files_dir=files)
+
+    cube = MonthlyCube(LAND.cube, tmp_path / "cubes")
+    assert list(cube.months()) == year_months(2015) + year_months(2016)
+    assert not client.requests
+    assert sorted(path.name for path in files.iterdir()) == [
+        "era5land_temperature-2015.grib",
+        "era5land_temperature-2016.grib",
+        "era5land_temperature-2017.part",
+    ]
+
+
+def test_months_missing_from_the_year_files_are_requested_from_the_cds(tmp_path, fake_grib):
+    files = tmp_path / "files"
+    files.mkdir()
+    write_year_file(files, 2016, year_months(2016))
+    client = FakeClient()
+
+    ingest(tmp_path / "cubes", LAND, "2016-01", client, files_dir=files)
+
+    requested = [(request["year"][0], request["month"][0]) for _, request in client.requests]
+    assert requested == [("2017", "01"), ("2017", "02")]
+
+
+def test_year_files_never_replace_a_stored_month(tmp_path, fake_grib, monkeypatch):
+    monkeypatch.setattr(era5, "newest_month", lambda: "2016-12")
+    cubes = tmp_path / "cubes"
+    write_months(cubes, LAND.cube, LAND.complete, [("2016-11", celsius_field(5), "0001")])
+    files = tmp_path / "files"
+    files.mkdir()
+    write_year_file(files, 2016, ["2016-11", "2016-12"])
+    client = FakeClient()
+
+    ingest(cubes, LAND, "2016-11", client, files_dir=files)
+    ingest(cubes, LAND, "2016-11", client, files_dir=files)
+
+    cube = MonthlyCube(LAND.cube, cubes)
+    assert list(cube.months()) == ["2016-11", "2016-12"]
+    assert cube.read("2016-11", (7, 7, 1, 1))[0, 0] == pytest.approx(5)
+    assert cube.read("2016-12", (7, 7, 1, 1))[0, 0] == pytest.approx(20)
+
+
+def test_year_files_before_the_first_stored_month_are_stored_newest_year_first(
+    tmp_path,
+    fake_grib,
+    monkeypatch,
+):
+    monkeypatch.setattr(era5, "newest_month", lambda: "2016-12")
+    cubes = tmp_path / "cubes"
+    stored = [(month, celsius_field(5), "0001") for month in year_months(2016)]
+    write_months(cubes, LAND.cube, LAND.complete, stored)
+    files = tmp_path / "files"
+    files.mkdir()
+    for year in (2014, 2015):
+        write_year_file(files, year, year_months(year))
+    client = FakeClient()
+
+    ingest(cubes, LAND, "2014-01", client, files_dir=files)
+
+    months = list(MonthlyCube(LAND.cube, cubes).months())
+    assert (months[0], months[-1], len(months)) == ("2014-01", "2016-12", 36)
+    assert not client.requests
+
+
+def test_year_files_start_at_the_requested_month(tmp_path, fake_grib, monkeypatch):
+    monkeypatch.setattr(era5, "newest_month", lambda: "2016-12")
+    files = tmp_path / "files"
+    files.mkdir()
+    write_year_file(files, 2016, year_months(2016))
+    client = FakeClient()
+
+    ingest(tmp_path / "cubes", LAND, "2016-11", client, files_dir=files)
+
+    assert list(MonthlyCube(LAND.cube, tmp_path / "cubes").months()) == [
+        "2016-11",
+        "2016-12",
+    ]
+    assert not client.requests
+
+
+def test_a_missing_middle_year_is_requested_and_the_year_files_around_it_are_stored(
+    tmp_path,
+    fake_grib,
+    monkeypatch,
+):
+    monkeypatch.setattr(era5, "newest_month", lambda: "2017-12")
+    files = tmp_path / "files"
+    files.mkdir()
+    for year in (2015, 2017):
+        write_year_file(files, year, year_months(year))
+    client = FakeClient()
+
+    ingest(tmp_path / "cubes", LAND, "2015-01", client, files_dir=files)
+
+    assert [request["year"] for _, request in client.requests] == [["2016"]]
+    expected = year_months(2015) + year_months(2016) + year_months(2017)
+    assert list(MonthlyCube(LAND.cube, tmp_path / "cubes").months()) == expected
+
+
+def test_a_missing_year_before_the_stored_months_is_requested_before_an_earlier_year_file(
+    tmp_path,
+    fake_grib,
+    monkeypatch,
+):
+    monkeypatch.setattr(era5, "newest_month", lambda: "2017-12")
+    cubes = tmp_path / "cubes"
+    stored = [(month, celsius_field(5), "0001") for month in year_months(2017)]
+    write_months(cubes, LAND.cube, LAND.complete, stored)
+    files = tmp_path / "files"
+    files.mkdir()
+    write_year_file(files, 2015, year_months(2015))
+    client = FakeClient()
+
+    ingest(cubes, LAND, "2015-01", client, files_dir=files)
+
+    assert [request["year"] for _, request in client.requests] == [["2016"]]
+    months = list(MonthlyCube(LAND.cube, cubes).months())
+    assert (months[0], months[-1], len(months)) == ("2015-01", "2017-12", 36)
+
+
+def test_a_year_file_that_lacks_the_month_next_to_the_stored_ones_is_requested_instead(
+    tmp_path,
+    fake_grib,
+    monkeypatch,
+):
+    monkeypatch.setattr(era5, "newest_month", lambda: "2016-12")
+    files = tmp_path / "files"
+    files.mkdir()
+    write_year_file(files, 2016, year_months(2016)[1:])
+    client = FakeClient()
+
+    ingest(tmp_path / "cubes", LAND, "2016-01", client, files_dir=files)
+
+    assert [request["year"] for _, request in client.requests] == [["2016"]]
+    assert list(MonthlyCube(LAND.cube, tmp_path / "cubes").months()) == year_months(2016)
+
+
+@pytest.mark.parametrize(
+    ("name", "files_name"),
+    [
+        ("era5land_temperature_84n", "era5land_temperature"),
+        ("era5land_precipitation_84n", "era5land_precipitation"),
+        ("era5_temperature_84n", "era5_temperature"),
+        ("era5_precipitation_84n", "era5_precipitation"),
+        ("era5land_temperature", "era5land_temperature"),
+    ],
+)
+def test_year_files_are_named_after_the_variable_not_the_extent(name, files_name):
+    assert INGEST_SPECS[name].files_name == files_name

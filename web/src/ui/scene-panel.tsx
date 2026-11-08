@@ -1,71 +1,51 @@
-/** Render the docked scene panel and its full-view dialog with charts. */
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+/** Render the docked scene panel and defer its chart and full-dialog implementations. */
+import {
+  Component,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ComponentProps,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import { createRoot } from "react-dom/client";
 
-import { creditsLine, NOTICES_HEADING_ID, renderAbout, renderCredits, summaryText } from "../about";
-import { elevationUnitFrom, type SceneDisplay } from "../display-state";
-import { ChartDetail } from "../charts/chart-detail";
-import { DownloadSection } from "../charts/download-section";
-import { ChartGallery } from "../charts/chart-gallery";
-import { draftForEdit, draftForNew, ChartEditor, type ChartDraft } from "../charts/chart-editor";
-import { chartTypeLabel, resolveMainId } from "../charts/definitions";
-import { HypsometryChart } from "../charts/hypsometry-chart";
-import { SeriesChart } from "../charts/series-chart";
+import { creditsLine, summaryText } from "../about";
+import { elevationUnitFrom } from "../display-state";
 import { makeHtmlElement } from "../html";
 import { noticeCount } from "../scene-info";
 import type { SceneStore } from "../scene-store";
-import type { LayerDoc, Scene } from "../types";
-import { DomNode } from "./dom-node";
+import type { Scene } from "../types";
+import {
+  TAB_LABELS,
+  type FullOpenOptions,
+  type FullPanelProps,
+  type FullRequest,
+  type PanelHooks,
+  type PanelTab,
+  type PanelTime,
+} from "./panel-contract";
 import { useSceneStore } from "./use-scene-store";
 
-/** The tabs of the full view, in order. */
-export const PANEL_TABS = ["charts", "about", "credits"] as const;
-export type PanelTab = (typeof PANEL_TABS)[number];
-
-const TAB_LABELS: Record<PanelTab, string> = {
-  charts: "Charts",
-  about: "About",
-  credits: "Credits",
-};
+export { PANEL_TABS, type FullOpenOptions, type PanelHooks, type PanelTab } from "./panel-contract";
 
 const DOCKED_TABS = ["charts", "about"] as const;
 
-/** Where the full view should land after its content commits. */
-export interface FullOpenOptions {
-  scrollToNotices?: boolean;
-}
+const FULL_LOAD_FAILED = "Could not load the full view. Close and reopen to retry.";
+const CHIP_LOAD_FAILED = "Could not load the chart preview.";
 
-/** What the panel asks its owner to do. */
-export interface PanelHooks {
-  // The owner records the history entry, then calls openFull or closeFull.
-  requestOpen(tab: PanelTab, options?: FullOpenOptions): void;
-  requestClose(): void;
-  stepTime(delta: number): void;
-}
+/** Raw chunk imports behind the deferred panel parts so tests can fail the first load. */
+export const panelChunkLoaders = {
+  full: () => import("./scene-full").then(({ FullPanel }) => FullPanel),
+  chip: () => import("./chart-chip").then(({ ChartChip }) => ChartChip),
+};
 
-interface PanelTime {
-  time: string | null;
-  label: string | null;
-}
+let fullPanelPromise: ReturnType<typeof panelChunkLoaders.full> | null = null;
+let chartChipPromise: ReturnType<typeof panelChunkLoaders.chip> | null = null;
 
-interface FullRequest {
-  tab: PanelTab;
-  seq: number;
-  scrollToNotices: boolean;
-}
-
-type ChartView =
-  | { kind: "gallery" }
-  | { kind: "detail"; id: string; origin: string | null; focusNotes?: boolean }
-  | {
-    kind: "editor";
-    draft: ChartDraft;
-    isNew: boolean;
-    returnTo: string | null;
-    origin: string | null;
-  };
-
-type GalleryReturnFocus = { id: string | null; target: "title" | "notes" };
+type ChartChipProps = ComponentProps<typeof import("./chart-chip").ChartChip>;
+type ChunkState<Props> = { component: ComponentType<Props> } | "failed" | null;
 
 interface CollapsedProps {
   scene: Scene;
@@ -73,20 +53,6 @@ interface CollapsedProps {
   hooks: PanelHooks;
   subscribeTime(listener: () => void): () => void;
   getTime(): PanelTime;
-}
-
-interface FullProps {
-  scene: Scene;
-  dialog: HTMLDialogElement;
-  store: SceneStore;
-  hooks: PanelHooks;
-  subscribeTime(listener: () => void): () => void;
-  getTime(): PanelTime;
-  subscribeFull(listener: () => void): () => void;
-  getFull(): FullRequest;
-  selectFull(tab: PanelTab): void;
-  subscribeSync(listener: () => void): () => void;
-  getSync(): string | null;
 }
 
 /**
@@ -171,7 +137,7 @@ export function createScenePanel(
   );
   const fullRoot = createRoot(dialog);
   fullRoot.render(
-    <FullPanel
+    <DeferredFullPanel
       scene={scene}
       dialog={dialog}
       store={store}
@@ -249,6 +215,20 @@ export function createScenePanel(
   };
 }
 
+function DeferredFullPanel(props: FullPanelProps): React.ReactElement | null {
+  const request = useSyncExternalStore(props.subscribeFull, props.getFull);
+  const chunk = useChunk(loadFullPanel, request.seq);
+  if (request.seq === 0 || chunk === null) return null;
+  if (chunk === "failed") return <p>{FULL_LOAD_FAILED}</p>;
+  const Panel = chunk.component;
+
+  return (
+    <ChunkBoundary resetKey={request.seq} fallback={<p>{FULL_LOAD_FAILED}</p>}>
+      <Panel {...props} />
+    </ChunkBoundary>
+  );
+}
+
 function CollapsedPanel({
   scene,
   store,
@@ -260,6 +240,7 @@ function CollapsedPanel({
   const time = useSyncExternalStore(subscribeTime, getTime);
   const [selected, setSelected] = useState<PanelTab>("about");
   const [collapsed, setCollapsed] = useState(false);
+  const chip = useChunk(loadChartChip, selected === "charts" ? scene.id : null);
   const showDetailsRef = useRef<HTMLButtonElement | null>(null);
   const collapseRef = useRef<HTMLButtonElement | null>(null);
   const focusAfterToggle = useRef<"show" | "collapse" | null>(null);
@@ -306,7 +287,7 @@ function CollapsedPanel({
     );
   }
   const body = selected === "charts"
-    ? <ChartChip scene={scene} store={store} currentTime={time.time} />
+    ? chartChipBody(chip, scene, store, time.time)
     : summaryText(scene, elevationUnit);
 
   return (
@@ -355,528 +336,101 @@ function CollapsedPanel({
   );
 }
 
-function ChartChip({
-  scene,
-  store,
-  currentTime,
-}: {
-  scene: Scene;
-  store: SceneStore;
-  currentTime: string | null;
-}): React.ReactElement {
-  const { charts, display } = useSceneStore(store);
-  const layers = scene.layers;
-  const mainId = resolveMainId(charts.definitions, charts.mainChartId, layers);
-  const definition = charts.definitions.find((entry) => entry.id === mainId) ?? null;
-  if (!definition) return <span>{"No charts for this scene."}</span>;
-  const layer = layers.find((entry) => entry.id === definition.source.layerId) ?? null;
-  if (!layer) return <span>{definition.title}</span>;
-  const viewerUnit = display.layers[layer.id]?.units ?? null;
-  const effectivePalette = display.layers[layer.id]?.palette ?? layer.style.palette ?? null;
-  const effectiveInk = display.layers[layer.id]?.ink ?? null;
-  const shapeLabel = definition.source.shape === "distribution"
-    ? "Hypsometry"
-    : definition.source.shape === "seasonal_cycle"
-      ? "By month"
-      : "Over time";
-
-  return (
-    <span className="chart-chip">
-      <span className="chip-title">
-        {`${definition.title} · ${shapeLabel} · ${chartTypeLabel(definition.chartType)}`}
-      </span>
-      {definition.source.shape === "distribution"
-        ? (
-          <HypsometryChart
-            key={definition.id}
-            layer={layer}
-            chartType={definition.chartType}
-            options={definition.options}
-            compact={true}
-            showNotes={false}
-            viewerUnit={viewerUnit}
-            effectivePalette={effectivePalette}
-            effectiveInk={effectiveInk}
-          />
-        )
-        : (
-          <SeriesChart
-            key={definition.id}
-            layer={layer}
-            shape={definition.source.shape}
-            chartType={definition.chartType}
-            options={definition.options}
-            currentTime={currentTime}
-            compact={true}
-            showNotes={false}
-            viewerUnit={viewerUnit}
-            effectivePalette={effectivePalette}
-            effectiveInk={effectiveInk}
-          />
-        )}
-    </span>
-  );
-}
-
-interface FullPanelProps extends FullProps {
-  onDirtyFlag(dirty: boolean): void;
-  onRegisterConfirm(show: (() => void) | null): void;
-}
-
-function FullPanel({
-  scene,
-  dialog,
-  store,
-  hooks,
-  subscribeTime,
-  getTime,
-  subscribeFull,
-  getFull,
-  selectFull,
-  subscribeSync,
-  getSync,
-  onDirtyFlag,
-  onRegisterConfirm,
-}: FullPanelProps): React.ReactElement {
-  const { display } = useSceneStore(store);
-  const time = useSyncExternalStore(subscribeTime, getTime);
-  const request = useSyncExternalStore(subscribeFull, getFull);
-  const syncNotice = useSyncExternalStore(subscribeSync, getSync);
-  const current = request.tab;
-  const buttons = useRef(new Map<PanelTab, HTMLButtonElement>());
-  const content = useRef<HTMLElement | null>(null);
-  const [chartView, setChartView] = useState<ChartView>({ kind: "gallery" });
-  const [editorDirty, setEditorDirty] = useState(false);
-  const [closeConfirm, setCloseConfirm] = useState(false);
-  const [pendingClose, setPendingClose] = useState(false);
-  const invokingRef = useRef<HTMLElement | null>(null);
-  const confirmSaveRef = useRef<HTMLButtonElement | null>(null);
-  const editorActions = useRef<{ save: () => void; discard: () => void } | null>(null);
-  const galleryReturnFocus = useRef<GalleryReturnFocus | null>(null);
-  useEffect(() => {
-    onDirtyFlag(editorDirty);
-  }, [editorDirty, onDirtyFlag]);
-  useEffect(() => {
-    onRegisterConfirm(() => {
-      invokingRef.current = document.activeElement as HTMLElement | null;
-      setPendingClose(true);
-      setCloseConfirm(true);
-    });
-
-    return () => onRegisterConfirm(null);
-  }, [onRegisterConfirm]);
-  useEffect(() => {
-    if (request.seq === 0 || !dialog.open) return;
-
-    buttons.current.get(request.tab)?.focus();
-    if (content.current) content.current.scrollTop = 0;
-    if (request.scrollToNotices) {
-      const notices = dialog.querySelector(`#${NOTICES_HEADING_ID}`);
-      notices?.scrollIntoView();
-    }
-  }, [request, dialog]);
-  useEffect(() => {
-    if (current !== "charts") return;
-
-    galleryReturnFocus.current = null;
-  }, [current]);
-  useEffect(() => {
-    if (current !== "charts" || chartView.kind !== "gallery") return;
-    if (!galleryReturnFocus.current) return;
-    const focus = galleryReturnFocus.current;
-    galleryReturnFocus.current = null;
-    focusGalleryCard(dialog, focus.id, focus.target);
-  }, [chartView, current, dialog]);
-  // The outer confirmation is a new decision group, so focus enters it on open.
-  useEffect(() => {
-    if (closeConfirm) confirmSaveRef.current?.focus();
-  }, [closeConfirm]);
-  useEffect(() => {
-    if (current !== "charts") return;
-    if (chartView.kind === "detail") {
-      if (chartView.focusNotes) {
-        const heading = dialog.querySelector<HTMLElement>("[data-chart-notes-heading]");
-        heading?.focus();
-        heading?.scrollIntoView();
-      } else {
-        dialog.querySelector<HTMLElement>("[data-detail-back]")?.focus();
-      }
-    }
-    if (chartView.kind === "editor") {
-      dialog.querySelector<HTMLElement>(".chart-editor .editor-head button")?.focus();
-    }
-  }, [chartView, current, dialog]);
-
-  const elevationUnit = elevationUnitFrom(display, scene.layers);
-  const displayUnits = useMemo(
-    () => displayUnitsOf(display, scene.layers),
-    [display, scene],
-  );
-  const node = useMemo(
-    () => renderTabNode(scene, current, elevationUnit, displayUnits),
-    [scene, current, elevationUnit, displayUnits],
-  );
-  const editing = current === "charts" && chartView.kind === "editor";
-
-  const openDetail = (id: string, focusNotes = false) => {
-    galleryReturnFocus.current = { id, target: focusNotes ? "notes" : "title" };
-    setChartView({ kind: "detail", id, origin: id, focusNotes });
-  };
-  const openEditor = (
-    draft: ChartDraft,
-    isNew: boolean,
-    returnTo: string | null,
-    origin: string | null,
-  ) => {
-    galleryReturnFocus.current = { id: origin, target: "title" };
-    setChartView({ kind: "editor", draft, isNew, returnTo, origin });
-    setEditorDirty(false);
-  };
-  const backToGallery = (focusId: string | null) => {
-    const target = galleryReturnFocus.current?.target ?? "title";
-    galleryReturnFocus.current = { id: focusId, target };
-    setChartView({ kind: "gallery" });
-    setEditorDirty(false);
-    setCloseConfirm(false);
-  };
-
-  const completePendingClose = () => {
-    setCloseConfirm(false);
-    setPendingClose(false);
-    backToGallery(null);
-    hooks.requestClose();
-  };
-
-  const handleEditorSave = (id: string) => {
-    setEditorDirty(false);
-    editorActions.current = null;
-    if (pendingClose) {
-      completePendingClose();
-
-      return;
-    }
-    openDetail(id);
-  };
-
-  const handleEditorCancel = (returnTo: string | null, origin: string | null) => {
-    setEditorDirty(false);
-    editorActions.current = null;
-    if (pendingClose) {
-      completePendingClose();
-
-      return;
-    }
-    if (returnTo) openDetail(returnTo);
-    else backToGallery(origin);
-  };
-
-  const requestPanelClose = () => {
-    if (editing && editorDirty) {
-      invokingRef.current = document.activeElement as HTMLElement | null;
-      setPendingClose(true);
-      setCloseConfirm(true);
-
-      return;
-    }
-    hooks.requestClose();
-  };
-
-  const safeSelect = (tab: PanelTab) => {
-    if (editing) return;
-    selectFull(tab);
-  };
-
-  const handleTabKey = (event: React.KeyboardEvent) => {
-    if (editing) {
-      event.preventDefault();
-
-      return;
-    }
-    handleTabKeyInner(event, safeSelect);
-  };
-
-  return (
-    <>
-      <header>
-        <h2 className="full-title">{scene.title}</h2>
-        <div className="tabs" role="tablist" onKeyDown={handleTabKey}>
-          {PANEL_TABS.map((tab) => (
-            <button
-              key={tab}
-              ref={(button) => {
-                if (button) buttons.current.set(tab, button);
-                else buttons.current.delete(tab);
-              }}
-              type="button"
-              role="tab"
-              aria-selected={tab === current}
-              tabIndex={tab === current ? 0 : -1}
-              disabled={editing && tab !== current}
-              onClick={() => safeSelect(tab)}
-            >
-              {TAB_LABELS[tab]}
-            </button>
-          ))}
-        </div>
-        <div className="mini-time" hidden={time.label === null}>
-          <button type="button" aria-label="Previous step" onClick={() => hooks.stepTime(-1)}>
-            {"◀"}
-          </button>
-          <span>{time.label ?? ""}</span>
-          <button type="button" aria-label="Next step" onClick={() => hooks.stepTime(1)}>
-            {"▶"}
-          </button>
-        </div>
-        <button type="button" onClick={requestPanelClose}>
-          {"✕ Back to scene"}
-        </button>
-      </header>
-      <main
-        role="tabpanel"
-        ref={(node) => {
-          content.current = node;
-        }}
-      >
-        {/* The editor shows no status, so the shell keeps storage and share warnings visible. */}
-        {editing && syncNotice && (
-          <p className="chart-note" role="status">
-            {syncNotice}
-          </p>
-        )}
-        {current === "charts"
-          ? chartViewFor({
-            scene,
-            store,
-            view: chartView,
-            currentTime: time.time,
-            syncNotice,
-            openDetail,
-            openEditor,
-            backToGallery,
-            setDirty: setEditorDirty,
-            editorActions,
-            onSave: handleEditorSave,
-            onCancel: handleEditorCancel,
-          })
-          : <DomNode node={node} />}
-        {closeConfirm && (
-          <div className="chart-confirm" role="alertdialog" aria-label="Unsaved chart changes">
-            <p>{"This chart draft has unsaved changes."}</p>
-            <button
-              type="button"
-              ref={confirmSaveRef}
-              onClick={() => {
-                editorActions.current?.save();
-              }}
-            >
-              {"Save"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                editorActions.current?.discard();
-              }}
-            >
-              {"Discard"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setCloseConfirm(false);
-                setPendingClose(false);
-                const fallback = dialog.querySelector<HTMLElement>(
-                  ".chart-editor .editor-head button",
-                );
-                (invokingRef.current ?? fallback)?.focus();
-              }}
-            >
-              {"Keep editing"}
-            </button>
-          </div>
-        )}
-      </main>
-    </>
-  );
-}
-
-interface EditorRefs {
-  current: { save: () => void; discard: () => void } | null;
-}
-
-function chartViewFor(args: {
-  scene: Scene;
-  store: SceneStore;
-  view: ChartView;
-  currentTime: string | null;
-  syncNotice: string | null;
-  openDetail(id: string, focusNotes?: boolean): void;
-  openEditor(
-    draft: ChartDraft,
-    isNew: boolean,
-    returnTo: string | null,
-    origin: string | null,
-  ): void;
-  backToGallery(focusId: string | null): void;
-  setDirty(dirty: boolean): void;
-  editorActions: EditorRefs;
-  onSave(id: string): void;
-  onCancel(returnTo: string | null, origin: string | null): void;
-}): React.ReactElement {
-  const {
-    scene,
-    store,
-    view,
-    currentTime,
-    syncNotice,
-    openDetail,
-    openEditor,
-    backToGallery,
-    setDirty,
-    editorActions,
-    onSave,
-    onCancel,
-  } = args;
-  if (view.kind === "detail") {
-    return (
-      <ChartDetail
-        scene={scene}
-        store={store}
-        definitionId={view.id}
-        currentTime={currentTime}
-        syncNotice={syncNotice}
-        onBack={() => backToGallery(view.origin)}
-        onEdit={(id) => {
-          const snapshot = store.getSnapshot();
-          const definition = snapshot.charts.definitions.find((entry) => entry.id === id);
-          if (!definition) {
-            backToGallery(view.origin);
-
-            return;
-          }
-          openEditor(draftForEdit(definition), false, view.id, view.origin);
-        }}
-      />
-    );
-  }
-  if (view.kind === "editor") {
-    return (
-      <ChartEditor
-        scene={scene}
-        store={store}
-        initial={view.draft}
-        isNew={view.isNew}
-        currentTime={currentTime}
-        onSave={onSave}
-        onCancel={() => onCancel(view.returnTo, view.origin)}
-        onDirtyChange={setDirty}
-        onRegisterActions={(actions) => {
-          editorActions.current = actions;
-        }}
-      />
-    );
-  }
-
-  return (
-    <>
-      <ChartGallery
-        scene={scene}
-        store={store}
-        currentTime={currentTime}
-        syncNotice={syncNotice}
-        onOpenDetail={openDetail}
-        onEdit={(id) => {
-          const snapshot = store.getSnapshot();
-          const definition = snapshot.charts.definitions.find((entry) => entry.id === id);
-          if (!definition) return;
-          openEditor(draftForEdit(definition), false, null, id);
-        }}
-        onNew={() => {
-          const snapshot = store.getSnapshot();
-          const existing = snapshot.charts.definitions.map((entry) => entry.id);
-          const draft = draftForNew(scene.layers, existing);
-          if (!draft) return;
-          openEditor(draft, true, null, null);
-        }}
-      />
-      <DownloadSection scene={scene} />
-    </>
-  );
-}
-
-function focusGalleryCard(
-  dialog: HTMLElement,
-  focusId: string | null,
-  target: GalleryReturnFocus["target"] = "title",
-) {
-  if (focusId) {
-    const cards = [...dialog.querySelectorAll("[data-chart-id]")];
-    const match = cards.find((element) => (element as HTMLElement).dataset.chartId === focusId);
-    if (match) {
-      if (target === "notes") {
-        const notes = match.querySelector(".chart-notes-button");
-        if (notes instanceof HTMLElement) {
-          notes.focus();
-
-          return;
-        }
-      }
-      const button = match.querySelector("button");
-      if (button instanceof HTMLElement) {
-        button.focus();
-
-        return;
-      }
-    }
-  }
-  const scope = dialog.querySelector(".chart-gallery") ?? dialog;
-  const creation = [...scope.querySelectorAll("button")].find(
-    (button) => button.textContent === "+ New chart",
-  );
-  if (creation instanceof HTMLElement) creation.focus();
-}
-
-function renderTabNode(
+function chartChipBody(
+  chip: ChunkState<ChartChipProps>,
   scene: Scene,
-  tab: PanelTab,
-  elevationUnit: string,
-  displayUnits: Record<string, string>,
-): HTMLElement | null {
-  if (tab === "about") return renderAbout(scene, elevationUnit, displayUnits);
-  if (tab === "credits") return renderCredits(scene);
+  store: SceneStore,
+  currentTime: string | null,
+): ReactNode {
+  if (chip === null) return null;
+  if (chip === "failed") return <span>{CHIP_LOAD_FAILED}</span>;
+  const Chip = chip.component;
 
-  return null;
-}
-
-function displayUnitsOf(
-  display: SceneDisplay,
-  layers: readonly LayerDoc[],
-): Record<string, string> {
-  return Object.fromEntries(
-    layers.map((layer) => [layer.id, display.layers[layer.id]?.units ?? layer.units]),
+  return (
+    <ChunkBoundary resetKey={scene.id} fallback={<span>{CHIP_LOAD_FAILED}</span>}>
+      <Chip scene={scene} store={store} currentTime={currentTime} />
+    </ChunkBoundary>
   );
 }
 
-function handleTabKeyInner(
-  event: React.KeyboardEvent,
-  select: (tab: PanelTab) => void,
-): void {
-  const target = event.target as HTMLElement;
-  const buttons = [...target.parentElement?.querySelectorAll('[role="tab"]') ?? []];
-  const index = buttons.indexOf(target);
-  const next = tabIndexForKey(event.key, index, buttons.length);
-  if (next === null) return;
+// Plain state allows retries, because React.lazy caches a rejected import for good.
+function useChunk<Props>(
+  load: () => Promise<ComponentType<Props>>,
+  retryKey: unknown,
+): ChunkState<Props> {
+  const [chunk, setChunk] = useState<ChunkState<Props>>(null);
+  useEffect(() => {
+    if (retryKey === null || retryKey === 0) return;
 
-  event.preventDefault();
-  select(PANEL_TABS[next]);
+    let current = true;
+    load().then(
+      (component) => {
+        if (current) setChunk({ component });
+      },
+      () => {
+        if (current) setChunk("failed");
+      },
+    );
+
+    return () => {
+      current = false;
+    };
+  }, [load, retryKey]);
+
+  return chunk;
 }
 
-// Arrow keys wrap; Home and End jump, as in the WAI-ARIA tabs pattern.
-function tabIndexForKey(key: string, current: number, count: number): number | null {
-  if (current < 0) return null;
-  if (key === "ArrowRight") return (current + 1) % count;
-  if (key === "ArrowLeft") return (current + count - 1) % count;
-  if (key === "Home") return 0;
-  if (key === "End") return count - 1;
+function loadFullPanel(): ReturnType<typeof panelChunkLoaders.full> {
+  fullPanelPromise ??= panelChunkLoaders.full();
+  // A rejected chunk stays rejected, so forget it and let the next open retry.
+  fullPanelPromise.catch(() => {
+    fullPanelPromise = null;
+  });
+  return fullPanelPromise;
+}
 
-  return null;
+function loadChartChip(): ReturnType<typeof panelChunkLoaders.chip> {
+  chartChipPromise ??= panelChunkLoaders.chip();
+  // A rejected chunk stays rejected, so forget it and let the next Charts click retry.
+  chartChipPromise.catch(() => {
+    chartChipPromise = null;
+  });
+  return chartChipPromise;
+}
+
+/** Clear cached chunk promises so tests can simulate a fresh first load. */
+export function resetPanelChunkCacheForTest(): void {
+  fullPanelPromise = null;
+  chartChipPromise = null;
+}
+
+interface ChunkBoundaryProps {
+  fallback: ReactNode;
+  resetKey: unknown;
+  children: ReactNode;
+}
+
+interface ChunkBoundaryState {
+  failed: boolean;
+}
+
+// A failed chunk must not unmount its root, so the next open or click can retry it.
+class ChunkBoundary extends Component<ChunkBoundaryProps, ChunkBoundaryState> {
+  state: ChunkBoundaryState = { failed: false };
+
+  static getDerivedStateFromError(): ChunkBoundaryState {
+    return { failed: true };
+  }
+
+  componentDidUpdate(previousProps: ChunkBoundaryProps): void {
+    if (previousProps.resetKey !== this.props.resetKey && this.state.failed) {
+      this.setState({ failed: false });
+    }
+  }
+
+  render(): ReactNode {
+    if (this.state.failed) return this.props.fallback;
+
+    return this.props.children;
+  }
 }

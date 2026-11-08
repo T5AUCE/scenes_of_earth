@@ -17,7 +17,7 @@ from shapely.geometry import mapping, shape
 from . import __version__, db
 from .areas import Area, AreaError, clean_polygon
 from .bundle import VERSION, JsonObject
-from .plan import Plan, beyond_legacy_extent, plan
+from .plan import Plan, beyond_legacy_extent, plan, scene_datasets
 from .sources import (
     REQUEST_FORMATS,
     REQUEST_STEP,
@@ -56,9 +56,9 @@ def prepare_scene(db_path: Path | str, registry: Registry, body: bytes | str) ->
     """Validate a request body and name its scene. Raises AreaError or SourceUnavailable."""
     data = _parse_body(body)
     layers = _requested_layers(data, registry)
-    datasets = [registry[layer_id] for layer_id in layers]
     title = _requested_title(data)
     area = resolve_area(db_path, data.get("area"))
+    datasets = scene_datasets(area, [registry[layer_id] for layer_id in layers])
     start, end = _requested_period(data, datasets)
     # Planning refuses a bad request before any data is read.
     scene_plan = plan(area, datasets, start, end)

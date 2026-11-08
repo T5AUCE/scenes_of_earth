@@ -4,6 +4,7 @@ from collections.abc import Callable
 import numpy as np
 import pytest
 from rasterio.transform import Affine
+from shapely.geometry.base import BaseGeometry
 
 from soe.sources import (
     Bbox,
@@ -52,8 +53,9 @@ class RevisionSource(RealSource):
         bounds: Bbox,
         res: float,
         on_block: Callable[[], None] = lambda: None,
+        geometry: BaseGeometry | None = None,
     ) -> tuple[np.ndarray, Affine]:
-        return self.data.terrain(bounds, res, on_block)
+        return self.data.terrain(bounds, res, on_block, geometry)
 
 
 @pytest.fixture

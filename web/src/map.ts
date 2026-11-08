@@ -3,14 +3,14 @@ import {
   AttributionControl,
   LngLat,
   Map as MapLibreMap,
-  type LayerSpecification,
   MercatorCoordinate,
   type PaddingOptions,
   ScaleControl,
+  setWorkerCount,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
-import { areaFilter, type TileArea, WORLD_WIDTH_DEG } from "./label-filter";
+import { WORLD_WIDTH_DEG } from "./label-filter";
 import { clampAround, nearestEquivalent, panLimit } from "./pan-lock";
 import { imageCorners } from "./render/mercator";
 import type { Bbox } from "./types";
@@ -22,6 +22,10 @@ const BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 export const MAX_ZOOM = 24;
 // MapLibre draws the world 512 px wide at zoom 0.
 const TILE_SIZE_PX = 512;
+// Extra workers let basemap, hillshade and contour tiles settle in parallel.
+const MAP_WORKER_COUNT = 3;
+let workersConfigured = false;
+
 // WebGL guarantees at least this much; used when the context cannot be queried.
 const GUARANTEED_TEXTURE_SIZE_PX = 4096;
 
@@ -42,8 +46,6 @@ const PICKED_LINE_WIDTH_PX = 3;
 // An imageless source never reports loaded, so dormant renderers seed this pixel.
 const PLACEHOLDER_SIZE_PX = 1;
 
-const AREA_LABEL_SUFFIX = "-in-area";
-
 // Projection round-off must not trigger another synchronous move event at the pan limit.
 const CENTRE_TOLERANCE_WORLDS = 1e-12;
 
@@ -53,6 +55,7 @@ interface DrawableImage {
 
 /** Creates the basemap, with its attribution at the bottom left. */
 export function createMap(container: string): MapLibreMap {
+  ensureWorkerCount();
   const map = new MapLibreMap({
     container,
     style: BASEMAP_STYLE,
@@ -63,6 +66,13 @@ export function createMap(container: string): MapLibreMap {
   // Bottom right belongs to the scene column.
   map.addControl(new AttributionControl({ compact: false }), "bottom-left");
   return map;
+}
+
+/** Set the worker count once, before the first map starts its workers. */
+function ensureWorkerCount(): void {
+  if (workersConfigured) return;
+  workersConfigured = true;
+  setWorkerCount(MAP_WORKER_COUNT);
 }
 
 /** Add a scale bar for reading dot spacing and return its removal callback. */
@@ -236,34 +246,4 @@ export function setImage(map: MapLibreMap, id: string, image: ImageData) {
 export function removeLayerAndSource(map: MapLibreMap, id: string) {
   if (map.getLayer(id)) map.removeLayer(id);
   if (map.getSource(id)) map.removeSource(id);
-}
-
-/** Copies labels above the mask, limited to the area; the originals give way. Returns undo. */
-export function moveLabelsIntoArea(map: MapLibreMap, area: TileArea, fromZoom: number) {
-  const labelLayers = map.getStyle().layers.filter((layer) => layer.type === "symbol");
-
-  const originals = labelLayers.map((layer) => {
-    const minzoom = layer.minzoom ?? 0;
-    const maxzoom = layer.maxzoom ?? MAX_ZOOM;
-    const switchZoom = Math.max(minzoom, fromZoom);
-
-    map.setLayerZoomRange(layer.id, minzoom, switchZoom);
-
-    map.addLayer({
-      ...layer,
-      id: `${layer.id}${AREA_LABEL_SUFFIX}`,
-      filter: areaFilter(layer.filter, area, Boolean(layer.layout?.["icon-image"])),
-      minzoom: switchZoom,
-      maxzoom,
-    } as LayerSpecification);
-
-    return { id: layer.id, minzoom, maxzoom };
-  });
-
-  return () => {
-    for (const { id, minzoom, maxzoom } of originals) {
-      map.removeLayer(`${id}${AREA_LABEL_SUFFIX}`);
-      map.setLayerZoomRange(id, minzoom, maxzoom);
-    }
-  };
 }

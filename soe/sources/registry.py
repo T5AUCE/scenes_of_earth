@@ -1,16 +1,24 @@
+from dataclasses import replace
 from pathlib import Path
 
 from ..geology_age import AGE_CLASSES, GEOLOGY_AGE_FILE, GEOLOGY_AGE_RES_DEG
 from .chirps import CHIRPS_CUBE, CHIRPS_GRID, ChirpsReader, RainDataset
-from .cubes import DEFAULT_CUBES_DIR, CubeStore
+from .cubes import DEFAULT_CUBES_DIR, HIGH_LATITUDE_FIRST_MONTH, CubeSpec, CubeStore
 from .datasets import Registry, Role
 from .era5 import (
+    ERA5_PRECIPITATION_84N_CUBE,
+    ERA5_PRECIPITATION_84N_FALLBACK,
     ERA5_PRECIPITATION_CUBE,
     ERA5_PRECIPITATION_FALLBACK,
+    ERA5_TEMPERATURE_84N_CUBE,
+    ERA5_TEMPERATURE_84N_FALLBACK,
     ERA5_TEMPERATURE_CUBE,
     ERA5_TEMPERATURE_FALLBACK,
 )
+from .era5land_precipitation import ERA5_LAND_PRECIPITATION_84N_CUBE, HighLatitudeRainDataset
 from .era5land_temperature import (
+    ERA5_LAND_84N_GRID,
+    ERA5_LAND_TEMPERATURE_84N_CUBE,
     ERA5_LAND_TEMPERATURE_CUBE,
     ERA5_LAND_TEMPERATURE_GRID,
     Era5LandTemperatureDataset,
@@ -26,6 +34,7 @@ from .lithology import (
     GeologyDataset,
     LithologyReader,
 )
+from .remote import SourceUnavailable
 from .synthetic import SyntheticSource
 from .terrain import GLO30_RES_DEG, CopernicusDemReader, TerrainDataset, terrain_tiles_block
 from .worldcover import (
@@ -41,10 +50,15 @@ CUBE_SPECS = (
     ERA5_TEMPERATURE_CUBE,
     ERA5_PRECIPITATION_CUBE,
     CHIRPS_CUBE,
+    ERA5_LAND_TEMPERATURE_84N_CUBE,
+    ERA5_LAND_PRECIPITATION_84N_CUBE,
+    ERA5_TEMPERATURE_84N_CUBE,
+    ERA5_PRECIPITATION_84N_CUBE,
 )
 
 # The cubes and the geology rasters end at 60N until they are re-ingested.
 CUBE_COVERAGE_DEG = (-180, -60, 180, 60)
+CUBE_COVERAGE_84N_DEG = (-180, -60, 180, 84)
 
 
 class RealSource(ChirpsReader, CopernicusDemReader, WorldCoverReader, LithologyReader, CubeStore):
@@ -69,7 +83,10 @@ def make_registry(backend: RealSource | SyntheticSource) -> Registry:
     """Return the datasets that can read through `backend`.
 
     Rainfall and Temperature are listed only when the backend has all of their cubes, so no
-    layer lacks the fallback that fills its gaps. Geology is listed only when the backend has
+    layer lacks the fallback that fills its gaps. They reach 84N only while the cubes that reach
+    it hold every month from 1981 that the ERA5 cube holds, so restart after such an ingest. A
+    scene beyond 60N or S then takes its layers through `for_scene` to read those cubes alone.
+    Geology is listed only when the backend has
     the lithology map and Geology age only when it has the age map.
     """
     registry = {}
@@ -87,6 +104,23 @@ def make_registry(backend: RealSource | SyntheticSource) -> Registry:
 
 
 def _chirps_monthly(backend: RealSource | SyntheticSource) -> RainDataset:
+    rain = _chirps_to_60n(backend)
+    north_cubes = (ERA5_LAND_PRECIPITATION_84N_CUBE, ERA5_PRECIPITATION_84N_CUBE)
+    if not _reaches_84n(backend, ERA5_PRECIPITATION_CUBE, *north_cubes):
+        return rain
+
+    return HighLatitudeRainDataset(
+        **{
+            **vars(rain),
+            "grid": WORLD_GRID,
+            "coverage": CUBE_COVERAGE_84N_DEG,
+            "north_cube": ERA5_LAND_PRECIPITATION_84N_CUBE,
+            "north_fallback": ERA5_PRECIPITATION_84N_FALLBACK,
+        },
+    )
+
+
+def _chirps_to_60n(backend: RealSource | SyntheticSource) -> RainDataset:
     return RainDataset(
         id="chirps_monthly",
         title="Rainfall",
@@ -234,6 +268,24 @@ def _geology_age(backend: RealSource | SyntheticSource) -> GeologyDataset:
 
 
 def _era5land_temperature(backend: RealSource | SyntheticSource) -> Era5LandTemperatureDataset:
+    temperature = _era5land_temperature_to_60n(backend)
+    north_cubes = (ERA5_LAND_TEMPERATURE_84N_CUBE, ERA5_TEMPERATURE_84N_CUBE)
+    if not _reaches_84n(backend, ERA5_TEMPERATURE_CUBE, *north_cubes):
+        return temperature
+
+    return replace(
+        temperature,
+        grid=ERA5_LAND_84N_GRID,
+        coverage=CUBE_COVERAGE_84N_DEG,
+        north_cube=ERA5_LAND_TEMPERATURE_84N_CUBE,
+        north_fallback=ERA5_TEMPERATURE_84N_FALLBACK,
+        north_source=SOURCES["era5land_84n"],
+    )
+
+
+def _era5land_temperature_to_60n(
+    backend: RealSource | SyntheticSource,
+) -> Era5LandTemperatureDataset:
     return Era5LandTemperatureDataset(
         id="era5land_temperature",
         title="Temperature",
@@ -264,6 +316,31 @@ def _era5land_temperature(backend: RealSource | SyntheticSource) -> Era5LandTemp
         remote=False,
         fallback=ERA5_TEMPERATURE_FALLBACK,
     )
+
+
+def _reaches_84n(
+    backend: RealSource | SyntheticSource,
+    reference: CubeSpec,
+    *north_cubes: CubeSpec,
+) -> bool:
+    """Return whether each cube that reaches 84N holds all months of the reference cube since 1981.
+
+    A cube that is missing or being updated counts as incomplete, so the layer keeps its extent.
+    """
+    try:
+        stored = [backend.optional_cube_months(cube) for cube in north_cubes]
+        if not all(stored):
+            return False
+
+        wanted = {
+            month
+            for month in backend.cube_months(reference)
+            if month >= HIGH_LATITUDE_FIRST_MONTH
+        }
+    except SourceUnavailable:
+        return False
+
+    return all(wanted <= months.keys() for months in stored)
 
 
 REGISTRY = make_registry(RealSource())

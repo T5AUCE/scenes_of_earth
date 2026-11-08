@@ -1,3 +1,4 @@
+import { getLayers } from "./api";
 import type { MonthSelect } from "./month-select";
 import type { Layer } from "./types";
 
@@ -19,8 +20,6 @@ export interface LayerChoiceControls {
  * the overlap of the checked layers. Rejects when the backend asks for periods other than months.
  */
 export async function loadLayerChoices({ layerBox, start, end }: LayerChoiceControls) {
-  // Loaded here so that tests can import this module without resolving the API client.
-  const { getLayers } = await import("./api");
   const { layers, default: defaultIds, request_step: requestStep } = await getLayers();
   if (requestStep !== MONTH_STEP) throw new Error(`request step ${requestStep} is not supported`);
 

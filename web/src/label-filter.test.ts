@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { areaFilter, tileAreaGeometry } from "./label-filter.ts";
+import { polygonParts } from "./label-filter.ts";
 
 const square = (west: number, east: number) => [
   [
@@ -13,38 +13,17 @@ const square = (west: number, east: number) => [
   ],
 ];
 
-test("an area west of 180 is used as given", () => {
-  const area = tileAreaGeometry({ type: "Polygon", coordinates: square(10, 20) });
-
-  assert.equal(area.coordinates.length, 1);
-  assert.equal(area.coordinates[0][0][0][0], 10);
+test("a Polygon yields its single ring set", () => {
+  assert.deepEqual(polygonParts("Polygon", square(10, 20)), [square(10, 20)]);
 });
 
-test("an area past 180 also gets a copy one world west", () => {
-  const area = tileAreaGeometry({
-    type: "MultiPolygon",
-    coordinates: [square(177, 181), square(185, 186)],
-  });
+test("a MultiPolygon yields each polygon", () => {
+  const coordinates = [square(10, 20), square(30, 40)];
 
-  assert.equal(area.coordinates.length, 4);
-  assert.deepEqual(area.coordinates[2][0][0], [-183, 0]);
-  assert.deepEqual(area.coordinates[3][0][0], [-175, 0]);
+  assert.deepEqual(polygonParts("MultiPolygon", coordinates), coordinates);
 });
 
-test("the area filter keeps the layer's own filter", () => {
-  const area = tileAreaGeometry({ type: "Polygon", coordinates: square(0, 1) });
-
-  assert.deepEqual(areaFilter(["==", ["get", "class"], "city"], area, false), [
-    "all",
-    ["==", ["get", "class"], "city"],
-    ["<=", ["distance", area], 0],
-  ]);
-
-  assert.deepEqual(areaFilter(undefined, area, false), ["<=", ["distance", area], 0]);
-});
-
-test("layers with icons need the feature fully inside the area", () => {
-  const area = tileAreaGeometry({ type: "Polygon", coordinates: square(0, 1) });
-
-  assert.deepEqual(areaFilter(undefined, area, true), ["within", area]);
+test("other geometry types yield no polygons", () => {
+  assert.deepEqual(polygonParts("Point", square(10, 20)), []);
+  assert.deepEqual(polygonParts("LineString", square(10, 20)), []);
 });

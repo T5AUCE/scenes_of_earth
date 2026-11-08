@@ -19,6 +19,7 @@ const hooks = registerHooks({
 const {
   DEFAULT_EDGES,
   densityControl,
+  displayUnitsFrom,
   elevationUnitFrom,
   formatDisplayParams,
   GEOLOGY_SMOOTH_RADIUS_CELLS,
@@ -29,17 +30,20 @@ const {
   loadStoredDensities,
   loadStoredSmoothing,
   loadStoredUnits,
+  loadMapDetailsShown,
   NO_TOKENS,
   rangeDecimals,
   recordMenuChange,
   resolveDisplay,
   setLayerDisplay,
   storeInk,
+  storeMapDetailsShown,
   storePalette,
   storeEdges,
   storeDensity,
   storeSmoothing,
   storeUnits,
+  subscribeMapDetails,
 } = await import("./display-state.ts");
 const { choose, loadStoredShowAs, storeShowAs, toggle } = await import("./show-as.ts");
 const {
@@ -472,9 +476,20 @@ test("Edge smoothing persists by dataset and rejects invalid values", () => {
   }
   items.set("soe.smoothing.v1", "broken JSON");
   assert.equal(loadStoredSmoothing("geology"), GEOLOGY_SMOOTH_RADIUS_CELLS);
+  storeSmoothing("geology", 1);
+  assert.equal(items.get("soe.smoothing.v1"), "broken JSON");
   useBlockedStorage();
   assert.equal(loadStoredSmoothing("geology"), GEOLOGY_SMOOTH_RADIUS_CELLS);
   assert.doesNotThrow(() => storeSmoothing("geology", 1));
+  let writes = 0;
+  useStorage({
+    getItem: () => {
+      throw new Error("blocked read");
+    },
+    setItem: () => writes++,
+  });
+  storeSmoothing("geology", 1);
+  assert.equal(writes, 0);
 });
 
 test("geology edge storage ignores Rounding but keeps softness and outline", () => {
@@ -1051,6 +1066,44 @@ test("a palette change keeps the chosen units", () => {
   assert.deepEqual(display.layers.rain, { units: "in/month", palette: "batlow" });
 });
 
+test("map details default to hidden and persist per browser", () => {
+  useStorage();
+
+  assert.equal(loadMapDetailsShown(), false);
+
+  storeMapDetailsShown(true);
+  assert.equal(loadMapDetailsShown(), true);
+
+  storeMapDetailsShown(false);
+  assert.equal(loadMapDetailsShown(), false);
+});
+
+test("invalid or blocked map details storage stays hidden without throwing", () => {
+  const items = useStorage();
+  items.set("soe.map-details.v1", "yes");
+
+  assert.equal(loadMapDetailsShown(), false);
+
+  useBlockedStorage();
+  assert.equal(loadMapDetailsShown(), false);
+  assert.doesNotThrow(() => storeMapDetailsShown(true));
+  assert.equal(loadMapDetailsShown(), false);
+});
+
+test("map details changes notify subscribers until removed", () => {
+  useStorage();
+  const seen: boolean[] = [];
+  const stop = subscribeMapDetails((shown) => seen.push(shown));
+
+  storeMapDetailsShown(true);
+  storeMapDetailsShown(false);
+  stop();
+  storeMapDetailsShown(true);
+
+  assert.deepEqual(seen, [true, false]);
+  assert.equal(loadMapDetailsShown(), true);
+});
+
 test("elevation units follow the terrain override and default to metres", () => {
   const terrain = {
     id: "terrain",
@@ -1075,6 +1128,22 @@ test("elevation units follow the terrain override and default to metres", () => 
     ),
     "ft",
   );
+  const display = {
+    layers: { terrain: { units: "ft" }, rain: { units: "" } },
+    off: new Set<string>(),
+    showAs: {},
+  };
+  const units = displayUnitsFrom(display, [field, terrain]);
+  assert.deepEqual(units, { rain: "", terrain: "ft" });
+  assert.deepEqual(Object.keys(units), ["rain", "terrain"]);
+  units.terrain = "m";
+  assert.equal(display.layers.terrain.units, "ft");
+  assert.equal(displayUnitsFrom(display, [field, terrain]).terrain, "ft");
+  assert.deepEqual(displayUnitsFrom({ ...display, layers: {} }, [field, terrain]), {
+    rain: "mm/month",
+    terrain: "m",
+  });
+  assert.deepEqual(displayUnitsFrom(display, []), {});
 });
 
 function unitsLayers() {

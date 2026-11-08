@@ -156,6 +156,12 @@ def plan(area: Area, datasets: list[Dataset], start: str | None, end: str | None
     return Plan(outline, layers, bbox, clipped, period, notices)
 
 
+def scene_datasets(area: Area, datasets: list[Dataset]) -> list[Dataset]:
+    """Return the datasets as the scene of this area reads them, by the scene's own extent."""
+    beyond = beyond_legacy_extent(area.geom)
+    return [dataset.for_scene(beyond) for dataset in datasets]
+
+
 def beyond_legacy_extent(geometry: BaseGeometry) -> bool:
     """Whether the geometry reaches past +-60 degrees latitude, where planning changed."""
     _, south, _, north = geometry.bounds
@@ -669,20 +675,12 @@ def _layer_plan(
         mask,
         int((mask == MASK_INSIDE).sum()),
         steps,
-        _sources_for(dataset, bbox, geometry),
+        dataset.sources_for(bbox),
         geometry,
         weights,
         dataset.coverage,
         notices,
     )
-
-
-def _sources_for(dataset: Dataset, bbox: Bbox, geometry: BaseGeometry) -> list[dict]:
-    """Sources of the tiles meeting the outline for capped datasets, else of the bbox."""
-    if dataset.max_tiles is None:
-        return dataset.sources_for(bbox)
-
-    return dataset.sources_for(bbox, geometry)
 
 
 def _enclosing_bbox(bboxes: list[list[float]]) -> list[float]:

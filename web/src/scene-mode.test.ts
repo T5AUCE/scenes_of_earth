@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
+import { registerHooks } from "node:module";
 import { afterEach, test } from "node:test";
 
 import { Window } from "happy-dom";
+
+registerHooks({
+  resolve(specifier, context, next) {
+    if (specifier.endsWith(".css")) {
+      return { url: "data:text/javascript,export default {}", shortCircuit: true };
+    }
+
+    return next(specifier, context);
+  },
+});
 
 import { assertSameNode } from "./testing/dom-assert.ts";
 import {
@@ -14,6 +25,9 @@ import {
 } from "./testing/scene-mode-harness.ts";
 import type { TestMap } from "./testing/scene-mode-harness.ts";
 import type { Scene } from "./types.ts";
+
+const FADE_ID = "soe-scene-fade";
+const FADE_OPACITY = 0.6;
 
 afterEach(resetHarness);
 
@@ -34,13 +48,433 @@ test("delayed geometry and mask tiles keep data hidden through resize until read
   harness.map.emit("sourcedata", { sourceId: "rain", isSourceLoaded: true });
   await settle();
   assertDataHidden(harness.map);
-  assert.equal(harness.labelMoves, 0);
+  assert.ok(harness.map.getLayer(FADE_ID));
 
   harness.map.finishMask();
   await settle();
   assertRanges(harness.map, [[4.75, 24], [6, 12], [4.75, 24], [4, 4]]);
-  assert.equal(harness.labelMoves, 1);
+  assertFadeCovers(harness.map);
   assertListenersRemoved(harness.map);
+});
+
+test("basemap geometry stays below scene data with the mask above both", async () => {
+  const harness = createHarness();
+  (harness.map.layers.get("contours") as unknown as Record<string, unknown>).type = "symbol";
+  harness.map.layers.set("soe-area-outline", {
+    id: "soe-area-outline",
+    layout: { visibility: "visible" },
+  });
+  // Liberty-like order: scene data mounts between early fills and the first symbol.
+  const styleOrder = [
+    "background",
+    "landcover_wood",
+    "relief",
+    "contours",
+    "rain",
+    "overview",
+    "soe-area-outline",
+    "road_one_way_arrow",
+    "bridge_motorway",
+    "boundary_2",
+    "highway-shield-non-us",
+    "label_city",
+  ];
+  const types: Record<string, string> = {
+    background: "background",
+    landcover_wood: "fill",
+    road_one_way_arrow: "symbol",
+    bridge_motorway: "line",
+    boundary_2: "line",
+    "highway-shield-non-us": "symbol",
+    label_city: "symbol",
+  };
+  (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
+    layers: styleOrder.map((id) => ({ id, type: types[id] ?? "raster" })),
+  });
+  const basemapIds = [
+    "background",
+    "landcover_wood",
+    "road_one_way_arrow",
+    "bridge_motorway",
+    "boundary_2",
+    "highway-shield-non-us",
+    "label_city",
+  ];
+  for (const id of basemapIds) {
+    harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
+  }
+  const order = [...styleOrder];
+  const place = (id: string, beforeId?: string) => {
+    const at = order.indexOf(id);
+    if (at >= 0) order.splice(at, 1);
+    const anchor = beforeId === undefined ? order.length : order.indexOf(beforeId);
+    order.splice(anchor < 0 ? order.length : anchor, 0, id);
+  };
+  const originalAdd = harness.map.addLayer.bind(harness.map);
+  harness.map.addLayer = ((layer: { id: string }, beforeId?: string) => {
+    place(layer.id, beforeId);
+    return originalAdd(layer as never);
+  }) as typeof harness.map.addLayer;
+  const originalMove = harness.map.moveLayer.bind(harness.map);
+  harness.map.moveLayer = ((id: string, beforeId?: string) => {
+    place(id, beforeId);
+    return originalMove(id, beforeId);
+  }) as typeof harness.map.moveLayer;
+  const originalRemove = harness.map.removeLayer.bind(harness.map);
+  harness.map.removeLayer = ((id: string) => {
+    const at = order.indexOf(id);
+    if (at >= 0) order.splice(at, 1);
+    return originalRemove(id);
+  }) as typeof harness.map.removeLayer;
+  harness.enter();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+  harness.map.finishMask();
+  await settle();
+
+  assert.ok(harness.map.getLayer(MASK_ID));
+  assertFadeCovers(harness.map);
+  assert.deepEqual(order, [
+    "background",
+    "landcover_wood",
+    "relief",
+    "rain",
+    "overview",
+    "bridge_motorway",
+    "boundary_2",
+    MASK_ID,
+    "road_one_way_arrow",
+    "highway-shield-non-us",
+    "label_city",
+    FADE_ID,
+    "contours",
+    "soe-area-outline",
+  ]);
+
+  harness.mode.exit();
+  await settle();
+
+  assert.equal(harness.map.getLayer(MASK_ID), undefined);
+  assert.equal(harness.map.getSource(MASK_ID), undefined);
+  assert.equal(harness.map.getLayer(FADE_ID), undefined);
+  assert.deepEqual(order.filter((id) => !["relief", "contours", "rain", "overview"].includes(id)), [
+    "soe-area-outline",
+    "background",
+    "landcover_wood",
+    "road_one_way_arrow",
+    "bridge_motorway",
+    "boundary_2",
+    "highway-shield-non-us",
+    "label_city",
+  ]);
+});
+
+test("exiting a scene removes the fade and shows details again", async () => {
+  const harness = createHarness();
+  const layouts: [string, string | undefined][] = [];
+  (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
+    layers: [
+      { id: "poi_transit", type: "symbol" },
+      { id: "label_city", type: "symbol" },
+    ],
+  });
+  for (const id of ["poi_transit", "label_city"]) {
+    harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
+  }
+  (harness.map as unknown as Record<string, unknown>).getLayoutProperty = (id: string) =>
+    (harness.map.layers.get(id) as unknown as { layout: { visibility?: string } })?.layout
+      ?.visibility;
+  (harness.map as unknown as Record<string, unknown>).setLayoutProperty = (
+    id: string,
+    _name: string,
+    value: string | undefined,
+  ) => {
+    layouts.push([id, value]);
+    (harness.map.layers.get(id) as unknown as { layout: { visibility?: string } }).layout
+      .visibility = value;
+  };
+  harness.enter();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+  harness.map.finishMask();
+  await settle();
+
+  assert.ok(harness.map.getLayer(FADE_ID));
+
+  harness.mode.exit();
+  await settle();
+
+  assert.equal(harness.map.getLayer(MASK_ID), undefined);
+  assert.equal(harness.map.getSource(MASK_ID), undefined);
+  assert.equal(harness.map.getLayer(FADE_ID), undefined);
+  assert.ok(layouts.some(([id, value]) => id === "poi_transit" && value === "visible"));
+});
+
+test("every basemap symbol hides in scenes and follows the toggle", async () => {
+  const { storeMapDetailsShown } = await import("./display-state.ts");
+  storeMapDetailsShown(false);
+  const harness = createHarness();
+  const layouts: [string, string | undefined][] = [];
+  (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
+    layers: [
+      { id: "poi_transit", type: "symbol" },
+      { id: "road_one_way_arrow", type: "symbol" },
+      { id: "highway-shield-non-us", type: "symbol" },
+      { id: "highway-name-minor", type: "symbol" },
+      { id: "label_city", type: "symbol" },
+      { id: "airport", type: "symbol" },
+      { id: "highway-name-major", type: "symbol" },
+    ],
+  });
+  for (
+    const id of [
+      "poi_transit",
+      "road_one_way_arrow",
+      "highway-shield-non-us",
+      "highway-name-minor",
+      "label_city",
+      "airport",
+      "highway-name-major",
+    ]
+  ) {
+    harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
+  }
+  (harness.map as unknown as Record<string, unknown>).getLayoutProperty = (id: string) =>
+    (harness.map.layers.get(id) as unknown as { layout: { visibility?: string } })?.layout
+      ?.visibility;
+  (harness.map as unknown as Record<string, unknown>).setLayoutProperty = (
+    id: string,
+    _name: string,
+    value: string | undefined,
+  ) => {
+    layouts.push([id, value]);
+    (harness.map.layers.get(id) as unknown as { layout: { visibility?: string } }).layout
+      .visibility = value;
+  };
+  harness.enter();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+  harness.map.finishMask();
+  await settle();
+
+  const hidden = layouts.filter(([, value]) => value === "none").map(([id]) => id).sort();
+  assert.deepEqual(hidden, [
+    "airport",
+    "highway-name-major",
+    "highway-name-minor",
+    "highway-shield-non-us",
+    "label_city",
+    "poi_transit",
+    "road_one_way_arrow",
+  ]);
+
+  storeMapDetailsShown(true);
+  const shown = layouts.filter(([, value]) => value === "visible").map(([id]) => id).sort();
+  assert.deepEqual(shown, [
+    "airport",
+    "highway-name-major",
+    "highway-name-minor",
+    "highway-shield-non-us",
+    "label_city",
+    "poi_transit",
+    "road_one_way_arrow",
+  ]);
+
+  storeMapDetailsShown(false);
+});
+
+test("an originally hidden symbol shows with the toggle but exit restores it", async () => {
+  const harness = createHarness();
+  const layouts: [string, string | undefined][] = [];
+  (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
+    layers: [
+      { id: "poi_hidden", type: "symbol" },
+      { id: "poi_plain", type: "symbol" },
+      { id: "label_city", type: "symbol" },
+    ],
+  });
+  harness.map.layers.set("poi_hidden", { id: "poi_hidden", layout: { visibility: "none" } });
+  harness.map.layers.set("poi_plain", { id: "poi_plain", layout: {} });
+  harness.map.layers.set("label_city", { id: "label_city", layout: { visibility: "visible" } });
+  (harness.map as unknown as Record<string, unknown>).getLayoutProperty = (id: string) =>
+    (harness.map.layers.get(id) as unknown as { layout: { visibility?: string } })?.layout
+      ?.visibility;
+  (harness.map as unknown as Record<string, unknown>).setLayoutProperty = (
+    id: string,
+    _name: string,
+    value: string | undefined,
+  ) => {
+    layouts.push([id, value]);
+    (harness.map.layers.get(id) as unknown as { layout: { visibility?: string } }).layout
+      .visibility = value;
+  };
+  const { storeMapDetailsShown } = await import("./display-state.ts");
+
+  harness.enter();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+  harness.map.finishMask();
+  await settle();
+
+  assert.deepEqual(layouts, [
+    ["poi_hidden", "none"],
+    ["poi_plain", "none"],
+    ["label_city", "none"],
+  ]);
+
+  layouts.length = 0;
+  storeMapDetailsShown(true);
+
+  assert.deepEqual(layouts, [
+    ["poi_hidden", "visible"],
+    ["poi_plain", "visible"],
+    ["label_city", "visible"],
+  ]);
+
+  layouts.length = 0;
+  harness.mode.exit();
+  await settle();
+
+  assert.deepEqual(layouts, [
+    ["poi_hidden", "none"],
+    ["poi_plain", undefined],
+    ["label_city", "visible"],
+  ]);
+
+  layouts.length = 0;
+  storeMapDetailsShown(false);
+  // The stub unmount removes scene layers without re-adding them, so reseed them.
+  for (const id of DATA_IDS) {
+    if (!harness.map.layers.has(id)) harness.map.layers.set(id, { id, layout: {} });
+  }
+  harness.enter();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+  harness.map.finishMask();
+  await settle();
+
+  assert.deepEqual(layouts, [
+    ["poi_hidden", "none"],
+    ["poi_plain", "none"],
+    ["label_city", "none"],
+  ]);
+});
+
+test("scene symbols stay out of the details toggle", async () => {
+  const { storeMapDetailsShown } = await import("./display-state.ts");
+  storeMapDetailsShown(false);
+  const harness = createHarness();
+  (harness.map.layers.get("contours") as unknown as Record<string, unknown>).type = "symbol";
+  (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
+    layers: [
+      { id: "background", type: "background" },
+      { id: "contours", type: "symbol" },
+      { id: "rain", type: "raster" },
+      { id: "label_city", type: "symbol" },
+    ],
+  });
+  for (const id of ["background", "label_city"]) {
+    harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
+  }
+  const layouts: [string, string | undefined][] = [];
+  (harness.map as unknown as Record<string, unknown>).getLayoutProperty = (id: string) =>
+    (harness.map.layers.get(id) as unknown as { layout: { visibility?: string } })?.layout
+      ?.visibility;
+  (harness.map as unknown as Record<string, unknown>).setLayoutProperty = (
+    id: string,
+    _name: string,
+    value: string | undefined,
+  ) => {
+    layouts.push([id, value]);
+    (harness.map.layers.get(id) as unknown as { layout: { visibility?: string } }).layout
+      .visibility = value;
+  };
+  harness.enter();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+  harness.map.finishMask();
+  await settle();
+
+  assert.deepEqual(layouts, [["label_city", "none"]]);
+
+  layouts.length = 0;
+  storeMapDetailsShown(true);
+
+  assert.deepEqual(layouts, [["label_city", "visible"]]);
+
+  layouts.length = 0;
+  harness.mode.exit();
+  await settle();
+
+  assert.deepEqual(layouts, [["label_city", "visible"]]);
+  storeMapDetailsShown(false);
+});
+
+test("the Map details toggle defaults off and persists per browser", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(context, window);
+  window.localStorage.clear();
+  const { act } = await import("react");
+  const { mountSceneColumn } = await import("./ui/scene-column.tsx");
+  const { createSceneStore } = await import("./scene-store.ts");
+  const { loadMapDetailsShown } = await import("./display-state.ts");
+  const rain = {
+    id: "rain",
+    title: "Rainfall",
+    units: "",
+    style: { kind: "field", encodings: ["ramp"] },
+  } as unknown as Scene;
+  const store = createSceneStore([rain] as never, {
+    layers: {},
+    off: new Set(),
+    showAs: {},
+  });
+  const container = document.createElement("div");
+  document.body.append(container);
+
+  let column: { unmount(): void } | null = null;
+  await act(async () => {
+    column = mountSceneColumn(container, {
+      mounted: [{
+        layer: rain as never,
+        view: {
+          parts: [{ id: "rain", label: "rain", layerIds: ["rain"] }],
+          options: [],
+          time: null,
+          setTime: () => {},
+          legend: () => null,
+          destroy: () => {},
+        },
+      }],
+      blend: null,
+      store,
+      onOutline: () => {},
+    });
+  });
+
+  const card = [...container.querySelectorAll(".card")].find((element) =>
+    (element.textContent ?? "").includes("Map details")
+  )!;
+  const input = card.querySelector('input[role="switch"]') as HTMLInputElement;
+  assert.equal(input.checked, false);
+  assert.equal(loadMapDetailsShown(), false);
+
+  await act(async () => {
+    input.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+
+  assert.equal(input.checked, true);
+  assert.equal(loadMapDetailsShown(), true);
+  assertSameNode(
+    card,
+    [...container.querySelectorAll(".card")].find((element) =>
+      (element.textContent ?? "").includes("Map details")
+    ),
+  );
+
+  window.localStorage.clear();
+  await act(async () => column!.unmount());
 });
 
 test("the flight waits for the mask and the first data", async () => {
@@ -220,7 +654,8 @@ test("closing just after mask readiness cannot reveal disposed layers", async ()
   await settle();
 
   assert.equal(harness.map.rangeWrites, writes);
-  assert.equal(harness.labelMoves, 0);
+  assert.equal(harness.map.getLayer(FADE_ID), undefined);
+  assert.equal(harness.map.getLayer(MASK_ID), undefined);
   assert.deepEqual(harness.notes, []);
   assertListenersRemoved(harness.map);
 });
@@ -451,11 +886,18 @@ test("a units change refreshes the gate and drops removed contour ids", async ()
   harness.map.finishMask();
   await settle();
 
+  const moved: [string, string | undefined][] = [];
+  const originalMove = harness.map.moveLayer.bind(harness.map);
+  harness.map.moveLayer = ((id: string, beforeId?: string) => {
+    moved.push([id, beforeId]);
+    return originalMove(id, beforeId);
+  }) as typeof harness.map.moveLayer;
   harness.map.layers.set("contours-ft", {
     id: "contours-ft",
     minzoom: 7,
     maxzoom: 12,
     layout: { visibility: "visible" },
+    type: "symbol",
   });
   harness.map.layers.delete("contours");
   harness.onUnits!("ft", { terrain: "ft" }, ["relief", "contours-ft", "rain", "overview"]);
@@ -465,6 +907,22 @@ test("a units change refreshes the gate and drops removed contour ids", async ()
   harness.resize();
   assert.equal(harness.map.getLayer("contours-ft")!.minzoom, 7.75);
   assert.equal(harness.map.getLayer("contours"), undefined);
+  assert.ok(harness.map.getLayer(FADE_ID));
+  assert.deepEqual(moved, [["contours-ft", undefined]]);
+
+  moved.length = 0;
+  harness.map.layers.set("contours", {
+    id: "contours",
+    minzoom: 6,
+    maxzoom: 12,
+    layout: { visibility: "visible" },
+    type: "symbol",
+  });
+  harness.map.layers.delete("contours-ft");
+  harness.onUnits!("m", { terrain: "m" }, ["relief", "contours", "rain", "overview"]);
+
+  assert.ok(harness.map.getLayer(FADE_ID));
+  assert.deepEqual(moved, [["contours", undefined]]);
 });
 
 test("chart commits update the share link without clobbering display or history", () => {
@@ -1194,6 +1652,19 @@ function assertRanges(map: TestMap, expected: number[][]) {
     return [layer.minzoom, layer.maxzoom];
   });
   assert.deepEqual(actual, expected);
+}
+
+function assertFadeCovers(map: TestMap) {
+  const fade = map.getLayer(FADE_ID) as unknown as {
+    source?: string;
+    paint?: Record<string, unknown>;
+  } | undefined;
+  assert.ok(fade, "the fade layer exists above basemap labels");
+  assert.equal(fade?.source, MASK_ID);
+  assert.ok(
+    JSON.stringify(fade?.paint?.["fill-opacity"] ?? "").includes(String(FADE_OPACITY)),
+    "the fade covers with the named opacity",
+  );
 }
 
 function assertListenersRemoved(map: TestMap) {

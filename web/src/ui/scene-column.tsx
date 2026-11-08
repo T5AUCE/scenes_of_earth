@@ -3,7 +3,11 @@ import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { cardTitle, drawLabel } from "../card-title";
-import { layerUnits } from "../display-state";
+import {
+  layerUnits,
+  loadMapDetailsShown,
+  storeMapDetailsShown,
+} from "../display-state";
 import { BLEND, drawOptions, type Draw, type Hidden } from "../layers/allocate";
 import { BLEND_TITLE, type BlendView } from "../layers/blend";
 import type { MountedLayer } from "../scene-cards";
@@ -16,6 +20,7 @@ import { isMasterOn, masterChangedUnits } from "./master-switch";
 import { useSceneStore } from "./use-scene-store";
 
 const OUTLINE_TITLE = "Area Outline";
+const MAP_DETAILS_TITLE = "Map details";
 
 const LAST_FIELD = "field";
 
@@ -48,6 +53,7 @@ function SceneColumn({
   const [notice, setNotice] = useState<string | null>(null);
   const [optionStates, setOptionStates] = useState<Record<string, boolean[]>>({});
   const [outlineOn, setOutlineOn] = useState(true);
+  const [detailsOn, setDetailsOn] = useState(loadMapDetailsShown);
   const remembered = useRef(new Map<string, string[]>());
   const editButton = useRef<HTMLButtonElement | null>(null);
   useEditFocus(selected, editButton);
@@ -68,6 +74,10 @@ function SceneColumn({
   const toggleOutline = (on: boolean) => {
     setOutlineOn(on);
     onOutline(on);
+  };
+  const toggleDetails = (on: boolean) => {
+    setDetailsOn(on);
+    storeMapDetailsShown(on);
   };
   const optionChange = (unit: string, index: number, on: boolean) => {
     setOptionStates((current) => {
@@ -104,7 +114,6 @@ function SceneColumn({
       {ordinary.slice(0, blendIndex + 1)}
       {blend && blendCard(
         blend,
-        display,
         allocation,
         optionStates,
         toggleBlend,
@@ -112,6 +121,7 @@ function SceneColumn({
       )}
       {ordinary.slice(blendIndex + 1)}
       {outlineCard(outlineOn, toggleOutline)}
+      {detailsCard(detailsOn, toggleDetails)}
       {target && (
         <LayerEditor
           key={target.unit}
@@ -280,7 +290,6 @@ function smoothedFor(
 
 function blendCard(
   blend: BlendView,
-  display: SceneStoreSnapshot["display"],
   allocation: SceneStoreSnapshot["allocation"],
   optionStates: Readonly<Record<string, readonly boolean[]>>,
   onToggle: (on: boolean) => void,
@@ -314,6 +323,21 @@ function outlineCard(
     <LayerCard
       key={OUTLINE_TITLE}
       title={OUTLINE_TITLE}
+      checked={checked}
+      onToggle={onToggle}
+      legend={null}
+    />
+  );
+}
+
+function detailsCard(
+  checked: boolean,
+  onToggle: (on: boolean) => void,
+): React.ReactElement {
+  return (
+    <LayerCard
+      key={MAP_DETAILS_TITLE}
+      title={MAP_DETAILS_TITLE}
       checked={checked}
       onToggle={onToggle}
       legend={null}

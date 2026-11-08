@@ -9,7 +9,7 @@ from shapely.geometry import MultiPolygon, Polygon, box
 
 from soe.area_weights import area_weights
 from soe.areas import Area, AreaError, unwrap
-from soe.plan import plan
+from soe.plan import plan, scene_datasets
 from soe.sources import SyntheticSource, make_registry
 from tests.helpers import FIJI, LAND_COVER, NAIROBI, RAIN, TERRAIN, harmonic_island, plan_months
 
@@ -205,6 +205,19 @@ def test_tile_cap_passes_when_only_touched_tiles_fit_and_fails_on_them():
         plan(area, [replace(LAND_COVER, max_tiles=1)], None, None)
 
 
+def test_layer_credits_follow_the_bbox_when_the_outline_touches_fewer_tiles():
+    outline = box(42.3, 39.3, 43.0, 39.7).union(box(42.3, 39.3, 42.7, 40.2))
+
+    layer = plan(Area(outline), [TERRAIN], None, None).layers["terrain"]
+
+    assert TERRAIN.tile_count(layer.bbox, layer.geometry) < TERRAIN.tile_count(layer.bbox)
+    assert [source["name"] for source in layer.sources] == [
+        "Copernicus DEM GLO-30 Public",
+        "Copernicus DEM GLO-90",
+    ]
+    assert layer.sources == TERRAIN.sources_for(layer.bbox)
+
+
 def test_plan_keeps_edge_only_contact_across_outline_sizes():
     inside = box(36.0, 58.0, 37.0, 59.0)
     touching = box(38.0, 60.0, 39.0, 61.0)
@@ -274,3 +287,18 @@ def test_plan_keeps_touching_parts_across_outline_sizes():
     )
     assert small_layer.sources == large_layer.sources
     assert small_layer.geometry.equals(large_layer.geometry)
+
+
+def test_scene_datasets_decide_beyond_60_north_by_the_area_outline():
+    class Marked(type(RAIN)):
+        def for_scene(self, beyond_legacy_extent):
+            return replace(self, title=f"beyond={beyond_legacy_extent}")
+
+    marked = Marked(**vars(RAIN))
+
+    inside = scene_datasets(Area(box(10, 50, 11, 60)), [marked])
+    beyond = scene_datasets(Area(box(10, 59, 11, 61)), [marked])
+
+    assert [dataset.title for dataset in inside] == ["beyond=False"]
+    assert [dataset.title for dataset in beyond] == ["beyond=True"]
+    assert scene_datasets(Area(NAIROBI), [RAIN]) == [RAIN]
