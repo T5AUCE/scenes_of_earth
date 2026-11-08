@@ -15,6 +15,11 @@ def family_value(family: str) -> int:
     return GLIM_VALUES[plain.get(family, family + "__")]
 
 
+def class_value(code: str) -> int:
+    """Return the class value of the GLiM level 1 + level 2 `code` (for example "ssss")."""
+    return GLIM_VALUES[code]
+
+
 def _timeline_span(oldest: str, newest: str) -> tuple[str, str]:
     """Return the span ordered oldest to newest, whatever order the names come in."""
     if TIMELINE.index(oldest) <= TIMELINE.index(newest):
@@ -260,61 +265,61 @@ def _canada_age_value(era: str, period: str, epoch: str) -> int | None:
 
 
 CANADA_TYPE_NAMES: dict[str, str | None] = {
-    "alkaline gabbro and syenite": "pb",
-    "alkaline intrusive rocks": "pi",
-    "alkaline volcanic rocks": "vb",
-    "anorthosite": "pb",
-    "bimodal alkaline volcanic rocks": "vi",
-    "bimodal volcanic rocks": "vi",
-    "carbonate": "sc",
-    "charnockite": "pa",
-    "coarse clastic sediments and alkaline volcanic rocks": "sm",
-    "conglomerate and sandstone": "ss",
-    "evaporite": "ev",
-    "felsic and mafic intrusive rocks": "pa",
-    "felsic volcanic rocks": "va",
-    "felsic-intermediate volcanic rocks": "vi",
-    "felsite": "pa",
-    "gabbro-anorthosite": "pb",
-    "granodiorite, quartz diorite": "pi",
-    "intermediate volcanic rocks": "vi",
-    "mafic and ultramafic intrusive rocks": "pb",
-    "mafic gneiss": "mt",
-    "mafic intrusive rocks-diorite, gabbro": "pb",
-    "mafic volcanic rocks": "vb",
-    "marble": "mt",
-    "medium-grade gneiss": "mt",
-    "melange": "mt",
-    "nonmarine sedimentary rocks": "ss",
-    "oceanic mafic volcanic rocks": "vb",
-    "offshelf miogeoclinal rocks": "sm",
-    "orthogneiss": "mt",
-    "paragneiss": "mt",
-    "paragneiss-orthogneiss": "mt",
-    "quartz monzonite, granite": "pa",
-    "rapakivi granite": "pa",
-    "sedimentary and mafic volcanic rocks": "sm",
-    "sedimentary and volcanic gneiss": "mt",
-    "syenite, monzodiorite": "pi",
-    "syenitic gneiss": "mt",
-    "tonalite": "pa",
-    "two mica granite, diatexite": "pa",
-    "ultramafic intrusive rocks": "pb",
-    "ultramafic melange": "mt",
-    "undivided gneiss": "mt",
-    "undivided granitoid rocks": "pa",
-    "undivided sedimentary and volcanic rocks": "sm",
-    "undivided sedimentary rocks": "sm",
-    "undivided volcanic rocks": "py",
-    "volcanic gneiss": "mt",
+    "alkaline gabbro and syenite": "pb__",
+    "alkaline intrusive rocks": "pi__",
+    "alkaline volcanic rocks": "vb__",
+    "anorthosite": "pb__",
+    "bimodal alkaline volcanic rocks": "vi__",
+    "bimodal volcanic rocks": "vi__",
+    "carbonate": "scmx",
+    "charnockite": "pa__",
+    "coarse clastic sediments and alkaline volcanic rocks": "smss",
+    "conglomerate and sandstone": "ssss",
+    "evaporite": "ev__",
+    "felsic and mafic intrusive rocks": "pa__",
+    "felsic volcanic rocks": "va__",
+    "felsic-intermediate volcanic rocks": "vi__",
+    "felsite": "pa__",
+    "gabbro-anorthosite": "pb__",
+    "granodiorite, quartz diorite": "pi__",
+    "intermediate volcanic rocks": "vi__",
+    "mafic and ultramafic intrusive rocks": "pb__",
+    "mafic gneiss": "mt__",
+    "mafic intrusive rocks-diorite, gabbro": "pb__",
+    "mafic volcanic rocks": "vb__",
+    "marble": "mtpu",
+    "medium-grade gneiss": "mt__",
+    "melange": "mt__",
+    "nonmarine sedimentary rocks": "ssmx",
+    "oceanic mafic volcanic rocks": "vb__",
+    "offshelf miogeoclinal rocks": "smmx",
+    "orthogneiss": "mt__",
+    "paragneiss": "mt__",
+    "paragneiss-orthogneiss": "mt__",
+    "quartz monzonite, granite": "pa__",
+    "rapakivi granite": "pa__",
+    "sedimentary and mafic volcanic rocks": "smmx",
+    "sedimentary and volcanic gneiss": "mt__",
+    "syenite, monzodiorite": "pi__",
+    "syenitic gneiss": "mt__",
+    "tonalite": "pa__",
+    "two mica granite, diatexite": "pa__",
+    "ultramafic intrusive rocks": "pb__",
+    "ultramafic melange": "mt__",
+    "undivided gneiss": "mt__",
+    "undivided granitoid rocks": "pa__",
+    "undivided sedimentary and volcanic rocks": "smmx",
+    "undivided sedimentary rocks": "smmx",
+    "undivided volcanic rocks": "py__",
+    "volcanic gneiss": "mt__",
 }
 
 CANADA_RXTP_FALLBACK: dict[str, str | None] = {
     "intrusive rocks": None,
-    "metamorphic rocks": "mt",
-    "sedimentary and volcanic rocks": "sm",
-    "sedimentary rocks": "sm",
-    "volcanic rocks": "py",
+    "metamorphic rocks": "mt__",
+    "sedimentary and volcanic rocks": "smmx",
+    "sedimentary rocks": "smmx",
+    "volcanic rocks": "py__",
 }
 
 
@@ -335,10 +340,10 @@ def canada_type_batch(records: list[tuple[str, str]]) -> list[int | None]:
     _fail_unmapped("Canada rock names", unmapped)
     values = []
     for rxtp, subrxtp in records:
-        family = CANADA_TYPE_NAMES.get(subrxtp)
-        if family is None and subrxtp in NO_DATA_NAMES:
-            family = CANADA_RXTP_FALLBACK.get(rxtp)
-        values.append(family_value(family) if family else None)
+        code = CANADA_TYPE_NAMES.get(subrxtp)
+        if code is None and subrxtp in NO_DATA_NAMES:
+            code = CANADA_RXTP_FALLBACK.get(rxtp)
+        values.append(class_value(code) if code else None)
     return values
 
 
@@ -453,157 +458,157 @@ def _igme_age_value(agename: str) -> int | None:
 
 # Volcanites without a petrography count as basic like Precambrian greenstones, plutonites as acid.
 IGME_TYPE_NAMES: dict[str, str | None] = {
-    "Ice": "ig",
-    "Qtz andesite": "vi",
-    "agglomerate/breccia group": "py",
-    "alkali basalt": "vb",
-    "ophiolite complex": "vb",
-    "alkali granite": "pa",
-    "alkali rhyolite": "va",
-    "alkali syenite": "pi",
-    "amphibolite": "mt",
-    "andesite": "vi",
-    "andesite agglomerate": "vi",
-    "andesite group": "vi",
-    "andesite tuff": "py",
-    "andesite tuffite": "py",
-    "anhydrite": "ev",
-    "basalt": "vb",
-    "basalt agglomerate": "py",
-    "basalt group": "vb",
-    "basalt tuffite": "py",
-    "blueschist": "mt",
-    "carbonates": "sc",
-    "carbonates, consolidated": "sc",
-    "chalk": "sc",
-    "chert": "ss",
-    "clay": "ss",
-    "claystone": "ss",
-    "coal": "sm",
-    "conglomerate": "ss",
-    "dacite": "va",
-    "diorite": "pi",
-    "dolerite": "vb",
-    "dolomite/dolostone": "sc",
-    "dunite, harzburgite, lherzolite": "pb",
-    "eclogite": "mt",
-    "essexite-theralite group": "pi",
-    "evaporites": "ev",
-    "gabbro": "pb",
-    "gabbro group": "pb",
-    "gneiss": "mt",
-    "granite": "pa",
-    "granite group": "pa",
-    "granodiorite": "pa",
-    "granodiorite-diorite group": "pi",
-    "granulite": "mt",
-    "gravel": "ss",
-    "greenschist": "mt",
-    "gypsum": "ev",
-    "gypsum, anhydrite": "ev",
-    "hawaiite": "vb",
-    "lamprophyre": "vb",
-    "latite": "vi",
-    "latite andesite": "vi",
-    "limestone": "sc",
-    "marble": "mt",
-    "marl": "sm",
-    "marlstone": "sm",
-    "meta-andesite": "mt",
-    "meta-basalt": "mt",
-    "meta-basalt group": "mt",
-    "meta-basalt tuff": "mt",
-    "meta-carbonate": "mt",
-    "meta-claystone": "mt",
-    "meta-conglomerate": "mt",
-    "meta-dacite": "mt",
-    "meta-dolerite": "mt",
-    "meta-gabbro": "mt",
-    "meta-gabbro group": "mt",
-    "meta-granite": "mt",
-    "meta-granite group": "mt",
-    "meta-granodiorite": "mt",
-    "meta-limestone": "mt",
-    "meta-peridotite": "mt",
-    "meta-plutonic rock group": "mt",
-    "meta-rhyodacite": "mt",
-    "meta-rhyolite": "mt",
-    "meta-rhyolite group": "mt",
-    "meta-rhyolite tuffite": "mt",
-    "meta-sandstone": "mt",
-    "meta-sediment group": "mt",
-    "meta-tonalite": "mt",
-    "meta-tuffite group": "mt",
-    "meta-volcanic rock group": "mt",
-    "mica schist": "mt",
-    "migmatite/anatexite": "mt",
-    "miscellaneous metamorphic rock group": "mt",
-    "monzodiorite": "pi",
-    "monzonite": "pi",
-    "mud": "ss",
-    "mudstone": "ss",
-    "mylonite": "mt",
-    "nephelinic, leucitic and analcitic rocks": "va",
-    "olivine basalt": "vb",
-    "peridotite": "pb",
-    "phonolite": "va",
-    "phonolitic tephrite, tephritic phonolite": "vb",
-    "phyllite": "mt",
-    "plutonic alkaline group": "pi",
-    "plutonic ultramafic group": "pb",
-    "pyroxenite": "pb",
-    "quartzite": "mt",
-    "rhyodacite": "va",
-    "rhyolite": "va",
-    "rhyolite group": "va",
-    "rhyolite tuff": "py",
-    "rhyolite tuffite": "py",
-    "rock salt": "ev",
-    "sand": "ss",
-    "sandstone": "ss",
-    "schist group": "mt",
-    "serpentinite": "mt",
-    "shale/slate": "ss",
-    "siliclastics, consolidated": "ss",
-    "silt": "ss",
-    "siltstone": "ss",
-    "siliceous ooze": "ss",
-    "syenite": "pi",
-    "syenite-monzonite group": "pi",
-    "tephrite, basanite": "vb",
-    "theralite": "pi",
-    "tholeiitic basalt": "vb",
-    "tillite": "sm",
-    "tonalite": "pa",
-    "trachyte": "va",
-    "tuff group": "py",
-    "tuffite group": "py",
-    "volcanic alkaline group": "vb",
-    "volcanic ultramafic group": "vb",
-    "volcano-sediments": "sm",
+    "Ice": "ig__",
+    "Qtz andesite": "vi__",
+    "agglomerate/breccia group": "pyss",
+    "alkali basalt": "vb__",
+    "ophiolite complex": "vb__",
+    "alkali granite": "pa__",
+    "alkali rhyolite": "va__",
+    "alkali syenite": "pi__",
+    "amphibolite": "mtam",
+    "andesite": "vi__",
+    "andesite agglomerate": "pyss",
+    "andesite group": "vi__",
+    "andesite tuff": "pysh",
+    "andesite tuffite": "pysh",
+    "anhydrite": "evpu",
+    "basalt": "vb__",
+    "basalt agglomerate": "pyss",
+    "basalt group": "vb__",
+    "basalt tuffite": "pysh",
+    "blueschist": "mt__",
+    "carbonates": "scmx",
+    "carbonates, consolidated": "scmx",
+    "chalk": "scpu",
+    "chert": "sssh",
+    "clay": "sush",
+    "claystone": "sssh",
+    "coal": "smor",
+    "conglomerate": "ssss",
+    "dacite": "va__",
+    "diorite": "pi__",
+    "dolerite": "vb__",
+    "dolomite/dolostone": "scpu",
+    "dunite, harzburgite, lherzolite": "pb__",
+    "eclogite": "mt__",
+    "essexite-theralite group": "pi__",
+    "evaporites": "ev__",
+    "gabbro": "pb__",
+    "gabbro group": "pb__",
+    "gneiss": "mt__",
+    "granite": "pa__",
+    "granite group": "pa__",
+    "granodiorite": "pa__",
+    "granodiorite-diorite group": "pi__",
+    "granulite": "mt__",
+    "gravel": "suss",
+    "greenschist": "mtgr",
+    "gypsum": "evpu",
+    "gypsum, anhydrite": "evpu",
+    "hawaiite": "vb__",
+    "lamprophyre": "vb__",
+    "latite": "vi__",
+    "latite andesite": "vi__",
+    "limestone": "scpu",
+    "marble": "mtpu",
+    "marl": "smsh",
+    "marlstone": "smsh",
+    "meta-andesite": "mt__",
+    "meta-basalt": "mt__",
+    "meta-basalt group": "mt__",
+    "meta-basalt tuff": "mt__",
+    "meta-carbonate": "mt__",
+    "meta-claystone": "mt__",
+    "meta-conglomerate": "mt__",
+    "meta-dacite": "mt__",
+    "meta-dolerite": "mt__",
+    "meta-gabbro": "mt__",
+    "meta-gabbro group": "mt__",
+    "meta-granite": "mt__",
+    "meta-granite group": "mt__",
+    "meta-granodiorite": "mt__",
+    "meta-limestone": "mt__",
+    "meta-peridotite": "mt__",
+    "meta-plutonic rock group": "mt__",
+    "meta-rhyodacite": "mt__",
+    "meta-rhyolite": "mt__",
+    "meta-rhyolite group": "mt__",
+    "meta-rhyolite tuffite": "mt__",
+    "meta-sandstone": "mt__",
+    "meta-sediment group": "mt__",
+    "meta-tonalite": "mt__",
+    "meta-tuffite group": "mt__",
+    "meta-volcanic rock group": "mt__",
+    "mica schist": "mt__",
+    "migmatite/anatexite": "mt__",
+    "miscellaneous metamorphic rock group": "mt__",
+    "monzodiorite": "pi__",
+    "monzonite": "pi__",
+    "mud": "sush",
+    "mudstone": "sssh",
+    "mylonite": "mt__",
+    "nephelinic, leucitic and analcitic rocks": "va__",
+    "olivine basalt": "vb__",
+    "peridotite": "pb__",
+    "phonolite": "va__",
+    "phonolitic tephrite, tephritic phonolite": "vb__",
+    "phyllite": "mt__",
+    "plutonic alkaline group": "pi__",
+    "plutonic ultramafic group": "pb__",
+    "pyroxenite": "pb__",
+    "quartzite": "mtpu",
+    "rhyodacite": "va__",
+    "rhyolite": "va__",
+    "rhyolite group": "va__",
+    "rhyolite tuff": "pysh",
+    "rhyolite tuffite": "pysh",
+    "rock salt": "evpu",
+    "sand": "suss",
+    "sandstone": "ssss",
+    "schist group": "mt__",
+    "serpentinite": "mt__",
+    "shale/slate": "sssh",
+    "siliclastics, consolidated": "ssmx",
+    "silt": "sush",
+    "siltstone": "sssh",
+    "siliceous ooze": "sush",
+    "syenite": "pi__",
+    "syenite-monzonite group": "pi__",
+    "tephrite, basanite": "vb__",
+    "theralite": "pi__",
+    "tholeiitic basalt": "vb__",
+    "tillite": "smmx",
+    "tonalite": "pa__",
+    "trachyte": "va__",
+    "tuff group": "pysh",
+    "tuffite group": "pysh",
+    "volcanic alkaline group": "vb__",
+    "volcanic ultramafic group": "vb__",
+    "volcano-sediments": "smpy",
 }
 
 IGME_IGNE_FALLBACK: dict[str, str | None] = {
-    "ophiolite complex": "vb",
-    "plutonite Cenozoic": "pa",
-    "plutonite Mesozoic": "pa",
-    "plutonite Palaeozoic": "pa",
-    "plutonite Precambrian": "pa",
-    "plutonite undifferentiated": "pa",
-    "volcanite Cenozoic": "vb",
-    "volcanite Mesozoic": "vb",
-    "volcanite Palaeozoic": "vb",
-    "volcanite Precambrian": "vb",
-    "volcanite Quaternary": "vb",
-    "volcanite undifferentiated": "vb",
+    "ophiolite complex": "vb__",
+    "plutonite Cenozoic": "pa__",
+    "plutonite Mesozoic": "pa__",
+    "plutonite Palaeozoic": "pa__",
+    "plutonite Precambrian": "pa__",
+    "plutonite undifferentiated": "pa__",
+    "volcanite Cenozoic": "vb__",
+    "volcanite Mesozoic": "vb__",
+    "volcanite Palaeozoic": "vb__",
+    "volcanite Precambrian": "vb__",
+    "volcanite Quaternary": "vb__",
+    "volcanite undifferentiated": "vb__",
 }
 
 IGME_MARI_FALLBACK: dict[str, str | None] = {
-    "break-up related basalt flows": "vb",
-    "ocean-continent transition of various ages": "sm",
-    "oceanic crust, older": "vb",
-    "oceanic crust, younger": "vb",
-    "rifted thinned continental crust of various ages": "sm",
+    "break-up related basalt flows": "vb__",
+    "ocean-continent transition of various ages": "smmx",
+    "oceanic crust, older": "vb__",
+    "oceanic crust, younger": "vb__",
+    "rifted thinned continental crust of various ages": "smmx",
 }
 
 
@@ -631,14 +636,14 @@ def igme_type_batch(
     _fail_unmapped("IGME5000 rock names", unmapped)
     values = []
     for petr, secondary, igne, mari in records:
-        family = IGME_TYPE_NAMES.get(petr or "")
-        if family is None and (not petr or petr in NO_DATA_NAMES):
-            family = IGME_TYPE_NAMES.get(secondary or "")
-        if family is None and (not secondary or secondary in NO_DATA_NAMES):
-            family = IGME_IGNE_FALLBACK.get(igne or "")
-        if family is None and (not igne or igne in NO_DATA_NAMES):
-            family = IGME_MARI_FALLBACK.get(mari or "")
-        values.append(family_value(family) if family else None)
+        code = IGME_TYPE_NAMES.get(petr or "")
+        if code is None and (not petr or petr in NO_DATA_NAMES):
+            code = IGME_TYPE_NAMES.get(secondary or "")
+        if code is None and (not secondary or secondary in NO_DATA_NAMES):
+            code = IGME_IGNE_FALLBACK.get(igne or "")
+        if code is None and (not igne or igne in NO_DATA_NAMES):
+            code = IGME_MARI_FALLBACK.get(mari or "")
+        values.append(class_value(code) if code else None)
     return values
 
 
@@ -835,23 +840,27 @@ def _sgmc_age_value(age_min: str, age_max: str) -> int | None:
 
 
 # Exact archive names keep invented substrings from matching real lithologies.
-SGMC_EVAPORITE_NAMES = (
+SGMC_EVAPORITE_PURE_NAMES = (
     "Anhydrite",
-    "Evaporite",
     "Gypsum",
     "Salt",
 )
-SGMC_CARBONATE_NAMES = (
-    "Calcarenite",
-    "Carbonate",
-    "Chalk",
-    "Coquina",
-    "Coral",
-    "Dolostone",
-    "Limestone",
+SGMC_EVAPORITE_NAMES = (
+    "Evaporite",
+)
+SGMC_CARBONATE_CLASSES = {
+    "Calcarenite": "scss",
+    "Carbonate": "scmx",
+    "Chalk": "scpu",
+    "Coquina": "scss",
+    "Coral": "scmx",
+    "Dolostone": "scpu",
+    "Limestone": "scpu",
+}
+SGMC_MIXED_FINE_NAMES = (
+    "Marlstone",
 )
 SGMC_MIXED_NAMES = (
-    "Marlstone",
     "Mixed-clastic",
 )
 SGMC_COAL_NAMES = (
@@ -867,26 +876,30 @@ SGMC_SILICEOUS_NAMES = (
     "Diatomite",
     "Novaculite",
 )
-SGMC_CLASTIC_NAMES = (
+SGMC_CLASTIC_COARSE_NAMES = (
     "Arenite",
     "Arkose",
-    "Bentonite",
-    "Black-shale",
-    "Clastic",
-    "Claystone",
     "Conglomerate",
-    "Conglomerate-mudstone",
     "Conglomerate-sandstone",
     "Graywacke",
+    "Sandstone",
+    "Sedimentary-breccia",
+)
+SGMC_CLASTIC_FINE_NAMES = (
+    "Bentonite",
+    "Black-shale",
+    "Claystone",
     "Mudstone",
     "Oil-shale",
     "Phosphatic-shale",
-    "Sandstone",
-    "Sandstone-mudstone",
-    "Sedimentary-breccia",
     "Shale",
     "Siltstone",
     "Siltstone-mudstone",
+)
+SGMC_CLASTIC_MIXED_NAMES = (
+    "Clastic",
+    "Conglomerate-mudstone",
+    "Sandstone-mudstone",
 )
 SGMC_CHEMICAL_OTHER_NAMES = (
     "Banded-iron-formation",
@@ -983,10 +996,16 @@ SGMC_IGNEOUS_GROUP_NAMES = (
     "Volcanic",
 )
 
+SGMC_METAMORPHIC_CLASSES = {
+    "Amphibolite": "mtam",
+    "Argillite": "mtsh",
+    "Marble": "mtpu",
+    "Quartzite": "mtpu",
+    "Slate": "mtsh",
+}
 SGMC_METAMORPHIC_NAMES = (
     "Amphibole-schist",
     "Amphibolite",
-    "Argillite",
     "Biotite-gneiss",
     "Biotite-schist",
     "Calc-silicate-gneiss",
@@ -1040,20 +1059,25 @@ SGMC_METAMORPHIC_NAMES = (
     "Schist",
     "Serpentinite",
     "Skarn",
-    "Slate",
     "Spilite",
 )
-SGMC_UNCONSOLIDATED_NAMES = (
+SGMC_UNCONSOLIDATED_COARSE_NAMES = (
     "Boulders",
-    "Clay",
     "Coarse-detrital",
     "Coral",
-    "Fine-detrital",
     "Gravel",
-    "Marl",
-    "Peat",
     "Sand",
+)
+SGMC_UNCONSOLIDATED_FINE_NAMES = (
+    "Clay",
+    "Fine-detrital",
     "Silt",
+)
+SGMC_UNCONSOLIDATED_ORGANIC_NAMES = (
+    "Peat",
+)
+SGMC_UNCONSOLIDATED_MIXED_NAMES = (
+    "Marl",
 )
 SGMC_TECTONITE_NAMES = (
     "Cataclasite",
@@ -1063,12 +1087,16 @@ SGMC_TECTONITE_NAMES = (
 )
 SGMC_KNOWN_NAMES = frozenset(
     (
+        *SGMC_EVAPORITE_PURE_NAMES,
         *SGMC_EVAPORITE_NAMES,
-        *SGMC_CARBONATE_NAMES,
+        *SGMC_CARBONATE_CLASSES,
+        *SGMC_MIXED_FINE_NAMES,
         *SGMC_MIXED_NAMES,
         *SGMC_COAL_NAMES,
         *SGMC_SILICEOUS_NAMES,
-        *SGMC_CLASTIC_NAMES,
+        *SGMC_CLASTIC_COARSE_NAMES,
+        *SGMC_CLASTIC_FINE_NAMES,
+        *SGMC_CLASTIC_MIXED_NAMES,
         *SGMC_CHEMICAL_OTHER_NAMES,
         *SGMC_SEDIMENTARY_GROUP_NAMES,
         *SGMC_BASIC_NAMES,
@@ -1076,53 +1104,101 @@ SGMC_KNOWN_NAMES = frozenset(
         *SGMC_ACID_NAMES,
         *SGMC_CARBONATITE_NAMES,
         *SGMC_IGNEOUS_GROUP_NAMES,
+        *SGMC_METAMORPHIC_CLASSES,
         *SGMC_METAMORPHIC_NAMES,
-        *SGMC_UNCONSOLIDATED_NAMES,
+        *SGMC_UNCONSOLIDATED_COARSE_NAMES,
+        *SGMC_UNCONSOLIDATED_FINE_NAMES,
+        *SGMC_UNCONSOLIDATED_ORGANIC_NAMES,
+        *SGMC_UNCONSOLIDATED_MIXED_NAMES,
         *SGMC_TECTONITE_NAMES,
     ),
 )
 SGMC_LITH1_DEFAULTS: dict[str, str] = {
-    "Ice": "ig",
-    "Igneous": "vi",
-    "Metamorphic": "mt",
-    "Sedimentary": "sm",
-    "Tectonite": "mt",
-    "Unconsolidated": "su",
+    "Ice": "ig__",
+    "Igneous": "vi__",
+    "Metamorphic": "mt__",
+    "Sedimentary": "smmx",
+    "Tectonite": "mt__",
+    "Unconsolidated": "sumx",
 }
 
 
-def sgmc_family(lith1: str, lith2: str, lith3: str, lith4: str, lith5: str) -> str:
-    """Return the GLiM family of an SGMC LITH1 to LITH5 hierarchy, failing on unknown LITH1."""
+def sgmc_class(lith1: str, lith2: str, lith3: str, lith4: str, lith5: str) -> str:
+    """Return the GLiM level 1 + level 2 code of an SGMC LITH1 to LITH5 hierarchy."""
     if lith1 not in SGMC_LITH1_DEFAULTS:
         raise ValueError(f"SGMC lithology without a class: {[lith1]}")
     if lith1 == "Ice":
-        return "ig"
+        return "ig__"
+
+    levels = (lith5, lith4, lith3, lith2)
     if lith1 == "Unconsolidated":
-        return "su"
+        return _sgmc_unconsolidated_class(set(levels))
     if lith1 in ("Metamorphic", "Tectonite"):
-        return "mt"
-    finer = {lith2, lith3, lith4, lith5}
+        return _deepest_class(levels, SGMC_METAMORPHIC_CLASSES) or "mt__"
     if lith1 == "Sedimentary":
-        if finer & set(SGMC_EVAPORITE_NAMES):
-            return "ev"
-        if finer & set(SGMC_CARBONATE_NAMES):
-            if finer & set(SGMC_MIXED_NAMES):
-                return "sm"
-            return "sc"
-        if finer & set(SGMC_COAL_NAMES):
-            return "sm"
-        if finer & (set(SGMC_SILICEOUS_NAMES) | set(SGMC_CLASTIC_NAMES)):
-            return "ss"
-        return "sm"
+        return _sgmc_sedimentary_class(levels)
+
+    finer = set(levels)
     if finer & set(SGMC_CARBONATITE_NAMES):
-        return "sc"
+        return "scpu"
     if finer & set(SGMC_BASIC_NAMES):
-        return "vb" if lith2 == "Volcanic" else "pb"
+        return "vb__" if lith2 == "Volcanic" else "pb__"
     if finer & set(SGMC_INTERMEDIATE_NAMES):
-        return "vi" if lith2 == "Volcanic" else "pi"
+        return "vi__" if lith2 == "Volcanic" else "pi__"
     if finer & set(SGMC_ACID_NAMES):
-        return "va" if lith2 == "Volcanic" else "pa"
+        return "va__" if lith2 == "Volcanic" else "pa__"
     return SGMC_LITH1_DEFAULTS[lith1]
+
+
+def _sgmc_unconsolidated_class(finer: set[str]) -> str:
+    """Return the GLiM code of loose finer names, or the mixed-grain code when none names a grain."""
+    if finer & set(SGMC_UNCONSOLIDATED_COARSE_NAMES):
+        return "suss"
+    if finer & set(SGMC_UNCONSOLIDATED_FINE_NAMES):
+        return "sush"
+    if finer & set(SGMC_UNCONSOLIDATED_ORGANIC_NAMES):
+        return "suor"
+    return "sumx"
+
+
+def _sgmc_sedimentary_class(levels: tuple[str, ...]) -> str:
+    """Return the GLiM code of sedimentary finer names.
+
+    Names that give no grain size fall back to the mixed-grain class. The levels run from the most to the least specific, so a carbonate leaf such as Coquina
+    decides the class before its Limestone ancestor does.
+    """
+    finer = set(levels)
+    if finer & set(SGMC_EVAPORITE_PURE_NAMES):
+        return "evpu"
+    if finer & set(SGMC_EVAPORITE_NAMES):
+        return "ev__"
+    carbonate_class = _deepest_class(levels, SGMC_CARBONATE_CLASSES)
+    if carbonate_class:
+        if finer & set(SGMC_MIXED_FINE_NAMES):
+            return "smsh"
+        if finer & set(SGMC_MIXED_NAMES):
+            return "smmx"
+        return carbonate_class
+    if finer & set(SGMC_COAL_NAMES):
+        return "smor"
+    if finer & set(SGMC_MIXED_FINE_NAMES):
+        return "smsh"
+    if finer & set(SGMC_MIXED_NAMES):
+        return "smmx"
+    if finer & set(SGMC_SILICEOUS_NAMES):
+        return "sssh"
+    if finer & set(SGMC_CLASTIC_COARSE_NAMES):
+        return "ssss"
+    if finer & set(SGMC_CLASTIC_FINE_NAMES):
+        return "sssh"
+    if finer & set(SGMC_CLASTIC_MIXED_NAMES):
+        return "ssmx"
+    return "smmx"
+
+
+def _deepest_class(levels: tuple[str, ...], classes: dict[str, str]) -> str | None:
+    """Return the class of the first level named in `classes`, or None when none is."""
+    return next((classes[name] for name in levels if name in classes), None)
 
 
 def sgmc_type_batch(records: list[tuple[str, str, str, str, str]]) -> list[int | None]:
@@ -1138,131 +1214,131 @@ def sgmc_type_batch(records: list[tuple[str, str, str, str, str]]) -> list[int |
         else:
             unmapped.update(name for name in finer if name and name not in SGMC_KNOWN_NAMES)
     _fail_unmapped("SGMC lithology", unmapped)
-    return [family_value(sgmc_family(*record)) for record in records]
+    return [class_value(sgmc_class(*record)) for record in records]
 
 
 # INSPIRE lithology classes of the EGDI raster by cell value; None leaves the cell to the base.
 EGDI_TYPE_NAMES: dict[int, str | None] = {
-    1: "vb",  # alkaliOlivineBasalt
-    2: "mt",  # amphibolite
-    3: "vi",  # andesite
-    4: "pb",  # anorthositicRock
-    5: "ss",  # arenite
-    6: "py",  # ashBrecciaBombOrBlockTephra
-    7: "py",  # ashTuffLapillistoneAndLapilliTuff
-    8: "vb",  # basalt
-    9: "vb",  # basanite
-    10: "ss",  # biogenicSilicaSedimentaryRock
-    11: "ss",  # breccia
-    12: "mt",  # brecciaGougeSeries
-    13: "su",  # carbonateMud
-    14: "su",  # carbonateOoze
-    15: "sc",  # carbonateSedimentaryRock
+    1: "vb__",  # alkaliOlivineBasalt
+    2: "mtam",  # amphibolite
+    3: "vi__",  # andesite
+    4: "pb__",  # anorthositicRock
+    5: "ssss",  # arenite
+    6: "pymx",  # ashBrecciaBombOrBlockTephra
+    7: "pymx",  # ashTuffLapillistoneAndLapilliTuff
+    8: "vb__",  # basalt
+    9: "vb__",  # basanite
+    10: "sssh",  # biogenicSilicaSedimentaryRock
+    11: "ssss",  # breccia
+    12: "mt__",  # brecciaGougeSeries
+    13: "sush",  # carbonateMud
+    14: "sush",  # carbonateOoze
+    15: "scmx",  # carbonateSedimentaryRock
     16: None,  # carbonatite
-    17: "sc",  # chalk
-    18: "mt",  # chloriteActinoliteEpidoteMetamorphicRock
-    19: "ss",  # clasticSandstone
-    20: "su",  # clasticSediment
-    21: "sm",  # clasticSedimentaryMaterial
-    22: "ss",  # clasticSedimentaryRock
-    23: "su",  # clay
-    24: "ss",  # claystone
-    25: "ss",  # conglomerate
-    26: "va",  # dacite
-    27: "sm",  # diamictite
-    28: "su",  # diamicton
-    29: "pi",  # diorite
-    30: "pi",  # dioriticRock
-    31: "vb",  # doleriticRock
-    32: "sc",  # dolomite
-    33: "sc",  # dolomiticOrMagnesianSedimentaryRock
-    34: "mt",  # eclogite
+    17: "scpu",  # chalk
+    18: "mtgr",  # chloriteActinoliteEpidoteMetamorphicRock
+    19: "ssss",  # clasticSandstone
+    20: "sumx",  # clasticSediment
+    21: "smmx",  # clasticSedimentaryMaterial
+    22: "ssmx",  # clasticSedimentaryRock
+    23: "sush",  # clay
+    24: "sssh",  # claystone
+    25: "ssss",  # conglomerate
+    26: "va__",  # dacite
+    27: "smmx",  # diamictite
+    28: "sumx",  # diamicton
+    29: "pi__",  # diorite
+    30: "pi__",  # dioriticRock
+    31: "vb__",  # doleriticRock
+    32: "scpu",  # dolomite
+    33: "scmx",  # dolomiticOrMagnesianSedimentaryRock
+    34: "mt__",  # eclogite
     35: None,  # exoticCompositionIgneousRock
     36: None,  # fineGrainedIgneousRock
-    37: "pi",  # foidBearingSyenite
-    38: "pi",  # foidSyenitoid
-    39: "mt",  # foliatedMetamorphicRock
-    40: "py",  # fragmentalIgneousMaterial
-    41: "pb",  # gabbro
-    42: "pb",  # gabbroicRock
-    43: "pb",  # gabbroid
-    44: "mt",  # glaucophaneLawsoniteEpidoteMetamorphicRock
-    45: "mt",  # gneiss
-    46: "pa",  # granite
-    47: "pa",  # granitoid
-    48: "pa",  # granodiorite
-    49: "mt",  # granulite
-    50: "su",  # gravel
-    51: "ev",  # gypsumOrAnhydrite
-    52: "mt",  # hornfels
+    37: "pi__",  # foidBearingSyenite
+    38: "pi__",  # foidSyenitoid
+    39: "mt__",  # foliatedMetamorphicRock
+    40: "pymx",  # fragmentalIgneousMaterial
+    41: "pb__",  # gabbro
+    42: "pb__",  # gabbroicRock
+    43: "pb__",  # gabbroid
+    44: "mt__",  # glaucophaneLawsoniteEpidoteMetamorphicRock
+    45: "mt__",  # gneiss
+    46: "pa__",  # granite
+    47: "pa__",  # granitoid
+    48: "pa__",  # granodiorite
+    49: "mt__",  # granulite
+    50: "suss",  # gravel
+    51: "evpu",  # gypsumOrAnhydrite
+    52: "mt__",  # hornfels
     53: None,  # igneousMaterial
     54: None,  # igneousRock
     55: None,  # impactGeneratedMaterial
-    56: "su",  # impureCarbonateSediment
-    57: "sm",  # impureCarbonateSedimentaryRock
-    58: "sm",  # impureDolomite
-    59: "sm",  # impureLimestone
-    60: "vb",  # komatiiticRock
-    61: "sc",  # limestone
-    62: "mt",  # marble
-    63: "mt",  # metamorphicRock
-    64: "mt",  # metasomaticRock
-    65: "mt",  # micaSchist
-    66: "mt",  # migmatite
-    67: "pa",  # monzogranite
-    68: "pi",  # monzonite
-    69: "su",  # mud
-    70: "ss",  # mudstone
-    71: "mt",  # myloniticRock
-    72: "ss",  # nonClasticSiliceousSedimentaryRock
-    73: "ss",  # organicBearingMudstone
-    74: "su",  # organicRichSediment
-    75: "sm",  # organicRichSedimentaryMaterial
-    76: "mt",  # orthogneiss
-    77: "mt",  # paragneiss
-    78: "su",  # peat
-    79: "pb",  # peridotite
+    56: "sumx",  # impureCarbonateSediment
+    57: "smmx",  # impureCarbonateSedimentaryRock
+    58: "smmx",  # impureDolomite
+    59: "smmx",  # impureLimestone
+    60: "vb__",  # komatiiticRock
+    61: "scpu",  # limestone
+    62: "mtpu",  # marble
+    63: "mt__",  # metamorphicRock
+    64: "mt__",  # metasomaticRock
+    65: "mt__",  # micaSchist
+    66: "mt__",  # migmatite
+    67: "pa__",  # monzogranite
+    68: "pi__",  # monzonite
+    69: "sush",  # mud
+    70: "sssh",  # mudstone
+    71: "mt__",  # myloniticRock
+    72: "sssh",  # nonClasticSiliceousSedimentaryRock
+    73: "sssh",  # organicBearingMudstone
+    74: "suor",  # organicRichSediment
+    75: "smor",  # organicRichSedimentaryMaterial
+    76: "mt__",  # orthogneiss
+    77: "mt__",  # paragneiss
+    78: "suor",  # peat
+    79: "pb__",  # peridotite
     80: None,  # phaneriticIgneousRock
-    81: "va",  # phonolite
-    82: "mt",  # phyllite
-    83: "mt",  # phyllonite
+    81: "va__",  # phonolite
+    82: "mt__",  # phyllite
+    83: "mt__",  # phyllonite
     84: None,  # porphyry
-    85: "py",  # pyroclasticMaterial
-    86: "py",  # pyroclasticRock
-    87: "pb",  # pyroxenite
-    88: "pi",  # quartzDiorite
-    89: "mt",  # quartzite
-    90: "su",  # residualMaterial
-    91: "va",  # rhyolite
-    92: "va",  # rhyolitoid
+    85: "pymx",  # pyroclasticMaterial
+    86: "pymx",  # pyroclasticRock
+    87: "pb__",  # pyroxenite
+    88: "pi__",  # quartzDiorite
+    89: "mtpu",  # quartzite
+    90: "sumx",  # residualMaterial
+    91: "va__",  # rhyolite
+    92: "va__",  # rhyolitoid
     93: None,  # rock
-    94: "su",  # sand
-    95: "ss",  # sandstone
-    96: "mt",  # schist
-    97: "su",  # sediment
-    98: "sm",  # sedimentaryMaterial
-    99: "sm",  # sedimentaryRock
-    100: "mt",  # serpentinite
-    101: "ss",  # shale
-    102: "su",  # silicateMud
-    103: "su",  # silt
-    104: "ss",  # siltstone
-    105: "mt",  # skarn
-    106: "mt",  # slate
-    107: "vb",  # spilite
-    108: "pi",  # syenite
-    109: "pi",  # syeniticRock
-    110: "pa",  # syenogranite
-    111: "vb",  # tephrite
-    112: "vb",  # tholeiiticBasalt
-    113: "pa",  # tonalite
-    114: "va",  # trachyte
-    115: "va",  # trachyticRock
-    116: "va",  # trachytoid
-    117: "sc",  # travertine
-    118: "py",  # tuffBrecciaAgglomerateOrPyroclasticBreccia
-    119: "pb",  # ultramaficIgneousRock
-    120: "ss",  # wacke
+    94: "suss",  # sand
+    95: "ssss",  # sandstone
+    96: "mt__",  # schist
+    97: "sumx",  # sediment
+    98: "smmx",  # sedimentaryMaterial
+    99: "smmx",  # sedimentaryRock
+    100: "mt__",  # serpentinite
+    101: "sssh",  # shale
+    102: "sush",  # silicateMud
+    103: "sush",  # silt
+    104: "sssh",  # siltstone
+    105: "mt__",  # skarn
+    106: "mtsh",  # slate
+    107: "vb__",  # spilite
+    108: "pi__",  # syenite
+    109: "pi__",  # syeniticRock
+    110: "pa__",  # syenogranite
+    111: "vb__",  # tephrite
+    112: "vb__",  # tholeiiticBasalt
+    113: "pa__",  # tonalite
+    114: "va__",  # trachyte
+    115: "va__",  # trachyticRock
+    116: "va__",  # trachytoid
+    117: "scpu",  # travertine
+    118: "pymx",  # tuffBrecciaAgglomerateOrPyroclasticBreccia
+    119: "pb__",  # ultramaficIgneousRock
+    120: "ssss",  # wacke
     121: None,  # waste
     122: None,  # Unknown
     123: None,  # Unpopulated
@@ -1277,7 +1353,7 @@ def egdi_type_batch(values: list[int]) -> list[int | None]:
     unmapped = {value for value in values if value not in EGDI_TYPE_NAMES}
     _fail_unmapped("EGDI lithology values", {str(value) for value in sorted(unmapped)})
     return [
-        family_value(EGDI_TYPE_NAMES[value]) if EGDI_TYPE_NAMES[value] else None
+        class_value(EGDI_TYPE_NAMES[value]) if EGDI_TYPE_NAMES[value] else None
         for value in values
     ]
 

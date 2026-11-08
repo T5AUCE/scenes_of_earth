@@ -15,11 +15,15 @@ from soe.bundle import validate
 from soe.geology_age import AGE_VALUES
 from soe.geology_regional import (
     BASE_CODE,
+    CANADA_AGE_FILE,
     CANADA_CODE,
+    CANADA_TYPE_FILE,
     CODE_MEANINGS,
     CODE_VALUES,
     IGME_CODE,
+    SGMC_AGE_FILE,
     SGMC_CODE,
+    SGMC_TYPE_FILE,
     candidates_for,
     composite_values,
     read_composited,
@@ -31,6 +35,7 @@ from soe.ingest.geology_classification import (
     EGDI_TYPE_NAMES,
     canada_age_batch,
     canada_type_batch,
+    class_value,
     egdi_type_batch,
     family_value,
     igme_age_batch,
@@ -40,7 +45,7 @@ from soe.ingest.geology_classification import (
 )
 from soe.ingest.geology_regional import (
     _reproject_egdi_tile,
-    _write_egdi_families,
+    _write_egdi_classes,
     ingest_egdi,
     ingest_geology_regional,
 )
@@ -52,6 +57,8 @@ from tests.helpers import BOUNDARY, HASH_A, NAIROBI
 
 SWITZERLAND = (5.9, 45.8, 10.5, 47.8)  # in the IGME5000 and EGDI footprints
 KENYA = (33.9, -4.7, 41.9, 5.0)  # outside every regional footprint
+USA_BBOX_DEG = (-110.0, 35.0, -100.0, 42.0)
+TORONTO_BBOX_DEG = (-80.0, 43.0, -79.0, 44.0)
 
 
 def write_cog(
@@ -90,6 +97,19 @@ def patchwork_cubes(tmp_path):
     write_cog(cubes / "geology_age.tif", base, west=-100.0, north=42.0, tag="gsc-of5529")
     patch = np.array([[0, 0], [AGE_VALUES["Cretaceous"], 0]], "uint8")
     write_cog(cubes / "geology_age_canada.tif", patch, west=-100.0, north=42.0, tag="canada-5m")
+    return cubes
+
+
+@pytest.fixture
+def id_cubes(tmp_path):
+    """Cubes with base and regional (Canada and SGMC) rock-age and rock-type COGs."""
+    cubes = tmp_path / "cubes"
+    cubes.mkdir()
+    ones = np.ones((2, 2), "uint8")
+    write_cog(cubes / "geology_age.tif", ones, tag="gsc-of5529")
+    write_cog(cubes / "lithology.tif", ones, tag="glim")
+    for file in (CANADA_AGE_FILE, CANADA_TYPE_FILE, SGMC_AGE_FILE, SGMC_TYPE_FILE):
+        write_cog(cubes / file, ones)
     return cubes
 
 
@@ -173,7 +193,13 @@ def test_regional_notices_name_scale_and_representation():
 
     assert len(notices) == 2
     assert "1:5,000,000" in notices[0] and "bedrock" in notices[0]
-    assert "surface geology" in notices[1]
+    assert "bedrock geology" in notices[1]
+
+
+def test_sgmc_notice_says_its_representation_varies_by_state():
+    (notice,) = regional_notices(("us_sgmc",), "type")
+
+    assert "depending on the state" in notice
 
 
 def test_canada_ranges_take_the_smallest_containing_class():
@@ -201,8 +227,19 @@ def test_canada_triassic_jurassic_epoch_keeps_the_whole_period_range():
 def test_canada_blank_names_fall_back_or_stay_no_data():
     assert canada_age_batch([("Cenozoic", " ", " ")]) == [AGE_VALUES["Cenozoic undivided"]]
     assert canada_age_batch([("unknown", "unknown", "unknown")]) == [None]
-    assert canada_type_batch([("sedimentary rocks", " ")]) == [family_value("sm")]
+    assert canada_type_batch([("sedimentary rocks", " ")]) == [class_value("smmx")]
     assert canada_type_batch([("intrusive rocks", " ")]) == [None]
+
+
+def test_canada_grain_names_map_to_level2_classes():
+    assert canada_type_batch([("sedimentary rocks", "conglomerate and sandstone")]) == [
+        class_value("ssss"),
+    ]
+    assert canada_type_batch([("sedimentary rocks", "carbonate")]) == [class_value("scmx")]
+
+
+def test_canada_marble_maps_to_the_pure_metamorphic_class():
+    assert canada_type_batch([("metamorphic rocks", "marble")]) == [class_value("mtpu")]
 
 
 def test_canada_unknown_names_fail_with_the_full_list():
@@ -226,7 +263,7 @@ def test_igme_unknown_sides_fail_with_the_full_list():
         igme_age_batch(["Cambrian", "BOGUS - Ordovician"])
 
 
-def test_igme_types_map_families_and_blanks_fall_back():
+def test_igme_types_map_classes_and_blanks_fall_back():
     values = igme_type_batch(
         [
             ("granite", None, None, None),
@@ -239,13 +276,29 @@ def test_igme_types_map_families_and_blanks_fall_back():
     )
 
     assert values == [
-        family_value("pa"),
-        family_value("vb"),
-        family_value("mt"),
-        family_value("vb"),
-        family_value("vb"),
+        class_value("pa__"),
+        class_value("vb__"),
+        class_value("mt__"),
+        class_value("vb__"),
+        class_value("vb__"),
         None,
     ]
+
+
+def test_igme_loose_and_lithified_names_split_grain():
+    assert igme_type_batch([("sandstone", None, None, None)]) == [class_value("ssss")]
+    assert igme_type_batch([("sand", None, None, None)]) == [class_value("suss")]
+    assert igme_type_batch([("claystone", None, None, None)]) == [class_value("sssh")]
+    assert igme_type_batch([("clay", None, None, None)]) == [class_value("sush")]
+    assert igme_type_batch([("limestone", None, None, None)]) == [class_value("scpu")]
+    assert igme_type_batch([("marl", None, None, None)]) == [class_value("smsh")]
+    assert igme_type_batch([("coal", None, None, None)]) == [class_value("smor")]
+    assert igme_type_batch([("gravel", None, None, None)]) == [class_value("suss")]
+
+
+def test_igme_siliceous_ooze_is_loose_fine_sediment_unlike_chert():
+    assert igme_type_batch([("siliceous ooze", None, None, None)]) == [class_value("sush")]
+    assert igme_type_batch([("chert", None, None, None)]) == [class_value("sssh")]
 
 
 def test_sgmc_leaf_names_class_by_period_not_ma():
@@ -294,13 +347,15 @@ def test_sgmc_batch_lists_every_unknown_name_at_once():
     assert all(name in str(error.value) for name in ("BOGUS", "WEIRD", "ODD", "Atlantis"))
 
 
-def test_sgmc_hierarchies_map_composition_to_families():
+def test_sgmc_hierarchies_map_composition_to_level2_classes():
     records = [
         ("Sedimentary", "Chemical", "Evaporite", "Gypsum", ""),
         ("Sedimentary", "Chemical", "Chert", "", ""),
         ("Sedimentary", "Carbonate", "Limestone", "Chalk", ""),
         ("Sedimentary", "Carbonate", "Marlstone", "", ""),
         ("Sedimentary", "Clastic", "Sandstone", "", ""),
+        ("Sedimentary", "Clastic", "Shale", "", ""),
+        ("Sedimentary", "Clastic", "Sandstone-mudstone", "", ""),
         ("Sedimentary", "Coal", "Lignite", "", ""),
         ("Igneous", "Volcanic", "Mafic-volcanic", "Basalt", ""),
         ("Igneous", "Volcanic", "Alkalic-volcanic", "Basanite", ""),
@@ -311,29 +366,63 @@ def test_sgmc_hierarchies_map_composition_to_families():
         ("Igneous", "Plutonic", "Syenitic", "Quartz-monzonite", ""),
         ("Igneous", "Hypabyssal", "Lamprophyre", "", ""),
         ("Metamorphic", "Schist", "", "", ""),
+        ("Metamorphic", "Slate", "", "", ""),
         ("Unconsolidated", "Coarse-detrital", "Sand", "", ""),
+        ("Unconsolidated", "Fine-detrital", "Silt", "", ""),
+        ("Unconsolidated", "Peat", "", "", ""),
     ]
 
     assert sgmc_type_batch(records) == [
-        family_value("ev"),
-        family_value("ss"),
-        family_value("sc"),
-        family_value("sm"),
-        family_value("ss"),
-        family_value("sm"),
-        family_value("vb"),
-        family_value("vb"),
-        family_value("va"),
-        family_value("vi"),
-        family_value("pa"),
-        family_value("pa"),
-        family_value("pi"),
-        family_value("pb"),
-        family_value("mt"),
-        family_value("su"),
+        class_value("evpu"),
+        class_value("sssh"),
+        class_value("scpu"),
+        class_value("smsh"),
+        class_value("ssss"),
+        class_value("sssh"),
+        class_value("ssmx"),
+        class_value("smor"),
+        class_value("vb__"),
+        class_value("vb__"),
+        class_value("va__"),
+        class_value("vi__"),
+        class_value("pa__"),
+        class_value("pa__"),
+        class_value("pi__"),
+        class_value("pb__"),
+        class_value("mt__"),
+        class_value("mtsh"),
+        class_value("suss"),
+        class_value("sush"),
+        class_value("suor"),
     ]
     with pytest.raises(ValueError, match="BOGUS"):
         sgmc_type_batch([("BOGUS", "", "", "", "")])
+
+
+@pytest.mark.parametrize(
+    ("hierarchy", "code"),
+    [
+        (("Sedimentary", "Carbonate", "Limestone", "Coquina", ""), "scss"),
+        (("Sedimentary", "Carbonate", "Limestone", "Calcarenite", ""), "scss"),
+        (("Sedimentary", "Carbonate", "Limestone", "", ""), "scpu"),
+        (("Sedimentary", "Carbonate", "Limestone", "Chalk", ""), "scpu"),
+        (("Sedimentary", "Carbonate", "", "", ""), "scmx"),
+        (("Sedimentary", "Carbonate", "Marlstone", "", ""), "smsh"),
+    ],
+)
+def test_sgmc_carbonates_take_the_deepest_applicable_name(hierarchy, code):
+    assert sgmc_type_batch([hierarchy]) == [class_value(code)]
+
+
+def test_metamorphic_names_agree_across_sources():
+    assert sgmc_type_batch([("Metamorphic", "Marble", "", "", "")]) == [class_value("mtpu")]
+    assert sgmc_type_batch([("Metamorphic", "Metasedimentary", "Quartzite", "", "")]) == [
+        class_value("mtpu"),
+    ]
+    assert sgmc_type_batch([("Metamorphic", "Amphibolite", "", "", "")]) == [class_value("mtam")]
+    assert igme_type_batch([("marble", None, None, None)]) == [class_value("mtpu")]
+    assert igme_type_batch([("amphibolite", None, None, None)]) == [class_value("mtam")]
+    assert egdi_type_batch([2]) == [class_value("mtam")]
 
 
 def test_sgmc_names_with_known_substrings_still_fail():
@@ -351,12 +440,28 @@ def test_sgmc_names_with_known_substrings_still_fail():
 def test_egdi_unknown_values_fail_and_generic_values_are_no_data():
     with pytest.raises(ValueError, match="999"):
         egdi_type_batch([999])
-    assert egdi_type_batch([8, 93, 121, 122, 123]) == [family_value("vb"), None, None, None, None]
+    assert egdi_type_batch([8, 93, 121, 122, 123]) == [class_value("vb__"), None, None, None, None]
 
 
-def test_egdi_table_covers_the_whole_legend_with_known_families():
+def test_egdi_loose_and_lithified_names_split_grain():
+    assert egdi_type_batch([95]) == [class_value("ssss")]
+    assert egdi_type_batch([94]) == [class_value("suss")]
+    assert egdi_type_batch([24]) == [class_value("sssh")]
+    assert egdi_type_batch([23]) == [class_value("sush")]
+    assert egdi_type_batch([50]) == [class_value("suss")]
+    assert egdi_type_batch([78]) == [class_value("suor")]
+    assert egdi_type_batch([61]) == [class_value("scpu")]
+    assert egdi_type_batch([51]) == [class_value("evpu")]
+
+
+def test_egdi_combined_ash_and_lapilli_tuff_is_mixed_grain_pyroclastic():
+    assert egdi_type_batch([7]) == [class_value("pymx")]
+
+
+def test_egdi_table_covers_the_whole_legend_with_known_classes():
     assert sorted(EGDI_TYPE_NAMES) == list(range(1, 124))
-    assert {name for name in EGDI_TYPE_NAMES.values() if name} <= {
+    assert all(code in GLIM_VALUES for code in EGDI_TYPE_NAMES.values() if code)
+    assert {code[:2] for code in EGDI_TYPE_NAMES.values() if code} <= {
         "ev",
         "ig",
         "mt",
@@ -453,10 +558,11 @@ def test_regional_sources_are_absent_offline():
     assert make_registry(backend)["geology_age"].sources_for((0.0, 0.0, 1.0, 1.0))[1:] == []
 
 
-def scene_id(folder: Path, layers: list[str]) -> str:
+def scene_id(folder: Path, layers: list[str], bbox: tuple[float, ...] | None = None) -> str:
     registry = make_registry(RealSource(cubes_dir=folder))
     datasets = [registry[layer_id] for layer_id in layers]
-    return compute_scene_id("poly:abc", layers, None, datasets, {})
+    bboxes = {layer_id: bbox for layer_id in layers} if bbox else None
+    return compute_scene_id("poly:abc", layers, None, datasets, {}, bboxes)
 
 
 def test_non_geology_scene_ids_ignore_installed_regional_sources(patchwork_cubes, tmp_path):
@@ -492,14 +598,39 @@ def test_geology_scene_ids_change_when_a_regional_source_is_installed_or_removed
     assert scene_id(patchwork_cubes, ["geology_age"]) != without
 
 
-def test_geology_scene_ids_change_with_a_regional_source_version(
-    patchwork_cubes,
+def test_geology_scene_ids_change_with_a_regional_source_version_over_its_footprint(
+    id_cubes,
     monkeypatch,
 ):
-    before = scene_id(patchwork_cubes, ["geology_age"])
+    before = scene_id(id_cubes, ["geology"], USA_BBOX_DEG)
+    monkeypatch.setitem(SOURCES["us_sgmc"], "version", "sgmc-next")
+
+    assert scene_id(id_cubes, ["geology"], USA_BBOX_DEG) != before
+
+
+def test_geology_scene_ids_ignore_regional_versions_outside_the_footprint(
+    id_cubes,
+    monkeypatch,
+):
+    before = scene_id(id_cubes, ["geology"], KENYA)
+    monkeypatch.setitem(SOURCES["us_sgmc"], "version", "sgmc-next")
     monkeypatch.setitem(SOURCES["canada_5m"], "version", "canada-5m-next")
 
-    assert scene_id(patchwork_cubes, ["geology_age"]) != before
+    assert scene_id(id_cubes, ["geology"], KENYA) == before
+
+
+def test_age_scene_ids_ignore_a_rock_type_only_version_bump(id_cubes, monkeypatch):
+    before = scene_id(id_cubes, ["geology_age"], TORONTO_BBOX_DEG)
+    monkeypatch.setitem(SOURCES["canada_5m"], "version", "canada-5m-next")
+
+    assert scene_id(id_cubes, ["geology_age"], TORONTO_BBOX_DEG) == before
+
+
+def test_age_scene_ids_change_with_a_regional_age_version(id_cubes, monkeypatch):
+    before = scene_id(id_cubes, ["geology_age"], TORONTO_BBOX_DEG)
+    monkeypatch.setitem(SOURCES["canada_5m"], "age_version", "canada-5m-next")
+
+    assert scene_id(id_cubes, ["geology_age"], TORONTO_BBOX_DEG) != before
 
 
 def test_geology_scene_ids_without_regional_sources_are_unchanged(tmp_path):
@@ -508,7 +639,7 @@ def test_geology_scene_ids_without_regional_sources_are_unchanged(tmp_path):
     write_cog(cubes / "geology_age.tif", np.ones((2, 2), "uint8"), tag="gsc-of5529")
     registry = make_registry(RealSource(cubes_dir=cubes))
 
-    assert registry["geology_age"].regional_versions() == []
+    assert registry["geology_age"].regional_versions((-180.0, -90.0, 180.0, 90.0)) == []
 
 
 def test_unknown_regional_source_is_refused(tmp_path):
@@ -522,6 +653,11 @@ def build_age_scene(cubes: Path, area: Area, scenes: Path) -> tuple[dict, zarr.G
     build_scene(HASH_A, area, None, None, [registry["geology_age"]], "T", scenes)
     doc = json.loads((scenes / HASH_A / "scene.json").read_text(encoding="utf-8"))
     return doc, zarr.open_group(str(scenes / HASH_A / "data.zarr"), mode="r")
+
+
+def canada_age_source() -> dict:
+    """Return the Canada licence entry as the rock-age layer reports it."""
+    return {**SOURCES["canada_5m"], "version": SOURCES["canada_5m"]["age_version"]}
 
 
 def write_age_patchwork(cubes: Path, patches: dict[str, np.ndarray]) -> None:
@@ -550,7 +686,7 @@ def test_a_used_regional_source_is_credited_noticed_and_coded(toronto_cubes, tmp
     mask = root["geology_age/mask"][...]
 
     assert validate(doc) == []
-    assert layer["fallback_sources"] == [SOURCES["canada_5m"]]
+    assert layer["fallback_sources"] == [canada_age_source()]
     assert SOURCES["canada_5m"]["attribution"] in doc["credits"]["lines"]
     assert any("Canada" in notice for notice in doc["notices"]["limits"])
     assert layer["arrays"]["provenance"]["dtype"] == "uint8"
@@ -601,7 +737,7 @@ def test_a_fully_replaced_base_map_is_not_credited(tmp_path):
     layer = doc["layers"][0]
 
     assert validate(doc) == []
-    assert layer["source"] == SOURCES["canada_5m"]
+    assert layer["source"] == canada_age_source()
     assert SOURCES["gsc_world"]["attribution"] not in doc["credits"]["lines"]
 
 
@@ -624,7 +760,7 @@ def test_regional_rock_types_take_the_openlandmap_classes_of_an_openlandmap_base
     cubes.mkdir()
     base = np.full((2, 2), 13, "uint8")
     write_cog(cubes / "lithology.tif", base, west=-100.0, north=42.0, tag=OPENLANDMAP_SOURCE)
-    patch = np.array([[family_value("pa"), 0], [family_value("sc"), 0]], "uint8")
+    patch = np.array([[class_value("pa__"), 0], [class_value("scmx"), 0]], "uint8")
     write_cog(cubes / "geology_type_canada.tif", patch, west=-100.0, north=42.0)
 
     value, codes, _ = read_composited(
@@ -642,8 +778,8 @@ def test_regional_rock_types_take_the_openlandmap_classes_of_an_openlandmap_base
 def test_egdi_raster_is_reprojected_with_mode_resampling(tmp_path, monkeypatch):
     from soe.ingest import geology_regional as regional_ingest
 
-    monkeypatch.setitem(EGDI_TYPE_NAMES, 1, "ss")
-    monkeypatch.setitem(EGDI_TYPE_NAMES, 2, "pa")
+    monkeypatch.setitem(EGDI_TYPE_NAMES, 1, "ssss")
+    monkeypatch.setitem(EGDI_TYPE_NAMES, 2, "pa__")
     monkeypatch.setattr(regional_ingest, "LITHOLOGY_RES_DEG", 0.05)
     source = tmp_path / "egdi_3035.tif"
     with rasterio.open(
@@ -667,7 +803,7 @@ def test_egdi_raster_is_reprojected_with_mode_resampling(tmp_path, monkeypatch):
     with rasterio.open(published) as cog:
         assert cog.tags()[LITHOLOGY_SOURCE_TAG] == "egdi"
         values = cog.read(1)
-    assert set(np.unique(values)) == {0, family_value("ss"), family_value("pa")}
+    assert set(np.unique(values)) == {0, class_value("ssss"), class_value("pa__")}
 
 
 def test_egdi_nodata_never_wins_the_mode_vote(tmp_path):
@@ -685,23 +821,23 @@ def test_egdi_nodata_never_wins_the_mode_vote(tmp_path):
         nodata=32767,
     ) as raster:
         raster.write(np.array([[8.0, 32767.0], [32767.0, 32767.0]]), 1)
-    families_path = tmp_path / "families.tif"
+    classes_path = tmp_path / "classes.tif"
     with rasterio.open(source) as opened:
-        _write_egdi_families(opened, families_path)
-    with rasterio.open(families_path) as families:
-        assert families.nodata == 0
-        assert families.read(1).tolist() == [
-            [family_value("vb"), 0],
+        _write_egdi_classes(opened, classes_path)
+    with rasterio.open(classes_path) as classes:
+        assert classes.nodata == 0
+        assert classes.read(1).tolist() == [
+            [class_value("vb__"), 0],
             [0, 0],
         ]
         mixed = _reproject_egdi_tile(
-            families,
+            classes,
             (0.0, 0.0, 2.0, 2.0),
             (0.0, 0.0, 2.0, 2.0),
             from_origin(0.0, 2.0, 2.0, 2.0),
             (1, 1),
         )
-    assert mixed.tolist() == [[family_value("vb")]]
+    assert mixed.tolist() == [[class_value("vb__")]]
     empty_path = tmp_path / "empty.tif"
     with rasterio.open(
         empty_path,

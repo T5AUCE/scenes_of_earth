@@ -16,6 +16,7 @@ import {
 } from "./display-state";
 import { makeHtmlElement } from "./html";
 import { polygonParts } from "./label-filter";
+import { buildMaskRings } from "./mask-ring";
 import { MAX_ZOOM, removeLayerAndSource, WORLD_VIEW } from "./map";
 import { resetFetchStats } from "./merging-store";
 import { shiftLongitudes, worldShift } from "./render/mercator";
@@ -48,9 +49,6 @@ const DATA_APPEARS_ZOOM = MASK_FADE_END_ZOOM;
 const READINESS_CAP_MS = 1500;
 const PREPARING_NOTE = "Preparing scene...";
 const PAGE_BACKGROUND_PROPERTY = "--page-background";
-const HALF_WORLD_DEG = 180;
-// Mercator has no poles.
-const MAX_LATITUDE_DEG = 85;
 
 const DOCK_GAP_PX = 8;
 
@@ -722,17 +720,19 @@ function addMask(
 ) {
   const shift = worldShift(bbox);
   const { exteriors, interiors } = outlines(feature.geometry);
-  const holes = exteriors.map((ring) => shiftLongitudes(ring, shift) as number[][]);
-  const enclaves = interiors.map((ring) => [shiftLongitudes(ring, shift)]);
+  const lands = exteriors.map((ring) => shiftLongitudes(ring, shift) as number[][]);
+  const waters = interiors.map((ring) => shiftLongitudes(ring, shift) as number[][]);
+  const maskRings = buildMaskRings(lands, waters);
 
   const maskFeature = {
     type: "Feature",
     properties: {},
-    // Lakes and enclaves inside the area are cut out of the area, so they are blanked again.
-    geometry: { type: "MultiPolygon", coordinates: [[worldRing(holes), ...holes], ...enclaves] },
+    // Lakes are cut out of the area so they blank again, with land islands cut back out of each lake.
+    geometry: { type: "MultiPolygon", coordinates: maskRings.map((ring) => [ring]) },
   };
 
-  map.addSource(MASK_ID, { type: "geojson", data: maskFeature as GeoJsonData });
+  // Simplifying would treat the two sides of each slit separately and leave hairline gaps.
+  map.addSource(MASK_ID, { type: "geojson", data: maskFeature as GeoJsonData, tolerance: 0 });
   // Appended last, the mask already covers every basemap layer beneath it.
   map.addLayer({
     id: MASK_ID,
@@ -868,22 +868,6 @@ function outlines(geometry: AreaFeature["geometry"]) {
     exteriors: parts.map((part) => part[0]),
     interiors: parts.flatMap((part) => part.slice(1)),
   };
-}
-
-// The ring is one world wide and centred on the area, as MapLibre cannot cut holes in a wider one.
-function worldRing(holes: number[][][]) {
-  const longitudes = holes.flat().map(([longitude]) => longitude);
-  const centre = (Math.min(...longitudes) + Math.max(...longitudes)) / 2;
-  const west = centre - HALF_WORLD_DEG;
-  const east = centre + HALF_WORLD_DEG;
-
-  return [
-    [west, -MAX_LATITUDE_DEG],
-    [east, -MAX_LATITUDE_DEG],
-    [east, MAX_LATITUDE_DEG],
-    [west, MAX_LATITUDE_DEG],
-    [west, -MAX_LATITUDE_DEG],
-  ];
 }
 
 const dataMinZoom = (fittedZoom: number | undefined) =>

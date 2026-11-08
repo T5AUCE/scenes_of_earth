@@ -339,15 +339,23 @@ class GeologyDataset(StaticDataset):
         from ..geology_regional import candidates_for
 
         regionals = candidates_for(self.kind, tuple(bbox), self.backend.has_lithology)
-        return [self.source, *(SOURCES[source["licence"]] for source in regionals)]
+        return [self.source, *(self._regional_source(source) for source in regionals)]
 
-    def regional_versions(self) -> list[str]:
-        """Return "id:version" of each regional source installed for this layer."""
+    def _regional_source(self, source: dict) -> dict:
+        """Return the licence entry of a regional source with the version of this layer."""
+        entry = SOURCES[source["licence"]]
+        if self.kind == "age" and "age_version" in entry:
+            return {**entry, "version": entry["age_version"]}
+
+        return entry
+
+    def regional_versions(self, bbox: Bbox) -> list[str]:
+        """Return "id:version" of each installed regional source whose footprint meets bbox."""
         from ..geology_regional import candidates_for
 
-        everywhere = (-WORLD_WIDTH_DEG / 2, -90.0, WORLD_WIDTH_DEG / 2, 90.0)
-        installed = candidates_for(self.kind, everywhere, self.backend.has_lithology)
-        return [f"{source['id']}:{SOURCES[source['licence']]['version']}" for source in installed]
+        installed = candidates_for(self.kind, tuple(bbox), self.backend.has_lithology)
+        versions = [self._regional_source(source)["version"] for source in installed]
+        return [f"{source['id']}:{version}" for source, version in zip(installed, versions)]
 
     def summary(
         self,
@@ -365,10 +373,10 @@ class GeologyDataset(StaticDataset):
 
         used = used_in(arrays["provenance"])
         regional = tuple(source_id for source_id in used if source_id != "global_base")
-        licences = {source["id"]: source["licence"] for source in REGIONAL_SOURCES}
+        entries = {source["id"]: source for source in REGIONAL_SOURCES}
         base = [self.source] if "global_base" in used else []
         return {
-            "used_sources": [*base, *(SOURCES[licences[source_id]] for source_id in regional)],
+            "used_sources": [*base, *(self._regional_source(entries[source_id]) for source_id in regional)],
             "notices": regional_notices(regional, self.kind),
         }
 

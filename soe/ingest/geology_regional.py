@@ -403,39 +403,39 @@ def _write_egdi_raster(source_path: Path | str, raster_path: Path) -> None:
     """Reproject the EGDI INSPIRE raster onto the type grid with mode resampling.
 
     Classes are mapped before resampling, so each output cell takes the most common GLiM
-    family around it rather than the most common INSPIRE code.
+    class around it rather than the most common INSPIRE code.
     """
-    families_path = raster_path.with_suffix(".families.tif")
+    classes_path = raster_path.with_suffix(".classes.tif")
     try:
         with rasterio.open(source_path) as source:
             footprint = transform_bounds(source.crs, "EPSG:4326", *source.bounds)
-            _write_egdi_families(source, families_path)
+            _write_egdi_classes(source, classes_path)
 
-        with rasterio.open(families_path) as families:
+        with rasterio.open(classes_path) as classes:
             write_tiled_raster(
                 raster_path,
                 LITHOLOGY_RES_DEG,
-                partial(_reproject_egdi_tile, families, footprint),
+                partial(_reproject_egdi_tile, classes, footprint),
             )
     finally:
-        families_path.unlink(missing_ok=True)
+        classes_path.unlink(missing_ok=True)
 
 
 def _reproject_egdi_tile(
-    families: DatasetReader,
+    classes: DatasetReader,
     footprint: Bbox,
     bounds: Bbox,
     transform: Affine,
     shape: tuple[int, int],
 ) -> np.ndarray:
-    """Return the most common family of the source cells under each cell of the tile."""
+    """Return the most common class of the source cells under each cell of the tile."""
     tile = np.zeros(shape, "uint8")
     west, south, east, north = footprint
     if bounds[0] >= east or bounds[2] <= west or bounds[1] >= north or bounds[3] <= south:
         return tile
 
     reproject(
-        rasterio.band(families, 1),
+        rasterio.band(classes, 1),
         tile,
         dst_transform=transform,
         dst_crs="EPSG:4326",
@@ -446,7 +446,7 @@ def _reproject_egdi_tile(
     return tile
 
 
-def _write_egdi_families(source: DatasetReader, families_path: Path) -> None:
+def _write_egdi_classes(source: DatasetReader, classes_path: Path) -> None:
     """Write the GLiM class of every source cell, block by block because the raster is huge."""
     lookup = _egdi_lookup(source)
     profile = {
@@ -464,11 +464,11 @@ def _write_egdi_families(source: DatasetReader, families_path: Path) -> None:
         "compress": "zstd",
         "BIGTIFF": "IF_SAFER",
     }
-    with rasterio.open(families_path, "w", **profile) as families:
+    with rasterio.open(classes_path, "w", **profile) as classes:
         for _, window in source.block_windows(1):
             values = source.read(1, window=window)
             indexes = np.where(values == source.nodata, 0, values).astype(int)
-            families.write(lookup[indexes], 1, window=window)
+            classes.write(lookup[indexes], 1, window=window)
 
 
 def _egdi_lookup(source: DatasetReader) -> np.ndarray:

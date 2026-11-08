@@ -15,12 +15,13 @@ from pathlib import Path
 from shapely.geometry import mapping, shape
 
 from . import __version__, db
-from .areas import Area, AreaError, clean_polygon
+from .areas import WORLD_WIDTH_DEG, Area, AreaError, clean_polygon
 from .bundle import VERSION, JsonObject
 from .plan import Plan, beyond_legacy_extent, plan, scene_datasets
 from .sources import (
     REQUEST_FORMATS,
     REQUEST_STEP,
+    Bbox,
     Dataset,
     GeologyDataset,
     Registry,
@@ -38,6 +39,8 @@ DRAWN_AREA_TITLE = "Drawn area"
 MAX_TITLE_CHARS = 120
 
 HIGH_LATITUDE_ID_MARK = ":north-84"  # separates scenes that reach past 60 degrees latitude
+
+WORLD_BBOX_DEG = (-WORLD_WIDTH_DEG / 2, -90.0, WORLD_WIDTH_DEG / 2, 90.0)
 
 REVISION_FRESH_SECS = 6 * 60 * 60  # reuse a revision without another source probe
 
@@ -71,6 +74,7 @@ def prepare_scene(db_path: Path | str, registry: Registry, body: bytes | str) ->
         scene_plan.period,
         datasets,
         revisions,
+        {layer_id: layer.bbox for layer_id, layer in scene_plan.layers.items()},
     )
     request = {
         "area": area_spec,
@@ -251,17 +255,23 @@ def compute_scene_id(
     period: tuple[str, str] | None,
     datasets: list[Dataset],
     revisions: dict[str, tuple[str | None, str | None]],
+    bboxes: dict[str, Bbox] | None = None,
 ) -> str:
     """Hash the canonical request with source identities and generator and bundle versions.
 
-    The versions are those of each dataset's main source and its fallback source.
+    The versions are those of each dataset's main source and its fallback source. A geology layer
+    adds those of the regional sources over its bbox, which defaults to the whole world.
 
     The terrain product (GLO-30 or GLO-90) follows from the area's size, so the geometry covers it.
     A layer drawn from tiles hashes the tile URL, so switching to another copy renames its scenes.
     `period` is the ISO date range [first day, day after the last), or None without series, so
     the id does not depend on how the request spelled its start and end.
     """
-    versions = {dataset.id: _source_versions(dataset) for dataset in datasets}
+    bboxes = bboxes or {}
+    versions = {
+        dataset.id: _source_versions(dataset, bboxes.get(dataset.id, WORLD_BBOX_DEG))
+        for dataset in datasets
+    }
     synthetic = {dataset.id: dataset.synthetic for dataset in datasets}
     dated_period = [*period, REQUEST_STEP] if period else None
     tile_urls = {dataset.id: dataset.tiles["url"] for dataset in datasets if dataset.tiles}
@@ -279,12 +289,12 @@ def compute_scene_id(
     return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:ID_CHARS]
 
 
-def _source_versions(dataset: Dataset) -> list[str | None]:
+def _source_versions(dataset: Dataset, bbox: Bbox) -> list[str | None]:
     """Return the main and fallback versions, using None for an unconfigured fallback.
 
-    A geology layer adds the id and version of each installed regional source, because they
-    change its content; a layer without any keeps the plain pair.
+    A geology layer adds the id and version of each installed regional source over bbox, because
+    they change its content; a layer without any keeps the plain pair.
     """
     fallback_version = dataset.fallback.source.get("version") if dataset.fallback else None
-    regional = dataset.regional_versions() if isinstance(dataset, GeologyDataset) else []
+    regional = dataset.regional_versions(bbox) if isinstance(dataset, GeologyDataset) else []
     return [dataset.source.get("version"), fallback_version, *regional]

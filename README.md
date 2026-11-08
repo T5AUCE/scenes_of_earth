@@ -237,16 +237,18 @@ python -m soe.cli ingest-geology-regional europe_egdi
 ```
 
 - `canada_5m`: Geological map of Canada 1:5M (GSC Map 1860A, OGL-Canada, 13 MB download), surface geology; offshore
-  polygons omitted. Ages from the ERA/PERIOD/EPOCH names, rock types from RXTP/SUBRXTP mapped to GLiM families.
+  polygons omitted. Ages from the ERA/PERIOD/EPOCH names, rock types from RXTP/SUBRXTP mapped to GLiM level-2 classes.
 - `us_sgmc`: USGS State Geologic Map Compilation (SGMC, DS 1052 v1.1, public domain, 436 MB geodatabase zip),
   conterminous US surface geology at 1:50,000-1:1,000,000 source scales. Polygons join the age and lithology tables on
-  UNIT_LINK (first Major rank row per unit). A direct range read of the members is impractical (the query-string
+  UNIT_LINK (first Major rank row per unit, rock types mapped to GLiM level-2 classes). A direct range read of the
+  members is impractical (the query-string
   download URL breaks remote reads), so the zip is downloaded once.
 - `europe_igme5000`: BGR IGME5000 1:5M (GeoNutzV), pre-Quaternary bedrock of Europe, Turkey and the Caucasus (47.5 MB).
-  Age from AgeName (names, never Ma); rock types from the petrography fields where mappable, else left to the base map.
+  Age from AgeName (names, never Ma); rock types from the petrography fields mapped to GLiM level-2 classes where
+  mappable, else left to the base map.
 - `europe_egdi`: EGDI 1:1M surface lithology 250 m raster (CC BY 4.0, OpenGeoHub/GeoZS, Zenodo 12607973, 10.5 MB),
   rock type only; the original (non-gap-filled) raster is reprojected from EPSG:3035 with mode resampling and its
-  INSPIRE classes mapped to GLiM families. Generic classes (rock, igneous rock, waste, unknown) stay no data so the
+  INSPIRE classes mapped to GLiM level-2 classes. Generic classes (rock, igneous rock, waste, unknown) stay no data so the
   base maps fill them.
 
 `--archive` takes a local copy of the source archive instead of fetching. Unknown age or rock names fail the ingest

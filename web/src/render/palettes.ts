@@ -35,7 +35,9 @@ const VARIANT_HUE_STEP_DEG = 12;
 // The hue spread stays within about +-35 degrees so neighbouring families keep their order.
 const VARIANT_HUE_LIMIT_DEG = 35;
 // Variants use a smaller lightness step away from the nearer extreme because hue now helps.
-const VARIANT_LIGHTNESS_STEP = 0.02;
+const VARIANT_LIGHTNESS_STEP = 0.03;
+// Variants gain chroma with rank so pale families stay distinct from no data.
+const VARIANT_CHROMA_STEP = 0.015;
 const LIGHT_FAMILY_LIGHTNESS = 0.65;
 const GRID_ROWS = 5;
 const FIELD_STOP_COUNT = 9;
@@ -422,7 +424,7 @@ function shadedRgb(base: number[], variant: number) {
   const direction = lightness > LIGHT_FAMILY_LIGHTNESS ? -1 : 1;
   return oklchRgb(
     lightness + direction * VARIANT_LIGHTNESS_STEP * variant,
-    chroma,
+    chroma + VARIANT_CHROMA_STEP * variant,
     hue + variantHueOffsetDeg(variant),
   );
 }

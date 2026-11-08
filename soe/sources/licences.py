@@ -212,7 +212,8 @@ SOURCES = {
     },
     "canada_5m": {
         "name": "Geological map of Canada 1:5M (GSC Map 1860A)",
-        "version": "canada-5m-1",
+        "version": "canada-5m-2",
+        "age_version": "canada-5m-1",  # the rock-age layer, whose tables did not change
         "licence": "Open Government Licence - Canada 2.0",
         "licence_url": "https://open.canada.ca/en/open-government-licence-canada",
         "attribution": (
@@ -225,13 +226,14 @@ SOURCES = {
         ),
         "modified": (
             "offshore polygons omitted; ages classed as the smallest ICS period or era that "
-            "holds the whole range; rock types mapped to GLiM families; rasterised to the "
-            "geology grids and cropped to 60°S-60°N; most common class per output cell"
+            "holds the whole range; rock types mapped to GLiM level-2 classes; rasterised to "
+            "the geology grids and cropped to 60°S-60°N; most common class per output cell"
         ),
     },
     "us_sgmc": {
         "name": "USGS State Geologic Map Compilation (SGMC) DS 1052 v1.1",
-        "version": "sgmc-1.1-1",
+        "version": "sgmc-1.1-2",
+        "age_version": "sgmc-1.1-1",  # the rock-age layer, whose tables did not change
         "licence": "Public domain (US Government work)",
         "attribution": "Rock type and age (conterminous US): USGS SGMC (public domain)",
         "citation": (
@@ -243,12 +245,13 @@ SOURCES = {
             "polygons read from the geodatabase joined to the CSV age and lithology tables "
             "on UNIT_LINK; first Major rank row per unit, then Indeterminate-major; ages "
             "classed as the smallest ICS period or era that holds the whole range; rock "
-            "types mapped to GLiM families; rasterised to the geology grids"
+            "types mapped to GLiM level-2 classes; rasterised to the geology grids"
         ),
     },
     "europe_igme5000": {
         "name": "IGME5000 1:5M (BGR/CGMW, pre-Quaternary bedrock)",
-        "version": "igme5000-2024-1",
+        "version": "igme5000-2024-2",
+        "age_version": "igme5000-2024-1",  # the rock-age layer, whose tables did not change
         "licence": "GeoNutzV (Datenlizenz Deutschland – Namensnennung)",
         "licence_url": "https://www.gesetze-im-internet.de/geonutzv/",
         "attribution": (
@@ -262,13 +265,13 @@ SOURCES = {
         ),
         "modified": (
             "pre-Quaternary bedrock kept as mapped; AgeName classed as the smallest ICS "
-            "period or era that holds the whole range; rock types mapped to GLiM families "
-            "where mappable, else left to the base map; rasterised to the geology grids"
+            "period or era that holds the whole range; rock types mapped to GLiM level-2 "
+            "classes where mappable, else left to the base map; rasterised to the geology grids"
         ),
     },
     "europe_egdi": {
         "name": "EGDI surface lithology 250 m (OpenGeoHub/GeoZS)",
-        "version": "egdi-2024-1",
+        "version": "egdi-2024-2",
         "licence": "CC BY 4.0",
         "licence_url": "https://creativecommons.org/licenses/by/4.0/",
         "attribution": (
@@ -282,7 +285,7 @@ SOURCES = {
         ),
         "modified": (
             "original (non-gap-filled) raster reprojected from EPSG:3035 with mode "
-            "resampling; INSPIRE lithology classes mapped to GLiM families"
+            "resampling; INSPIRE lithology classes mapped to GLiM level-2 classes"
         ),
     },
     "geoBoundaries CGAZ": {

@@ -49,7 +49,7 @@ REGIONAL_SOURCES = (
         "age_file": CANADA_AGE_FILE,
         "type_file": CANADA_TYPE_FILE,
         "scale": "1:5,000,000",
-        "representation": "surface geology",
+        "representation": "bedrock geology",
     },
     {
         "id": "europe_egdi",
@@ -69,7 +69,7 @@ REGIONAL_SOURCES = (
         "age_file": SGMC_AGE_FILE,
         "type_file": SGMC_TYPE_FILE,
         "scale": "1:50,000-1:1,000,000",
-        "representation": "surface geology",
+        "representation": "bedrock or surface geology depending on the state",
     },
 )
 
