@@ -21,11 +21,18 @@ import { scaleUnitForElevation } from "./units";
 const BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 /** The map's highest zoom, used as the open upper end of layer zoom ranges. */
 export const MAX_ZOOM = 24;
-// MapLibre draws the world 512 px wide at zoom 0.
-const TILE_SIZE_PX = 512;
+// MapLibre draws the world 512 px wide at zoom 0. Exported for the cache-bound test.
+export const TILE_SIZE_PX = 512;
 // Extra workers let basemap, hillshade and contour tiles settle in parallel.
 const MAP_WORKER_COUNT = 3;
 let workersConfigured = false;
+
+// Zooming back after panning deep reuses tiles instead of reloading them.
+export const MAX_TILE_CACHE_ZOOM_LEVELS = 8;
+// MapLibre sizes each source out-of-view cache as its in-view count times the levels:
+// 1280x800 at 512 px tiles holds (3+1)*(2+1)*8 = 96 slots, while 1920x1080 holds
+// (4+1)*(3+1)*8 = 160. The cap covers both desktop viewports and bounds larger ones.
+export const MAX_TILE_CACHE_SIZE = 160;
 
 // WebGL guarantees at least this much; used when the context cannot be queried.
 const GUARANTEED_TEXTURE_SIZE_PX = 4096;
@@ -67,6 +74,8 @@ export function createMap(container: string): MapLibreMap {
     style: BASEMAP_STYLE,
     ...WORLD_VIEW,
     ...(ratio === undefined ? {} : { pixelRatio: ratio }),
+    maxTileCacheZoomLevels: MAX_TILE_CACHE_ZOOM_LEVELS,
+    maxTileCacheSize: MAX_TILE_CACHE_SIZE,
     attributionControl: false,
   });
 

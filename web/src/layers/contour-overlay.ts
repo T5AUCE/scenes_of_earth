@@ -30,6 +30,7 @@ import { makeHtmlElement } from "../html";
 import { contourLegendText } from "../legend";
 import { labelFadeDurationMs } from "../reduced-motion";
 import { contourColor, DEFAULT_CONTOUR_COLOR } from "../render/palettes";
+import { targetViewportBounds, tileInScene } from "../render/tile-viewport";
 import { convertValue, displayUnitFor, isUnitFor } from "../units";
 import type { Bbox, LayerContext, Part, TerrainStats, TerrainTiles } from "../types";
 
@@ -637,57 +638,6 @@ function warmerFetcher(dem: { manager?: unknown }): ContourTileFetcher | null {
     : null;
 }
 
-function targetViewportBounds(map: MapLibreMap, targetZoom: number): {
-  west: number;
-  south: number;
-  east: number;
-  north: number;
-} | null {
-  if (typeof map.getCenter !== "function" || typeof map.getCanvas !== "function") return null;
-  const canvas = map.getCanvas();
-  if (!canvas || !canvas.clientWidth || !canvas.clientHeight) return null;
-  const current = viewportBounds(map);
-  if (!current) return null;
-  // The next zoom shows the same screen smaller, so its span shrinks by one doubling per level.
-  const scale = 2 ** (map.getZoom() - targetZoom);
-  const centre = map.getCenter();
-  const span = current.east >= current.west
-    ? current.east - current.west
-    : current.east - current.west + 360;
-  const halfSpan = span / 2 * scale;
-  const southY = mercatorY(current.south);
-  const northY = mercatorY(current.north);
-  const halfHeight = (southY - northY) / 2 * scale;
-  const centreY = (southY + northY) / 2;
-  return {
-    west: centre.lng - halfSpan,
-    south: inverseMercatorY(centreY + halfHeight),
-    east: centre.lng + halfSpan,
-    north: inverseMercatorY(centreY - halfHeight),
-  };
-}
-
-function tileInScene(tile: WarmTile, bbox: Bbox): boolean {
-  const count = 2 ** tile.z;
-  const width = 360 / count;
-  const west = tile.x / count * 360 - 180;
-  const north = inverseMercatorY(tile.y / count);
-  const south = inverseMercatorY((tile.y + 1) / count);
-  if (south > bbox[3] || north < bbox[1]) return false;
-  return [west - 360, west, west + 360].some(
-    (shifted) => shifted <= bbox[2] && shifted + width >= bbox[0],
-  );
-}
-
-function mercatorY(latitude: number): number {
-  const radians = latitude * Math.PI / 180;
-  return (1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2;
-}
-
-function inverseMercatorY(fraction: number): number {
-  return Math.atan(Math.sinh(Math.PI * (1 - 2 * fraction))) * 180 / Math.PI;
-}
-
 function transparentColor(color: string): string {
   const trimmed = color.trim();
   const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(trimmed);
@@ -706,22 +656,6 @@ function transparentHex(digits: string): string {
   const green = parseInt(expanded.slice(2, 4), 16);
   const blue = parseInt(expanded.slice(4, 6), 16);
   return `rgba(${red}, ${green}, ${blue}, 0)`;
-}
-
-function viewportBounds(map: MapLibreMap): {
-  west: number;
-  south: number;
-  east: number;
-  north: number;
-} | null {
-  if (typeof map.getBounds !== "function") return null;
-  const bounds = map.getBounds();
-  return {
-    west: bounds.getWest(),
-    south: bounds.getSouth(),
-    east: bounds.getEast(),
-    north: bounds.getNorth(),
-  };
 }
 
 function labelledTiers(ladder: ContourLadder): ContourLadder["labelTiers"] {

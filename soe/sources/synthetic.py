@@ -11,9 +11,25 @@ from shapely.geometry.base import BaseGeometry
 from ..geology_age import AGE_CLASSES, GEOLOGY_AGE_FILE, GSC_SOURCE
 from ..geology_type import GEOLOGY_CLASSES, GLIM_SOURCE, LITHOLOGY_FILE
 from .chirps import CHIRPS_CUBE, FIRST_MONTH
-from .cubes import FINAL_EXPVER, MONTHS_PER_YEAR, PRELIMINARY_EXPVER, CubeSpec, month_index
-from .era5 import ERA5_PRECIPITATION_CUBE, ERA5_TEMPERATURE_CUBE
-from .era5land_temperature import ERA5_LAND_TEMPERATURE_CUBE
+from .cubes import (
+    FINAL_EXPVER,
+    HIGH_LATITUDE_SUFFIX,
+    MONTHS_PER_YEAR,
+    PRELIMINARY_EXPVER,
+    CubeSpec,
+    month_index,
+)
+from .era5 import (
+    ERA5_PRECIPITATION_84N_CUBE,
+    ERA5_PRECIPITATION_CUBE,
+    ERA5_TEMPERATURE_84N_CUBE,
+    ERA5_TEMPERATURE_CUBE,
+)
+from .era5land_precipitation import ERA5_LAND_PRECIPITATION_84N_CUBE
+from .era5land_temperature import (
+    ERA5_LAND_TEMPERATURE_84N_CUBE,
+    ERA5_LAND_TEMPERATURE_CUBE,
+)
 from .grid import Bbox, CellWindow
 from .periods import MONTH_CHARS, add_duration
 from .terrain import terrain_block_count
@@ -26,6 +42,7 @@ class SyntheticSource:
     synthetic = True
     _lithology = False  # so that subclasses that skip __init__ still have no lithology map
     _geology_age = False  # likewise for the rock-age map
+    _north_cubes = False  # likewise for the 84N twins
 
     def __init__(
         self,
@@ -33,16 +50,19 @@ class SyntheticSource:
         chirps_cube: bool = False,
         lithology: bool = False,
         geology_age: bool = False,
+        north_cubes: bool = False,
     ) -> None:
         """Read rain over fake HTTP, or from a fake CHIRPS cube when `chirps_cube` is set.
 
         The lithology map exists only when `lithology` is set, and the rock-age map only when
-        `geology_age` is.
+        `geology_age` is. The 84N cubes exist only when `north_cubes` is set, so a registry
+        built from it reaches 84N like production does now that those cubes are complete.
         """
         self._latest = latest
         self._chirps_cube = chirps_cube
         self._lithology = lithology
         self._geology_age = geology_age
+        self._north_cubes = north_cubes
         self.reads = 0
 
     def latest_month(self) -> str:
@@ -52,11 +72,17 @@ class SyntheticSource:
         return "synthetic"
 
     def has_cube(self, spec: CubeSpec) -> bool:
-        """Return True for every cube except the CHIRPS one, which exists when enabled."""
+        """Return True for every cube except CHIRPS and the 84N twins unless enabled."""
+        if spec.name.endswith(HIGH_LATITUDE_SUFFIX):
+            return self._north_cubes
+
         return spec.name != CHIRPS_CUBE.name or self._chirps_cube
 
     def optional_cube_months(self, spec: CubeSpec) -> dict[str, str]:
-        """Return the final markers of the CHIRPS cube when enabled, and no months otherwise."""
+        """Return the markers of the CHIRPS cube and the 84N twins when each is enabled."""
+        if spec.name.endswith(HIGH_LATITUDE_SUFFIX):
+            return self.cube_months(spec) if self._north_cubes else {}
+
         if spec.name != CHIRPS_CUBE.name or not self._chirps_cube:
             return {}
 
@@ -208,4 +234,8 @@ CUBE_FIELDS = {
     ERA5_TEMPERATURE_CUBE.name: _era5_temperature,
     ERA5_PRECIPITATION_CUBE.name: _era5_precipitation,
     CHIRPS_CUBE.name: _chirps_rain,
+    ERA5_LAND_TEMPERATURE_84N_CUBE.name: _land_temperature,
+    ERA5_TEMPERATURE_84N_CUBE.name: _era5_temperature,
+    ERA5_PRECIPITATION_84N_CUBE.name: _era5_precipitation,
+    ERA5_LAND_PRECIPITATION_84N_CUBE.name: _era5_precipitation,
 }

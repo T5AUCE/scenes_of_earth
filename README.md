@@ -199,8 +199,8 @@ python -m soe.cli worldcover-index
 The Geology layer (`geology`, not a default layer) reads one COG, `lithology.tif`, in the cubes folder, and is listed only
 when that file exists. Build it once with the command below. When the GLiM v1.0 geodatabase is unpacked at
 `data/cubes/.downloads/glim/LiMW_GIS 2015.gdb`, the COG is rasterised from it (level 1 and 2 codes, 88 classes, onto the
-1/480 degree grid from 60S to 60N; water bodies and no data become 0). Without it, the command downloads the 232 MB
-OpenLandMap lithology map from Zenodo and crops it to 60S-60N, turns water and the undefined class into no data (0) and
+1/480 degree grid from 60S to 84N; water bodies and no data become 0). Without it, the command downloads the 232 MB
+OpenLandMap lithology map from Zenodo and crops it to 60S-84N, turns water and the undefined class into no data (0) and
 repairs its edge columns. Either way the result is a tiled ZSTD COG with most-common-class overviews (a few hundred MB), and a
 `LITHOLOGY_SOURCE` tag in it names the source, so the layer's classes, source and licence follow the COG.
 
@@ -214,7 +214,7 @@ The Geology age layer (`geology_age`, not a default layer) reads one COG, `geolo
 listed only when that file exists. Build it once with the command below. It fetches five small members (about 27 MB) of the
 577 MB archive of Geological Survey of Canada Open File 5529 (Chorlton 2007) by HTTP range reads into
 `data/cubes/.downloads/gsc-of5529/`, gives each map unit the class of its age range, and rasterises the units onto the
-1/120 degree grid from 60S to 60N (0 = no data). The result is a few-MB tiled ZSTD COG with most-common-class overviews and
+1/120 degree grid from 60S to 84N (0 = no data). The result is a few-MB tiled ZSTD COG with most-common-class overviews and
 a `LITHOLOGY_SOURCE` tag set to `gsc-of5529`. `--archive of_5529.zip` takes a local copy instead of fetching.
 
 ```
@@ -229,7 +229,7 @@ on the map.
 
 ## Geology regional patchwork
 
-Four verified regional maps override the global geology maps inside their footprints, for rock age and rock type
+Six verified regional maps override the global geology maps inside their footprints, for rock age and rock type
 together (Europe type also has a raster source). Each source is ingested once to its own uint8 class COGs on the same
 grids (age 1/120 degree, type 1/480 degree), and a build composites them in priority order over the global base
 (age: GSC Open File 5529; type: GLiM, else OpenLandMap). Missing regional files are skipped silently, so the base maps
@@ -242,6 +242,8 @@ python -m soe.cli ingest-geology-regional canada_5m
 python -m soe.cli ingest-geology-regional us_sgmc
 python -m soe.cli ingest-geology-regional europe_igme5000
 python -m soe.cli ingest-geology-regional europe_egdi
+python -m soe.cli ingest-geology-regional alaska_sim3340
+python -m soe.cli ingest-geology-regional north_america_gmna
 ```
 
 - `canada_5m`: Geological map of Canada 1:5M (GSC Map 1860A, OGL-Canada, 13 MB download), surface geology; offshore
@@ -251,7 +253,21 @@ python -m soe.cli ingest-geology-regional europe_egdi
   UNIT_LINK (first Major rank row per unit, rock types mapped to GLiM level-2 classes). A direct range read of the
   members is impractical (the query-string
   download URL breaks remote reads), so the zip is downloaded once.
-- `europe_igme5000`: BGR IGME5000 1:5M (GeoNutzV), pre-Quaternary bedrock of Europe, Turkey and the Caucasus (47.5 MB).
+- `alaska_sim3340`: USGS Geologic map of Alaska (SIM 3340, Wilson et al. 2015, public domain, 386 MB geodatabase zip from
+  `pubs.usgs.gov/sim/3340/sim3340_gdb.zip`), nominal scale 1:250,000, bedrock and surficial units together. Polygons join the
+  `nsaage` and `nsalith` tables on NSACLASS (first Major rank row per unit); age comes from the finest name of the
+  FULL_MIN and FULL_MAX paths, rock types reuse the SGMC vocabulary plus 14 aliased spellings, and water polygons stay no data.
+  Polygons that cross 180 degrees (the Aleutians) are split, and the footprint runs to 231 degrees east so scenes across the
+  antimeridian find it.
+- `north_america_gmna`: USGS Geologic Map of North America (GMNA, Data Series 424, Garrity and Soller 2009, public domain;
+  source map by the Geological Society of America, Reed et al. 2005; fetch `gmna_shapefiles.zip` by browser, scripted
+  downloads are refused, and pass it with `--archive`). Lowest priority, so the national maps win where they exist; it patches
+  Greenland, Mexico, Central America and the Caribbean at 1:5,000,000 bedrock geology. Seafloor units (an asterisk ends their
+  abbreviation) are omitted because the global base maps hold no ocean data; age comes from the MIN_AGE (younger) and MAX_AGE
+  (older) names through the SGMC tables plus aliased qualifiers, rock types map each rock group and lithology pair to a GLiM
+   level-2 class, polygons with unclosed rings are closed on the read, and polygons over 180 degrees are split.
+- `europe_igme5000`: BGR IGME5000 1:5M (GeoNutzV), pre-Quaternary bedrock of Europe, Turkey and the Caucasus (47.5 MB); its footprint runs from 25W to 52E and 32N to 82N,
+  so Iceland and Svalbard are patched while Greenland, which the COG also holds, stays on the global base.
   Age from AgeName (names, never Ma); rock types from the petrography fields mapped to GLiM level-2 classes where
   mappable, else left to the base map.
 - `europe_egdi`: EGDI 1:1M surface lithology 250 m raster (CC BY 4.0, OpenGeoHub/GeoZS, Zenodo 12607973, 10.5 MB),
@@ -261,6 +277,10 @@ python -m soe.cli ingest-geology-regional europe_egdi
 
 `--archive` takes a local copy of the source archive instead of fetching. Unknown age or rock names fail the ingest
 with the full unmapped list, as for the global maps.
+
+All geology COGs run from 60S to 84N. The Canada, IGME5000 and EGDI COGs were rebuilt for that extent, so rebuild any of them
+with the same commands after changing a name table. Greenland, Mexico and the rest of North America outside the national
+maps now read GMNA, lowest priority, instead of the global base maps.
 
 ## Area contract notes
 
@@ -320,7 +340,7 @@ with the full unmapped list, as for the global maps.
   centres lie on 0.1 degree multiples (half a cell off the rain grid). It is listed only when the cube below exists.
 - Terrain, land cover and geology are anchored to the 60S-84N grid of 0.05 degree cells that starts at 180W, and rain
   to the 60S-60N CHIRPS grid whose cells coincide with it. The supported extent is 60S-84N. A layer whose data stops
-  short of part of the area (rain, temperature and geology end at 60N until their cubes are re-ingested) keeps its own
+  short of part of the area (rain and temperature end at 60N until their 84N cubes are complete) keeps its own
   clipped outline and gets a notice, while `area.geojson` is the whole area, simplified for display to a quarter of the
   scene's finest grid cell (never below 0.0005 degrees), so one layer's mask can reach slightly beyond the outline.
   Masks, statistics, style stops and scene ids all use the full stored outline, which is why the bundle format stays at 0.7: old bundles keep
@@ -339,11 +359,12 @@ with the full unmapped list, as for the global maps.
   softer set the viewer holds by default, and its "ESA colours" option switches to the official ones. Land cover is refused
   above 2500 source tiles (about the size of Brazil).
 - Geology (`geology`, not a default layer) is a static `categorical` layer built like land cover, with a uint8 `value`
-  array (0 = no data, water or undefined) holding the most common rock class in each cell of the lithology map, read from
+  array (0 = no data, water or undefined) holding the most common rock class in each cell of the lithology map (60S-84N), read from
   the local COG: GLiM level 1 + 2 when the COG was built from it (88 classes), else the 14 OpenLandMap classes. Its
   `style.classes` carry an optional `group` (Sediments, Volcanic, Plutonic, Metamorphic, Ice/other) that the legend uses as
   collapsible headings, and GLiM classes also carry `parent` (the level 1 code) and `variant` (its position under the parent),
-  from which the viewer shades the sub-classes of one family. The source, and so the scene id, follows the COG. The notice
+  from which the viewer shades the sub-classes of one family. The source, and so the scene id, follows the COG; a scene beyond 60N or S names the 84N edition of the base map
+  (`glim-1.5`, `1.3` for OpenLandMap, `of5529-3` for age), so scenes wholly inside 60N keep their ids. The notice
   states the 1:3.75 million source scale and the seams where source maps meet (OpenLandMap also at 180 degrees and its
   missing islands). Regional patchwork COGs override the base map inside their footprints (see "Geology regional
   patchwork"); each cell's source stays in a uint8 `provenance` array (0 outside the area or no data, 1 the base, then one
@@ -442,30 +463,43 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
   bundles built from it must not be published until the authors confirm terms. Credit: "Geology: GLiM, Hartmann and
   Moosdorf (2012); licence not stated by the authors, for local evaluation only". Hartmann, J. and Moosdorf, N. (2012) The new
   global lithological map database GLiM. Geochem. Geophys. Geosyst. 13, Q12004, doi:10.1029/2012GC004370. Modified: level 1
-  and 2 codes rasterised to 1/480 degrees from World Eckert IV, water bodies and no data set to no data, cropped to 60S-60N,
-  most common class per output cell. The same text is in `soe/sources/licences.py`.
+  and 2 codes rasterised to 1/480 degrees from World Eckert IV, water bodies and no data set to no data, cropped to 60S-84N,
+  most common class per output cell (60S-60N in a scene wholly inside 60N). The same text is in `soe/sources/licences.py`.
 - **Geology (fallback): OpenLandMap lithology 250 m**, CC BY-SA 4.0 (ShareAlike, so the geology array of a bundle is ShareAlike).
   Credit: "Geology: OpenLandMap lithology, derived from the USGS Global Ecological Land Units and the GLiM lithology classes
   (CC BY-SA 4.0, ShareAlike)". Hengl, T. (2018) Global landform and lithology class at 250 m based on the USGS global
   ecosystem map. doi:10.5281/zenodo.1464846; Sayre, R. et al. (2014) A new map of global ecological land units, Global Ecology
-  and Conservation 2; Hartmann, J. and Moosdorf, N. (2012) GLiM, doi:10.1029/2012GC004370. Modified: cropped to 60°S-60°N;
+  and Conservation 2; Hartmann, J. and Moosdorf, N. (2012) GLiM, doi:10.1029/2012GC004370. Modified: cropped to 60°S-84°N (60°S-60°N in a scene wholly inside 60N);
   water and undefined set to no data; faulty columns at ±180° replaced by their inner neighbours; most common class per output
   cell. The same text is in `soe/sources/licences.py`.
 - **Geology age: GSC Open File 5529**, Open Government Licence - Canada 2.0. Credit: "Geology age: Contains information
   licensed under the Open Government Licence – Canada (Chorlton 2007, GSC Open File 5529); colours: ICS chart via Macrostrat
   (CC BY 4.0)". Chorlton, L.B. (2007) Generalized geology of the world: bedrock domains and major faults in GIS format.
   Geological Survey of Canada Open File 5529, doi:10.4095/223767. Modified: the age names of each unit classed as the
-  smallest ICS period or era that holds its whole age range, rasterised to 1/120 degrees, cropped to 60S-60N, most common
+  smallest ICS period or era that holds its whole age range, rasterised to 1/120 degrees, cropped to 60S-84N (60S-60N in a scene wholly inside 60N), most common
   class per output cell. The same text is in `soe/sources/licences.py`.
 - **Geology patchwork: Geological map of Canada 1:5M**, Open Government Licence - Canada 2.0. Credit: "Rock type and age
   (Canada): Contains information licensed under the Open Government Licence – Canada (Wheeler et al. 1996, GSC Map 1860A)".
   Citation: Wheeler, J.O. et al. (1996) Geological map of Canada, Map 1860A, doi:10.4095/208175. Modified: offshore polygons
-  omitted; ages classed to ICS; rock types mapped to GLiM families. The same text is in `soe/sources/licences.py`.
+  omitted; ages classed to ICS; rock types mapped to GLiM families; cropped to 60S-84N. The same text is in
+  `soe/sources/licences.py`.
 - **Geology patchwork: USGS SGMC DS 1052 v1.1**, public domain (US Government work). Credit: "Rock type and age
   (conterminous US): USGS SGMC (public domain)". Citation: Horton, J.D. et al. (2017) The State Geologic Map Compilation
   (SGMC) geodatabase of the conterminous United States, Data Series 1052 v1.1. Modified: polygons joined to the CSV age and
   lithology tables on UNIT_LINK (Major rank first); ages classed to ICS; rock types mapped to GLiM families. The same text
   is in `soe/sources/licences.py`.
+- **Geology patchwork: Geologic map of Alaska (USGS SIM 3340)**, public domain (US Government work; USGS acknowledgment
+  appreciated). Credit: "Rock type and age (Alaska): USGS Geologic map of Alaska (public domain)". Citation: Wilson, F.H.,
+  Hults, C.P., Mull, C.G. and Karl, S.M. (2015) Geologic map of Alaska, Scientific Investigations Map 3340,
+  doi:10.3133/sim3340. Modified: polygons joined to the age and lithology tables on NSACLASS (Major rank first); water
+  omitted; ages classed to ICS; rock types mapped to GLiM families; polygons over 180 degrees split. The same text is in
+  `soe/sources/licences.py`.
+- **Geology patchwork: Geologic Map of North America (USGS DS 424)**, public domain (US Government work; source map by the
+  Geological Society of America). Credit: "Rock type and age (North America): USGS Geologic Map of North America (public domain;
+  source map by the Geological Society of America)". Citation: Garrity, C.P. and Soller, D.R. (2009) Database of the Geologic Map
+  of North America, Data Series 424, doi:10.3133/ds424; Reed, J.C., Jr., Wheeler, J.O. and Tucholke, B.E. (2005) Geologic map of
+  North America, Geological Society of America, 1:5,000,000. Modified: seafloor units omitted; polygons with unclosed rings closed;
+  ages classed to ICS; rock types mapped to GLiM families. The same text is in `soe/sources/licences.py`.
 - **Geology patchwork: IGME5000 1:5M**, GeoNutzV (Datenlizenz Deutschland). Credit: "Rock type and age (Europe):
   BGR IGME5000 1:5,000,000 (GeoNutzV, source: BGR, Hannover)". Citation: Asch, K. (2003) The 1:5 Million International
   Geological Map of Europe and Adjacent Areas; 2024 BGR release. Modified: pre-Quaternary bedrock kept as mapped; AgeName

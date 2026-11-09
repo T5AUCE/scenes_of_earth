@@ -227,7 +227,7 @@ SOURCES = {
         "modified": (
             "offshore polygons omitted; ages classed as the smallest ICS period or era that "
             "holds the whole range; rock types mapped to GLiM level-2 classes; rasterised to "
-            "the geology grids and cropped to 60°S-60°N; most common class per output cell"
+            "the geology grids and cropped to 60°S-84°N; most common class per output cell"
         ),
     },
     "us_sgmc": {
@@ -246,6 +246,44 @@ SOURCES = {
             "on UNIT_LINK; first Major rank row per unit, then Indeterminate-major; ages "
             "classed as the smallest ICS period or era that holds the whole range; rock "
             "types mapped to GLiM level-2 classes; rasterised to the geology grids"
+        ),
+    },
+    "alaska_sim3340": {
+        "name": "Geologic map of Alaska (USGS SIM 3340)",
+        "version": "sim3340-1",
+        "licence": "Public domain (US Government work)",
+        "attribution": "Rock type and age (Alaska): USGS Geologic map of Alaska (public domain)",
+        "citation": (
+            "Wilson, F.H., Hults, C.P., Mull, C.G. and Karl, S.M. (2015) Geologic map of "
+            "Alaska. U.S. Geological Survey Scientific Investigations Map 3340, "
+            "doi:10.3133/sim3340"
+        ),
+        "modified": (
+            "polygons joined to the age and lithology tables on NSACLASS; first Major rank "
+            "row per unit, then Indeterminate-major; water polygons omitted; ages classed as "
+            "the smallest ICS period or era that holds the whole range; rock types mapped to "
+            "GLiM level-2 classes; polygons over 180° split; rasterised to the geology grids"
+        ),
+    },
+    "north_america_gmna": {
+        "name": "Geologic Map of North America (USGS DS 424)",
+        "version": "gmna-2",
+        "licence": "Public domain (US Government work)",
+        "attribution": (
+            "Rock type and age (North America): USGS Geologic Map of North America "
+            "(public domain; source map by the Geological Society of America)"
+        ),
+        "citation": (
+            "Garrity, C.P. and Soller, D.R. (2009) Database of the Geologic Map of North "
+            "America. U.S. Geological Survey Data Series 424, doi:10.3133/ds424; source map: "
+            "Reed, J.C., Jr., Wheeler, J.O. and Tucholke, B.E. (2005) Geologic map of North "
+            "America. Geological Society of America, scale 1:5,000,000"
+        ),
+        "modified": (
+            "seafloor units omitted; polygons with unclosed rings closed and polygons "
+            "over 180 degrees split; ages classed as the smallest ICS period or era that "
+            "holds the whole range; rock types mapped to GLiM level-2 classes; rasterised "
+            "to the geology grids"
         ),
     },
     "europe_igme5000": {
@@ -341,3 +379,15 @@ SOURCES["era5_84n"] = {
     **_ERA5,
     "modified": _ERA5["modified"].replace("60°S-60°N", "60°S-84°N"),
 }
+
+# The rebaked geology maps reach 84N, so a scene beyond 60N or S takes these entries with their own
+# versions and extent, while a scene inside 60N keeps the entries above and its scene id.
+def _reaching_84n(name: str, version: str) -> dict:
+    entry = SOURCES[name]
+    modified = entry["modified"].replace("60°S-60°N", "60°S-84°N")
+    return {**entry, "version": version, "modified": modified}
+
+
+SOURCES["lithology_84n"] = _reaching_84n("lithology", "1.3")
+SOURCES["glim_84n"] = _reaching_84n("glim", "glim-1.5")
+SOURCES["gsc_world_84n"] = _reaching_84n("gsc_world", "of5529-3")

@@ -38,6 +38,7 @@ import type {
 const STORAGE_KEY = "soe.display.v1";
 const EDGES_STORAGE_KEY = "soe.edges.v1";
 const INK_STORAGE_KEY = "soe.ink.v1";
+const OUTLINE_STORAGE_KEY = "soe.outline.v1";
 const DENSITY_STORAGE_KEY = "soe.density.v1";
 const UNITS_STORAGE_KEY = "soe.units.v1";
 const SMOOTHING_STORAGE_KEY = "soe.smoothing.v1";
@@ -66,6 +67,7 @@ export const NO_TOKENS: DisplayTokens = {
   ink: "",
   dens: "",
   units: "",
+  outline: "",
 };
 
 /** Default class edges keep a one-pixel anti-aliased border and preserve isolated cells. */
@@ -162,6 +164,54 @@ export function isGeologyLayer(datasetId: string): boolean {
   return datasetId === "geology" || datasetId === "geology_age";
 }
 
+/** The outline colours offered in the Area Outline editor, in menu order. */
+export const OUTLINE_COLORS = [
+  { name: "graphite", label: "Graphite", color: "#333333" },
+  { name: "black", label: "Black", color: "#1f1f1f" },
+  { name: "navy", label: "Navy", color: "#1a3658" },
+  { name: "brown", label: "Brown", color: "#5b4636" },
+  { name: "deep-red", label: "Deep red", color: "#7a2430" },
+  { name: "white", label: "White", color: "#ffffff" },
+];
+
+/** The outline colour a scene has before the viewer chooses one. */
+export const DEFAULT_OUTLINE_COLOR = "graphite";
+/** The outline width in pixels before the viewer chooses one. */
+export const DEFAULT_OUTLINE_WIDTH_PX = 1.5;
+/** The thinnest area outline the slider offers, in pixels. */
+export const MIN_OUTLINE_WIDTH_PX = 0.5;
+/** The thickest area outline the slider offers, in pixels. */
+export const MAX_OUTLINE_WIDTH_PX = 4;
+/** The step of the area outline width slider, in pixels. */
+export const OUTLINE_WIDTH_STEP_PX = 0.5;
+
+/** The area outline's visibility, colour and width. */
+export interface OutlineState {
+  shown: boolean;
+  /** A preset name or a custom #rrggbb. */
+  color: string;
+  widthPx: number;
+}
+
+/** The outline a scene shows before stored or linked choices apply. */
+export const DEFAULT_OUTLINE: OutlineState = {
+  shown: true,
+  color: DEFAULT_OUTLINE_COLOR,
+  widthPx: DEFAULT_OUTLINE_WIDTH_PX,
+};
+
+const OUTLINE_HEX_PATTERN = /^#[0-9a-f]{6}$/;
+
+/** The CSS colour of an outline preset name or custom #rrggbb, graphite for anything else. */
+export function outlineCss(color: string): string {
+  const preset = OUTLINE_COLORS.find(({ name }) => name === color);
+  if (preset) return preset.color;
+  if (OUTLINE_HEX_PATTERN.test(color)) return color;
+
+  // The paint needs a valid CSS string, so an unknown name falls back to graphite, the first entry.
+  return OUTLINE_COLORS[0].color;
+}
+
 /** Read the stored Edge smoothing radius without changing shared-link display. */
 export function loadStoredSmoothing(datasetId: string): number {
   if (!isGeologyLayer(datasetId)) return 0;
@@ -200,6 +250,8 @@ export interface SceneDisplay {
   off: Set<string>;
   /** Explicit Show as choices; a missing key means the auto rank decides. */
   showAs: Record<string, Draw>;
+  /** The area outline's visibility, colour and width. */
+  outline: OutlineState;
 }
 
 /** A scene's display state and whether part of the link had to be dropped. */
@@ -297,8 +349,14 @@ export function resolveDisplay(
   storedInks: Record<string, string> = {},
   storedDensities: Record<string, number> = {},
   storedUnits: Record<string, string> = {},
+  storedOutline: OutlineState | null = null,
 ): ResolvedDisplay {
-  const display: SceneDisplay = { layers: {}, off: new Set(), showAs: {} };
+  const display: SceneDisplay = {
+    layers: {},
+    off: new Set(),
+    showAs: {},
+    outline: { ...DEFAULT_OUTLINE },
+  };
   const byId = new Map(layers.map((layer) => [layer.id, layer]));
   let dropped = false;
 
@@ -385,6 +443,14 @@ export function resolveDisplay(
     }
   }
 
+  if (tokens.outline !== "") {
+    const linked = outlineOf(tokens.outline);
+    if (linked) display.outline = linked;
+    else dropped = true;
+  } else if (storedOutline && isOutlineState(storedOutline)) {
+    display.outline = { ...storedOutline };
+  }
+
   const units = new Set(layers.flatMap(layerUnits));
   for (const unit of tokens.off.split(",").filter(Boolean)) {
     if (units.has(unit)) display.off.add(unit);
@@ -457,8 +523,8 @@ function addBlendHalves(off: Set<string>, pair: BlendPair | null) {
  * The link parameters, each starting with `&`. Every layer with a menu names its palette so that
  * the receiver sees the sender's colours whatever palettes their browser remembers. Ranges, inks
  * and off parts appear only when they differ from the defaults. Every dot layer names its effective
- * density and every convertible layer names its effective units, because an omitted default would
- * let the receiver's stored choice win.
+ * density and every convertible layer names its effective units, and the outline always rides the
+ * link, because an omitted default would let the receiver's stored choice win.
  */
 export function formatDisplayParams(display: SceneDisplay, layers: LayerDoc[]) {
   const units = layers.flatMap(layerUnits);
@@ -496,6 +562,10 @@ export function formatDisplayParams(display: SceneDisplay, layers: LayerDoc[]) {
       const effective = display.layers[id]?.units ?? native;
       return [`${id}:${effective}`];
     }),
+    outline: [
+      `${display.outline.shown ? "on" : "off"}`
+        + `:${outlineToLink(display.outline.color)}:${display.outline.widthPx}`,
+    ],
   };
 
   return Object.entries(parameters)
@@ -582,6 +652,45 @@ export function loadStoredUnits(): Record<string, string> {
 /** Remember a layer's display unit in this browser, or forget it when unit is null. */
 export function storeUnits(layerId: string, unit: string | null) {
   storeName(UNITS_STORAGE_KEY, layerId, unit);
+}
+
+/** The stored area outline, or null when this browser remembers none or it is invalid. */
+export function loadStoredOutline(): OutlineState | null {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(OUTLINE_STORAGE_KEY) ?? "null");
+
+    return isOutlineState(parsed) ? { ...parsed } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Remember the area outline in this browser. */
+export function storeOutline(outline: OutlineState): void {
+  try {
+    localStorage.setItem(OUTLINE_STORAGE_KEY, JSON.stringify(outline));
+  } catch {
+    // Blocked storage must not prevent this visit's display changes.
+  }
+}
+
+function isOutlineState(value: unknown): value is OutlineState {
+  if (typeof value !== "object" || value === null) return false;
+  const { shown, color, widthPx } = value as Record<string, unknown>;
+
+  return typeof shown === "boolean" && isOutlineColor(color) && isOutlineWidth(widthPx);
+}
+
+function isOutlineColor(value: unknown): value is string {
+  return typeof value === "string"
+    && (OUTLINE_COLORS.some(({ name }) => name === value) || OUTLINE_HEX_PATTERN.test(value));
+}
+
+function isOutlineWidth(value: unknown): value is number {
+  return typeof value === "number"
+    && Number.isFinite(value)
+    && value >= MIN_OUTLINE_WIDTH_PX
+    && value <= MAX_OUTLINE_WIDTH_PX;
 }
 
 /** Whether scenes show the dense basemap details, off until the viewer opts in. */
@@ -714,4 +823,39 @@ function rangeOf(layer: LayerDoc | undefined, lowText: string, highText: string)
   if (!Number.isFinite(low) || !Number.isFinite(high) || low >= high) return null;
 
   return [low, high] as [number, number];
+}
+
+const OUTLINE_FIELDS = 3;
+const OUTLINE_LINK_HEX_PATTERN = /^[0-9a-f]{6}$/;
+
+function outlineFromLink(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (OUTLINE_LINK_HEX_PATTERN.test(value)) return `#${value}`;
+
+  return OUTLINE_COLORS.some(({ name }) => name === value) ? value : undefined;
+}
+
+function outlineToLink(color: string): string {
+  return color.replace("#", "");
+}
+
+function outlineOf(token: string): OutlineState | null {
+  const last = token.split(",").pop() ?? "";
+  const [shownText, colorText, widthText] = last.split(":");
+  if (last.split(":").length !== OUTLINE_FIELDS) return null;
+  if (shownText !== "on" && shownText !== "off") return null;
+  const color = outlineFromLink(colorText);
+  const width = Number(widthText);
+  if (color === undefined || !isOutlineWidth(width)) return null;
+
+  return { shown: shownText === "on", color, widthPx: quantiseOutlineWidth(width) };
+}
+
+function quantiseOutlineWidth(width: number): number {
+  const steps = Math.round(width / OUTLINE_WIDTH_STEP_PX);
+
+  return Math.min(
+    MAX_OUTLINE_WIDTH_PX,
+    Math.max(MIN_OUTLINE_WIDTH_PX, steps * OUTLINE_WIDTH_STEP_PX),
+  );
 }

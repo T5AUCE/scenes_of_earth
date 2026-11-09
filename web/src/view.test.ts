@@ -153,7 +153,7 @@ function firstDataOf(mounted: ReturnType<typeof mountScene>) {
 }
 
 test("preparation keeps its receiver and blocks the wait until its read settles", async () => {
-  const mounted = mountTwoLayers();
+  const { mounted } = mountTwoLayers();
   const { waiting, cancel } = firstDataOf(mounted);
   const isWaitingSettled = track(waiting);
   await settle();
@@ -171,7 +171,7 @@ test("preparation keeps its receiver and blocks the wait until its read settles"
 });
 
 test("a selected later month keeps the wait after the first month settles", async () => {
-  const mounted = mountTwoLayers();
+  const { mounted } = mountTwoLayers();
   (globalThis.viewTest as ViewTestState).currentTime = "2020-02-01";
   const { waiting, cancel } = firstDataOf(mounted);
   const isWaitingSettled = track(waiting);
@@ -192,7 +192,7 @@ test("a selected later month keeps the wait after the first month settles", asyn
 });
 
 test("switching colour awaits the drawn layer and drops the hidden one", async () => {
-  const mounted = mountTwoLayers();
+  const { mounted } = mountTwoLayers();
   const { waiting, cancel } = firstDataOf(mounted);
   const isWaitingSettled = track(waiting);
   await settle();
@@ -220,7 +220,7 @@ test("switching colour awaits the drawn layer and drops the hidden one", async (
 });
 
 test("a static-only deferred ready blocks the wait until it settles", async () => {
-  const mounted = mountTwoLayers(false, ["a"]);
+  const { mounted } = mountTwoLayers(false, ["a"]);
   const { waiting, cancel } = firstDataOf(mounted);
   const isWaitingSettled = track(waiting);
   await settle();
@@ -235,7 +235,36 @@ test("a static-only deferred ready blocks the wait until it settles", async () =
   mounted.unmount();
 });
 
-function mountTwoLayers(withTime = true, readyLayers: string[] = []) {
+test("the outline layer paints the linked colour and width and hides when linked off", () => {
+  const { mounted, map } = mountTwoLayers(true, [], "off:navy:2");
+
+  assert.ok(map.layouts.includes("soe-area-outline:visibility:none"));
+  assert.ok(map.paints.includes("soe-area-outline:line-color:#1a3658"));
+  assert.ok(map.paints.includes("soe-area-outline:line-width:2"));
+  mounted.unmount();
+});
+
+test("an outline display change repaints the map and remembers the choice", () => {
+  const { mounted, map } = mountTwoLayers();
+
+  mounted.store.dispatch({
+    kind: "display",
+    update: (next) => {
+      next.outline = { shown: true, color: "white", widthPx: 3 };
+    },
+  });
+
+  assert.ok(map.layouts.includes("soe-area-outline:visibility:visible"));
+  assert.ok(map.paints.includes("soe-area-outline:line-color:#ffffff"));
+  assert.ok(map.paints.includes("soe-area-outline:line-width:3"));
+  assert.equal(
+    window.localStorage.getItem("soe.outline.v1"),
+    JSON.stringify({ shown: true, color: "white", widthPx: 3 }),
+  );
+  mounted.unmount();
+});
+
+function mountTwoLayers(withTime = true, readyLayers: string[] = [], outline = "") {
   installBrowser();
   const state = freshState();
   for (const layerId of readyLayers) state.readyGates.set(layerId, deferredUnit());
@@ -244,11 +273,22 @@ function mountTwoLayers(withTime = true, readyLayers: string[] = []) {
   const mounted = mountScene(map as never, makeScene(withTime), {
     cards: document.createElement("div"),
     timeBar: document.createElement("div"),
+    display: {
+      pal: "",
+      range: "",
+      off: "",
+      as: "",
+      ink: "",
+      dens: "",
+      units: "",
+      outline,
+      charts: "",
+    },
     onTime() {},
     onDisplay() {},
   });
 
-  return mounted;
+  return { mounted, map };
 }
 
 function recordFor(layerId: string): ViewRecord {
@@ -300,7 +340,11 @@ async function settle() {
 function fakeMap() {
   const layers = new Map<string, object>();
   const sources = new Map<string, object>();
+  const layouts: string[] = [];
+  const paints: string[] = [];
   return {
+    layouts,
+    paints,
     addSource(id: string, source: object) {
       sources.set(id, source);
     },
@@ -319,7 +363,12 @@ function fakeMap() {
     removeSource(id: string) {
       sources.delete(id);
     },
-    setLayoutProperty() {},
+    setLayoutProperty(id: string, name: string, value: unknown) {
+      layouts.push(`${id}:${name}:${String(value)}`);
+    },
+    setPaintProperty(id: string, name: string, value: unknown) {
+      paints.push(`${id}:${name}:${String(value)}`);
+    },
     getStyle() {
       return { layers: [] };
     },

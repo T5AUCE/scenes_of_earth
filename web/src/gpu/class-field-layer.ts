@@ -45,7 +45,8 @@ export interface ClassFieldOptions extends TiledLayerOptions {
 
 interface Gpu extends TiledGpu {
   palette: WebGLTexture | null;
-  bandTiles: BandTileTextures[];
+  bandTiles: (BandTileTextures | null | undefined)[];
+  bandStaging: (BandStaging | undefined)[];
 }
 
 /** One tile's baked band textures, uploaded beside the ids and flags windows. */
@@ -53,6 +54,14 @@ interface BandTileTextures {
   ids: WebGLTexture;
   low: WebGLTexture;
   high: WebGLTexture;
+}
+
+/** A large tile's band textures while row uploads fill them from the top. */
+interface BandStaging {
+  ids: WebGLTexture;
+  low: WebGLTexture;
+  high: WebGLTexture;
+  nextRow: number;
 }
 
 const PALETTE_SIZE = 256;
@@ -64,6 +73,12 @@ const BAND_HIGH_UNIT = 6;
 const BAKE_SLICE_MS = 4;
 // A busy page still gets a slice after this wait so the bake cannot starve.
 const BAKE_IDLE_TIMEOUT_MS = 1000;
+// Final copies and uploads also stay staged so one render never carries every band tile.
+const BAKE_UPLOAD_TILES_PER_RENDER = 4;
+// A large tile's rows fill the staging textures within this byte budget per render.
+const BAKE_UPLOAD_BYTES_PER_RENDER = 2 * 1024 * 1024;
+// A large tile also yields within this time so a slow copy cannot stall the frame.
+const BAKE_UPLOAD_MS_PER_RENDER = 4;
 const UNIFORM_NAMES = [
   "uIds",
   "uHomogeneous",
@@ -324,13 +339,16 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
   }
 
   protected extendGpu(base: TiledGpu): Gpu {
-    return { ...base, palette: null, bandTiles: [] };
+    return { ...base, palette: null, bandTiles: [], bandStaging: [] };
   }
 
   protected extraTextures(gpu: Gpu) {
     return [
       gpu.palette,
-      ...gpu.bandTiles.flatMap(({ ids, low, high }) => [ids, low, high]),
+      ...gpu.bandTiles.flatMap((band) => (band ? [band.ids, band.low, band.high] : [])),
+      ...gpu.bandStaging.flatMap((staging) => (
+        staging ? [staging.ids, staging.low, staging.high] : []
+      )),
     ];
   }
 
@@ -350,42 +368,102 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
       // A zero radius never samples the flags, so land cover uploads ids alone.
       const flags = this.needsFlags() ? this.flags! : undefined;
       this.uploadTiles(gl, gpu, this.options.grid, this.ids!, flags, WIDE_HALO_CELLS);
-      this.uploadBandTiles(gl, gpu);
+      // New tiles invalidate every band decision, so skipped tiles are reconsidered.
+      deleteBandTextures(gl, gpu);
+      gpu.bandTiles = [];
+      gpu.bandStaging = [];
+      this.bakeGpuBytes = 0;
+      const pending = this.uploadBandTiles(gl, gpu);
       this.isIdsStale = false;
-      this.isBandStale = false;
+      this.isBandStale = pending;
+      if (pending) this.map?.triggerRepaint();
       return;
     }
     if (this.isBandStale) {
-      this.uploadBandTiles(gl, gpu);
-      this.isBandStale = false;
+      const pending = this.uploadBandTiles(gl, gpu);
+      this.isBandStale = pending;
+      if (pending) this.map?.triggerRepaint();
     }
   }
 
-  private uploadBandTiles(gl: WebGL2RenderingContext, gpu: Gpu): void {
-    if (!this.bakeAllowed) return;
+  private uploadBandTiles(gl: WebGL2RenderingContext, gpu: Gpu): boolean {
+    if (!this.bakeAllowed) return false;
 
-    deleteResources(gl, {
-      textures: gpu.bandTiles.flatMap(({ ids, low, high }) => [ids, low, high]),
-    });
-    gpu.bandTiles = [];
-    this.bakeGpuBytes = 0;
-    if (!this.isBakeReady()) return;
+    if (!this.isBakeReady()) {
+      deleteBandTextures(gl, gpu);
+      gpu.bandTiles = [];
+      gpu.bandStaging = [];
+      this.bakeGpuBytes = 0;
+      this.publishBakeStats();
+      return false;
+    }
 
     const radius = this.edges.smoothRadiusCells ?? 0;
-    const { nx } = this.options.grid;
-    let gpuBytes = 0;
-    for (const { tile } of gpu.tiles) {
-      const { window } = tile;
-      const mismatched = isBandParityMismatched(window.column, window.row, radius);
-      const idsWindow = mismatched
-        ? complexBandIds(window.width, window.height)
-        : bandIdsWindow(this.bandIds!, nx, window);
-      const lowWindow = mismatched
-        ? complexBandMask(window.width, window.height)
-        : bandMaskWindow(this.bandLow!, nx, window);
-      const highWindow = mismatched
-        ? complexBandMask(window.width, window.height)
-        : bandMaskWindow(this.bandHigh!, nx, window);
+    const { nx, ny } = this.options.grid;
+    if (gpu.bandTiles.length !== gpu.tiles.length) {
+      deleteBandTextures(gl, gpu);
+      gpu.bandTiles = new Array(gpu.tiles.length).fill(undefined);
+      gpu.bandStaging = new Array(gpu.tiles.length).fill(undefined);
+      this.bakeGpuBytes = 0;
+    }
+    if (gpu.bandStaging.length !== gpu.tiles.length) {
+      gpu.bandStaging = new Array(gpu.tiles.length).fill(undefined);
+    }
+    let gpuBytes = this.bakeGpuBytes;
+    let bytesUsed = 0;
+    let tilesUsed = 0;
+    const startMs = performance.now();
+    for (let index = 0; index < gpu.tiles.length; index++) {
+      if (gpu.bandTiles[index] !== undefined) continue;
+
+      const { window } = gpu.tiles[index].tile;
+      // Tiles that fall back never sample the band, so they keep the full gather.
+      if (isBandParityMismatched(window.column, window.row, radius)) {
+        gpu.bandTiles[index] = null;
+        continue;
+      }
+      if (this.flags && isUniformBandWindow(this.flags, nx, window)) {
+        gpu.bandTiles[index] = null;
+        continue;
+      }
+      if (tilesUsed >= BAKE_UPLOAD_TILES_PER_RENDER) break;
+      if (bytesUsed > 0 && performance.now() - startMs >= BAKE_UPLOAD_MS_PER_RENDER) break;
+
+      const bytesLeft = BAKE_UPLOAD_BYTES_PER_RENDER - bytesUsed;
+      const result = this.uploadOneBand(gl, gpu, index, window, nx, ny, bytesLeft);
+      if (!result) break;
+
+      bytesUsed += result.bytes;
+      if (result.finished) {
+        gpuBytes += window.width * window.height * BAND_BYTES_PER_CELL;
+        tilesUsed += 1;
+      }
+      if (bytesUsed >= BAKE_UPLOAD_BYTES_PER_RENDER) break;
+      if (performance.now() - startMs >= BAKE_UPLOAD_MS_PER_RENDER) break;
+    }
+    this.bakeGpuBytes = gpuBytes;
+    this.publishBakeStats();
+    return gpu.bandTiles.some((band) => band === undefined);
+  }
+
+  private uploadOneBand(
+    gl: WebGL2RenderingContext,
+    gpu: Gpu,
+    index: number,
+    window: { column: number; row: number; width: number; height: number },
+    nx: number,
+    ny: number,
+    bytesLeft: number,
+  ): { bytes: number; finished: boolean } | null {
+    const windowBytes = window.width * window.height * BAND_BYTES_PER_CELL;
+    if (gpu.bandStaging[index] === undefined && windowBytes <= bytesLeft) {
+      const fullGrid = window.column === 0
+        && window.row === 0
+        && window.width === nx
+        && window.height === ny;
+      const idsWindow = fullGrid ? this.bandIds! : bandIdsWindow(this.bandIds!, nx, window);
+      const lowWindow = fullGrid ? this.bandLow! : bandMaskWindow(this.bandLow!, nx, window);
+      const highWindow = fullGrid ? this.bandHigh! : bandMaskWindow(this.bandHigh!, nx, window);
       let idsTexture: WebGLTexture | null = null;
       let lowTexture: WebGLTexture | null = null;
       let highTexture: WebGLTexture | null = null;
@@ -397,11 +475,56 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
         deleteResources(gl, { textures: [idsTexture, lowTexture, highTexture] });
         throw error;
       }
-      gpu.bandTiles.push({ ids: idsTexture, low: lowTexture, high: highTexture });
-      gpuBytes += window.width * window.height * BAND_BYTES_PER_CELL;
+      gpu.bandTiles[index] = { ids: idsTexture, low: lowTexture, high: highTexture };
+      return { bytes: windowBytes, finished: true };
     }
-    this.bakeGpuBytes = gpuBytes;
-    this.publishBakeStats();
+    return this.uploadPartialBand(gl, gpu, index, window, nx, bytesLeft);
+  }
+
+  private uploadPartialBand(
+    gl: WebGL2RenderingContext,
+    gpu: Gpu,
+    index: number,
+    window: { column: number; row: number; width: number; height: number },
+    nx: number,
+    bytesLeft: number,
+  ): { bytes: number; finished: boolean } | null {
+    const bytesPerRow = window.width * BAND_BYTES_PER_CELL;
+    const rowsLeft = window.height - (gpu.bandStaging[index]?.nextRow ?? 0);
+    const rowsCanDo = Math.floor(bytesLeft / bytesPerRow);
+    if (bytesLeft <= 0 || rowsCanDo <= 0 || rowsLeft <= 0) return null;
+
+    let staging = gpu.bandStaging[index];
+    if (!staging) {
+      try {
+        staging = allocateBandStaging(gl, window.width, window.height);
+      } catch (error) {
+        gpu.bandStaging[index] = undefined;
+        throw error;
+      }
+      gpu.bandStaging[index] = staging;
+    }
+    const rows = Math.min(rowsLeft, rowsCanDo);
+    const startRow = staging.nextRow;
+    const idsRows = bandIdsRowRange(this.bandIds!, nx, window, startRow, rows);
+    const lowRows = bandMaskRowRange(this.bandLow!, nx, window, startRow, rows);
+    const highRows = bandMaskRowRange(this.bandHigh!, nx, window, startRow, rows);
+    try {
+      uploadBandRows(gl, staging.ids, "ids", window.width, startRow, rows, idsRows);
+      uploadBandRows(gl, staging.low, "mask", window.width, startRow, rows, lowRows);
+      uploadBandRows(gl, staging.high, "mask", window.width, startRow, rows, highRows);
+    } catch (error) {
+      deleteResources(gl, { textures: [staging.ids, staging.low, staging.high] });
+      gpu.bandStaging[index] = undefined;
+      throw error;
+    }
+    staging.nextRow += rows;
+    if (staging.nextRow < window.height) {
+      return { bytes: rows * bytesPerRow, finished: false };
+    }
+    gpu.bandTiles[index] = { ids: staging.ids, low: staging.low, high: staging.high };
+    gpu.bandStaging[index] = undefined;
+    return { bytes: rows * bytesPerRow, finished: true };
   }
 
   protected draw(gl: WebGL2RenderingContext, gpu: Gpu, mainMatrix: ArrayLike<number>) {
@@ -431,7 +554,23 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
 
     let tileIndex = 0;
     timedGpuDraw(gl, this.id, () => this.drawTiles(gl, gpu, mainMatrix, ({ window }) => {
-      if (this.bakeAllowed) this.bindBandTile(gl, gpu, tileIndex++);
+      if (this.bakeAllowed) {
+        const band = gpu.bandTiles[tileIndex];
+        const ready = band !== null && band !== undefined;
+        gl.uniform1i(uniform("uBake"), ready ? 1 : 0);
+        if (ready) {
+          gl.uniform1i(uniform("uBandIds"), BAND_IDS_UNIT);
+          gl.uniform1i(uniform("uBandLow"), BAND_LOW_UNIT);
+          gl.uniform1i(uniform("uBandHigh"), BAND_HIGH_UNIT);
+          this.bindBandTile(gl, gpu, tileIndex);
+        } else {
+          // Unsigned samplers must stay valid even when their branch is inactive.
+          gl.uniform1i(uniform("uBandIds"), 0);
+          gl.uniform1i(uniform("uBandLow"), 0);
+          gl.uniform1i(uniform("uBandHigh"), 0);
+        }
+      }
+      tileIndex += 1;
       gl.uniform2i(uniform("uIdsSize"), window.width, window.height);
       gl.uniform1f(uniform("uWindowRow"), window.row);
     }));
@@ -439,20 +578,17 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
 
   private bindBakeUniforms(gl: WebGL2RenderingContext, gpu: Gpu): void {
     const uniform = (name: string) => this.uniform(gpu, name);
-    const baked = this.isBakeReady();
     gl.bindSampler(BAND_IDS_UNIT, null);
     gl.bindSampler(BAND_LOW_UNIT, null);
     gl.bindSampler(BAND_HIGH_UNIT, null);
-    // Unit 0 holds an integer texture, which keeps the unsigned samplers valid without a bake.
-    gl.uniform1i(uniform("uBandIds"), baked ? BAND_IDS_UNIT : 0);
-    gl.uniform1i(uniform("uBandLow"), baked ? BAND_LOW_UNIT : 0);
-    gl.uniform1i(uniform("uBandHigh"), baked ? BAND_HIGH_UNIT : 0);
-    gl.uniform1i(uniform("uBake"), baked ? 1 : 0);
+    gl.uniform1i(uniform("uBandIds"), 0);
+    gl.uniform1i(uniform("uBandLow"), 0);
+    gl.uniform1i(uniform("uBandHigh"), 0);
   }
 
   private bindBandTile(gl: WebGL2RenderingContext, gpu: Gpu, index: number): void {
     const band = gpu.bandTiles[index];
-    if (!band) return;
+    if (band === null || band === undefined) return;
 
     gl.activeTexture(gl.TEXTURE0 + BAND_IDS_UNIT);
     gl.bindTexture(gl.TEXTURE_2D, band.ids);
@@ -497,14 +633,172 @@ function bandMaskWindow(
   return cells;
 }
 
-/** A window that always falls back because an odd origin would misread the baked taps. */
-function complexBandIds(width: number, height: number): Uint8Array {
-  return new Uint8Array(width * height * 2);
+function bandIdsRowRange(
+  bandIds: Uint8Array,
+  nx: number,
+  window: { column: number; row: number; width: number; height: number },
+  startRow: number,
+  rowCount: number,
+): Uint8Array {
+  const cells = new Uint8Array(window.width * rowCount * 2);
+  for (let row = 0; row < rowCount; row++) {
+    const source = ((window.row + startRow + row) * nx + window.column) * 2;
+    const target = row * window.width * 2;
+    cells.set(bandIds.subarray(source, source + window.width * 2), target);
+  }
+  return cells;
 }
 
-/** All-ones mask marks a complex window so the shader takes the full gather. */
-function complexBandMask(width: number, height: number): Uint32Array {
-  return new Uint32Array(width * height).fill(0xffffffff);
+function bandMaskRowRange(
+  bandMasks: Uint32Array,
+  nx: number,
+  window: { column: number; row: number; width: number; height: number },
+  startRow: number,
+  rowCount: number,
+): Uint32Array {
+  const cells = new Uint32Array(window.width * rowCount);
+  for (let row = 0; row < rowCount; row++) {
+    const source = (window.row + startRow + row) * nx + window.column;
+    cells.set(bandMasks.subarray(source, source + window.width), row * window.width);
+  }
+  return cells;
+}
+
+/**
+ * Whether every flag in a tile window marks a uniform interior. Those fragments return
+ * before any band fetch, so the tile keeps the full path without band textures.
+ */
+function isUniformBandWindow(
+  flags: Uint8Array | readonly number[],
+  nx: number,
+  window: { column: number; row: number; width: number; height: number },
+): boolean {
+  for (let row = 0; row < window.height; row++) {
+    for (let column = 0; column < window.width; column++) {
+      if (flags[(window.row + row) * nx + window.column + column] !== 1) return false;
+    }
+  }
+  return true;
+}
+
+/** Free finished and partially uploaded band textures when tiles or data change. */
+function deleteBandTextures(gl: WebGL2RenderingContext, gpu: Gpu): void {
+  deleteResources(gl, {
+    textures: [
+      ...gpu.bandTiles.flatMap((band) => (band ? [band.ids, band.low, band.high] : [])),
+      ...(gpu.bandStaging ?? []).flatMap((staging) => (
+        staging ? [staging.ids, staging.low, staging.high] : []
+      )),
+    ],
+  });
+}
+
+/**
+ * Allocate empty band textures for a large tile so later renders fill them row by row.
+ * Empty allocation keeps one render inside its byte budget while the tile still falls
+ * back to the full gather until every row arrives.
+ */
+function allocateBandStaging(
+  gl: WebGL2RenderingContext,
+  width: number,
+  height: number,
+): BandStaging {
+  const ids = allocateBandTexture(gl, "ids", width, height);
+  try {
+    const low = allocateBandTexture(gl, "mask", width, height);
+    try {
+      const high = allocateBandTexture(gl, "mask", width, height);
+      return { ids, low, high, nextRow: 0 };
+    } catch (error) {
+      deleteResources(gl, { textures: [low] });
+      throw error;
+    }
+  } catch (error) {
+    deleteResources(gl, { textures: [ids] });
+    throw error;
+  }
+}
+
+function allocateBandTexture(
+  gl: WebGL2RenderingContext,
+  kind: "ids" | "mask",
+  width: number,
+  height: number,
+): WebGLTexture {
+  const texture = gl.createTexture();
+  if (!texture) throw new Error("Cannot allocate a band texture");
+
+  const internal = kind === "ids" ? gl.RG8UI : gl.R32UI;
+  const layout = kind === "ids" ? gl.RG_INTEGER : gl.RED_INTEGER;
+  const type = kind === "ids" ? gl.UNSIGNED_BYTE : gl.UNSIGNED_INT;
+  const error = withIsolatedUnpack(gl, () => {
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, internal, width, height, 0, layout, type, null);
+    return gl.getError();
+  });
+  if (error !== gl.NO_ERROR) {
+    gl.deleteTexture(texture);
+    throw new Error(`Cannot allocate a ${width} x ${height} band texture`);
+  }
+  return texture;
+}
+
+/**
+ * Fill one row range of an allocated band texture so a large tile uploads in bounded
+ * chunks. The tile keeps the full gather until the last row arrives.
+ */
+function uploadBandRows(
+  gl: WebGL2RenderingContext,
+  texture: WebGLTexture,
+  kind: "ids" | "mask",
+  width: number,
+  startRow: number,
+  rowCount: number,
+  data: ArrayBufferView,
+): void {
+  const layout = kind === "ids" ? gl.RG_INTEGER : gl.RED_INTEGER;
+  const type = kind === "ids" ? gl.UNSIGNED_BYTE : gl.UNSIGNED_INT;
+  const error = withIsolatedUnpack(gl, () => {
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, startRow, width, rowCount, layout, type, data);
+    return gl.getError();
+  });
+  if (error !== gl.NO_ERROR) {
+    throw new Error(`Cannot upload band rows ${startRow} to ${startRow + rowCount}`);
+  }
+}
+
+// MapLibre leaves image unpack state behind, so grid uploads run isolated.
+function withIsolatedUnpack<T>(gl: WebGL2RenderingContext, task: () => T): T {
+  const alignment = gl.getParameter(gl.UNPACK_ALIGNMENT) as number;
+  const flipY = gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL) as boolean;
+  const premultiply = gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL) as boolean;
+  const rowLength = gl.getParameter(gl.UNPACK_ROW_LENGTH) as number;
+  const skipRows = gl.getParameter(gl.UNPACK_SKIP_ROWS) as number;
+  const skipPixels = gl.getParameter(gl.UNPACK_SKIP_PIXELS) as number;
+  const unpackBuffer = gl.getParameter(gl.PIXEL_UNPACK_BUFFER_BINDING) as WebGLBuffer | null;
+  gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+  gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
+  gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
+  try {
+    return task();
+  } finally {
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, alignment);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, flipY);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, premultiply);
+    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, rowLength);
+    gl.pixelStorei(gl.UNPACK_SKIP_ROWS, skipRows);
+    gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, skipPixels);
+    gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, unpackBuffer);
+  }
 }
 
 /**

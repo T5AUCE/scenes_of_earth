@@ -15,7 +15,7 @@ registerHooks({
 });
 
 import { assertSameNode } from "./testing/dom-assert.ts";
-import { storeMapDetailsShown } from "./display-state.ts";
+import { DEFAULT_OUTLINE, storeMapDetailsShown } from "./display-state.ts";
 import {
   createHarness,
   DATA_IDS,
@@ -712,6 +712,7 @@ test("the Map details toggle defaults off and persists per browser", async (cont
     layers: {},
     off: new Set(),
     showAs: {},
+    outline: { ...DEFAULT_OUTLINE },
   });
   const container = document.createElement("div");
   document.body.append(container);
@@ -940,6 +941,18 @@ test("closing just after mask readiness cannot reveal disposed layers", async ()
   assert.equal(harness.map.getLayer(FADE_ID), undefined);
   assert.equal(harness.map.getLayer(MASK_ID), undefined);
   assert.deepEqual(harness.notes, []);
+  assertListenersRemoved(harness.map);
+});
+
+test("scene entry adds no tile warm-up listeners", async () => {
+  const harness = createHarness();
+  harness.enter();
+  assert.equal(harness.map.listeners.get("zoom")?.size ?? 0, 0);
+  assert.equal(harness.map.listeners.get("move")?.size ?? 0, 0);
+
+  harness.mode.exit();
+  assert.equal(harness.map.listeners.get("zoom")?.size ?? 0, 0);
+  assert.equal(harness.map.listeners.get("move")?.size ?? 0, 0);
   assertListenersRemoved(harness.map);
 });
 
@@ -1477,6 +1490,7 @@ test("a throwing renderer keeps charts while the working layer keeps colour", as
     addSource() {},
     addLayer() {},
     setLayoutProperty() {},
+    setPaintProperty() {},
     addControl() {},
     removeControl() {},
     getSource() {},
@@ -1628,6 +1642,7 @@ test("a denied storage write stays visible until the retry succeeds", async (con
     addSource() {},
     addLayer() {},
     setLayoutProperty() {},
+    setPaintProperty() {},
     addControl() {},
     removeControl() {},
     getSource() {},
@@ -1845,7 +1860,7 @@ test("initial oversized entry clears its warning on a fitting edit", async (cont
   const { encodeSlice, STORAGE_DENIED_NOTICE } = await import("./charts/state.ts");
   const store = createSceneStore(
     scene.layers,
-    { layers: {}, off: new Set(), showAs: {} },
+    { layers: {}, off: new Set(), showAs: {}, outline: { ...DEFAULT_OUTLINE } },
     oversized,
   );
   const huge = encodeSlice(oversized);
@@ -2137,6 +2152,7 @@ function makeWaterMap() {
       order.splice(index < 0 ? order.length : index, 0, spec.id);
     },
     setLayoutProperty() {},
+    setPaintProperty() {},
     addControl() {},
     removeControl() {},
     getSource() {},
@@ -2340,7 +2356,7 @@ async function openOversizedPendingClose(
   const { encodeSlice } = await import("./charts/state.ts");
   const store = createSceneStore(
     scene.layers,
-    { layers: {}, off: new Set(), showAs: {} },
+    { layers: {}, off: new Set(), showAs: {}, outline: { ...DEFAULT_OUTLINE } },
     oversized,
   );
   const before = JSON.stringify(store.getSnapshot().charts);

@@ -8,6 +8,9 @@ from .geology_names import (
     CANADA_RXTP_FALLBACK,
     CANADA_TYPE_NAMES,
     EGDI_TYPE_NAMES,
+    GMNA_AGE_ALIASES,
+    GMNA_PRE_RANGES,
+    GMNA_TYPE_HIERARCHIES,
     IGME_AGE_SIDES,
     IGME_IGNE_FALLBACK,
     IGME_MARI_FALLBACK,
@@ -41,6 +44,8 @@ from .geology_names import (
     SGMC_UNCONSOLIDATED_FINE_NAMES,
     SGMC_UNCONSOLIDATED_MIXED_NAMES,
     SGMC_UNCONSOLIDATED_ORGANIC_NAMES,
+    SIM3340_AGE_ALIASES,
+    SIM3340_LITHOLOGY_ALIASES,
 )
 
 
@@ -340,6 +345,80 @@ def _sgmc_sedimentary_class(levels: tuple[str, ...]) -> str:
 def _deepest_class(levels: tuple[str, ...], classes: dict[str, str]) -> str | None:
     """Return the class of the first level named in `classes`, or None when none is."""
     return next((classes[name] for name in levels if name in classes), None)
+
+
+def sim3340_age_batch(records: list[tuple[str, str]]) -> list[int | None]:
+    """Return the age class of each (full_min, full_max) pair of Alaska age paths.
+
+    The paths run from the eon down to the finest name, separated by semicolons, and the finest
+    name decides like an SGMC leaf. A name missing from the SGMC and alias tables fails the whole
+    call and lists every such name.
+    """
+    leaves = [(_sim3340_leaf(young), _sim3340_leaf(old)) for young, old in records]
+    return sgmc_age_batch(leaves)
+
+
+def _sim3340_leaf(path: str) -> str:
+    leaf = path.split(";")[-1].strip()
+    return SIM3340_AGE_ALIASES.get(leaf, leaf)
+
+
+def sim3340_type_batch(records: list[tuple[str, str, str, str, str]]) -> list[int | None]:
+    """Return the rock-type class of each Alaska LITH1 to LITH5 hierarchy, None for water.
+
+    Alaska spellings that differ from SGMC are aliased first, and any other name missing from
+    the SGMC vocabulary fails the whole call and lists every such name.
+    """
+    land = [_aliased_hierarchy(record) for record in records if record[0] != "Water"]
+    values = iter(sgmc_type_batch(land))
+    return [None if record[0] == "Water" else next(values) for record in records]
+
+
+def _aliased_hierarchy(record: tuple[str, str, str, str, str]) -> tuple[str, str, str, str, str]:
+    lith1, *finer = record
+    lith2, lith3, lith4, lith5 = (SIM3340_LITHOLOGY_ALIASES.get(name, name) for name in finer)
+    return lith1, lith2, lith3, lith4, lith5
+
+
+def gmna_age_batch(records: list[tuple[str, str]]) -> list[int | None]:
+    """Return the age class of each (min_age, max_age) pair of GMNA names, None for no age.
+
+    MIN_AGE names the younger bound and MAX_AGE the older one like SGMC. Bounds that share
+    one Pre- name expand to its whole span, and any other name missing from the SGMC and
+    alias tables fails the whole call and lists every such name.
+    """
+    expanded = [_gmna_expanded(young, old) for young, old in records]
+    leaves = [(_gmna_leaf(young), _gmna_leaf(old)) for young, old in expanded]
+    return sgmc_age_batch(leaves)
+
+
+def _gmna_expanded(young: str, old: str) -> tuple[str, str]:
+    if young == old and young in GMNA_PRE_RANGES:
+        return GMNA_PRE_RANGES[young]
+    return young, old
+
+
+def _gmna_leaf(name: str) -> str:
+    return GMNA_AGE_ALIASES.get(name, name)
+
+
+def gmna_type_batch(records: list[tuple[str, str]]) -> list[int | None]:
+    """Return the rock-type class of each (rocktype, lithology) pair of GMNA units.
+
+    Every pair must belong to the verified archive vocabulary, so a new spelling fails the
+    whole call and lists every such pair before any COG is published.
+    """
+    unmapped = {
+        f"{rocktype} with {lithology or 'no lithology'}"
+        for rocktype, lithology in records
+        if (rocktype, lithology or "") not in GMNA_TYPE_HIERARCHIES
+    }
+    _fail_unmapped("GMNA rock names", unmapped)
+    hierarchies = [
+        (*GMNA_TYPE_HIERARCHIES[(rocktype, lithology or "")], "", "")
+        for rocktype, lithology in records
+    ]
+    return sgmc_type_batch(hierarchies)
 
 
 def egdi_type_batch(values: list[int]) -> list[int | None]:

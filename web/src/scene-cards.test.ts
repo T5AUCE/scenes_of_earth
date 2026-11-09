@@ -5,6 +5,7 @@ import { test } from "node:test";
 import type { Map as MapLibreMap } from "maplibre-gl";
 
 import type { BlendView } from "./layers/blend.ts";
+import { DEFAULT_OUTLINE } from "./display-state.ts";
 import type { MountedLayer } from "./scene-cards.ts";
 import { createSceneStore } from "./scene-store.ts";
 import type { LayerDoc, LayerView } from "./types.ts";
@@ -221,7 +222,12 @@ test("chart-only changes keep map identity and skip redraws", () => {
 });
 
 function display() {
-  return { layers: {}, off: new Set<string>(), showAs: {} };
+  return {
+    layers: {},
+    off: new Set<string>(),
+    showAs: {},
+    outline: { ...DEFAULT_OUTLINE },
+  };
 }
 
 function chartLayers(): LayerDoc[] {

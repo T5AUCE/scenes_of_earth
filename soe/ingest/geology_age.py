@@ -3,7 +3,7 @@
 The map is Geological Survey of Canada Open File 5529 (Chorlton 2007), a 577 MB zip of which
 the build needs only five small members. They are fetched by HTTP range reads, or taken from a
 zip that is already on disk. Each map unit gets the class of its age range (see
-`soe.geology_age`) and the polygons are rasterised onto the 1/120° grid between 60°S and 60°N.
+`soe.geology_age`) and the polygons are rasterised onto the 1/120° grid between 60°S and 84°N.
 """
 import io
 import logging

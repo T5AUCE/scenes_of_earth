@@ -248,6 +248,7 @@ export interface DisplayTokens {
   ink: string; // `layer:preset` or `layer:rrggbb` entries
   dens: string; // `layer:multiple` entries, the dot density as a multiple of the default
   units: string; // `layer:unit` entries, the display unit for a convertible layer
+  outline: string; // `on|off:colour:width`, the area outline with its width in pixels
   charts?: string; // compact base64url JSON of the chart slice, owned by charts/state
 }
 

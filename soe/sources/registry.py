@@ -1,8 +1,18 @@
+import logging
 from dataclasses import replace
 from pathlib import Path
 
+import rasterio
+from rasterio.errors import RasterioIOError
+
 from ..geology_age import AGE_CLASSES, GEOLOGY_AGE_FILE, GEOLOGY_AGE_RES_DEG
-from ..geology_type import GEOLOGY_CLASSES, GLIM_SOURCE, LITHOLOGY_RES_DEG, OPENLANDMAP_CLASSES
+from ..geology_type import (
+    GEOLOGY_CLASSES,
+    GLIM_SOURCE,
+    LITHOLOGY_FILE,
+    LITHOLOGY_RES_DEG,
+    OPENLANDMAP_CLASSES,
+)
 from .chirps import CHIRPS_CUBE, CHIRPS_GRID, ChirpsReader, RainDataset
 from .cubes import DEFAULT_CUBES_DIR, HIGH_LATITUDE_FIRST_MONTH, CubeSpec, CubeStore
 from .datasets import Registry, Role
@@ -50,9 +60,11 @@ CUBE_SPECS = (
     ERA5_PRECIPITATION_84N_CUBE,
 )
 
-# The cubes and the geology rasters end at 60N until they are re-ingested.
+# The older cubes end at 60N until they are re-ingested, while the geology rasters reach 84N.
 CUBE_COVERAGE_DEG = (-180, -60, 180, 60)
 CUBE_COVERAGE_84N_DEG = (-180, -60, 180, 84)
+
+log = logging.getLogger(__name__)
 
 
 class RealSource(ChirpsReader, CopernicusDemReader, WorldCoverReader, LithologyReader, CubeStore):
@@ -199,10 +211,10 @@ def _land_cover(backend: RealSource | SyntheticSource) -> LandCoverDataset:
 def _geology(backend: RealSource | SyntheticSource) -> GeologyDataset:
     # The COG records which map built it, so the registry passes that map's source and classes.
     if backend.lithology_source() == GLIM_SOURCE:
-        source = SOURCES["glim"]
+        source, north_source = SOURCES["glim"], SOURCES["glim_84n"]
         classes = GEOLOGY_CLASSES
     else:
-        source = SOURCES["lithology"]
+        source, north_source = SOURCES["lithology"], SOURCES["lithology_84n"]
         classes = OPENLANDMAP_CLASSES
     return GeologyDataset(
         id="geology",
@@ -227,9 +239,38 @@ def _geology(backend: RealSource | SyntheticSource) -> GeologyDataset:
         },
         backend=backend,
         grid=WORLD_GRID,
-        coverage=CUBE_COVERAGE_DEG,
+        coverage=_geology_coverage(backend, LITHOLOGY_FILE),
         synthetic=backend.synthetic,
+        north_source=north_source,
     )
+
+
+def _geology_coverage(
+    backend: RealSource | SyntheticSource,
+    file: str,
+) -> tuple[float, float, float, float]:
+    """Return the 84N coverage when the COG behind `file` reaches 84N, else the 60N one.
+
+    Synthetic data stands in for the rebaked maps, so it always reaches 84N. An older
+    on-disk COG that still ends at 60N would otherwise leave geology empty above 60N.
+    """
+    if isinstance(backend, SyntheticSource):
+        return CUBE_COVERAGE_84N_DEG
+    # No public accessor leads to the COG, so the registry reads through the reader's folder.
+    north = _cog_north_deg(backend._cubes_dir / file)
+    if north is not None and north >= CUBE_COVERAGE_84N_DEG[3]:
+        return CUBE_COVERAGE_84N_DEG
+    log.warning("Geology COG %s reaches only %s, so geology keeps the 60N coverage", file, north)
+    return CUBE_COVERAGE_DEG
+
+
+def _cog_north_deg(path: Path) -> float | None:
+    """Return the north edge of the COG at path in degrees, None when it cannot be read."""
+    try:
+        with rasterio.open(path) as source:
+            return source.bounds.top
+    except RasterioIOError:
+        return None
 
 
 def _geology_age(backend: RealSource | SyntheticSource) -> GeologyDataset:
@@ -255,9 +296,10 @@ def _geology_age(backend: RealSource | SyntheticSource) -> GeologyDataset:
         },
         backend=backend,
         grid=WORLD_GRID,
-        coverage=CUBE_COVERAGE_DEG,
+        coverage=_geology_coverage(backend, GEOLOGY_AGE_FILE),
         synthetic=backend.synthetic,
         file=GEOLOGY_AGE_FILE,
+        north_source=SOURCES["gsc_world_84n"],
     )
 
 

@@ -52,11 +52,11 @@ test("zoom-in only adds contour heights and every chain step divides the next", 
   }
 });
 
-test("every tier is traced one whole zoom before it enters except at the z0 floor", () => {
+test("every tier is traced two whole zooms before it enters except at the z0 floor", () => {
   for (const sample of [FIJI, KENYA, FLAT, makeStats(0, 0, 0, 0)]) {
     const ladder = contourLadder(sample, 0);
     for (const tier of ladder.tiers) {
-      assert.equal(tier.traceZoom, Math.max(0, tier.entryZoom - 1));
+      assert.equal(tier.traceZoom, Math.max(0, tier.entryZoom - 2));
       assert.ok(thresholdAt(ladder.thresholds, tier.traceZoom) <= tier.interval);
     }
   }

@@ -215,6 +215,7 @@ function copyDisplay(display: SceneDisplay): SceneDisplay {
     ),
     off: new Set(display.off),
     showAs: { ...display.showAs },
+    outline: { ...display.outline },
   };
 }
 

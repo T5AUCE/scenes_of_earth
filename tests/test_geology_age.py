@@ -205,7 +205,7 @@ def test_cog_holds_the_class_of_each_unit_and_zero_where_no_unit_has_an_age(tmp_
         row, _ = raster.index(0, 2.5)
         values = [raster.read(1)[row, raster.index(x, 2.5)[1]] for x in (2, 7, 12, 17, 30)]
         assert raster.tags()[LITHOLOGY_SOURCE_TAG] == GSC_SOURCE
-        assert raster.bounds.bottom == -60 and raster.bounds.top == 60
+        assert raster.bounds.bottom == -60 and raster.bounds.top == 84
     assert values == [
         AGE_VALUES["Cambrian"],
         AGE_VALUES["Phanerozoic undivided"],

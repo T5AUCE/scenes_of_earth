@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { defaultSlice } from "./charts/state.ts";
-import type { SceneDisplay } from "./display-state.ts";
+import { DEFAULT_OUTLINE, type SceneDisplay } from "./display-state.ts";
 import { createSceneStore } from "./scene-store.ts";
 import type { LayerDisplay, LayerDoc } from "./types.ts";
 
@@ -406,7 +406,7 @@ test("draw layers drive allocation while validation layers keep failed charts", 
 });
 
 function display(): SceneDisplay {
-  return { layers: {}, off: new Set(), showAs: {} };
+  return { layers: {}, off: new Set(), showAs: {}, outline: { ...DEFAULT_OUTLINE } };
 }
 
 function layer(id: string, encodings: string[]): LayerDoc {

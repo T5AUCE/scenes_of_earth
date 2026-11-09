@@ -7,6 +7,7 @@ import {
   layerUnits,
   loadMapDetailsShown,
   storeMapDetailsShown,
+  type OutlineState,
 } from "../display-state";
 import { BLEND, drawOptions, type Draw, type Hidden } from "../layers/allocate";
 import { BLEND_TITLE, type BlendView } from "../layers/blend";
@@ -15,7 +16,7 @@ import type { SceneStore, SceneStoreSnapshot } from "../scene-store";
 import { storeShowAs } from "../show-as";
 import type { LayerDoc, LayerView } from "../types";
 import { LayerCard } from "./layer-card";
-import { LayerEditor, type EditorTarget } from "./layer-editor";
+import { EditorPanel, LayerEditor, OutlineEditor, type EditorTarget } from "./layer-editor";
 import { isMasterOn, masterChangedUnits } from "./master-switch";
 import { useSceneStore } from "./use-scene-store";
 
@@ -24,11 +25,16 @@ const MAP_DETAILS_TITLE = "Map details";
 
 const LAST_FIELD = "field";
 
+/** Which card's editor the panel shows; outline and details share its shell for now. */
+type SelectedTarget =
+  | { kind: "unit"; unit: string }
+  | { kind: "outline" }
+  | { kind: "details" };
+
 interface SceneColumnProps {
   mounted: MountedLayer[];
   blend: BlendView | null;
   store: SceneStore;
-  onOutline(on: boolean): void;
 }
 
 /** Mount the React scene column into a container and return its teardown. */
@@ -46,21 +52,19 @@ function SceneColumn({
   mounted,
   blend,
   store,
-  onOutline,
 }: SceneColumnProps): React.ReactElement {
   const { display, allocation } = useSceneStore(store);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<SelectedTarget | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [optionStates, setOptionStates] = useState<Record<string, boolean[]>>({});
-  const [outlineOn, setOutlineOn] = useState(true);
   const [detailsOn, setDetailsOn] = useState(loadMapDetailsShown);
   const remembered = useRef(new Map<string, string[]>());
   const editButton = useRef<HTMLButtonElement | null>(null);
   useEditFocus(selected, editButton);
 
-  const select = (unit: string, button: HTMLButtonElement) => {
+  const select = (target: SelectedTarget, button: HTMLButtonElement) => {
     editButton.current = button;
-    setSelected(unit);
+    setSelected(target);
     setNotice(null);
   };
   const toggleLayer = (entry: MountedLayer, on: boolean) => {
@@ -72,8 +76,20 @@ function SceneColumn({
     setNotice(null);
   };
   const toggleOutline = (on: boolean) => {
-    setOutlineOn(on);
-    onOutline(on);
+    store.dispatch({
+      kind: "display",
+      update: (next) => {
+        next.outline.shown = on;
+      },
+    });
+  };
+  const changeOutline = (outline: OutlineState) => {
+    store.dispatch({
+      kind: "display",
+      update: (next) => {
+        next.outline = outline;
+      },
+    });
   };
   const toggleDetails = (on: boolean) => {
     setDetailsOn(on);
@@ -93,18 +109,20 @@ function SceneColumn({
     display,
     allocation,
     optionStates,
+    selected,
     toggleLayer,
     select,
   );
   const blendIndex = mounted.map(({ layer }) => layer.style.kind).lastIndexOf(LAST_FIELD);
   const target = editorTarget(mounted, blend, selected);
   const toggleTarget = (on: boolean) => {
-    if (selected === BLEND) {
+    if (selected?.kind !== "unit") return;
+    if (selected.unit === BLEND) {
       toggleBlend(on);
 
       return;
     }
-    const entry = mounted.find(({ layer }) => layer.id === selected);
+    const entry = mounted.find(({ layer }) => layer.id === selected.unit);
     if (!entry) return;
     toggleLayer(entry, on);
   };
@@ -116,12 +134,13 @@ function SceneColumn({
         blend,
         allocation,
         optionStates,
+        selected,
         toggleBlend,
         select,
       )}
       {ordinary.slice(blendIndex + 1)}
-      {outlineCard(outlineOn, toggleOutline)}
-      {detailsCard(detailsOn, toggleDetails)}
+      {outlineCard(display.outline.shown, selected?.kind === "outline", toggleOutline, select)}
+      {detailsCard(detailsOn, selected?.kind === "details", toggleDetails, select)}
       {target && (
         <LayerEditor
           key={target.unit}
@@ -136,15 +155,31 @@ function SceneColumn({
           onToggleTarget={toggleTarget}
         />
       )}
+      {selected?.kind === "outline" && (
+        <EditorPanel
+          key="outline"
+          title={OUTLINE_TITLE}
+          onClose={() => setSelected(null)}
+        >
+          <OutlineEditor outline={display.outline} onChange={changeOutline} />
+        </EditorPanel>
+      )}
+      {selected?.kind === "details" && (
+        <EditorPanel
+          key="details"
+          title={MAP_DETAILS_TITLE}
+          onClose={() => setSelected(null)}
+        />
+      )}
     </>
   );
 }
 
 function useEditFocus(
-  selected: string | null,
+  selected: SelectedTarget | null,
   editButton: { current: HTMLButtonElement | null },
 ): void {
-  const previous = useRef<string | null>(null);
+  const previous = useRef<SelectedTarget | null>(null);
   useEffect(() => {
     const closed = previous.current !== null && selected === null;
     previous.current = selected;
@@ -190,14 +225,16 @@ function ordinaryCards(
   display: SceneStoreSnapshot["display"],
   allocation: SceneStoreSnapshot["allocation"],
   optionStates: Readonly<Record<string, readonly boolean[]>>,
+  selected: SelectedTarget | null,
   onToggle: (entry: MountedLayer, on: boolean) => void,
-  onEdit: (unit: string, button: HTMLButtonElement) => void,
+  onEdit: (target: SelectedTarget, button: HTMLButtonElement) => void,
 ): React.ReactElement[] {
   return mounted.map((entry) => ordinaryCard(
     entry,
     display,
     allocation,
     optionStates,
+    selected,
     onToggle,
     onEdit,
   ));
@@ -208,8 +245,9 @@ function ordinaryCard(
   display: SceneStoreSnapshot["display"],
   allocation: SceneStoreSnapshot["allocation"],
   optionStates: Readonly<Record<string, readonly boolean[]>>,
+  selected: SelectedTarget | null,
   onToggle: (entry: MountedLayer, on: boolean) => void,
-  onEdit: (unit: string, button: HTMLButtonElement) => void,
+  onEdit: (target: SelectedTarget, button: HTMLButtonElement) => void,
 ): React.ReactElement {
   const smoothed = smoothedFor(entry.view.options, optionStates[entry.layer.id]);
   const title = layerCardTitle(entry.layer, display, allocation, smoothed);
@@ -220,8 +258,9 @@ function ordinaryCard(
       key={entry.layer.id}
       title={title}
       checked={checked}
+      expanded={isUnitSelected(selected, entry.layer.id)}
       onToggle={(on) => onToggle(entry, on)}
-      onEdit={(button) => onEdit(entry.layer.id, button)}
+      onEdit={(button) => onEdit({ kind: "unit", unit: entry.layer.id }, button)}
       legend={entry.view.legend()}
     />
   );
@@ -292,8 +331,9 @@ function blendCard(
   blend: BlendView,
   allocation: SceneStoreSnapshot["allocation"],
   optionStates: Readonly<Record<string, readonly boolean[]>>,
+  selected: SelectedTarget | null,
   onToggle: (on: boolean) => void,
-  onEdit: (unit: string, button: HTMLButtonElement) => void,
+  onEdit: (target: SelectedTarget, button: HTMLButtonElement) => void,
 ): React.ReactElement {
   const smoothed = smoothedFor(blend.options, optionStates[BLEND]);
   const blendOn = allocation.as.get(BLEND) === "colour";
@@ -308,8 +348,9 @@ function blendCard(
       key={BLEND}
       title={title}
       checked={blendOn}
+      expanded={isUnitSelected(selected, BLEND)}
       onToggle={onToggle}
-      onEdit={(button) => onEdit(BLEND, button)}
+      onEdit={(button) => onEdit({ kind: "unit", unit: BLEND }, button)}
       legend={blend.legend()}
     />
   );
@@ -317,14 +358,18 @@ function blendCard(
 
 function outlineCard(
   checked: boolean,
+  expanded: boolean,
   onToggle: (on: boolean) => void,
+  onEdit: (target: SelectedTarget, button: HTMLButtonElement) => void,
 ): React.ReactElement {
   return (
     <LayerCard
       key={OUTLINE_TITLE}
       title={OUTLINE_TITLE}
       checked={checked}
+      expanded={expanded}
       onToggle={onToggle}
+      onEdit={(button) => onEdit({ kind: "outline" }, button)}
       legend={null}
     />
   );
@@ -332,14 +377,18 @@ function outlineCard(
 
 function detailsCard(
   checked: boolean,
+  expanded: boolean,
   onToggle: (on: boolean) => void,
+  onEdit: (target: SelectedTarget, button: HTMLButtonElement) => void,
 ): React.ReactElement {
   return (
     <LayerCard
       key={MAP_DETAILS_TITLE}
       title={MAP_DETAILS_TITLE}
       checked={checked}
+      expanded={expanded}
       onToggle={onToggle}
+      onEdit={(button) => onEdit({ kind: "details" }, button)}
       legend={null}
     />
   );
@@ -360,12 +409,17 @@ function initialOptions(
 function editorTarget(
   mounted: MountedLayer[],
   blend: BlendView | null,
-  selected: string | null,
+  selected: SelectedTarget | null,
 ): EditorTarget | null {
-  if (selected === BLEND) {
+  if (selected?.kind !== "unit") return null;
+  if (selected.unit === BLEND) {
     return blend ? { unit: BLEND, title: BLEND_TITLE, view: blend } : null;
   }
 
-  const entry = mounted.find(({ layer }) => layer.id === selected);
+  const entry = mounted.find(({ layer }) => layer.id === selected.unit);
   return entry ? { unit: entry.layer.id, title: entry.layer.title, view: entry.view } : null;
+}
+
+function isUnitSelected(selected: SelectedTarget | null, unit: string): boolean {
+  return selected?.kind === "unit" && selected.unit === unit;
 }

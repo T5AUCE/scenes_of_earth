@@ -25,6 +25,7 @@ test("a card shows its legend, title, master switch and Edit button", async (con
     <LayerCard
       title="Rainfall · Dots, Smoothed"
       checked
+      expanded={false}
       onToggle={(on) => {
         toggled = on;
       }}
@@ -37,6 +38,8 @@ test("a card shows its legend, title, master switch and Edit button", async (con
   assert.equal(container.querySelector(".card-legend")?.textContent, "legend");
   const input = container.querySelector('input[role="switch"]') as HTMLInputElement;
   assert.equal(input.checked, true);
+  assert.equal(container.querySelector(".edit-button")?.getAttribute("aria-expanded"), "false");
+  assert.equal(container.querySelector("section")?.classList.contains("editing"), false);
 
   await act(async () => {
     input.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
@@ -52,7 +55,7 @@ test("a card shows its legend, title, master switch and Edit button", async (con
   await act(async () => root.unmount());
 });
 
-test("a card without Edit keeps only its switch", async (context) => {
+test("a card head holds title, switch and Edit in that order", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
@@ -65,11 +68,48 @@ test("a card without Edit keeps only its switch", async (context) => {
   const root = createRoot(container);
 
   await act(async () => root.render(
-    <LayerCard title="Area Outline" checked onToggle={() => {}} legend={null} />,
+    <LayerCard
+      title="Area Outline"
+      checked
+      expanded={false}
+      onToggle={() => {}}
+      onEdit={() => {}}
+      legend={null}
+    />,
   ));
 
-  assert.equal(container.querySelectorAll("button").length, 0);
-  assert.equal(container.querySelectorAll('input[role="switch"]').length, 1);
+  const cells = [...container.querySelector(".card-head")!.children]
+    .map((element) => element.tagName);
+  assert.deepEqual(cells, ["H4", "LABEL", "BUTTON"]);
+
+  await act(async () => root.unmount());
+});
+
+test("an open card marks its Edit expanded and rings the card", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { LayerCard } = await import("./layer-card.tsx");
+
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+
+  await act(async () => root.render(
+    <LayerCard
+      title="Area Outline"
+      checked
+      expanded
+      onToggle={() => {}}
+      onEdit={() => {}}
+      legend={null}
+    />,
+  ));
+
+  assert.equal(container.querySelector(".edit-button")?.getAttribute("aria-expanded"), "true");
+  assert.equal(container.querySelector("section")?.classList.contains("editing"), true);
 
   await act(async () => root.unmount());
 });

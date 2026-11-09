@@ -905,6 +905,198 @@ SGMC_LITH1_DEFAULTS: dict[str, str] = {
     "Unconsolidated": "sumx",
 }
 
+# The Alaska map (USGS SIM 3340) shares the SGMC vocabulary, so these aliases map its other
+# spellings onto SGMC names. Age leaves are classed by period when the SGMC tables lack the stage.
+SIM3340_AGE_ALIASES: dict[str, str] = {
+    "Aalenian": "Jurassic",
+    "Ediacarian": "Ediacaran",
+    "Gzelian": "Gzhelian",
+    "Lockovian": "Lockhovian",
+    "Olenekian": "Olenikian",
+    "Rhuddian": "Rhuddanian",
+    "Series 2": "Cambrian",
+    "Valanginian": "Cretaceous",
+}
+SIM3340_LITHOLOGY_ALIASES: dict[str, str] = {
+    "Cataclastite": "Cataclasite",
+    "Chlorite-schist": "Schist",
+    "Gabbronorite": "Gabbro",
+    "Grainstone": "Limestone",
+    "Lime-mudstone": "Limestone",
+    "Lithic-wacke": "Graywacke",
+    "Lithicarenite": "Arenite",
+    "Melilitic": "Foidite",
+    "Monzogabbro": "Gabbro",
+    "Quartz-arenite": "Arenite",
+    "Quartzose-sandstone": "Sandstone",
+    "Red-shale": "Shale",
+    "Sandstone-Mudstone": "Sandstone-mudstone",
+    "Siltstone-Mudstone": "Siltstone-mudstone",
+}
+
+# GMNA qualifies ages with spaces where SGMC joins them with hyphens, so these spellings map across.
+GMNA_AGE_ALIASES: dict[str, str] = {
+    "Age unknown": "Undetermined",
+    "Precambrian": "preCambrian",
+    "Early Archean": "Early-Archean",
+    "Middle Archean": "Middle-Archean",
+    "Late Archean": "Late-Archean",
+    "Early Proterozoic": "Early-Proterozoic",
+    "Middle Proterozoic": "Middle-Proterozoic",
+    "Late Proterozoic": "Late-Proterozoic",
+    "Middle Cambrian": "Middle-Cambrian",
+    "Upper Cambrian": "Late-Cambrian",
+    "Early Cretaceous": "Early-Cretaceous",
+    "Lower Cretaceous": "Early-Cretaceous",
+    "Middle Cretaceous": "Middle-Cretaceous",
+    "Mid-Cretaceous": "Middle-Cretaceous",
+    "Late Cretaceous": "Late-Cretaceous",
+    "Upper Cretaceous": "Late-Cretaceous",
+    "Lower Devonian": "Early-Devonian",
+    "Middle Devonian": "Middle-Devonian",
+    "Upper Devonian": "Late-Devonian",
+    "Lower Eocene": "Early-Eocene",
+    "Middle Eocene": "Middle-Eocene",
+    "Upper Eocene": "Late-Eocene",
+    "Lower Jurassic": "Early-Jurassic",
+    "Middle Jurassic": "Middle-Jurassic",
+    "Late Jurassic": "Late-Jurassic",
+    "Upper Jurassic": "Late-Jurassic",
+    "Lower Mississippian": "Early-Mississippian",
+    "Upper Mississippian": "Late-Mississippian",
+    "Lower Ordovician": "Early-Ordovician",
+    "Middle Ordovician": "Middle-Ordovician",
+    "Upper Ordovician": "Late-Ordovician",
+    "Lower Pennsylvanian": "Early-Pennsylvanian",
+    "Upper Pennsylvanian": "Late-Pennsylvanian",
+    "Lower Permian": "Early-Permian",
+    "Upper Permian": "Late-Permian",
+    "Lower Silurian": "Early-Silurian",
+    "Upper Silurian": "Late-Silurian",
+}
+
+# A Pre- unit predates its bound but is otherwise undifferentiated, so each maps to its whole span.
+GMNA_PRE_RANGES: dict[str, tuple[str, str]] = {
+    "Pre-Cenozoic": ("Cretaceous", "Archean"),
+    "Pre-Cenozoic undivided": ("Cretaceous", "Archean"),
+    "Pre-Cretaceous": ("Jurassic", "Archean"),
+    "Pre-Mesozoic": ("Permian", "Archean"),
+}
+
+# GMNA pairs one rock group with one lithology per unit, so each pair maps to one SGMC hierarchy.
+GMNA_TYPE_HIERARCHIES: dict[tuple[str, str], tuple[str, str, str]] = {
+    ("Ice", ""): ("Ice", "", ""),
+    ("Metamorphic and undivided crystalline", ""): ("Metamorphic", "", ""),
+    ("Metamorphic and undivided crystalline", "impact breccia"): ("Metamorphic", "", ""),
+    ("Metamorphic and undivided crystalline", "mafic gneiss"): ("Metamorphic", "", "Gneiss"),
+    ("Metamorphic and undivided crystalline", "mainly tonalite gneiss"): (
+        "Metamorphic",
+        "",
+        "Metatonalite",
+    ),
+    ("Metamorphic and undivided crystalline", "marble"): ("Metamorphic", "", "Marble"),
+    ("Metamorphic and undivided crystalline", "orthogneiss"): (
+        "Metamorphic",
+        "",
+        "Orthogneiss",
+    ),
+    ("Metamorphic and undivided crystalline", "orthogneiss and paragneiss"): (
+        "Metamorphic",
+        "",
+        "Gneiss",
+    ),
+    ("Metamorphic and undivided crystalline", "paragneiss"): (
+        "Metamorphic",
+        "",
+        "Paragneiss",
+    ),
+    ("Metamorphic and undivided crystalline", "sedimentary and volcanic gneiss"): (
+        "Metamorphic",
+        "",
+        "Gneiss",
+    ),
+    ("Metamorphic and undivided crystalline", "syenite gneiss"): (
+        "Metamorphic",
+        "",
+        "Gneiss",
+    ),
+    (
+        "Metamorphic and undivided crystalline",
+        "undivided crystalline rocks (seafloor units may include a variety of metamorphosed rock)",
+    ): ("Metamorphic", "", ""),
+    ("Metamorphic and undivided crystalline", "undivided gneissic rocks"): (
+        "Metamorphic",
+        "",
+        "Gneiss",
+    ),
+    ("Metamorphic and undivided crystalline", "volcanic gneiss"): (
+        "Metamorphic",
+        "",
+        "Metavolcanic",
+    ),
+    ("Plutonic", "alkaline complex"): ("Igneous", "Plutonic", "Syenite"),
+    ("Plutonic", "alkaline diorite gabbro and syenite"): ("Igneous", "Plutonic", "Syenite"),
+    ("Plutonic", "anorthosite"): ("Igneous", "Plutonic", "Anorthosite"),
+    ("Plutonic", "charnockite"): ("Igneous", "Plutonic", "Charnockite"),
+    ("Plutonic", "diabase"): ("Igneous", "Plutonic", "Mafic-hypabyssal"),
+    ("Plutonic", "early tonalite plutons in the Superior province"): (
+        "Igneous",
+        "Plutonic",
+        "Tonalite",
+    ),
+    ("Plutonic", "felsic and intermediate rocks"): ("Igneous", "Plutonic", "Granodiorite"),
+    ("Plutonic", "felsic and mafic rocks"): ("Igneous", "Plutonic", "Granite"),
+    ("Plutonic", "felsite"): ("Igneous", "Plutonic", "Rhyolite"),
+    ("Plutonic", "gabbro-anorthosite"): ("Igneous", "Plutonic", "Gabbro"),
+    ("Plutonic", "granite"): ("Igneous", "Plutonic", "Granite"),
+    ("Plutonic", "intermediate and mafic rocks"): ("Igneous", "Plutonic", "Diorite"),
+    ("Plutonic", "intermediate rocks"): ("Igneous", "Plutonic", "Diorite"),
+    ("Plutonic", "late felsic and intermediate plutons in the Superior province"): (
+        "Igneous",
+        "Plutonic",
+        "Granodiorite",
+    ),
+    ("Plutonic", "mafic and ultramafic rocks"): ("Igneous", "Plutonic", "Ultramafic"),
+    ("Plutonic", "mafic rocks"): ("Igneous", "Plutonic", "Gabbro"),
+    ("Plutonic", "rapakivi granite"): ("Igneous", "Plutonic", "Granite"),
+    ("Plutonic", "syenite, monzogranite"): ("Igneous", "Plutonic", "Syenite"),
+    ("Plutonic", "tonalite"): ("Igneous", "Plutonic", "Tonalite"),
+    ("Plutonic", "two-mica granite"): ("Igneous", "Plutonic", "Granite"),
+    ("Plutonic", "ultramafic rocks"): ("Igneous", "Plutonic", "Ultramafic"),
+    ("Plutonic", "undivided granitic rocks"): ("Igneous", "Plutonic", "Granitic"),
+    ("Sedimentary", ""): ("Sedimentary", "", ""),
+    ("Sedimentary", "carbonate"): ("Sedimentary", "Carbonate", ""),
+    ("Sedimentary", "evaporite"): ("Sedimentary", "Chemical", "Evaporite"),
+    ("Volcanic", "alkaline mafic and felsic rocks"): ("Igneous", "Volcanic", ""),
+    ("Volcanic", "alkaline mafic and inter-mediate rocks"): ("Igneous", "Volcanic", ""),
+    ("Volcanic", "alkaline mafic rocks"): ("Igneous", "Volcanic", "Basanite"),
+    ("Volcanic", "alkaline rocks"): ("Igneous", "Volcanic", "Alkalic-volcanic"),
+    ("Volcanic", "bimodal alkaline rocks"): ("Igneous", "Volcanic", ""),
+    ("Volcanic", "bimodal rocks (mafic and alkaline mafic)"): (
+        "Igneous",
+        "Volcanic",
+        "Mafic-volcanic",
+    ),
+    ("Volcanic", "felsic and intermediate rocks"): ("Igneous", "Volcanic", ""),
+    ("Volcanic", "felsic and mafic rocks"): ("Igneous", "Volcanic", ""),
+    ("Volcanic", "felsic rocks"): ("Igneous", "Volcanic", "Felsic-volcanic"),
+    ("Volcanic", "interlayered sedimentary and alkaline volcanic rocks"): (
+        "Sedimentary",
+        "",
+        "",
+    ),
+    ("Volcanic", "interlayered sedimentary and mafic volcanic rocks"): (
+        "Sedimentary",
+        "",
+        "",
+    ),
+    ("Volcanic", "interlayered sedimentary and volcanic rocks"): ("Sedimentary", "", ""),
+    ("Volcanic", "intermediate and mafic rocks"): ("Igneous", "Volcanic", ""),
+    ("Volcanic", "intermediate rocks"): ("Igneous", "Volcanic", "Andesite"),
+    ("Volcanic", "mafic rocks"): ("Igneous", "Volcanic", "Mafic-volcanic"),
+    ("Volcanic", "undivided volcanic rocks"): ("Igneous", "Volcanic", ""),
+}
+
 
 # INSPIRE lithology classes of the EGDI raster by cell value; None leaves the cell to the base.
 EGDI_TYPE_NAMES: dict[int, str | None] = {

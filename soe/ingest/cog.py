@@ -14,7 +14,7 @@ from ..geology_type import LITHOLOGY_SOURCE_TAG
 from ..sources.grid import Bbox
 
 TILE_DEG = 10
-NORTH_EDGE_DEG = 60
+NORTH_EDGE_DEG = 84
 SOUTH_EDGE_DEG = -60
 BLOCK_PX = 512
 
@@ -47,7 +47,7 @@ def write_tiled_raster(
     res_deg: float,
     rasterize_tile: Callable[[Bbox, Affine, tuple[int, int]], np.ndarray],
 ) -> None:
-    """Write the uint8 classes of the 60°S-60°N world at res_deg, one TILE_DEG tile at a time.
+    """Write the uint8 classes of the 60°S-84°N world at res_deg, one TILE_DEG tile at a time.
 
     rasterize_tile(bounds, transform, shape) returns the classes of one tile, 0 where it has none.
     """

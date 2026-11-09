@@ -57,11 +57,6 @@ export function subscribeDrawing(
   return store.subscribe(apply);
 }
 
-/** Show or hide the scene's area outline. */
-export function setOutline(map: MapLibreMap, layerId: string, visible: boolean) {
-  setVisible(map, [layerId], visible);
-}
-
 function drawView(
   map: MapLibreMap,
   view: LayerView,

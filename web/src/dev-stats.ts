@@ -13,6 +13,31 @@ const BYTES_PER_MB = 1024 * 1024;
 const DEV_STATS_CLASS = "has-dev-stats";
 const LONGTASK_ENTRY = "longtask";
 
+const RELIEF_SUFFIX = "-relief";
+const CONTOUR_SUFFIX = "-contours";
+/** The Liberty basemap source, whose loads the readout groups as basemap. */
+const BASEMAP_SOURCE_ID = "openmaptiles";
+
+/** The map surface the dev badge reads. Tile listeners stay optional for tests. */
+export type DevStatsMap = Pick<MapLibreMap, "getZoom">
+  & Partial<Pick<MapLibreMap, "on" | "off" | "isSourceLoaded" | "getStyle">>;
+
+/** One per-step tile layer in the dev readout. */
+export type TileLayerKey = "terrain" | "basemap" | "contours";
+
+/** Settle time and request count for one tile layer after a zoom step. */
+export interface TileStepStats {
+  settleMs: number | null;
+  requests: number;
+}
+
+/** Per-layer settle times after the last zoom step. The badge shows them only in dev. */
+export interface TileSettleSnapshot {
+  terrain: TileStepStats;
+  basemap: TileStepStats;
+  contours: TileStepStats;
+}
+
 /** Opening start and open-to-drawn time for the current scene. */
 export const sceneLoadStats = { startMs: 0, loadMs: null as number | null };
 
@@ -44,7 +69,7 @@ let activeLoop: DevStatsLoop | null = null;
 /** Show the badge when this build and address allow dev output. */
 export function startDevStatsWhenEnabled(
   element: HTMLElement | null,
-  map: Pick<MapLibreMap, "getZoom">,
+  map: DevStatsMap,
 ): () => void {
   if (element === null) return () => {};
   if (!shouldShowDevStats(import.meta.env.DEV, location.search)) return () => {};
@@ -73,11 +98,14 @@ export class DevStatsLoop {
   private isRunning = false;
   private longtasks = 0;
   private observer: PerformanceObserver | null = null;
+  private readonly settle: TileSettleTracker;
 
   constructor(
     private readonly element: HTMLElement,
-    private readonly map: Pick<MapLibreMap, "getZoom">,
-  ) {}
+    private readonly map: DevStatsMap,
+  ) {
+    this.settle = new TileSettleTracker(map);
+  }
 
   start(): void {
     if (this.isRunning) return;
@@ -85,6 +113,7 @@ export class DevStatsLoop {
     this.element.hidden = false;
     document.body.classList.add(DEV_STATS_CLASS);
     this.startLongtasks();
+    this.settle.start();
     this.frameId = requestAnimationFrame(this.tick);
   }
 
@@ -93,6 +122,7 @@ export class DevStatsLoop {
     this.isRunning = false;
     cancelAnimationFrame(this.frameId);
     this.stopLongtasks();
+    this.settle.stop();
     this.element.hidden = true;
     document.body.classList.remove(DEV_STATS_CLASS);
   }
@@ -102,7 +132,8 @@ export class DevStatsLoop {
     recordFrame(this.stamps, nowMs);
     if (nowMs - this.renderedMs >= REFRESH_MS) {
       this.renderedMs = nowMs;
-      const text = formatDevStats(snapshot(this.stamps, nowMs, this.map, this.longtasks));
+      const base = snapshot(this.stamps, nowMs, this.map, this.longtasks);
+      const text = formatDevStats({ ...base, tiles: this.settle.snapshot() });
       renderDevStats(this.element, text);
     }
     this.frameId = requestAnimationFrame(this.tick);
@@ -131,8 +162,183 @@ export class DevStatsLoop {
   }
 }
 
+/**
+ * Track per-layer settle times across one camera gesture for the dev readout. The step
+ * opens on movestart and stays open through sourcedata and idle, so zoomend and moveend
+ * never discard requests or settle times mid-gesture. The tracker stays idle until
+ * started, so production builds without the badge keep no listeners and no cost.
+ */
+export class TileSettleTracker {
+  private stepStartMs: number | null = null;
+  private readonly layers: Record<TileLayerKey, TileStepStats> = {
+    terrain: { settleMs: null, requests: 0 },
+    basemap: { settleMs: null, requests: 0 },
+    contours: { settleMs: null, requests: 0 },
+  };
+  private readonly seenSources: Record<TileLayerKey, Set<string>> = {
+    terrain: new Set(),
+    basemap: new Set(),
+    contours: new Set(),
+  };
+  private stopListening: () => void = () => {};
+
+  constructor(
+    private readonly map: DevStatsMap,
+    private readonly clock: () => number = () => performance.now(),
+  ) {}
+
+  start(): void {
+    if (typeof this.map.on !== "function" || typeof this.map.off !== "function") return;
+    const gestureStart = (): void => this.beginStep(this.clock());
+    const zoomStart = (): void => {
+      // A programmatic zoom opens a step only outside a gesture, so mid-gesture zooms keep counts.
+      if (this.stepStartMs === null) this.beginStep(this.clock());
+    };
+    // Each source load reaches the map as both dataloading and sourcedataloading.
+    const loading = (event: unknown): void => this.noteRequest(event);
+    const loaded = (event: unknown): void => this.noteLoaded(event);
+    const drained = (): void => this.settleLoaded(this.clock());
+    this.map.on("movestart", gestureStart);
+    this.map.on("zoomstart", zoomStart);
+    this.map.on("sourcedataloading", loading);
+    this.map.on("sourcedata", loaded);
+    this.map.on("moveend", drained);
+    this.map.on("idle", drained);
+    this.stopListening = (): void => {
+      this.map.off?.("movestart", gestureStart);
+      this.map.off?.("zoomstart", zoomStart);
+      this.map.off?.("sourcedataloading", loading);
+      this.map.off?.("sourcedata", loaded);
+      this.map.off?.("moveend", drained);
+      this.map.off?.("idle", drained);
+    };
+  }
+
+  stop(): void {
+    this.stopListening();
+    this.stopListening = (): void => {};
+  }
+
+  /** Copy the current per-layer counts so the badge never mutates tracker state. */
+  snapshot(): TileSettleSnapshot {
+    return {
+      terrain: { ...this.layers.terrain },
+      basemap: { ...this.layers.basemap },
+      contours: { ...this.layers.contours },
+    };
+  }
+
+  private beginStep(nowMs: number): void {
+    this.stepStartMs = nowMs;
+    for (const key of ["terrain", "basemap", "contours"] as const) {
+      this.layers[key] = { settleMs: null, requests: 0 };
+      this.seenSources[key].clear();
+    }
+    this.seedSeenSources();
+  }
+
+  private seedSeenSources(): void {
+    // Cached tiles emit no loads, so the gesture starts from the style sources.
+    for (const sourceId of styleSourceIds(this.map)) {
+      const layer = layerForSource(sourceId);
+      if (layer) this.seenSources[layer].add(sourceId);
+    }
+  }
+
+  private noteRequest(event: unknown): void {
+    if (this.stepStartMs === null) return;
+    const sourceId = sourceIdOf(event);
+    const layer = layerForSource(sourceId);
+    if (!layer || !sourceId) return;
+    this.layers[layer].requests += 1;
+    this.seenSources[layer].add(sourceId);
+    // A later load reopens the layer so the second wave times its own settle.
+    if (this.layers[layer].settleMs !== null) this.layers[layer].settleMs = null;
+  }
+
+  private noteLoaded(event: unknown): void {
+    if (this.stepStartMs === null) return;
+    const sourceId = sourceIdOf(event);
+    const layer = layerForSource(sourceId);
+    if (!layer || this.layers[layer].settleMs !== null) return;
+    const eventSourceId = eventLoaded(event) ? sourceId : undefined;
+    if (eventSourceId === undefined && !sourceLoaded(this.map, sourceId)) return;
+    // One sibling may settle while another still loads, so wait for every tracked source.
+    if (!allSourcesLoaded(this.map, this.seenSources[layer], eventSourceId)) return;
+    this.layers[layer].settleMs = this.clock() - this.stepStartMs;
+  }
+
+  /**
+   * Settle every requested layer whose sources already report loaded. A cached
+   * gesture emits no loads, so its end time is the settle time.
+   */
+  private settleLoaded(nowMs: number): void {
+    const startMs = this.stepStartMs;
+    if (startMs === null) return;
+    for (const key of ["terrain", "basemap", "contours"] as const) {
+      if (this.layers[key].settleMs !== null) continue;
+      if (this.seenSources[key].size === 0) {
+        this.layers[key].settleMs = nowMs - startMs;
+        continue;
+      }
+      if (allSourcesLoaded(this.map, this.seenSources[key])) {
+        this.layers[key].settleMs = nowMs - startMs;
+      }
+    }
+  }
+}
+
+/** Map a source id to its dev-readout layer. Scene data and helpers map to null. */
+export function layerForSource(sourceId: string | undefined): TileLayerKey | null {
+  if (!sourceId) return null;
+  if (sourceId === BASEMAP_SOURCE_ID) return "basemap";
+  if (sourceId.endsWith(RELIEF_SUFFIX)) return "terrain";
+  if (sourceId.endsWith(CONTOUR_SUFFIX)) return "contours";
+  return null;
+}
+
+function sourceIdOf(event: unknown): string | undefined {
+  const sourceId = (event as { sourceId?: unknown }).sourceId;
+  return typeof sourceId === "string" ? sourceId : undefined;
+}
+
+function eventLoaded(event: unknown): boolean {
+  return (event as { isSourceLoaded?: unknown }).isSourceLoaded === true;
+}
+
+function sourceLoaded(map: DevStatsMap, sourceId: string | undefined): boolean {
+  if (!sourceId || typeof map.isSourceLoaded !== "function") return false;
+  try {
+    return map.isSourceLoaded(sourceId);
+  } catch {
+    return false;
+  }
+}
+
+function allSourcesLoaded(
+  map: DevStatsMap,
+  sourceIds: ReadonlySet<string>,
+  loadedId?: string,
+): boolean {
+  for (const sourceId of sourceIds) {
+    if (sourceId === loadedId) continue;
+    if (!sourceLoaded(map, sourceId)) return false;
+  }
+  return true;
+}
+
+function styleSourceIds(map: DevStatsMap): string[] {
+  try {
+    const sources = map.getStyle?.()?.sources;
+    if (!sources) return [];
+    return Object.keys(sources);
+  } catch {
+    return [];
+  }
+}
+
 /** Start the frame loop and refresh the badge about twice a second. */
-export function startDevStats(element: HTMLElement, map: Pick<MapLibreMap, "getZoom">): () => void {
+export function startDevStats(element: HTMLElement, map: DevStatsMap): () => void {
   const loop = new DevStatsLoop(element, map);
   loop.start();
 
@@ -149,7 +355,7 @@ function recordFrame(stamps: number[], nowMs: number): void {
 function snapshot(
   stamps: readonly number[],
   nowMs: number,
-  map: Pick<MapLibreMap, "getZoom">,
+  map: DevStatsMap,
   longtasks: number,
 ): DevStatsSnapshot {
   const gpu = readGpuSnapshot();
@@ -208,6 +414,8 @@ export interface DevStatsSnapshot {
   bake?: Record<string, BakeStats>;
   /** Count of main-thread tasks over 50 ms since the loop started. */
   longtasks: number;
+  /** Per-layer settle times after the last zoom step, present only while tracking. */
+  tiles?: TileSettleSnapshot;
 }
 
 /** One layer's band-bake cost for the dev readout. */
@@ -228,6 +436,7 @@ export function formatDevStats(snapshot: DevStatsSnapshot): string {
     + ` · ${snapshot.requests} req ${formatBytes(snapshot.bytes)}`
     + ` · ${formatGpuPart(snapshot.gpuMs, snapshot.gpuUnavailable)}`
     + formatBakeSuffix(snapshot.bake)
+    + formatTileSuffix(snapshot.tiles)
     + ` · ${snapshot.longtasks} long`;
 }
 
@@ -252,6 +461,24 @@ export function formatBakePart(bake?: Record<string, BakeStats>): string {
 function formatBakeSuffix(bake?: Record<string, BakeStats>): string {
   if (!bake || Object.keys(bake).length === 0) return "";
   return ` · ${formatBakePart(bake)}`;
+}
+
+/** Build the badge's tile-settle part from the last zoom step. */
+export function formatTileSettlePart(tiles: TileSettleSnapshot): string {
+  return `tiles ${formatTileLayer("terrain", tiles.terrain)}`
+    + ` ${formatTileLayer("basemap", tiles.basemap)}`
+    + ` ${formatTileLayer("contours", tiles.contours)}`;
+}
+
+/** The tile suffix for the badge line. It stays empty until the first zoom step settles. */
+function formatTileSuffix(tiles?: TileSettleSnapshot): string {
+  if (!tiles) return "";
+  return ` · ${formatTileSettlePart(tiles)}`;
+}
+
+function formatTileLayer(name: string, stats: TileStepStats): string {
+  const settle = stats.settleMs === null ? "—" : `${Math.round(stats.settleMs)} ms`;
+  return `${name} ${settle} ${stats.requests} req`;
 }
 
 /** Read the timer-query timings without creating extension work when disabled. */

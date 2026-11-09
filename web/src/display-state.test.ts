@@ -18,6 +18,7 @@ const hooks = registerHooks({
 });
 const {
   DEFAULT_EDGES,
+  DEFAULT_OUTLINE,
   densityControl,
   displayUnitsFrom,
   elevationUnitFrom,
@@ -28,16 +29,20 @@ const {
   loadStoredPalettes,
   loadStoredEdges,
   loadStoredDensities,
+  loadStoredOutline,
   loadStoredSmoothing,
   loadStoredUnits,
   loadMapDetailsShown,
   NO_TOKENS,
+  OUTLINE_COLORS,
+  outlineCss,
   rangeDecimals,
   recordMenuChange,
   resolveDisplay,
   setLayerDisplay,
   storeInk,
   storeMapDetailsShown,
+  storeOutline,
   storePalette,
   storeEdges,
   storeDensity,
@@ -217,7 +222,10 @@ test("the link writes the effective draw of every on unit", () => {
 
   assert.ok(
     formatDisplayParams(auto.display, COLOUR_LAYERS)
-      .endsWith("&as=chirps_monthly:dots,era5land_temperature:colour&dens=chirps_monthly:1"),
+      .endsWith(
+        "&as=chirps_monthly:dots,era5land_temperature:colour"
+          + "&dens=chirps_monthly:1&outline=on:graphite:1.5",
+      ),
   );
 
   const single = resolveDisplay([TEMPERATURE], NO_TOKENS, {});
@@ -233,13 +241,16 @@ test("a blend link omits its halves from off", () => {
 
   assert.deepEqual(display.showAs, { blend: "colour" });
   assert.deepEqual([...display.off], ["chirps_monthly", "era5land_temperature"]);
-  assert.ok(text.endsWith("&as=blend:colour&dens=chirps_monthly:1"));
+  assert.ok(
+    text.endsWith("&as=blend:colour&dens=chirps_monthly:1&outline=on:graphite:1.5"),
+  );
   assert.equal(text.includes("off="), false);
 
   const pair = [LAYERS[0], TEMPERATURE];
   const pairOnly = resolveDisplay(pair, { ...NO_TOKENS, as: "blend:colour" }, {});
   assert.ok(
-    formatDisplayParams(pairOnly.display, pair).endsWith("&as=blend:colour&dens=chirps_monthly:1"),
+    formatDisplayParams(pairOnly.display, pair)
+      .endsWith("&as=blend:colour&dens=chirps_monthly:1&outline=on:graphite:1.5"),
   );
 });
 
@@ -329,7 +340,7 @@ test("every layer with a menu names its palette but ranges and off parts only wh
   assert.equal(
     formatDisplayParams(display, LAYERS),
     "&pal=chirps_monthly:ink-blue,esa_worldcover:painted,terrain:brown"
-      + "&as=chirps_monthly:colour&dens=chirps_monthly:1",
+      + "&as=chirps_monthly:colour&dens=chirps_monthly:1&outline=on:graphite:1.5",
   );
 });
 
@@ -364,7 +375,7 @@ test("palettes, ranges and off parts round trip through the link text", () => {
     text,
     "&pal=chirps_monthly:custom-1a2b3c-88cc44,esa_worldcover:esa,terrain:grey"
       + "&range=chirps_monthly:0:250&off=esa_worldcover,terrain.contours"
-      + "&as=chirps_monthly:colour&dens=chirps_monthly:1",
+      + "&as=chirps_monthly:colour&dens=chirps_monthly:1&outline=on:graphite:1.5",
   );
 });
 
@@ -408,7 +419,10 @@ test("a menu range change keeps the Show as choice", () => {
   assert.deepEqual(display.layers.chirps_monthly, { range: [0, 90] });
   assert.ok(
     formatDisplayParams(display, COLOUR_LAYERS)
-      .endsWith("&as=chirps_monthly:colour,era5land_temperature:isolines&dens=chirps_monthly:1"),
+      .endsWith(
+        "&as=chirps_monthly:colour,era5land_temperature:isolines"
+          + "&dens=chirps_monthly:1&outline=on:graphite:1.5",
+      ),
   );
 });
 
@@ -1102,6 +1116,124 @@ test("map details changes notify subscribers until removed", () => {
 
   assert.deepEqual(seen, [true, false]);
   assert.equal(loadMapDetailsShown(), true);
+});
+
+test("the outline offers graphite first with black, navy, brown, deep red and white", () => {
+  assert.deepEqual(
+    OUTLINE_COLORS.map(({ name }) => name),
+    ["graphite", "black", "navy", "brown", "deep-red", "white"],
+  );
+  assert.equal(OUTLINE_COLORS[0].color, "#333333");
+  assert.deepEqual(DEFAULT_OUTLINE, { shown: true, color: "graphite", widthPx: 1.5 });
+});
+
+test("outline CSS resolves presets and custom hexes and falls back to graphite", () => {
+  assert.equal(outlineCss("graphite"), "#333333");
+  assert.equal(outlineCss("white"), "#ffffff");
+  assert.equal(outlineCss("#102030"), "#102030");
+  assert.equal(outlineCss("pink"), "#333333");
+  assert.equal(outlineCss(""), "#333333");
+});
+
+test("the stored outline round trips and starts absent", () => {
+  useStorage();
+
+  assert.equal(loadStoredOutline(), null);
+
+  storeOutline({ shown: false, color: "#102030", widthPx: 2 });
+  assert.deepEqual(loadStoredOutline(), { shown: false, color: "#102030", widthPx: 2 });
+
+  storeOutline({ ...DEFAULT_OUTLINE });
+  assert.deepEqual(loadStoredOutline(), DEFAULT_OUTLINE);
+});
+
+test("invalid or blocked outline storage falls back to null without throwing", () => {
+  const items = useStorage();
+  for (const value of [
+    null,
+    [],
+    { shown: "yes", color: "graphite", widthPx: 1.5 },
+    { shown: true, color: "pink", widthPx: 1.5 },
+    { shown: true, color: "#10203G", widthPx: 1.5 },
+    { shown: true, color: "graphite", widthPx: 0.25 },
+    { shown: true, color: "graphite", widthPx: 5 },
+    { shown: true, color: "graphite", widthPx: "1.5" },
+    { shown: true, color: "graphite" },
+  ]) {
+    items.set("soe.outline.v1", JSON.stringify(value));
+    assert.deepEqual(loadStoredOutline(), null);
+  }
+  items.set("soe.outline.v1", "broken JSON");
+  assert.deepEqual(loadStoredOutline(), null);
+  useBlockedStorage();
+  assert.deepEqual(loadStoredOutline(), null);
+  assert.doesNotThrow(() => storeOutline({ ...DEFAULT_OUTLINE }));
+});
+
+test("a linked outline beats a stored one which beats the default", () => {
+  const stored = { shown: false, color: "navy", widthPx: 2 };
+  const linked = resolveDisplay(
+    LAYERS,
+    { ...NO_TOKENS, outline: "off:navy:2" },
+    {},
+    {},
+    {},
+    {},
+    {},
+    stored,
+  );
+
+  assert.deepEqual(linked.display.outline, stored);
+  assert.equal(linked.dropped, false);
+
+  const remembered = resolveDisplay(LAYERS, NO_TOKENS, {}, {}, {}, {}, {}, stored);
+
+  assert.deepEqual(remembered.display.outline, stored);
+  assert.equal(remembered.dropped, false);
+
+  const auto = resolveDisplay(LAYERS, NO_TOKENS, {});
+
+  assert.deepEqual(auto.display.outline, DEFAULT_OUTLINE);
+});
+
+test("a malformed outline token drops with the note and keeps the default", () => {
+  for (const outline of ["off:navy", "on:pink:1.5", "on:navy:9"]) {
+    const { display, dropped } = resolveDisplay(LAYERS, { ...NO_TOKENS, outline }, {});
+
+    assert.equal(dropped, true);
+    assert.deepEqual(display.outline, DEFAULT_OUTLINE);
+  }
+});
+
+test("the outline always rides the link and round trips", () => {
+  const { display } = resolveDisplay(LAYERS, { ...NO_TOKENS, outline: "off:navy:2" }, {});
+  const text = formatDisplayParams(display, LAYERS);
+  const params = new URLSearchParams(text.replace(/^&/, ""));
+  const back = resolveDisplay(
+    LAYERS,
+    { ...NO_TOKENS, outline: params.get("outline") ?? "" },
+    {},
+  );
+
+  assert.ok(text.includes("&outline=off:navy:2"));
+  assert.deepEqual(back.display.outline, { shown: false, color: "navy", widthPx: 2 });
+});
+
+test("an outline width snaps to the slider step", () => {
+  const { display } = resolveDisplay(
+    LAYERS,
+    { ...NO_TOKENS, outline: "on:graphite:1.23" },
+    {},
+  );
+
+  assert.equal(display.outline.widthPx, 1);
+});
+
+test("repeated outline tokens keep the last entry", () => {
+  const tokens = { ...NO_TOKENS, outline: "on:graphite:1,off:black:2" };
+  const { display } = resolveDisplay(LAYERS, tokens, {});
+
+  assert.deepEqual(display.outline, { shown: false, color: "black", widthPx: 2 });
 });
 
 test("elevation units follow the terrain override and default to metres", () => {

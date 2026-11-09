@@ -26,6 +26,7 @@ const {
 } = await import("./show-as.ts");
 const { allocate, BLEND } = await import("./layers/allocate.ts");
 const {
+  DEFAULT_OUTLINE,
   formatDisplayParams,
   NO_TOKENS,
   resolveDisplay,
@@ -224,7 +225,12 @@ test("an off sticky colour round trips in either layer order", () => {
     const senderAllocation = allocate(layers, on("temp"), sender.showAs);
     const params = new URLSearchParams(
       formatDisplayParams(
-        { layers: {}, off: new Set(sender.off), showAs: sender.showAs },
+        {
+          layers: {},
+          off: new Set(sender.off),
+          showAs: sender.showAs,
+          outline: { ...DEFAULT_OUTLINE },
+        },
         layers,
       ),
     );
@@ -261,7 +267,15 @@ test("a linked snapshot ignores stored choices, including a stored blend", () =>
   const sender = state({ rain: "dots", temp: "isolines" });
   const senderAllocation = allocate(layers, on("rain", "temp", "land"), sender.showAs);
   const params = new URLSearchParams(
-    formatDisplayParams({ layers: {}, off: new Set(), showAs: sender.showAs }, layers),
+    formatDisplayParams(
+      {
+        layers: {},
+        off: new Set(),
+        showAs: sender.showAs,
+        outline: { ...DEFAULT_OUTLINE },
+      },
+      layers,
+    ),
   );
   const storedCases = [
     { blend: "colour" },

@@ -17,13 +17,27 @@ CANADA_CODE = 3
 EGDI_CODE = 4
 IGME_CODE = 2
 SGMC_CODE = 5
+ALASKA_CODE = 6
+GMNA_CODE = 7
 
-CODE_MEANINGS = ("global_base", "europe_igme5000", "canada_5m", "europe_egdi", "us_sgmc")
-CODE_VALUES = (BASE_CODE, IGME_CODE, CANADA_CODE, EGDI_CODE, SGMC_CODE)
+CODE_MEANINGS = (
+    "global_base",
+    "europe_igme5000",
+    "canada_5m",
+    "europe_egdi",
+    "us_sgmc",
+    "alaska_sim3340",
+    "north_america_gmna",
+)
+CODE_VALUES = (BASE_CODE, IGME_CODE, CANADA_CODE, EGDI_CODE, SGMC_CODE, ALASKA_CODE, GMNA_CODE)
 
+ALASKA_AGE_FILE = "geology_age_alaska.tif"
+ALASKA_TYPE_FILE = "geology_type_alaska.tif"
 CANADA_AGE_FILE = "geology_age_canada.tif"
 CANADA_TYPE_FILE = "geology_type_canada.tif"
 EGDI_TYPE_FILE = "geology_type_egdi.tif"
+GMNA_AGE_FILE = "geology_age_gmna.tif"
+GMNA_TYPE_FILE = "geology_type_gmna.tif"
 IGME_AGE_FILE = "geology_age_igme5000.tif"
 IGME_TYPE_FILE = "geology_type_igme5000.tif"
 SGMC_AGE_FILE = "geology_age_sgmc.tif"
@@ -32,10 +46,32 @@ SGMC_TYPE_FILE = "geology_type_sgmc.tif"
 # Priority rises down the table, so a later source wins where footprints overlap.
 REGIONAL_SOURCES = (
     {
+        # Lowest priority because the national maps win where they exist.
+        "id": "north_america_gmna",
+        "title": "North America (USGS GMNA)",
+        "licence": "north_america_gmna",
+        "footprint": (-180.0, 5.0, -10.0, 84.0),
+        "age_file": GMNA_AGE_FILE,
+        "type_file": GMNA_TYPE_FILE,
+        "scale": "1:5,000,000",
+        "representation": "bedrock geology",
+    },
+    {
+        "id": "alaska_sim3340",
+        "title": "Alaska (USGS SIM 3340)",
+        "licence": "alaska_sim3340",
+        # The footprint runs past 180 degrees because the Aleutians start at Attu, 172 degrees east.
+        "footprint": (171.0, 51.0, 231.0, 72.0),
+        "age_file": ALASKA_AGE_FILE,
+        "type_file": ALASKA_TYPE_FILE,
+        "scale": "1:250,000",
+        "representation": "bedrock and surficial geology",
+    },
+    {
         "id": "europe_igme5000",
         "title": "Europe, Turkey and the Caucasus (IGME5000)",
         "licence": "europe_igme5000",
-        "footprint": (-13.0, 32.0, 52.0, 73.0),
+        "footprint": (-25.0, 32.0, 52.0, 82.0),
         "age_file": IGME_AGE_FILE,
         "type_file": IGME_TYPE_FILE,
         "scale": "1:5,000,000",
@@ -45,7 +81,7 @@ REGIONAL_SOURCES = (
         "id": "canada_5m",
         "title": "Canada (GSC 1:5M, Map 1860A)",
         "licence": "canada_5m",
-        "footprint": (-170.0, 38.0, -50.0, 74.0),
+        "footprint": (-170.0, 38.0, -50.0, 84.0),
         "age_file": CANADA_AGE_FILE,
         "type_file": CANADA_TYPE_FILE,
         "scale": "1:5,000,000",
@@ -75,6 +111,8 @@ REGIONAL_SOURCES = (
 
 SOURCE_IDS = tuple(source["id"] for source in REGIONAL_SOURCES)
 SOURCE_CODES = {
+    "north_america_gmna": GMNA_CODE,
+    "alaska_sim3340": ALASKA_CODE,
     "europe_igme5000": IGME_CODE,
     "canada_5m": CANADA_CODE,
     "europe_egdi": EGDI_CODE,
@@ -159,7 +197,7 @@ def sources_for_kind(kind: str) -> tuple[dict, ...]:
 def footprint_intersects(source: dict, bbox: tuple[float, ...]) -> bool:
     """Return whether the bbox (W, S, E, N) overlaps the source footprint.
 
-    Scene bboxes may run 0 to 360 past the antimeridian while footprints stay
+    Scene bboxes may run 0 to 360 past the antimeridian while footprints mostly stay
     within -180 to 180, so each footprint is also tried one world width away.
     """
     west, south, east, north = source["footprint"]

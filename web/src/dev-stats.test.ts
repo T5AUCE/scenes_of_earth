@@ -10,7 +10,9 @@ import {
   formatBytes,
   formatDevStats,
   formatGpuPart,
+  formatTileSettlePart,
   framesPerSecond,
+  layerForSource,
   noteSceneOpen,
   noteSceneReady,
   pruneStamps,
@@ -18,6 +20,7 @@ import {
   sceneLoadStats,
   shouldShowDevStats,
   startDevStats,
+  TileSettleTracker,
   worstFrameMs,
 } from "./dev-stats.ts";
 import { fetchStats, mergingStore, noteFetch, resetFetchStats } from "./merging-store.ts";
@@ -367,4 +370,301 @@ function rangeSource(): { store: AsyncReadable; requests: RangeRequest[] } {
   };
 
   return { store, requests };
+}
+
+test("tile sources map to their readout layers", () => {
+  assert.equal(layerForSource("terrain-relief"), "terrain");
+  assert.equal(layerForSource("my-scene-relief"), "terrain");
+  assert.equal(layerForSource("terrain-contours"), "contours");
+  assert.equal(layerForSource("openmaptiles"), "basemap");
+  assert.equal(layerForSource("rain"), null);
+  assert.equal(layerForSource(undefined), null);
+});
+
+test("the tile readout stays empty without a gesture", () => {
+  const tracker = new TileSettleTracker({ getZoom: () => 8 }, () => 1000);
+  tracker.start();
+
+  assert.deepEqual(tracker.snapshot(), {
+    terrain: { settleMs: null, requests: 0 },
+    basemap: { settleMs: null, requests: 0 },
+    contours: { settleMs: null, requests: 0 },
+  });
+  tracker.stop();
+});
+
+test("a zoom gesture counts requests and times each layer until loaded", () => {
+  let now = 1000;
+  const map = tileMap(() => 8);
+  const tracker = new TileSettleTracker(map, () => now);
+  tracker.start();
+
+  map.emit("movestart", {});
+  map.emit("sourcedataloading", { sourceId: "terrain-relief" });
+  map.emit("sourcedataloading", { sourceId: "terrain-relief" });
+  map.emit("sourcedataloading", { sourceId: "openmaptiles" });
+  map.emit("zoom", {});
+  now += 120;
+  map.emit("sourcedata", { sourceId: "terrain-relief", isSourceLoaded: true });
+  map.emit("zoomend", {});
+  map.emit("moveend", {});
+
+  const settled = tracker.snapshot();
+  assert.equal(settled.terrain.requests, 2);
+  assert.equal(settled.terrain.settleMs, 120);
+  assert.equal(settled.basemap.requests, 1);
+  assert.equal(settled.basemap.settleMs, null);
+
+  map.loaded.add("openmaptiles");
+  now += 60;
+  map.emit("idle", {});
+  assert.equal(tracker.snapshot().basemap.settleMs, 180);
+  tracker.stop();
+});
+
+test("a loading-loaded-end sequence keeps its requests and settle time", () => {
+  let now = 1000;
+  const map = tileMap(() => 8);
+  const tracker = new TileSettleTracker(map, () => now);
+  tracker.start();
+
+  map.emit("movestart", {});
+  map.emit("sourcedataloading", { sourceId: "openmaptiles" });
+  now += 40;
+  map.emit("sourcedata", { sourceId: "openmaptiles", isSourceLoaded: true });
+  map.emit("zoomend", {});
+  map.emit("moveend", {});
+
+  assert.deepEqual(tracker.snapshot().basemap, { settleMs: 40, requests: 1 });
+  tracker.stop();
+});
+
+test("moveend settles already-loaded sources with no further events", () => {
+  let now = 1000;
+  const map = tileMap(() => 8);
+  map.loaded.add("terrain-contours");
+  const tracker = new TileSettleTracker(map, () => now);
+  tracker.start();
+
+  map.emit("movestart", {});
+  map.emit("sourcedataloading", { sourceId: "terrain-contours" });
+  now += 40;
+  map.emit("moveend", {});
+
+  assert.deepEqual(tracker.snapshot().contours, { settleMs: 40, requests: 1 });
+  tracker.stop();
+});
+
+test("idle settles loaded sources after an unresolved moveend", () => {
+  let now = 1000;
+  const map = tileMap(() => 8);
+  const tracker = new TileSettleTracker(map, () => now);
+  tracker.start();
+
+  map.emit("movestart", {});
+  map.emit("sourcedataloading", { sourceId: "terrain-relief" });
+  map.emit("moveend", {});
+
+  assert.equal(tracker.snapshot().terrain.settleMs, null);
+
+  map.loaded.add("terrain-relief");
+  now += 80;
+  map.emit("idle", {});
+
+  assert.equal(tracker.snapshot().terrain.settleMs, 80);
+  tracker.stop();
+});
+
+test("a new gesture resets the previous counts", () => {
+  const map = tileMap(() => 8);
+  const tracker = new TileSettleTracker(map, () => 1000);
+  tracker.start();
+
+  map.emit("movestart", {});
+  map.emit("sourcedataloading", { sourceId: "terrain-contours" });
+  map.emit("moveend", {});
+  map.emit("movestart", {});
+
+  assert.deepEqual(tracker.snapshot().contours, { settleMs: null, requests: 0 });
+  tracker.stop();
+});
+
+test("a zoomstart outside a gesture opens a step without resetting mid-gesture", () => {
+  const map = tileMap(() => 8);
+  const tracker = new TileSettleTracker(map, () => 1000);
+  tracker.start();
+
+  map.emit("zoomstart", {});
+  map.emit("sourcedataloading", { sourceId: "terrain-relief" });
+  map.emit("zoomstart", {});
+
+  assert.equal(tracker.snapshot().terrain.requests, 1);
+  tracker.stop();
+});
+
+test("the bubbled dataloading event counts nothing on its own", () => {
+  const map = tileMap(() => 8);
+  const tracker = new TileSettleTracker(map, () => 1000);
+  tracker.start();
+
+  map.emit("movestart", {});
+  map.emit("dataloading", { sourceId: "terrain-relief" });
+
+  assert.equal(tracker.snapshot().terrain.requests, 0);
+  tracker.stop();
+});
+
+test("the tracker falls back to isSourceLoaded and ignores unknown sources", () => {
+  let now = 1000;
+  const map = tileMap(() => 8);
+  map.loaded.add("terrain-contours");
+  const tracker = new TileSettleTracker(map, () => now);
+  tracker.start();
+
+  map.emit("movestart", {});
+  map.emit("sourcedataloading", { sourceId: "rain" });
+  now += 40;
+  map.emit("sourcedata", { sourceId: "terrain-contours" });
+
+  const settled = tracker.snapshot();
+  assert.equal(settled.contours.settleMs, 40);
+  assert.equal(settled.terrain.requests, 0);
+  tracker.stop();
+});
+
+test("a gesture with no source events settles cached style sources", () => {
+  let now = 1000;
+  const map = tileMap(() => 8);
+  map.loaded.add("terrain-relief");
+  map.loaded.add("openmaptiles");
+  map.loaded.add("terrain-contours");
+  (map as unknown as { getStyle: () => { sources: Record<string, object> } }).getStyle = () => ({
+    sources: {
+      "terrain-relief": {},
+      "openmaptiles": {},
+      "terrain-contours": {},
+    },
+  });
+  const tracker = new TileSettleTracker(map, () => now);
+  tracker.start();
+
+  map.emit("movestart", {});
+  now += 50;
+  map.emit("moveend", {});
+
+  const settled = tracker.snapshot();
+  assert.equal(settled.terrain.settleMs, 50);
+  assert.equal(settled.basemap.settleMs, 50);
+  assert.equal(settled.contours.settleMs, 50);
+  assert.equal(settled.terrain.requests, 0);
+
+  map.loaded.clear();
+  map.emit("movestart", {});
+  now += 30;
+  map.emit("moveend", {});
+
+  assert.equal(tracker.snapshot().terrain.settleMs, null);
+  tracker.stop();
+});
+
+test("a second load wave in one gesture reopens until all sources load", () => {
+  let now = 1000;
+  const map = tileMap(() => 8);
+  const tracker = new TileSettleTracker(map, () => now);
+  tracker.start();
+
+  map.emit("movestart", {});
+  map.emit("sourcedataloading", { sourceId: "terrain-relief" });
+  map.emit("sourcedataloading", { sourceId: "my-scene-relief" });
+  now += 40;
+  map.emit("sourcedata", { sourceId: "terrain-relief", isSourceLoaded: true });
+
+  assert.equal(tracker.snapshot().terrain.settleMs, null);
+
+  map.loaded.add("terrain-relief");
+  map.loaded.add("my-scene-relief");
+  now += 40;
+  map.emit("sourcedata", { sourceId: "my-scene-relief", isSourceLoaded: true });
+
+  assert.equal(tracker.snapshot().terrain.settleMs, 80);
+
+  map.emit("sourcedataloading", { sourceId: "terrain-relief" });
+
+  assert.equal(tracker.snapshot().terrain.settleMs, null);
+
+  map.loaded.delete("terrain-relief");
+  map.emit("moveend", {});
+
+  assert.equal(tracker.snapshot().terrain.settleMs, null);
+
+  map.loaded.add("terrain-relief");
+  now += 100;
+  map.emit("sourcedata", { sourceId: "terrain-relief", isSourceLoaded: true });
+
+  assert.deepEqual(tracker.snapshot().terrain, { settleMs: 180, requests: 3 });
+  tracker.stop();
+});
+
+test("the tile badge part lists each layer once", () => {
+  const text = formatTileSettlePart({
+    terrain: { settleMs: 120, requests: 12 },
+    basemap: { settleMs: null, requests: 0 },
+    contours: { settleMs: 80.4, requests: 2 },
+  });
+
+  assert.equal(text, "tiles terrain 120 ms 12 req basemap — 0 req contours 80 ms 2 req");
+});
+
+test("the badge line gains the tile part only while tracking", () => {
+  const plain = formatDevStats({
+    fps: 60,
+    worstMs: 33,
+    zoom: 5.25,
+    loadMs: null,
+    requests: 2,
+    bytes: 1536,
+    gpuMs: {},
+    gpuUnavailable: true,
+    longtasks: 0,
+  });
+  assert.ok(!plain.includes("tiles"));
+
+  const withTiles = formatDevStats({
+    fps: 60,
+    worstMs: 33,
+    zoom: 5.25,
+    loadMs: null,
+    requests: 2,
+    bytes: 1536,
+    gpuMs: {},
+    gpuUnavailable: true,
+    longtasks: 0,
+    tiles: {
+      terrain: { settleMs: 120, requests: 3 },
+      basemap: { settleMs: null, requests: 0 },
+      contours: { settleMs: 40, requests: 1 },
+    },
+  });
+  assert.ok(withTiles.includes("tiles terrain 120 ms 3 req"));
+});
+
+function tileMap(zoom: () => number) {
+  const listeners = new Map<string, Set<(event: object) => void>>();
+  const loaded = new Set<string>();
+  return {
+    loaded,
+    getZoom: zoom,
+    isSourceLoaded: (id: string) => loaded.has(id),
+    on: (type: string, listener: (event: object) => void) => {
+      const entries = listeners.get(type) ?? new Set<(event: object) => void>();
+      entries.add(listener);
+      listeners.set(type, entries);
+    },
+    off: (type: string, listener: (event: object) => void) => {
+      listeners.get(type)?.delete(listener);
+    },
+    emit: (type: string, event: object) => {
+      for (const listener of [...(listeners.get(type) ?? [])]) listener(event);
+    },
+  };
 }

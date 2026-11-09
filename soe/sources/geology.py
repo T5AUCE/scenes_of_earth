@@ -1,6 +1,6 @@
 """Compose runtime rock-type and rock-age datasets with regional provenance and notices."""
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 from rasterio.transform import Affine
@@ -46,6 +46,7 @@ class GeologyDataset(StaticDataset):
     """
 
     file: str = LITHOLOGY_FILE  # the class COG in the cubes folder
+    north_source: dict | None = None  # the base source as credited for a scene beyond 60N or S
 
     def __post_init__(self) -> None:
         """Remember which map built the COG for the notices and require land tiles.
@@ -54,6 +55,16 @@ class GeologyDataset(StaticDataset):
         """
         self.needs_tiles = True
         self.lithology_source = self.backend.lithology_source(self.file)
+
+    def for_scene(self, beyond_legacy_extent: bool) -> "GeologyDataset":
+        """Return the layer as a scene reads it, with the base source of the 84N maps beyond 60N/S.
+
+        A scene inside 60N keeps the source it always had, so its scene id stays the same.
+        """
+        if not beyond_legacy_extent or self.north_source is None:
+            return self
+
+        return replace(self, source=self.north_source)
 
     def tile_count(self, bbox: Bbox) -> int:
         """Return the land tile count of bbox, which is zero over open sea."""

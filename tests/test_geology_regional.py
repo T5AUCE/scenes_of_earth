@@ -1,5 +1,7 @@
 """Test the regional geology patchwork: name tables, compositing, provenance and notices."""
 import json
+import logging
+import struct
 from pathlib import Path
 
 import numpy as np
@@ -7,6 +9,7 @@ import pytest
 import rasterio
 import zarr
 from rasterio.transform import from_origin
+import shapely
 from shapely.geometry import box
 
 from soe.areas import Area
@@ -21,6 +24,10 @@ from soe.geology_regional import (
     CANADA_TYPE_FILE,
     CODE_MEANINGS,
     CODE_VALUES,
+    ALASKA_AGE_FILE,
+    ALASKA_TYPE_FILE,
+    GMNA_AGE_FILE,
+    GMNA_TYPE_FILE,
     IGME_CODE,
     SGMC_AGE_FILE,
     SGMC_CODE,
@@ -38,17 +45,29 @@ from soe.ingest.geology_classification import (
     class_value,
     egdi_type_batch,
     family_value,
+    gmna_age_batch,
+    gmna_type_batch,
     igme_age_batch,
     igme_type_batch,
     sgmc_age_batch,
     sgmc_type_batch,
+    sim3340_age_batch,
+    sim3340_type_batch,
 )
 from soe.ingest.geology_names import EGDI_TYPE_NAMES
 from soe.ingest.geology_regional import (
+    GMNA_SHAPE,
+    SIM3340_DIR,
+    SIM3340_GDB,
+    _close_wkb_rings,
+    _gmna_geometry,
     _reproject_egdi_tile,
+    _split_at_antimeridian,
     _write_egdi_classes,
     ingest_egdi,
     ingest_geology_regional,
+    ingest_gmna,
+    ingest_sim3340,
 )
 from soe.scene_request import compute_scene_id
 from soe.sources import RealSource, SyntheticSource, make_registry
@@ -129,11 +148,15 @@ def toronto_cubes(tmp_path):
 
 def test_sources_for_kind_lists_only_suppliers_in_priority_order():
     assert [source["id"] for source in sources_for_kind("age")] == [
+        "north_america_gmna",
+        "alaska_sim3340",
         "europe_igme5000",
         "canada_5m",
         "us_sgmc",
     ]
     assert [source["id"] for source in sources_for_kind("type")] == [
+        "north_america_gmna",
+        "alaska_sim3340",
         "europe_igme5000",
         "canada_5m",
         "europe_egdi",
@@ -157,8 +180,8 @@ def test_candidates_find_regional_sources_for_a_zero_to_360_bbox():
     assert [source["id"] for source in found] == ["canada_5m", "us_sgmc"]
 
 
-@pytest.mark.parametrize("bbox", [(144.0, 40.0, 146.0, 41.0), (-180.0, 40.0, -175.0, 41.0)])
-def test_candidates_ignore_a_bbox_east_or_west_of_every_footprint(bbox):
+@pytest.mark.parametrize("bbox", [(144.0, 40.0, 146.0, 41.0), (140.0, -40.0, 145.0, -39.0)])
+def test_candidates_ignore_a_bbox_outside_every_footprint(bbox):
     found = candidates_for("type", bbox, lambda file: True)
 
     assert found == []
@@ -435,6 +458,198 @@ def test_sgmc_names_with_known_substrings_still_fail():
         sgmc_type_batch(records)
 
     assert all(name in str(error.value) for name in ("BOGUS volcanic", "WEIRD basalt"))
+
+
+def test_sim3340_ages_take_the_finest_name_of_each_path_and_alias_odd_spellings():
+    values = sim3340_age_batch(
+        [
+            ("Phanerozoic;Cenozoic;Quaternary;Holocene", "Phanerozoic;Cenozoic;Quaternary"),
+            ("Phanerozoic;Paleozoic;Cambrian;Series 2", "Proterozoic;Neoproterozoic;Ediacarian"),
+            ("Phanerozoic;Mesozoic;Cretaceous;Valanginian", "Phanerozoic;Mesozoic"),
+        ],
+    )
+
+    assert values == [
+        AGE_VALUES["Quaternary"],
+        AGE_VALUES["Precambrian to Phanerozoic"],
+        AGE_VALUES["Mesozoic undivided"],
+    ]
+
+
+def test_sim3340_unknown_age_names_fail_with_the_full_list():
+    with pytest.raises(ValueError, match="BOGUS.*ODD"):
+        sim3340_age_batch([("Phanerozoic;BOGUS", "Phanerozoic;ODD")])
+
+
+def test_sim3340_types_alias_spellings_and_leave_water_to_the_base_map():
+    values = sim3340_type_batch(
+        [
+            ("Sedimentary", "Clastic", "Quartzose-sandstone", "", ""),
+            ("Water", "", "", "", ""),
+            ("Igneous", "Plutonic", "Gabbronorite", "", ""),
+        ],
+    )
+
+    assert values == [class_value("ssss"), None, class_value("pb__")]
+
+
+def test_sim3340_unknown_names_fail_with_the_full_list():
+    records = [("Igneous", "BOGUS", "", "", ""), ("Water", "ODD", "", "", "")]
+    with pytest.raises(ValueError, match="BOGUS"):
+        sim3340_type_batch(records)
+
+
+def test_gmna_ages_take_the_whole_range_of_each_side():
+    values = gmna_age_batch(
+        [
+            ("Quaternary", "Tertiary"),
+            ("Precambrian", "Precambrian"),
+            ("Middle Devonian", "Middle Devonian"),
+            ("Maastrichtian", "Campanian"),
+            ("Age unknown", "Age unknown"),
+        ],
+    )
+
+    assert values == [
+        AGE_VALUES["Cenozoic undivided"],
+        AGE_VALUES["Precambrian undivided"],
+        AGE_VALUES["Devonian"],
+        AGE_VALUES["Cretaceous"],
+        None,
+    ]
+
+
+def test_gmna_pre_ranges_span_their_whole_allowance():
+    values = gmna_age_batch(
+        [("Pre-Cenozoic", "Pre-Cenozoic"), ("Pre-Mesozoic", "Pre-Mesozoic")],
+    )
+
+    assert values == [
+        AGE_VALUES["Precambrian to Phanerozoic"],
+        AGE_VALUES["Precambrian to Phanerozoic"],
+    ]
+
+
+def test_gmna_unknown_age_names_fail_with_the_full_list():
+    with pytest.raises(ValueError, match="BOGUS"):
+        gmna_age_batch([("Cretaceous", "BOGUS")])
+    with pytest.raises(ValueError, match="Pre-Cenozoic"):
+        gmna_age_batch([("Pre-Cenozoic", "Cretaceous")])
+
+
+def test_gmna_types_map_rock_groups_and_lithologies_to_level2_classes():
+    values = gmna_type_batch(
+        [
+            ("Sedimentary", ""),
+            ("Sedimentary", "carbonate"),
+            ("Sedimentary", "evaporite"),
+            ("Volcanic", "mafic rocks"),
+            ("Volcanic", "felsic rocks"),
+            ("Volcanic", "intermediate rocks"),
+            ("Volcanic", "alkaline mafic rocks"),
+            ("Volcanic", "undivided volcanic rocks"),
+            ("Volcanic", "interlayered sedimentary and volcanic rocks"),
+            ("Plutonic", "granite"),
+            ("Plutonic", "mafic rocks"),
+            ("Plutonic", "intermediate rocks"),
+            ("Plutonic", "tonalite"),
+            ("Plutonic", "felsite"),
+            ("Plutonic", "diabase"),
+            ("Plutonic", "undivided granitic rocks"),
+            ("Metamorphic and undivided crystalline", "marble"),
+            ("Metamorphic and undivided crystalline", "orthogneiss"),
+            ("Metamorphic and undivided crystalline", "volcanic gneiss"),
+            ("Metamorphic and undivided crystalline", "impact breccia"),
+            (
+                "Metamorphic and undivided crystalline",
+                "undivided crystalline rocks (seafloor units may include "
+                "a variety of metamorphosed rock)",
+            ),
+            ("Ice", ""),
+        ],
+    )
+
+    assert values == [
+        class_value("smmx"),
+        class_value("scmx"),
+        class_value("ev__"),
+        class_value("vb__"),
+        class_value("va__"),
+        class_value("vi__"),
+        class_value("vb__"),
+        class_value("vi__"),
+        class_value("smmx"),
+        class_value("pa__"),
+        class_value("pb__"),
+        class_value("pi__"),
+        class_value("pa__"),
+        class_value("pa__"),
+        class_value("pb__"),
+        class_value("pa__"),
+        class_value("mtpu"),
+        class_value("mt__"),
+        class_value("mt__"),
+        class_value("mt__"),
+        class_value("mt__"),
+        class_value("ig__"),
+    ]
+
+
+def test_gmna_unknown_rock_names_fail_with_the_full_list():
+    with pytest.raises(ValueError, match="BOGUS"):
+        gmna_type_batch([("Sedimentary", "BOGUS"), ("Atlantis", "")])
+
+
+def test_a_polygon_over_the_antimeridian_is_split_into_its_two_sides():
+    wrapped = box(-179.5, 52.0, 179.5, 53.0)
+
+    parts = _split_at_antimeridian(wrapped)
+
+    assert parts.bounds == pytest.approx((-180.0, 52.0, 180.0, 53.0))
+    assert parts.area == pytest.approx(1.0)
+    assert not parts.intersects(box(-100.0, 52.0, 100.0, 53.0))
+
+
+@pytest.mark.parametrize(
+    "bbox",
+    [(172.0, 52.0, 176.0, 53.0), (-160.0, 60.0, -150.0, 65.0), (170.0, 50.0, 220.0, 70.0)],
+)
+def test_alaska_footprint_covers_attu_the_mainland_and_scenes_across_180(bbox):
+    found = candidates_for("age", bbox, lambda _: True)
+
+    assert "alaska_sim3340" in [source["id"] for source in found]
+
+
+@pytest.mark.parametrize(
+    "bbox",
+    [
+        (-99.3, 19.2, -99.0, 19.5),
+        (-55.0, 64.0, -50.0, 65.0),
+        (-24.0, 63.5, -14.0, 66.0),
+        (190.0, 55.0, 210.0, 65.0),
+    ],
+)
+def test_gmna_footprint_covers_mexico_greenland_iceland_and_zero_to_360_scenes(bbox):
+    present = {"geology_age_gmna.tif", "geology_type_gmna.tif"}
+    found = candidates_for("age", bbox, present.__contains__)
+
+    assert [source["id"] for source in found] == ["north_america_gmna"]
+
+
+def test_gmna_is_lowest_priority_where_alaska_and_canada_overlap():
+    present = {
+        "geology_age_gmna.tif",
+        "geology_age_alaska.tif",
+        "geology_age_canada.tif",
+        "geology_age_sgmc.tif",
+    }
+    found = candidates_for("age", (-152.0, 60.0, -150.0, 61.0), present.__contains__)
+
+    assert [source["id"] for source in found] == [
+        "north_america_gmna",
+        "alaska_sim3340",
+        "canada_5m",
+    ]
 
 
 def test_egdi_unknown_values_fail_and_generic_values_are_no_data():
@@ -901,3 +1116,227 @@ def test_provenance_codes_follow_priority_overlaps(tmp_path):
     )
 
     assert codes.tolist() == [[SGMC_CODE, CANADA_CODE], [CANADA_CODE, CANADA_CODE]]
+
+
+def write_sim3340_source(path: Path) -> None:
+    """Write SIM 3340 tables in a GeoPackage named like the geodatabase, with three polygons.
+
+    Unit 1 is Cretaceous sandstone, unit 2 is water and unit 3 is a Jurassic island over 180°.
+    """
+    import geopandas as gpd
+    import pandas as pd
+    import pyogrio
+
+    path.parent.mkdir(parents=True)
+    shapes = gpd.GeoDataFrame(
+        {"NSACLASS": [1, 2, 3]},
+        geometry=[
+            box(-150.0, 60.0, -149.0, 61.0),
+            box(-148.0, 60.0, -147.0, 61.0),
+            box(179.5, 52.0, 180.5, 53.0),
+        ],
+        crs="EPSG:4326",
+    )
+    pyogrio.write_dataframe(shapes.to_crs(3338), path, layer="AKStategeol_poly", driver="GPKG")
+    ages = pd.DataFrame(
+        {
+            "NSACLASS": [1, 3],
+            "FULL_MIN": ["Phanerozoic;Mesozoic;Cretaceous", "Phanerozoic;Mesozoic;Jurassic"],
+            "FULL_MAX": ["Phanerozoic;Mesozoic;Cretaceous", "Phanerozoic;Mesozoic;Jurassic"],
+        },
+    )
+    rocks = pd.DataFrame(
+        {
+            "NSACLASS": [1, 2, 3],
+            "LITH1": ["Sedimentary", "Water", "Igneous"],
+            "LITH2": ["Clastic", "", "Volcanic"],
+            "LITH3": ["Sandstone", "", "Basalt"],
+            "LITH4": ["", "", ""],
+            "LITH5": ["", "", ""],
+            "RANK": ["Major", "Major", "Major"],
+        },
+    )
+    for layer, table in (("nsaage", ages), ("nsalith", rocks)):
+        pyogrio.write_dataframe(
+            gpd.GeoDataFrame(table, geometry=[None] * len(table)),
+            path,
+            layer=layer,
+            driver="GPKG",
+        )
+
+
+def sim3340_cell(latitude: float, longitude: float) -> tuple[int, int]:
+    """Return the row and column of a point in the 0.25 degree world rasters, 84°N at row 0."""
+    return int((84 - latitude) / 0.25), int((longitude + 180) / 0.25)
+
+
+def test_sim3340_ingest_rasterises_units_and_splits_polygons_over_180(tmp_path, monkeypatch):
+    from soe.ingest import geology_regional as regional_ingest
+
+    monkeypatch.setattr(regional_ingest, "LITHOLOGY_RES_DEG", 0.25)
+    monkeypatch.setattr(regional_ingest, "GEOLOGY_AGE_RES_DEG", 0.25)
+    write_sim3340_source(tmp_path / "cubes" / ".downloads" / SIM3340_DIR / SIM3340_GDB)
+
+    age_cog, type_cog = ingest_sim3340(tmp_path / "cubes")
+
+    assert (age_cog.name, type_cog.name) == (ALASKA_AGE_FILE, ALASKA_TYPE_FILE)
+    with rasterio.open(type_cog) as cog, rasterio.open(age_cog) as ages:
+        assert cog.tags()[LITHOLOGY_SOURCE_TAG] == "sim3340"
+        types = cog.read(1)
+        age_values = ages.read(1)
+
+        assert types[sim3340_cell(60.5, -149.5)] == class_value("ssss")
+        assert age_values[sim3340_cell(60.5, -149.5)] == AGE_VALUES["Cretaceous"]
+        assert types[sim3340_cell(60.5, -147.5)] == 0
+        assert types[sim3340_cell(52.5, 179.75)] == class_value("vb__")
+        assert types[sim3340_cell(52.5, -179.75)] == class_value("vb__")
+        assert types[sim3340_cell(52.5, 0.0)] == 0
+        assert age_values[sim3340_cell(52.5, -179.75)] == AGE_VALUES["Jurassic"]
+
+
+def write_gmna_source(folder: Path) -> None:
+    """Write a GMNA-style shapefile with an onshore unit, ice and a seafloor unit.
+
+    The Cretaceous sedimentary unit is onshore Mexico, the ice is Greenland and the starred
+    volcanic unit is seafloor, so only the first two reach the COGs.
+    """
+    import geopandas as gpd
+
+    shapes = gpd.GeoDataFrame(
+        {
+            "UNIT_ABBRE": ["KT", "Ice", "Kx*"],
+            "ROCKTYPE": ["Sedimentary", "Ice", "Volcanic"],
+            "LITHOLOGY": ["", "", "mafic rocks"],
+            "MIN_AGE": ["Cretaceous", "Holocene", "Cretaceous"],
+            "MAX_AGE": ["Cretaceous", "Holocene", "Cretaceous"],
+        },
+        geometry=[
+            box(-100.0, 19.0, -99.0, 20.0),
+            box(-42.0, 72.0, -41.0, 73.0),
+            box(-60.0, 40.0, -59.0, 41.0),
+        ],
+        crs="EPSG:4326",
+    )
+    target = folder / "GMNA_SHAPES"
+    target.mkdir(parents=True)
+    shapes.to_file(target / "Geologic_units.shp")
+
+
+def gmna_cell(latitude: float, longitude: float) -> tuple[int, int]:
+    """Return the row and column of a point in the 1 degree world rasters, 84°N at row 0."""
+    return int(84 - latitude), int(longitude + 180)
+
+
+def test_gmna_ingest_rasterises_onshore_units_and_omits_seafloor(tmp_path, monkeypatch):
+    from soe.ingest import geology_regional as regional_ingest
+
+    monkeypatch.setattr(regional_ingest, "LITHOLOGY_RES_DEG", 1.0)
+    monkeypatch.setattr(regional_ingest, "GEOLOGY_AGE_RES_DEG", 1.0)
+    source = tmp_path / "source"
+    write_gmna_source(source)
+
+    age_cog, type_cog = ingest_gmna(tmp_path / "cubes", source)
+
+    assert (age_cog.name, type_cog.name) == (GMNA_AGE_FILE, GMNA_TYPE_FILE)
+    with rasterio.open(type_cog) as cog, rasterio.open(age_cog) as ages:
+        assert cog.tags()[LITHOLOGY_SOURCE_TAG] == "gmna"
+        types = cog.read(1)
+        age_values = ages.read(1)
+
+        assert types[gmna_cell(19.5, -99.5)] == class_value("smmx")
+        assert age_values[gmna_cell(19.5, -99.5)] == AGE_VALUES["Cretaceous"]
+        assert types[gmna_cell(72.5, -41.5)] == class_value("ig__")
+        assert types[gmna_cell(40.5, -59.5)] == 0
+        assert age_values[gmna_cell(40.5, -59.5)] == 0
+
+
+def test_gmna_ingest_splits_a_unit_wrapping_across_the_antimeridian(tmp_path, monkeypatch):
+    from soe.ingest import geology_regional as regional_ingest
+
+    monkeypatch.setattr(regional_ingest, "LITHOLOGY_RES_DEG", 1.0)
+    monkeypatch.setattr(regional_ingest, "GEOLOGY_AGE_RES_DEG", 1.0)
+    source = tmp_path / "source"
+    write_gmna_dateline_source(source)
+
+    age_cog, type_cog = ingest_gmna(tmp_path / "cubes", source)
+
+    with rasterio.open(type_cog) as cog, rasterio.open(age_cog) as ages:
+        types = cog.read(1)
+        age_values = ages.read(1)
+
+        assert types[gmna_cell(52.5, 179.5)] == class_value("smmx")
+        assert types[gmna_cell(52.5, -179.5)] == class_value("smmx")
+        assert types[gmna_cell(52.5, 0.0)] == 0
+        assert age_values[gmna_cell(52.5, 179.5)] == AGE_VALUES["Cretaceous"]
+        assert age_values[gmna_cell(52.5, -179.5)] == AGE_VALUES["Cretaceous"]
+        assert age_values[gmna_cell(52.5, 0.0)] == 0
+
+
+def write_gmna_dateline_source(folder: Path) -> None:
+    """Write a GMNA-style shapefile with one onshore unit wrapping across the antimeridian.
+
+    In -180 to 180 longitude the unit is a nearly world-wide band, which is how an
+    Aleutian polygon comes out of the GMNA reprojection before it is split.
+    """
+    import geopandas as gpd
+
+    shapes = gpd.GeoDataFrame(
+        {
+            "UNIT_ABBRE": ["KT"],
+            "ROCKTYPE": ["Sedimentary"],
+            "LITHOLOGY": [""],
+            "MIN_AGE": ["Cretaceous"],
+            "MAX_AGE": ["Cretaceous"],
+        },
+        geometry=[box(-178.0, 52.0, 178.0, 53.0)],
+        crs="EPSG:4326",
+    )
+    target = folder / "GMNA_SHAPES"
+    target.mkdir(parents=True)
+    shapes.to_file(target / "Geologic_units.shp")
+
+
+def test_gmna_geometry_closes_rings_the_archive_left_open():
+    coords = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]
+    ring = struct.pack("<I", len(coords)) + b"".join(
+        struct.pack("<2d", x, y) for x, y in coords
+    )
+    wkb = b"\x01\x03\x00\x00\x00" + struct.pack("<I", 1) + ring
+
+    with pytest.raises(Exception):
+        shapely.from_wkb(wkb)
+    fixed = _close_wkb_rings(wkb)
+
+    assert fixed != wkb
+    geometry = _gmna_geometry(wkb)
+    assert geometry is not None
+    assert geometry.is_valid
+    assert geometry.area == pytest.approx(0.5)
+
+
+def test_geology_claims_84n_coverage_while_its_cog_reaches_84n(tmp_path):
+    cubes = tmp_path / "cubes"
+    cubes.mkdir()
+    tall = np.ones((2, 2), "uint8")
+    write_cog(cubes / "lithology.tif", tall, west=0.0, north=84.0, tag="glim")
+    write_cog(cubes / "geology_age.tif", tall, west=0.0, north=84.0, tag="gsc-of5529")
+    registry = make_registry(RealSource(cubes_dir=cubes))
+
+    assert registry["geology"].coverage == (-180, -60, 180, 84)
+    assert registry["geology_age"].coverage == (-180, -60, 180, 84)
+
+
+def test_geology_falls_back_to_60n_coverage_when_its_cog_ends_at_60n(tmp_path, caplog):
+    cubes = tmp_path / "cubes"
+    cubes.mkdir()
+    short = np.ones((2, 2), "uint8")
+    write_cog(cubes / "lithology.tif", short, west=0.0, north=60.0, tag="glim")
+    write_cog(cubes / "geology_age.tif", short, west=0.0, north=60.0, tag="gsc-of5529")
+
+    with caplog.at_level(logging.WARNING, logger="soe.sources.registry"):
+        registry = make_registry(RealSource(cubes_dir=cubes))
+
+    assert registry["geology"].coverage == (-180, -60, 180, 60)
+    assert registry["geology_age"].coverage == (-180, -60, 180, 60)
+    assert "lithology.tif" in caplog.text
+    assert "geology_age.tif" in caplog.text

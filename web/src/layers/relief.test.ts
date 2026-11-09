@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { RELIEF_STRENGTH, reliefPaint } from "./relief.ts";
+import { RELIEF_STRENGTH, reliefExaggeration, reliefPaint } from "./relief.ts";
 
 const COLOR_PROPERTIES = [
   "hillshade-shadow-color",
@@ -79,4 +79,33 @@ test("exaggeration ramps linearly between the low and high detail zooms", () => 
     [4, 12],
   );
   assert.equal(expression.length, 7);
+});
+
+test("the paint keeps the same lights and colours as the shared light table", () => {
+  const paint = reliefPaint(RELIEF_STRENGTH.initial);
+
+  assert.deepEqual(paint["hillshade-illumination-direction"], [315, 255, 15]);
+  assert.deepEqual(paint["hillshade-illumination-altitude"], [30, 30, 30]);
+  assert.deepEqual(paint["hillshade-shadow-color"], [
+    "rgba(0,0,0,0.55)",
+    "rgba(0,0,0,0.22)",
+    "rgba(0,0,0,0.22)",
+  ]);
+  assert.deepEqual(paint["hillshade-highlight-color"], [
+    "rgba(255,255,255,0.35)",
+    "rgba(255,255,255,0.08)",
+    "rgba(255,255,255,0.08)",
+  ]);
+});
+
+test("baked exaggeration follows the paint's zoom ramp and caps like it", () => {
+  const ramp = reliefPaint(2)["hillshade-exaggeration"] as unknown[];
+
+  assert.equal(reliefExaggeration(4, 2), ramp[4]);
+  assert.equal(reliefExaggeration(12, 2), ramp[6]);
+  assert.equal(reliefExaggeration(0, 2), ramp[4]);
+  assert.equal(reliefExaggeration(20, 2), ramp[6]);
+  assert.ok(Math.abs(reliefExaggeration(8, 2) - (0.8 + 1.4) / 2) < 1e-12);
+  assert.equal(reliefExaggeration(12, 5), 3.5);
+  assert.equal(reliefExaggeration(8, 0), 0);
 });

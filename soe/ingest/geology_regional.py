@@ -9,25 +9,35 @@ ingest with the full unmapped list before any COG is published.
 import logging
 import os
 import shutil
+import struct
 import tempfile
 import urllib.request
 import zipfile
 from functools import partial
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import rasterio
+import shapely
 from rasterio.features import rasterize
 from rasterio.io import DatasetReader
 from rasterio.transform import Affine
 from rasterio.warp import Resampling, reproject, transform_bounds
+from shapely import unary_union
+from shapely.affinity import translate
 from shapely.geometry import box
+from shapely.geometry.base import BaseGeometry
 
 from ..geology_age import GEOLOGY_AGE_RES_DEG
 from ..geology_regional import (
+    ALASKA_AGE_FILE,
+    ALASKA_TYPE_FILE,
     CANADA_AGE_FILE,
     CANADA_TYPE_FILE,
     EGDI_TYPE_FILE,
+    GMNA_AGE_FILE,
+    GMNA_TYPE_FILE,
     IGME_AGE_FILE,
     IGME_TYPE_FILE,
     SGMC_AGE_FILE,
@@ -41,11 +51,18 @@ from .geology_classification import (
     canada_age_batch,
     canada_type_batch,
     egdi_type_batch,
+    gmna_age_batch,
+    gmna_type_batch,
     igme_age_batch,
     igme_type_batch,
     sgmc_age_batch,
     sgmc_type_batch,
+    sim3340_age_batch,
+    sim3340_type_batch,
 )
+
+if TYPE_CHECKING:
+    import geopandas as gpd
 
 log = logging.getLogger(__name__)
 
@@ -79,13 +96,35 @@ SGMC_ZIP = "USGS_SGMC_Geodatabase.zip"
 SGMC_GDB = "USGS_SGMC_Geodatabase/USGS_StateGeologicMapCompilation_ver1.1.gdb"
 SGMC_LAYER = "SGMC_Geology"
 SGMC_LITHOLOGY_LAYER = "Lithology"
-SGMC_SEGMENT_M = 20_000
+
+SIM3340_URL = "https://pubs.usgs.gov/sim/3340/sim3340_gdb.zip"
+SIM3340_DIR = "sim3340"
+SIM3340_GDB = "sim3340_gdb/AKgeol_web_gdb/geologic_data/AKStategeol.gdb"
+SIM3340_LAYER = "AKStategeol_poly"
+SIM3340_AGE_LAYER = "nsaage"
+SIM3340_LITHOLOGY_LAYER = "nsalith"
+
+GMNA_URL = "https://ngmdb.usgs.gov/gis_files/gmna_shapefiles.zip"
+GMNA_DIR = "gmna"
+GMNA_SHAPE = "GMNA_SHAPES/Geologic_units.shp"
+GMNA_SEGMENT_M = 20_000
+
+TILED_SEGMENT_M = 20_000  # longest polygon edge kept before reprojection, so edges bend right
+ANTIMERIDIAN_WRAP_DEG = 180  # a reprojected polygon wider than this crossed the antimeridian
+TILE_QUERY_PAD_M = 10_000  # so a curved tile edge in the source projection never drops a polygon
 
 DOWNLOAD_TIMEOUT_SECS = 600
 DOWNLOAD_CHUNK_BYTES = 1 << 20
 USER_AGENT = "Mozilla/5.0 (Scenes of Earth ingest)"
 
-SOURCE_IDS = ("canada_5m", "us_sgmc", "europe_igme5000", "europe_egdi")
+SOURCE_IDS = (
+    "canada_5m",
+    "us_sgmc",
+    "europe_igme5000",
+    "europe_egdi",
+    "alaska_sim3340",
+    "north_america_gmna",
+)
 
 
 def ingest_geology_regional(
@@ -101,6 +140,8 @@ def ingest_geology_regional(
         "europe_igme5000": ingest_igme,
         "europe_egdi": ingest_egdi,
         "us_sgmc": ingest_sgmc,
+        "alaska_sim3340": ingest_sim3340,
+        "north_america_gmna": ingest_gmna,
     }
     return builders[source_id](Path(cubes_dir), archive_path)
 
@@ -157,6 +198,53 @@ def ingest_sgmc(cubes_dir: Path, archive_path: Path | str | None = None) -> list
     return [
         _publish_sgmc(gdb, "age", GEOLOGY_AGE_RES_DEG, cubes_dir / SGMC_AGE_FILE),
         _publish_sgmc(gdb, "type", LITHOLOGY_RES_DEG, cubes_dir / SGMC_TYPE_FILE),
+    ]
+
+
+def ingest_sim3340(cubes_dir: Path, archive_path: Path | str | None = None) -> list[Path]:
+    """Publish the Alaska age and type COGs from the USGS SIM 3340 geodatabase.
+
+    The polygons carry a unit class whose age range and first Major lithology come from the
+    nsaage and nsalith tables, like SGMC. All names are classified before any COG is published.
+    """
+    folder = cubes_dir / DOWNLOADS_DIR / SIM3340_DIR
+    gdb = _ensure_member(SIM3340_URL, folder, SIM3340_GDB, archive_path)
+    log.info("Classifying the SIM 3340 units")
+    ages = _read_sim3340_ages(gdb)
+    types = _read_sim3340_types(gdb)
+    return [
+        _publish_by_key(
+            gdb,
+            SIM3340_LAYER,
+            "NSACLASS",
+            values,
+            res_deg,
+            cubes_dir / file,
+            "sim3340",
+        )
+        for values, res_deg, file in (
+            (ages, GEOLOGY_AGE_RES_DEG, ALASKA_AGE_FILE),
+            (types, LITHOLOGY_RES_DEG, ALASKA_TYPE_FILE),
+        )
+    ]
+
+
+def ingest_gmna(cubes_dir: Path, archive_path: Path | str | None = None) -> list[Path]:
+    """Publish the GMNA age and type COGs from the USGS shapefile of geologic units.
+
+    Seafloor units (an asterisk ends their abbreviation) stay out like the Canada offshore
+    polygons, because the global base maps hold no ocean data. All names are classified
+    before any COG is published.
+    """
+    folder = cubes_dir / DOWNLOADS_DIR / GMNA_DIR
+    shape = _ensure_member(GMNA_URL, folder, GMNA_SHAPE, archive_path)
+    log.info("Classifying the GMNA units")
+    classified = _read_gmna_units(shape)
+    age_cog = cubes_dir / GMNA_AGE_FILE
+    type_cog = cubes_dir / GMNA_TYPE_FILE
+    return [
+        _publish_units(classified, "age", GEOLOGY_AGE_RES_DEG, age_cog, "gmna"),
+        _publish_units(classified, "type", LITHOLOGY_RES_DEG, type_cog, "gmna"),
     ]
 
 
@@ -262,19 +350,152 @@ def _read_igme_units(shape_path: Path) -> "object":
     return gpd.GeoDataFrame(frame.to_crs(4326))
 
 
+def _read_gmna_units(shape_path: Path) -> "object":
+    """Return the onshore GMNA units with the class of their age range and rock type."""
+    import geopandas as gpd
+    import pyogrio
+    from pyogrio.raw import read as read_raw
+
+    attributes = pyogrio.read_dataframe(
+        shape_path,
+        columns=["UNIT_ABBRE", "ROCKTYPE", "LITHOLOGY", "MIN_AGE", "MAX_AGE"],
+        read_geometry=False,
+    )
+    onshore = ~attributes["UNIT_ABBRE"].fillna("").str.endswith("*")
+    frame = attributes[onshore].reset_index(drop=True)
+    meta, _, wkbs, _ = read_raw(shape_path, columns=["UNIT_ABBRE"])
+    geometries = [_gmna_geometry(wkb) for wkb in wkbs]
+    frame = gpd.GeoDataFrame(
+        frame,
+        geometry=[geometry for geometry, keep in zip(geometries, onshore) if keep],
+        crs=meta["crs"],
+    )
+    pairs = list(zip(frame["MIN_AGE"].fillna(""), frame["MAX_AGE"].fillna("")))
+    ages = gmna_age_batch(pairs)
+    rocks = list(zip(frame["ROCKTYPE"].fillna(""), frame["LITHOLOGY"].fillna("")))
+    types = gmna_type_batch(rocks)
+    frame["age"] = [value or 0 for value in ages]
+    frame["type"] = [value or 0 for value in types]
+    frame.geometry = frame.geometry.segmentize(GMNA_SEGMENT_M)
+    reprojected = gpd.GeoDataFrame(frame.to_crs(4326))
+    # Aleutian polygons wrap across the dateline in the transverse mercator source.
+    reprojected.geometry = gpd.GeoSeries(
+        _world_geometries(reprojected.geometry),
+        index=reprojected.index,
+        crs=reprojected.crs,
+    )
+    return reprojected
+
+
+def _gmna_geometry(wkb: bytes | None) -> BaseGeometry | None:
+    """Return the shape of one GMNA WKB, closing rings the archive left open.
+
+    A few polygons end a ring without repeating its first point, which strict readers refuse.
+    """
+    if wkb is None:
+        return None
+    raw = bytes(wkb)
+    try:
+        return shapely.from_wkb(raw)
+    except Exception:
+        return shapely.from_wkb(_close_wkb_rings(raw))
+
+
+def _close_wkb_rings(data: bytes) -> bytes:
+    """Return the WKB with every unclosed polygon ring closed by its first point."""
+    order = "<" if data[0] == 1 else ">"
+    kind = struct.unpack_from(order + "I", data, 1)[0]
+    if kind == 3:
+        fixed, _ = _close_polygon_rings(data, 5, order)
+        return data[:5] + fixed
+    if kind == 6:
+        count = struct.unpack_from(order + "I", data, 5)[0]
+        offset = 9
+        parts = [data[:9]]
+        for _ in range(count):
+            part_order = "<" if data[offset] == 1 else ">"
+            head = data[offset : offset + 5]
+            fixed, offset = _close_polygon_rings(data, offset + 5, part_order)
+            parts.append(head + fixed)
+        return b"".join(parts)
+    return data
+
+
+def _close_polygon_rings(data: bytes, offset: int, order: str) -> tuple[bytes, int]:
+    """Return the WKB polygon at offset with closed rings and the offset past it."""
+    rings = struct.unpack_from(order + "I", data, offset)[0]
+    offset += 4
+    parts = [struct.pack(order + "I", rings)]
+    for _ in range(rings):
+        points = struct.unpack_from(order + "I", data, offset)[0]
+        offset += 4
+        coords = data[offset : offset + points * 16]
+        offset += points * 16
+        if coords[:16] != coords[-16:]:
+            coords += coords[:16]
+            points += 1
+        parts.append(struct.pack(order + "I", points))
+        parts.append(coords)
+    return b"".join(parts), offset
+
+
 def _read_sgmc_lithology(gdb_path: Path) -> dict[str, int]:
-    """Return the rock-type class of each SGMC unit link.
+    """Return the rock-type class of each SGMC unit link."""
+    hierarchies = _first_major_hierarchies(
+        gdb_path,
+        SGMC_LITHOLOGY_LAYER,
+        "UNIT_LINK",
+        "LITH_RANK",
+    )
+    values = sgmc_type_batch(list(hierarchies.values()))
+    return dict(zip(hierarchies, values))
+
+
+def _read_sim3340_types(gdb_path: Path) -> dict[int, int]:
+    """Return the rock-type class of each SIM 3340 unit class, 0 where the base map fills in."""
+    hierarchies = _first_major_hierarchies(
+        gdb_path,
+        SIM3340_LITHOLOGY_LAYER,
+        "NSACLASS",
+        "RANK",
+    )
+    values = sim3340_type_batch(list(hierarchies.values()))
+    return {unit: value or 0 for unit, value in zip(hierarchies, values)}
+
+
+def _read_sim3340_ages(gdb_path: Path) -> dict[int, int]:
+    """Return the age class of each SIM 3340 unit class, 0 where it has no age."""
+    import pyogrio
+
+    table = pyogrio.read_dataframe(
+        gdb_path,
+        layer=SIM3340_AGE_LAYER,
+        columns=["NSACLASS", "FULL_MIN", "FULL_MAX"],
+        read_geometry=False,
+    )
+    pairs = list(zip(table["FULL_MIN"].fillna(""), table["FULL_MAX"].fillna("")))
+    values = sim3340_age_batch(pairs)
+    return {unit: value or 0 for unit, value in zip(table["NSACLASS"], values)}
+
+
+def _first_major_hierarchies(
+    gdb_path: Path,
+    layer: str,
+    link_column: str,
+    rank_column: str,
+) -> dict:
+    """Return the LITH1 to LITH5 hierarchy of each unit link of a lithology table.
 
     Each unit takes the hierarchy of its first Major row, or its first Indeterminate-major
     row when it has no Major one. Table order decides, so the file order is kept.
     """
     import pyogrio
 
-    table = pyogrio.read_dataframe(gdb_path, layer=SGMC_LITHOLOGY_LAYER, read_geometry=False)
-    hierarchies: dict[str, tuple[str, str, str, str, str]] = {}
-    fallback: dict[str, tuple[str, str, str, str, str]] = {}
+    table = pyogrio.read_dataframe(gdb_path, layer=layer, read_geometry=False)
+    hierarchies: dict = {}
+    fallback: dict = {}
     for _, row in table.iterrows():
-        link = row["UNIT_LINK"]
+        link = row[link_column]
         hierarchy = (
             _cell(row["LITH1"]),
             _cell(row["LITH2"]),
@@ -282,14 +503,13 @@ def _read_sgmc_lithology(gdb_path: Path) -> dict[str, int]:
             _cell(row["LITH4"]),
             _cell(row["LITH5"]),
         )
-        if row["LITH_RANK"] == "Major" and link not in hierarchies:
+        if row[rank_column] == "Major" and link not in hierarchies:
             hierarchies[link] = hierarchy
-        elif row["LITH_RANK"] == "Indeterminate, major" and link not in fallback:
+        elif row[rank_column] == "Indeterminate, major" and link not in fallback:
             fallback[link] = hierarchy
     for link, hierarchy in fallback.items():
         hierarchies.setdefault(link, hierarchy)
-    values = sgmc_type_batch(list(hierarchies.values()))
-    return dict(zip(hierarchies, values))
+    return hierarchies
 
 
 def _cell(value: object) -> str:
@@ -314,13 +534,12 @@ def _publish_units(frame: object, kind: str, res_deg: float, cog_path: Path, tag
 
 
 def _publish_sgmc(gdb_path: Path, kind: str, res_deg: float, cog_path: Path) -> Path:
-    """Write an SGMC COG tile by tile, so 300k polygons never sit in memory at once.
+    """Write an SGMC COG, validating all age and rock names first.
 
-    All age and rock names are still validated up front from attribute-only reads, so an
-    unknown name fails before any COG is published.
+    The names come from attribute-only reads, so an unknown name fails before any COG is
+    published.
     """
     import pyogrio
-    from pyproj import Transformer
 
     attributes = pyogrio.read_dataframe(
         gdb_path,
@@ -335,12 +554,29 @@ def _publish_sgmc(gdb_path: Path, kind: str, res_deg: float, cog_path: Path) -> 
     else:
         lithology = _read_sgmc_lithology(gdb_path)
         values = {link: (value or 0) for link, value in lithology.items()}
-    native_crs = pyogrio.read_info(gdb_path, layer=SGMC_LAYER)["crs"]
+    return _publish_by_key(gdb_path, SGMC_LAYER, "UNIT_LINK", values, res_deg, cog_path, "us-sgmc")
+
+
+def _publish_by_key(
+    gdb_path: Path,
+    layer: str,
+    key_column: str,
+    values: dict,
+    res_deg: float,
+    cog_path: Path,
+    tag: str,
+) -> Path:
+    """Write a COG tile by tile, so hundreds of thousands of polygons never sit in memory.
+
+    Each polygon takes the class that `values` gives its key, and keys without one stay no data.
+    """
+    import pyogrio
+    from pyproj import Transformer
+
+    native_crs = pyogrio.read_info(gdb_path, layer=layer)["crs"]
     transformer = Transformer.from_crs(4326, native_crs, always_xy=True)
 
     def rasterize_tile(bounds: Bbox, transform: Affine, shape: tuple[int, int]) -> np.ndarray:
-        import pyogrio
-
         lons, lats = np.meshgrid(
             np.linspace(bounds[0], bounds[2], 9),
             np.linspace(bounds[1], bounds[3], 9),
@@ -348,19 +584,24 @@ def _publish_sgmc(gdb_path: Path, kind: str, res_deg: float, cog_path: Path) -> 
         xs, ys = transformer.transform(lons, lats)
         tile = pyogrio.read_dataframe(
             gdb_path,
-            layer=SGMC_LAYER,
-            columns=["UNIT_LINK"],
-            bbox=(xs.min(), ys.min(), xs.max(), ys.max()),
+            layer=layer,
+            columns=[key_column],
+            bbox=(
+                xs.min() - TILE_QUERY_PAD_M,
+                ys.min() - TILE_QUERY_PAD_M,
+                xs.max() + TILE_QUERY_PAD_M,
+                ys.max() + TILE_QUERY_PAD_M,
+            ),
         )
         if tile.empty:
             return np.zeros(shape, "uint8")
-        tile["value"] = [values.get(link, 0) for link in tile["UNIT_LINK"]]
+        tile["value"] = [values.get(key, 0) for key in tile[key_column]]
         classed = tile[tile["value"] != 0]
         if classed.empty:
             return np.zeros(shape, "uint8")
-        classed.geometry = classed.geometry.segmentize(SGMC_SEGMENT_M)
+        classed.geometry = classed.geometry.segmentize(TILED_SEGMENT_M)
         return rasterize(
-            zip(classed.geometry.to_crs(4326), classed["value"]),
+            zip(_world_geometries(classed.geometry.to_crs(4326)), classed["value"]),
             out_shape=shape,
             transform=transform,
             dtype="uint8",
@@ -368,10 +609,31 @@ def _publish_sgmc(gdb_path: Path, kind: str, res_deg: float, cog_path: Path) -> 
 
     publish_cog(
         lambda raster: write_tiled_raster(raster, res_deg, rasterize_tile),
-        "us-sgmc",
+        tag,
         cog_path,
     )
     return cog_path
+
+
+def _world_geometries(geometries: "gpd.GeoSeries") -> list[BaseGeometry]:
+    """Return the geometries with each one that wraps across 180 degrees split into its two sides.
+
+    A polygon over the antimeridian comes out of the reprojection spanning the whole world,
+    which would paint a band of cells instead of a few islands.
+    """
+    widths = geometries.bounds["maxx"] - geometries.bounds["minx"]
+    return [
+        _split_at_antimeridian(geometry) if width > ANTIMERIDIAN_WRAP_DEG else geometry
+        for geometry, width in zip(geometries, widths)
+    ]
+
+
+def _split_at_antimeridian(geometry: BaseGeometry) -> BaseGeometry:
+    """Return the geometry cut at 180 degrees, with the part east of it back on the -180 side."""
+    continuous = shapely.transform(geometry, lambda xy: np.column_stack((xy[:, 0] % 360, xy[:, 1])))
+    west = continuous.intersection(box(0, -90, 180, 90))
+    east = translate(continuous.intersection(box(180, -90, 360, 90)), xoff=-360)
+    return unary_union([west, east])
 
 
 def _rasterize_units(

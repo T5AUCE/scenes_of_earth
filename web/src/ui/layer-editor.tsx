@@ -1,8 +1,17 @@
 /** Edit one layer in a persistent panel, with Show as, options and menu sections. */
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from "react";
 
 import { drawLabel } from "../card-title";
-import { recordMenuChange } from "../display-state";
+import {
+  DEFAULT_OUTLINE_COLOR,
+  MAX_OUTLINE_WIDTH_PX,
+  MIN_OUTLINE_WIDTH_PX,
+  OUTLINE_COLORS,
+  OUTLINE_WIDTH_STEP_PX,
+  outlineCss,
+  recordMenuChange,
+  type OutlineState,
+} from "../display-state";
 import {
   BLEND,
   type ColourAllocation,
@@ -21,10 +30,19 @@ import {
   storeShowAs,
   type ShowAsAction,
 } from "../show-as";
-import type { LayerDoc, LayerView, Part } from "../types";
+import {
+  customColors,
+  customPalette,
+  fieldGradient,
+  MAX_CUSTOM_COLORS,
+  MIN_CUSTOM_COLORS,
+  rgbToHex,
+} from "../render/palettes";
+import type { InkMenu, LayerDoc, LayerMenu, LayerView, Part } from "../types";
 import { DomNode } from "./dom-node";
 import { RangeSection } from "./range-section";
 import { ShowAsSection } from "./show-as-section";
+import { SwatchPicker, type SwatchOption } from "./swatch-picker";
 import { useSceneStore } from "./use-scene-store";
 
 const COLOUR_NOTICE = "Only one layer can use colour unless layers are combined.";
@@ -64,7 +82,6 @@ export function LayerEditor({
   onToggleTarget,
 }: LayerEditorProps): React.ReactElement {
   const { display, allocation } = useSceneStore(store);
-  const panel = useRef<HTMLElement>(null);
   const { unit, title, view } = target;
   const options = showAsOptions(unit, layers);
   const current = allocation.as.get(unit) ?? display.showAs[unit];
@@ -72,22 +89,6 @@ export function LayerEditor({
   const hidden = typeof allocation.draws.get(unit) !== "string";
   const tabLayer = layers.find(({ id }) => id === unit) ?? { title, units: "" };
   const [fading, setFading] = useState(false);
-
-  useEffect(() => {
-    panel.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-
-      event.preventDefault();
-      onClose();
-    };
-    window.addEventListener("keydown", closeOnEscape);
-
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
 
   useEffect(() => {
     if (notice === null) {
@@ -154,18 +155,7 @@ export function LayerEditor({
   );
 
   return (
-    <aside
-      ref={panel}
-      className="layer-editor"
-      aria-label={`Edit ${title}`}
-      tabIndex={-1}
-    >
-      <header className="editor-head">
-        <h2>{title}</h2>
-        <button type="button" onClick={onClose}>
-          Close
-        </button>
-      </header>
+    <EditorPanel title={title} onClose={onClose}>
       <ShowAsSection
         unit={unit}
         options={options}
@@ -194,6 +184,55 @@ export function LayerEditor({
           onUserInput={clearNotice}
         />
       )}
+    </EditorPanel>
+  );
+}
+
+interface EditorPanelProps {
+  title: string;
+  onClose(): void;
+  children?: React.ReactNode;
+}
+
+/** The floating shell every card editor shares: title, Close and Escape handling. */
+export function EditorPanel({
+  title,
+  onClose,
+  children,
+}: EditorPanelProps): React.ReactElement {
+  const panel = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    panel.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      // An inner control that already claimed Escape keeps the panel open.
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+
+      event.preventDefault();
+      onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  return (
+    <aside
+      ref={panel}
+      className="layer-editor"
+      aria-label={`Edit ${title}`}
+      tabIndex={-1}
+    >
+      <header className="editor-head">
+        <h2>{title}</h2>
+        <button type="button" onClick={onClose}>
+          Close
+        </button>
+      </header>
+      {children}
     </aside>
   );
 }
@@ -358,12 +397,11 @@ function MenuContent({
     return element;
   });
   const [bottomHost] = useState(() => document.createElement("div"));
-  const group = useId();
   const fillRef = useRef<() => void>(() => {});
   const fill = useCallback(() => {
-    topHost.replaceChildren(...menuMainSections(menu, group, onChange));
+    topHost.replaceChildren(...menuMainSections(menu));
     bottomHost.replaceChildren(menuResetButton(menu, onChange, () => fillRef.current()));
-  }, [bottomHost, group, menu, onChange, topHost]);
+  }, [bottomHost, menu, onChange, topHost]);
 
   useEffect(() => {
     fillRef.current = fill;
@@ -401,12 +439,372 @@ function MenuContent({
 
   return (
     <>
+      <ColourSection menu={menu} onChange={onChange} />
       <DomNode node={topHost} className="editor-menu" />
       {menu.units && <UnitsSection units={menu.units} onChange={onChange} />}
       {menu.range && <RangeSection range={menu.range} onChange={onChange} />}
       <DomNode node={bottomHost} className="editor-menu-reset" />
     </>
   );
+}
+
+interface ColourSectionProps {
+  menu: NonNullable<LayerView["menu"]>;
+  onChange(changed: MenuChange): void;
+}
+
+/** The palette or ink swatches; the Custom box keeps its last choice across resets. */
+function ColourSection({ menu, onChange }: ColourSectionProps): React.ReactElement {
+  const [rememberedPalette, setRememberedPalette] = useState<string | null>(
+    () => (customColors(menu.palette) === null ? null : menu.palette),
+  );
+  const [rememberedInk, setRememberedInk] = useState<string | null>(
+    () => (menu.ink && isCustomInk(menu.ink) ? menu.ink.value : null),
+  );
+  if (menu.ink?.inUse) {
+    return (
+      <InkSection
+        ink={menu.ink}
+        remembered={rememberedInk}
+        onRemember={setRememberedInk}
+        onChange={onChange}
+      />
+    );
+  }
+
+  return (
+    <PaletteSection
+      menu={menu}
+      remembered={rememberedPalette}
+      onRemember={setRememberedPalette}
+      onChange={onChange}
+    />
+  );
+}
+
+interface PaletteSectionProps {
+  menu: NonNullable<LayerView["menu"]>;
+  remembered: string | null;
+  onRemember(name: string): void;
+  onChange(changed: MenuChange): void;
+}
+
+function PaletteSection({
+  menu,
+  remembered,
+  onRemember,
+  onChange,
+}: PaletteSectionProps): React.ReactElement {
+  const group = useId();
+  const customName = customColors(menu.palette) === null ? null : menu.palette;
+  const selected = customName === null ? menu.palette : "custom";
+  const faceColors = facePaletteColors(customName, remembered);
+
+  const options: SwatchOption[] = menu.palettes.map(({ name, label, colors }) => ({
+    value: name,
+    label,
+    colors,
+    blocks: menu.blocks,
+  }));
+  if (menu.custom) options.push({ value: "custom", label: "Custom", colors: faceColors });
+
+  const select = (next: string) => {
+    if (next !== "custom") {
+      menu.setPalette(next);
+      onChange("palette");
+
+      return;
+    }
+    if (customName === null) {
+      const seeded = rememberedOrSeeded(remembered, menu.palette);
+      menu.setPalette(seeded);
+      onRemember(seeded);
+      onChange("palette");
+    }
+  };
+  const applyCustom = (colors: string[]) => {
+    const next = customPalette(colors);
+    menu.setPalette(next);
+    onRemember(next);
+    onChange("palette");
+  };
+
+  return (
+    <fieldset className="editor-colours">
+      <legend>{menu.heading}</legend>
+      <SwatchPicker
+        legend={menu.heading}
+        group={group}
+        options={options}
+        value={selected}
+        defaultValue={menu.defaultPalette}
+        tiles={hasWideFaces(menu)}
+        onSelect={select}
+      />
+      {menu.custom && customName !== null && (
+        <CustomPaletteEditor colors={customColors(customName)!} onApply={applyCustom} />
+      )}
+    </fieldset>
+  );
+}
+
+interface InkSectionProps {
+  ink: InkMenu;
+  remembered: string | null;
+  onRemember(ink: string): void;
+  onChange(changed: MenuChange): void;
+}
+
+function InkSection({
+  ink,
+  remembered,
+  onRemember,
+  onChange,
+}: InkSectionProps): React.ReactElement {
+  const group = useId();
+  const custom = isCustomInk(ink);
+  const selected = custom ? "custom" : ink.value;
+  const faceColors = custom ? [ink.value] : remembered ? [remembered] : [];
+
+  const options: SwatchOption[] = ink.presets.map(({ name, label, colors }) => ({
+    value: name,
+    label,
+    colors,
+  }));
+  options.push({ value: "custom", label: "Custom", colors: faceColors });
+
+  const select = (next: string) => {
+    if (next !== "custom") {
+      ink.set(next);
+      onChange("ink");
+
+      return;
+    }
+    if (!custom) {
+      const seeded = remembered ?? inkSeed(ink);
+      ink.set(seeded);
+      onRemember(seeded);
+      onChange("ink");
+    }
+  };
+  const commitCustom = (next: string) => {
+    ink.set(next);
+    onRemember(next);
+    onChange("ink");
+  };
+
+  return (
+    <fieldset className="editor-colours">
+      <legend>{ink.heading}</legend>
+      <SwatchPicker
+        legend={ink.heading}
+        group={group}
+        options={options}
+        value={selected}
+        defaultValue={ink.defaultInk}
+        onSelect={select}
+      />
+      {custom && <CommitColorInput value={ink.value} label="Ink colour" onCommit={commitCustom} />}
+    </fieldset>
+  );
+}
+
+interface OutlineEditorProps {
+  outline: OutlineState;
+  onChange(outline: OutlineState): void;
+}
+
+/** The Area Outline editor: colour swatches with a Custom well, plus a thickness slider. */
+export function OutlineEditor({ outline, onChange }: OutlineEditorProps): React.ReactElement {
+  const group = useId();
+  const custom = outline.color.startsWith("#");
+  const [remembered, setRemembered] = useState<string | null>(
+    () => (custom ? outline.color : null),
+  );
+  const faceColors = custom ? [outline.color] : remembered ? [remembered] : [];
+
+  const options: SwatchOption[] = OUTLINE_COLORS.map(({ name, label, color }) => ({
+    value: name,
+    label,
+    colors: [color],
+  }));
+  options.push({ value: "custom", label: "Custom", colors: faceColors });
+
+  const setColor = (color: string) => {
+    // Choosing a colour while the outline is off shows it again.
+    onChange({ ...outline, color, shown: true });
+  };
+  const select = (next: string) => {
+    if (next !== "custom") {
+      setColor(next);
+
+      return;
+    }
+    if (!custom) {
+      const seeded = remembered ?? outlineCss(outline.color);
+      setRemembered(seeded);
+      setColor(seeded);
+    }
+  };
+  const commitCustom = (color: string) => {
+    setRemembered(color);
+    setColor(color);
+  };
+  const css = outlineCss(outline.color);
+
+  return (
+    <>
+      <fieldset className="editor-colours">
+        <legend>Colour</legend>
+        <SwatchPicker
+          legend="Colour"
+          group={group}
+          options={options}
+          value={custom ? "custom" : outline.color}
+          defaultValue={DEFAULT_OUTLINE_COLOR}
+          onSelect={select}
+        />
+        {custom && (
+          <CommitColorInput value={outline.color} label="Custom colour" onCommit={commitCustom} />
+        )}
+      </fieldset>
+      <fieldset>
+        <legend>Thickness</legend>
+        <div className="edge-control">
+          <output>{`${outline.widthPx} px`}</output>
+          <input
+            type="range"
+            min={MIN_OUTLINE_WIDTH_PX}
+            max={MAX_OUTLINE_WIDTH_PX}
+            step={OUTLINE_WIDTH_STEP_PX}
+            value={outline.widthPx}
+            aria-label="Outline thickness"
+            aria-valuetext={`${outline.widthPx} pixels`}
+            onChange={(event) => onChange({ ...outline, widthPx: Number(event.target.value) })}
+          />
+          <span className="line-preview" aria-hidden="true">
+            <i style={previewStyle(css, outline.widthPx)} />
+          </span>
+        </div>
+      </fieldset>
+    </>
+  );
+}
+
+/** The preview line of the thickness slider, with a ring around white so it stays visible. */
+function previewStyle(colorCss: string, widthPx: number): CSSProperties {
+  return {
+    height: `${widthPx}px`,
+    background: colorCss,
+    boxShadow: colorCss === "#ffffff" ? "0 0 0 1px #999" : "none",
+  };
+}
+
+function hasWideFaces(menu: NonNullable<LayerView["menu"]>): boolean {
+  return menu.palettes.some(({ colors }) => colors.length > 1);
+}
+
+/** The remembered custom gradient, else the one on screen, else an empty Custom box. */
+function facePaletteColors(customName: string | null, remembered: string | null): string[] {
+  if (customName !== null) return customColors(customName)!;
+  if (remembered !== null) return customColors(remembered) ?? [];
+
+  return [];
+}
+
+/** The remembered custom gradient, or a three-stop seed from the shown preset. */
+function rememberedOrSeeded(remembered: string | null, palette: string): string {
+  if (remembered !== null && customColors(remembered) !== null) return remembered;
+
+  return customPalette(seedColors(palette));
+}
+
+// Starting from the gradient on screen keeps the first custom colours familiar.
+function seedColors(palette: string) {
+  const gradient = fieldGradient(palette) ?? [[0, 0, 0], [255, 255, 255]];
+  const middle = Math.floor((gradient.length - 1) / 2);
+
+  return [gradient[0], gradient[middle], gradient[gradient.length - 1]].map(rgbToHex);
+}
+
+/** The first colour of the shown ink preset, so a first Custom choice stays familiar. */
+function inkSeed(ink: InkMenu) {
+  return ink.presets.find(({ name }) => name === ink.value)?.colors[0] ?? ink.value;
+}
+
+function isCustomInk(ink: InkMenu) {
+  return ink.value.startsWith("#");
+}
+
+function CustomPaletteEditor({
+  colors,
+  onApply,
+}: {
+  colors: string[];
+  onApply(colors: string[]): void;
+}): React.ReactElement {
+  const edit = (index: number, next: string) => {
+    onApply(colors.map((color, position) => (position === index ? next : color)));
+  };
+  const remove = (index: number) => {
+    onApply(colors.filter((_, position) => position !== index));
+  };
+  const add = () => {
+    onApply([...colors, colors[colors.length - 1]]);
+  };
+
+  return (
+    <div className="custom-colors">
+      {colors.map((color, index) => (
+        <div key={index}>
+          <CommitColorInput
+            value={color}
+            label={`Colour ${index + 1}`}
+            onCommit={(next) => edit(index, next)}
+          />
+          {colors.length > MIN_CUSTOM_COLORS && (
+            <button
+              type="button"
+              aria-label={`Remove colour ${index + 1}`}
+              onClick={() => remove(index)}
+            >
+              {"\u2715"}
+            </button>
+          )}
+        </div>
+      ))}
+      {colors.length < MAX_CUSTOM_COLORS && (
+        <button type="button" onClick={add}>
+          Add colour
+        </button>
+      )}
+    </div>
+  );
+}
+
+function CommitColorInput({
+  value,
+  label,
+  onCommit,
+}: {
+  value: string;
+  label: string;
+  onCommit(color: string): void;
+}): React.ReactElement {
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const input = ref.current;
+    if (!input) return;
+    input.value = value;
+    // The picker fires input continuously while dragging, so only change commits.
+    const commit = () => onCommit(input.value);
+    input.addEventListener("change", commit);
+
+    return () => input.removeEventListener("change", commit);
+  }, [value, onCommit]);
+
+  return <input ref={ref} type="color" defaultValue={value} aria-label={label} />;
 }
 
 /** A small Units choice for a convertible layer; other layers show nothing. */

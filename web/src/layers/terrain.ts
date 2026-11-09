@@ -1,6 +1,7 @@
 /** Combine terrain shading with contours and adapt relief strength to colour fills. */
 import type { Map as MapLibreMap } from "maplibre-gl";
 
+import { addressSearch, shadeFadeEnabled } from "../gesture-quality";
 import { removeLayerAndSource } from "../map";
 import { CONTOUR_COLORS, contourColor, DEFAULT_CONTOUR_COLOR } from "../render/palettes";
 import { displayUnitFor, isUnitFor, unitOptions } from "../units";
@@ -10,6 +11,7 @@ import type {
   LayerMenu,
   LayerView,
   TerrainStats,
+  TerrainTiles,
   UnitsMenu,
 } from "../types";
 import {
@@ -19,6 +21,7 @@ import {
   terrainTileBounds,
 } from "./contour-overlay";
 import { RELIEF_STRENGTH, reliefPaint } from "./relief";
+import { ShadeRaster } from "./shade-raster";
 
 // Shade over a colour fill is eased so the colour stays readable.
 const COLOUR_UNDER_FACTOR = 0.75;
@@ -43,34 +46,21 @@ type TerrainSourceState = {
 
 /** Terrain shading from Mapterhorn tiles and contour lines for one terrain layer. */
 export function createTerrainView(context: LayerContext): LayerView {
-  const { map, layer, slots, report } = context;
+  const { map, layer, report } = context;
   const { tiles, stats } = layer;
   if (!tiles || !stats) throw new Error("Terrain needs tile metadata and summary statistics");
 
   const dem = sharedDemSource(tiles);
   const id = `${layer.id}-relief`;
-  // Separate translucent hillshades would darken loaded areas while other tiles are pending.
-  map.addSource(id, {
-    type: "raster-dem",
-    // Relief fetches tiles directly so it never waits behind contour tracing.
-    tiles: [tiles.url],
-    encoding: tiles.encoding,
-    tileSize: tiles.tile_size,
-    maxzoom: cappedDemMaxZoom(tiles.maxzoom),
-    attribution: tiles.source.attribution,
-    ...terrainTileBounds(layer.grid.bbox),
-  });
-  map.addLayer(
-    { id, type: "hillshade", source: id, paint: reliefPaint(RELIEF_STRENGTH.initial) },
-    slots.shade,
-  );
+  // Scene entry drops trial parameters from the address bar, so the flag is read once here.
+  const shading = shadeFadeEnabled(addressSearch())
+    ? shadeRasterShading(context, id, tiles)
+    : hillshadeShading(context, id, tiles);
 
   let strengthValue = RELIEF_STRENGTH.initial;
   let isUnderColour = false;
   const applyStrength = () => {
-    const effective = strengthValue * (isUnderColour ? COLOUR_UNDER_FACTOR : 1);
-    const exaggeration = reliefPaint(effective)["hillshade-exaggeration"];
-    map.setPaintProperty(id, "hillshade-exaggeration", exaggeration);
+    shading.setStrength(strengthValue * (isUnderColour ? COLOUR_UNDER_FACTOR : 1));
   };
 
   const strength: LayerControl = {
@@ -153,9 +143,57 @@ export function createTerrainView(context: LayerContext): LayerView {
     destroy: () => {
       stopWatchingTiles();
       contourOverlay.destroy();
-      removeLayerAndSource(map, id);
+      shading.destroy();
     },
   };
+}
+
+interface ReliefShading {
+  setStrength(strength: number): void;
+  destroy(): void;
+}
+
+function hillshadeShading(context: LayerContext, id: string, tiles: TerrainTiles): ReliefShading {
+  const { map, layer, slots } = context;
+  // Separate translucent hillshades would darken loaded areas while other tiles are pending.
+  map.addSource(id, {
+    type: "raster-dem",
+    // Relief fetches tiles directly so it never waits behind contour tracing.
+    tiles: [tiles.url],
+    encoding: tiles.encoding,
+    tileSize: tiles.tile_size,
+    maxzoom: cappedDemMaxZoom(tiles.maxzoom),
+    attribution: tiles.source.attribution,
+    ...terrainTileBounds(layer.grid.bbox),
+  });
+  map.addLayer(
+    { id, type: "hillshade", source: id, paint: reliefPaint(RELIEF_STRENGTH.initial) },
+    slots.shade,
+  );
+  return {
+    setStrength: (strength) => {
+      const exaggeration = reliefPaint(strength)["hillshade-exaggeration"];
+      map.setPaintProperty(id, "hillshade-exaggeration", exaggeration);
+    },
+    destroy: () => removeLayerAndSource(map, id),
+  };
+}
+
+function shadeRasterShading(
+  context: LayerContext,
+  id: string,
+  tiles: TerrainTiles,
+): ReliefShading {
+  const { map, layer, slots } = context;
+  return new ShadeRaster(map, {
+    id,
+    tiles,
+    maxzoom: cappedDemMaxZoom(tiles.maxzoom),
+    bounds: terrainTileBounds(layer.grid.bbox),
+    bbox: layer.grid.bbox,
+    strength: RELIEF_STRENGTH.initial,
+    beforeId: slots.shade,
+  });
 }
 
 // Missing ocean tiles stay missing, so a bounded memo warns once per tile instead of every zoom.

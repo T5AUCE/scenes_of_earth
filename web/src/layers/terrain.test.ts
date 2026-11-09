@@ -9,6 +9,7 @@ const WARNING = "Terrain shading or contour tiles could not be loaded";
 
 const rootUrl = new URL("./", import.meta.url).href;
 const mockModules = {
+  "maplibre-gl": `export const addProtocol = () => {};`,
   "../map": `export const removeLayerAndSource = () => {};`,
   "./contour-overlay": `
     export const sharedDemSource = () => ({
@@ -309,6 +310,31 @@ test("relief loads Mapterhorn tiles directly instead of the contour protocol", (
   view.destroy();
 });
 
+test("relief stays a hillshade layer unless the shade fade flag is set", () => {
+  const { map, layers } = terrainMap();
+
+  const view = createTestTerrainView(map);
+
+  assert.equal(layers[0].type, "hillshade");
+  view.destroy();
+});
+
+test("the shade fade flag draws relief as a fading raster layer", () => {
+  const { map, sources, layers } = terrainMap();
+  globalThis.location = { search: "?shadeFade=1" } as Location;
+
+  try {
+    const view = createTestTerrainView(map);
+
+    assert.equal(sources.get("terrain-relief")?.type, "raster");
+    assert.equal(layers[0].type, "raster");
+    assert.equal((layers[0].paint as Record<string, unknown>)["raster-fade-duration"], 250);
+    view.destroy();
+  } finally {
+    Reflect.deleteProperty(globalThis, "location");
+  }
+});
+
 test("terrain offers metres and feet and forwards the choice to contours", () => {
   const map = {
     addSource() {},
@@ -361,3 +387,56 @@ test("terrain offers metres and feet and forwards the choice to contours", () =>
 
   view.destroy();
 });
+
+function terrainMap() {
+  const sources = new Map<string, { type?: unknown; tiles?: unknown }>();
+  const layers: { type: string; paint?: unknown }[] = [];
+  const map = {
+    addSource(id: string, source: { tiles?: unknown }) {
+      sources.set(id, source);
+    },
+    addLayer(layer: { type: string }) {
+      layers.push(layer);
+    },
+    getLayer: () => undefined,
+    getSource: () => undefined,
+    on() {},
+    off() {},
+    setPaintProperty() {},
+  };
+  return { map, sources, layers };
+}
+
+function createTestTerrainView(map: ReturnType<typeof terrainMap>["map"]) {
+  return createTerrainView({
+    map,
+    store: Promise.resolve({}),
+    layer: {
+      id: "terrain",
+      title: "Terrain",
+      units: "m",
+      grid: { bbox: [0, 0, 1, 1], res: 1, nx: 2, ny: 2 },
+      tiles: {
+        url: "https://example.test/{z}/{x}/{y}",
+        encoding: "terrarium",
+        tile_size: 512,
+        maxzoom: 11,
+        source: { name: "DEM", licence: "open" },
+      },
+      stats: {
+        min: 0,
+        max: 100,
+        mean: 50,
+        p2: 5,
+        p98: 95,
+        slope_p50_deg: 5,
+        slope_p90_deg: 10,
+        cell_m: 500,
+      },
+    },
+    shift: 0,
+    slots: { fill: "fill", shade: "shade", marks: "marks", lines: "lines" },
+    beforeId: undefined,
+    report: () => () => {},
+  } as unknown as Parameters<typeof createTerrainView>[0]);
+}

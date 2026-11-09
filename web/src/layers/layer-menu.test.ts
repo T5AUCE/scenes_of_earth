@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { afterEach, beforeEach, test } from "node:test";
 
-import type { InkMenu, LayerMenu } from "../types.ts";
+import type { LayerMenu } from "../types.ts";
 
 const menuUrl = new URL("./layer-menu.ts", import.meta.url).href;
 const hooks = registerHooks({
@@ -15,8 +15,6 @@ const hooks = registerHooks({
   },
 });
 const {
-  CUSTOM_INK_NOTE,
-  CUSTOM_PALETTE_NOTE,
   menuMainSections,
   menuResetButton,
 } = await import("./layer-menu.ts").finally(() => hooks.deregister());
@@ -34,101 +32,28 @@ afterEach(() => {
   else Reflect.deleteProperty(globalThis, "document");
 });
 
-test("a layer drawn as colour shows its palettes and no ink", () => {
+test("the menu shows the edge section without colour radios or notes", () => {
   const { menu } = fieldMenu(false);
+  menu.edges = {
+    controls: [{ label: "Smoothing", min: 0, max: 0.6, step: 0.05, value: 0.25, set: () => {} }],
+    outline: { value: false, set: () => {} },
+    get isDefault() {
+      return true;
+    },
+    reset: () => {},
+  };
   const sections = sectionsOf(menu);
 
-  assert.deepEqual(legendsOf(sections), ["Colours"]);
-  assert.deepEqual(presetLabels(sections), ["Ink blue (default)", "Batlow"]);
+  assert.deepEqual(legendsOf(sections), ["Edges"]);
+  assert.equal(radios(sections).length, 0);
+  assert.ok(!descendants(sections).some((element) => element.className === "mode-switch"));
+  assert.ok(!descendants(sections).some((element) => element.className === "swatches"));
 });
 
-test("a layer drawn as dots shows the ink presets and no palettes", () => {
-  const { menu } = fieldMenu(true);
-  const sections = sectionsOf(menu);
-
-  assert.deepEqual(legendsOf(sections), ["Dot ink"]);
-  assert.deepEqual(presetLabels(sections), ["Navy (default)", "White"]);
-});
-
-test("the menu follows the draw each time it is built", () => {
-  const { menu, setDrawn } = fieldMenu(false);
-
-  setDrawn(true);
-  assert.deepEqual(legendsOf(sectionsOf(menu)), ["Dot ink"]);
-
-  setDrawn(false);
-  assert.deepEqual(legendsOf(sectionsOf(menu)), ["Colours"]);
-});
-
-test("choosing a preset ink applies it and reports an ink change", () => {
-  const { menu, changes } = fieldMenu(true);
-  const white = findRadio(sectionsOf(menu, changes), "White");
-
-  white.onchange!();
-
-  assert.equal(menu.ink!.value, "white");
-  assert.deepEqual(changes, ["ink"]);
-});
-
-test("switching to a custom ink starts from the current preset and shows one colour input", () => {
-  const { menu, changes } = fieldMenu(true);
-  const sections = sectionsOf(menu, changes);
-
-  findRadio(sections, "Custom").onchange!();
-
-  assert.equal(menu.ink!.value, "#1a3658");
-  assert.deepEqual(changes, ["ink"]);
-  const inputs = descendants(sections).filter((element) => element.type === "color");
-  assert.equal(inputs.length, 1);
-  assert.equal(inputs[0].value, "#1a3658");
-});
-
-test("an ink that is already custom opens on the custom colour", () => {
-  const { menu } = fieldMenu(true, "#102030");
-  const sections = sectionsOf(menu);
-
-  assert.equal(findRadio(sections, "Custom").checked, true);
-  assert.equal(descendants(sections).filter((element) => element.type === "color").length, 1);
-});
-
-test("a palette layer offers a custom editor and a preset-only layer does not", () => {
+test("a menu without edges has no sections left", () => {
   const { menu } = fieldMenu(false);
-  const presetOnly = { ...menu, custom: false };
 
-  assert.equal(hasRadio(sectionsOf(menu), "Custom"), true);
-  assert.equal(hasRadio(sectionsOf(presetOnly), "Custom"), false);
-});
-
-test("switching a custom ink to Presets keeps that mode and notes the applied ink", () => {
-  const { menu, changes } = fieldMenu(true, "#102030");
-  findRadio(sectionsOf(menu), "Presets").onchange!();
-
-  const presets = sectionsOf(menu);
-  assert.equal(findRadio(presets, "Presets").checked, true);
-  assert.equal(descendants(presets).filter((element) => element.type === "color").length, 0);
-  assert.ok(descendants(presets).some((element) => element.textContent === CUSTOM_INK_NOTE));
-  assert.deepEqual(changes, []);
-
-  findRadio(presets, "Custom").onchange!();
-  const custom = sectionsOf(menu);
-  const input = descendants(custom).find((element) => element.type === "color")!;
-  assert.equal(input.value, "#102030");
-});
-
-test("switching custom colours to Presets keeps that mode and the custom draft", () => {
-  const { menu, changes } = fieldMenu(false, "navy", "custom-1a2b3c-88cc44");
-  findRadio(sectionsOf(menu), "Presets").onchange!();
-
-  const presets = sectionsOf(menu);
-  assert.equal(findRadio(presets, "Presets").checked, true);
-  assert.equal(descendants(presets).filter((element) => element.type === "color").length, 0);
-  assert.ok(descendants(presets).some((element) => element.textContent === CUSTOM_PALETTE_NOTE));
-  assert.deepEqual(changes, []);
-
-  findRadio(presets, "Custom").onchange!();
-  const custom = sectionsOf(menu);
-  const inputs = descendants(custom).filter((element) => element.type === "color");
-  assert.deepEqual(inputs.map((input) => input.value), ["#1a2b3c", "#88cc44"]);
+  assert.deepEqual(menuMainSections(menu), []);
 });
 
 test("reset layer reports a reset after applying the defaults", () => {
@@ -139,17 +64,6 @@ test("reset layer reports a reset after applying the defaults", () => {
   reset.onclick!();
 
   assert.equal(changes.at(-1), "reset");
-});
-
-test("picking a preset clears the note about applied custom colours", () => {
-  const { menu } = fieldMenu(false, "navy", "custom-1a2b3c-88cc44");
-  findRadio(sectionsOf(menu), "Presets").onchange!();
-
-  const presets = sectionsOf(menu);
-  findRadio(presets, "Batlow").onchange!();
-
-  assert.equal(menu.palette, "batlow");
-  assert.ok(!descendants(presets).some((element) => element.textContent === CUSTOM_PALETTE_NOTE));
 });
 
 test("reset layer returns units to the bundle default", () => {
@@ -210,23 +124,6 @@ function fieldMenu(isDrawn: boolean, ink = "navy", palette = "ink-blue") {
   let value = ink;
   let paletteValue = palette;
   const changes: string[] = [];
-  const inkMenu: InkMenu = {
-    heading: "Dot ink",
-    presets: [
-      { name: "navy", label: "Navy", colors: ["#1a3658"] },
-      { name: "white", label: "White", colors: ["#ffffff"] },
-    ],
-    defaultInk: "navy",
-    get inUse() {
-      return isInk;
-    },
-    get value() {
-      return value;
-    },
-    set: (next) => {
-      value = next;
-    },
-  };
   const menu: LayerMenu = {
     title: "Rainfall",
     heading: "Colours",
@@ -237,7 +134,23 @@ function fieldMenu(isDrawn: boolean, ink = "navy", palette = "ink-blue") {
     ],
     defaultPalette: "ink-blue",
     custom: true,
-    ink: inkMenu,
+    ink: {
+      heading: "Dot ink",
+      presets: [
+        { name: "navy", label: "Navy", colors: ["#1a3658"] },
+        { name: "white", label: "White", colors: ["#ffffff"] },
+      ],
+      defaultInk: "navy",
+      get inUse() {
+        return isInk;
+      },
+      get value() {
+        return value;
+      },
+      set: (next) => {
+        value = next;
+      },
+    },
     get palette() {
       return paletteValue;
     },
@@ -256,7 +169,7 @@ function sectionsOf(menu: LayerMenu, changes: string[] = []) {
   const push = (change: string) => changes.push(change);
 
   return [
-    ...menuMainSections(menu, "test", push),
+    ...menuMainSections(menu),
     menuResetButton(menu, push, () => {}),
   ] as unknown as TestElement[];
 }
@@ -273,20 +186,6 @@ function legendsOf(sections: TestElement[]) {
 
 function radios(sections: TestElement[]) {
   return descendants(sections).filter((element) => element.type === "radio");
-}
-
-function findRadio(sections: TestElement[], label: string) {
-  return radios(sections).find((radio) => radio.parent!.textContent.startsWith(label))!;
-}
-
-function hasRadio(sections: TestElement[], label: string) {
-  return radios(sections).some((radio) => radio.parent!.textContent === label);
-}
-
-function presetLabels(sections: TestElement[]) {
-  return radios(sections)
-    .map((radio) => radio.parent!.textContent)
-    .filter((label) => label !== "Presets" && label !== "Custom");
 }
 
 class TestElement {

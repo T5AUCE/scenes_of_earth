@@ -10,7 +10,7 @@ export const INTERVAL_CHAIN_FT = [20, 100, 500, 1000, 5000];
 /** Contour tiles are traced from DEM tiles one zoom coarser, so their ceiling is one above. */
 export const CONTOUR_OVERZOOM = 1;
 /** Zoom levels a tier takes to reach full opacity after it first shows. */
-export const FADE_SPAN_ZOOM = 0.75;
+export const FADE_SPAN_ZOOM = 1.5;
 
 /** Add the next finer labelled height where bold lines sit far apart; the M5 trial asked for it. */
 export const LABEL_SPARSE_FALLBACK = true;
@@ -67,7 +67,7 @@ export function contourLadder(
     const entryZoom = firstZoomWhere((zoom) => requiredInterval(zoom) <= interval, maxZoom);
     return entryZoom === null
       ? []
-      : [{ interval, entryZoom, traceZoom: Math.max(entryZoom - 1, 0) }];
+      : [{ interval, entryZoom, traceZoom: Math.max(entryZoom - 2, 0) }];
   });
   const boldInterval = boldIntervalFor(stats, tiers, elevationUnit);
 

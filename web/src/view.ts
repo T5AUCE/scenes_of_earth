@@ -18,12 +18,16 @@ import {
   isGeologyLayer,
   loadStoredDensities,
   loadStoredInks,
+  loadStoredOutline,
   loadStoredPalettes,
   loadStoredUnits,
   NO_TOKENS,
+  outlineCss,
   resolveDisplay,
+  type OutlineState,
   type SceneDisplay,
   setLayerDisplay,
+  storeOutline,
 } from "./display-state";
 import { makeHtmlElement } from "./html";
 import { BLEND, blendPair } from "./layers/allocate";
@@ -32,7 +36,7 @@ import { addGeologyWater, removeGeologyWater } from "./layers/geology-water";
 import { LAYER_KINDS } from "./layers/registry";
 import { firstSymbolId, removeLayerAndSource, showScaleBar } from "./map";
 import { shiftLongitudes, worldShift } from "./render/mercator";
-import { setOutline, subscribeDrawing, type MountedLayer } from "./scene-cards";
+import { subscribeDrawing, type MountedLayer } from "./scene-cards";
 import { createSceneStore, type SceneStore } from "./scene-store";
 import { loadStoredShowAs } from "./show-as";
 import { createTimeline, formatTime, scrubberTimes } from "./timeline";
@@ -51,8 +55,6 @@ type AddNote = (text: string) => () => void;
 
 /** Map layer and source id of the scene's area outline. */
 export const OUTLINE_ID = "soe-area-outline";
-const OUTLINE_COLOR = "#333";
-const OUTLINE_WIDTH_PX = 1.5;
 const EMPTY_FEATURES: GeoJsonData = { type: "FeatureCollection", features: [] };
 
 // Hidden anchors keep each kind of drawing in its own band.
@@ -147,6 +149,7 @@ export function mountScene(
     loadStoredInks(),
     loadStoredDensities(),
     loadStoredUnits(),
+    loadStoredOutline(),
   );
   if (dropped) addNote(DROPPED_NOTE);
   elevationUnit = elevationUnitFrom(display, scene.layers);
@@ -198,7 +201,7 @@ export function mountScene(
     dataStore.catch((error) => addNote(`Cannot open the data: ${error.message}`));
 
     const shift = worldShift(scene.area.bbox);
-    addOutline(map, scene, shift, addNote, () => isMounted);
+    addOutline(map, scene, shift, addNote, () => isMounted, display.outline);
     addSlotAnchors(map);
     mounted.push(
       ...mountLayerViews(map, scene.layers, dataStore, shift, addNote, display, changeDisplay),
@@ -215,10 +218,10 @@ export function mountScene(
       mounted,
       blend,
       store,
-      onOutline: (on) => setOutline(map, OUTLINE_ID, on),
     });
     stopDrawing = subscribeDrawing(map, mounted, blend, store);
     let previousDisplay = store.getSnapshot().display;
+    let previousOutline = store.getSnapshot().display.outline;
     let previousCharts = store.getSnapshot().charts;
     let lastSyncNotice: string | null = null;
     let removeSyncNote: (() => void) | null = null;
@@ -252,6 +255,11 @@ export function mountScene(
         previousDisplay = snapshot.display;
         onDisplay(formatDisplayParams(snapshot.display, layerDocs));
         notifyUnits(snapshot.display, layerDocs);
+        if (outlineChanged(snapshot.display.outline, previousOutline)) {
+          previousOutline = { ...snapshot.display.outline };
+          applyOutline(map, snapshot.display.outline);
+          storeOutline(snapshot.display.outline);
+        }
       }
       if (snapshot.charts !== previousCharts) {
         previousCharts = snapshot.charts;
@@ -384,25 +392,31 @@ function addOutline(
   shift: number,
   addNote: AddNote,
   isMounted: () => boolean,
+  outline: OutlineState,
 ) {
   const data = shift === 0 ? scene.area.geometry_href : EMPTY_FEATURES;
 
   map.addSource(OUTLINE_ID, { type: "geojson", data });
-
-  map.addLayer(
-    {
-      id: OUTLINE_ID,
-      type: "line",
-      source: OUTLINE_ID,
-      paint: { "line-color": OUTLINE_COLOR, "line-width": OUTLINE_WIDTH_PX },
-    },
-    firstSymbolId(map),
-  );
+  map.addLayer({ id: OUTLINE_ID, type: "line", source: OUTLINE_ID }, firstSymbolId(map));
+  applyOutline(map, outline);
 
   if (shift === 0) return;
 
   showShiftedOutline(map, scene.area.geometry_href, shift, isMounted)
     .catch((error) => addNote(`Area outline: ${error.message}`));
+}
+
+/** Paint the area outline's colour, width and visibility without rebuilding. */
+function applyOutline(map: MapLibreMap, outline: OutlineState) {
+  map.setLayoutProperty(OUTLINE_ID, "visibility", outline.shown ? "visible" : "none");
+  map.setPaintProperty(OUTLINE_ID, "line-color", outlineCss(outline.color));
+  map.setPaintProperty(OUTLINE_ID, "line-width", outline.widthPx);
+}
+
+function outlineChanged(next: OutlineState, previous: OutlineState): boolean {
+  return next.shown !== previous.shown
+    || next.color !== previous.color
+    || next.widthPx !== previous.widthPx;
 }
 
 async function showShiftedOutline(

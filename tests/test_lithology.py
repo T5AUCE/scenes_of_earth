@@ -61,8 +61,8 @@ def coarse_source(monkeypatch):
 
 
 def write_source_map(path: Path) -> None:
-    """Write a 70°N-62°S map: class 14 west of 0, class 5 east of it and two odd columns."""
-    columns, rows = 720, 264
+    """Write an 87°N-62°S map: class 14 west of 0, class 5 east of it and two odd columns."""
+    columns, rows = 720, 298
     values = np.full((rows, columns), EAST_CLASS, "uint8")
     values[:, : columns // 2] = WEST_CLASS
     values[:, UNDEFINED_COLUMN] = lithology.UNDEFINED_CLASS
@@ -76,7 +76,7 @@ def write_source_map(path: Path) -> None:
         width=columns,
         height=rows,
         crs="EPSG:4326",
-        transform=from_origin(-180, 70, SOURCE_RES_DEG, SOURCE_RES_DEG),
+        transform=from_origin(-180, 87, SOURCE_RES_DEG, SOURCE_RES_DEG),
         nodata=WATER_CLASS,
     ) as dataset:
         dataset.write(values, 1)
@@ -120,12 +120,12 @@ def glim_cubes_dir(tmp_path):
 
 
 def write_edge_source(path: Path) -> np.ndarray:
-    """Write a 70°N-60°S map of class 9 with bad edge columns; return its values.
+    """Write an 87°N-60°S map of class 9 with bad edge columns; return its values.
 
     The first and last columns hold classes 1 and 14 like the bad edge columns of the real
     map, the second column alternates 9 and 5 by row, and column 5 holds class 2.
     """
-    columns, rows = 12, 260
+    columns, rows = 12, 294
     values = np.full((rows, columns), 9, "uint8")
     values[:, 0] = 1
     values[:, -1] = 14
@@ -140,18 +140,18 @@ def write_edge_source(path: Path) -> np.ndarray:
         width=columns,
         height=rows,
         crs="EPSG:4326",
-        transform=from_origin(-180, 70, SOURCE_RES_DEG, SOURCE_RES_DEG),
+        transform=from_origin(-180, 87, SOURCE_RES_DEG, SOURCE_RES_DEG),
         nodata=WATER_CLASS,
     ) as dataset:
         dataset.write(values, 1)
     return values
 
 
-def test_cog_covers_60_south_to_60_north_and_has_no_water_or_undefined_class(cubes_dir):
+def test_cog_covers_60_south_to_84_north_and_has_no_water_or_undefined_class(cubes_dir):
     with rasterio.open(cubes_dir / LITHOLOGY_FILE) as dataset:
         values = dataset.read(1)
 
-        assert dataset.bounds.top == 60 and dataset.bounds.bottom == -60
+        assert dataset.bounds.top == 84 and dataset.bounds.bottom == -60
         assert dataset.profile["tiled"] and dataset.nodata == 0
 
     assert (values[:, UNDEFINED_COLUMN] == 0).all() and (values[:, WATER_COLUMN] == 0).all()
@@ -195,7 +195,7 @@ def test_glim_cog_holds_level_two_classes_and_leaves_water_and_no_data_at_zero(g
     def column_at(longitude: float) -> int:
         return round((longitude + 180) / SOURCE_RES_DEG)
 
-    assert (bounds.left, bounds.bottom, bounds.right, bounds.top) == (-180, -60, 180, 60)
+    assert (bounds.left, bounds.bottom, bounds.right, bounds.top) == (-180, -60, 180, 84)
     assert values[row, column_at(2.5)] == GLIM_VALUES["sumx"]
     assert values[row, column_at(7.5)] == GLIM_VALUES["sush"]
     assert values[row, column_at(12.5)] == GLIM_VALUES["ig__"]

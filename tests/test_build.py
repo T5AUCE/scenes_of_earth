@@ -19,7 +19,7 @@ from soe.build import SourceChanged, build_scene
 from soe.layer_writer import _fill_outside
 from soe.zarr_encoding import COMPRESSION, DeterministicGzipCodec, encode_values
 from soe.bundle import JsonObject, validate
-from soe.plan import plan
+from soe.plan import plan, scene_datasets
 from soe.scene_request import prepare_scene, resolve_area
 from soe.sources import (
     SOURCES,
@@ -35,6 +35,7 @@ from soe.sources import (
     terrain_res,
 )
 from soe.sources import terrain as terrain_module
+from soe.sources.licences import SOURCES
 from soe.sources.synthetic import _synthetic_classes
 from soe.sources.terrain import CopernicusDemReader, PlacedTile as TerrainTile
 from soe.sources.worldcover import PlacedTile, land_cover_by_tiles
@@ -414,6 +415,44 @@ def test_area_crossing_60_north_builds_with_the_whole_outline_and_rain_below_60(
     assert layers["chirps_monthly"]["grid"]["bbox"][3] == 60
     assert layers["terrain"]["grid"]["bbox"][3] >= 62
     assert any("outside Rainfall coverage" in note for note in document["notices"]["limits"])
+    assert validate(document) == []
+
+
+def test_area_beyond_60_north_builds_rain_and_temperature_from_the_84n_cubes(tmp_path):
+    arctic = Area(box(10.0, 70.0, 10.5, 71.0))
+    registry = make_registry(SyntheticSource(north_cubes=True))
+    datasets = scene_datasets(
+        arctic,
+        [registry["chirps_monthly"], registry["era5land_temperature"], registry["terrain"]],
+    )
+
+    build_scene(HASH_A, arctic, "2015-01", "2015-02", datasets, "T", tmp_path)
+    document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    layers = {layer["id"]: layer for layer in document["layers"]}
+
+    assert layers["chirps_monthly"]["coverage"][3] == 84
+    assert layers["era5land_temperature"]["coverage"][3] == 84
+    assert layers["chirps_monthly"]["grid"]["bbox"][3] >= 71
+    assert not any("outside" in note for note in document["notices"]["limits"])
+    assert any("north of CHIRPS" in note for note in document["notices"]["limits"])
+    assert validate(document) == []
+
+
+def test_geology_beyond_60_north_reads_the_84n_base_edition_and_inside_60_keeps_its_own(tmp_path):
+    arctic = Area(box(19.0, 69.5, 19.5, 70.0))
+    southern = Area(box(19.0, 58.5, 19.5, 59.0))
+    registry = make_registry(SyntheticSource(lithology=True))
+    datasets = scene_datasets(arctic, [registry["geology"], registry["terrain"]])
+
+    build_scene(HASH_A, arctic, None, None, datasets, "T", tmp_path)
+    document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+    layer = next(layer for layer in document["layers"] if layer["id"] == "geology")
+    (inside,) = scene_datasets(southern, [registry["geology"]])
+
+    assert layer["coverage"][3] == 84
+    assert layer["source"]["version"] == SOURCES["glim_84n"]["version"]
+    assert not any("outside" in note for note in document["notices"]["limits"])
+    assert inside.source["version"] == SOURCES["glim"]["version"]
     assert validate(document) == []
 
 

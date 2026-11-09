@@ -1,7 +1,7 @@
 """Build the lithology COG that rock-type scenes read, from GLiM or the OpenLandMap map.
 
 When the GLiM geodatabase has been downloaded, a one-off run rasterises its level 1 and 2 codes
-onto the 1/480° grid between 60°S and 60°N. Otherwise it downloads the OpenLandMap map, a global
+onto the 1/480° grid between 60°S and 84°N. Otherwise it downloads the OpenLandMap map, a global
 GeoTIFF in 1-row strips, crops it, turns water and the undefined class into no data (0), and
 repairs its edge columns. Either way the result is a tiled COG whose overviews keep the most
 common class and whose tags name the source.
@@ -113,7 +113,7 @@ def _download(url: str, target: Path) -> None:
 
 
 def _write_cleaned(source_path: Path | str, cleaned_path: Path) -> None:
-    """Copy the 60°S-60°N rows strip by strip, clearing water and undefined cells to 0.
+    """Copy the 60°S-84°N rows strip by strip, clearing water and undefined cells to 0.
 
     The source columns within EDGE_REPAIR_WIDTH_DEG of each file edge are replaced by their
     nearest inner column, per row.
@@ -166,7 +166,7 @@ def _repair_edge_columns(values: np.ndarray, edge_pixels: int) -> None:
 
 
 def _write_glim_raster(glim_path: Path | str, raster_path: Path) -> None:
-    """Rasterise the GLiM codes tile by tile onto the 60°S-60°N grid of LITHOLOGY_RES_DEG."""
+    """Rasterise the GLiM codes tile by tile onto the 60°S-84°N grid of LITHOLOGY_RES_DEG."""
     write_tiled_raster(
         raster_path,
         LITHOLOGY_RES_DEG,

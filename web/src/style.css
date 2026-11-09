@@ -1,4 +1,7 @@
 :root {
+  /* Swap these two lines to try other fonts; bundled files go in web/public/fonts/. */
+  --font-title: sans-serif;
+  --font-body: sans-serif;
   --page-background: #fff;
   --pick-outline: #d92d20;
   --panel-background: #fff;
@@ -28,7 +31,7 @@ body {
   z-index: 1;
   padding: 4px 8px;
   border-radius: 4px;
-  font: 12px sans-serif;
+  font: 12px var(--font-body);
   background: var(--panel-background);
   box-shadow: var(--panel-outline);
 }
@@ -61,7 +64,7 @@ body.has-dev-stats #panel {
   box-sizing: border-box;
   padding: 8px;
   border-radius: 4px;
-  font: 13px sans-serif;
+  font: 13px var(--font-body);
   background: var(--panel-background);
   box-shadow: var(--panel-outline);
 }
@@ -215,7 +218,7 @@ body.scene-mode #panel {
 
 .notice {
   color: #444;
-  font: 13px sans-serif;
+  font: 13px var(--font-body);
   margin-bottom: 4px;
 }
 
@@ -230,7 +233,7 @@ body.scene-mode #panel {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  font: 13px sans-serif;
+  font: 13px var(--font-body);
 }
 
 #scene-column[hidden] {
@@ -263,23 +266,30 @@ body.scene-mode #panel {
   box-shadow: var(--panel-outline);
 }
 
+#scene-column .card.editing {
+  box-shadow: 0 0 0 2px #124;
+}
+
 #scene-column .card .card-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px 44px;
+  column-gap: 8px;
+  align-items: start;
 }
 
 #scene-column .card .card-title {
-  flex: 1;
   min-width: 0;
+  font-family: var(--font-title);
   margin: 0;
   font-size: 13px;
   font-weight: bold;
+  line-height: 20px;
 }
 
 #scene-column .card .card-switch {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  height: 20px;
 }
 
 #scene-column .card .card-switch input {
@@ -323,7 +333,9 @@ body.scene-mode #panel {
 }
 
 #scene-column .card .edit-button {
-  padding: 0 8px;
+  width: 44px;
+  height: 20px;
+  padding: 0;
   font-size: 12px;
 }
 
@@ -353,7 +365,7 @@ body.scene-mode #panel {
   border-radius: 4px;
   background: var(--panel-background);
   box-shadow: var(--panel-outline), 0 4px 16px rgba(0, 0, 0, 0.2);
-  font: 13px sans-serif;
+  font: 13px var(--font-body);
 }
 
 .layer-editor:focus {
@@ -374,6 +386,7 @@ body.scene-mode #panel {
 }
 
 .layer-editor .editor-head h2 {
+  font-family: var(--font-title);
   margin: 0;
   font-size: 15px;
 }
@@ -485,32 +498,155 @@ body.scene-mode #panel {
   font-variant-numeric: tabular-nums;
 }
 
-.layer-editor .swatch {
-  display: inline-flex;
-  flex: 0 0 90px;
-  height: 14px;
-  border: 1px solid #999;
+.layer-editor .line-preview {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  height: 16px;
 }
 
-.layer-editor .swatch-blocks span {
+.layer-editor .line-preview i {
+  display: block;
+  width: 100%;
+  border-radius: 2px;
+}
+
+.layer-editor .swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 2px;
+}
+
+.layer-editor .swatches.tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.layer-editor .swatch-option {
+  position: relative;
+  display: block;
+  cursor: pointer;
+}
+
+.layer-editor .swatch-option input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  pointer-events: none;
+}
+
+.layer-editor .swatch-option input:focus-visible {
+  outline: none;
+}
+
+.layer-editor .swatch-face {
+  display: block;
+  box-sizing: border-box;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+
+.layer-editor .tiles .swatch-face {
+  width: 100%;
+  height: 22px;
+  border-radius: 3px;
+}
+
+.layer-editor .swatch-face.swatch-blocks {
+  display: flex;
+  overflow: hidden;
+}
+
+.layer-editor .swatch-face.swatch-blocks span {
   flex: 1;
+}
+
+.layer-editor .swatch-option input:checked + .swatch-face {
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.25),
+    0 0 0 2px #fff,
+    0 0 0 4px #124;
+}
+
+.layer-editor .swatch-option input:focus-visible + .swatch-face {
+  outline: 2px dashed #124;
+  outline-offset: 5px;
+}
+
+.layer-editor .swatch-check {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #124;
+  color: #fff;
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+  box-shadow: 0 0 0 1.5px #fff;
+}
+
+.layer-editor .swatch-option input:checked ~ .swatch-check {
+  display: block;
+}
+
+.layer-editor .swatch-face.custom-empty {
+  display: grid;
+  place-items: center;
+  color: #444;
+  font-size: 16px;
+  line-height: 1;
+  background: repeating-linear-gradient(45deg, #fff 0 4px, #eee 4px 8px);
+  box-shadow: inset 0 0 0 1px #888;
+}
+
+.layer-editor .tiles .swatch-face.custom-empty {
+  font-size: 12px;
+}
+
+.layer-editor .swatch-tip {
+  position: absolute;
+  z-index: 5;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 6px;
+  border-radius: 3px;
+  background: #1f1f1f;
+  color: #fff;
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 80ms;
+}
+
+.layer-editor .swatch-option:hover .swatch-tip,
+.layer-editor .swatch-option:focus-within .swatch-tip {
+  opacity: 1;
+}
+
+.layer-editor .swatch-caption {
+  margin-top: 6px;
+  min-height: 14px;
+  font-size: 11px;
+  color: #666;
 }
 
 .layer-editor .custom-colors {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin: 0 0 4px;
-}
-
-.layer-editor .mode-switch {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 6px;
-}
-
-.layer-editor .mode-switch label {
-  margin-bottom: 0;
+  margin: 8px 0 4px;
 }
 
 .layer-editor input[type="number"] {
@@ -569,7 +705,7 @@ body.scene-mode #panel {
   z-index: 1;
   padding: 8px;
   border-radius: 4px;
-  font: 13px sans-serif;
+  font: 13px var(--font-body);
   background: var(--panel-background);
   box-shadow: var(--panel-outline);
 }
@@ -648,7 +784,7 @@ body.scene-mode #panel {
   border-top: 1px solid #ddd;
   background: none;
   text-align: left;
-  font: 12px sans-serif;
+  font: 12px var(--font-body);
   color: #124;
   white-space: nowrap;
   overflow: hidden;
@@ -675,7 +811,7 @@ body.scene-mode #panel {
   margin: 0;
   padding: 0;
   border: 0;
-  font: 14px sans-serif;
+  font: 14px var(--font-body);
   overflow: hidden;
 }
 

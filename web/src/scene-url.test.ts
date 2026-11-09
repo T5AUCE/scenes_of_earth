@@ -33,7 +33,17 @@ test("a scene link reads the time and ignores a malformed one", () => {
     id,
     time: "2026-03",
     panel: null,
-    display: { pal: "", range: "", off: "", as: "", ink: "", dens: "", units: "", charts: "" },
+    display: {
+      pal: "",
+      range: "",
+      off: "",
+      as: "",
+      ink: "",
+      dens: "",
+      units: "",
+      outline: "",
+      charts: "",
+    },
   });
 
   const timeOf = (label: string) =>
@@ -81,6 +91,7 @@ test("display params round trip through the address", () => {
     ink: "",
     dens: "",
     units: "",
+    outline: "",
     charts: "",
   });
 });
@@ -116,6 +127,19 @@ test("the units param round trips through the address", () => {
   const route = routeFor(url, null) as { display: { units: string } };
 
   assert.equal(route.display.units, "chirps_monthly:in/month,era5land_temperature:°F");
+});
+
+test("the outline param round trips through the address", () => {
+  const url = sceneUrl(id, null, "&outline=off:navy:2");
+  const route = routeFor(url, null) as { display: { outline: string } };
+  const repeated = routeFor(
+    `?scene=${id}&outline=on:graphite:1&outline=off:black:2`,
+    null,
+  ) as typeof route;
+
+  assert.equal(route.display.outline, "off:navy:2");
+  assert.equal(repeated.display.outline, "on:graphite:1,off:black:2");
+  assert.ok(!url.includes("%"));
 });
 
 test("repeated display parameters are joined in order", () => {

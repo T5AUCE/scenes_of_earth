@@ -1385,6 +1385,7 @@ test("the baked band matches the full gather on straight and staircase edges", (
     const band = bakeBand(cells, nx, ny, radius);
     for (const softnessCells of [0, 1]) {
       for (const outline of [false, true]) {
+        const appearance = { outline, outlineStrength: FILL_OUTLINE_STRENGTH };
         const options = { smooth: true, rounding: 0.25, softnessCells, smoothRadiusCells: radius };
         for (const positionX of [12.5, 15.5, 16.5, 20.25, 24.75]) {
           for (const positionY of [4.5, 8.25, 12.75]) {
@@ -1405,7 +1406,13 @@ test("the baked band matches the full gather on straight and staircase edges", (
               );
             }
             assert.ok(Math.abs(actual.outline - expected.outline) < 1e-12, `${positionX}`);
-            void outline;
+            const expectedAlpha = classFieldAlpha(expected, appearance);
+            const actualAlpha = classFieldAlpha(actual, appearance);
+            assert.equal(actualAlpha.alpha, expectedAlpha.alpha, `${outline}`);
+            assert.ok(
+              Math.abs(actualAlpha.ink - expectedAlpha.ink) < 1e-12,
+              `${outline} ${positionX},${positionY}`,
+            );
           }
         }
       }
@@ -1424,6 +1431,8 @@ test("the baked band matches across tile borders with halos", () => {
   }
   const radius = 4;
   const band = bakeBand(cells, nx, ny, radius);
+  const flags = homogeneousFlags(cells, nx, ny, radius);
+  markThinCells(cells, nx, ny, flags);
   const tiles = textureTiles(nx, ny, 24, WIDE_HALO_CELLS);
   assert.ok(tiles.length > 1);
   const options = { smooth: true, rounding: 0.25, softnessCells: 1, smoothRadiusCells: radius };
@@ -1439,13 +1448,108 @@ test("the baked band matches across tile borders with halos", () => {
       `${positionX}`,
     );
     assert.ok(Math.abs(actual.outline - expected.outline) < 1e-12, `${positionX}`);
+    for (const outline of [false, true]) {
+      const appearance = { outline, outlineStrength: FILL_OUTLINE_STRENGTH };
+      const expectedAlpha = classFieldAlpha(expected, appearance);
+      const actualAlpha = classFieldAlpha(actual, appearance);
+      assert.equal(actualAlpha.alpha, expectedAlpha.alpha, `${outline} ${positionX}`);
+      assert.ok(Math.abs(actualAlpha.ink - expectedAlpha.ink) < 1e-12, `${outline}`);
+    }
   }
-  const windowed = windowBand(band, tiles[0].window, nx, ny);
-  assert.equal(windowed.ids.length, tiles[0].window.width * tiles[0].window.height * 2);
-  assert.equal(
-    windowed.ids.length + windowed.low.length * 4 + windowed.high.length * 4,
-    tiles[0].window.width * tiles[0].window.height * BAND_BYTES_PER_CELL,
-  );
+  for (const tile of tiles) {
+    const { window, core } = tile;
+    const idsWindow = new Uint8Array(window.width * window.height);
+    const flagsWindow = new Uint8Array(window.width * window.height);
+    const bandWindow = windowBand(band, window, nx, ny);
+    for (let row = 0; row < window.height; row++) {
+      for (let column = 0; column < window.width; column++) {
+        const target = row * window.width + column;
+        const globalColumn = window.column + column;
+        const globalRow = window.row + row;
+        idsWindow[target] = cells[globalRow * nx + globalColumn];
+        flagsWindow[target] = flags[globalRow * nx + globalColumn];
+        assert.equal(idsWindow[target], diagonalId(globalColumn, globalRow), `${globalColumn}`);
+        const uniform = expectedDiagonalUniform(globalColumn, globalRow, nx, ny) === 1;
+        assert.equal(flagsWindow[target] === 1, uniform, `${globalColumn},${globalRow}`);
+        const texel: BandTexel = {
+          id0: bandWindow.ids[target * 2],
+          id1: bandWindow.ids[target * 2 + 1],
+          low: bandWindow.low[target],
+          high: bandWindow.high[target],
+        };
+        assert.ok(!isComplexBand(texel), `${globalColumn},${globalRow}`);
+      }
+    }
+    assert.equal(bandWindow.ids.length, window.width * window.height * 2);
+    assert.equal(
+      bandWindow.ids.length + bandWindow.low.length * 4 + bandWindow.high.length * 4,
+      window.width * window.height * BAND_BYTES_PER_CELL,
+    );
+    const useBand = !isBandParityMismatched(window.column, window.row, radius)
+      && !flagsWindow.every((flag) => flag === 1);
+    const sampleWindow = (cellX: number, cellY: number) => {
+      const confinedX = Math.min(window.column + window.width - 1, Math.max(window.column, cellX));
+      const confinedY = Math.min(window.row + window.height - 1, Math.max(window.row, cellY));
+      return idsWindow[(confinedY - window.row) * window.width + confinedX - window.column];
+    };
+    const thinWindow = (cellX: number, cellY: number) => {
+      const confinedX = Math.min(window.column + window.width - 1, Math.max(window.column, cellX));
+      const confinedY = Math.min(window.row + window.height - 1, Math.max(window.row, cellY));
+      return flagsWindow[(confinedY - window.row) * window.width + confinedX - window.column]
+        === THIN_CELL_FLAG;
+    };
+    const bandTexel = (baseX: number, baseY: number): BandTexel => {
+      const target = (baseY - window.row) * window.width + baseX - window.column;
+      return {
+        id0: bandWindow.ids[target * 2],
+        id1: bandWindow.ids[target * 2 + 1],
+        low: bandWindow.low[target],
+        high: bandWindow.high[target],
+      };
+    };
+    for (const positionX of [core.column + 1e-7, core.column + core.width - 1e-7]) {
+      const positionY = 8.5;
+      const baseX = Math.floor(positionX);
+      const baseY = Math.floor(positionY);
+      const ids: number[][] = [];
+      for (let row = -1; row <= 2; row++) {
+        const line: number[] = [];
+        for (let column = -1; column <= 2; column++) {
+          line.push(sampleWindow(baseX + column, baseY + row));
+        }
+        ids.push(line);
+      }
+      const tiled = sampleClassField(
+        {
+          ids,
+          fraction: [positionX - baseX, positionY - baseY],
+          positionDx: [0.001, 0],
+          positionDy: [0, 0.001],
+          position: [positionX, positionY],
+          sampleId: sampleWindow,
+          band: useBand ? bandTexel(baseX, baseY) : undefined,
+          thin: [
+            [thinWindow(baseX, baseY), thinWindow(baseX + 1, baseY)],
+            [thinWindow(baseX, baseY + 1), thinWindow(baseX + 1, baseY + 1)],
+          ],
+        },
+        options,
+      );
+      const direct = sampleClassField(
+        gridFragment(cells, nx, ny, positionX, positionY, 0.001),
+        options,
+      );
+      assert.ok(Math.abs(weightOf(tiled, TREE) - weightOf(direct, TREE)) < 1e-12, `${positionX}`);
+      assert.ok(Math.abs(tiled.outline - direct.outline) < 1e-12, `${positionX}`);
+      for (const outline of [false, true]) {
+        const appearance = { outline, outlineStrength: FILL_OUTLINE_STRENGTH };
+        const tiledAlpha = classFieldAlpha(tiled, appearance);
+        const directAlpha = classFieldAlpha(direct, appearance);
+        assert.equal(tiledAlpha.alpha, directAlpha.alpha, `${outline} ${positionX}`);
+        assert.ok(Math.abs(tiledAlpha.ink - directAlpha.ink) < 1e-12, `${outline} ${positionX}`);
+      }
+    }
+  }
 });
 
 function windowBand(
@@ -1469,6 +1573,22 @@ function windowBand(
     }
   }
   return { ids, low, high };
+}
+
+function expectedDiagonalUniform(column: number, row: number, nx: number, ny: number): number {
+  const first = -7;
+  const span = 16;
+  const clampX = (value: number) => Math.min(nx - 1, Math.max(0, value));
+  const clampY = (value: number) => Math.min(ny - 1, Math.max(0, value));
+  const firstId = diagonalId(clampX(column + first), clampY(row + first));
+  for (let tapRow = 0; tapRow < span; tapRow++) {
+    for (let tapColumn = 0; tapColumn < span; tapColumn++) {
+      const cellX = clampX(column + first + tapColumn);
+      const cellY = clampY(row + first + tapRow);
+      if (diagonalId(cellX, cellY) !== firstId) return 0;
+    }
+  }
+  return 1;
 }
 
 test("the baked band falls back pixel-identical in many-class windows", () => {
@@ -1521,7 +1641,7 @@ test("the baked band keeps hatch and outlines identical", () => {
   for (const radius of [GEOLOGY_SMOOTH_RADIUS_CELLS, 4]) {
     const band = bakeBand(cells, nx, ny, radius);
     for (const outline of [false, true]) {
-      void outline;
+      const appearance = { outline, outlineStrength: FILL_OUTLINE_STRENGTH };
       const options = { smooth: true, rounding: 0.25, softnessCells: 1, smoothRadiusCells: radius };
       for (const [positionX, positionY] of [[7.5, 8.5], [8.5, 8.5], [9.5, 10.5]]) {
         const full = gridFragment(cells, nx, ny, positionX, positionY, 0.01);
@@ -1535,7 +1655,48 @@ test("the baked band keeps hatch and outlines identical", () => {
           `${radius} ${positionX},${positionY}`,
         );
         assert.ok(Math.abs(actual.outline - expected.outline) < 1e-12, `${positionX}`);
+        const expectedAlpha = classFieldAlpha(expected, appearance);
+        const actualAlpha = classFieldAlpha(actual, appearance);
+        assert.equal(actualAlpha.alpha, expectedAlpha.alpha, `${outline}`);
+        assert.ok(Math.abs(actualAlpha.ink - expectedAlpha.ink) < 1e-12, `${outline}`);
       }
+    }
+  }
+});
+
+test("the baked mask splits low and high words and matches at clipped edges", () => {
+  const nx = 16;
+  const ny = 16;
+  const cells = new Uint8Array(nx * ny);
+  for (let row = 0; row < ny; row++) {
+    for (let column = 0; column < nx; column++) {
+      cells[row * nx + column] = row < 8 ? TREE : GRASS;
+    }
+  }
+  const radius = GEOLOGY_SMOOTH_RADIUS_CELLS;
+  const band = bakeBand(cells, nx, ny, radius);
+  const texel = bandTexelAt(band, nx, 8, 8)!;
+  assert.equal(texel.id0, TREE);
+  assert.equal(texel.id1, GRASS);
+  assert.ok(texel.low !== 0 || texel.high !== 0);
+  assert.ok(!isComplexBand(texel));
+  const options = { smooth: true, rounding: 0.25, softnessCells: 1, smoothRadiusCells: radius };
+  const corners: [number, number][] = [[0.5, 0.5], [0.5, 15.5], [15.5, 0.5], [15.5, 15.5]];
+  for (const [positionX, positionY] of [...corners, [8, 8] as [number, number]]) {
+    const full = gridFragment(cells, nx, ny, positionX, positionY, 0.01);
+    const edgeTexel = bandTexelAt(band, nx, positionX, positionY)!;
+    const baked = gridFragment(cells, nx, ny, positionX, positionY, 0.01, edgeTexel);
+    const expected = sampleClassField(full, options);
+    const actual = sampleClassField(baked, options);
+    for (const { id, weight } of expected.weights) {
+      assert.ok(Math.abs(weightOf(actual, id) - weight) < 1e-12, `${positionX},${positionY}`);
+    }
+    assert.ok(Math.abs(actual.outline - expected.outline) < 1e-12, `${positionX},${positionY}`);
+    for (const outline of [false, true]) {
+      const appearance = { outline, outlineStrength: FILL_OUTLINE_STRENGTH };
+      const expectedAlpha = classFieldAlpha(expected, appearance);
+      const actualAlpha = classFieldAlpha(actual, appearance);
+      assert.ok(Math.abs(actualAlpha.ink - expectedAlpha.ink) < 1e-12, `${outline}`);
     }
   }
 });
@@ -1798,6 +1959,184 @@ test("the repaired weights and gradients are continuous and the gradient is anal
     }
   }
 });
+
+test("a repaired three-class rival swap stays continuous", () => {
+  const size = 32;
+  let state = 7;
+  const cells = Uint8Array.from({ length: size * size }, () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return 1 + (state % 3);
+  });
+  const flags = homogeneousFlags(cells, size, size, 1.5);
+  markThinCells(cells, size, size, flags);
+  const clampCell = (value: number) => Math.min(size - 1, Math.max(0, value));
+  const at = (positionX: number, positionY: number) => {
+    const baseX = Math.floor(positionX);
+    const baseY = Math.floor(positionY);
+    const sample = (cellX: number, cellY: number) => (
+      cells[clampCell(cellY) * size + clampCell(cellX)]
+    );
+    const thin = (cellX: number, cellY: number) => (
+      flags[clampCell(cellY) * size + clampCell(cellX)] === THIN_CELL_FLAG
+    );
+    const ids: number[][] = [];
+    for (let row = -1; row <= 2; row++) {
+      const line: number[] = [];
+      for (let column = -1; column <= 2; column++) {
+        line.push(sample(baseX + column, baseY + row));
+      }
+      ids.push(line);
+    }
+    return {
+      ids,
+      fraction: [positionX - baseX, positionY - baseY] as [number, number],
+      positionDx: [0.01, 0] as [number, number],
+      positionDy: [0, 0.01] as [number, number],
+      position: [positionX, positionY] as [number, number],
+      sampleId: sample,
+      thin: [
+        [thin(baseX, baseY), thin(baseX + 1, baseY)],
+        [thin(baseX, baseY + 1), thin(baseX + 1, baseY + 1)],
+      ],
+    };
+  };
+  const tieX = 13.111393135484223;
+  const tieY = 16.16;
+  const options = { smooth: true, rounding: 0.25, softnessCells: 1, smoothRadiusCells: 1.5 };
+  const field = (positionX: number, positionY: number) => (
+    gatherFieldClasses(at(positionX, positionY), options).find(({ id }) => id === 2)
+    ?? { weight: 0, gradient: [0, 0] }
+  );
+  const step = 1e-6;
+  const here = field(tieX, tieY);
+  const slopeX = (field(tieX + step, tieY).weight - field(tieX - step, tieY).weight) / (2 * step);
+  const slopeY = (field(tieX, tieY + step).weight - field(tieX, tieY - step).weight) / (2 * step);
+  assert.ok(Math.abs(slopeX - here.gradient[0]) < 1e-3, `${slopeX} ${here.gradient[0]}`);
+  assert.ok(Math.abs(slopeY - here.gradient[1]) < 1e-3, `${slopeY} ${here.gradient[1]}`);
+
+  for (const epsilon of [1e-7, 1e-9]) {
+    const before = sampleClassField(at(tieX - epsilon, tieY), options);
+    const after = sampleClassField(at(tieX + epsilon, tieY), options);
+    for (const id of [1, 2, 3]) {
+      const jump = Math.abs(weightOf(before, id) - weightOf(after, id));
+      assert.ok(jump < 1e-3, `${id} ${jump}`);
+    }
+    assert.ok(Math.abs(before.outline - after.outline) < 1e-3, `${before.outline}`);
+    for (const outline of [false, true]) {
+      const appearance = { outline, outlineStrength: FILL_OUTLINE_STRENGTH };
+      const beforeAlpha = classFieldAlpha(before, appearance);
+      const afterAlpha = classFieldAlpha(after, appearance);
+      assert.ok(Math.abs(beforeAlpha.ink - afterAlpha.ink) < 1e-3, `${outline}`);
+    }
+    const beforeField = field(tieX - epsilon, tieY);
+    const afterField = field(tieX + epsilon, tieY);
+    const slopeJump = Math.hypot(
+      beforeField.gradient[0] - afterField.gradient[0],
+      beforeField.gradient[1] - afterField.gradient[1],
+    );
+    assert.ok(slopeJump < 1e-3, `${slopeJump}`);
+  }
+});
+
+test("a zero-weight rival entering the thin repair changes no final mix or ink", () => {
+  const size = 24;
+  const { cells, flags } = zeroSupportGrid();
+  const options = { smooth: true, rounding: 0.25, softnessCells: 1, smoothRadiusCells: 1.5 };
+  const observed = 12;
+  for (const epsilon of [1e-7, 1e-10]) {
+    for (const includeThin of [true, false]) {
+      const beforeAt = zeroSupportAt(cells, flags, size, 12 - epsilon, 12.16, includeThin);
+      const afterAt = zeroSupportAt(cells, flags, size, 12 + epsilon, 12.16, includeThin);
+      const before = sampleClassField(beforeAt, options);
+      const after = sampleClassField(afterAt, options);
+      const jump = Math.abs(weightOf(before, observed) - weightOf(after, observed));
+      assert.ok(jump < 1e-6, `${epsilon} ${includeThin} ${jump}`);
+      assert.ok(Math.abs(before.outline - after.outline) < 1e-6, `${epsilon} ${includeThin}`);
+      for (const outline of [false, true]) {
+        const appearance = { outline, outlineStrength: FILL_OUTLINE_STRENGTH };
+        const beforeAlpha = classFieldAlpha(before, appearance);
+        const afterAlpha = classFieldAlpha(after, appearance);
+        assert.ok(Math.abs(beforeAlpha.ink - afterAlpha.ink) < 1e-6, `${outline}`);
+        assert.equal(beforeAlpha.alpha, afterAlpha.alpha, `${outline}`);
+      }
+      const beforeField = gatherFieldClasses(beforeAt, options)
+        .find((entry) => entry.id === observed) ?? { weight: 0, gradient: [0, 0] };
+      const afterField = gatherFieldClasses(afterAt, options)
+        .find((entry) => entry.id === observed) ?? { weight: 0, gradient: [0, 0] };
+      assert.ok(Math.abs(beforeField.weight - afterField.weight) < 1e-6, `${epsilon}`);
+      const slopeJump = Math.hypot(
+        beforeField.gradient[0] - afterField.gradient[0],
+        beforeField.gradient[1] - afterField.gradient[1],
+      );
+      assert.ok(slopeJump < 1e-3, `${epsilon} ${includeThin} ${slopeJump}`);
+    }
+  }
+});
+
+function zeroSupportGrid(): { cells: Uint8Array; flags: Uint8Array } {
+  const size = 24;
+  let state = 24;
+  const cells = Uint8Array.from({ length: size * size }, () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return 1 + (state % 12);
+  });
+  cells[12 * size + 15] = 100;
+  const flags = homogeneousFlags(cells, size, size, 1.5);
+  markThinCells(cells, size, size, flags);
+  return { cells, flags };
+}
+
+function zeroSupportAt(
+  cells: Uint8Array,
+  flags: Uint8Array,
+  size: number,
+  positionX: number,
+  positionY: number,
+  includeThin: boolean,
+): {
+  ids: number[][];
+  fraction: [number, number];
+  positionDx: [number, number];
+  positionDy: [number, number];
+  position: [number, number];
+  sampleId: (cellX: number, cellY: number) => number;
+  thin?: boolean[][];
+} {
+  const clampCell = (value: number) => Math.min(size - 1, Math.max(0, value));
+  const sample = (cellX: number, cellY: number) => (
+    cells[clampCell(cellY) * size + clampCell(cellX)]
+  );
+  const isThin = (cellX: number, cellY: number) => (
+    flags[clampCell(cellY) * size + clampCell(cellX)] === THIN_CELL_FLAG
+  );
+  const baseX = Math.floor(positionX);
+  const baseY = Math.floor(positionY);
+  const ids: number[][] = [];
+  for (let row = -1; row <= 2; row++) {
+    const line: number[] = [];
+    for (let column = -1; column <= 2; column++) {
+      line.push(sample(baseX + column, baseY + row));
+    }
+    ids.push(line);
+  }
+  const fragment = {
+    ids,
+    fraction: [positionX - baseX, positionY - baseY] as [number, number],
+    positionDx: [0.01, 0] as [number, number],
+    positionDy: [0, 0.01] as [number, number],
+    position: [positionX, positionY] as [number, number],
+    sampleId: sample,
+  };
+  if (!includeThin) return fragment;
+
+  return {
+    ...fragment,
+    thin: [
+      [isThin(baseX, baseY), isThin(baseX + 1, baseY)],
+      [isThin(baseX, baseY + 1), isThin(baseX + 1, baseY + 1)],
+    ],
+  };
+}
 
 test("outlines come from the repaired field and ring a lifted cell", () => {
   const single = patchGrid((cellX, cellY) => (cellX === 12 && cellY === 12 ? TREE : GRASS));

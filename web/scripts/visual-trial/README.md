@@ -169,6 +169,15 @@ measures label placement cost against the unlabelled baseline. Hiding the mask a
 its clip reveals the basemap outside, so its delta is the mask and the clip against the
 basemap they cover.
 
+`&shadeFade=1` is not a trial variant but a manual option on any scene link. It replaces the
+hillshade with raster shading tiles computed in a worker from the same Mapterhorn tiles, so
+each tile fades in over its stretched parent (250 ms, none under reduced motion) instead of
+popping in. It looks the same as the hillshade at whole zooms (at most 1 of 255 levels apart
+away from loaded-tile edges) and differs slightly between zooms, because each tile bakes the
+exaggeration of its own zoom and the image is filtered after shading instead of before.
+Strength changes reshade tiles in place without flicker, and zooming in prefetches up to 12
+next-zoom tiles with at most 4 shadings at a time. Leave the parameter off to keep the hillshade.
+
 The headless browser uses SwiftShader, so its frames cannot rank GPU fill; they measure
 main-thread work such as label placement and tile churn while zooming. The dev readout's
 per-layer GPU timings answer the real-GPU question in a desktop browser instead.

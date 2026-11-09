@@ -145,6 +145,11 @@ float classSupport(float weight) {
   return smoothstep(0.0, FULL_SUPPORT_WEIGHT, weight);
 }
 
+float supportSlope(float weight) {
+  float scaled = clamp(weight / FULL_SUPPORT_WEIGHT, 0.0, 1.0);
+  return 6.0 * scaled * (1.0 - scaled) / FULL_SUPPORT_WEIGHT;
+}
+
 vec2 screenGradientOf(vec2 cellGradient, vec2 positionDx, vec2 positionDy) {
   return vec2(dot(cellGradient, positionDx), dot(cellGradient, positionDy));
 }
@@ -479,16 +484,48 @@ void repairThinCells(
     if (repeated) continue;
 
     int index = -1;
-    float rivalWeight = 0.0;
-    vec2 rivalGradient = vec2(0.0);
     for (int known = 0; known < classCount; known++) {
       if (classIds[known] == cornerIds[corner]) {
         index = known;
-      } else if (classIds[known] != 0u && classIds[known] != HATCH_ID) {
-        if (classWeights[known] > rivalWeight) {
-          rivalWeight = classWeights[known];
-          rivalGradient = classGradients[known];
-        }
+        break;
+      }
+    }
+    // Vanishing support keeps rival swaps and class entry continuous.
+    float rivalPeak = 0.0;
+    int rivalCount = 0;
+    for (int known = 0; known < classCount; known++) {
+      if (classIds[known] == cornerIds[corner]) continue;
+      if (classIds[known] == 0u || classIds[known] == HATCH_ID) continue;
+      rivalPeak = max(rivalPeak, classWeights[known]);
+      rivalCount++;
+    }
+    float rivalWeight = 0.0;
+    vec2 rivalGradient = vec2(0.0);
+    if (rivalCount > 0) {
+      float supportTotal = 0.0;
+      float weightedTotal = 0.0;
+      for (int known = 0; known < classCount; known++) {
+        if (classIds[known] == cornerIds[corner]) continue;
+        if (classIds[known] == 0u || classIds[known] == HATCH_ID) continue;
+        float support = classSupport(classWeights[known]);
+        supportTotal += support;
+        weightedTotal += support
+          * exp((classWeights[known] - rivalPeak) / THIN_DEFICIT_FULL_WEIGHT);
+      }
+      float peakExp = exp(rivalPeak / THIN_DEFICIT_FULL_WEIGHT);
+      float shiftedSum = max(1.0 - supportTotal + peakExp * weightedTotal, 1.0);
+      rivalWeight = THIN_DEFICIT_FULL_WEIGHT * log(shiftedSum);
+      for (int known = 0; known < classCount; known++) {
+        if (classIds[known] == cornerIds[corner]) continue;
+        if (classIds[known] == 0u || classIds[known] == HATCH_ID) continue;
+        float support = classSupport(classWeights[known]);
+        float slope = supportSlope(classWeights[known]);
+        float weightExp = peakExp
+          * exp((classWeights[known] - rivalPeak) / THIN_DEFICIT_FULL_WEIGHT);
+        float share = (
+          THIN_DEFICIT_FULL_WEIGHT * slope * (weightExp - 1.0) + support * weightExp
+        ) / shiftedSum;
+        rivalGradient += share * classGradients[known];
       }
     }
     float weight = index < 0 ? 0.0 : classWeights[index];
@@ -985,12 +1022,8 @@ function liftOf(
   const current = classes.find((entry) => entry.id === id);
   const weight = current?.weight ?? 0;
   const gradient = current?.gradient ?? [0, 0];
-  let rival: FieldClass | undefined;
-  for (const entry of classes) {
-    if (entry.id === id || entry.id === 0 || entry.id === CLASS_HATCH_ID) continue;
-    if (entry.weight > (rival?.weight ?? 0)) rival = entry;
-  }
-  const rivalWeight = rival?.weight ?? 0;
+  const rival = smoothRivalOf(classes, id);
+  const rivalWeight = rival.weight;
   const gateFraction = Math.min(1, Math.max(0, (rivalWeight - weight) / THIN_DEFICIT_FULL_WEIGHT));
   const gate = smoothstep(gateFraction);
   const gateSlope = (6 * gateFraction * (1 - gateFraction)) / THIN_DEFICIT_FULL_WEIGHT;
@@ -1002,7 +1035,7 @@ function liftOf(
     ? (lift * lift) / (2 * THIN_SOFT_WEIGHT)
     : lift - THIN_SOFT_WEIGHT / 2;
   const softenedSlope = Math.min(lift / THIN_SOFT_WEIGHT, 1);
-  const rivalGradient = rival?.gradient ?? [0, 0];
+  const rivalGradient = rival.gradient;
   const targetGradient = [0, 1].map((axis) => (
     aim * (
       gate * presenceGradient[axis]
@@ -1017,6 +1050,49 @@ function liftOf(
       gradient[1] + softenedSlope * (targetGradient[1] - gradient[1]),
     ],
   };
+}
+
+/**
+ * The support-weighted smooth maximum of every rival class and its analytic gradient.
+ * A hard maximum swaps gradients at ties while a plain smooth maximum still moves when
+ * a class enters with no weight, so both would make the repaired colour jump.
+ */
+function smoothRivalOf(
+  classes: readonly FieldClass[],
+  id: number,
+): { weight: number; gradient: [number, number] } {
+  const rivals = classes.filter((entry) => (
+    entry.id !== id && entry.id !== 0 && entry.id !== CLASS_HATCH_ID
+  ));
+  if (rivals.length === 0) return { weight: 0, gradient: [0, 0] };
+
+  const peak = rivals.reduce((highest, entry) => Math.max(highest, entry.weight), 0);
+  let supportTotal = 0;
+  let weightedTotal = 0;
+  for (const entry of rivals) {
+    const support = classSupport(entry.weight);
+    supportTotal += support;
+    weightedTotal += support * Math.exp((entry.weight - peak) / THIN_DEFICIT_FULL_WEIGHT);
+  }
+  const peakExp = Math.exp(peak / THIN_DEFICIT_FULL_WEIGHT);
+  const shifted = Math.max(1 - supportTotal + peakExp * weightedTotal, 1);
+  const gradient: [number, number] = [0, 0];
+  for (const entry of rivals) {
+    const support = classSupport(entry.weight);
+    const slope = rivalSupportSlope(entry.weight);
+    const weightExp = peakExp * Math.exp((entry.weight - peak) / THIN_DEFICIT_FULL_WEIGHT);
+    const share = (
+      THIN_DEFICIT_FULL_WEIGHT * slope * (weightExp - 1) + support * weightExp
+    ) / shifted;
+    gradient[0] += share * entry.gradient[0];
+    gradient[1] += share * entry.gradient[1];
+  }
+  return { weight: THIN_DEFICIT_FULL_WEIGHT * Math.log(shifted), gradient };
+}
+
+function rivalSupportSlope(weight: number): number {
+  const scaled = Math.min(1, Math.max(0, weight / FULL_SUPPORT_WEIGHT));
+  return (6 * scaled * (1 - scaled)) / FULL_SUPPORT_WEIGHT;
 }
 
 function smoothBlend(fraction: number): number {
@@ -1466,18 +1542,7 @@ export function bakeBand(
   if (nx <= 0 || ny <= 0) {
     return { ids, low, high };
   }
-  const radius = smoothRadiusCells ?? 0;
-  for (let row = 0; row < ny; row++) {
-    for (let column = 0; column < nx; column++) {
-      if (homogeneous && homogeneous[row * nx + column] === 1) {
-        const cell = cells[row * nx + column];
-        ids[(row * nx + column) * 2] = cell;
-        ids[(row * nx + column) * 2 + 1] = cell;
-        continue;
-      }
-      bakeOneBand(cells, nx, ny, column, row, radius, ids, low, high);
-    }
-  }
+  bakeBandInto(cells, nx, ny, smoothRadiusCells, homogeneous ?? null, ids, low, high, 0, ny);
   return { ids, low, high };
 }
 
