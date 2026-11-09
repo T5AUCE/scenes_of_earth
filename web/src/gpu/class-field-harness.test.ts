@@ -25,6 +25,7 @@ export function createHarness(
     compile?: boolean;
     link?: boolean;
     uploadError?: number;
+    failUploadAt?: number;
     globe?: boolean;
     nx?: number;
     maxTextureSize?: number;
@@ -38,6 +39,7 @@ export function createHarness(
     arrays: [] as object[],
   };
   const listeners = new Map<string, (event: object) => void>();
+  const mapListeners = new Map<string, Set<() => void>>();
   const uploads: unknown[][] = [];
   const draws: unknown[][] = [];
   const failures: Error[] = [];
@@ -79,7 +81,12 @@ export function createHarness(
     texParameteri: () => {},
     pixelStorei: () => {},
     texImage2D: (...args: unknown[]) => uploads.push(args),
-    getError: () => options.uploadError ?? 0,
+    getError: () => {
+      if (options.failUploadAt !== undefined && uploads.length === options.failUploadAt + 1) {
+        return 1285;
+      }
+      return options.uploadError ?? 0;
+    },
     deleteTexture: (value: object) => deleted.textures.push(value),
     getParameter: (name: number) => name === 1 ? options.maxTextureSize ?? 4096 : 0,
     getUniformLocation: (_program: unknown, name: string) => name,
@@ -99,6 +106,14 @@ export function createHarness(
       repaints++;
     },
     getProjection: () => ({ type: options.globe ? "globe" : "mercator" }),
+    on: (type: string, listener: () => void) => {
+      const entries = mapListeners.get(type) ?? new Set<() => void>();
+      entries.add(listener);
+      mapListeners.set(type, entries);
+    },
+    off: (type: string, listener: () => void) => {
+      mapListeners.get(type)?.delete(listener);
+    },
     getCanvas: () => ({
       addEventListener: (name: string, listener: (event: object) => void) => {
         listeners.set(name, listener);
@@ -133,6 +148,10 @@ export function createHarness(
     deleted,
     vertexArray: () => vertexArray,
     repaints: () => repaints,
+    emitMapEvent: (type: string) => {
+      for (const listener of [...(mapListeners.get(type) ?? [])]) listener();
+    },
+    mapListenerCount: (type: string) => mapListeners.get(type)?.size ?? 0,
   };
 }
 

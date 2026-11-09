@@ -182,6 +182,42 @@ export function createZoomWatch(map: Pick<MapLibreMap, "on" | "off">, refresh: (
   };
 }
 
+/**
+ * Identify a dot legend's output so callers skip rebuilding when the level and swatch
+ * inputs are unchanged. Every input that changes the swatches or labels is in the key,
+ * while the raw zoom is represented by its lattice so a zoom that keeps the level keeps
+ * the key. The legend output for an unchanged key is identical.
+ */
+export function dotLegendKey(
+  stops: number[],
+  units: string,
+  grid: GridDoc,
+  zoom: number,
+  density: number,
+  ink: InkPaint,
+  hasHatched: boolean,
+): string {
+  const ticks = legendTicks(stops).slice(1);
+  const lattice = dotSwatchLattice(grid, zoom, pixelRatio(), density);
+  const dotsPerSide = dotsPerSideFor(ticks[0]?.position ?? 0, lattice);
+  return JSON.stringify([
+    ticks,
+    units,
+    grid.bbox,
+    grid.nx,
+    grid.ny,
+    lattice.level,
+    lattice.fade,
+    lattice.inkShare,
+    lattice.opacity,
+    lattice.pixelRatio,
+    lattice.density,
+    dotsPerSide,
+    ink,
+    hasHatched,
+  ]);
+}
+
 /** The map's dot lattice with how much it inks and how visible its dots are. */
 export interface DotSwatchLattice extends DotLattice {
   opacity: number;

@@ -149,6 +149,60 @@ test("a step that becomes the first one after a fade draws without a second set"
   assert.equal(harness.failures.length, 0);
 });
 
+test("a camera gesture hides the hatch without re-uploading and restores it", () => {
+  withSearch("?fastHatch=1", () => {
+    const { marks, harness, render } = mountMarks();
+    marks.setHatch(true);
+    marks.setFade(STEPS.leaving, null, 0);
+    render();
+    const uploads = harness.uploads.length;
+    assert.equal(harness.uniforms.get("uHatch"), 1);
+
+    harness.emitMapEvent("movestart");
+    render();
+
+    assert.equal(harness.uniforms.get("uHatch"), 0);
+    assert.equal(harness.uploads.length, uploads);
+
+    harness.emitMapEvent("moveend");
+    render();
+
+    assert.equal(harness.uniforms.get("uHatch"), 1);
+    assert.equal(harness.uploads.length, uploads);
+  });
+});
+
+test("without the opt-in a camera gesture leaves the hatch alone", () => {
+  withSearch("", () => {
+    const { marks, harness, render } = mountMarks();
+    marks.setHatch(true);
+    marks.setFade(STEPS.leaving, null, 0);
+    render();
+    assert.equal(harness.uniforms.get("uHatch"), 1);
+
+    harness.emitMapEvent("movestart");
+    render();
+
+    assert.equal(harness.uniforms.get("uHatch"), 1);
+
+    harness.emitMapEvent("moveend");
+    render();
+
+    assert.equal(harness.uniforms.get("uHatch"), 1);
+  });
+});
+
+function withSearch(search: string, run: () => void): void {
+  const previous = (globalThis as Record<string, unknown>).location;
+  (globalThis as Record<string, unknown>).location = { search };
+  try {
+    run();
+  } finally {
+    if (previous === undefined) Reflect.deleteProperty(globalThis, "location");
+    else (globalThis as Record<string, unknown>).location = previous;
+  }
+}
+
 function mountMarks() {
   const harness = createHarness();
   Object.assign(harness.gl, { uniform2f: () => {}, uniform3f: () => {} });

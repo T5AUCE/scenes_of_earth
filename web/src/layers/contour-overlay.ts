@@ -14,14 +14,24 @@ import {
   finestIntervalAt,
   INTERVAL_CHAIN_FT,
   INTERVAL_CHAIN_M,
+  warmTilesForZoom,
   type ContourLadder,
   type LadderTier,
+  type WarmTile,
 } from "../contour-ladder";
+import {
+  addressSearch,
+  contourMaxZoomSetting,
+  gestureFlags,
+  isGestureActive,
+  subscribeGesture,
+} from "../gesture-quality";
 import { makeHtmlElement } from "../html";
 import { contourLegendText } from "../legend";
+import { labelFadeDurationMs } from "../reduced-motion";
 import { contourColor, DEFAULT_CONTOUR_COLOR } from "../render/palettes";
 import { convertValue, displayUnitFor, isUnitFor } from "../units";
-import type { LayerContext, Part, TerrainStats, TerrainTiles } from "../types";
+import type { Bbox, LayerContext, Part, TerrainStats, TerrainTiles } from "../types";
 
 const CONTOUR_OPACITY = 0.55;
 const MINOR_LINE_WIDTH_PX = 0.5;
@@ -35,7 +45,16 @@ const PAGE_BACKGROUND_PROPERTY = "--page-background";
 
 // Version 0.1.1 materializes only one pixel of padding before tracing contours.
 const CONTOUR_BUFFER_PX = 1;
-const DEM_CACHE_TILES = 50;
+// Workers rebuild maplibre-contour errors from strings, so messages keep an "Error: " prefix.
+const WORKER_ERROR_PREFIX = "Error: ";
+// A zoom step keeps its neighbours cached so sweeping zooms stop evicting them.
+const DEM_CACHE_TILES = 120;
+// The warm-up never delays a visible tile: few traces at a time and no flings.
+export const WARM_MAX_IN_FLIGHT = 4;
+export const WARM_MAX_TILES = 12;
+const WARM_FLING_ZOOM_PER_SEC = 3;
+// Ocean tiles stay missing, so the per-source memo caps how many 404 tiles it remembers.
+export const MAX_MISSING_DEM_TILES = 2000;
 const MAX_CONTOUR_ZOOM = 12;
 
 type DemSource = InstanceType<typeof mlcontour.DemSource>;
@@ -57,8 +76,94 @@ export function sharedDemSource(tiles: TerrainTiles): DemSource {
     cacheSize: DEM_CACHE_TILES,
   });
   source.setupMaplibre(maplibregl);
+  memoizeMissingDemTiles(source);
   demSources.set(key, source);
   return source;
+}
+
+/**
+ * Remember 404 DEM and contour tiles so coastal scenes stop re-requesting ocean tiles on
+ * every zoom. The memo is per source and bounded, and its keys hold only tile coordinates
+ * because a missing DEM stays missing for every contour threshold set. Only 404s are
+ * memoized because they stay missing, while other failures keep retrying. Exported for tests.
+ */
+export function memoizeMissingDemTiles(dem: DemSource): void {
+  const manager = (dem as unknown as { manager?: DemManager }).manager;
+  if (!manager) return;
+  const missingTiles = new Map<string, true>();
+  if (typeof manager.fetchTile === "function") {
+    const fetchTile = manager.fetchTile.bind(manager);
+    manager.fetchTile = ((z: number, x: number, y: number, ...rest: unknown[]) => {
+      const key = `dem:${z}/${x}/${y}`;
+      if (missingTiles.has(key)) return Promise.reject(missingTileError(key));
+      return (fetchTile(z, x, y, ...rest) as Promise<unknown>).catch((error: unknown) => {
+        if (isDem404(error)) rememberMissingTile(missingTiles, key);
+        throw error;
+      });
+    }) as DemManager["fetchTile"];
+  }
+  if (typeof manager.fetchContourTile === "function") {
+    const fetchContourTile = manager.fetchContourTile.bind(manager);
+    const fetchWithMemo = (
+      z: number,
+      x: number,
+      y: number,
+      options: unknown,
+      ...rest: unknown[]
+    ) => {
+      const key = `contours:${z}/${x}/${y}`;
+      if (missingTiles.has(key)) return Promise.reject(missingTileError(key));
+      return (fetchContourTile(z, x, y, options, ...rest) as Promise<unknown>)
+        .catch((error: unknown) => {
+          if (isDem404(error)) rememberMissingTile(missingTiles, key);
+          throw error;
+        });
+    };
+    manager.fetchContourTile = fetchWithMemo as DemManager["fetchContourTile"];
+  }
+}
+
+/** Remember a missing tile, dropping the oldest entry once the memo is full. */
+function rememberMissingTile(missingTiles: Map<string, true>, key: string) {
+  if (missingTiles.has(key)) return;
+  if (missingTiles.size >= MAX_MISSING_DEM_TILES) {
+    const oldest = missingTiles.keys().next().value;
+    if (oldest !== undefined) missingTiles.delete(oldest);
+  }
+  missingTiles.set(key, true);
+}
+
+interface DemManager {
+  fetchTile(z: number, x: number, y: number, ...rest: unknown[]): Promise<unknown>;
+  fetchContourTile(
+    z: number,
+    x: number,
+    y: number,
+    options: unknown,
+    ...rest: unknown[]
+  ): Promise<unknown>;
+}
+
+function isDem404(error: unknown): boolean {
+  const message = (error as Error)?.message ?? "";
+  const withoutPrefix = message.startsWith(WORKER_ERROR_PREFIX)
+    ? message.slice(WORKER_ERROR_PREFIX.length)
+    : message;
+  return withoutPrefix.startsWith("Bad response: 404");
+}
+
+function missingTileError(key: string): Error {
+  return new Error(`Bad response: 404 for memoized tile ${key}`);
+}
+
+/**
+ * Cap native tiling zooms at the crisp contour ceiling, with the measurement-only
+ * contourMaxZoom flag lowering it further. Deeper zooms overzoom the last tiles instead
+ * of re-tiling, so the lines stay identical while tile churn stops past the cap.
+ */
+export function cappedDemMaxZoom(nativeMaxzoom: number): number {
+  const cap = contourMaxZoomSetting(addressSearch()) ?? MAX_CONTOUR_ZOOM;
+  return Math.min(nativeMaxzoom, cap);
 }
 
 /** Own stable, elevation-filtered contour tiers and labels for one scene. */
@@ -76,13 +181,21 @@ export class ContourOverlay {
   private elevationUnit: string;
   private isOn = true;
   private color: string;
+  private halo = "";
   private labelId?: string;
+  private labelsFrozen = false;
+  private labelFadeZeroed = false;
+  private readonly warmer: ContourZoomWarmer;
+  // Captured here because scene entry replaces the address and drops trial flags.
+  private readonly freezeAllowed = gestureFlags(addressSearch()).freezeLabels;
+  private readonly stopGesture: () => void;
 
   constructor(
     context: LayerContext,
     dem: DemSource,
     tiles: TerrainTiles,
     stats: TerrainStats,
+    clock: () => number = () => performance.now(),
   ) {
     const { map, layer, beforeId, display } = context;
     // The card would set the interval in card type, so it takes the legend caption style.
@@ -95,20 +208,40 @@ export class ContourOverlay {
     this.color = contourColor(display?.palette ?? DEFAULT_CONTOUR_COLOR)!;
     this.sourceId = `${layer.id}-contours`;
     this.elevationUnit = displayUnitFor(layer.units, display?.units);
-    this.maxzoom = Math.min(MAX_CONTOUR_ZOOM, tiles.maxzoom + CONTOUR_OVERZOOM);
+    this.maxzoom = Math.min(MAX_CONTOUR_ZOOM, cappedDemMaxZoom(tiles.maxzoom + CONTOUR_OVERZOOM));
     this.part = {
       id: `${layer.id}.contours`,
       label: "Contours",
       layerIds: [],
       onToggle: (visible) => {
         this.isOn = visible;
+        if (!visible) this.warmer.cancelAll();
+        // drawView shows every part layer first, so the freeze state decides the labels.
+        if (this.freezeAllowed) this.updateLabelVisibility();
         this.updateLegend();
       },
     };
+    this.warmer = new ContourZoomWarmer(map, dem, () => ({
+      sourceId: this.sourceId,
+      ladder: this.ladder,
+      maxzoom: this.maxzoom,
+      elevationUnit: this.elevationUnit,
+      enabled: this.isOn,
+      bbox: this.bbox,
+    }), clock);
 
     this.build();
     map.on("zoomend", this.updateLegend);
     this.updateLegend();
+    // Hidden labels skip placement and collision, so a gesture freezes them until moveend.
+    this.stopGesture = subscribeGesture(map, {
+      onStart: () => {
+        this.warmer.reset();
+        this.setLabelsFrozen(true);
+      },
+      onEnd: () => this.setLabelsFrozen(false),
+    });
+    if (isGestureActive(map)) this.setLabelsFrozen(true);
   }
 
   /** Switch the tiers, labels and legend to metres or feet, keeping the map colours. */
@@ -124,6 +257,7 @@ export class ContourOverlay {
       maxZoom: this.maxzoom,
       elevationUnit: this.elevationUnit,
     });
+    this.labelFadeZeroed = false;
     this.map.addSource(this.sourceId, {
       type: "vector",
       tiles: [
@@ -134,6 +268,7 @@ export class ContourOverlay {
           ...elevationMultiplier(this.elevationUnit),
         }),
       ],
+      // Vector tiles stay at the fixed 512 grid, matching the 512 DEM tiles they trace.
       maxzoom: this.maxzoom,
       ...terrainTileBounds(this.bbox),
     });
@@ -148,12 +283,15 @@ export class ContourOverlay {
     this.map.removeSource(this.sourceId);
     this.part.layerIds.length = 0;
     this.labelId = undefined;
+    this.warmer.reset();
     this.build();
     if (!this.isOn) {
       for (const id of this.part.layerIds) {
         this.map.setLayoutProperty(id, "visibility", "none");
       }
     }
+    if (isGestureActive(this.map)) this.setLabelsFrozen(true);
+    else if (this.freezeAllowed) this.updateLabelVisibility();
     this.updateLegend();
   }
 
@@ -189,11 +327,12 @@ export class ContourOverlay {
 
     const id = `${this.sourceId}-labels`;
     this.labelId = id;
+    this.halo = getComputedStyle(document.documentElement)
+      .getPropertyValue(PAGE_BACKGROUND_PROPERTY).trim();
     const font = this.map.getStyle().layers.find(
       (layer): layer is SymbolLayerSpecification =>
         layer.type === "symbol" && layer.layout?.["text-font"] !== undefined,
     )?.layout?.["text-font"];
-    const finest = tiers.at(-1)!;
     this.map.addLayer(
       {
         id,
@@ -201,7 +340,7 @@ export class ContourOverlay {
         source: this.sourceId,
         "source-layer": "contours",
         minzoom: tiers[0].entryZoom,
-        filter: multipleOf(finest.interval),
+        filter: labelFilter(tiers, this.ladder.boldInterval),
         layout: {
           "symbol-placement": "line",
           "symbol-spacing": LABEL_SPACING_PX,
@@ -213,10 +352,13 @@ export class ContourOverlay {
         },
         paint: {
           "text-color": this.color,
-          "text-halo-color": getComputedStyle(document.documentElement)
-            .getPropertyValue(PAGE_BACKGROUND_PROPERTY).trim(),
+          "text-halo-color": this.halo,
+          "text-color-transition": { duration: 0 },
+          "text-halo-color-transition": { duration: 0 },
           "text-halo-width": LABEL_HALO_WIDTH_PX,
           "text-opacity": tierFades(tiers, 1),
+          // Data-driven values snap instead of transitioning, so the fade runs on the colours.
+          "text-opacity-transition": { duration: 0 },
         },
       },
       beforeId,
@@ -231,6 +373,51 @@ export class ContourOverlay {
       const property = id === this.labelId ? "text-color" : "line-color";
       this.map.setPaintProperty(id, property, color);
     }
+    if (this.labelId !== undefined) {
+      // A recolour during the restore would otherwise inherit its remaining fade duration.
+      const instant = { duration: 0 };
+      this.map.setPaintProperty(this.labelId, "text-color-transition", instant);
+      this.map.setPaintProperty(this.labelId, "text-halo-color-transition", instant);
+    }
+  }
+
+  // Placement runs once per gesture instead of every zoom frame while frozen.
+  private setLabelsFrozen(frozen: boolean) {
+    if (!this.freezeAllowed) return;
+    this.labelsFrozen = frozen;
+    this.updateLabelVisibility();
+  }
+
+  /** Hide the labels while frozen and fade them back through their colours. */
+  private updateLabelVisibility() {
+    if (this.labelId === undefined || !this.map.getLayer(this.labelId)) return;
+    if (typeof this.map.setLayoutProperty !== "function") return;
+    const id = this.labelId;
+    // The user toggle wins over the gesture, so off stays off through moveend.
+    const show = this.isOn && !this.labelsFrozen;
+    this.map.setLayoutProperty(id, "visibility", show ? "visible" : "none");
+    if (show && this.labelFadeZeroed) {
+      this.labelFadeZeroed = false;
+      // Restart from transparent so a recolour or a half-run fade cannot skip the start.
+      this.snapLabelFadeStart(id);
+      const fade = { duration: labelFadeDurationMs() };
+      this.map.setPaintProperty(id, "text-color-transition", fade);
+      this.map.setPaintProperty(id, "text-halo-color-transition", fade);
+      this.map.setPaintProperty(id, "text-color", this.color);
+      this.map.setPaintProperty(id, "text-halo-color", this.halo);
+    } else if (!show && !this.labelFadeZeroed) {
+      this.labelFadeZeroed = true;
+      this.snapLabelFadeStart(id);
+    }
+  }
+
+  // Transparent colours hide the labels while visibility stays off, ready for the fade.
+  private snapLabelFadeStart(id: string) {
+    const instant = { duration: 0 };
+    this.map.setPaintProperty(id, "text-color-transition", instant);
+    this.map.setPaintProperty(id, "text-halo-color-transition", instant);
+    this.map.setPaintProperty(id, "text-color", transparentColor(this.color));
+    this.map.setPaintProperty(id, "text-halo-color", transparentColor(this.halo));
   }
 
   private readonly updateLegend = () => {
@@ -242,16 +429,323 @@ export class ContourOverlay {
   };
 
   destroy() {
+    this.stopGesture();
+    this.warmer.destroy();
     this.map.off("zoomend", this.updateLegend);
     for (const id of this.part.layerIds) this.map.removeLayer(id);
     this.map.removeSource(this.sourceId);
   }
 }
 
+/** What the contour warm-up reads from its overlay on every zoom event. */
+export interface ContourWarmerPlan {
+  sourceId: string;
+  ladder: ContourLadder;
+  maxzoom: number;
+  elevationUnit: string;
+  enabled: boolean;
+  bbox: Bbox;
+}
+
+interface ContourTileFetcher {
+  fetchContourTile(
+    z: number,
+    x: number,
+    y: number,
+    options: unknown,
+    cancel: AbortController,
+  ): Promise<unknown>;
+}
+
+/**
+ * Trace the next integer zoom through the shared DEM and contour caches while the camera
+ * zooms in. Warmed tiles land in the same worker caches the visible source reads, and the
+ * guards below keep the warm-up from ever delaying what is already in view. Each trace reads
+ * its 3×3 contour neighbourhood, which the one-level overzoom maps onto at most four DEM
+ * parents, so a zoom step adds at most 48 DEM tile reads before cache hits. The shared caches
+ * hold 120 entries each, about 120 MiB of decoded 512×512 tiles at most, so sweeping zooms
+ * reuse parents instead of refetching them.
+ */
+export class ContourZoomWarmer {
+  private readonly map: MapLibreMap;
+  private readonly dem: { manager?: unknown };
+  private readonly plan: () => ContourWarmerPlan;
+  private readonly clock: () => number;
+  private readonly stopListening: () => void;
+  private readonly inflight = new Map<string, AbortController>();
+  private readonly warmed = new Set<string>();
+  private lastZoom: number | null = null;
+  private lastTimeMs = 0;
+  private zoomingIn = false;
+
+  constructor(
+    map: MapLibreMap,
+    dem: { manager?: unknown },
+    plan: () => ContourWarmerPlan,
+    clock: () => number = () => performance.now(),
+  ) {
+    this.map = map;
+    this.dem = dem;
+    this.plan = plan;
+    this.clock = clock;
+    const zoomed = () => {
+      this.trackDirection(this.map.getZoom(), this.clock());
+      this.considerZoom();
+    };
+    const moved = () => this.considerZoom();
+    if (typeof map.on === "function") {
+      map.on("zoom", zoomed);
+      map.on("move", moved);
+    }
+    this.stopListening = () => {
+      if (typeof map.off === "function") {
+        map.off("zoom", zoomed);
+        map.off("move", moved);
+      }
+    };
+  }
+
+  /** Forget the last gesture so a fresh one rewarms instead of trusting stale tiles. */
+  reset(): void {
+    this.cancelAll();
+    this.warmed.clear();
+    this.lastZoom = null;
+    this.zoomingIn = false;
+  }
+
+  destroy(): void {
+    this.cancelAll();
+    this.stopListening();
+  }
+
+  /** Abort every warm trace, keeping the aborted tiles eligible for a later pass. */
+  cancelAll(): void {
+    for (const [key, cancel] of this.inflight) {
+      this.inflight.delete(key);
+      this.warmed.delete(key);
+      cancel.abort();
+    }
+  }
+
+  private considerZoom(): void {
+    const current = this.plan();
+    if (!this.zoomingIn || !isGestureActive(this.map) || !current.enabled) {
+      this.cancelAll();
+      return;
+    }
+    if (typeof this.map.isSourceLoaded === "function"
+      && !this.map.isSourceLoaded(current.sourceId)) {
+      this.cancelAll();
+      return;
+    }
+    const target = Math.floor(this.map.getZoom()) + 1;
+    if (target > current.maxzoom) {
+      this.cancelAll();
+      return;
+    }
+    const bounds = targetViewportBounds(this.map, target);
+    if (!bounds) return;
+    const wanted = warmTilesForZoom(
+      bounds.west,
+      bounds.south,
+      bounds.east,
+      bounds.north,
+      target,
+      WARM_MAX_TILES,
+    ).filter((tile) => tileInScene(tile, current.bbox));
+    this.pruneOutside(wanted);
+    const levels = levelsForZoom(current.ladder.thresholds, target);
+    if (levels.length === 0) return;
+    const fetch = warmerFetcher(this.dem);
+    if (!fetch) return;
+    for (const tile of wanted) {
+      if (this.inflight.size >= WARM_MAX_IN_FLIGHT) return;
+      const key = `${tile.z}/${tile.x}/${tile.y}`;
+      if (this.inflight.has(key) || this.warmed.has(key)) continue;
+      this.warmed.add(key);
+      const cancel = new AbortController();
+      this.inflight.set(key, cancel);
+      fetch.fetchContourTile(tile.z, tile.x, tile.y, warmOptions(levels, current), cancel)
+        .then(() => this.finish(key, cancel), () => this.finish(key, cancel));
+    }
+  }
+
+  private trackDirection(zoom: number, now: number): void {
+    if (this.lastZoom === null) {
+      this.lastZoom = zoom;
+      this.lastTimeMs = now;
+      return;
+    }
+    if (zoom < this.lastZoom) {
+      this.zoomingIn = false;
+      this.cancelAll();
+    } else if (zoom > this.lastZoom) {
+      const elapsedMs = Math.max(1, now - this.lastTimeMs);
+      this.zoomingIn = (zoom - this.lastZoom) / elapsedMs * 1000 <= WARM_FLING_ZOOM_PER_SEC;
+    }
+    this.lastZoom = zoom;
+    this.lastTimeMs = now;
+  }
+
+  private pruneOutside(wanted: readonly WarmTile[]): void {
+    const keys = new Set(wanted.map((tile) => `${tile.z}/${tile.x}/${tile.y}`));
+    for (const [key, cancel] of this.inflight) {
+      if (!keys.has(key)) {
+        this.inflight.delete(key);
+        this.warmed.delete(key);
+        cancel.abort();
+      }
+    }
+  }
+
+  private finish(key: string, cancel: AbortController): void {
+    if (this.inflight.get(key) === cancel) this.inflight.delete(key);
+  }
+}
+
+/**
+ * Pick the contour levels MapLibre would request at a zoom, mirroring the protocol threshold
+ * lookup so the warm-up traces exactly what the source will ask for. Exported for tests.
+ */
+export function levelsForZoom(thresholds: Record<number, number>, zoom: number): number[] {
+  let selected = -Infinity;
+  let levels: number[] = [];
+  for (const [key, value] of Object.entries(thresholds)) {
+    const entry = Number(key);
+    if (entry <= zoom && entry > selected) {
+      selected = entry;
+      levels = [value];
+    }
+  }
+  return levels;
+}
+
+/** The protocol encodes the same keys, so warm traces share the source cache entries. */
+function warmOptions(levels: number[], plan: ContourWarmerPlan): Record<string, unknown> {
+  return {
+    levels,
+    overzoom: CONTOUR_OVERZOOM,
+    buffer: CONTOUR_BUFFER_PX,
+    ...elevationMultiplier(plan.elevationUnit),
+  };
+}
+
+function warmerFetcher(dem: { manager?: unknown }): ContourTileFetcher | null {
+  const manager = dem as { manager?: ContourTileFetcher };
+  return manager.manager && typeof manager.manager.fetchContourTile === "function"
+    ? manager.manager
+    : null;
+}
+
+function targetViewportBounds(map: MapLibreMap, targetZoom: number): {
+  west: number;
+  south: number;
+  east: number;
+  north: number;
+} | null {
+  if (typeof map.getCenter !== "function" || typeof map.getCanvas !== "function") return null;
+  const canvas = map.getCanvas();
+  if (!canvas || !canvas.clientWidth || !canvas.clientHeight) return null;
+  const current = viewportBounds(map);
+  if (!current) return null;
+  // The next zoom shows the same screen smaller, so its span shrinks by one doubling per level.
+  const scale = 2 ** (map.getZoom() - targetZoom);
+  const centre = map.getCenter();
+  const span = current.east >= current.west
+    ? current.east - current.west
+    : current.east - current.west + 360;
+  const halfSpan = span / 2 * scale;
+  const southY = mercatorY(current.south);
+  const northY = mercatorY(current.north);
+  const halfHeight = (southY - northY) / 2 * scale;
+  const centreY = (southY + northY) / 2;
+  return {
+    west: centre.lng - halfSpan,
+    south: inverseMercatorY(centreY + halfHeight),
+    east: centre.lng + halfSpan,
+    north: inverseMercatorY(centreY - halfHeight),
+  };
+}
+
+function tileInScene(tile: WarmTile, bbox: Bbox): boolean {
+  const count = 2 ** tile.z;
+  const width = 360 / count;
+  const west = tile.x / count * 360 - 180;
+  const north = inverseMercatorY(tile.y / count);
+  const south = inverseMercatorY((tile.y + 1) / count);
+  if (south > bbox[3] || north < bbox[1]) return false;
+  return [west - 360, west, west + 360].some(
+    (shifted) => shifted <= bbox[2] && shifted + width >= bbox[0],
+  );
+}
+
+function mercatorY(latitude: number): number {
+  const radians = latitude * Math.PI / 180;
+  return (1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2;
+}
+
+function inverseMercatorY(fraction: number): number {
+  return Math.atan(Math.sinh(Math.PI * (1 - 2 * fraction))) * 180 / Math.PI;
+}
+
+function transparentColor(color: string): string {
+  const trimmed = color.trim();
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(trimmed);
+  if (hex) return transparentHex(hex[1]);
+  const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(trimmed);
+  if (rgb) return `rgba(${rgb[1]}, ${rgb[2]}, ${rgb[3]}, 0)`;
+  // An unknown format still fades from transparent black instead of popping in.
+  return "rgba(0, 0, 0, 0)";
+}
+
+function transparentHex(digits: string): string {
+  const expanded = digits.length === 3
+    ? [...digits].map((digit) => digit + digit).join("")
+    : digits;
+  const red = parseInt(expanded.slice(0, 2), 16);
+  const green = parseInt(expanded.slice(2, 4), 16);
+  const blue = parseInt(expanded.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, 0)`;
+}
+
+function viewportBounds(map: MapLibreMap): {
+  west: number;
+  south: number;
+  east: number;
+  north: number;
+} | null {
+  if (typeof map.getBounds !== "function") return null;
+  const bounds = map.getBounds();
+  return {
+    west: bounds.getWest(),
+    south: bounds.getSouth(),
+    east: bounds.getEast(),
+    north: bounds.getNorth(),
+  };
+}
+
 function labelledTiers(ladder: ContourLadder): ContourLadder["labelTiers"] {
   const bold = ladder.tiers.filter((tier) => tier.interval >= ladder.boldInterval);
   const sparse = ladder.labelTiers.filter((tier) => tier.interval < ladder.boldInterval);
   return [...bold, ...sparse];
+}
+
+/**
+ * Keep only bold lines in placement until the finer tier shows, so low zooms skip anchors
+ * the text field would hide anyway while the visible labels stay identical.
+ */
+function labelFilter(
+  tiers: ContourLadder["labelTiers"],
+  boldInterval: number,
+): FilterSpecification {
+  const finest = tiers.at(-1)!;
+  if (tiers.length < 2 || finest.interval === boldInterval) return multipleOf(boldInterval);
+
+  return [
+    "any",
+    multipleOf(boldInterval),
+    ["all", [">=", ["zoom"], finest.entryZoom], multipleOf(finest.interval)],
+  ] as FilterSpecification;
 }
 
 function labelPriority(elevationUnit: string): ExpressionSpecification {

@@ -14,6 +14,7 @@ import {
   INTERVAL_CHAIN_M,
   labelIntervalsAt,
   metresPerPixel,
+  warmTilesForZoom,
 } from "./contour-ladder.ts";
 import { RELIEF_STRENGTH, reliefPaint } from "./layers/relief.ts";
 import type { LayerContext, TerrainStats, TerrainTiles } from "./types.ts";
@@ -114,6 +115,43 @@ test("labels are bold-only without the sparse switch, which only adds a finer ti
   assert.equal(contourLadder(FLAT, 12).labelTiers.length, 2);
 });
 
+test("the warm-up covers the viewport centre first within its limit", () => {
+  // A degree square around the equator at z5 spans few tiles with the middle first.
+  const tiles = warmTilesForZoom(-0.5, -0.5, 0.5, 0.5, 5, 12);
+  assert.ok(tiles.length > 1 && tiles.length <= 12);
+  assert.ok(tiles.every((tile) => tile.z === 5));
+  assert.ok(new Set(tiles.map((tile) => `${tile.x}/${tile.y}`)).size === tiles.length);
+  assert.deepEqual({ x: tiles[0].x, y: tiles[0].y }, { x: 16, y: 16 });
+
+  assert.equal(warmTilesForZoom(-0.5, -0.5, 0.5, 0.5, 5, 2).length, 2);
+  assert.deepEqual(warmTilesForZoom(-0.5, -0.5, 0.5, 0.5, 5, 0), []);
+});
+
+test("the warm-up wraps the antimeridian and clamps the poles", () => {
+  const wrapped = warmTilesForZoom(179, -10, -179, 10, 2, 16);
+  assert.ok(wrapped.length > 0 && wrapped.length <= 16);
+  assert.ok(wrapped.every((tile) => tile.x >= 0 && tile.x < 4));
+
+  const polar = warmTilesForZoom(-10, 80, 10, 89, 3, 16);
+  assert.ok(polar.length > 0);
+  assert.ok(polar.every((tile) => tile.y >= 0 && tile.y < 8));
+});
+
+test("the warm-up maps unwrapped antimeridian bounds to the same tiles", () => {
+  const wrapped = warmTilesForZoom(179, -10, -179, 10, 2, 16);
+  const unwrapped = warmTilesForZoom(179, -10, 181, 10, 2, 16);
+  assert.ok(unwrapped.length > 0);
+  assert.deepEqual(tileKeys(unwrapped), tileKeys(wrapped));
+
+  const negative = warmTilesForZoom(-181, -10, -179, 10, 2, 16);
+  assert.deepEqual(tileKeys(negative), tileKeys(wrapped));
+
+  const eastern = warmTilesForZoom(170, -10, 190, 10, 9, 12);
+  assert.ok(eastern.length > 0);
+  assert.ok(eastern.every((tile) => tile.x >= 0 && tile.x < 512));
+  assert.deepEqual(tileKeys(warmTilesForZoom(170, -10, -170, 10, 9, 12)), tileKeys(eastern));
+});
+
 test("the ladder is deterministic and does not mutate its statistics", () => {
   const sample = Object.freeze({ ...KENYA });
   assert.deepEqual(contourLadder(sample, 0), contourLadder(sample, 0));
@@ -140,6 +178,10 @@ function makeStats(
 function thresholdAt(thresholds: Record<number, number>, zoom: number) {
   const entries = Object.entries(thresholds).filter(([entry]) => Number(entry) <= zoom);
   return entries.at(-1)?.[1] ?? Infinity;
+}
+
+function tileKeys(tiles: { x: number; y: number }[]): string[] {
+  return tiles.map((tile) => `${tile.x}/${tile.y}`).sort();
 }
 
 // Browser dependencies are replaced so integration checks need no worker or terrain downloads.
@@ -221,7 +263,7 @@ test("both terrain displays reuse one worker cache and register protocols once p
     encoding: "terrarium",
     maxzoom: 11,
     worker: true,
-    cacheSize: 50,
+    cacheSize: 120,
   });
 });
 
@@ -261,6 +303,7 @@ test("contour styles validate in MapLibre and cap refinement at z12", (context) 
   const labels = map.layers.get("terrain-contours-labels")!;
   assert.deepEqual(labels.layout["text-font"], ["Noto Sans Regular"]);
   assert.equal(labels.layout["symbol-spacing"], 350);
+  assert.ok(JSON.stringify(labels.filter).includes("100"));
   assert.equal(labels.paint["text-halo-color"], "#faf8f3");
   assert.equal(labels.minzoom, contourLadder(FIJI, 0).tiers[0].entryZoom);
   assert.ok(overlay.part.layerIds.includes(labels.id));

@@ -1,7 +1,8 @@
 /** Draw nested field dots and no-data hatching from tiled grid textures. */
-import type { CustomLayerInterface } from "maplibre-gl";
+import type { CustomLayerInterface, Map as MapLibreMap } from "maplibre-gl";
 
 import type { InkPaint } from "../render/palettes";
+import { addressSearch, gestureFlags, subscribeGesture } from "../gesture-quality";
 import {
   DEFAULT_DENSITY_RATIO,
   blockMeans,
@@ -120,6 +121,10 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
   private isHalo = false;
   private isDots = true;
   private isHatch = true;
+  private isGestureHatchOff = false;
+  private stopGesture: (() => void) | null = null;
+  // Captured here because scene entry replaces the address and drops trial flags.
+  private readonly fastHatchAllowed = gestureFlags(addressSearch()).fastHatch;
   private density = DEFAULT_DENSITY_RATIO;
   private uploaded: Uploaded | null = null;
   private frame: DotLattice = {
@@ -197,10 +202,39 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
     this.map?.triggerRepaint();
   }
 
+  override onAdd(map: MapLibreMap, gl: WebGL2RenderingContext) {
+    super.onAdd(map, gl);
+    if (!this.fastHatchAllowed || this.stopGesture) return;
+    this.stopGesture = subscribeGesture(map, {
+      onStart: () => this.setGestureHatchOff(true),
+      onEnd: () => this.setGestureHatchOff(false),
+    });
+  }
+
+  override onRemove() {
+    this.stopGesture?.();
+    this.stopGesture = null;
+    super.onRemove();
+  }
+
+  /**
+   * Hide the hatch while the camera moves and restore it on moveend. The override applies
+   * at draw time, so the per-step hatch choice survives the gesture untouched.
+   */
+  private setGestureHatchOff(isOff: boolean) {
+    if (isOff === this.isGestureHatchOff) return;
+    this.isGestureHatchOff = isOff;
+    this.map?.triggerRepaint();
+  }
+
+  private hasEffectiveHatch() {
+    return this.isHatch && !this.isGestureHatchOff;
+  }
+
   protected hasData() {
     return (this.from !== null || this.to !== null)
       && this.mask !== null
-      && (this.isDots || this.isHatch);
+      && (this.isDots || this.hasEffectiveHatch());
   }
 
   protected extendGpu(base: TiledGpu): MarksGpu {
@@ -275,6 +309,7 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
   private lattice() {
     const { bbox, nx, ny } = this.options.grid;
     const [west, south, east, north] = bbox;
+    // Stateless like the legend key and the containment fit, so canvas and legend agree at rest.
     return dotLattice(
       { width: (east - west) / nx, height: (north - south) / ny },
       (south + north) / 2,
@@ -299,7 +334,7 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
     const drawnLevel = fade > 0 ? level + 1 : level;
     const pixelRatio = this.map!.getPixelRatio();
     const dotOpacity = highZoomDotOpacity(this.map!.getZoom(), pixelRatio);
-    if (dotOpacity === 0 && !this.isHatch) return;
+    if (dotOpacity === 0 && !this.hasEffectiveHatch()) return;
     const cellPx = Math.sqrt(sidesPx.width * sidesPx.height);
     const radiusPx = (dotLevel: number) =>
       maxDotRadiusPx(cellPx / 2 ** dotLevel, dotLevel, aimedPx, density) * pixelRatio;
@@ -329,7 +364,7 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
     gl.uniform3f(uniform("uHaloInk"), ...channels(this.ink.halo));
     gl.uniform1i(uniform("uHalo"), this.isHalo ? 1 : 0);
     gl.uniform1i(uniform("uDots"), this.isDots && dotOpacity > 0 ? 1 : 0);
-    gl.uniform1i(uniform("uHatch"), this.isHatch ? 1 : 0);
+    gl.uniform1i(uniform("uHatch"), this.hasEffectiveHatch() ? 1 : 0);
     gl.uniform1f(uniform("uPixelRatio"), pixelRatio);
     gl.uniform1f(uniform("uDotOpacity"), dotOpacity);
 

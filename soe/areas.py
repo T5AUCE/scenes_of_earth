@@ -1,10 +1,11 @@
 """Area handling: validate drawn GeoJSON and bring shapes that cross 180 into one frame."""
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import shapely
 from shapely.affinity import translate
-from shapely.geometry import MultiPolygon, Polygon, shape
+from shapely.geometry import MultiPolygon, Polygon, mapping, shape
 from shapely.geometry.base import BaseGeometry
 
 MAX_VERTICES = 5000
@@ -14,6 +15,8 @@ DRAWN_PRECISION_DEG = 1e-4
 MAX_LONGITUDE_DEG = 180
 MAX_LATITUDE_DEG = 90
 WORLD_WIDTH_DEG = 360
+
+PREVIEW_SIMPLIFY_DIVISOR = 2000  # a 2000th of the larger bbox side, so small areas stay sharp
 
 
 class AreaError(ValueError):
@@ -105,6 +108,20 @@ def polygonal_parts(geometry: BaseGeometry) -> list[Polygon]:
     # make_valid can nest a MultiPolygon in a GeometryCollection, so flatten twice.
     parts = shapely.get_parts(shapely.get_parts(collection))
     return [part for part in parts if isinstance(part, Polygon) and not part.is_empty]
+
+
+def display_preview(
+    geometry: BaseGeometry,
+    bbox: tuple[float, float, float, float],
+) -> dict[str, Any]:
+    """Return the simplified preview of `geometry` in its bbox longitude frame.
+
+    A shape stored across 180 is unwrapped first, so the preview matches the unwrapped bbox.
+    """
+    west, south, east, north = bbox
+    frame = unwrap(geometry) if east > MAX_LONGITUDE_DEG else geometry
+    tolerance_deg = max(east - west, north - south) / PREVIEW_SIMPLIFY_DIVISOR
+    return mapping(simplify_for_display(frame, tolerance_deg))
 
 
 def unwrap(geom: BaseGeometry) -> BaseGeometry:

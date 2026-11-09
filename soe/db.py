@@ -1,4 +1,5 @@
 """SQLite: boundaries (search), scene jobs and source revisions; one WAL connection per call."""
+import hashlib
 import logging
 import sqlite3
 from collections.abc import Iterable, Iterator
@@ -12,6 +13,7 @@ from .country_names import OFFICIAL_NAMES
 SqlValue = str | int | float | None
 Record = dict[str, Any]  # one table row as column -> value
 BoundaryValues = tuple[SqlValue, ...]  # one boundaries row in INSERT_BOUNDARY column order
+PreviewWrite = tuple[str, str, str | None, str]  # id, preview, expected digest, new digest
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS boundaries (
@@ -26,6 +28,8 @@ CREATE TABLE IF NOT EXISTS boundaries (
     bbox_n REAL,
     cells INTEGER,
     geom_geojson TEXT NOT NULL,
+    geom_digest TEXT,
+    preview_geojson TEXT,
     source TEXT NOT NULL,
     licence TEXT NOT NULL
 );
@@ -81,13 +85,14 @@ INSERT_BOUNDARY = """
     INSERT OR REPLACE INTO boundaries (
         id, level, name, parent_name, iso3,
         bbox_w, bbox_s, bbox_e, bbox_n, cells,
-        geom_geojson, source, licence
+        geom_geojson, geom_digest, preview_geojson, source, licence
     )
     VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     )
 """
 INSERT_BATCH_ROWS = 500
+GEOM_DIGEST_CHARS = 16  # hex characters of the sha256 kept as the geometry revision
 
 log = logging.getLogger("soe.db")
 
@@ -98,12 +103,29 @@ class Busy(Exception):
 
 def init(path: Path | str) -> None:
     """Create tables; jobs that were queued or running when the process died are marked failed."""
+    ensure_schema(path)
+    recover_interrupted_scenes(path)
+
+
+def ensure_schema(path: Path | str) -> None:
+    """Create tables and migrate old files, leaving scene jobs alone.
+
+    Maintenance commands use this, so a backfill never touches unrelated job state.
+    """
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with connect(path) as connection:
         connection.executescript(SCHEMA)
         # The old per-month revision cache is only a cache, so it is dropped, not migrated.
         connection.execute("DROP TABLE IF EXISTS source_revisions")
         _add_missing_columns(connection)
+
+
+def recover_interrupted_scenes(path: Path | str) -> None:
+    """Mark jobs that were queued or running when the process died as failed.
+
+    Only the app calls this at startup, so maintenance commands never see it.
+    """
+    with connect(path) as connection:
         connection.execute(
             "UPDATE scenes SET status='failed', error='interrupted', "
             "error_class='Interrupted', finished=? "
@@ -114,16 +136,30 @@ def init(path: Path | str) -> None:
 
 def _add_missing_columns(connection: sqlite3.Connection) -> None:
     """Databases created before a column was added to SCHEMA get it here."""
-    columns = {row["name"] for row in connection.execute("PRAGMA table_info(scenes)")}
-    if "stage" in columns:
-        return
+    scenes_columns = {row["name"] for row in connection.execute("PRAGMA table_info(scenes)")}
+    if "stage" not in scenes_columns:
+        try:
+            connection.execute("ALTER TABLE scenes ADD COLUMN stage TEXT")
+        except sqlite3.OperationalError as error:
+            # Another process added it between the check and the ALTER.
+            if "duplicate column" not in str(error):
+                raise
 
-    try:
-        connection.execute("ALTER TABLE scenes ADD COLUMN stage TEXT")
-    except sqlite3.OperationalError as error:
-        # Another process added it between the check and the ALTER.
-        if "duplicate column" not in str(error):
-            raise
+    boundaries_columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(boundaries)")
+    }
+    if "preview_geojson" not in boundaries_columns:
+        try:
+            connection.execute("ALTER TABLE boundaries ADD COLUMN preview_geojson TEXT")
+        except sqlite3.OperationalError as error:
+            if "duplicate column" not in str(error):
+                raise
+    if "geom_digest" not in boundaries_columns:
+        try:
+            connection.execute("ALTER TABLE boundaries ADD COLUMN geom_digest TEXT")
+        except sqlite3.OperationalError as error:
+            if "duplicate column" not in str(error):
+                raise
 
 
 def search(
@@ -189,11 +225,28 @@ def _official_matches(needle: str) -> list[str]:
     ]
 
 
-def get_boundary(path: Path | str, boundary_id: str) -> Record | None:
-    """The full boundaries row, geometry included, or None."""
+def get_boundary(
+    path: Path | str,
+    boundary_id: str,
+    with_geometry: bool = True,
+) -> Record | None:
+    """One boundaries row, or None. Without geometry only the digest and preview load.
+
+    The preview read skips the full stored geometry, so serving it stays fast; the stored
+    digest versions the row cheaply because it is computed once at import.
+    """
+    geometry_select = (
+        "boundaries.geom_geojson, boundaries.geom_digest"
+        if with_geometry
+        else "boundaries.geom_digest"
+    )
     with connect(path) as connection:
         row = connection.execute(
-            "SELECT boundaries.*, admin_kinds.kind AS kind FROM boundaries "
+            "SELECT boundaries.id, boundaries.level, "
+            "boundaries.name, boundaries.parent_name, boundaries.iso3, boundaries.bbox_w, "
+            "boundaries.bbox_s, boundaries.bbox_e, boundaries.bbox_n, boundaries.cells, "
+            f"{geometry_select}, boundaries.preview_geojson, boundaries.source, "
+            "boundaries.licence, admin_kinds.kind AS kind FROM boundaries "
             "LEFT JOIN admin_kinds ON admin_kinds.iso3 = boundaries.iso3 "
             "AND admin_kinds.level = boundaries.level WHERE id = ?",
             (boundary_id,),
@@ -216,7 +269,7 @@ def add_boundaries(path: Path | str, source: str, rows: Iterable[BoundaryValues]
             if row[0] in seen:
                 replaced += 1
             seen.add(row[0])
-            batch.append(row)
+            batch.append(_complete_row(row))
             if len(batch) >= INSERT_BATCH_ROWS:
                 connection.executemany(INSERT_BOUNDARY, batch)
                 batch = []
@@ -227,6 +280,139 @@ def add_boundaries(path: Path | str, source: str, rows: Iterable[BoundaryValues]
     if replaced:
         log.warning("%s: %d duplicate boundary ids replaced", source, replaced)
     return replaced
+
+
+def _complete_row(row: BoundaryValues) -> BoundaryValues:
+    """A boundaries row in INSERT_BOUNDARY order, computing a missing geometry digest."""
+    if len(row) == 15:
+        if row[11] is None and isinstance(row[10], str):
+            return (*row[:11], geometry_digest(row[10]), *row[12:])
+        return row
+    if len(row) == 14:
+        digest = geometry_digest(row[10]) if isinstance(row[10], str) else None
+        return (*row[:11], digest, *row[11:])
+    if len(row) == 13:
+        digest = geometry_digest(row[10]) if isinstance(row[10], str) else None
+        return (*row[:11], digest, None, *row[11:])
+    raise ValueError(f"boundary row has {len(row)} values, expected 13, 14 or 15")
+
+
+def geometry_digest(geometry_text: str) -> str:
+    """The short sha256 revision of stored geometry text, computed once at import."""
+    return hashlib.sha256(geometry_text.encode("utf-8")).hexdigest()[:GEOM_DIGEST_CHARS]
+
+
+def count_boundaries_missing_preview(path: Path | str) -> int:
+    """The number of boundaries whose display preview is not stored yet."""
+    with connect(path) as connection:
+        row = connection.execute(
+            "SELECT COUNT(*) FROM boundaries WHERE preview_geojson IS NULL",
+        ).fetchone()
+    return row[0]
+
+
+def fetch_boundaries_missing_preview(
+    path: Path | str,
+    limit: int,
+    offset: int = 0,
+) -> list[Record]:
+    """Up to `limit` boundaries without a stored preview, oldest first, geometry included.
+
+    `offset` skips rows, so a backfill moves past geometries too broken to store a preview
+    for instead of fetching them again.
+    """
+    with connect(path) as connection:
+        rows = connection.execute(
+            "SELECT id, bbox_w, bbox_s, bbox_e, bbox_n, geom_geojson, geom_digest "
+            "FROM boundaries WHERE preview_geojson IS NULL ORDER BY rowid LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def count_boundaries_missing_digest(path: Path | str) -> int:
+    """The number of boundaries whose geometry revision is not stored yet."""
+    with connect(path) as connection:
+        row = connection.execute(
+            "SELECT COUNT(*) FROM boundaries WHERE geom_digest IS NULL",
+        ).fetchone()
+    return row[0]
+
+
+def fetch_boundaries_missing_digest(
+    path: Path | str,
+    limit: int,
+    offset: int = 0,
+) -> list[Record]:
+    """Up to `limit` boundaries without a stored digest, oldest first, geometry included."""
+    with connect(path) as connection:
+        rows = connection.execute(
+            "SELECT id, geom_geojson FROM boundaries "
+            "WHERE geom_digest IS NULL ORDER BY rowid LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def set_boundary_digests(
+    path: Path | str,
+    digests: Iterable[tuple[str, str]],
+) -> int:
+    """Store geometry digests as (boundary id, digest) pairs; returns the rows stored.
+
+    Rows whose digest is already set keep it, so a concurrent reimport is never overwritten.
+    """
+    with connect(path) as connection:
+        before = connection.total_changes
+        connection.execute("BEGIN")
+        connection.executemany(
+            "UPDATE boundaries SET geom_digest = ? WHERE id = ? AND geom_digest IS NULL",
+            [(digest, boundary_id) for boundary_id, digest in digests],
+        )
+        connection.execute("COMMIT")
+        return connection.total_changes - before
+
+
+def set_boundary_preview(
+    path: Path | str,
+    boundary_id: str,
+    preview_geojson: str,
+    expected_digest: str | None,
+    new_digest: str,
+) -> bool:
+    """Store one display preview, guarded on the digest the computation was based on.
+
+    Returns True when stored; False when a concurrent reimport changed the geometry first.
+    """
+    return (
+        set_boundary_previews(path, [(boundary_id, preview_geojson, expected_digest, new_digest)])
+        == 1
+    )
+
+
+def set_boundary_previews(
+    path: Path | str,
+    previews: Iterable[PreviewWrite],
+) -> int:
+    """Store display previews; returns the rows stored, skipping concurrent reimports.
+
+    Each write holds (boundary id, preview GeoJSON, the digest the computation was based on,
+    the digest of the geometry it was computed from), so an older computation never
+    overwrites a reimported geometry and its preview.
+    """
+    with connect(path) as connection:
+        before = connection.total_changes
+        connection.execute("BEGIN")
+        connection.executemany(
+            "UPDATE boundaries SET preview_geojson = ?, geom_digest = ? "
+            "WHERE id = ? AND geom_digest IS ?",
+            [
+                (preview, new_digest, boundary_id, expected)
+                for boundary_id, preview, expected, new_digest in previews
+            ],
+        )
+        connection.execute("COMMIT")
+        return connection.total_changes - before
 
 
 def set_admin_kinds(path: Path | str, rows: list[tuple[str, str, str]]) -> int:

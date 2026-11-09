@@ -13,6 +13,7 @@ import { keepThroughContextLoss } from "../gpu/tiled-layer";
 import {
   createZoomWatch,
   dotLegend,
+  dotLegendKey,
   gradientLegend,
   hatchLegend,
   isothermLegend,
@@ -92,6 +93,7 @@ class FieldView implements LayerView {
   private readonly readStep;
   private readonly drawLatestStep;
   private readonly dotsZoomWatch;
+  private lastLegendKey: string | null = null;
   private palette: string;
   // Only a layer with dots or isotherms draws its ink, so the empty default is never painted.
   private ink: string;
@@ -217,9 +219,36 @@ class FieldView implements LayerView {
   }
 
   private showLegend() {
+    const key = this.legendKey();
+    if (key === this.lastLegendKey) return;
+    this.lastLegendKey = key;
     const element = this.legendOf();
     if (this.hasHatched) element.append(hatchLegend());
     this.legendBox.replaceChildren(element);
+  }
+
+  // The key holds every input that changes the legend's output, so a skipped rebuild
+  // draws exactly what a rebuild would. Dots use their lattice so a zoom that keeps the
+  // level and swatch keeps the key.
+  private legendKey(): string {
+    const { layer, map } = this.context;
+    if (this.draw === "dots") {
+      const stops = displayStops(this.stops, layer.units, this.units, rangeDecimals(layer));
+      return `dots:${dotLegendKey(
+        stops,
+        this.units,
+        layer.grid,
+        map.getZoom(),
+        this.density,
+        inkPaint(this.ink),
+        this.hasHatched,
+      )}`;
+    }
+    if (this.draw === "isolines") {
+      return `isolines:${this.isolines!.interval}:${this.units}:${this.ink}`;
+    }
+    const rangeNote = this.range !== null ? "fitted" : "custom";
+    return `colour:${this.palette}:${this.stops}:${this.units}:${rangeNote}:${this.hasHatched}`;
   }
 
   private legendOf() {

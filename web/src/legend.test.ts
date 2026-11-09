@@ -34,6 +34,7 @@ const {
   contourLegendText,
   createZoomWatch,
   dotLegend,
+  dotLegendKey,
   dotSwatchDots,
   dotSwatchLattice,
   gradientLegend,
@@ -258,6 +259,50 @@ function renderDotLegend({
     inkPaint(ink),
   ) as unknown as TestElement;
 }
+
+test("the dot legend key keeps its level across a zoom and moves with it", () => {
+  const keyAt = (zoom: number, density = 1, ink = "navy") =>
+    dotLegendKey(
+      KENYA_RAINFALL_STOPS,
+      "mm/month",
+      KENYA_RAINFALL_GRID,
+      zoom,
+      density,
+      inkPaint(ink),
+      false,
+    );
+  const latticeAt = (zoom: number) => dotSwatchLattice(KENYA_RAINFALL_GRID, zoom, 1, 1);
+
+  const zoom = 10;
+  assert.equal(keyAt(zoom), keyAt(zoom));
+  assert.equal(keyAt(zoom, 1, "navy") === keyAt(zoom, 1, "charcoal"), false);
+  assert.equal(keyAt(zoom) === keyAt(zoom, MAX_DENSITY_RATIO), false);
+
+  const higher = zoom + 3;
+  if (latticeAt(higher).level === latticeAt(zoom).level) {
+    assert.equal(keyAt(higher), keyAt(zoom));
+  } else {
+    assert.equal(keyAt(higher) === keyAt(zoom), false);
+  }
+});
+
+test("the dot legend key matches the stateless lattice the canvas draws", () => {
+  // Just below a level boundary, where a remembered level would hold the coarser lattice.
+  const zoom = 10.2;
+  const lattice = dotSwatchLattice(KENYA_RAINFALL_GRID, zoom, 1, 1);
+  const key = JSON.parse(dotLegendKey(
+    KENYA_RAINFALL_STOPS,
+    "mm/month",
+    KENYA_RAINFALL_GRID,
+    zoom,
+    1,
+    inkPaint("navy"),
+    false,
+  )) as unknown[];
+  // The key lists ticks, units, bbox, nx and ny before the lattice level and fade.
+  assert.equal(key[5], lattice.level);
+  assert.equal(key[6], lattice.fade);
+});
 
 test("every swatch holds a clean grid of whole dots centred in their sites", () => {
   for (const [dotsPerSide, position] of [[2, 1], [3, 0.5]]) {

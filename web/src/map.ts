@@ -10,6 +10,7 @@ import {
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
+import { maxPixelRatioSetting } from "./gesture-quality";
 import { WORLD_WIDTH_DEG } from "./label-filter";
 import { clampAround, nearestEquivalent, panLimit } from "./pan-lock";
 import { imageCorners } from "./render/mercator";
@@ -60,7 +61,7 @@ interface DrawableImage {
 /** Creates the basemap, with its attribution at the bottom left. */
 export function createMap(container: string): MapLibreMap {
   ensureWorkerCount();
-  const ratio = trialPixelRatio(location.search);
+  const ratio = cappedPixelRatio(location.search, devicePixelRatio());
   const map = new MapLibreMap({
     container,
     style: BASEMAP_STYLE,
@@ -86,6 +87,23 @@ export function trialPixelRatio(search: string): number | undefined {
     return undefined;
   }
   return ratio;
+}
+
+/**
+ * Combine the trial-only override with the measurement-only cap. The cap never changes
+ * the default: without `maxPixelRatio` the override behaves as before, and with it the
+ * map uses the lower of the override or device ratio and the cap. Exported for tests.
+ */
+export function cappedPixelRatio(search: string, deviceRatio: number): number | undefined {
+  const override = trialPixelRatio(search);
+  const cap = maxPixelRatioSetting(search);
+  if (cap === undefined) return override;
+  const base = override ?? (Number.isFinite(deviceRatio) && deviceRatio > 0 ? deviceRatio : 1);
+  return Math.min(base, cap);
+}
+
+function devicePixelRatio(): number {
+  return typeof window === "undefined" ? 1 : window.devicePixelRatio;
 }
 
 /** Set the worker count once, before the first map starts its workers. */

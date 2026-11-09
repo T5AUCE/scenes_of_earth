@@ -111,7 +111,7 @@ test("search works before the layer list arrives", async (context) => {
       searched.push(url);
       return Response.json([areaHit()]);
     }
-    if (url === "/api/areas/cgaz:ADM1:NAKURU") {
+    if (url === "/api/areas/cgaz%3AADM1%3ANAKURU") {
       return Response.json({ ...areaHit(), geometry: bboxFeature() });
     }
     assert.fail(`Unexpected request: ${url}`);
@@ -218,7 +218,7 @@ test("build shows Starting build… before the POST resolves", async (context) =
     if (url.startsWith("/api/areas/search?")) {
       return Response.json([areaHit()]);
     }
-    if (url === "/api/areas/cgaz:ADM1:NAKURU") {
+    if (url === "/api/areas/cgaz%3AADM1%3ANAKURU") {
       return Response.json({
         ...areaHit(),
         geometry: {
@@ -313,7 +313,7 @@ test("repick clears a build and a stale 503 never overwrites a newer run", async
     if (url.startsWith("/api/areas/search?")) {
       return Response.json([areaHit()]);
     }
-    if (url === "/api/areas/cgaz:ADM1:NAKURU") {
+    if (url === "/api/areas/cgaz%3AADM1%3ANAKURU") {
       return Response.json({
         ...areaHit(),
         geometry: {

@@ -1,6 +1,14 @@
 /** Reads and watches the viewer's reduced-motion setting, which every map animation honours. */
 export const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 
+/** Label layers fade back over this long after a camera gesture ends. */
+export const LABEL_FADE_MS = 300;
+
+/** How long a label fade back lasts, or zero when the viewer asked for reduced motion. */
+export function labelFadeDurationMs(): number {
+  return prefersReducedMotion() ? 0 : LABEL_FADE_MS;
+}
+
 /** Whether the viewer asked for reduced motion, false without a browser. */
 export function prefersReducedMotion(): boolean {
   try {

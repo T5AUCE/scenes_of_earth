@@ -95,6 +95,19 @@ test("the dot level stops rising at its maximum", () => {
   assert.equal(levelFor(40 * 2 ** 10).fade, 0);
 });
 
+test("a remembered level holds through boundary jitter and yields past it", () => {
+  const aimedPx = MIN_SPACING_PX;
+  const boundary = aimedPx * 2 ** 3;
+  const justAbove = boundary * 2 ** 0.05;
+  const wellAbove = boundary * 2 ** 0.5;
+
+  assert.equal(levelFor(boundary, aimedPx).level, 3);
+  assert.equal(levelFor(justAbove, aimedPx, 2).level, 2);
+  assert.equal(levelFor(wellAbove, aimedPx, 2).level, 3);
+  assert.equal(levelFor(boundary * 2 ** -0.05, aimedPx, 3).level, 3);
+  assert.equal(levelFor(boundary / 2, aimedPx, 3).level, 2);
+});
+
 test("block_means_ignore_no_data", () => {
   const none = NO_DATA_BYTE;
   const positions = Uint8Array.of(

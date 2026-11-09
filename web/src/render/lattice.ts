@@ -130,14 +130,43 @@ export function aimedSpacingPx(zoom: number, density = DEFAULT_DENSITY_RATIO) {
 }
 
 /** Choose the level whose dot spacing is one to two aimed spacings and its progress to the next. */
-export function levelFor(cellPx: number, aimedPx = MIN_SPACING_PX) {
+export function levelFor(cellPx: number, aimedPx = MIN_SPACING_PX, previousLevel?: number) {
   const exact = Math.log2(cellPx / aimedPx);
+  if (previousLevel === undefined || !Number.isInteger(previousLevel)) {
+    return statelessLevel(exact);
+  }
+  const previous = Math.min(MAX_LEVEL, Math.max(MIN_LEVEL, previousLevel));
+  if (previous === MAX_LEVEL) return { level: MAX_LEVEL, fade: 0 };
+
+  const level = Math.min(MAX_LEVEL, Math.max(MIN_LEVEL, Math.floor(exact)));
+  if (level !== previous && !isBeyondHysteresis(exact, level, previous)) {
+    // Zoom jitter at a boundary keeps its level instead of thrashing re-bakes each crossing.
+    return { level: previous, fade: levelFade(exact - previous) };
+  }
+  if (level === MAX_LEVEL) return { level, fade: 0 };
+
+  return { level, fade: levelFade(exact - level) };
+}
+
+// A sweep leaves its level until the zoom moves past the boundary by this much of a level.
+const LEVEL_HYSTERESIS_EXACT = 0.08;
+
+function isBeyondHysteresis(exact: number, level: number, previous: number): boolean {
+  if (level > previous) return exact >= previous + 1 + LEVEL_HYSTERESIS_EXACT;
+  return exact < previous - LEVEL_HYSTERESIS_EXACT;
+}
+
+function statelessLevel(exact: number) {
   const level = Math.min(MAX_LEVEL, Math.max(MIN_LEVEL, Math.floor(exact)));
   if (level === MAX_LEVEL) return { level, fade: 0 };
 
   // A full-interval fade lets density steps change the dots between nested lattice levels.
-  const progress = Math.min(1, Math.max(0, exact - level));
-  return { level, fade: progress * progress * (3 - 2 * progress) };
+  return { level, fade: levelFade(exact - level) };
+}
+
+function levelFade(progress: number): number {
+  const clamped = Math.min(1, Math.max(0, progress));
+  return clamped * clamped * (3 - 2 * clamped);
 }
 
 /**
@@ -231,12 +260,13 @@ export function dotLattice(
   zoom: number,
   density: number,
   pixelRatio: number,
+  previousLevel?: number,
 ): DotLattice {
   const sidesPx = cellSidesPx(zoom, cellDegrees, latitude);
   const cellPx = Math.sqrt(sidesPx.width * sidesPx.height);
   const fitting = containedDensity(cellPx, sidesPx, zoom, density, pixelRatio);
   const aimedPx = aimedSpacingPx(zoom, fitting);
-  const { level, fade } = levelFor(cellPx, aimedPx);
+  const { level, fade } = levelFor(cellPx, aimedPx, previousLevel);
 
   return { level, fade, sidesPx, aimedPx, density: fitting, pixelRatio };
 }

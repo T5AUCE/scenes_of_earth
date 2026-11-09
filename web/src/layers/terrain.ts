@@ -12,7 +12,12 @@ import type {
   TerrainStats,
   UnitsMenu,
 } from "../types";
-import { ContourOverlay, sharedDemSource, terrainTileBounds } from "./contour-overlay";
+import {
+  cappedDemMaxZoom,
+  ContourOverlay,
+  sharedDemSource,
+  terrainTileBounds,
+} from "./contour-overlay";
 import { RELIEF_STRENGTH, reliefPaint } from "./relief";
 
 // Shade over a colour fill is eased so the colour stays readable.
@@ -51,7 +56,7 @@ export function createTerrainView(context: LayerContext): LayerView {
     tiles: [tiles.url],
     encoding: tiles.encoding,
     tileSize: tiles.tile_size,
-    maxzoom: tiles.maxzoom,
+    maxzoom: cappedDemMaxZoom(tiles.maxzoom),
     attribution: tiles.source.attribution,
     ...terrainTileBounds(layer.grid.bbox),
   });
@@ -153,6 +158,10 @@ export function createTerrainView(context: LayerContext): LayerView {
   };
 }
 
+// Missing ocean tiles stay missing, so a bounded memo warns once per tile instead of every zoom.
+export const MAX_MISSING_TILES = 2000;
+const missingTiles = new Map<string, true>();
+
 /** Warn after one terrain source repeatedly fails before it has loaded a tile. */
 export function watchTerrainTiles(
   map: MapLibreMap,
@@ -174,14 +183,16 @@ export function watchTerrainTiles(
     const { sourceId, tile, error = {} } = event as TerrainTileEvent;
     const source = sourceState(sourceId);
     if (!source) return;
+    if (isBenignTileError(error)) {
+      warnOnceForMissingTile(sourceId, tile, error);
+      return;
+    }
 
     console.warn("Terrain tile failed", {
       source: sourceId,
       tile: tileLabel(tile),
       message: error.message,
     });
-    if (isBenignTileError(error)) return;
-
     source.failures += 1;
     if (withdrawWarning || !hasUnhealthySource(sources)) return;
 
@@ -215,6 +226,34 @@ function isBenignTileError(error: NonNullable<TerrainTileEvent["error"]>): boole
 
   const message = stripWorkerErrorPrefix(error.message);
   return message === "aborted" || message?.startsWith(MISSING_TILE_MESSAGE_PREFIX) === true;
+}
+
+/** Warn once per missing tile key; aborts are routine while panning and stay silent. */
+function warnOnceForMissingTile(
+  sourceId: string | undefined,
+  tile: TerrainTileEvent["tile"],
+  error: NonNullable<TerrainTileEvent["error"]>,
+): void {
+  if (!isMissingTile(error)) return;
+  const key = `${sourceId}:${tileLabel(tile)}`;
+  if (missingTiles.has(key)) return;
+  if (missingTiles.size >= MAX_MISSING_TILES) {
+    const oldest = missingTiles.keys().next().value;
+    if (oldest !== undefined) missingTiles.delete(oldest);
+  }
+  missingTiles.set(key, true);
+  console.warn("Terrain tile failed", {
+    source: sourceId,
+    tile: tileLabel(tile),
+    message: error.message,
+  });
+}
+
+function isMissingTile(error: NonNullable<TerrainTileEvent["error"]>): boolean {
+  if (error.status === 404) return true;
+
+  const message = stripWorkerErrorPrefix(error.message);
+  return message?.startsWith(MISSING_TILE_MESSAGE_PREFIX) === true;
 }
 
 function stripWorkerErrorPrefix(message: string | undefined): string | undefined {

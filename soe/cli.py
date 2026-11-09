@@ -1,7 +1,8 @@
 """Run the offline data jobs from the command line.
 
 The module imports country and city boundaries into SQLite, with each country's own names
-for its administrative levels. It rebuilds the Copernicus terrain
+for its administrative levels. It also backfills the stored display previews and geometry
+digests of boundaries imported before them. It rebuilds the Copernicus terrain
 tile indexes and the ESA WorldCover tile index. It also ingests ERA5-Land, ERA5 and CHIRPS
 monthly cubes, the lithology map and the rock-age map into local folders. Run
 `python -m soe.cli --help` to see the commands and their options.
@@ -16,8 +17,10 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
+from shapely.geometry import shape
 
 from . import db
+from .areas import display_preview
 from .boundary_import import import_admin_kinds, import_cgaz, import_ucdb
 from .ingest import chirps
 from .ingest.era5 import INGEST_SPECS, ingest
@@ -45,6 +48,8 @@ WORLDCOVER_GRID_URL = (
 )
 DOWNLOAD_TIMEOUT_SECS = 60
 
+BACKFILL_BATCH_SIZE = 100  # boundaries read and updated per backfill transaction
+
 
 def main(argv: list[str] | None = None) -> None:
     """Run the command named on the command line; `--help` lists them."""
@@ -58,6 +63,14 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "worldcover-index":
         print("WorldCover tiles:", build_worldcover_index(WORLDCOVER_TILE_INDEX))
+        return
+
+    if args.command == "backfill-area-previews":
+        if args.batch_size < 1:
+            parser.error("--batch-size must be at least 1")
+
+        logging.basicConfig(level=logging.INFO)
+        print(f"Area previews: {backfill_area_previews(args.db, args.batch_size)} backfilled")
         return
 
     if args.command == "ingest-cube":
@@ -94,7 +107,7 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("give at least one of --cgaz, --ucdb, --meta")
 
     logging.basicConfig(level=logging.INFO)
-    db.init(args.db)
+    db.ensure_schema(args.db)
     if args.cgaz:
         print("CGAZ rows:", import_cgaz(args.db, args.cgaz))
     if args.ucdb:
@@ -124,6 +137,17 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "worldcover-index",
         help="rebuild the ESA WorldCover tile bitmap in soe/data (downloads 0.5 MB)",
+    )
+    backfill_parser = subparsers.add_parser(
+        "backfill-area-previews",
+        help="store display previews and geometry digests for boundaries imported before them",
+    )
+    backfill_parser.add_argument("--db", default=os.environ.get("SOE_DB", "./data/soe.db"))
+    backfill_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=BACKFILL_BATCH_SIZE,
+        help="boundaries read and updated per transaction",
     )
     lithology_parser = subparsers.add_parser(
         "ingest-lithology",
@@ -189,6 +213,76 @@ def _build_parser() -> argparse.ArgumentParser:
         help="folder of the cubes (default: SOE_CUBES_DIR or ./data/cubes)",
     )
     return parser
+
+
+def backfill_area_previews(db_path: Path | str, batch_size: int = BACKFILL_BATCH_SIZE) -> int:
+    """Store digests and previews for boundaries missing them, in batches.
+
+    Returns the previews filled. Rows whose geometry cannot even be kept as is stay NULL
+    for the request fallback.
+    """
+    db.ensure_schema(db_path)
+    _backfill_missing_digests(db_path, batch_size)
+    return _backfill_missing_previews(db_path, batch_size)
+
+
+def _backfill_missing_digests(db_path: Path | str, batch_size: int) -> int:
+    """Store the geometry revision of rows missing it; returns the digests filled."""
+    total = db.count_boundaries_missing_digest(db_path)
+    done = 0
+    while True:
+        batch = db.fetch_boundaries_missing_digest(db_path, batch_size)
+        if not batch:
+            break
+        digests = [
+            (record["id"], db.geometry_digest(record["geom_geojson"]))
+            for record in batch
+            if isinstance(record["geom_geojson"], str)
+        ]
+        done += db.set_boundary_digests(db_path, digests)
+        print(f"area digests: {done}/{total} stored")
+    return done
+
+
+def _backfill_missing_previews(db_path: Path | str, batch_size: int) -> int:
+    """Store previews for boundaries missing them; returns the previews filled."""
+    total = db.count_boundaries_missing_preview(db_path)
+    done, skipped = 0, 0
+    while True:
+        batch = db.fetch_boundaries_missing_preview(db_path, batch_size, skipped)
+        if not batch:
+            break
+        previews = [
+            (record["id"], preview, record["geom_digest"], _digest_for_backfill(record))
+            for record in batch
+            if (preview := _preview_for_backfill(record)) is not None
+        ]
+        done += db.set_boundary_previews(db_path, previews)
+        skipped += len(batch) - len(previews)
+        print(f"area previews: {done}/{total} stored")
+    return done
+
+
+def _digest_for_backfill(record: db.Record) -> str:
+    """The geometry revision of a fetched row, computed from its stored text."""
+    if isinstance(record["geom_geojson"], str):
+        return db.geometry_digest(record["geom_geojson"])
+    return record["geom_digest"] or ""
+
+
+def _preview_for_backfill(record: db.Record) -> str | None:
+    """The preview GeoJSON of a boundary row missing it, or None when its geometry is broken."""
+    try:
+        geometry = shape(json.loads(record["geom_geojson"]))
+    except Exception:
+        try:
+            json.loads(record["geom_geojson"])
+        except ValueError:
+            print(f"skipping {record['id']}: stored geometry is not JSON")
+            return None
+        return record["geom_geojson"]
+    bbox = (record["bbox_w"], record["bbox_s"], record["bbox_e"], record["bbox_n"])
+    return json.dumps(display_preview(geometry, bbox))
 
 
 def build_tile_index(product: str, path: Path | str) -> int:

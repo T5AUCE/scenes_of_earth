@@ -16,6 +16,7 @@ const mockModules = {
       contourProtocolUrl: () => "contour://{z}/{x}/{y}",
     });
     export const terrainTileBounds = () => ({});
+    export const cappedDemMaxZoom = (maxzoom) => maxzoom;
     export class ContourOverlay {
       part = { id: "contours", label: "Contours", layerIds: [] };
       units = "m";
@@ -41,7 +42,7 @@ const hooks = registerHooks({
     return next(specifier, context);
   },
 });
-const { createTerrainView, watchTerrainTiles } = await import("./terrain.ts");
+const { createTerrainView, MAX_MISSING_TILES, watchTerrainTiles } = await import("./terrain.ts");
 hooks.deregister();
 
 test("a cancellation or missing tile is ignored", (context) => {
@@ -76,6 +77,53 @@ test("worker-forwarded cancellations and missing tiles are ignored", (context) =
 
     assert.deepEqual(reporter.notes, []);
   }
+});
+
+test("a repeated missing tile warns once per session", (context) => {
+  const warnings: unknown[][] = [];
+  context.mock.method(console, "warn", (...args: unknown[]) => void warnings.push(args));
+  const { map, emit } = fakeMap();
+  watchTerrainTiles(map as unknown as MapLibreMap, TERRAIN_SOURCES, () => () => {});
+  const missing = {
+    name: "Error",
+    message: "Bad response: 404 for https://example.test/7/3/5.webp",
+  };
+
+  emit("error", { sourceId: TERRAIN_SOURCES[0], tile: tile(7, 3, 5), error: missing });
+  emit("error", { sourceId: TERRAIN_SOURCES[0], tile: tile(7, 3, 5), error: missing });
+  emit("error", { sourceId: TERRAIN_SOURCES[0], tile: tile(7, 3, 6), error: missing });
+
+  assert.equal(warnings.length, 2);
+});
+
+test("the missing tile memo drops its oldest tile past its cap", (context) => {
+  const warnings: unknown[][] = [];
+  context.mock.method(console, "warn", (...args: unknown[]) => void warnings.push(args));
+  const { map, emit } = fakeMap();
+  watchTerrainTiles(map as unknown as MapLibreMap, TERRAIN_SOURCES, () => () => {});
+  const missing = {
+    name: "Error",
+    message: "Bad response: 404 for https://example.test/tile.webp",
+  };
+
+  for (let tileX = 0; tileX <= MAX_MISSING_TILES; tileX++) {
+    emit("error", {
+      sourceId: TERRAIN_SOURCES[0],
+      tile: tile(9, tileX, 1),
+      error: missing,
+    });
+  }
+  assert.equal(warnings.length, MAX_MISSING_TILES + 1);
+
+  // The first tile fell out of the full memo, so it warns again while a fresh tile does not.
+  emit("error", { sourceId: TERRAIN_SOURCES[0], tile: tile(9, 0, 1), error: missing });
+  assert.equal(warnings.length, MAX_MISSING_TILES + 2);
+  emit("error", {
+    sourceId: TERRAIN_SOURCES[0],
+    tile: tile(9, MAX_MISSING_TILES, 1),
+    error: missing,
+  });
+  assert.equal(warnings.length, MAX_MISSING_TILES + 2);
 });
 
 test("a failed tile among successful loads gives no warning", (context) => {

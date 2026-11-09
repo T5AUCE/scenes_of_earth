@@ -67,3 +67,16 @@ function exaggerations(strength: number) {
   const expression = reliefPaint(strength)["hillshade-exaggeration"] as unknown[];
   return expression.slice(3).filter((_, index) => index % 2 === 1) as number[];
 }
+
+test("exaggeration ramps linearly between the low and high detail zooms", () => {
+  const expression = reliefPaint(RELIEF_STRENGTH.initial)["hillshade-exaggeration"] as unknown[];
+
+  assert.equal(expression[0], "interpolate");
+  assert.deepEqual(expression[1], ["linear"]);
+  assert.deepEqual(expression[2], ["zoom"]);
+  assert.deepEqual(
+    expression.slice(3).filter((_, index) => index % 2 === 0),
+    [4, 12],
+  );
+  assert.equal(expression.length, 7);
+});

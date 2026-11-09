@@ -14,11 +14,24 @@
  * `uSoftnessCells` is the width of the colour blend between competing classes in grid cells.
  * `uSmoothRadiusCells` scales a cubic B-spline kernel with support twice the radius
  * in grid cells to round staircases, while 0 keeps the legacy kernel. Radii above 2 sample
- * every second cell over a 16 x 16 window so the cost stays 64 taps. `uOutline`
+ * every second cell over a 16 x 16 window so the cost stays 64 taps. `uBake` enables the
+ * baked band textures, which only the bake variant of the program declares. `uOutline`
  * enables the border while `uOutlineStrength` controls its ink weight, `uOpacity`
  * scales the class fills while the hatch draws at full strength, and `uPixelRatio` keeps
- * the hatch at CSS spacing.
+ * the hatch at CSS spacing. `uHomogeneous` also marks thin cells with 2, which are cells
+ * outside every uniform 3 x 3 block, so wide smoothing lifts the class of a thin cell near
+ * its centre when smoothing would otherwise erase it.
  */
+
+/** The flag that marks a thin cell in the homogeneous texture, beside 1 for a uniform window. */
+export const THIN_CELL_FLAG = 2;
+// A lifted class aims this far above its strongest rival at its own centre.
+const THIN_LEAD_WEIGHT = 0.5;
+// The lift is full once a class trails its strongest rival by this weight.
+const THIN_DEFICIT_FULL_WEIGHT = 0.04;
+// A weight that the lift barely exceeds rises quadratically so the field stays slope-continuous.
+const THIN_SOFT_WEIGHT = 0.15;
+
 export const CLASS_FIELD_VERTEX = `#version 300 es
 in vec2 aCorner;
 uniform mat4 uMatrix;
@@ -31,7 +44,16 @@ void main() {
 }
 `;
 
-export const CLASS_FIELD_FRAGMENT = `#version 300 es
+/**
+ * The fragment shader source. The `bake` variant declares the baked band textures and
+ * their uniforms while the plain variant is exactly the full wide gather.
+ */
+export function classFieldFragment(bake: boolean): string {
+  const define = bake ? "#define BAKE\n" : "";
+  return CLASS_FIELD_FRAGMENT_BODY.replace("#version 300 es\n", `#version 300 es\n${define}`);
+}
+
+const CLASS_FIELD_FRAGMENT_BODY = `#version 300 es
 precision highp float;
 precision highp int;
 precision highp usampler2D;
@@ -40,6 +62,12 @@ precision highp sampler2D;
 in vec2 vPosition;
 uniform usampler2D uIds;
 uniform usampler2D uHomogeneous;
+#ifdef BAKE
+uniform usampler2D uBandIds;
+uniform usampler2D uBandLow;
+uniform usampler2D uBandHigh;
+uniform bool uBake;
+#endif
 uniform sampler2D uRows;
 uniform sampler2D uPalette;
 uniform ivec2 uIdsSize;
@@ -68,6 +96,10 @@ const int WIDE_LARGE_FIRST_OFFSET = -6;
 const float WIDE_SUPPORT_RADII = 2.0;
 const float FULL_SUPPORT_WEIGHT = 0.1;
 const uint HATCH_ID = 255u;
+const uint THIN_FLAG = ${THIN_CELL_FLAG}u;
+const float THIN_LEAD_WEIGHT = ${THIN_LEAD_WEIGHT};
+const float THIN_DEFICIT_FULL_WEIGHT = ${THIN_DEFICIT_FULL_WEIGHT};
+const float THIN_SOFT_WEIGHT = ${THIN_SOFT_WEIGHT};
 const float HATCH_SPACING_PX = 8.0;
 // Hatch lines stay faint so large unmapped areas don't strain the eye.
 const float HATCH_STRENGTH = 0.45;
@@ -268,6 +300,240 @@ vec2 wideAxis(float offset, float radiusCells) {
   return vec2(weight, slope * sign(offset) / radiusCells);
 }
 
+#ifdef BAKE
+const uint BAND_COMPLEX_WORD = 0xFFFFFFFFu;
+
+bool bandIsComplex(uvec4 ids, uint low, uint high) {
+  return ids.r == 0u && ids.g == 0u && low == BAND_COMPLEX_WORD && high == BAND_COMPLEX_WORD;
+}
+
+bool bandBit(uint low, uint high, int tap) {
+  return tap < 32
+    ? ((low >> uint(tap)) & 1u) == 1u
+    : ((high >> uint(tap - 32)) & 1u) == 1u;
+}
+
+// Baked masks avoid repeated id fetches without changing tap arithmetic.
+bool gatherBandClasses(
+  vec2 position,
+  ivec2 base,
+  float radiusCells,
+  uint bandId0,
+  uint bandId1,
+  uint bandLow,
+  uint bandHigh,
+  out uint classIds[MAX_CLASS_COUNT],
+  out float classWeights[MAX_CLASS_COUNT],
+  out vec2 classGradients[MAX_CLASS_COUNT],
+  out int classCount
+) {
+  ivec2 size = uIdsSize;
+  if (base.x < 0 || base.y < 0 || base.x >= size.x || base.y >= size.y) return false;
+  if (bandId0 == bandId1) return false;
+
+  int firstX = WIDE_FIRST_OFFSET;
+  int firstY = WIDE_FIRST_OFFSET;
+  int stride = 1;
+  if (radiusCells > 2.0) {
+    firstX = WIDE_LARGE_FIRST_OFFSET - (base.x & 1);
+    firstY = WIDE_LARGE_FIRST_OFFSET - (base.y & 1);
+    stride = 2;
+  }
+  vec2 columnAxes[WIDE_SPAN];
+  vec2 rowAxes[WIDE_SPAN];
+  for (int tap = 0; tap < WIDE_SPAN; tap++) {
+    vec2 cell = vec2(base + ivec2(firstX + tap * stride, firstY + tap * stride));
+    columnAxes[tap] = wideAxis(position.x - cell.x, radiusCells);
+    rowAxes[tap] = wideAxis(position.y - cell.y, radiusCells);
+  }
+
+  float weight0 = 0.0;
+  float weight1 = 0.0;
+  vec2 gradient0 = vec2(0.0);
+  vec2 gradient1 = vec2(0.0);
+  float totalWeight = 0.0;
+  vec2 totalGradient = vec2(0.0);
+  for (int row = 0; row < WIDE_SPAN; row++) {
+    for (int column = 0; column < WIDE_SPAN; column++) {
+      float weight = columnAxes[column].x * rowAxes[row].x;
+      if (weight <= 0.0) continue;
+
+      int tap = row * WIDE_SPAN + column;
+      uint id = bandBit(bandLow, bandHigh, tap) ? bandId1 : bandId0;
+      vec2 gradient = vec2(
+        columnAxes[column].y * rowAxes[row].x,
+        columnAxes[column].x * rowAxes[row].y
+      );
+      totalWeight += weight;
+      totalGradient += gradient;
+      if (id == bandId0) {
+        weight0 += weight;
+        gradient0 += gradient;
+      } else {
+        weight1 += weight;
+        gradient1 += gradient;
+      }
+    }
+  }
+  if (totalWeight <= 0.0) return false;
+
+  float totalSquared = totalWeight * totalWeight;
+  classCount = 0;
+  if (weight0 > 0.0) {
+    classIds[classCount] = bandId0;
+    classWeights[classCount] = weight0 / totalWeight;
+    classGradients[classCount] = (
+      gradient0 * totalWeight - weight0 * totalGradient
+    ) / totalSquared;
+    classCount++;
+  }
+  if (weight1 > 0.0) {
+    classIds[classCount] = bandId1;
+    classWeights[classCount] = weight1 / totalWeight;
+    classGradients[classCount] = (
+      gradient1 * totalWeight - weight1 * totalGradient
+    ) / totalSquared;
+    classCount++;
+  }
+  return classCount > 0;
+}
+
+bool gatherBakedClasses(
+  vec2 position,
+  ivec2 base,
+  out uint classIds[MAX_CLASS_COUNT],
+  out float classWeights[MAX_CLASS_COUNT],
+  out vec2 classGradients[MAX_CLASS_COUNT],
+  out int classCount
+) {
+  if (!uBake) return false;
+
+  ivec2 bandCell = clamp(base, ivec2(0), uIdsSize - 1);
+  uvec4 bandIds = texelFetch(uBandIds, bandCell, 0);
+  uint bandLow = texelFetch(uBandLow, bandCell, 0).r;
+  uint bandHigh = texelFetch(uBandHigh, bandCell, 0).r;
+  if (bandIsComplex(bandIds, bandLow, bandHigh)) return false;
+
+  return gatherBandClasses(
+    position,
+    base,
+    uSmoothRadiusCells,
+    bandIds.r,
+    bandIds.g,
+    bandLow,
+    bandHigh,
+    classIds,
+    classWeights,
+    classGradients,
+    classCount
+  );
+}
+#endif
+
+// A thin cell's class is lifted near its centre where smoothing would erase it.
+void repairThinCells(
+  ivec2 base,
+  vec2 fraction,
+  inout uint classIds[MAX_CLASS_COUNT],
+  inout float classWeights[MAX_CLASS_COUNT],
+  inout vec2 classGradients[MAX_CLASS_COUNT],
+  inout int classCount
+) {
+  vec2 blend = fraction * fraction * (3.0 - 2.0 * fraction);
+  vec2 blendSlope = 6.0 * fraction * (1.0 - fraction);
+  uint cornerIds[4];
+  float cornerShares[4];
+  vec2 cornerSlopes[4];
+  bool cornerThin[4];
+  bool anyThin = false;
+  for (int corner = 0; corner < 4; corner++) {
+    vec2 side = vec2(float(corner & 1), float(corner >> 1));
+    ivec2 cell = clamp(base + ivec2(side), ivec2(0), uIdsSize - 1);
+    cornerThin[corner] = texelFetch(uHomogeneous, cell, 0).r == THIN_FLAG;
+    anyThin = anyThin || cornerThin[corner];
+    cornerIds[corner] = cellId(cell);
+    vec2 share = mix(vec2(1.0) - blend, blend, side);
+    vec2 slope = mix(-blendSlope, blendSlope, side);
+    cornerShares[corner] = share.x * share.y;
+    cornerSlopes[corner] = vec2(slope.x * share.y, share.x * slope.y);
+  }
+  if (!anyThin) return;
+
+  bool isLifted[4];
+  int liftedIndex[4];
+  float liftedWeight[4];
+  vec2 liftedGradient[4];
+  for (int corner = 0; corner < 4; corner++) {
+    isLifted[corner] = false;
+    if (!cornerThin[corner]) continue;
+
+    float presence = 0.0;
+    vec2 presenceGradient = vec2(0.0);
+    bool repeated = false;
+    for (int other = 0; other < 4; other++) {
+      if (!cornerThin[other] || cornerIds[other] != cornerIds[corner]) continue;
+      if (other < corner) repeated = true;
+      presence += cornerShares[other];
+      presenceGradient += cornerSlopes[other];
+    }
+    if (repeated) continue;
+
+    int index = -1;
+    float rivalWeight = 0.0;
+    vec2 rivalGradient = vec2(0.0);
+    for (int known = 0; known < classCount; known++) {
+      if (classIds[known] == cornerIds[corner]) {
+        index = known;
+      } else if (classIds[known] != 0u && classIds[known] != HATCH_ID) {
+        if (classWeights[known] > rivalWeight) {
+          rivalWeight = classWeights[known];
+          rivalGradient = classGradients[known];
+        }
+      }
+    }
+    float weight = index < 0 ? 0.0 : classWeights[index];
+    vec2 gradient = index < 0 ? vec2(0.0) : classGradients[index];
+    float gateFraction = clamp(
+      (rivalWeight - weight) / THIN_DEFICIT_FULL_WEIGHT,
+      0.0,
+      1.0
+    );
+    float gate = gateFraction * gateFraction * (3.0 - 2.0 * gateFraction);
+    float gateSlope = 6.0 * gateFraction * (1.0 - gateFraction) / THIN_DEFICIT_FULL_WEIGHT;
+    float aim = rivalWeight + THIN_LEAD_WEIGHT;
+    float lift = presence * gate * aim - weight;
+    if (lift <= 0.0) continue;
+
+    float softened = lift < THIN_SOFT_WEIGHT
+      ? lift * lift / (2.0 * THIN_SOFT_WEIGHT)
+      : lift - THIN_SOFT_WEIGHT / 2.0;
+    float softenedSlope = min(lift / THIN_SOFT_WEIGHT, 1.0);
+    vec2 targetGradient = aim * (
+      gate * presenceGradient + presence * gateSlope * (rivalGradient - gradient)
+    ) + presence * gate * rivalGradient;
+    isLifted[corner] = true;
+    liftedIndex[corner] = index;
+    liftedWeight[corner] = weight + softened;
+    liftedGradient[corner] = gradient + softenedSlope * (targetGradient - gradient);
+  }
+
+  // Lifts read the unlifted weights above so the corner order cannot change the result.
+  for (int corner = 0; corner < 4; corner++) {
+    if (!isLifted[corner]) continue;
+
+    int index = liftedIndex[corner];
+    if (index < 0) {
+      if (classCount >= MAX_CLASS_COUNT) continue;
+
+      index = classCount;
+      classIds[index] = cornerIds[corner];
+      classCount++;
+    }
+    classWeights[index] = liftedWeight[corner];
+    classGradients[index] = liftedGradient[corner];
+  }
+}
+
 float gridRow() {
   float position = vPosition.y * float(uRowCount - 1);
   int index = min(int(position), uRowCount - 2);
@@ -317,16 +583,29 @@ void main() {
     }
 
     bool wideOverflowed = false;
-    gatherWideClasses(
+#ifdef BAKE
+    bool bandDone = gatherBakedClasses(
       position,
       base,
-      uSmoothRadiusCells,
       classIds,
       classWeights,
       classGradients,
-      classCount,
-      wideOverflowed
+      classCount
     );
+    if (!bandDone)
+#endif
+    {
+      gatherWideClasses(
+        position,
+        base,
+        uSmoothRadiusCells,
+        classIds,
+        classWeights,
+        classGradients,
+        classCount,
+        wideOverflowed
+      );
+    }
     // An empty or overflowing wide gather falls back to the legacy kernel as a safe default.
     if (wideOverflowed || classCount == 0) {
       gatherClasses(
@@ -340,6 +619,8 @@ void main() {
         classGradients,
         classCount
       );
+    } else {
+      repairThinCells(base, fraction, classIds, classWeights, classGradients, classCount);
     }
   } else {
     gatherClasses(
@@ -447,6 +728,9 @@ const MAX_CLASS_COUNT = 24;
 export const CLASS_HATCH_ID = 255;
 /** The faint outline drawn while a categorical layer holds colour. */
 export const FILL_OUTLINE_STRENGTH = 0.25;
+/** Extra GPU bytes per grid cell when the baked band rides beside the ids and flags. */
+export const BAND_BYTES_PER_CELL = 10;
+const BAND_COMPLEX_WORD = 0xffffffff;
 
 /** The distances and coverage that the fragment shader derives from one class gap. */
 export interface EdgeCoverage {
@@ -480,6 +764,18 @@ export function edgeCoverage(
   };
 }
 
+/** One baked band texel for a base cell: two wide-window ids with a 64-bit tap mask. */
+export interface BandTexel {
+  /** First id in tap order; both ids are 0 with an all-ones mask when the window is complex. */
+  id0: number;
+  /** Second id in tap order; equals id0 when the window holds one id. */
+  id1: number;
+  /** Low 32 mask bits where a set bit takes id1; all ones marks a complex window. */
+  low: number;
+  /** High 32 mask bits; all ones marks a complex window. */
+  high: number;
+}
+
 /** One fragment's 4 x 4 class kernel and the screen mapping that its gradients use. */
 export interface ClassFieldFragment {
   /** Class ids in kernel order, rows first, with the fragment's cells at [1][1] to [2][2]. */
@@ -496,6 +792,10 @@ export interface ClassFieldFragment {
   sampleId?: (cellX: number, cellY: number) => number;
   /** Homogeneous-neighbourhood flag for the fragment base; only used when radius is positive. */
   homogeneous?: boolean;
+  /** Baked wide-window ids and mask for the fragment base; only used when radius is positive. */
+  band?: BandTexel;
+  /** Thin-cell flags of the 2 x 2 cells around the fragment, rows first; wide radii only. */
+  thin?: readonly (readonly boolean[])[];
 }
 
 /** The edge choices that change the fragment shader's result. */
@@ -571,29 +871,160 @@ export function sampleClassField(
     return { discarded: false, nearest, weights: [{ id: nearest, weight: 1 }], outline: 0 };
   }
 
-  const columnWeights = axisWeights(fractionX, options.rounding);
-  const rowWeights = axisWeights(fractionY, options.rounding);
-  const columnSlopes = axisSlopes(fractionX, options.rounding);
-  const rowSlopes = axisSlopes(fractionY, options.rounding);
-  const classes = (
-    (radiusCells > 0 ? wideClasses(fragment, radiusCells) : null)
-    ?? gatherClasses(fragment.ids, columnWeights, rowWeights, columnSlopes, rowSlopes)
   // Remaining hatch stays out of the mix so its edge stays crisp while classes smooth around it.
-  ).filter(({ id }) => id !== 0 && id !== CLASS_HATCH_ID);
+  const classes = gatherFieldClasses(fragment, options)
+    .filter(({ id }) => id !== 0 && id !== CLASS_HATCH_ID);
   const influences = classInfluences(classes, fragment, options.softnessCells);
   const total = Math.max(
     influences.reduce((sum, influence) => sum + influence, 0),
     MIN_MIRROR_GRADIENT,
   );
+  const shares = influences.map((influence) => influence / total);
 
   return {
     discarded: false,
     nearest,
     weights: classes
-      .map(({ id }, index) => ({ id, weight: influences[index] / total }))
+      .map(({ id }, index) => ({ id, weight: shares[index] }))
       .filter(({ weight }) => weight > 0),
-    outline: outlineInk(classes, influences.map((influence) => influence / total), fragment),
+    outline: outlineInk(classes, shares, fragment),
   };
+}
+
+/** One class of the smoothed field with its weight and its gradient in grid cells. */
+export interface FieldClass {
+  id: number;
+  weight: number;
+  gradient: [number, number];
+}
+
+/**
+ * The class weights that the shader gathers for a fragment before any colour mixing: the wide
+ * or legacy kernel, then the thin-cell repair when the fragment carries thin flags.
+ */
+export function gatherFieldClasses(
+  fragment: ClassFieldFragment,
+  options: EdgeOptions,
+): FieldClass[] {
+  const radiusCells = options.smoothRadiusCells ?? 0;
+  const wide = radiusCells > 0
+    ? bakedWideClasses(fragment, radiusCells) ?? wideClasses(fragment, radiusCells)
+    : null;
+  if (wide) return repairThinCells(wide, fragment);
+
+  const [fractionX, fractionY] = fragment.fraction;
+  return gatherClasses(
+    fragment.ids,
+    axisWeights(fractionX, options.rounding),
+    axisWeights(fractionY, options.rounding),
+    axisSlopes(fractionX, options.rounding),
+    axisSlopes(fractionY, options.rounding),
+  );
+}
+
+/**
+ * Lift the weight of every thin cell's class around the fragment, as the shader does, so a class
+ * that smoothing would erase wins near its own cell. The lift is the thin-cell presence, a
+ * smooth blend of the 2 x 2 cells, scaled down as the smoothed weight rises, so a class that
+ * already wins is returned untouched.
+ */
+function repairThinCells(classes: FieldClass[], fragment: ClassFieldFragment): FieldClass[] {
+  const thin = fragment.thin;
+  if (!thin) return classes;
+
+  const [blendX, blendY] = fragment.fraction.map(smoothBlend);
+  const [slopeX, slopeY] = fragment.fraction.map(smoothBlendSlope);
+  const corners = [0, 1, 2, 3].map((corner) => {
+    const [column, row] = [corner & 1, corner >> 1];
+    const shareX = column === 1 ? blendX : 1 - blendX;
+    const shareY = row === 1 ? blendY : 1 - blendY;
+    const signX = column === 1 ? slopeX : -slopeX;
+    const signY = row === 1 ? slopeY : -slopeY;
+    return {
+      id: fragment.ids[1 + row][1 + column],
+      isThin: thin[row][column],
+      share: shareX * shareY,
+      slope: [signX * shareY, shareX * signY] as [number, number],
+    };
+  });
+  const seen = new Set<number>();
+  const lifts: FieldClass[] = [];
+  for (const corner of corners) {
+    if (!corner.isThin || seen.has(corner.id)) continue;
+
+    seen.add(corner.id);
+    const same = corners.filter((other) => other.isThin && other.id === corner.id);
+    const presence = same.reduce((sum, other) => sum + other.share, 0);
+    const presenceGradient: [number, number] = [
+      same.reduce((sum, other) => sum + other.slope[0], 0),
+      same.reduce((sum, other) => sum + other.slope[1], 0),
+    ];
+    const lift = liftOf(classes, corner.id, presence, presenceGradient);
+    if (lift) lifts.push(lift);
+  }
+  // Every lift reads the unlifted weights so the corner order cannot change the result.
+  for (const lift of lifts) {
+    const current = classes.find((entry) => entry.id === lift.id);
+    if (current) {
+      current.weight = lift.weight;
+      current.gradient = lift.gradient;
+    } else if (classes.length < MAX_CLASS_COUNT) {
+      classes.push(lift);
+    }
+  }
+  return classes;
+}
+
+/** The lifted weight of one thin class, or null when the class already leads or wins enough. */
+function liftOf(
+  classes: readonly FieldClass[],
+  id: number,
+  presence: number,
+  presenceGradient: readonly [number, number],
+): FieldClass | null {
+  const current = classes.find((entry) => entry.id === id);
+  const weight = current?.weight ?? 0;
+  const gradient = current?.gradient ?? [0, 0];
+  let rival: FieldClass | undefined;
+  for (const entry of classes) {
+    if (entry.id === id || entry.id === 0 || entry.id === CLASS_HATCH_ID) continue;
+    if (entry.weight > (rival?.weight ?? 0)) rival = entry;
+  }
+  const rivalWeight = rival?.weight ?? 0;
+  const gateFraction = Math.min(1, Math.max(0, (rivalWeight - weight) / THIN_DEFICIT_FULL_WEIGHT));
+  const gate = smoothstep(gateFraction);
+  const gateSlope = (6 * gateFraction * (1 - gateFraction)) / THIN_DEFICIT_FULL_WEIGHT;
+  const aim = rivalWeight + THIN_LEAD_WEIGHT;
+  const lift = presence * gate * aim - weight;
+  if (lift <= 0) return null;
+
+  const softened = lift < THIN_SOFT_WEIGHT
+    ? (lift * lift) / (2 * THIN_SOFT_WEIGHT)
+    : lift - THIN_SOFT_WEIGHT / 2;
+  const softenedSlope = Math.min(lift / THIN_SOFT_WEIGHT, 1);
+  const rivalGradient = rival?.gradient ?? [0, 0];
+  const targetGradient = [0, 1].map((axis) => (
+    aim * (
+      gate * presenceGradient[axis]
+      + presence * gateSlope * (rivalGradient[axis] - gradient[axis])
+    ) + presence * gate * rivalGradient[axis]
+  ));
+  return {
+    id,
+    weight: weight + softened,
+    gradient: [
+      gradient[0] + softenedSlope * (targetGradient[0] - gradient[0]),
+      gradient[1] + softenedSlope * (targetGradient[1] - gradient[1]),
+    ],
+  };
+}
+
+function smoothBlend(fraction: number): number {
+  return fraction * fraction * (3 - 2 * fraction);
+}
+
+function smoothBlendSlope(fraction: number): number {
+  return 6 * fraction * (1 - fraction);
 }
 
 function axisWeights(fraction: number, rounding: number): number[] {
@@ -621,20 +1052,14 @@ function axisSlopes(fraction: number, rounding: number): number[] {
   return bilinear.map((value, index) => value + (bSpline[index] - value) * rounding);
 }
 
-interface ClassSum {
-  id: number;
-  weight: number;
-  gradient: [number, number];
-}
-
 function gatherClasses(
   ids: readonly (readonly number[])[],
   columnWeights: number[],
   rowWeights: number[],
   columnSlopes: number[],
   rowSlopes: number[],
-): ClassSum[] {
-  const classes: ClassSum[] = [];
+): FieldClass[] {
+  const classes: FieldClass[] = [];
   for (let row = 0; row < KERNEL_SIZE; row++) {
     for (let column = 0; column < KERNEL_SIZE; column++) {
       const id = ids[row][column];
@@ -658,7 +1083,7 @@ function gatherClasses(
 function wideClasses(
   fragment: ClassFieldFragment,
   radiusCells: number,
-): ClassSum[] | null {
+): FieldClass[] | null {
   const position = fragment.position;
   const sample = fragment.sampleId;
   if (!position || !sample) return null;
@@ -666,10 +1091,7 @@ function wideClasses(
   const base = [Math.floor(position[0]), Math.floor(position[1])];
   // Radii above 2 sample every second cell over a 16 x 16 window so the cost stays 64 taps.
   // The taps align to globally even cells so the sampled set slides without popping.
-  const large = radiusCells > 2;
-  const stride = large ? 2 : 1;
-  const firstX = large ? WIDE_LARGE_FIRST_OFFSET - parity(base[0]) : WIDE_FIRST_OFFSET;
-  const firstY = large ? WIDE_LARGE_FIRST_OFFSET - parity(base[1]) : WIDE_FIRST_OFFSET;
+  const { firstX, firstY, stride } = wideFirst(base[0], base[1], radiusCells);
   const columns = Array.from(
     { length: WIDE_SPAN },
     (_, tap) => wideAxis(position[0] - (base[0] + firstX + tap * stride), radiusCells),
@@ -678,7 +1100,7 @@ function wideClasses(
     { length: WIDE_SPAN },
     (_, tap) => wideAxis(position[1] - (base[1] + firstY + tap * stride), radiusCells),
   );
-  const classes: ClassSum[] = [];
+  const classes: FieldClass[] = [];
   let totalWeight = 0;
   const totalGradient: [number, number] = [0, 0];
   let overflowed = false;
@@ -736,7 +1158,7 @@ function wideAxis(offset: number, radiusCells: number): [number, number] {
 
 // A class fades out with its kernel support so classes entering the stencil change nothing.
 function classInfluences(
-  classes: ClassSum[],
+  classes: FieldClass[],
   fragment: ClassFieldFragment,
   softnessCells: number,
 ): number[] {
@@ -757,7 +1179,7 @@ function classSupport(weight: number): number {
   return smoothstep(weight / FULL_SUPPORT_WEIGHT);
 }
 
-function pairGradients(current: ClassSum, other: ClassSum, fragment: ClassFieldFragment) {
+function pairGradients(current: FieldClass, other: FieldClass, fragment: ClassFieldFragment) {
   const cellGradient: [number, number] = [
     current.gradient[0] - other.gradient[0],
     current.gradient[1] - other.gradient[1],
@@ -771,7 +1193,7 @@ function pairGradients(current: ClassSum, other: ClassSum, fragment: ClassFieldF
 
 // Each pair is weighted by how far both its classes lead the rest so the ink is continuous.
 function outlineInk(
-  classes: ClassSum[],
+  classes: FieldClass[],
   shares: number[],
   fragment: ClassFieldFragment,
 ): number {
@@ -797,7 +1219,7 @@ function outlineInk(
   return Math.min(ink, 1);
 }
 
-function distancePx(current: ClassSum, other: ClassSum, fragment: ClassFieldFragment): number {
+function distancePx(current: FieldClass, other: FieldClass, fragment: ClassFieldFragment): number {
   const { gap, screenGradient } = pairGradients(current, other, fragment);
   return gap / Math.max(Math.hypot(screenGradient[0], screenGradient[1]), MIN_MIRROR_GRADIENT);
 }
@@ -846,6 +1268,76 @@ export function homogeneousFlags(
     }
   }
   return flags;
+}
+
+/**
+ * Mark thin cells in the flags with `THIN_CELL_FLAG`. A thin cell lies in no uniform 3 x 3
+ * block of its own id, so wide smoothing can erase its class. Cells that the uniform flag
+ * already skips stay unchanged, and outside and hatch cells never count as thin.
+ */
+export function markThinCells(
+  cells: Uint8Array | readonly number[],
+  nx: number,
+  ny: number,
+  flags: Uint8Array,
+): void {
+  const centres = uniformBlockCentres(cells, nx, ny, flags);
+  for (let row = 0; row < ny; row++) {
+    for (let column = 0; column < nx; column++) {
+      const index = row * nx + column;
+      const id = cells[index];
+      if (flags[index] === 1 || id === 0 || id === CLASS_HATCH_ID) continue;
+      if (!hasBlockCentreNearby(centres, nx, ny, column, row)) flags[index] = THIN_CELL_FLAG;
+    }
+  }
+}
+
+/** Mark every cell whose 3 x 3 neighbourhood lies inside the grid and holds one id. */
+function uniformBlockCentres(
+  cells: Uint8Array | readonly number[],
+  nx: number,
+  ny: number,
+  flags: Uint8Array,
+): Uint8Array {
+  const centres = new Uint8Array(nx * ny);
+  for (let row = 1; row < ny - 1; row++) {
+    for (let column = 1; column < nx - 1; column++) {
+      const index = row * nx + column;
+      if (flags[index] === 1 || isUniformBlock(cells, nx, index)) centres[index] = 1;
+    }
+  }
+  return centres;
+}
+
+function isUniformBlock(cells: Uint8Array | readonly number[], nx: number, index: number): boolean {
+  const id = cells[index];
+  return cells[index - 1] === id
+    && cells[index + 1] === id
+    && cells[index - nx - 1] === id
+    && cells[index - nx] === id
+    && cells[index - nx + 1] === id
+    && cells[index + nx - 1] === id
+    && cells[index + nx] === id
+    && cells[index + nx + 1] === id;
+}
+
+function hasBlockCentreNearby(
+  centres: Uint8Array,
+  nx: number,
+  ny: number,
+  column: number,
+  row: number,
+): boolean {
+  const firstRow = Math.max(0, row - 1);
+  const lastRow = Math.min(ny - 1, row + 1);
+  const firstColumn = Math.max(0, column - 1);
+  const lastColumn = Math.min(nx - 1, column + 1);
+  for (let nearRow = firstRow; nearRow <= lastRow; nearRow++) {
+    for (let nearColumn = firstColumn; nearColumn <= lastColumn; nearColumn++) {
+      if (centres[nearRow * nx + nearColumn] === 1) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -926,4 +1418,271 @@ function rectangleSum(
     - (top > 0 ? table[(top - 1) * nx + right] : 0)
     - (left > 0 ? table[bottom * nx + left - 1] : 0)
     + (top > 0 && left > 0 ? table[(top - 1) * nx + left - 1] : 0);
+}
+
+/**
+ * Whether a baked texel needs the full gather because its window holds more than two ids.
+ * Uniform windows never reach the band path because the homogeneous flag skips them first.
+ */
+export function isComplexBand(band: BandTexel): boolean {
+  return band.id0 === 0
+    && band.id1 === 0
+    && band.low === BAND_COMPLEX_WORD
+    && band.high === BAND_COMPLEX_WORD;
+}
+
+/**
+ * Whether a tile window needs the full gather because its origin flips the large-radius tap
+ * frame. Stride-2 taps align to globally even cells, so an odd window origin would reinterpret
+ * the baked mask while the full gather keeps drawing.
+ */
+export function isBandParityMismatched(
+  windowColumn: number,
+  windowRow: number,
+  smoothRadiusCells?: number,
+): boolean {
+  if ((smoothRadiusCells ?? 0) <= 2) return false;
+  return windowColumn % 2 !== 0 || windowRow % 2 !== 0;
+}
+
+/**
+ * Bake the wide window of every base cell into two ids with a 64-bit tap mask so the
+ * fragment shader fetches three texels instead of gathering 64. Windows with more than two
+ * ids keep the complex sentinel and fall back to the full gather, while clipped edges match
+ * the shader exactly because both clamp taps to the grid. Homogeneous bases keep their own
+ * id without reading taps because the shader skips them before any band fetch.
+ */
+export function bakeBand(
+  cells: Uint8Array | readonly number[],
+  nx: number,
+  ny: number,
+  smoothRadiusCells?: number,
+  homogeneous?: Uint8Array | readonly number[],
+): { ids: Uint8Array; low: Uint32Array; high: Uint32Array } {
+  const count = Math.max(0, nx) * Math.max(0, ny);
+  const ids = new Uint8Array(count * 2);
+  const low = new Uint32Array(count);
+  const high = new Uint32Array(count);
+  if (nx <= 0 || ny <= 0) {
+    return { ids, low, high };
+  }
+  const radius = smoothRadiusCells ?? 0;
+  for (let row = 0; row < ny; row++) {
+    for (let column = 0; column < nx; column++) {
+      if (homogeneous && homogeneous[row * nx + column] === 1) {
+        const cell = cells[row * nx + column];
+        ids[(row * nx + column) * 2] = cell;
+        ids[(row * nx + column) * 2 + 1] = cell;
+        continue;
+      }
+      bakeOneBand(cells, nx, ny, column, row, radius, ids, low, high);
+    }
+  }
+  return { ids, low, high };
+}
+
+/**
+ * Fill one row range of a band allocation so large grids can yield between chunks.
+ * Rows outside the range keep whatever the caller wrote, so homogeneous callers still skip.
+ */
+export function bakeBandInto(
+  cells: Uint8Array | readonly number[],
+  nx: number,
+  ny: number,
+  smoothRadiusCells: number | undefined,
+  homogeneous: Uint8Array | readonly number[] | null,
+  ids: Uint8Array,
+  low: Uint32Array,
+  high: Uint32Array,
+  startRow: number,
+  endRow: number,
+): void {
+  const radius = smoothRadiusCells ?? 0;
+  const first = Math.max(0, startRow);
+  const last = Math.min(ny, endRow);
+  for (let row = first; row < last; row++) {
+    for (let column = 0; column < nx; column++) {
+      if (homogeneous && homogeneous[row * nx + column] === 1) {
+        const cell = cells[row * nx + column];
+        ids[(row * nx + column) * 2] = cell;
+        ids[(row * nx + column) * 2 + 1] = cell;
+        continue;
+      }
+      bakeOneBand(cells, nx, ny, column, row, radius, ids, low, high);
+    }
+  }
+}
+
+function bakeOneBand(
+  cells: Uint8Array | readonly number[],
+  nx: number,
+  ny: number,
+  column: number,
+  row: number,
+  radiusCells: number,
+  ids: Uint8Array,
+  low: Uint32Array,
+  high: Uint32Array,
+): void {
+  const { firstX, firstY, stride } = wideFirst(column, row, radiusCells);
+  let id0 = -1;
+  let id1 = -1;
+  let lowBits = 0;
+  let highBits = 0;
+  for (let tapRow = 0; tapRow < WIDE_SPAN; tapRow++) {
+    for (let tapColumn = 0; tapColumn < WIDE_SPAN; tapColumn++) {
+      const cellX = clampBand(column + firstX + tapColumn * stride, nx);
+      const cellY = clampBand(row + firstY + tapRow * stride, ny);
+      const id = cells[cellY * nx + cellX];
+      const tap = tapRow * WIDE_SPAN + tapColumn;
+      if (id === id0) {
+        continue;
+      }
+      if (id === id1) {
+        const updated = withBandBit(lowBits, highBits, tap);
+        lowBits = updated.lowBits;
+        highBits = updated.highBits;
+        continue;
+      }
+      if (id0 < 0) {
+        id0 = id;
+        continue;
+      }
+      if (id1 < 0) {
+        id1 = id;
+        const updated = withBandBit(lowBits, highBits, tap);
+        lowBits = updated.lowBits;
+        highBits = updated.highBits;
+        continue;
+      }
+      writeComplexBand(column, row, nx, ids, low, high);
+      return;
+    }
+  }
+  if (id0 < 0) {
+    writeComplexBand(column, row, nx, ids, low, high);
+    return;
+  }
+  if (id1 < 0) {
+    id1 = id0;
+  }
+  ids[(row * nx + column) * 2] = id0;
+  ids[(row * nx + column) * 2 + 1] = id1;
+  low[row * nx + column] = lowBits >>> 0;
+  high[row * nx + column] = highBits >>> 0;
+}
+
+function withBandBit(
+  lowBits: number,
+  highBits: number,
+  tap: number,
+): { lowBits: number; highBits: number } {
+  if (tap < 32) {
+    return { lowBits: lowBits | (1 << tap), highBits };
+  }
+  return { lowBits, highBits: highBits | (1 << (tap - 32)) };
+}
+
+function writeComplexBand(
+  column: number,
+  row: number,
+  nx: number,
+  ids: Uint8Array,
+  low: Uint32Array,
+  high: Uint32Array,
+): void {
+  ids[(row * nx + column) * 2] = 0;
+  ids[(row * nx + column) * 2 + 1] = 0;
+  low[row * nx + column] = BAND_COMPLEX_WORD;
+  high[row * nx + column] = BAND_COMPLEX_WORD;
+}
+
+function clampBand(value: number, size: number): number {
+  return Math.min(size - 1, Math.max(0, value));
+}
+
+function wideFirst(
+  baseX: number,
+  baseY: number,
+  radiusCells: number,
+): { firstX: number; firstY: number; stride: number } {
+  const large = radiusCells > 2;
+  const stride = large ? 2 : 1;
+  const firstX = large ? WIDE_LARGE_FIRST_OFFSET - parity(baseX) : WIDE_FIRST_OFFSET;
+  const firstY = large ? WIDE_LARGE_FIRST_OFFSET - parity(baseY) : WIDE_FIRST_OFFSET;
+  return { firstX, firstY, stride };
+}
+
+/**
+ * Rebuild the wide sums from a baked texel instead of fetching 64 ids. The arithmetic
+ * matches the full gather tap for tap, so simple windows render pixel-identical output with
+ * three fetches. Complex windows and missing bands return null for the full gather.
+ */
+function bakedWideClasses(
+  fragment: ClassFieldFragment,
+  radiusCells: number,
+): FieldClass[] | null {
+  const band = fragment.band;
+  const position = fragment.position;
+  if (!band || !position || isComplexBand(band) || band.id0 === band.id1) {
+    return null;
+  }
+  const base = [Math.floor(position[0]), Math.floor(position[1])];
+  const { firstX, firstY, stride } = wideFirst(base[0], base[1], radiusCells);
+  const columns = Array.from(
+    { length: WIDE_SPAN },
+    (_, tap) => wideAxis(position[0] - (base[0] + firstX + tap * stride), radiusCells),
+  );
+  const rows = Array.from(
+    { length: WIDE_SPAN },
+    (_, tap) => wideAxis(position[1] - (base[1] + firstY + tap * stride), radiusCells),
+  );
+  const sums = new Map<number, FieldClass>();
+  let totalWeight = 0;
+  const totalGradient: [number, number] = [0, 0];
+  for (let tapRow = 0; tapRow < WIDE_SPAN; tapRow++) {
+    for (let tapColumn = 0; tapColumn < WIDE_SPAN; tapColumn++) {
+      const weight = columns[tapColumn][0] * rows[tapRow][0];
+      if (weight <= 0) {
+        continue;
+      }
+      const tap = tapRow * WIDE_SPAN + tapColumn;
+      const id = bandBit(band.low, band.high, tap) ? band.id1 : band.id0;
+      let current = sums.get(id);
+      if (!current) {
+        current = { id, weight: 0, gradient: [0, 0] };
+        sums.set(id, current);
+      }
+      const gradient: [number, number] = [
+        columns[tapColumn][1] * rows[tapRow][0],
+        columns[tapColumn][0] * rows[tapRow][1],
+      ];
+      totalWeight += weight;
+      totalGradient[0] += gradient[0];
+      totalGradient[1] += gradient[1];
+      current.weight += weight;
+      current.gradient[0] += gradient[0];
+      current.gradient[1] += gradient[1];
+    }
+  }
+  if (sums.size === 0) {
+    return null;
+  }
+  const classes = [...sums.values()];
+  const totalSquared = totalWeight * totalWeight;
+  for (const current of classes) {
+    current.gradient = [
+      (current.gradient[0] * totalWeight - current.weight * totalGradient[0]) / totalSquared,
+      (current.gradient[1] * totalWeight - current.weight * totalGradient[1]) / totalSquared,
+    ];
+    current.weight /= totalWeight;
+  }
+  return classes;
+}
+
+function bandBit(low: number, high: number, tap: number): boolean {
+  if (tap < 32) {
+    return ((low >>> tap) & 1) === 1;
+  }
+  return ((high >>> (tap - 32)) & 1) === 1;
 }

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from shapely.geometry.base import BaseGeometry
 
 from . import db
-from .areas import AreaError, polygonal_parts, unwrap
+from .areas import AreaError, display_preview, polygonal_parts, unwrap
 from .sources import CELL_DEG, SOURCES, SUPPORTED_BOUNDS_DEG
 
 if TYPE_CHECKING:
@@ -295,6 +295,8 @@ def _row(
         return None
 
     cells = max(1, round(clipped.area / CELL_AREA_DEG2))
+    geometry_text = json.dumps(mapping(clipped))
+    preview = json.dumps(display_preview(clipped, (west, south, east, north)))
 
     return (
         row_id,
@@ -307,7 +309,9 @@ def _row(
         east,
         north,
         cells,
-        json.dumps(mapping(clipped)),
+        geometry_text,
+        db.geometry_digest(geometry_text),
+        preview,
         source,
         SOURCES[source]["licence"],
     )

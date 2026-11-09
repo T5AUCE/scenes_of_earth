@@ -15,6 +15,7 @@ registerHooks({
 });
 
 import { assertSameNode } from "./testing/dom-assert.ts";
+import { storeMapDetailsShown } from "./display-state.ts";
 import {
   createHarness,
   DATA_IDS,
@@ -217,6 +218,51 @@ test("scene entry hides fully-outside basemap features and exit restores filters
   assert.equal(restored.get("label_city"), null);
 });
 
+test("a camera gesture hides basemap symbols and restores the details choice", async () => {
+  const harness = createHarness();
+  (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
+    layers: [
+      { id: "background", type: "background" },
+      { id: "label_city", type: "symbol" },
+    ],
+  });
+  harness.map.layers.set("label_city", { id: "label_city", layout: { visibility: "visible" } });
+  const visibilities = new Map<string, unknown>();
+  const stub = harness.map as unknown as Record<string, unknown>;
+  stub.getLayoutProperty = (id: string) => visibilities.get(id);
+  stub.setLayoutProperty = (id: string, _property: string, value: unknown) => {
+    visibilities.set(id, value);
+  };
+  const storage = new Map<string, string>();
+  const globals = globalThis as Record<string, unknown>;
+  const previousStorage = globals.localStorage;
+  globals.localStorage = {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => void storage.set(key, value),
+  };
+  try {
+    harness.enter();
+    storeMapDetailsShown(true);
+    assert.equal(visibilities.get("label_city"), "visible");
+
+    visibilities.clear();
+    harness.map.emit("movestart");
+    assert.equal(visibilities.get("label_city"), "none");
+
+    // A details change mid-gesture waits for moveend instead of showing symbols.
+    storeMapDetailsShown(false);
+    assert.equal(visibilities.get("label_city"), "none");
+
+    storeMapDetailsShown(true);
+    harness.map.emit("moveend");
+    assert.equal(visibilities.get("label_city"), "visible");
+  } finally {
+    if (previousStorage === undefined) Reflect.deleteProperty(globals, "localStorage");
+    else globals.localStorage = previousStorage;
+    storeMapDetailsShown(false);
+  }
+});
+
 test("the basemap clip keeps an area crossing 180 in its 0 to 360 frame", async () => {
   const harness = createHarness();
   (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
@@ -405,8 +451,13 @@ test("every basemap symbol hides in scenes and follows the toggle", async () => 
     value: string | undefined,
   ) => {
     layouts.push([id, value]);
-    (harness.map.layers.get(id) as unknown as { layout: { visibility?: string } }).layout
-      .visibility = value;
+    const layer = harness.map.layers.get(id) as unknown as {
+      layout?: { visibility?: string };
+    };
+    if (layer) {
+      layer.layout ??= {};
+      layer.layout.visibility = value;
+    }
   };
   harness.enter();
   harness.geometry.resolve(FEATURE);
@@ -414,7 +465,11 @@ test("every basemap symbol hides in scenes and follows the toggle", async () => 
   harness.map.finishMask();
   await settle();
 
-  const hidden = layouts.filter(([, value]) => value === "none").map(([id]) => id).sort();
+  const hidden = layouts
+    .filter(([, value]) => value === "none")
+    .map(([id]) => id)
+    .filter((id) => id !== FADE_ID)
+    .sort();
   assert.deepEqual(hidden, [
     "airport",
     "highway-name-major",
@@ -424,9 +479,15 @@ test("every basemap symbol hides in scenes and follows the toggle", async () => 
     "poi_transit",
     "road_one_way_arrow",
   ]);
+  assert.ok(layouts.some(([id, value]) => id === FADE_ID && value === "none"));
 
+  layouts.length = 0;
   storeMapDetailsShown(true);
-  const shown = layouts.filter(([, value]) => value === "visible").map(([id]) => id).sort();
+  const shown = layouts
+    .filter(([, value]) => value === "visible")
+    .map(([id]) => id)
+    .filter((id) => id !== FADE_ID)
+    .sort();
   assert.deepEqual(shown, [
     "airport",
     "highway-name-major",
@@ -436,6 +497,52 @@ test("every basemap symbol hides in scenes and follows the toggle", async () => 
     "poi_transit",
     "road_one_way_arrow",
   ]);
+  assert.ok(layouts.some(([id, value]) => id === FADE_ID && value === "visible"));
+
+  storeMapDetailsShown(false);
+});
+
+test("the fade hides when details are off and shows with them", async () => {
+  const { storeMapDetailsShown } = await import("./display-state.ts");
+  storeMapDetailsShown(false);
+  const harness = createHarness();
+  (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
+    layers: [{ id: "label_city", type: "symbol" }],
+  });
+  harness.map.layers.set("label_city", { id: "label_city", layout: { visibility: "visible" } });
+  const layouts: [string, string | undefined][] = [];
+  (harness.map as unknown as Record<string, unknown>).getLayoutProperty = (id: string) =>
+    (harness.map.layers.get(id) as unknown as { layout: { visibility?: string } })?.layout
+      ?.visibility;
+  (harness.map as unknown as Record<string, unknown>).setLayoutProperty = (
+    id: string,
+    _name: string,
+    value: string | undefined,
+  ) => {
+    layouts.push([id, value]);
+    const layer = harness.map.layers.get(id) as unknown as {
+      layout?: { visibility?: string };
+    };
+    if (layer) {
+      layer.layout ??= {};
+      layer.layout.visibility = value;
+    }
+  };
+  harness.enter();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+  harness.map.finishMask();
+  await settle();
+
+  assert.ok(layouts.some(([id, value]) => id === FADE_ID && value === "none"));
+
+  layouts.length = 0;
+  storeMapDetailsShown(true);
+  assert.ok(layouts.some(([id, value]) => id === FADE_ID && value === "visible"));
+
+  layouts.length = 0;
+  storeMapDetailsShown(false);
+  assert.ok(layouts.some(([id, value]) => id === FADE_ID && value === "none"));
 
   storeMapDetailsShown(false);
 });
@@ -462,8 +569,13 @@ test("an originally hidden symbol shows with the toggle but exit restores it", a
     value: string | undefined,
   ) => {
     layouts.push([id, value]);
-    (harness.map.layers.get(id) as unknown as { layout: { visibility?: string } }).layout
-      .visibility = value;
+    const layer = harness.map.layers.get(id) as unknown as {
+      layout?: { visibility?: string };
+    };
+    if (layer) {
+      layer.layout ??= {};
+      layer.layout.visibility = value;
+    }
   };
   const { storeMapDetailsShown } = await import("./display-state.ts");
 
@@ -477,6 +589,7 @@ test("an originally hidden symbol shows with the toggle but exit restores it", a
     ["poi_hidden", "none"],
     ["poi_plain", "none"],
     ["label_city", "none"],
+    [FADE_ID, "none"],
   ]);
 
   layouts.length = 0;
@@ -486,6 +599,7 @@ test("an originally hidden symbol shows with the toggle but exit restores it", a
     ["poi_hidden", "visible"],
     ["poi_plain", "visible"],
     ["label_city", "visible"],
+    [FADE_ID, "visible"],
   ]);
 
   layouts.length = 0;
@@ -514,6 +628,7 @@ test("an originally hidden symbol shows with the toggle but exit restores it", a
     ["poi_hidden", "none"],
     ["poi_plain", "none"],
     ["label_city", "none"],
+    [FADE_ID, "none"],
   ]);
 });
 
@@ -543,8 +658,13 @@ test("scene symbols stay out of the details toggle", async () => {
     value: string | undefined,
   ) => {
     layouts.push([id, value]);
-    (harness.map.layers.get(id) as unknown as { layout: { visibility?: string } }).layout
-      .visibility = value;
+    const layer = harness.map.layers.get(id) as unknown as {
+      layout?: { visibility?: string };
+    };
+    if (layer) {
+      layer.layout ??= {};
+      layer.layout.visibility = value;
+    }
   };
   harness.enter();
   harness.geometry.resolve(FEATURE);
@@ -552,12 +672,18 @@ test("scene symbols stay out of the details toggle", async () => {
   harness.map.finishMask();
   await settle();
 
-  assert.deepEqual(layouts, [["label_city", "none"]]);
+  assert.deepEqual(layouts, [
+    ["label_city", "none"],
+    [FADE_ID, "none"],
+  ]);
 
   layouts.length = 0;
   storeMapDetailsShown(true);
 
-  assert.deepEqual(layouts, [["label_city", "visible"]]);
+  assert.deepEqual(layouts, [
+    ["label_city", "visible"],
+    [FADE_ID, "visible"],
+  ]);
 
   layouts.length = 0;
   harness.mode.exit();

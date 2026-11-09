@@ -153,7 +153,16 @@ Variants run on the same bundle and differ only as named: `all` is the baseline,
 `labels-on` switches the Map details toggle on, `no-terrain` switches Terrain off through
 the link, `colour-swap` exchanges the colour owner between temperature and geology,
 `mask-hidden` hides the two mask fills and lifts the entry-time basemap clip, and
-`pixel-ratio-2` forces `&pixelRatio=2` through the trial-only address option. Non-baseline
+`pixel-ratio-2` forces `&pixelRatio=2` through the trial-only address option.
+Label freezing defaults on while the shader fast paths and the band bake default off,
+so `freeze-off` disables label freezing through `&freezeLabels=0` and `fast-class-on`,
+`fast-hatch-on` and `bake-on` enable the class-field fast path, hatch hiding and the band
+bake one at a time through `&fastClass=1`, `&fastHatch=1` and `&bake=1`. `max-pixel-ratio-1` caps the ratio
+with `&maxPixelRatio=1` and `contour-max-11` overzooms contour and hillshade tiles past
+`&contourMaxZoom=11`. The sweep steps with `jumpTo`, whose gestures fire
+synchronously, so it holds one outer `movestart`/`moveend` pair to keep the shared
+hub active while stepping and the gesture
+variants engage exactly as in a real zoom. Non-baseline
 bands also carry `_delta` fields against `all`, so the verdict is the delta between
 variants per band, not absolute milliseconds. Scenes default to details off, so `labels-on`
 measures label placement cost against the unlabelled baseline. Hiding the mask and lifting

@@ -42,6 +42,8 @@ API: `GET /api/health`, `GET /api/layers` (per layer: id, title, kind, units, co
 `{"area": {"type": "boundary", "id": ...} | {"type": "polygon", "geometry": GeoJSON}, "start": "YYYY-MM",
 "end": "YYYY-MM", "layers": ["chirps_monthly", "terrain"], "title": ...}` and returns 202 (queued or running),
 200 (already built), 422 (refused, with a reason), 413, or 503 (queue full or data server unreachable; `Retry-After`).
+`GET /api/areas/{id}` allows an hour of caching and JSON responses arrive gzipped, while bundle files skip
+compression so byte-range downloads stay exact.
 
 With `SOE_SYNTHETIC=1`, five sample areas (Kenya, Fiji, Nairobi, Cusco, Burkina Faso) are
 loaded from `soe/data/sample_areas.geojson`, so search works without the boundaries import. They are real
@@ -93,8 +95,14 @@ python -m soe.cli import-boundaries --cgaz <folder> --ucdb <GHS_UCDB file or zip
 The import is large (several hundred MB of input, about a gigabyte in SQLite). CGAZ draws disputed borders to US State Department definitions.
 Search shows each country's own name for its levels (County, Canton) where the metadata
 names one, else the generic level; countries and cities always show the generic level.
-The stored outlines keep every CGAZ vertex, so search never reads the geometry column and stays
-fast; simplification happens only for display (see the bundle notes).
+The stored outlines keep every CGAZ vertex, and each row also stores its display preview, so a
+first pick serves the small preview without reading the full geometry; search never reads the
+geometry column and stays fast. Each row also stores a short revision of its geometry text,
+so a reimport with the same-length text still serves a fresh outline and validator.
+Boundaries imported before previews existed get them with
+`python -m soe.cli backfill-area-previews --db <soe.db>`, which fills missing digests and
+previews in batches with progress; an area without a stored preview still serves, computing
+and storing it on its first request.
 
 ## Cubes (once, then monthly)
 

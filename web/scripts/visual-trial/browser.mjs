@@ -246,6 +246,12 @@ export const ZOOM_VARIANTS = [
   "colour-swap",
   "mask-hidden",
   "pixel-ratio-2",
+  "freeze-off",
+  "fast-class-on",
+  "fast-hatch-on",
+  "bake-on",
+  "max-pixel-ratio-1",
+  "contour-max-11",
 ];
 const ZOOM_BASELINE = "all";
 const ZOOM_REPEATS_FALLBACK = 3;
@@ -353,6 +359,12 @@ export function zoomSceneUrl(appUrl, sceneId, spot, variant) {
   if (variant === "no-terrain") query = withOff(query, "terrain");
   if (variant === "colour-swap") query = withSwappedColour(query, spot);
   if (variant === "pixel-ratio-2") query += "&pixelRatio=2";
+  if (variant === "freeze-off") query += "&freezeLabels=0";
+  if (variant === "fast-class-on") query += "&fastClass=1";
+  if (variant === "fast-hatch-on") query += "&fastHatch=1";
+  if (variant === "bake-on") query += "&bake=1";
+  if (variant === "max-pixel-ratio-1") query += "&maxPixelRatio=1";
+  if (variant === "contour-max-11") query += "&contourMaxZoom=11";
 
   return `${appUrl}/?scene=${sceneId}${query}`;
 }
@@ -1987,6 +1999,8 @@ function zoomSweep([startZoom, endZoom, stepZoom]) {
     observer = null;
   }
   map.jumpTo({ center, zoom: startZoom });
+  // jumpTo gestures fire synchronously, so the outer pair keeps the shared hub active.
+  map.fire("movestart");
   return new Promise((resolve) => {
     let previous;
     let zoom = startZoom;
@@ -2009,6 +2023,7 @@ function zoomSweep([startZoom, endZoom, stepZoom]) {
           } catch {
             // A missing observer leaves the task list as it is.
           }
+          map.fire("moveend");
           resolve({ frames, longtasks: tasksWithZoom(tasks, marks) });
           return;
         }

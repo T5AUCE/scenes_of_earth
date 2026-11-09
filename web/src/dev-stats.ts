@@ -162,6 +162,7 @@ function snapshot(
     bytes: fetchStats.bytes,
     gpuMs: gpu.msByLayer,
     gpuUnavailable: gpu.unavailable,
+    bake: readBakeSnapshot(),
     longtasks,
   };
 }
@@ -203,8 +204,20 @@ export interface DevStatsSnapshot {
   gpuMs: Record<string, number>;
   /** Whether the timer extension is absent, so the badge shows n/a. */
   gpuUnavailable: boolean;
+  /** One-time band-bake time and retained bytes by layer, absent without `?bake=1`. */
+  bake?: Record<string, BakeStats>;
   /** Count of main-thread tasks over 50 ms since the loop started. */
   longtasks: number;
+}
+
+/** One layer's band-bake cost for the dev readout. */
+export interface BakeStats {
+  /** CPU milliseconds spent baking the band, excluding idle gaps between chunks. */
+  ms: number;
+  /** Retained CPU band bytes for the grid. */
+  cpuBytes: number;
+  /** Uploaded GPU band bytes across tile windows, including halo duplication. */
+  gpuBytes: number;
 }
 
 /** Build the compact badge line from one snapshot. */
@@ -214,6 +227,7 @@ export function formatDevStats(snapshot: DevStatsSnapshot): string {
     + ` · z ${snapshot.zoom.toFixed(1)} · load ${load}`
     + ` · ${snapshot.requests} req ${formatBytes(snapshot.bytes)}`
     + ` · ${formatGpuPart(snapshot.gpuMs, snapshot.gpuUnavailable)}`
+    + formatBakeSuffix(snapshot.bake)
     + ` · ${snapshot.longtasks} long`;
 }
 
@@ -222,6 +236,22 @@ export function formatGpuPart(msByLayer: Record<string, number>, unavailable: bo
   const names = Object.keys(msByLayer).sort();
   if (names.length === 0 || unavailable) return "gpu n/a";
   return `gpu ${names.map((name) => `${name} ${msByLayer[name].toFixed(1)} ms`).join(" ")}`;
+}
+
+/** Build the badge's bake suffix, empty when no layer baked a band. */
+export function formatBakePart(bake?: Record<string, BakeStats>): string {
+  const names = Object.keys(bake ?? {}).sort();
+  if (names.length === 0) return "bake n/a";
+  return `bake ${names.map((name) => {
+    const stats = bake![name];
+    return `${name} ${stats.ms.toFixed(1)} ms ${formatBytes(stats.cpuBytes + stats.gpuBytes)}`;
+  }).join(" ")}`;
+}
+
+/** The bake suffix for the badge line, empty when no layer baked a band. */
+function formatBakeSuffix(bake?: Record<string, BakeStats>): string {
+  if (!bake || Object.keys(bake).length === 0) return "";
+  return ` · ${formatBakePart(bake)}`;
 }
 
 /** Read the timer-query timings without creating extension work when disabled. */
@@ -235,6 +265,19 @@ function readGpuSnapshot(): { msByLayer: Record<string, number>; unavailable: bo
     return { msByLayer, unavailable: scope.__gpuUnavailable ?? false };
   } catch {
     return { msByLayer: {}, unavailable: false };
+  }
+}
+
+/** Read the band-bake costs without creating work when the bake never ran. */
+function readBakeSnapshot(): Record<string, BakeStats> | undefined {
+  try {
+    const scope = globalThis as unknown as {
+      __bakeStats?: Record<string, BakeStats>;
+    };
+    if (!scope.__bakeStats || Object.keys(scope.__bakeStats).length === 0) return undefined;
+    return { ...scope.__bakeStats };
+  } catch {
+    return undefined;
   }
 }
 

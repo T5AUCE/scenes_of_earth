@@ -6,8 +6,13 @@ import type {
   SymbolLayerSpecification,
 } from "maplibre-gl";
 
+import {
+  addressSearch,
+  gestureFlags,
+  subscribeGesture,
+} from "../gesture-quality";
 import { labelIndexFor } from "../playback";
-import { prefersReducedMotion } from "../reduced-motion";
+import { labelFadeDurationMs, prefersReducedMotion } from "../reduced-motion";
 import { evenStops } from "../render/colormap";
 import {
   BOLD_ISOTHERM_MULTIPLE,
@@ -112,6 +117,10 @@ export function createIsolineOverlay(
   let overallVisible = true;
   let dominantStep: number | null = null;
   let playing = false;
+  let labelsFrozen = false;
+  let fadeArmed = false;
+  // Captured here because scene entry replaces the address and drops trial flags.
+  const freezeAllowed = gestureFlags(addressSearch()).freezeLabels;
   const labelShown: [boolean | null, boolean | null] = [null, null];
 
   for (const [index, sourceId] of sourceIds.entries()) {
@@ -121,6 +130,19 @@ export function createIsolineOverlay(
     setSlotFactor(groups[index], 0);
   }
   const layerIds = groups.flatMap((group) => Object.values(group));
+  // Hidden labels skip placement and collision, so a gesture freezes them until moveend.
+  const stopGesture = subscribeGesture(map, {
+    onStart: () => {
+      if (!freezeAllowed) return;
+      labelsFrozen = true;
+      updateLabelVisibility();
+    },
+    onEnd: () => {
+      if (!labelsFrozen) return;
+      labelsFrozen = false;
+      updateLabelVisibility(true);
+    },
+  });
 
   return {
     layerIds,
@@ -265,6 +287,7 @@ export function createIsolineOverlay(
     },
 
     destroy() {
+      stopGesture();
       for (const group of groups) {
         for (const id of Object.values(group)) {
           if (map.getLayer(id)) map.removeLayer(id);
@@ -368,16 +391,37 @@ export function createIsolineOverlay(
     updateLabelVisibility();
   }
 
-  function updateLabelVisibility() {
+  function updateLabelVisibility(fade = false) {
+    // Only the gesture restoration arms the fade so per-frame updates never lag behind it.
+    if (fade) armLabelFade();
+    else disarmLabelFade();
     for (const [slot, group] of groups.entries()) {
       const showsDominant = overallVisible && dominantStep !== null && keys[slot] === dominantStep;
+      // Frozen labels sit at zero while hidden, so moveend fades them back instead of popping.
       // Opacity flips labels without a reload, and paused visibility keeps culling exact.
-      map.setPaintProperty(group.labelId, "text-opacity", showsDominant ? 1 : 0);
-      const shouldShow = overallVisible && (playing || showsDominant);
+      map.setPaintProperty(group.labelId, "text-opacity", !labelsFrozen && showsDominant ? 1 : 0);
+      const shouldShow = !labelsFrozen && overallVisible && (playing || showsDominant);
       if (labelShown[slot] !== shouldShow) {
         labelShown[slot] = shouldShow;
         map.setLayoutProperty(group.labelId, "visibility", shouldShow ? "visible" : "none");
       }
+    }
+  }
+
+  function armLabelFade() {
+    fadeArmed = true;
+    for (const group of groups) {
+      map.setPaintProperty(group.labelId, "text-opacity-transition", {
+        duration: labelFadeDurationMs(),
+      });
+    }
+  }
+
+  function disarmLabelFade() {
+    if (!fadeArmed) return;
+    fadeArmed = false;
+    for (const group of groups) {
+      map.setPaintProperty(group.labelId, "text-opacity-transition", { duration: 0 });
     }
   }
 

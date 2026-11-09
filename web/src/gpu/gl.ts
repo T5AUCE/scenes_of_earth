@@ -1,5 +1,5 @@
 /** The texture layouts the GPU layers use; all are read without filtering. */
-export type TextureFormat = "ids" | "floats" | "colors";
+export type TextureFormat = "ids" | "floats" | "colors" | "bandIds" | "bandMask";
 
 /** Everything a GPU layer creates, so that one call can free it. */
 export interface GlResources {
@@ -104,6 +104,10 @@ function layoutOf(gl: WebGL2RenderingContext, format: TextureFormat) {
       return { internal: gl.R32F, layout: gl.RED, type: gl.FLOAT };
     case "colors":
       return { internal: gl.RGBA8, layout: gl.RGBA, type: gl.UNSIGNED_BYTE };
+    case "bandIds":
+      return { internal: gl.RG8UI, layout: gl.RG_INTEGER, type: gl.UNSIGNED_BYTE };
+    case "bandMask":
+      return { internal: gl.R32UI, layout: gl.RED_INTEGER, type: gl.UNSIGNED_INT };
   }
 }
 

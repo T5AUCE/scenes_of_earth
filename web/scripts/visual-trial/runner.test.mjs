@@ -101,6 +101,25 @@ test("zoom variants differ from the baseline only as named", () => {
   assert.ok(
     zoomSceneUrl("http://example.test", "scene", spot, "pixel-ratio-2").endsWith("&pixelRatio=2"),
   );
+  assert.ok(
+    zoomSceneUrl("http://example.test", "scene", spot, "freeze-off").endsWith("&freezeLabels=0"),
+  );
+  assert.ok(
+    zoomSceneUrl("http://example.test", "scene", spot, "fast-class-on").endsWith("&fastClass=1"),
+  );
+  assert.ok(
+    zoomSceneUrl("http://example.test", "scene", spot, "fast-hatch-on").endsWith("&fastHatch=1"),
+  );
+  assert.ok(
+    zoomSceneUrl("http://example.test", "scene", spot, "max-pixel-ratio-1").endsWith(
+      "&maxPixelRatio=1",
+    ),
+  );
+  assert.ok(
+    zoomSceneUrl("http://example.test", "scene", spot, "contour-max-11").endsWith(
+      "&contourMaxZoom=11",
+    ),
+  );
 });
 
 test("swappedZoomColour exchanges temperature and geology", () => {
@@ -124,6 +143,15 @@ test("a blend baseline swaps colour without keeping the halves off", () => {
 test("the zoom sweep labels its variants with the details-on difference", () => {
   assert.ok(ZOOM_VARIANTS.includes("labels-on"));
   assert.ok(!ZOOM_VARIANTS.includes("no-labels"));
+  for (const variant of [
+    "freeze-off",
+    "fast-class-on",
+    "fast-hatch-on",
+    "max-pixel-ratio-1",
+    "contour-max-11",
+  ]) {
+    assert.ok(ZOOM_VARIANTS.includes(variant), variant);
+  }
 });
 
 test("withoutClipFilter lifts the scene clip back to the previous filter", () => {

@@ -14,6 +14,7 @@ import {
   traceIsolines,
 } from "../render/isolines.ts";
 import { inkPaint } from "../render/palettes.ts";
+import { LABEL_FADE_MS } from "../reduced-motion.ts";
 
 const KENYA_STOPS = [5, 8, 11, 14, 17, 20, 23, 26, 29];
 
@@ -309,6 +310,68 @@ test("labels show only on the dominant set and flip halfway", () => {
   overlay.frame(0, 1, 0.75);
   assert.equal(labelOpacityOf(layers, "temperature-isotherms-a-labels"), 0);
   assert.equal(labelOpacityOf(layers, "temperature-isotherms-b-labels"), 1);
+});
+
+test("a camera gesture hides the isotherm labels and restores the dominant set", () => {
+  const { map, layoutOf } = fakeMap();
+  const overlay = mountOverlay(map);
+  overlay.setValues([0, 30, 30, 0], 0);
+  assert.equal(layoutOf("temperature-isotherms-a-labels", "visibility"), "visible");
+
+  map.emit("movestart");
+  assert.equal(layoutOf("temperature-isotherms-a-labels", "visibility"), "none");
+
+  map.emit("moveend");
+  assert.equal(layoutOf("temperature-isotherms-a-labels", "visibility"), "visible");
+  overlay.destroy();
+});
+
+test("the isotherm labels fade back after a gesture instead of popping", () => {
+  const { map, layers, layoutOf } = fakeMap();
+  const overlay = mountOverlay(map);
+  overlay.setValues([0, 30, 30, 0], 0);
+
+  map.emit("movestart");
+  assert.equal(labelOpacityOf(layers, "temperature-isotherms-a-labels"), 0);
+
+  map.emit("moveend");
+  assert.equal(layoutOf("temperature-isotherms-a-labels", "visibility"), "visible");
+  assert.deepEqual(transitionOf(layers, "temperature-isotherms-a-labels"), {
+    duration: LABEL_FADE_MS,
+  });
+  assert.equal(labelOpacityOf(layers, "temperature-isotherms-a-labels"), 1);
+  overlay.destroy();
+});
+
+test("reduced motion restores the isotherm labels instantly", () => {
+  const { map, layers } = fakeMap();
+  const overlay = mountOverlay(map);
+  overlay.setValues([0, 30, 30, 0], 0);
+  useReducedMotion(true);
+
+  try {
+    map.emit("movestart");
+    map.emit("moveend");
+    assert.deepEqual(transitionOf(layers, "temperature-isotherms-a-labels"), { duration: 0 });
+    assert.equal(labelOpacityOf(layers, "temperature-isotherms-a-labels"), 1);
+  } finally {
+    useReducedMotion(false);
+  }
+  overlay.destroy();
+});
+
+test("the next crossfade frame clears the gesture fade transition", () => {
+  const { map, layers } = fakeMap();
+  const overlay = mountOverlay(map);
+  overlay.setValues([0, 30, 30, 0], 0);
+  overlay.prepareStep(1, [0, 20, 20, 0]);
+  overlay.frame(0, 1, 0);
+
+  map.emit("movestart");
+  map.emit("moveend");
+  assert.equal(overlay.frame(0, 1, 0.5), true);
+  assert.deepEqual(transitionOf(layers, "temperature-isotherms-a-labels"), { duration: 0 });
+  overlay.destroy();
 });
 
 test("the sources swap roles after the fade ends", () => {
@@ -611,6 +674,7 @@ function fakeMap() {
   const sources = new Map<string, unknown>();
   const layouts = new Map<string, Map<string, unknown>>();
   const loaded = new Map<string, boolean>();
+  const gestureListeners = new Map<string, Set<() => void>>();
   let paintCalls = 0;
   let layoutCalls = 0;
   const map = {
@@ -647,6 +711,17 @@ function fakeMap() {
     getLayer: () => ({}),
     removeLayer() {},
     removeSource() {},
+    on(type: string, listener: () => void) {
+      const entries = gestureListeners.get(type) ?? new Set<() => void>();
+      entries.add(listener);
+      gestureListeners.set(type, entries);
+    },
+    off(type: string, listener: () => void) {
+      gestureListeners.get(type)?.delete(listener);
+    },
+    emit(type: string) {
+      for (const listener of [...(gestureListeners.get(type) ?? [])]) listener();
+    },
   };
 
   return {
@@ -745,6 +820,13 @@ function labelOpacityOf(
   id: string,
 ): unknown {
   return layers.find((layer) => layer.id === id)!.paint!["text-opacity"];
+}
+
+function transitionOf(
+  layers: { id: string; paint?: Record<string, unknown> }[],
+  id: string,
+): unknown {
+  return layers.find((layer) => layer.id === id)!.paint!["text-opacity-transition"];
 }
 
 function stopAt(expression: readonly unknown[], zoom: number): number {

@@ -45,6 +45,7 @@ export function bindAreaSearch(
   map: MapLibreMap,
   onPick: (hit: AreaHit) => void,
   onClear: () => void,
+  onOutlineNotice?: (text: string) => void,
 ) {
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let searchCount = 0;
@@ -125,10 +126,16 @@ export function bindAreaSearch(
   // The outline is the stored geometry; the bbox rectangle stands in when it cannot be fetched.
   async function drawPickedOutline(hit: AreaHit) {
     const thisPick = ++pickCount;
-    const geometry = await getArea(hit.id).then(
-      (detail) => detail.geometry,
-      () => bboxGeometry(hit.bbox),
-    );
+    let geometry: AreaFeature["geometry"];
+    try {
+      geometry = (await getArea(hit.id)).geometry;
+    } catch {
+      if (thisPick !== pickCount) return;
+      geometry = bboxGeometry(hit.bbox);
+      chosen.textContent = `${hit.name} (approximate outline)`;
+      const notice = `Outline unavailable for ${hit.name}; showing an approximate outline.`;
+      onOutlineNotice?.(notice);
+    }
     if (thisPick !== pickCount) return;
 
     const shifted = shiftLongitudes(geometry.coordinates, worldShift(hit.bbox));

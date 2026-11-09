@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from shapely.geometry import box, mapping, shape
 
-from soe import db
+from soe import api, db
 from soe.api import QUEUE_RETRY_AFTER_SECS, SOURCE_RETRY_AFTER_SECS, create_app
 from soe.bundle import SYNTHETIC_DATA_CREDIT, JsonObject, validate
 from soe.scene_request import ID_CHARS
@@ -29,6 +29,7 @@ from tests.helpers import (
     FIJI,
     ReingestedSource,
     boundary_row,
+    harmonic_island,
     write_cube,
     write_updating_chirps_cube,
 )
@@ -758,6 +759,328 @@ def test_area_preview_is_simplified_but_keeps_shape(env):
 
     assert len(preview["coordinates"][0]) < len(ring)
     assert shape(preview).area == pytest.approx(math.pi / 4, rel=1e-3)
+
+
+def test_repeated_area_preview_comes_from_the_cache(env):
+    client, _, _ = env
+    api._geometry_cache.clear()
+
+    first = client.get("/api/areas/cgaz:ADM1:NBO").json()["geometry"]
+
+    assert len(api._geometry_cache) == 1
+    assert client.get("/api/areas/cgaz:ADM1:NBO").json()["geometry"] == first
+    assert len(api._geometry_cache) == 1
+
+
+def test_reimported_identical_boundary_hits_preview_cache(env):
+    client, _, tmp_path = env
+    api._geometry_cache.clear()
+    path = str(tmp_path / "soe.db")
+
+    first = client.get("/api/areas/cgaz:ADM1:NBO").json()["geometry"]
+
+    assert len(api._geometry_cache) == 1
+
+    before = db.get_boundary(path, "cgaz:ADM1:NBO")
+    with db.connect(path) as connection:
+        connection.execute(db.INSERT_BOUNDARY, _nairobi_values(before))
+    after = db.get_boundary(path, "cgaz:ADM1:NBO")
+
+    assert after["geom_digest"] == before["geom_digest"]
+    assert api._geometry_cache_key(after) == api._geometry_cache_key(before)
+
+    second = client.get("/api/areas/cgaz:ADM1:NBO").json()["geometry"]
+
+    assert second == first
+    assert len(api._geometry_cache) == 1
+
+
+def _nairobi_values(row: db.Record) -> db.BoundaryValues:
+    """The Nairobi boundary row, so a test can store the identical content again."""
+    values = boundary_row(
+        row["id"],
+        row["level"],
+        row["name"],
+        row["parent_name"],
+        row["iso3"],
+        (row["bbox_w"], row["bbox_s"], row["bbox_e"], row["bbox_n"]),
+        row["cells"],
+        geometry=row["geom_geojson"],
+        source=row["source"],
+        licence=row["licence"],
+    )
+    return (*values[:11], row["geom_digest"], row["preview_geojson"], *values[11:])
+
+
+def test_stored_preview_matches_the_served_simplification():
+    from soe.boundary_import import CGAZ_SOURCE, _row
+
+    for row_id, geometry in (("cgaz:ADM0:TST", box(36, 4, 38, 6)), ("cgaz:ADM0:FJI", FIJI)):
+        row = _row(row_id, "country", "Testland", "", "TST", geometry, CGAZ_SOURCE)
+
+        assert row is not None
+        full = {
+            "geom_geojson": row[10],
+            "bbox_w": row[5],
+            "bbox_s": row[6],
+            "bbox_e": row[7],
+            "bbox_n": row[8],
+        }
+
+        assert json.loads(row[12]) == json.loads(json.dumps(api._simplify_geometry(full)))
+
+
+def test_area_detail_serves_the_stored_preview_without_computing(env, monkeypatch):
+    client, _, tmp_path = env
+    sentinel = mapping(box(0, 0, 1, 1))
+    legacy = boundary_row(
+        "cgaz:ADM0:SENT",
+        "country",
+        "Sentinelia",
+        iso3="SEN",
+        bbox=(0, 0, 1, 1),
+        geometry=json.dumps(mapping(box(10, 10, 20, 20))),
+    )
+    db.add_boundaries(
+        str(tmp_path / "soe.db"),
+        "geoBoundaries CGAZ",
+        [(*legacy[:11], json.dumps(sentinel), *legacy[11:])],
+    )
+
+    def failing(row: db.Record) -> JsonObject:
+        raise AssertionError("a stored preview must skip computing")
+
+    monkeypatch.setattr(api, "_simplify_geometry", failing)
+
+    assert client.get("/api/areas/cgaz:ADM0:SENT").json()["geometry"] == json.loads(
+        json.dumps(sentinel)
+    )
+
+
+def test_area_detail_without_a_preview_computes_and_stores_it(env, monkeypatch):
+    client, _, tmp_path = env
+    path = str(tmp_path / "soe.db")
+    db.add_boundaries(
+        path,
+        "geoBoundaries CGAZ",
+        [
+            boundary_row(
+                "cgaz:ADM0:FRESH",
+                "country",
+                "Freshland",
+                iso3="FRE",
+                bbox=(0, 0, 1, 1),
+                geometry=json.dumps(mapping(box(0, 0, 1, 1))),
+            ),
+        ],
+    )
+    assert db.get_boundary(path, "cgaz:ADM0:FRESH")["preview_geojson"] is None
+
+    geometry = client.get("/api/areas/cgaz:ADM0:FRESH").json()["geometry"]
+
+    stored = db.get_boundary(path, "cgaz:ADM0:FRESH")["preview_geojson"]
+    assert json.loads(stored) == geometry
+
+    def failing(row: db.Record) -> JsonObject:
+        raise AssertionError("a stored preview must skip computing")
+
+    monkeypatch.setattr(api, "_simplify_geometry", failing)
+
+    assert client.get("/api/areas/cgaz:ADM0:FRESH").json()["geometry"] == geometry
+
+
+def test_area_geometry_for_a_boundary_deleted_mid_request_is_404(tmp_path):
+    from fastapi import HTTPException
+
+    path = str(tmp_path / "soe.db")
+    db.init(path)
+    row = {
+        "id": "cgaz:ADM0:GONE",
+        "geom_digest": "0123456789abcdef",
+        "bbox_w": 0.0,
+        "bbox_s": 0.0,
+        "bbox_e": 1.0,
+        "bbox_n": 1.0,
+        "preview_geojson": None,
+    }
+
+    with pytest.raises(HTTPException, match="unknown area"):
+        api._area_geometry(row, path)
+
+
+def test_area_preview_refreshes_after_reimport(env):
+    client, _, tmp_path = env
+    before = client.get("/api/areas/cgaz:ADM1:NBO").json()["geometry"]
+
+    assert shape(before).bounds == pytest.approx((36.5, -1.5, 37.5, -0.5))
+
+    moved = boundary_row(
+        "cgaz:ADM1:NBO",
+        "state",
+        "Nairobi",
+        "Kenya",
+        "KEN",
+        bbox=(0, 0, 2, 2),
+        geometry=json.dumps(mapping(box(0, 0, 2, 2))),
+    )
+    db.add_boundaries(str(tmp_path / "soe.db"), "geoBoundaries CGAZ", [moved])
+    after = client.get("/api/areas/cgaz:ADM1:NBO").json()["geometry"]
+
+    assert after != before
+    assert shape(after).bounds == pytest.approx((0, 0, 2, 2))
+
+
+def test_large_area_preview_is_gzipped(env):
+    client, _, tmp_path = env
+    island = harmonic_island(512)
+    db.add_boundaries(
+        str(tmp_path / "soe.db"),
+        "geoBoundaries CGAZ",
+        [
+            boundary_row(
+                "cgaz:ADM0:BIG",
+                "country",
+                "Bigland",
+                iso3="BIG",
+                bbox=island.bounds,
+                geometry=json.dumps(mapping(island)),
+            ),
+        ],
+    )
+
+    plain = client.get(
+        "/api/areas/cgaz:ADM0:BIG",
+        headers={"Accept-Encoding": "identity"},
+    )
+    gzipped = client.get(
+        "/api/areas/cgaz:ADM0:BIG",
+        headers={"Accept-Encoding": "gzip"},
+    )
+
+    assert "content-encoding" not in plain.headers
+    assert gzipped.headers["content-encoding"] == "gzip"
+    assert gzipped.json() == plain.json()
+
+
+def test_small_area_preview_skips_gzip(env):
+    client, _, _ = env
+
+    response = client.get(
+        "/api/areas/cgaz:ADM1:NBO",
+        headers={"Accept-Encoding": "gzip"},
+    )
+
+    assert "content-encoding" not in response.headers
+
+
+def test_area_detail_is_cacheable_for_an_hour(env):
+    client, _, _ = env
+
+    response = client.get("/api/areas/cgaz:ADM1:NBO")
+
+    assert response.headers["cache-control"] == "public, max-age=3600, must-revalidate"
+
+
+def test_area_detail_etag_returns_304_until_reimport(env):
+    client, _, tmp_path = env
+
+    first = client.get("/api/areas/cgaz:ADM1:NBO")
+    etag = first.headers["etag"]
+
+    assert etag
+    cached = client.get("/api/areas/cgaz:ADM1:NBO", headers={"If-None-Match": etag})
+
+    assert cached.status_code == 304
+    assert cached.headers["etag"] == etag
+    assert cached.headers["cache-control"] == "public, max-age=3600, must-revalidate"
+
+    before = db.get_boundary(str(tmp_path / "soe.db"), "cgaz:ADM1:NBO")
+    moved = boundary_row(
+        before["id"],
+        before["level"],
+        before["name"],
+        before["parent_name"],
+        before["iso3"],
+        (0, 0, 2, 2),
+        before["cells"],
+        geometry=json.dumps(mapping(box(0, 0, 2, 2))),
+        source=before["source"],
+        licence=before["licence"],
+    )
+    db.add_boundaries(str(tmp_path / "soe.db"), "geoBoundaries CGAZ", [moved])
+    stale = client.get("/api/areas/cgaz:ADM1:NBO", headers={"If-None-Match": etag})
+
+    assert stale.status_code == 200
+    assert stale.headers["etag"] != etag
+
+
+def test_equal_length_reimport_gets_a_new_etag_and_fresh_outline(env):
+    client, _, tmp_path = env
+    api._geometry_cache.clear()
+    path = str(tmp_path / "soe.db")
+    old_geometry = json.dumps(mapping(box(0, 0, 1, 1)))
+    new_geometry = json.dumps(mapping(box(1, 1, 2, 2)))
+
+    assert len(new_geometry) == len(old_geometry)
+
+    db.add_boundaries(
+        path,
+        "test-src",
+        [
+            boundary_row(
+                "test:EQUAL",
+                "state",
+                "Equalland",
+                bbox=(0, 0, 2, 2),
+                geometry=old_geometry,
+                source="test-src",
+            ),
+        ],
+    )
+    first = client.get("/api/areas/test:EQUAL")
+    etag = first.headers["etag"]
+    first_geometry = first.json()["geometry"]
+
+    db.add_boundaries(
+        path,
+        "test-src",
+        [
+            boundary_row(
+                "test:EQUAL",
+                "state",
+                "Equalland",
+                bbox=(0, 0, 2, 2),
+                geometry=new_geometry,
+                source="test-src",
+            ),
+        ],
+    )
+    second = client.get("/api/areas/test:EQUAL")
+
+    assert second.headers["etag"] != etag
+    assert second.json()["geometry"] != first_geometry
+    assert client.get("/api/areas/test:EQUAL", headers={"If-None-Match": etag}).status_code == 200
+
+
+def test_scene_files_keep_byte_ranges_without_gzip(env):
+    client, _, tmp_path = env
+    payload = b"0123456789abcdef" * 1024
+    (tmp_path / "scenes" / "probe.txt").write_bytes(payload)
+
+    partial = client.get(
+        "/scenes/probe.txt",
+        headers={"Range": "bytes=0-99", "Accept-Encoding": "gzip"},
+    )
+
+    assert partial.status_code == 206
+    assert "content-encoding" not in partial.headers
+    assert partial.content == payload[:100]
+
+    whole = client.get("/scenes/probe.txt", headers={"Accept-Encoding": "gzip"})
+
+    assert whole.status_code == 200
+    assert "content-encoding" not in whole.headers
+    assert whole.content == payload
 
 
 def test_sample_areas_seed_only_in_synthetic_mode_and_when_empty(tmp_path, monkeypatch):

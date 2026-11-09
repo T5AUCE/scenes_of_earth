@@ -15,6 +15,12 @@ import {
   loadMapDetailsShown,
   subscribeMapDetails,
 } from "./display-state";
+import {
+  addressSearch,
+  gestureFlags,
+  subscribeGesture,
+  type GestureQualityFlags,
+} from "./gesture-quality";
 import { makeHtmlElement } from "./html";
 import { polygonParts } from "./label-filter";
 import { buildMaskRings } from "./mask-ring";
@@ -100,6 +106,8 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     leaveCurrentScene();
     noteSceneOpen(performance.now());
     resetFetchStats();
+    // Captured here because publishing the entry replaces the address and drops trial flags.
+    const flags = gestureFlags(addressSearch());
 
     const cards = openColumn(scene, entry);
     const clock = createSceneClock(scene.id);
@@ -154,7 +162,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     clock.publishEntry(entry);
     clock.markEntered();
 
-    current = startScene(scene, mounted, panel, clock);
+    current = startScene(scene, mounted, panel, clock, flags);
     const initialIds = pendingLayerIds[0];
     if (initialIds) current.syncLayers(initialIds);
     panel.setTime(clock.time, clock.label);
@@ -235,12 +243,31 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     mounted: ReturnType<typeof mountScene>,
     panel: ReturnType<typeof createScenePanel>,
     clock: SceneClock,
+    flags: GestureQualityFlags,
   ): ActiveScene {
     const dataLayers = new SceneDataLayers(map, mounted.layerIds);
     const symbolBaseline = snapshotBasemapSymbols(map, new Set(sceneLayerIds));
-    const stopDetails = subscribeMapDetails((shown) =>
-      setBasemapSymbolsVisible(map, shown, symbolBaseline)
-    );
+    // A details change mid-gesture waits for moveend so frozen symbols stay hidden.
+    let labelsFrozen = false;
+    const stopGesture = subscribeGesture(map, {
+      onStart: () => {
+        if (!flags.freezeLabels) return;
+        labelsFrozen = true;
+        setBasemapSymbolsVisible(map, false, symbolBaseline);
+      },
+      onEnd: () => {
+        if (!labelsFrozen) return;
+        labelsFrozen = false;
+        const shown = loadMapDetailsShown();
+        setBasemapSymbolsVisible(map, shown, symbolBaseline);
+        syncFadeVisible(map, shown);
+      },
+    });
+    const stopDetails = subscribeMapDetails((shown) => {
+      if (labelsFrozen) return;
+      setBasemapSymbolsVisible(map, shown, symbolBaseline);
+      syncFadeVisible(map, shown);
+    });
     setBasemapSymbolsVisible(map, loadMapDetailsShown(), symbolBaseline);
     const maskLoad = new AbortController();
     // Once landed, nothing depends on zoom, so the elastic zoom-out dip stays clean.
@@ -283,6 +310,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
         stopWatchingResize();
         stopDocking();
         flight.stopClamp();
+        stopGesture();
         stopDetails();
         removeLayerAndSource(map, FADE_ID);
         removeLayerAndSource(map, MASK_ID);
@@ -761,6 +789,8 @@ function addMask(
     source: MASK_ID,
     paint: { "fill-color": pageBackground(), "fill-opacity": fadeOpacity(fittedZoom) },
   });
+  // With details off the fade dims nothing, so hiding it skips a full-viewport fill.
+  syncFadeVisible(map);
 
   // Basemap labels sit above the mask in their original relative order.
   for (const id of basemap.symbols) {
@@ -910,6 +940,12 @@ function setBasemapSymbolsVisible(
     if (!map.getLayer(id)) continue;
     map.setLayoutProperty(id, "visibility", visible ? "visible" : ("none" as const));
   }
+}
+
+/** Hide the outside-dimming fill when details are off, since it dims nothing then. */
+function syncFadeVisible(map: MapLibreMap, shown = loadMapDetailsShown()): void {
+  if (typeof map.setLayoutProperty !== "function" || !map.getLayer(FADE_ID)) return;
+  map.setLayoutProperty(FADE_ID, "visibility", shown ? "visible" : "none");
 }
 
 /** Return each basemap symbol to its own visibility, clearing overrides the scene added. */

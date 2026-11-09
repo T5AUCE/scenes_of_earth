@@ -296,7 +296,7 @@ void main() {
     mark = markAt(distancePx, radiusPx, uFading ? uFade : 1.0);
   }
 
-  if (uDots && uFading) {
+  if (uDots && uFading && uFade > 0.0) {
     // The parent dots are judged on their own lattice because they outgrow the nearest fine site.
     vec2 parentSlot = floor((position - offset) * uParentSlots + 0.5);
     vec2 parentSite = parentSlot / uParentSlots + offset;

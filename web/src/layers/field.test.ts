@@ -57,6 +57,7 @@ function mockModule(specifier: string) {
         const element = () => ({ children: [], append(child) { this.children.push(child); } });
         export const createZoomWatch = () => ({ setActive() {} });
         export const dotLegend = element;
+        export const dotLegendKey = (...parts) => JSON.stringify(parts);
         export const gradientLegend = element;
         export const isothermLegend = element;
         export const hatchLegend = () => "hatch";

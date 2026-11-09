@@ -175,3 +175,84 @@ export function labelIntervalsAt(ladder: ContourLadder, zoom: number) {
     .filter((tier) => tier.entryZoom <= zoom)
     .map((tier) => tier.interval);
 }
+
+/** A tile the warm-up may trace ahead, in slippy-map coordinates. */
+export interface WarmTile {
+  z: number;
+  x: number;
+  y: number;
+}
+
+// Web Mercator stays finite below this latitude, so warmer bounds clamp to it.
+const MAX_WARM_LAT_DEG = 85.05112878;
+
+/**
+ * List the tiles a zoom needs for a viewport, nearest the centre first so a bounded
+ * warm-up traces the middle while the edges can wait. Counts stay small because one
+ * viewport spans few tiles, and the caller slices to its own limit.
+ */
+export function warmTilesForZoom(
+  west: number,
+  south: number,
+  east: number,
+  north: number,
+  targetZoom: number,
+  limit: number,
+): WarmTile[] {
+  if (limit <= 0) return [];
+  const tiles: WarmTile[] = [];
+  for (const x of tileColumns(west, east, targetZoom)) {
+    for (let y = tileY(north, targetZoom); y <= tileY(south, targetZoom); y += 1) {
+      tiles.push({ z: targetZoom, x, y });
+    }
+  }
+  const centre: WarmTile = {
+    z: targetZoom,
+    x: tileX(wrapCentre(west, east), targetZoom),
+    y: tileY((south + north) / 2, targetZoom),
+  };
+  tiles.sort((left, right) => tileDistance(left, centre) - tileDistance(right, centre));
+  return tiles.slice(0, limit);
+}
+
+/** Columns spanned by a longitude range, wrapping indices past the 180th meridian. */
+function tileColumns(west: number, east: number, zoom: number): number[] {
+  const count = 2 ** zoom;
+  const last = east < west ? east + 360 : east;
+  if (last - west >= 360) return Array.from({ length: count }, (_, x) => x);
+  // Western and eastern copies unwrap to the same tile indices, so enumerate unwrapped.
+  const firstColumn = Math.floor((west + 180) / 360 * count);
+  const lastColumn = Math.floor((last + 180) / 360 * count);
+  const columns: number[] = [];
+  for (let x = firstColumn; x <= lastColumn; x += 1) {
+    columns.push(((x % count) + count) % count);
+  }
+  return columns;
+}
+
+/** Middle of a longitude range, unwrapped past 180 when the range crosses it. */
+function wrapCentre(west: number, east: number): number {
+  return east < west ? (west + east + 360) / 2 : (west + east) / 2;
+}
+
+function tileDistance(tile: WarmTile, centre: WarmTile): number {
+  const wraparound = Math.min(
+    Math.abs(tile.x - centre.x),
+    2 ** tile.z - Math.abs(tile.x - centre.x),
+  );
+  return wraparound ** 2 + (tile.y - centre.y) ** 2;
+}
+
+function tileX(longitude: number, zoom: number): number {
+  const count = 2 ** zoom;
+  const wrapped = ((longitude + 180) % 360 + 360) % 360;
+  return Math.min(count - 1, Math.floor(wrapped / 360 * count));
+}
+
+function tileY(latitude: number, zoom: number): number {
+  const count = 2 ** zoom;
+  const clamped = Math.min(MAX_WARM_LAT_DEG, Math.max(-MAX_WARM_LAT_DEG, latitude));
+  const radians = clamped * Math.PI / 180;
+  const y = (1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2 * count;
+  return Math.min(count - 1, Math.max(0, Math.floor(y)));
+}

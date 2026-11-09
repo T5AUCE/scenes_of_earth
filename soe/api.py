@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import threading
+from collections import OrderedDict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,13 +20,14 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from shapely.geometry import mapping, shape
+from shapely.geometry import shape
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.responses import Response
-from starlette.types import Scope
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import __version__, db
-from .areas import MAX_LONGITUDE_DEG, AreaError, simplify_for_display, unwrap
+from .areas import AreaError, display_preview
 from .bundle import JsonObject
 from .jobs import SceneJobs
 from .sample_areas import seed_sample_areas
@@ -46,8 +48,18 @@ ID_RE = re.compile(r"[0-9a-f]{%d}" % ID_CHARS)
 IMMUTABLE_MAX_AGE_SECS = 365 * 24 * 60 * 60
 IMMUTABLE = f"public, max-age={IMMUTABLE_MAX_AGE_SECS}, immutable"
 
+AREA_MAX_AGE_SECS = 60 * 60
+AREA_CACHE_CONTROL = f"public, max-age={AREA_MAX_AGE_SECS}, must-revalidate"
+
+GEOMETRY_CACHE_SIZE = 64
+GeometryKey = tuple[str, str | None, tuple[float, float, float, float]]
+# id, geometry digest and bbox, all cheap to read so hits skip the text.
+_geometry_cache: OrderedDict[GeometryKey, JsonObject] = OrderedDict()
+_geometry_cache_lock = threading.Lock()
+
+GZIP_MINIMUM_SIZE_BYTES = 1000
+
 MAX_BODY_BYTES = 1_000_000
-PREVIEW_SIMPLIFY_DIVISOR = 2000  # a 2000th of the larger bbox side, so small areas stay sharp
 LEVELS = ("country", "state", "county", "city")
 MAX_SEARCH_LIMIT = 50
 
@@ -89,6 +101,12 @@ def create_app(
         jobs.shutdown()
 
     app = FastAPI(title="Scenes of Earth", version=__version__, lifespan=lifespan)
+    bundles = public if public.startswith("/") else "/scenes"
+    app.add_middleware(
+        ApiGzipMiddleware,
+        bundles_path=bundles,
+        minimum_size=GZIP_MINIMUM_SIZE_BYTES,
+    )
 
     @app.get("/api/health", response_model=None)
     def health() -> JsonObject:
@@ -116,12 +134,18 @@ def create_app(
         return [_area_out(row) for row in rows]
 
     @app.get("/api/areas/{area_id:path}", response_model=None)
-    def get_area(area_id: str) -> JsonObject:
-        row = db.get_boundary(db_path, area_id)
+    def get_area(area_id: str, request: Request) -> JSONResponse | Response:
+        row = db.get_boundary(db_path, area_id, with_geometry=False)
         if row is None:
             raise HTTPException(404, "unknown area")
-        
-        return {**_area_out(row), "geometry": _area_geometry(row)}
+
+        etag = _area_etag(row)
+        headers = {"Cache-Control": AREA_CACHE_CONTROL, "ETag": etag}
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
+
+        detail = {**_area_out(row), "geometry": _area_geometry(row, db_path)}
+        return JSONResponse(detail, headers=headers)
 
     @app.post("/api/scenes")
     async def post_scene(request: Request) -> JSONResponse:
@@ -168,7 +192,7 @@ def create_app(
         return scene_out(row)
 
     app.mount(
-        public if public.startswith("/") else "/scenes",
+        bundles,
         SceneFiles(directory=scenes_dir, check_dir=False),
         name="scenes",
     )
@@ -236,7 +260,91 @@ def _area_out(row: db.Record) -> JsonObject:
     }
 
 
-def _area_geometry(row: db.Record) -> JsonObject:
+def _area_geometry(row: db.Record, db_path: Path | str) -> JsonObject:
+    """Return the stored boundary preview, computing and storing it when missing.
+
+    The preview read skips the full stored geometry; a NULL preview falls back to the old
+    parse-unwrap-simplify path and is written back, so only its first request pays for it.
+    """
+    key = _geometry_cache_key(row)
+    with _geometry_cache_lock:
+        cached = _geometry_cache.get(key)
+        if cached is not None:
+            _geometry_cache.move_to_end(key)
+            return cached
+
+    preview = _stored_preview(row)
+    if preview is None:
+        full = db.get_boundary(db_path, row["id"])
+        if full is None:
+            raise HTTPException(404, "unknown area")
+        preview = _simplify_geometry(full)
+        new_digest = _digest_of_full(full)
+        _remember_preview(db_path, full["id"], preview, full["geom_digest"], new_digest)
+        key = (full["id"], new_digest, _bbox_of(full))
+    with _geometry_cache_lock:
+        if key in _geometry_cache:
+            _geometry_cache.move_to_end(key)
+            return _geometry_cache[key]
+        if len(_geometry_cache) >= GEOMETRY_CACHE_SIZE:
+            _geometry_cache.popitem(last=False)
+        _geometry_cache[key] = preview
+    return preview
+
+
+def _stored_preview(row: db.Record) -> JsonObject | None:
+    """The stored preview as JSON, or None when it is missing or no longer parses."""
+    if row.get("preview_geojson") is None:
+        return None
+    try:
+        return json.loads(row["preview_geojson"])
+    except ValueError:
+        return None
+
+
+def _remember_preview(
+    db_path: Path | str,
+    boundary_id: str,
+    preview: JsonObject,
+    expected_digest: str | None,
+    new_digest: str,
+) -> None:
+    """Write a computed preview back, keeping the response when the write fails."""
+    try:
+        db.set_boundary_preview(
+            db_path,
+            boundary_id,
+            json.dumps(preview),
+            expected_digest,
+            new_digest,
+        )
+    except Exception:
+        log.warning("could not store the preview of %s", boundary_id, exc_info=True)
+
+
+def _digest_of_full(row: db.Record) -> str:
+    """The revision of a fully read boundary, computed when the stored one is missing."""
+    if isinstance(row["geom_geojson"], str):
+        return db.geometry_digest(row["geom_geojson"])
+    return row["geom_digest"] or ""
+
+
+def _geometry_cache_key(row: db.Record) -> GeometryKey:
+    """Key the preview cheaply; a reimport changes the digest, while the bbox covers moves."""
+    return (row["id"], row["geom_digest"], _bbox_of(row))
+
+
+def _area_etag(row: db.Record) -> str:
+    """The area detail validator from the same cheap version as the preview key."""
+    return f'"{row["id"]}:{row["geom_digest"]}:{_bbox_of(row)}"'
+
+
+def _bbox_of(row: db.Record) -> tuple[float, float, float, float]:
+    """The bbox tuple of a boundary row, so cache keys and validators share one frame."""
+    return (row["bbox_w"], row["bbox_s"], row["bbox_e"], row["bbox_n"])
+
+
+def _simplify_geometry(row: db.Record) -> JsonObject:
     """Return the boundary simplified for preview, in its bbox's longitude frame.
 
     A stored outline that no longer parses is returned as is, as before.
@@ -245,13 +353,8 @@ def _area_geometry(row: db.Record) -> JsonObject:
         geometry = shape(json.loads(row["geom_geojson"]))
     except Exception:
         return json.loads(row["geom_geojson"])
-    if row["bbox_e"] > MAX_LONGITUDE_DEG:
-        geometry = unwrap(geometry)
-
-    width_deg = row["bbox_e"] - row["bbox_w"]
-    height_deg = row["bbox_n"] - row["bbox_s"]
-    tolerance_deg = max(width_deg, height_deg) / PREVIEW_SIMPLIFY_DIVISOR
-    return mapping(simplify_for_display(geometry, tolerance_deg))
+    bbox = (row["bbox_w"], row["bbox_s"], row["bbox_e"], row["bbox_n"])
+    return display_preview(geometry, bbox)
 
 
 async def read_body(request: Request) -> bytes:
@@ -269,6 +372,22 @@ async def read_body(request: Request) -> bytes:
         if len(body) > MAX_BODY_BYTES:
             raise HTTPException(413, "request body too large")
     return body
+
+
+class ApiGzipMiddleware(GZipMiddleware):
+    """GZip for the JSON API; bundle files skip compression so range downloads stay exact."""
+
+    def __init__(self, app: ASGIApp, bundles_path: str, minimum_size: int) -> None:
+        super().__init__(app, minimum_size=minimum_size)
+        self.bundles_path = bundles_path
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        path = scope.get("path", "")
+        if path == self.bundles_path or path.startswith(self.bundles_path + "/"):
+            await self.app(scope, receive, send)
+            return
+
+        await super().__call__(scope, receive, send)
 
 
 class SceneFiles(StaticFiles):

@@ -3,7 +3,13 @@ import { registerHooks } from "node:module";
 import { test } from "node:test";
 
 import { createHarness } from "../gpu/class-field-harness.test.ts";
-import { CLASS_HATCH_ID } from "../gpu/class-field-shaders.ts";
+import {
+  CLASS_HATCH_ID,
+  homogeneousFlags,
+  markThinCells,
+  sampleClassField,
+  THIN_CELL_FLAG,
+} from "../gpu/class-field-shaders.ts";
 import { GEOLOGY_SMOOTH_RADIUS_CELLS } from "../display-state.ts";
 import { classColors, rgbToHex } from "../render/palettes.ts";
 import { smoothClassIds } from "../render/smooth-classes.ts";
@@ -22,8 +28,10 @@ const viewHooks = registerHooks({
     return next(specifier, context);
   },
 });
+const categoricalModule = await import("./categorical.ts");
+await import("./categorical-image.ts").finally(() => viewHooks.deregister());
 const { createCategoricalView, coastalFillRadiusCells, fillCoastalGaps, unhatchIds } =
-  await import("./categorical.ts").finally(() => viewHooks.deregister());
+  categoricalModule;
 
 function viewMockModule(specifier: string) {
   switch (specifier) {
@@ -452,6 +460,79 @@ test("geology fill hides a coastal hatch while land cover keeps it", async () =>
     Reflect.deleteProperty(globalThis, "__mask");
   }
 });
+
+const SMALL_PATCHES: Record<string, (column: number, row: number) => number> = {
+  island: (column, row) => (column === 3 && row === 3 ? 2 : 1),
+  pair: (column, row) => (column >= 2 && column < 4 && row >= 2 && row < 4 ? 2 : 1),
+  strip: (column) => (column === 3 ? 2 : 1),
+  oddIsland: (column, row) => (column === 4 && row === 2 ? 2 : 1),
+};
+
+test("the image fallback and the GPU field both keep small patches at their cell centres", () => {
+  const grid = { bbox: [0, 0, 7, 7] as Bbox, nx: 7, ny: 7 };
+  for (const [name, patch] of Object.entries(SMALL_PATCHES)) {
+    const cells = new Uint8Array(49);
+    for (let row = 0; row < 7; row++) {
+      for (let column = 0; column < 7; column++) cells[row * 7 + column] = patch(column, row);
+    }
+    const raster = smoothClassIds(cells, grid, { width: 7, height: 7 }, 64);
+    for (let row = 0; row < 7; row++) {
+      for (let column = 0; column < 7; column++) {
+        const centreColumn = Math.floor(((column + 0.5) * raster.width) / grid.nx);
+        const centreRow = Math.floor(((row + 0.5) * raster.height) / grid.ny);
+        const expected = cells[row * 7 + column];
+        assert.equal(raster.ids[centreRow * raster.width + centreColumn], expected, `cpu ${name}`);
+        assert.equal(gpuWinnerAt(cells, column, row, GEOLOGY_SMOOTH_RADIUS_CELLS), expected, name);
+      }
+    }
+  }
+});
+
+test("the image fallback keeps a straight edge where bilinear selection put it", () => {
+  const grid = { bbox: [0, 0, 8, 4] as Bbox, nx: 8, ny: 4 };
+  const cells = new Uint8Array(32);
+  for (let row = 0; row < 4; row++) {
+    for (let column = 0; column < 8; column++) cells[row * 8 + column] = column < 4 ? 1 : 2;
+  }
+  const raster = smoothClassIds(cells, grid, { width: 8, height: 4 }, 64);
+  const firstRow = [...raster.ids.subarray(0, raster.width)];
+  const edge = firstRow.indexOf(2);
+  assert.equal(edge, raster.width / 2);
+  assert.ok(firstRow.slice(0, edge).every((id) => id === 1));
+  assert.ok(firstRow.slice(edge).every((id) => id === 2));
+});
+
+/** The class that the GPU field mirror paints at a cell centre of a padded grid. */
+function gpuWinnerAt(cells: Uint8Array, column: number, row: number, radius: number): number {
+  const size = 7;
+  const flags = homogeneousFlags(cells, size, size, radius);
+  markThinCells(cells, size, size, flags);
+  const clamp = (value: number) => Math.min(size - 1, Math.max(0, value));
+  const sample = (cellX: number, cellY: number) => cells[clamp(cellY) * size + clamp(cellX)];
+  const thinAt = (cellX: number, cellY: number) => (
+    flags[clamp(cellY) * size + clamp(cellX)] === THIN_CELL_FLAG
+  );
+  const ids = [-1, 0, 1, 2].map((rowOffset) => (
+    [-1, 0, 1, 2].map((columnOffset) => sample(column + columnOffset, row + rowOffset))
+  ));
+  const result = sampleClassField(
+    {
+      ids,
+      fraction: [0, 0],
+      positionDx: [0.01, 0],
+      positionDy: [0, 0.01],
+      position: [column, row],
+      sampleId: sample,
+      homogeneous: flags[row * size + column] === 1,
+      thin: [
+        [thinAt(column, row), thinAt(column + 1, row)],
+        [thinAt(column, row + 1), thinAt(column + 1, row + 1)],
+      ],
+    },
+    { smooth: true, rounding: 0.25, softnessCells: 0, smoothRadiusCells: radius },
+  );
+  return result.weights.reduce((best, entry) => (entry.weight > best.weight ? entry : best)).id;
+}
 
 const COVER_CLASSES = [
   { value: 10, label: "Trees", color: "#112233" },

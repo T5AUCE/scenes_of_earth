@@ -41,6 +41,7 @@ export async function createPanel(
     map,
     handlePick,
     handleClear,
+    showStatus,
   );
 
   build.onclick = buildScene;
