@@ -27,8 +27,10 @@ import {
   classColors,
   classPaletteOptions,
   customPalette,
+  customStops,
   FIELD_PALETTES,
   fieldGradient,
+  fieldStops,
   oklchGrid,
   RAIN_TEMPERATURE_GRID,
   rgbToHex,
@@ -400,10 +402,63 @@ test("every field palette has nine stops that blend into a full table", () => {
 });
 
 test("a custom gradient blends through its own colours", () => {
-  const table = lut(fieldGradient(customPalette(["#000000", "#ffffff"]))!);
+  const name = customPalette(customStops("custom-000000-ffffff")!);
+  const table = lut(fieldGradient(name)!);
 
   assert.deepEqual([...table.slice(0, RGBA_CHANNELS)], [0, 0, 0, 255]);
   assert.deepEqual([...table.slice(-RGBA_CHANNELS)], [255, 255, 255, 255]);
+});
+
+test("positioned stops interpolate by place and stay flat beyond the ends", () => {
+  const stops = customStops("custom-000000_20-ffffff_80")!;
+  const table = lut(stops);
+  const at = (percent: number) => {
+    const start = Math.round((percent / 100) * 255) * RGBA_CHANNELS;
+    return [...table.slice(start, start + COLOR_CHANNELS)];
+  };
+
+  assert.deepEqual(at(0), [0, 0, 0]);
+  assert.deepEqual(at(20), [0, 0, 0]);
+  assert.deepEqual(at(80), [255, 255, 255]);
+  assert.deepEqual(at(100), [255, 255, 255]);
+  const middle = at(50);
+  assert.ok(middle.every((channel) => channel > 100 && channel < 160), String(middle));
+});
+
+test("exact hits on coincident end stops take the last stop", () => {
+  const table = lut(customStops("custom-000000_0-ff0000_0-ffffff_100")!);
+
+  assert.deepEqual([...table.slice(0, COLOR_CHANNELS)], [255, 0, 0]);
+  assert.deepEqual([...table.slice(-RGBA_CHANNELS)], [255, 255, 255, 255]);
+});
+
+test("flat ends hold before a nonzero coincident start", () => {
+  const stops = customStops("custom-000000_20-ff0000_20-ffffff_100")!;
+  const table = lut(stops);
+  const at = (percent: number) => {
+    const start = Math.round((percent / 100) * 255) * RGBA_CHANNELS;
+    return [...table.slice(start, start + COLOR_CHANNELS)];
+  };
+
+  assert.deepEqual(at(0), [0, 0, 0]);
+  assert.deepEqual(at(20), [255, 0, 0]);
+  assert.deepEqual(at(100), [255, 255, 255]);
+});
+
+test("coincident stops make a hard edge and even customs match the old table", () => {
+  const hard = lut(customStops("custom-000000_0-000000_50-ff0000_50-ffffff_100")!);
+  const edge = Math.round(0.5 * 255) * RGBA_CHANNELS;
+  const before = (Math.round(0.5 * 255) - 2) * RGBA_CHANNELS;
+  const [red, green, blue] = hard.slice(edge, edge + COLOR_CHANNELS);
+
+  assert.deepEqual([...hard.slice(before, before + COLOR_CHANNELS)], [0, 0, 0]);
+  assert.equal(red, 255);
+  assert.ok(green < 5 && blue < 5, `${green},${blue}`);
+
+  const builtin = lut(gradient("ink-blue"));
+  const positioned = lut(fieldStops("ink-blue")!);
+
+  assert.deepEqual([...positioned], [...builtin]);
 });
 
 const LAST_LUT2D = LUT2D_SIZE - 1;

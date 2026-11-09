@@ -4,6 +4,7 @@ import type { Map as MapLibreMap } from "maplibre-gl";
 import { addressSearch, shadeFadeEnabled } from "../gesture-quality";
 import { removeLayerAndSource } from "../map";
 import { CONTOUR_COLORS, contourColor, DEFAULT_CONTOUR_COLOR } from "../render/palettes";
+import { BASEMAP_SOURCE_ID } from "../render/tile-viewport";
 import { displayUnitFor, isUnitFor, unitOptions } from "../units";
 import type {
   LayerContext,
@@ -22,6 +23,7 @@ import {
 } from "./contour-overlay";
 import { RELIEF_STRENGTH, reliefPaint } from "./relief";
 import { ShadeRaster } from "./shade-raster";
+import type { TilePrefetchWiring } from "./tile-prefetch";
 
 // Shade over a colour fill is eased so the colour stays readable.
 const COLOUR_UNDER_FACTOR = 0.75;
@@ -78,10 +80,17 @@ export function createTerrainView(context: LayerContext): LayerView {
     },
   };
 
-  const contourOverlay = new ContourOverlay(context, dem, tiles, stats as TerrainStats);
+  const contourOverlay = new ContourOverlay(
+    context,
+    dem,
+    tiles,
+    stats as TerrainStats,
+    undefined,
+    terrainPrefetchWiring(layer.id),
+  );
   const stopWatchingTiles = watchTerrainTiles(
     map,
-    [id, `${layer.id}-contours`],
+    [id, ...contourOverlay.contourSourceIds],
     report,
   );
 
@@ -145,6 +154,14 @@ export function createTerrainView(context: LayerContext): LayerView {
       contourOverlay.destroy();
       shading.destroy();
     },
+  };
+}
+
+/** Visible source ids the prefetch scheduler treats as outranking speculation. */
+export function terrainPrefetchWiring(layerId: string): TilePrefetchWiring {
+  return {
+    reliefSourceId: `${layerId}-relief`,
+    basemapSourceId: BASEMAP_SOURCE_ID,
   };
 }
 

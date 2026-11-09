@@ -1347,7 +1347,7 @@ test("Reset keeps a stored custom palette in the Custom box", async (context) =>
   });
   assert.match(paletteValue, /^custom-/);
   const seeded = paletteValue;
-  assert.ok(container.querySelector(".custom-colors input"));
+  assert.equal(container.querySelectorAll(".gradient-stops .gradient-stop").length, 3);
 
   await act(async () => {
     buttonWithText(container, "Reset layer")
@@ -1358,7 +1358,7 @@ test("Reset keeps a stored custom palette in the Custom box", async (context) =>
       .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assert.equal(paletteValue, "ink-blue");
-  assert.equal(container.querySelector(".custom-colors"), null);
+  assert.equal(container.querySelector(".gradient-stops"), null);
   assert.equal(container.querySelector(".swatch-face.custom-empty"), null);
 
   await act(async () => {

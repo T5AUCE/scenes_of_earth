@@ -293,15 +293,37 @@ test("unknown layers, palettes and reversed ranges are dropped", () => {
   assert.deepEqual([...display.off], ["chirps_monthly"]);
 });
 
-test("a custom gradient needs two to five six-digit colours", () => {
+test("a custom gradient needs two to eight six-digit colours", () => {
   const resolve = (palette: string) =>
     resolveDisplay(LAYERS, { ...NO_TOKENS, pal: `chirps_monthly:${palette}` }, {});
 
   assert.equal(resolve("custom-1a2b3c-88cc44-ffeedd").dropped, false);
   assert.equal(resolve("custom-1a2b3c").dropped, true);
-  assert.equal(resolve("custom-1a2b3c-88cc44-ffeedd-000000-111111-222222").dropped, true);
+  assert.equal(
+    resolve("custom-1a2b3c-88cc44-ffeedd-000000-111111-222222-333333-444444-555555").dropped,
+    true,
+  );
   assert.equal(resolve("custom-1a2b3c-88cc4").dropped, true);
   assert.equal(resolve("custom-1A2B3C-88CC44").dropped, true);
+});
+
+test("positioned custom gradients ride the link while legacy names still work", () => {
+  const resolve = (palette: string) =>
+    resolveDisplay(LAYERS, { ...NO_TOKENS, pal: `chirps_monthly:${palette}` }, {});
+
+  const positioned = resolve("custom-447dc4_0-189d73_50-618d63_80-cf764c_100");
+  assert.equal(positioned.dropped, false);
+  assert.deepEqual(
+    positioned.display.layers.chirps_monthly,
+    { palette: "custom-447dc4_0-189d73_50-618d63_80-cf764c_100" },
+  );
+
+  const legacy = resolve("custom-1a2b3c-88cc44");
+  assert.equal(legacy.dropped, false);
+  assert.deepEqual(legacy.display.layers.chirps_monthly, { palette: "custom-1a2b3c-88cc44" });
+
+  assert.equal(resolve("custom-1a2b3c-88cc44_50").dropped, true);
+  assert.equal(resolve("custom-1a2b3c_60-88cc44_50").dropped, true);
 });
 
 test("the last entry for a layer wins and ranges keep their link precision", () => {

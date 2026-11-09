@@ -2,6 +2,7 @@
 import type { Map as MapLibreMap } from "maplibre-gl";
 
 import { fetchStats } from "./merging-store";
+import { BASEMAP_SOURCE_ID } from "./render/tile-viewport";
 
 const FPS_WINDOW_MS = 1000;
 const WORST_WINDOW_MS = 5 * 1000;
@@ -15,8 +16,6 @@ const LONGTASK_ENTRY = "longtask";
 
 const RELIEF_SUFFIX = "-relief";
 const CONTOUR_SUFFIX = "-contours";
-/** The Liberty basemap source, whose loads the readout groups as basemap. */
-const BASEMAP_SOURCE_ID = "openmaptiles";
 
 /** The map surface the dev badge reads. Tile listeners stay optional for tests. */
 export type DevStatsMap = Pick<MapLibreMap, "getZoom">
@@ -297,6 +296,63 @@ export function layerForSource(sourceId: string | undefined): TileLayerKey | nul
   return null;
 }
 
+/** Speculative prefetch outcomes per source, so the gain is visible on any machine. */
+export interface SpeculativeCounts {
+  hits: number;
+  misses: number;
+  wasted: number;
+}
+
+/** Cumulative speculative outcomes, reset only by tests or a new page load. */
+export const speculativeStats: Record<TileLayerKey, SpeculativeCounts> = {
+  terrain: { hits: 0, misses: 0, wasted: 0 },
+  basemap: { hits: 0, misses: 0, wasted: 0 },
+  contours: { hits: 0, misses: 0, wasted: 0 },
+};
+
+/** Count the first visible request that found a tile warm or already in flight. */
+export function noteSpeculativeHit(source: TileLayerKey): void {
+  speculativeStats[source].hits += 1;
+}
+
+/** Count a visible request that no speculation had prepared. */
+export function noteSpeculativeMiss(source: TileLayerKey): void {
+  speculativeStats[source].misses += 1;
+}
+
+/** Count speculative work cancelled, forgotten unused or left over at teardown. */
+export function noteSpeculativeWasted(source: TileLayerKey): void {
+  speculativeStats[source].wasted += 1;
+}
+
+/** Clear the speculative counters, used by tests between predictions. */
+export function resetSpeculativeStats(): void {
+  for (const key of ["terrain", "basemap", "contours"] as const) {
+    speculativeStats[key] = { hits: 0, misses: 0, wasted: 0 };
+  }
+}
+
+let prefetchDisabled = false;
+
+/** Remember whether `?prefetch=0` disabled speculation, so the badge says so. */
+export function setPrefetchDisabled(disabled: boolean): void {
+  prefetchDisabled = disabled;
+}
+
+/** Whether speculation is disabled, so the badge shows off instead of counts. */
+export function isPrefetchDisabled(): boolean {
+  return prefetchDisabled;
+}
+
+/** Copy the speculative counters so the badge never mutates tracker state. */
+export function speculativeSnapshot(): Record<TileLayerKey, SpeculativeCounts> {
+  return {
+    terrain: { ...speculativeStats.terrain },
+    basemap: { ...speculativeStats.basemap },
+    contours: { ...speculativeStats.contours },
+  };
+}
+
 function sourceIdOf(event: unknown): string | undefined {
   const sourceId = (event as { sourceId?: unknown }).sourceId;
   return typeof sourceId === "string" ? sourceId : undefined;
@@ -370,6 +426,7 @@ function snapshot(
     gpuUnavailable: gpu.unavailable,
     bake: readBakeSnapshot(),
     longtasks,
+    prefetch: speculativeSnapshot(),
   };
 }
 
@@ -416,6 +473,8 @@ export interface DevStatsSnapshot {
   longtasks: number;
   /** Per-layer settle times after the last zoom step, present only while tracking. */
   tiles?: TileSettleSnapshot;
+  /** Speculative prefetch outcomes per source, hidden until the first warm. */
+  prefetch?: Record<TileLayerKey, SpeculativeCounts>;
 }
 
 /** One layer's band-bake cost for the dev readout. */
@@ -437,6 +496,7 @@ export function formatDevStats(snapshot: DevStatsSnapshot): string {
     + ` · ${formatGpuPart(snapshot.gpuMs, snapshot.gpuUnavailable)}`
     + formatBakeSuffix(snapshot.bake)
     + formatTileSuffix(snapshot.tiles)
+    + formatPrefetchSuffix(snapshot.prefetch)
     + ` · ${snapshot.longtasks} long`;
 }
 
@@ -474,6 +534,39 @@ export function formatTileSettlePart(tiles: TileSettleSnapshot): string {
 function formatTileSuffix(tiles?: TileSettleSnapshot): string {
   if (!tiles) return "";
   return ` · ${formatTileSettlePart(tiles)}`;
+}
+
+/** Build the badge's prefetch part from the speculative counters. */
+export function formatPrefetchPart(
+  prefetch: Record<TileLayerKey, SpeculativeCounts>,
+): string {
+  if (isPrefetchDisabled()) return "prefetch off";
+  return `prefetch ${formatPrefetchSource("terrain", prefetch.terrain)}`
+    + ` ${formatPrefetchSource("basemap", prefetch.basemap)}`
+    + ` ${formatPrefetchSource("contours", prefetch.contours)}`;
+}
+
+/** The prefetch suffix for the badge line. It stays empty until the first warm. */
+function formatPrefetchSuffix(prefetch?: Record<TileLayerKey, SpeculativeCounts>): string {
+  if (isPrefetchDisabled()) return " · prefetch off";
+  if (!prefetch) return "";
+  const empty = (counts: SpeculativeCounts) => counts.hits === 0
+    && counts.misses === 0
+    && counts.wasted === 0;
+  if (empty(prefetch.terrain) && empty(prefetch.basemap) && empty(prefetch.contours)) return "";
+  return ` · ${formatPrefetchPart(prefetch)}`;
+}
+
+function formatPrefetchSource(name: string, counts: SpeculativeCounts): string {
+  return `${name} ${counts.hits} hit ${counts.misses} miss ${counts.wasted} wasted`
+    + ` ${formatHitRate(counts)}`;
+}
+
+/** Hit share of decided speculative tiles, or a dash before the first decision. */
+function formatHitRate(counts: SpeculativeCounts): string {
+  const decided = counts.hits + counts.misses;
+  if (decided === 0) return "—";
+  return `${Math.round(counts.hits / decided * 100)}%`;
 }
 
 function formatTileLayer(name: string, stats: TileStepStats): string {

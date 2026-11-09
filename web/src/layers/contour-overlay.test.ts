@@ -12,20 +12,30 @@ import {
   EvaluationParameters,
 } from "../../node_modules/maplibre-gl/src/style/evaluation_parameters.ts";
 
-import type { Bbox, LayerContext, TerrainStats, TerrainTiles } from "../types.ts";
+import type { LayerContext, TerrainStats, TerrainTiles } from "../types.ts";
 import {
   cappedDemMaxZoom,
   ContourOverlay,
-  ContourWarmerPlan,
-  ContourZoomWarmer,
   levelsForZoom,
   MAX_MISSING_DEM_TILES,
   memoizeMissingDemTiles,
-  WARM_MAX_IN_FLIGHT,
 } from "./contour-overlay.ts";
-import { contourLadder, type ContourLadder } from "../contour-ladder.ts";
-import { subscribeGesture } from "../gesture-quality.ts";
+import { contourLadder } from "../contour-ladder.ts";
 import { LABEL_FADE_MS } from "../reduced-motion.ts";
+import {
+  formatPrefetchPart,
+  isPrefetchDisabled,
+  resetSpeculativeStats,
+  speculativeSnapshot,
+} from "../dev-stats.ts";
+import { BASEMAP_SOURCE_ID } from "../render/tile-viewport.ts";
+import {
+  PREFETCH_MAX_HTTP_PER_PREDICTION,
+  PREFETCH_MAX_PER_SOURCE,
+  PREFETCH_NETWORK_LANES,
+  PREFETCH_TRACE_LANES,
+  type HttpWarmer,
+} from "./tile-prefetch.ts";
 
 Object.assign(globalThis, {
   document: { createElement: () => ({}), documentElement: {} },
@@ -53,7 +63,15 @@ const LABEL_ID = "terrain-contours-labels";
 
 test("a camera gesture hides the contour labels and restores them on moveend", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourOverlay(
+    layerContext(map),
+    fakeDem(),
+    TILES,
+    STATS,
+    undefined,
+    undefined,
+    silentHttp(),
+  );
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), undefined);
 
   map.emit("movestart");
@@ -67,7 +85,15 @@ test("a camera gesture hides the contour labels and restores them on moveend", (
 test("a disabled freeze flag leaves the contour labels alone", () => {
   withSearch("?freezeLabels=0", () => {
     const map = fakeMap();
-    const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+    const overlay = new ContourOverlay(
+    layerContext(map),
+    fakeDem(),
+    TILES,
+    STATS,
+    undefined,
+    undefined,
+    silentHttp(),
+  );
 
     map.emit("movestart");
     assert.equal(map.layoutOf(LABEL_ID, "visibility"), undefined);
@@ -80,7 +106,15 @@ test("a disabled freeze flag leaves the contour labels alone", () => {
 
 test("leaving mid-gesture restores the contour labels", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourOverlay(
+    layerContext(map),
+    fakeDem(),
+    TILES,
+    STATS,
+    undefined,
+    undefined,
+    silentHttp(),
+  );
 
   map.emit("movestart");
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), "none");
@@ -93,10 +127,20 @@ test("a measurement cap lowers the contour tiling zoom and nothing else", () => 
   withSearch("?contourMaxZoom=9", () => {
     assert.equal(cappedDemMaxZoom(12), 9);
     const map = fakeMap();
-    const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+    const overlay = new ContourOverlay(
+    layerContext(map),
+    fakeDem(),
+    TILES,
+    STATS,
+    undefined,
+    undefined,
+    silentHttp(),
+  );
     const source = map.sources.get("terrain-contours") as { maxzoom: number };
+    const labelSource = map.sources.get("terrain-labels-contours") as { maxzoom: number };
 
     assert.equal(source.maxzoom, 9);
+    assert.equal(labelSource.maxzoom, 9);
     overlay.destroy();
   });
 });
@@ -105,10 +149,20 @@ test("without a cap the contour tiling keeps its crisp ceiling", () => {
   assert.equal(cappedDemMaxZoom(12), 12);
   assert.equal(cappedDemMaxZoom(14), 12);
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourOverlay(
+    layerContext(map),
+    fakeDem(),
+    TILES,
+    STATS,
+    undefined,
+    undefined,
+    silentHttp(),
+  );
   const source = map.sources.get("terrain-contours") as { maxzoom: number };
+  const labelSource = map.sources.get("terrain-labels-contours") as { maxzoom: number };
 
   assert.equal(source.maxzoom, 12);
+  assert.equal(labelSource.maxzoom, 12);
   overlay.destroy();
 });
 
@@ -194,7 +248,15 @@ test("the 404 memo drops its oldest tile past its cap", async () => {
 
 test("the contour labels fade back after a gesture instead of popping", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourOverlay(
+    layerContext(map),
+    fakeDem(),
+    TILES,
+    STATS,
+    undefined,
+    undefined,
+    silentHttp(),
+  );
 
   map.emit("movestart");
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), "none");
@@ -216,7 +278,15 @@ test("the contour labels fade back after a gesture instead of popping", () => {
 
 test("the label fade passes through a translucent midpoint", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourOverlay(
+    layerContext(map),
+    fakeDem(),
+    TILES,
+    STATS,
+    undefined,
+    undefined,
+    silentHttp(),
+  );
 
   map.emit("movestart");
   const hidden = map.paintOf(LABEL_ID, "text-color");
@@ -245,7 +315,15 @@ test("a data-driven opacity snaps instead of fading, so the fade runs on colour"
 
 test("low-zoom contour labels keep the resting 350 px spacing", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourOverlay(
+    layerContext(map),
+    fakeDem(),
+    TILES,
+    STATS,
+    undefined,
+    undefined,
+    silentHttp(),
+  );
 
   assert.equal(map.layoutProp(LABEL_ID, "symbol-spacing"), 350);
   overlay.destroy();
@@ -254,7 +332,15 @@ test("low-zoom contour labels keep the resting 350 px spacing", () => {
 test("reduced motion restores the contour labels instantly", () => {
   withReducedMotion(true, () => {
     const map = fakeMap();
-    const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+    const overlay = new ContourOverlay(
+    layerContext(map),
+    fakeDem(),
+    TILES,
+    STATS,
+    undefined,
+    undefined,
+    silentHttp(),
+  );
 
     map.emit("movestart");
     map.emit("moveend");
@@ -267,7 +353,15 @@ test("reduced motion restores the contour labels instantly", () => {
 
 test("a hidden contour toggle stays hidden through the gesture fade", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourOverlay(
+    layerContext(map),
+    fakeDem(),
+    TILES,
+    STATS,
+    undefined,
+    undefined,
+    silentHttp(),
+  );
 
   map.emit("movestart");
   overlay.part.onToggle?.(false);
@@ -278,7 +372,15 @@ test("a hidden contour toggle stays hidden through the gesture fade", () => {
 
 test("zooming keeps the contour source so stretched parents cover late children", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourOverlay(
+    layerContext(map),
+    fakeDem(),
+    TILES,
+    STATS,
+    undefined,
+    undefined,
+    silentHttp(),
+  );
   const source = map.sources.get("terrain-contours") as { maxzoom?: number; minzoom?: unknown };
   assert.equal(source.maxzoom, 12);
   assert.equal(source.minzoom, undefined);
@@ -287,6 +389,7 @@ test("zooming keeps the contour source so stretched parents cover late children"
   map.emit("zoom");
   map.emit("zoomend");
   assert.ok(map.sources.has("terrain-contours"));
+  assert.ok(map.sources.has("terrain-labels-contours"));
   assert.ok(overlay.part.layerIds.every((id) => map.layers.has(id)));
   overlay.destroy();
 });
@@ -297,314 +400,192 @@ test("warm levels mirror the protocol threshold lookup", () => {
   assert.deepEqual(levelsForZoom({ 8: 50, 10: 10 }, 10), [10]);
 });
 
-test("the warm-up traces the next zoom while zooming in with spare capacity", () => {
+test("the overlay warms DEM parents before traces and the Liberty template", async (t) => {
+  optInPrefetch(t);
   const map = fakeMap();
-  const stop = startGesture(map);
+  map.sources.set(BASEMAP_SOURCE_ID, {
+    url: "https://tiles.openfreemap.org/planet",
+    tiles: ["https://tiles.openfreemap.org/planet/20260101_001001_pt/{z}/{x}/{y}.pbf"],
+    maxzoom: 14,
+  });
   map.emit("movestart");
   const warm = warmingDem();
-  const ladder = contourLadder(STATS, 0, { maxZoom: 12 });
+  const http = warmingHttp();
   let now = 1000;
-  const warmer = new ContourZoomWarmer(map, warm.dem, () => warmPlan(ladder), () => now);
+  const overlay = overlayWithDem(map, warm.dem, http.warmer, () => now);
   try {
-    map.state.zoom = 8;
-    map.emit("zoom");
-    now += 100;
-    map.state.zoom = 8.2;
-    map.emit("zoom");
+    frame(map, () => {
+      map.state.zoom = 8;
+      now += 100;
+    });
+    frame(map, () => {
+      map.state.zoom = 8.2;
+      now += 100;
+    });
+
+    await settled();
+    assert.ok(warm.demCalls.length > 0);
+    assert.equal(warm.calls.length, 0);
+
+    for (let round = 0; round < 10 && warm.demPending.size > 0; round += 1) {
+      for (const entry of [...warm.demPending.values()]) entry.resolve();
+      await settled();
+    }
+
     assert.ok(warm.calls.length > 0);
-    assert.ok(warm.calls.length <= WARM_MAX_IN_FLIGHT);
-    assert.ok(warm.calls.every((call) => call.z === 9));
-    assert.deepEqual(warm.calls[0].options, {
-      levels: levelsForZoom(ladder.thresholds, 9),
+    assert.ok(warm.calls.length <= PREFETCH_MAX_PER_SOURCE);
+    assert.ok(warm.peak <= PREFETCH_TRACE_LANES);
+    assert.ok(http.urls.length > 0);
+    assert.ok(http.urls.length <= PREFETCH_MAX_HTTP_PER_PREDICTION);
+    assert.ok(http.peak <= PREFETCH_NETWORK_LANES);
+    const versioned = "https://tiles.openfreemap.org/planet/20260101_001001_pt/";
+    assert.ok(http.urls.every((url) => url.startsWith(versioned)));
+    const latest = warm.calls.at(-1)!;
+    assert.deepEqual(latest.options, {
+      levels: levelsForZoom(contourLadder(STATS, { maxZoom: 12 }).thresholds, latest.z),
       overzoom: 1,
       buffer: 1,
     });
   } finally {
-    warmer.destroy();
-    stop();
+    overlay.destroy();
   }
 });
 
-test("the warm-up waits while the visible tiles are still loading", () => {
-  const map = fakeMap();
-  const stop = startGesture(map);
-  map.emit("movestart");
-  const warm = warmingDem();
-  const ladder = contourLadder(STATS, 0, { maxZoom: 12 });
-  let now = 1000;
-  const warmer = new ContourZoomWarmer(map, warm.dem, () => warmPlan(ladder), () => now);
+test("the prefetch switch off warms nothing and the badge says off", async () => {
+  const previous = (globalThis as Record<string, unknown>).location;
+  (globalThis as Record<string, unknown>).location = { search: "?prefetch=0" };
   try {
-    map.state.loaded = false;
-    map.state.zoom = 8;
-    map.emit("zoom");
-    now += 100;
-    map.state.zoom = 8.2;
-    map.emit("zoom");
-    assert.equal(warm.calls.length, 0);
+    resetSpeculativeStats();
+    const map = fakeMap();
+    map.emit("movestart");
+    const warm = warmingDem();
+    const http = warmingHttp();
+    let now = 1000;
+    const overlay = overlayWithDem(map, warm.dem, http.warmer, () => now);
+    try {
+      frame(map, () => {
+        map.state.zoom = 8;
+        now += 100;
+      });
+      frame(map, () => {
+        map.state.zoom = 8.2;
+        now += 100;
+      });
+      await settled();
 
-    map.state.loaded = true;
-    now += 100;
-    map.state.zoom = 8.4;
-    map.emit("zoom");
-    assert.ok(warm.calls.length > 0);
-  } finally {
-    warmer.destroy();
-    stop();
-  }
-});
-
-test("visible tiles loading cancels warm work so visible requests keep priority", () => {
-  const map = fakeMap();
-  const stop = startGesture(map);
-  map.emit("movestart");
-  const warm = warmingDem();
-  const ladder = contourLadder(STATS, 0, { maxZoom: 12 });
-  let now = 1000;
-  const warmer = new ContourZoomWarmer(map, warm.dem, () => warmPlan(ladder), () => now);
-  try {
-    map.state.zoom = 8;
-    map.emit("zoom");
-    now += 100;
-    map.state.zoom = 8.2;
-    map.emit("zoom");
-    assert.ok(warm.pending.size > 0);
-
-    map.state.loaded = false;
-    map.emit("zoom");
-    assert.equal(warm.pending.size, 0);
-    assert.equal(warm.aborted.length, warm.calls.length);
-  } finally {
-    warmer.destroy();
-    stop();
-  }
-});
-
-test("a stale warm rejection never erases its replacement request", async () => {
-  const map = fakeMap();
-  const stop = startGesture(map);
-  map.emit("movestart");
-  const warm = warmingDem();
-  const ladder = contourLadder(STATS, 0, { maxZoom: 12 });
-  let now = 1000;
-  const warmer = new ContourZoomWarmer(map, warm.dem, () => warmPlan(ladder), () => now);
-  try {
-    map.state.zoom = 8;
-    map.emit("zoom");
-    now += 100;
-    map.state.zoom = 8.2;
-    map.emit("zoom");
-    assert.ok(warm.pending.size > 0);
-
-    now += 100;
-    map.state.zoom = 8.4;
-    map.state.bounds = { west: 30, south: -0.5, east: 31, north: 0.5 };
-    map.emit("zoom");
-    assert.equal(warm.pending.size, 0);
-
-    now += 100;
-    map.state.zoom = 8.6;
-    map.state.bounds = { west: -0.5, south: -0.5, east: 0.5, north: 0.5 };
-    map.emit("zoom");
-    const retraced = warm.calls.length;
-    assert.ok(warm.pending.size > 0);
-
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(warm.pending.size, 4);
-    now += 100;
-    map.state.zoom = 8.8;
-    map.emit("zoom");
-    assert.equal(warm.calls.length, retraced);
-    assert.equal(warm.pending.size, 4);
-  } finally {
-    warmer.destroy();
-    stop();
-  }
-  assert.equal(warm.pending.size, 0);
-});
-
-test("panning prunes drifted warm tiles without a zoom event", () => {
-  const map = fakeMap();
-  const stop = startGesture(map);
-  map.emit("movestart");
-  const warm = warmingDem();
-  const ladder = contourLadder(STATS, 0, { maxZoom: 12 });
-  let now = 1000;
-  const warmer = new ContourZoomWarmer(map, warm.dem, () => warmPlan(ladder), () => now);
-  try {
-    map.state.zoom = 8;
-    map.emit("zoom");
-    now += 100;
-    map.state.zoom = 8.2;
-    map.emit("zoom");
-    assert.ok(warm.pending.size > 0);
-
-    map.state.bounds = { west: 60, south: -0.5, east: 61, north: 0.5 };
-    map.emit("move");
-    assert.equal(warm.pending.size, 0);
-    assert.equal(warm.aborted.length, warm.calls.length);
-  } finally {
-    warmer.destroy();
-    stop();
-  }
-});
-
-test("the warm-up covers the target zoom viewport inside the scene bounds", () => {
-  const map = fakeMap();
-  const stop = startGesture(map);
-  map.emit("movestart");
-  const warm = warmingDem();
-  const ladder = contourLadder(STATS, 0, { maxZoom: 12 });
-  let now = 1000;
-  const warmer = new ContourZoomWarmer(map, warm.dem, () => warmPlan(ladder), () => now);
-  try {
-    map.state.bounds = { west: -20, south: -10, east: 20, north: 10 };
-    map.state.zoom = 8;
-    map.emit("zoom");
-    now += 100;
-    map.state.zoom = 8.2;
-    map.emit("zoom");
-    assert.ok(warm.calls.length > 0);
-    for (const call of warm.calls) {
-      assert.equal(call.z, 9);
-      const centreLng = (call.x + 0.5) / 512 * 360 - 180;
-      assert.ok(Math.abs(centreLng) <= 12, `tile ${call.x} sits outside the target viewport`);
-      const west = call.x / 512 * 360 - 180;
-      assert.ok(west <= 15 && west + 360 / 512 >= -15, `tile ${call.x} sits outside the scene`);
+      assert.equal(warm.demCalls.length, 0);
+      assert.equal(warm.calls.length, 0);
+      assert.equal(http.urls.length, 0);
+      assert.deepEqual(speculativeSnapshot(), {
+        terrain: { hits: 0, misses: 0, wasted: 0 },
+        basemap: { hits: 0, misses: 0, wasted: 0 },
+        contours: { hits: 0, misses: 0, wasted: 0 },
+      });
+      assert.equal(formatPrefetchPart(speculativeSnapshot()), "prefetch off");
+    } finally {
+      overlay.destroy();
     }
+    assert.equal(isPrefetchDisabled(), false);
   } finally {
-    warmer.destroy();
-    stop();
+    if (previous === undefined) Reflect.deleteProperty(globalThis, "location");
+    else (globalThis as Record<string, unknown>).location = previous;
   }
 });
 
-test("switching contours off cancels warm work at once", () => {
+test("a visible contour tile load credits one hit after the overlay warmed it", async (t) => {
+  optInPrefetch(t);
+  resetSpeculativeStats();
   const map = fakeMap();
+  map.emit("movestart");
   const warm = warmingDem();
   let now = 1000;
-  const overlay = new ContourOverlay(layerContext(map), warm.dem as never, TILES, STATS, () => now);
+  const overlay = overlayWithDem(map, warm.dem, silentHttp(), () => now);
+  try {
+    frame(map, () => {
+      map.state.zoom = 8;
+      now += 100;
+    });
+    frame(map, () => {
+      map.state.zoom = 8.2;
+      now += 100;
+    });
+    for (let round = 0; round < 10; round += 1) {
+      for (const entry of [...warm.demPending.values(), ...warm.pending.values()]) entry.resolve();
+      await settled();
+    }
+    const traced = warm.calls[0];
+    const loading = { sourceId: "terrain-contours", tile: { tileID: { canonical: traced } } };
+
+    map.emit("sourcedataloading", loading);
+    map.emit("sourcedataloading", loading);
+
+    assert.equal(speculativeSnapshot().contours.hits, 1);
+  } finally {
+    overlay.destroy();
+  }
+});
+
+test("switching contours off cancels speculative work at once", async (t) => {
+  optInPrefetch(t);
+  const map = fakeMap();
+  const warm = warmingDem();
+  const http = warmingHttp();
+  let now = 1000;
+  const overlay = overlayWithDem(map, warm.dem, http.warmer, () => now);
   map.state.zoom = 8;
   map.emit("movestart");
   map.emit("zoom");
   now += 100;
   map.state.zoom = 8.2;
   map.emit("zoom");
-  assert.ok(warm.pending.size > 0);
+  await settled();
+  assert.ok(warm.demPending.size > 0);
 
   overlay.part.onToggle?.(false);
-  assert.equal(warm.pending.size, 0);
+  await settled();
+
+  assert.equal(warm.demPending.size + warm.pending.size, 0);
   overlay.destroy();
 });
 
-test("the warm-up skips flings and stops past the tiling cap", () => {
-  const map = fakeMap();
-  const stop = startGesture(map);
-  map.emit("movestart");
-  const warm = warmingDem();
-  const ladder = contourLadder(STATS, 0, { maxZoom: 12 });
-  let now = 1000;
-  const warmer = new ContourZoomWarmer(map, warm.dem, () => warmPlan(ladder), () => now);
-  try {
-    map.state.zoom = 8;
-    map.emit("zoom");
-    now += 10;
-    map.state.zoom = 9.5;
-    map.emit("zoom");
-    assert.equal(warm.calls.length, 0);
-
-    now += 1000;
-    map.state.zoom = 12.5;
-    map.emit("zoom");
-    now += 1000;
-    map.state.zoom = 12.7;
-    map.emit("zoom");
-    assert.equal(warm.calls.length, 0);
-  } finally {
-    warmer.destroy();
-    stop();
-  }
-});
-
-test("the warm-up never runs more traces than its in-flight bound", () => {
-  const map = fakeMap();
-  const stop = startGesture(map);
-  map.emit("movestart");
-  const warm = warmingDem();
-  const ladder = contourLadder(STATS, 0, { maxZoom: 12 });
-  let now = 1000;
-  const warmer = new ContourZoomWarmer(map, warm.dem, () => warmPlan(ladder), () => now);
-  try {
-    map.state.zoom = 8;
-    map.emit("zoom");
-    for (let step = 1; step <= 6; step += 1) {
-      now += 100;
-      map.state.zoom = 8 + step * 0.1;
-      map.state.bounds = { west: step * 2 - 0.5, south: -0.5, east: step * 2 + 0.5, north: 0.5 };
-      map.emit("zoom");
-    }
-    assert.ok(warm.peak <= WARM_MAX_IN_FLIGHT);
-  } finally {
-    warmer.destroy();
-    stop();
-  }
-});
-
-test("the warm-up cancels when the gesture turns around or the scene exits", () => {
-  const map = fakeMap();
-  const stop = startGesture(map);
-  map.emit("movestart");
-  const warm = warmingDem();
-  const ladder = contourLadder(STATS, 0, { maxZoom: 12 });
-  let now = 1000;
-  const warmer = new ContourZoomWarmer(map, warm.dem, () => warmPlan(ladder), () => now);
-  try {
-    map.state.zoom = 8;
-    map.emit("zoom");
-    now += 100;
-    map.state.zoom = 8.2;
-    map.emit("zoom");
-    assert.ok(warm.pending.size > 0);
-
-    now += 100;
-    map.state.zoom = 8.1;
-    map.emit("zoom");
-    assert.equal(warm.pending.size, 0);
-    assert.ok(warm.aborted.length > 0);
-
-    const calls = warm.calls.length;
-    warmer.destroy();
-    map.state.zoom = 8.3;
-    map.emit("zoom");
-    assert.equal(warm.calls.length, calls);
-  } finally {
-    stop();
-  }
-});
-
-test("the overlay warms the next zoom mid-gesture and stops on destroy", () => {
+test("destroying the overlay aborts speculative work and stops new requests", async (t) => {
+  optInPrefetch(t);
   const map = fakeMap();
   const warm = warmingDem();
+  const http = warmingHttp();
   let now = 1000;
-  const overlay = new ContourOverlay(layerContext(map), warm.dem as never, TILES, STATS, () => now);
+  const overlay = overlayWithDem(map, warm.dem, http.warmer, () => now);
   map.state.zoom = 8;
   map.emit("movestart");
   map.emit("zoom");
   now += 100;
   map.state.zoom = 8.2;
   map.emit("zoom");
-  assert.ok(warm.calls.length > 0);
+  await settled();
+  assert.ok(warm.demCalls.length > 0);
 
-  const calls = warm.calls.length;
+  const calls = warm.demCalls.length;
   overlay.destroy();
   now += 100;
   map.state.zoom = 8.4;
   map.emit("zoom");
-  assert.equal(warm.calls.length, calls);
-  assert.equal(warm.pending.size, 0);
+  await settled();
+
+  assert.equal(warm.demCalls.length, calls);
+  assert.equal(warm.demPending.size + warm.pending.size + http.pending.size, 0);
 });
 
 test("toggling contours on mid-gesture keeps the labels frozen until moveend", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourOverlay(
+    layerContext(map),
+    fakeDem(),
+    TILES,
+    STATS,
+    undefined,
+    undefined,
+    silentHttp(),
+  );
 
   map.emit("movestart");
   // drawView shows every part layer before it notifies the toggle.
@@ -617,22 +598,154 @@ test("toggling contours on mid-gesture keeps the labels frozen until moveend", (
   overlay.destroy();
 });
 
+test("a gesture hides only the labels while the line source and buckets stay put", () => {
+  const map = fakeMap();
+  const dem = fakeDem();
+  const overlay = overlayWithDem(map, dem, silentHttp());
+  const lineSource = map.sources.get("terrain-contours");
+  const labelSource = map.sources.get("terrain-labels-contours");
+  const lineIds = overlay.part.layerIds.filter((id) => id !== LABEL_ID);
+  assert.ok(lineIds.length > 0);
+  // Identical protocol URLs decode to one worker cache entry, so the labels add no traces.
+  const lineTiles = (map.sources.get("terrain-contours") as { tiles: unknown }).tiles;
+  const labelTiles = (map.sources.get("terrain-labels-contours") as { tiles: unknown }).tiles;
+  assert.deepEqual(labelTiles, lineTiles);
+
+  map.emit("movestart");
+  assert.equal(map.layoutOf(LABEL_ID, "visibility"), "none");
+  assert.equal(map.sources.get("terrain-contours"), lineSource);
+  assert.equal(map.sources.get("terrain-labels-contours"), labelSource);
+  for (const id of lineIds) {
+    assert.equal(map.layoutOf(id, "visibility"), undefined);
+    assert.ok(map.layers.has(id));
+  }
+
+  map.emit("moveend");
+  assert.equal(map.layoutOf(LABEL_ID, "visibility"), "visible");
+  assert.equal(map.sources.get("terrain-contours"), lineSource);
+  for (const id of lineIds) {
+    assert.equal(map.layoutOf(id, "visibility"), undefined);
+    assert.ok(map.layers.has(id));
+  }
+  overlay.destroy();
+});
+
 function fakeDem() {
-  return { contourProtocolUrl: () => "dem-contour://terrain/{z}/{x}/{y}" };
-}
-
-function startGesture(map: FakeMap): () => void {
-  return subscribeGesture(map, { onStart() {}, onEnd() {} });
-}
-
-function warmPlan(ladder: ContourLadder, bbox: Bbox = [-15, -15, 15, 15]): ContourWarmerPlan {
   return {
-    sourceId: "terrain-contours",
-    ladder,
-    maxzoom: 12,
-    elevationUnit: "m",
-    enabled: true,
-    bbox,
+    contourProtocolUrl: (request: unknown) =>
+      `dem-contour://terrain/{z}/{x}/{y}?${encodeContourOptions(request)}`,
+  };
+}
+
+/** Silent HTTP warming for overlay tests, so gestures never touch the network. */
+function silentHttp(): HttpWarmer {
+  return () => Promise.resolve(new ArrayBuffer(0));
+}
+
+/** Build an overlay whose scheduler warms through fakes instead of the network. */
+function overlayWithDem(
+  map: FakeMap,
+  dem: { contourProtocolUrl: (request: unknown) => string; manager?: unknown },
+  http: HttpWarmer,
+  clock?: () => number,
+): ContourOverlay {
+  return new ContourOverlay(
+    layerContext(map),
+    dem as never,
+    TILES,
+    STATS,
+    clock,
+    undefined,
+    http,
+  );
+}
+
+// The worker keys its contour cache by tile plus encoded options, so equal URLs share traces.
+function encodeContourOptions(request: unknown): string {
+  const entries = Object.entries(request as Record<string, unknown>);
+  entries.sort(([first], [second]) => (first < second ? -1 : 1));
+  return entries.map(([key, value]) => `${key}=${JSON.stringify(value)}`).join("&");
+}
+
+/** Let aborted and resolved fakes reach the scheduler before the test asserts. */
+async function settled(): Promise<void> {
+  for (let round = 0; round < 4; round += 1) await Promise.resolve();
+}
+
+/** Step one camera frame the way MapLibre emits it: move then zoom at one position. */
+function frame(map: FakeMap, advance: () => void): void {
+  advance();
+  map.emit("move");
+  map.emit("zoom");
+}
+
+interface PendingCall {
+  id: number;
+  key: string;
+  resolve: (data?: unknown) => void;
+  reject: (error: unknown) => void;
+}
+
+interface WarmingHttp {
+  warmer: HttpWarmer;
+  urls: string[];
+  ids: number[];
+  pending: Map<number, PendingCall & { url: string }>;
+  aborted: string[];
+  readonly peak: number;
+}
+
+/** Fake versioned HTTP warming that records URLs without touching the network. */
+function warmingHttp(settleOnAbort = true): WarmingHttp {
+  const urls: string[] = [];
+  const ids: number[] = [];
+  const pending = new Map<number, PendingCall & { url: string }>();
+  const aborted: string[] = [];
+  let peak = 0;
+  let nextId = 0;
+  const warmer: HttpWarmer = (url, signal) => {
+    const id = nextId++;
+    urls.push(url);
+    ids.push(id);
+    peak = Math.max(peak, pending.size + 1);
+    return new Promise<unknown>((resolve, reject) => {
+      if (signal.aborted) {
+        aborted.push(url);
+        reject(new Error("aborted"));
+        return;
+      }
+      const call: PendingCall & { url: string } = {
+        id,
+        key: url,
+        url,
+        resolve: (data?: unknown) => {
+          pending.delete(id);
+          resolve(data ?? new ArrayBuffer(0));
+        },
+        reject: (error: unknown) => {
+          pending.delete(id);
+          reject(error);
+        },
+      };
+      pending.set(id, call);
+      signal.addEventListener("abort", () => {
+        aborted.push(url);
+        if (!settleOnAbort) return;
+        if (!pending.has(id)) return;
+        pending.delete(id);
+        reject(new Error("aborted"));
+      });
+    });
+  };
+  return {
+    warmer,
+    urls,
+    ids,
+    pending,
+    aborted,
+    get peak() {
+      return peak;
+    },
   };
 }
 
@@ -640,6 +753,7 @@ interface WarmingDem {
   dem: {
     contourProtocolUrl: () => string;
     manager: {
+      fetchTile: (z: number, x: number, y: number, cancel: AbortController) => Promise<unknown>;
       fetchContourTile: (
         z: number,
         x: number,
@@ -650,17 +764,61 @@ interface WarmingDem {
     };
   };
   calls: { z: number; x: number; y: number; options: unknown }[];
-  pending: Map<string, () => void>;
+  traceIds: number[];
+  pending: Map<number, PendingCall>;
   aborted: string[];
   readonly peak: number;
+  demCalls: { z: number; x: number; y: number }[];
+  demIds: number[];
+  demPending: Map<number, PendingCall>;
+  demAborted: string[];
 }
 
-function warmingDem(): WarmingDem {
+function warmingDem(demBytes = 200, settleOnAbort = true): WarmingDem {
   const calls: { z: number; x: number; y: number; options: unknown }[] = [];
-  const pending = new Map<string, () => void>();
+  const traceIds: number[] = [];
+  const pending = new Map<number, PendingCall>();
   const aborted: string[] = [];
   let peak = 0;
+  const demCalls: { z: number; x: number; y: number }[] = [];
+  const demIds: number[] = [];
+  const demPending = new Map<number, PendingCall>();
+  const demAborted: string[] = [];
+  let nextId = 0;
   const manager = {
+    fetchTile: (z: number, x: number, y: number, cancel: AbortController) => {
+      const key = `${z}/${x}/${y}`;
+      const id = nextId++;
+      demCalls.push({ z, x, y });
+      demIds.push(id);
+      return new Promise<unknown>((resolve, reject) => {
+        if (cancel.signal.aborted) {
+          demAborted.push(key);
+          reject(new Error("aborted"));
+          return;
+        }
+        const call: PendingCall = {
+          id,
+          key,
+          resolve: (data) => {
+            demPending.delete(id);
+            resolve(data ?? { data: new Blob([new Uint8Array(demBytes)]) });
+          },
+          reject: (error) => {
+            demPending.delete(id);
+            reject(error);
+          },
+        };
+        demPending.set(id, call);
+        cancel.signal.addEventListener("abort", () => {
+          demAborted.push(key);
+          if (!settleOnAbort) return;
+          if (!demPending.has(id)) return;
+          demPending.delete(id);
+          reject(new Error("aborted"));
+        });
+      });
+    },
     fetchContourTile: (
       z: number,
       x: number,
@@ -669,7 +827,9 @@ function warmingDem(): WarmingDem {
       cancel: AbortController,
     ) => {
       const key = `${z}/${x}/${y}`;
+      const id = nextId++;
       calls.push({ z, x, y, options });
+      traceIds.push(id);
       peak = Math.max(peak, pending.size + 1);
       return new Promise<unknown>((resolve, reject) => {
         if (cancel.signal.aborted) {
@@ -677,14 +837,24 @@ function warmingDem(): WarmingDem {
           reject(new Error("aborted"));
           return;
         }
-        pending.set(key, () => {
-          pending.delete(key);
-          resolve({ arrayBuffer: new ArrayBuffer(0) });
-        });
+        const call: PendingCall = {
+          id,
+          key,
+          resolve: (data) => {
+            pending.delete(id);
+            resolve(data ?? { arrayBuffer: new ArrayBuffer(0) });
+          },
+          reject: (error) => {
+            pending.delete(id);
+            reject(error);
+          },
+        };
+        pending.set(id, call);
         cancel.signal.addEventListener("abort", () => {
-          if (!pending.has(key)) return;
-          pending.delete(key);
           aborted.push(key);
+          if (!settleOnAbort) return;
+          if (!pending.has(id)) return;
+          pending.delete(id);
           reject(new Error("aborted"));
         });
       });
@@ -693,11 +863,16 @@ function warmingDem(): WarmingDem {
   return {
     dem: { contourProtocolUrl: () => "dem-contour://terrain/{z}/{x}/{y}", manager },
     calls,
+    traceIds,
     pending,
     aborted,
     get peak() {
       return peak;
     },
+    demCalls,
+    demIds,
+    demPending,
+    demAborted,
   };
 }
 
@@ -785,7 +960,7 @@ function fakeMap() {
     string,
     { id: string; paint: Record<string, unknown>; layout: Record<string, unknown> }
   >();
-  const listeners = new Map<string, Set<() => void>>();
+  const listeners = new Map<string, Set<(event: object) => void>>();
   const layouts = new Map<string, Map<string, unknown>>();
   const state = {
     zoom: 8,
@@ -807,6 +982,7 @@ function fakeMap() {
       getNorth: () => state.bounds.north,
     }),
     isSourceLoaded: () => state.loaded,
+    getSource: (id: string) => sources.get(id) ?? null,
     getLayer: (id: string) => layers.get(id),
     addSource: (id: string, source: object) => void sources.set(id, source),
     addLayer: (layer: {
@@ -830,14 +1006,16 @@ function fakeMap() {
       entries.set(name, value);
       layouts.set(id, entries);
     },
-    on: (type: string, listener: () => void) => {
-      const entries = listeners.get(type) ?? new Set<() => void>();
+    on: (type: string, listener: (event: object) => void) => {
+      const entries = listeners.get(type) ?? new Set<(event: object) => void>();
       entries.add(listener);
       listeners.set(type, entries);
     },
-    off: (type: string, listener: () => void) => void listeners.get(type)?.delete(listener),
-    emit: (type: string) => {
-      for (const listener of [...(listeners.get(type) ?? [])]) listener();
+    off: (type: string, listener: (event: object) => void) => {
+      listeners.get(type)?.delete(listener);
+    },
+    emit: (type: string, event: object = {}) => {
+      for (const listener of [...(listeners.get(type) ?? [])]) listener(event);
     },
     layoutOf: (id: string, name: string) => layouts.get(id)?.get(name),
     paintOf: (id: string, name: string) => layers.get(id)!.paint[name],
@@ -853,6 +1031,16 @@ function fakeMap() {
     layoutProp: map.layoutProp,
     state,
   };
+}
+
+/** Opt the test into the prefetch scheduler, which the address must now request. */
+function optInPrefetch(t: { after: (cleanup: () => void) => void }) {
+  const previous = (globalThis as Record<string, unknown>).location;
+  (globalThis as Record<string, unknown>).location = { search: "?prefetch=1" };
+  t.after(() => {
+    if (previous === undefined) Reflect.deleteProperty(globalThis, "location");
+    else (globalThis as Record<string, unknown>).location = previous;
+  });
 }
 
 function withSearch(search: string, run: () => void) {

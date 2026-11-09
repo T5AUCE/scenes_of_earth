@@ -10,15 +10,22 @@ import {
   formatBytes,
   formatDevStats,
   formatGpuPart,
+  formatPrefetchPart,
   formatTileSettlePart,
   framesPerSecond,
   layerForSource,
   noteSceneOpen,
   noteSceneReady,
+  noteSpeculativeHit,
+  noteSpeculativeMiss,
+  noteSpeculativeWasted,
   pruneStamps,
   renderDevStats,
+  resetSpeculativeStats,
   sceneLoadStats,
+  setPrefetchDisabled,
   shouldShowDevStats,
+  speculativeSnapshot,
   startDevStats,
   TileSettleTracker,
   worstFrameMs,
@@ -613,6 +620,71 @@ test("the tile badge part lists each layer once", () => {
   });
 
   assert.equal(text, "tiles terrain 120 ms 12 req basemap — 0 req contours 80 ms 2 req");
+});
+
+test("speculative counters accumulate per source for the badge", () => {
+  resetSpeculativeStats();
+  noteSpeculativeHit("contours");
+  noteSpeculativeMiss("contours");
+  noteSpeculativeWasted("terrain");
+  noteSpeculativeWasted("terrain");
+
+  assert.deepEqual(speculativeSnapshot(), {
+    terrain: { hits: 0, misses: 0, wasted: 2 },
+    basemap: { hits: 0, misses: 0, wasted: 0 },
+    contours: { hits: 1, misses: 1, wasted: 0 },
+  });
+  assert.equal(
+    formatPrefetchPart(speculativeSnapshot()),
+    "prefetch terrain 0 hit 0 miss 2 wasted — basemap 0 hit 0 miss 0 wasted —"
+      + " contours 1 hit 1 miss 0 wasted 50%",
+  );
+  resetSpeculativeStats();
+
+  assert.deepEqual(speculativeSnapshot().contours, { hits: 0, misses: 0, wasted: 0 });
+});
+
+test("the prefetch badge shows the hit rate and off when disabled", () => {
+  resetSpeculativeStats();
+  assert.equal(
+    formatPrefetchPart({
+      terrain: { hits: 79, misses: 1776, wasted: 67 },
+      basemap: { hits: 20, misses: 1178, wasted: 577 },
+      contours: { hits: 0, misses: 899, wasted: 6 },
+    }),
+    "prefetch terrain 79 hit 1776 miss 67 wasted 4%"
+      + " basemap 20 hit 1178 miss 577 wasted 2% contours 0 hit 899 miss 6 wasted 0%",
+  );
+  setPrefetchDisabled(true);
+  try {
+    assert.equal(
+      formatPrefetchPart({
+        terrain: { hits: 0, misses: 0, wasted: 0 },
+        basemap: { hits: 0, misses: 0, wasted: 0 },
+        contours: { hits: 0, misses: 0, wasted: 0 },
+      }),
+      "prefetch off",
+    );
+    assert.ok(formatDevStats({
+      fps: 60,
+      worstMs: 33,
+      zoom: 5.25,
+      loadMs: null,
+      requests: 2,
+      bytes: 1536,
+      gpuMs: {},
+      gpuUnavailable: true,
+      longtasks: 0,
+      prefetch: {
+        terrain: { hits: 0, misses: 0, wasted: 0 },
+        basemap: { hits: 0, misses: 0, wasted: 0 },
+        contours: { hits: 0, misses: 0, wasted: 0 },
+      },
+    }).includes("prefetch off"));
+  } finally {
+    setPrefetchDisabled(false);
+  }
+  resetSpeculativeStats();
 });
 
 test("the badge line gains the tile part only while tracking", () => {

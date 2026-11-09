@@ -2,12 +2,80 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { rgbToOklch } from "./colormap.ts";
-import { classColors, classPaletteOptions } from "./palettes.ts";
+import {
+  classColors,
+  classPaletteOptions,
+  customColors,
+  customPalette,
+  customStops,
+  fieldGradient,
+  fieldStops,
+} from "./palettes.ts";
 
 const AGE_CLASSES = [
   { value: 1, label: "Quaternary", color: "#f9f97f", group: "Cenozoic" },
   { value: 7, label: "Triassic", color: "#812b92", group: "Mesozoic" },
 ];
+
+test("legacy even custom names still parse to evenly spaced stops", () => {
+  const stops = customStops("custom-000000-ffffff")!;
+
+  assert.equal(stops.length, 2);
+  assert.deepEqual(stops.map(({ at }) => at), [0, 1]);
+  assert.deepEqual(customColors("custom-000000-ffffff"), ["#000000", "#ffffff"]);
+  assert.deepEqual(fieldGradient("custom-000000-ffffff"), [[0, 0, 0], [255, 255, 255]]);
+});
+
+test("positioned custom names parse with integer percents in non-decreasing order", () => {
+  const stops = customStops("custom-447dc4_0-189d73_50-618d63_80-cf764c_100")!;
+
+  assert.deepEqual(stops.map(({ at }) => at), [0, 0.5, 0.8, 1]);
+  assert.deepEqual(customColors("custom-447dc4_0-189d73_50-618d63_80-cf764c_100"), [
+    "#447dc4",
+    "#189d73",
+    "#618d63",
+    "#cf764c",
+  ]);
+});
+
+test("custom names reject mixed, unordered or out-of-range positions", () => {
+  const bad = [
+    "custom-000000-ffffff_50",
+    "custom-000000_50-ffffff_40",
+    "custom-000000_101-ffffff_100",
+    "custom-000000",
+    "custom-000000-ffffff-000000-ffffff-000000-ffffff-000000-ffffff-000000",
+    "custom-00000g-ffffff",
+    "custom-000000-FFFFff",
+  ];
+  for (const name of bad) assert.equal(customStops(name), null, name);
+  assert.equal(customStops("custom-000000_0-000000_0-ffffff_100")!.length, 3);
+});
+
+test("custom names canonically omit positions when the stops sit evenly", () => {
+  const even = [
+    { at: 0, rgb: [0, 0, 0] },
+    { at: 0.5, rgb: [136, 136, 136] },
+    { at: 1, rgb: [255, 255, 255] },
+  ];
+
+  assert.equal(customPalette(even), "custom-000000-888888-ffffff");
+  assert.equal(
+    customPalette([{ at: 0, rgb: [0, 0, 0] }, { at: 0.4, rgb: [255, 255, 255] }]),
+    "custom-000000_0-ffffff_40",
+  );
+  assert.equal(customPalette(customStops("custom-000000-ffffff")!), "custom-000000-ffffff");
+});
+
+test("built-in gradients expose even stops while unknown names stay unknown", () => {
+  const stops = fieldStops("ink-blue")!;
+
+  assert.equal(stops.length, 9);
+  assert.deepEqual(stops.map(({ at }) => at), stops.map((_, index) => index / 8));
+  assert.deepEqual(fieldStops("custom-000000_0-ffffff_100")!.map(({ at }) => at), [0, 1]);
+  assert.equal(fieldStops("nope"), undefined);
+  assert.equal(fieldGradient("nope"), undefined);
+});
 
 test("the age layer offers painted colours first and the ICS chart second", () => {
   assert.deepEqual(classPaletteOptions("geology_age"), [

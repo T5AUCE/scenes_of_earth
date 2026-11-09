@@ -6,6 +6,7 @@ import {
   gestureFlags,
   isGestureActive,
   maxPixelRatioSetting,
+  prefetchEnabled,
   subscribeGesture,
 } from "./gesture-quality.ts";
 
@@ -62,6 +63,13 @@ test("a tiling cap outside the zoom range keeps the default tiling", () => {
   assert.equal(contourMaxZoomSetting("?contourMaxZoom=11.9"), 11);
   assert.equal(contourMaxZoomSetting("?contourMaxZoom=99"), undefined);
   assert.equal(contourMaxZoomSetting("?contourMaxZoom=deep"), undefined);
+});
+
+test("prefetch stays off unless its parameter opts in", () => {
+  assert.equal(prefetchEnabled(""), false);
+  assert.equal(prefetchEnabled("?prefetch=0"), false);
+  assert.equal(prefetchEnabled("?prefetch=1"), true);
+  assert.equal(prefetchEnabled("?prefetch=off"), false);
 });
 
 test("nested gestures notify once and a stray moveend is ignored", () => {

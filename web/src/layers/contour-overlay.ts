@@ -14,25 +14,34 @@ import {
   finestIntervalAt,
   INTERVAL_CHAIN_FT,
   INTERVAL_CHAIN_M,
-  warmTilesForZoom,
   type ContourLadder,
   type LadderTier,
-  type WarmTile,
 } from "../contour-ladder";
+import { setPrefetchDisabled } from "../dev-stats";
 import {
   addressSearch,
   contourMaxZoomSetting,
   gestureFlags,
   isGestureActive,
+  prefetchEnabled,
   subscribeGesture,
 } from "../gesture-quality";
 import { makeHtmlElement } from "../html";
 import { contourLegendText } from "../legend";
 import { labelFadeDurationMs } from "../reduced-motion";
 import { contourColor, DEFAULT_CONTOUR_COLOR } from "../render/palettes";
-import { targetViewportBounds, tileInScene } from "../render/tile-viewport";
+import { BASEMAP_SOURCE_ID, basemapDescriptor } from "../render/tile-viewport";
 import { convertValue, displayUnitFor, isUnitFor } from "../units";
-import type { Bbox, LayerContext, Part, TerrainStats, TerrainTiles } from "../types";
+import type { LayerContext, Part, TerrainStats, TerrainTiles } from "../types";
+import {
+  TilePrefetchScheduler,
+  type DemFetcher,
+  type HttpWarmer,
+  type TilePrefetchMap,
+  type TilePrefetchWiring,
+} from "./tile-prefetch";
+
+export { levelsForZoom } from "../contour-ladder";
 
 const CONTOUR_OPACITY = 0.55;
 const MINOR_LINE_WIDTH_PX = 0.5;
@@ -50,10 +59,6 @@ const CONTOUR_BUFFER_PX = 1;
 const WORKER_ERROR_PREFIX = "Error: ";
 // A zoom step keeps its neighbours cached so sweeping zooms stop evicting them.
 const DEM_CACHE_TILES = 120;
-// The warm-up never delays a visible tile: few traces at a time and no flings.
-export const WARM_MAX_IN_FLIGHT = 4;
-export const WARM_MAX_TILES = 12;
-const WARM_FLING_ZOOM_PER_SEC = 3;
 // Ocean tiles stay missing, so the per-source memo caps how many 404 tiles it remembers.
 export const MAX_MISSING_DEM_TILES = 2000;
 const MAX_CONTOUR_ZOOM = 12;
@@ -171,8 +176,11 @@ export function cappedDemMaxZoom(nativeMaxzoom: number): number {
 export class ContourOverlay {
   readonly legend = makeHtmlElement("div");
   readonly part: Part;
+  /** Both contour sources, so terrain watches line and label tiles for failures. */
+  readonly contourSourceIds: readonly string[];
   private readonly map: MapLibreMap;
-  private readonly sourceId: string;
+  private readonly lineSourceId: string;
+  private readonly labelSourceId: string;
   private readonly dem: DemSource;
   private readonly stats: TerrainStats;
   private readonly bbox: LayerContext["layer"]["grid"]["bbox"];
@@ -186,9 +194,10 @@ export class ContourOverlay {
   private labelId?: string;
   private labelsFrozen = false;
   private labelFadeZeroed = false;
-  private readonly warmer: ContourZoomWarmer;
+  private readonly prefetch: TilePrefetchScheduler;
   // Captured here because scene entry replaces the address and drops trial flags.
   private readonly freezeAllowed = gestureFlags(addressSearch()).freezeLabels;
+  private readonly prefetchAllowed = prefetchEnabled(addressSearch());
   private readonly stopGesture: () => void;
 
   constructor(
@@ -197,6 +206,8 @@ export class ContourOverlay {
     tiles: TerrainTiles,
     stats: TerrainStats,
     clock: () => number = () => performance.now(),
+    wiring?: TilePrefetchWiring,
+    httpWarmer: HttpWarmer = warmHttp,
   ) {
     const { map, layer, beforeId, display } = context;
     // The card would set the interval in card type, so it takes the legend caption style.
@@ -207,7 +218,10 @@ export class ContourOverlay {
     this.bbox = layer.grid.bbox;
     this.beforeId = beforeId;
     this.color = contourColor(display?.palette ?? DEFAULT_CONTOUR_COLOR)!;
-    this.sourceId = `${layer.id}-contours`;
+    this.lineSourceId = `${layer.id}-contours`;
+    // A separate label source keeps gesture invalidation off the cached line buckets.
+    this.labelSourceId = `${layer.id}-labels-contours`;
+    this.contourSourceIds = [this.lineSourceId, this.labelSourceId];
     this.elevationUnit = displayUnitFor(layer.units, display?.units);
     this.maxzoom = Math.min(MAX_CONTOUR_ZOOM, cappedDemMaxZoom(tiles.maxzoom + CONTOUR_OVERZOOM));
     this.part = {
@@ -216,28 +230,42 @@ export class ContourOverlay {
       layerIds: [],
       onToggle: (visible) => {
         this.isOn = visible;
-        if (!visible) this.warmer.cancelAll();
+        if (!visible) this.prefetch.cancelAll();
         // drawView shows every part layer first, so the freeze state decides the labels.
         if (this.freezeAllowed) this.updateLabelVisibility();
         this.updateLegend();
       },
     };
-    this.warmer = new ContourZoomWarmer(map, dem, () => ({
-      sourceId: this.sourceId,
-      ladder: this.ladder,
-      maxzoom: this.maxzoom,
-      elevationUnit: this.elevationUnit,
-      enabled: this.isOn,
-      bbox: this.bbox,
-    }), clock);
+    const prefetchWiring = wiring ?? {
+      reliefSourceId: `${layer.id}-relief`,
+      basemapSourceId: BASEMAP_SOURCE_ID,
+    };
+    this.prefetch = new TilePrefetchScheduler(
+      map as unknown as TilePrefetchMap,
+      () => ({
+        sourceId: this.lineSourceId,
+        ladder: this.ladder,
+        maxzoom: this.maxzoom,
+        reliefMaxzoom: cappedDemMaxZoom(tiles.maxzoom),
+        elevationUnit: this.elevationUnit,
+        enabled: this.isOn && this.prefetchAllowed,
+        bbox: this.bbox,
+      }),
+      { tileTemplate: tiles.url, fetcher: traceFetcherFor(dem) },
+      prefetchWiring,
+      () => basemapDescriptor(map),
+      httpWarmer,
+      clock,
+    );
 
     this.build();
     map.on("zoomend", this.updateLegend);
     this.updateLegend();
+    setPrefetchDisabled(!this.prefetchAllowed);
     // Hidden labels skip placement and collision, so a gesture freezes them until moveend.
     this.stopGesture = subscribeGesture(map, {
       onStart: () => {
-        this.warmer.reset();
+        this.prefetch.reset();
         this.setLabelsFrozen(true);
       },
       onEnd: () => this.setLabelsFrozen(false),
@@ -254,22 +282,27 @@ export class ContourOverlay {
   }
 
   private build() {
-    this.ladder = contourLadder(this.stats, centreLatitude(this.bbox), {
+    this.ladder = contourLadder(this.stats, {
       maxZoom: this.maxzoom,
       elevationUnit: this.elevationUnit,
     });
     this.labelFadeZeroed = false;
-    this.map.addSource(this.sourceId, {
+    const protocolOptions = {
+      thresholds: this.ladder.thresholds,
+      overzoom: CONTOUR_OVERZOOM,
+      buffer: CONTOUR_BUFFER_PX,
+      ...elevationMultiplier(this.elevationUnit),
+    };
+    this.map.addSource(this.lineSourceId, {
       type: "vector",
-      tiles: [
-        this.dem.contourProtocolUrl({
-          thresholds: this.ladder.thresholds,
-          overzoom: CONTOUR_OVERZOOM,
-          buffer: CONTOUR_BUFFER_PX,
-          ...elevationMultiplier(this.elevationUnit),
-        }),
-      ],
+      tiles: [this.dem.contourProtocolUrl({ ...protocolOptions })],
       // Vector tiles stay at the fixed 512 grid, matching the 512 DEM tiles they trace.
+      maxzoom: this.maxzoom,
+      ...terrainTileBounds(this.bbox),
+    });
+    this.map.addSource(this.labelSourceId, {
+      type: "vector",
+      tiles: [this.dem.contourProtocolUrl({ ...protocolOptions })],
       maxzoom: this.maxzoom,
       ...terrainTileBounds(this.bbox),
     });
@@ -281,10 +314,11 @@ export class ContourOverlay {
 
   private rebuild() {
     for (const id of this.part.layerIds) this.map.removeLayer(id);
-    this.map.removeSource(this.sourceId);
+    this.map.removeSource(this.lineSourceId);
+    this.map.removeSource(this.labelSourceId);
     this.part.layerIds.length = 0;
     this.labelId = undefined;
-    this.warmer.reset();
+    this.prefetch.reset();
     this.build();
     if (!this.isOn) {
       for (const id of this.part.layerIds) {
@@ -297,7 +331,7 @@ export class ContourOverlay {
   }
 
   private addLine(tier: LadderTier, coarser: LadderTier | undefined, beforeId?: string) {
-    const id = `${this.sourceId}-${tier.interval}`;
+    const id = `${this.lineSourceId}-${tier.interval}`;
     const filter: FilterSpecification = coarser
       ? ["all", multipleOf(tier.interval), ["!", multipleOf(coarser.interval)]]
       : multipleOf(tier.interval);
@@ -305,7 +339,7 @@ export class ContourOverlay {
       {
         id,
         type: "line",
-        source: this.sourceId,
+        source: this.lineSourceId,
         "source-layer": "contours",
         minzoom: tier.entryZoom,
         filter,
@@ -326,7 +360,7 @@ export class ContourOverlay {
     const tiers = labelledTiers(this.ladder);
     if (tiers.length === 0) return;
 
-    const id = `${this.sourceId}-labels`;
+    const id = `${this.lineSourceId}-labels`;
     this.labelId = id;
     this.halo = getComputedStyle(document.documentElement)
       .getPropertyValue(PAGE_BACKGROUND_PROPERTY).trim();
@@ -338,7 +372,7 @@ export class ContourOverlay {
       {
         id,
         type: "symbol",
-        source: this.sourceId,
+        source: this.labelSourceId,
         "source-layer": "contours",
         minzoom: tiers[0].entryZoom,
         filter: labelFilter(tiers, this.ladder.boldInterval),
@@ -431,211 +465,32 @@ export class ContourOverlay {
 
   destroy() {
     this.stopGesture();
-    this.warmer.destroy();
+    this.prefetch.destroy();
+    setPrefetchDisabled(false);
     this.map.off("zoomend", this.updateLegend);
     for (const id of this.part.layerIds) this.map.removeLayer(id);
-    this.map.removeSource(this.sourceId);
+    this.map.removeSource(this.lineSourceId);
+    this.map.removeSource(this.labelSourceId);
   }
 }
 
-/** What the contour warm-up reads from its overlay on every zoom event. */
-export interface ContourWarmerPlan {
-  sourceId: string;
-  ladder: ContourLadder;
-  maxzoom: number;
-  elevationUnit: string;
-  enabled: boolean;
-  bbox: Bbox;
-}
-
-interface ContourTileFetcher {
-  fetchContourTile(
-    z: number,
-    x: number,
-    y: number,
-    options: unknown,
-    cancel: AbortController,
-  ): Promise<unknown>;
+/** Read the DEM manager both warmers share with the visible sources. */
+function traceFetcherFor(dem: { manager?: unknown }): DemFetcher | null {
+  const manager = dem as { manager?: DemFetcher };
+  if (!manager.manager) return null;
+  if (typeof manager.manager.fetchContourTile !== "function") return null;
+  return manager.manager;
 }
 
 /**
- * Trace the next integer zoom through the shared DEM and contour caches while the camera
- * zooms in. Warmed tiles land in the same worker caches the visible source reads, and the
- * guards below keep the warm-up from ever delaying what is already in view. Each trace reads
- * its 3×3 contour neighbourhood, which the one-level overzoom maps onto at most four DEM
- * parents, so a zoom step adds at most 48 DEM tile reads before cache hits. The shared caches
- * hold 120 entries each, about 120 MiB of decoded 512×512 tiles at most, so sweeping zooms
- * reuse parents instead of refetching them.
+ * Warm one versioned basemap URL so later visible reads hit the HTTP cache. The resolved
+ * body is measured against the speculative budget by the scheduler.
  */
-export class ContourZoomWarmer {
-  private readonly map: MapLibreMap;
-  private readonly dem: { manager?: unknown };
-  private readonly plan: () => ContourWarmerPlan;
-  private readonly clock: () => number;
-  private readonly stopListening: () => void;
-  private readonly inflight = new Map<string, AbortController>();
-  private readonly warmed = new Set<string>();
-  private lastZoom: number | null = null;
-  private lastTimeMs = 0;
-  private zoomingIn = false;
-
-  constructor(
-    map: MapLibreMap,
-    dem: { manager?: unknown },
-    plan: () => ContourWarmerPlan,
-    clock: () => number = () => performance.now(),
-  ) {
-    this.map = map;
-    this.dem = dem;
-    this.plan = plan;
-    this.clock = clock;
-    const zoomed = () => {
-      this.trackDirection(this.map.getZoom(), this.clock());
-      this.considerZoom();
-    };
-    const moved = () => this.considerZoom();
-    if (typeof map.on === "function") {
-      map.on("zoom", zoomed);
-      map.on("move", moved);
-    }
-    this.stopListening = () => {
-      if (typeof map.off === "function") {
-        map.off("zoom", zoomed);
-        map.off("move", moved);
-      }
-    };
-  }
-
-  /** Forget the last gesture so a fresh one rewarms instead of trusting stale tiles. */
-  reset(): void {
-    this.cancelAll();
-    this.warmed.clear();
-    this.lastZoom = null;
-    this.zoomingIn = false;
-  }
-
-  destroy(): void {
-    this.cancelAll();
-    this.stopListening();
-  }
-
-  /** Abort every warm trace, keeping the aborted tiles eligible for a later pass. */
-  cancelAll(): void {
-    for (const [key, cancel] of this.inflight) {
-      this.inflight.delete(key);
-      this.warmed.delete(key);
-      cancel.abort();
-    }
-  }
-
-  private considerZoom(): void {
-    const current = this.plan();
-    if (!this.zoomingIn || !isGestureActive(this.map) || !current.enabled) {
-      this.cancelAll();
-      return;
-    }
-    if (typeof this.map.isSourceLoaded === "function"
-      && !this.map.isSourceLoaded(current.sourceId)) {
-      this.cancelAll();
-      return;
-    }
-    const target = Math.floor(this.map.getZoom()) + 1;
-    if (target > current.maxzoom) {
-      this.cancelAll();
-      return;
-    }
-    const bounds = targetViewportBounds(this.map, target);
-    if (!bounds) return;
-    const wanted = warmTilesForZoom(
-      bounds.west,
-      bounds.south,
-      bounds.east,
-      bounds.north,
-      target,
-      WARM_MAX_TILES,
-    ).filter((tile) => tileInScene(tile, current.bbox));
-    this.pruneOutside(wanted);
-    const levels = levelsForZoom(current.ladder.thresholds, target);
-    if (levels.length === 0) return;
-    const fetch = warmerFetcher(this.dem);
-    if (!fetch) return;
-    for (const tile of wanted) {
-      if (this.inflight.size >= WARM_MAX_IN_FLIGHT) return;
-      const key = `${tile.z}/${tile.x}/${tile.y}`;
-      if (this.inflight.has(key) || this.warmed.has(key)) continue;
-      this.warmed.add(key);
-      const cancel = new AbortController();
-      this.inflight.set(key, cancel);
-      fetch.fetchContourTile(tile.z, tile.x, tile.y, warmOptions(levels, current), cancel)
-        .then(() => this.finish(key, cancel), () => this.finish(key, cancel));
-    }
-  }
-
-  private trackDirection(zoom: number, now: number): void {
-    if (this.lastZoom === null) {
-      this.lastZoom = zoom;
-      this.lastTimeMs = now;
-      return;
-    }
-    if (zoom < this.lastZoom) {
-      this.zoomingIn = false;
-      this.cancelAll();
-    } else if (zoom > this.lastZoom) {
-      const elapsedMs = Math.max(1, now - this.lastTimeMs);
-      this.zoomingIn = (zoom - this.lastZoom) / elapsedMs * 1000 <= WARM_FLING_ZOOM_PER_SEC;
-    }
-    this.lastZoom = zoom;
-    this.lastTimeMs = now;
-  }
-
-  private pruneOutside(wanted: readonly WarmTile[]): void {
-    const keys = new Set(wanted.map((tile) => `${tile.z}/${tile.x}/${tile.y}`));
-    for (const [key, cancel] of this.inflight) {
-      if (!keys.has(key)) {
-        this.inflight.delete(key);
-        this.warmed.delete(key);
-        cancel.abort();
-      }
-    }
-  }
-
-  private finish(key: string, cancel: AbortController): void {
-    if (this.inflight.get(key) === cancel) this.inflight.delete(key);
-  }
-}
-
-/**
- * Pick the contour levels MapLibre would request at a zoom, mirroring the protocol threshold
- * lookup so the warm-up traces exactly what the source will ask for. Exported for tests.
- */
-export function levelsForZoom(thresholds: Record<number, number>, zoom: number): number[] {
-  let selected = -Infinity;
-  let levels: number[] = [];
-  for (const [key, value] of Object.entries(thresholds)) {
-    const entry = Number(key);
-    if (entry <= zoom && entry > selected) {
-      selected = entry;
-      levels = [value];
-    }
-  }
-  return levels;
-}
-
-/** The protocol encodes the same keys, so warm traces share the source cache entries. */
-function warmOptions(levels: number[], plan: ContourWarmerPlan): Record<string, unknown> {
-  return {
-    levels,
-    overzoom: CONTOUR_OVERZOOM,
-    buffer: CONTOUR_BUFFER_PX,
-    ...elevationMultiplier(plan.elevationUnit),
-  };
-}
-
-function warmerFetcher(dem: { manager?: unknown }): ContourTileFetcher | null {
-  const manager = dem as { manager?: ContourTileFetcher };
-  return manager.manager && typeof manager.manager.fetchContourTile === "function"
-    ? manager.manager
-    : null;
+function warmHttp(url: string, signal: AbortSignal): Promise<unknown> {
+  return fetch(url, { signal }).then((response) => {
+    if (!response.ok) throw new Error(`Bad response: ${response.status} for ${url}`);
+    return response.arrayBuffer();
+  });
 }
 
 function transparentColor(color: string): string {
@@ -700,11 +555,6 @@ function labelField(
     field.push(zoom, ["case", multipleOf(interval), label, ""]);
   }
   return field;
-}
-
-function centreLatitude(bbox: LayerContext["layer"]["grid"]["bbox"]) {
-  const [, south, , north] = bbox;
-  return (south + north) / 2;
 }
 
 function elevationMultiplier(elevationUnit: string) {

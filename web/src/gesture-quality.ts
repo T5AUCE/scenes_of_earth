@@ -35,6 +35,14 @@ export function gestureFlags(search: string): GestureQualityFlags {
 }
 
 /**
+ * Read whether the bounded tile prefetch scheduler runs, which needs an explicit `?prefetch=1`
+ * because the user's trial found it wasted far more requests than it saved.
+ */
+export function prefetchEnabled(search: string): boolean {
+  return flagOptIn(search, "prefetch");
+}
+
+/**
  * Read whether terrain shading is drawn as fading raster tiles shaded in a worker, which needs
  * an explicit `?shadeFade=1` because its look and cost are still being compared with the hillshade.
  */

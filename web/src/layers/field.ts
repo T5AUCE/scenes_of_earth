@@ -38,10 +38,11 @@ import {
 import { sampleTable } from "../render/mercator";
 import {
   FIELD_PALETTES,
-  fieldGradient,
+  fieldStops,
   INK_COLORS,
   inkPaint,
   rgbCss,
+  type GradientStop,
 } from "../render/palettes";
 import { latestOnly, stepAt } from "../timeline";
 import type {
@@ -315,7 +316,7 @@ class FieldView implements LayerView {
       palettes: FIELD_PALETTES.map(({ name, label }) => ({
         name,
         label,
-        colors: gradientOf(name).map(rgbCss),
+        colors: gradientOf(name).map(stopCss),
       })),
       defaultPalette: layerDefaultPalette(layer),
       custom: true,
@@ -699,10 +700,15 @@ function keyOf(step: number) {
 }
 
 function gradientOf(palette: string) {
-  const gradient = fieldGradient(palette);
-  if (!gradient) throw new Error(`Unknown palette "${palette}"`);
+  const stops = fieldStops(palette);
+  if (!stops) throw new Error(`Unknown palette "${palette}"`);
 
-  return gradient;
+  return stops;
+}
+
+/** A tile colour with its gradient position, so custom pins show where they sit. */
+function stopCss(stop: GradientStop) {
+  return `${rgbCss(stop.rgb)} ${stop.at * 100}%`;
 }
 
 function valueStats({ stats }: LayerContext["layer"]) {

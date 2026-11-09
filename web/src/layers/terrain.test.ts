@@ -20,6 +20,7 @@ const mockModules = {
     export const cappedDemMaxZoom = (maxzoom) => maxzoom;
     export class ContourOverlay {
       part = { id: "contours", label: "Contours", layerIds: [] };
+      contourSourceIds = ["terrain-contours", "terrain-labels-contours"];
       units = "m";
       setColor() {}
       setUnits(unit) {
@@ -43,8 +44,16 @@ const hooks = registerHooks({
     return next(specifier, context);
   },
 });
-const { createTerrainView, MAX_MISSING_TILES, watchTerrainTiles } = await import("./terrain.ts");
+const { createTerrainView, MAX_MISSING_TILES, terrainPrefetchWiring, watchTerrainTiles } =
+  await import("./terrain.ts");
 hooks.deregister();
+
+test("the prefetch wiring names the visible relief and basemap sources", () => {
+  assert.deepEqual(terrainPrefetchWiring("terrain"), {
+    reliefSourceId: "terrain-relief",
+    basemapSourceId: "openmaptiles",
+  });
+});
 
 test("a cancellation or missing tile is ignored", (context) => {
   const { map, emit } = fakeMap();
@@ -153,6 +162,80 @@ test("persistent failures without a loaded tile give a warning", (context) => {
 
   emit("error", { sourceId: TERRAIN_SOURCES[0], tile: tile(), error: failure() });
   assert.deepEqual(reporter.notes, [WARNING]);
+});
+
+test("a persistent label-source failure warns while the line source stays healthy", (context) => {
+  const sources = ["terrain-relief", "terrain-contours", "terrain-labels-contours"];
+  const { map, emit } = fakeMap();
+  const reporter = makeReporter(context);
+  watchTerrainTiles(map as unknown as MapLibreMap, sources, reporter.report);
+
+  emit("sourcedata", { sourceId: "terrain-contours", tile: tile() });
+  for (let failureCount = 0; failureCount < 3; failureCount += 1) {
+    emit("error", { sourceId: "terrain-labels-contours", tile: tile(), error: failure() });
+  }
+
+  assert.deepEqual(reporter.notes, [WARNING]);
+});
+
+test("the terrain view watches its label source for failures", (context) => {
+  const listeners = new Map<string, Set<(event: object) => void>>();
+  const map = {
+    addSource() {},
+    addLayer() {},
+    getLayer: () => undefined,
+    getSource: () => undefined,
+    on(type: string, listener: (event: object) => void) {
+      const entries = listeners.get(type) ?? new Set();
+      entries.add(listener);
+      listeners.set(type, entries);
+    },
+    off(type: string, listener: (event: object) => void) {
+      listeners.get(type)?.delete(listener);
+    },
+    setPaintProperty() {},
+  };
+  const reporter = makeReporter(context);
+  const view = createTerrainView({
+    map,
+    store: Promise.resolve({}),
+    layer: {
+      id: "terrain",
+      title: "Terrain",
+      units: "m",
+      grid: { bbox: [0, 0, 1, 1], res: 1, nx: 2, ny: 2 },
+      tiles: {
+        url: "https://example.test/{z}/{x}/{y}",
+        encoding: "terrarium",
+        tile_size: 512,
+        maxzoom: 11,
+        source: { name: "DEM", licence: "open" },
+      },
+      stats: {
+        min: 0,
+        max: 100,
+        mean: 50,
+        p2: 5,
+        p98: 95,
+        slope_p50_deg: 5,
+        slope_p90_deg: 10,
+        cell_m: 500,
+      },
+    },
+    shift: 0,
+    slots: { fill: "fill", shade: "shade", marks: "marks", lines: "lines" },
+    beforeId: undefined,
+    report: reporter.report,
+  } as unknown as Parameters<typeof createTerrainView>[0]);
+
+  const emit = (type: string, event: object) => {
+    for (const listener of [...(listeners.get(type) ?? [])]) listener(event);
+  };
+  for (let failureCount = 0; failureCount < 3; failureCount += 1) {
+    emit("error", { sourceId: "terrain-labels-contours", tile: tile(), error: failure() });
+  }
+  assert.deepEqual(reporter.notes, [WARNING]);
+  view.destroy();
 });
 
 test("a successful tile clears the warning", (context) => {

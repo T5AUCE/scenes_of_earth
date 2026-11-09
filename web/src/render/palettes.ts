@@ -14,7 +14,12 @@ const HEX_CHANNEL_STARTS = [1, 3, 5];
 /** The fewest colour stops a custom gradient may have. */
 export const MIN_CUSTOM_COLORS = 2;
 /** The most colour stops a custom gradient may have. */
-export const MAX_CUSTOM_COLORS = 5;
+export const MAX_CUSTOM_COLORS = 8;
+/** A positioned colour stop, with its place from 0 to 1 along the gradient. */
+export interface GradientStop {
+  at: number; // 0..1
+  rgb: number[]; // sRGB triple 0..255
+}
 const INK_PATTERN = /^#[0-9a-f]{6}$/;
 const LINK_INK_PATTERN = /^[0-9a-f]{6}$/;
 // Inks lighter than this take a dark halo, because a light halo would vanish around them.
@@ -22,9 +27,11 @@ const LIGHT_INK_LIGHTNESS = 0.6;
 const HALO_LIGHT_RGB = [246, 239, 227];
 const HALO_DARK_RGB = [31, 31, 31];
 const CUSTOM_PREFIX = "custom";
+const CUSTOM_PART = "([0-9a-f]{6}(_(100|[1-9]?\\d))?)";
 const CUSTOM_PATTERN = new RegExp(
-  `^${CUSTOM_PREFIX}(-[0-9a-f]{6}){${MIN_CUSTOM_COLORS},${MAX_CUSTOM_COLORS}}$`,
+  `^${CUSTOM_PREFIX}(-${CUSTOM_PART}){${MIN_CUSTOM_COLORS},${MAX_CUSTOM_COLORS}}$`,
 );
+const PERCENT_PER_UNIT = 100;
 
 const RGB_MAX = 255;
 const MAX_CHROMA = 0.4;
@@ -367,19 +374,57 @@ export function inkPaint(ink: string): InkPaint {
 
 /** The RGB stops of a built-in or custom field gradient, or undefined for an unknown name. */
 export function fieldGradient(name: string) {
-  return FIELD_GRADIENTS.get(name) ?? customColors(name)?.map(hexToRgb);
+  return FIELD_GRADIENTS.get(name) ?? customStops(name)?.map(({ rgb }) => rgb);
 }
 
-/** The palette name of a custom gradient made from #rrggbb colours. */
-export function customPalette(colors: string[]) {
-  return CUSTOM_PREFIX + colors.map((color) => `-${color.slice(1)}`).join("");
+/** The positioned stops of a built-in or custom field gradient, else undefined. */
+export function fieldStops(name: string) {
+  const builtin = FIELD_GRADIENTS.get(name);
+  if (builtin) return builtin.map((rgb, index) => ({ at: index / (builtin.length - 1), rgb }));
+
+  return customStops(name) ?? undefined;
 }
 
-/** The #rrggbb colours of a custom palette name, or null unless it has 2-5 lowercase hex values. */
-export function customColors(name: string) {
+/** The canonical palette name of positioned stops, with positions only when uneven. */
+export function customPalette(stops: GradientStop[]) {
+  const ordered = [...stops].sort((first, second) => first.at - second.at);
+  const percents = ordered.map(({ at }) => {
+    return Math.max(0, Math.min(PERCENT_PER_UNIT, Math.round(at * PERCENT_PER_UNIT)));
+  });
+  const even = evenPercents(ordered.length);
+  const positioned = percents.some((percent, index) => percent !== even[index]);
+  return CUSTOM_PREFIX + ordered.map(({ rgb }, index) => {
+    const hex = rgbToHex(rgb).slice(1);
+    return positioned ? `-${hex}_${percents[index]}` : `-${hex}`;
+  }).join("");
+}
+
+/** The positioned stops of a custom palette name, or null when it breaks the grammar. */
+export function customStops(name: string) {
   if (!CUSTOM_PATTERN.test(name)) return null;
+  const parts = name.split("-").slice(1);
+  const parsed = parts.map((part) => {
+    const [hex, positionText] = part.split("_");
+    return {
+      at: positionText === undefined ? -1 : Number(positionText) / PERCENT_PER_UNIT,
+      rgb: hexToRgb(`#${hex}`),
+    };
+  });
+  const positioned = parsed.filter(({ at }) => at >= 0);
+  if (positioned.length !== 0 && positioned.length !== parsed.length) return null;
+  if (positioned.length === 0) {
+    return parsed.map(({ rgb }, index) => ({ at: index / (parsed.length - 1), rgb }));
+  }
+  for (let index = 1; index < parsed.length; index++) {
+    if (parsed[index].at < parsed[index - 1].at) return null;
+  }
 
-  return name.split("-").slice(1).map((hex) => `#${hex}`);
+  return parsed.map(({ at, rgb }) => ({ at, rgb }));
+}
+
+/** The #rrggbb colours of a custom palette name, or null unless the grammar holds. */
+export function customColors(name: string) {
+  return customStops(name)?.map(({ rgb }) => rgbToHex(rgb)) ?? null;
 }
 
 /** The colour of a contour palette name, or undefined for an unknown name. */
@@ -447,8 +492,16 @@ export function rgbToHex(color: number[]) {
   return `#${digits.join("")}`;
 }
 
-function hexToRgb(hex: string) {
+/** The RGB triple of a #rrggbb colour. */
+export function hexToRgb(hex: string) {
   return HEX_CHANNEL_STARTS.map((start) => parseInt(hex.slice(start, start + HEX_DIGITS), 16));
+}
+
+/** Integer percents evenly spaced over count stops, for the canonical custom name. */
+function evenPercents(count: number) {
+  return Array.from({ length: count }, (_, index) => {
+    return Math.round((index * PERCENT_PER_UNIT) / (count - 1));
+  });
 }
 
 function oklchRgb(lightness: number, chroma: number, hue: number) {

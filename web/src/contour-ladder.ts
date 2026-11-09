@@ -7,6 +7,28 @@ export const INTERVAL_CHAIN_M = [10, 50, 100, 500, 1000, 2000];
 /** Contour heights in feet, US-topo style; at about 6 m, 20 ft keeps lines as sparse as metres. */
 export const INTERVAL_CHAIN_FT = [20, 100, 500, 1000, 5000];
 
+/**
+ * The entry zoom of every contour height, the same at each zoom everywhere because the user
+ * forbids terrain or latitude adaptation. Values sit close to the previous mid-relief Kenya
+ * ladder, so the 20 ft step stays beyond the z12 cap while metres keep their 10 m floor.
+ */
+export const ENTRY_ZOOM_M: Record<number, number> = {
+  2000: 5,
+  1000: 6,
+  500: 7,
+  100: 9,
+  50: 10,
+  10: 12,
+};
+
+/** The entry zoom of every feet height. The 20 ft step never enters at or below the z12 cap. */
+export const ENTRY_ZOOM_FT: Record<number, number> = {
+  5000: 5,
+  1000: 7,
+  500: 8,
+  100: 11,
+};
+
 /** Contour tiles are traced from DEM tiles one zoom coarser, so their ceiling is one above. */
 export const CONTOUR_OVERZOOM = 1;
 /** Zoom levels a tier takes to reach full opacity after it first shows. */
@@ -15,13 +37,8 @@ export const FADE_SPAN_ZOOM = 1.5;
 /** Add the next finer labelled height where bold lines sit far apart; the M5 trial asked for it. */
 export const LABEL_SPARSE_FALLBACK = true;
 
-const MIN_LINE_GAP_PX = 5;
 const MIN_BOLD_LEVELS = 3;
-const SCREEN_HEIGHT_PX = 800;
 const MAX_CONTOUR_ZOOM = 12;
-
-const WORLD_CIRCUMFERENCE_M = 40_075_016.686;
-const WORLD_WIDTH_ZOOM0_PX = 512;
 
 /** A height step with the zoom where it starts to show and the zoom where it is first traced. */
 export interface LadderTier {
@@ -46,13 +63,11 @@ interface LadderOptions {
 }
 
 /**
- * Plan the contours of a scene from its elevation statistics. A height step shows once its lines
- * would sit at least MIN_LINE_GAP_PX apart on the scene's steep slopes, so steep scenes get finer
- * lines later and flat ones sooner.
+ * Plan the contours from one global zoom table, so every scene traces the same heights at the
+ * same zooms and derived products stay keyable by table and units rather than scene identity.
  */
 export function contourLadder(
   stats: TerrainStats,
-  centreLatitudeDeg: number,
   {
     maxZoom = MAX_CONTOUR_ZOOM,
     labelSparseFallback = LABEL_SPARSE_FALLBACK,
@@ -61,11 +76,10 @@ export function contourLadder(
 ): ContourLadder {
   maxZoom = Math.min(MAX_CONTOUR_ZOOM, maxZoom);
   const chain = elevationUnit === "ft" ? INTERVAL_CHAIN_FT : INTERVAL_CHAIN_M;
-  const requiredInterval = (zoom: number) =>
-    MIN_LINE_GAP_PX * heightPerPixel(stats.slope_p90_deg, zoom, centreLatitudeDeg, elevationUnit);
+  const entries = elevationUnit === "ft" ? ENTRY_ZOOM_FT : ENTRY_ZOOM_M;
   const tiers = [...chain].reverse().flatMap((interval) => {
-    const entryZoom = firstZoomWhere((zoom) => requiredInterval(zoom) <= interval, maxZoom);
-    return entryZoom === null
+    const entryZoom = entries[interval];
+    return entryZoom === undefined || entryZoom > maxZoom
       ? []
       : [{ interval, entryZoom, traceZoom: Math.max(entryZoom - 2, 0) }];
   });
@@ -74,30 +88,13 @@ export function contourLadder(
   return {
     tiers,
     boldInterval,
-    labelTiers: labelTiersFor(stats, centreLatitudeDeg, tiers, boldInterval, {
+    labelTiers: labelTiersFor(tiers, boldInterval, {
       maxZoom,
       labelSparseFallback,
       elevationUnit,
     }),
     thresholds: thresholdsFor(tiers, maxZoom),
   };
-}
-
-function heightPerPixel(
-  slopeDeg: number,
-  zoom: number,
-  latitudeDeg: number,
-  elevationUnit = "m",
-) {
-  const metres = metresPerPixel(zoom, latitudeDeg) * Math.tan((slopeDeg * Math.PI) / 180);
-  return convertValue(metres, "m", elevationUnit);
-}
-
-function firstZoomWhere(isTrue: (zoom: number) => boolean, maxZoom: number) {
-  for (let zoom = 0; zoom <= maxZoom; zoom += 1) {
-    if (isTrue(zoom)) return zoom;
-  }
-  return null;
 }
 
 function boldIntervalFor(stats: TerrainStats, tiers: LadderTier[], elevationUnit: string) {
@@ -118,11 +115,9 @@ function levelsBetween(low: number, high: number, interval: number) {
 }
 
 function labelTiersFor(
-  stats: TerrainStats,
-  latitudeDeg: number,
   tiers: LadderTier[],
   boldInterval: number,
-  { maxZoom, labelSparseFallback, elevationUnit }: Required<LadderOptions>,
+  { maxZoom, labelSparseFallback }: Required<LadderOptions>,
 ) {
   const boldIndex = tiers.findIndex((tier) => tier.interval === boldInterval);
   if (boldIndex === -1) return [];
@@ -130,16 +125,10 @@ function labelTiersFor(
   const labelTiers = [{ interval: boldInterval, entryZoom: tiers[boldIndex].entryZoom }];
   const finer = tiers[boldIndex + 1];
   if (!labelSparseFallback || !finer) return labelTiers;
+  // The finer labels wait for the tiling cap, so they never crowd the mid zooms.
+  if (MAX_CONTOUR_ZOOM > maxZoom) return labelTiers;
 
-  const sparseZoom = firstZoomWhere((zoom) => {
-    const gapPx = boldInterval
-      / heightPerPixel(stats.slope_p50_deg, zoom, latitudeDeg, elevationUnit);
-    return gapPx > SCREEN_HEIGHT_PX;
-  }, maxZoom);
-  if (sparseZoom === null) return labelTiers;
-
-  const entryZoom = Math.max(sparseZoom, finer.entryZoom);
-  return [...labelTiers, { interval: finer.interval, entryZoom }];
+  return [...labelTiers, { interval: finer.interval, entryZoom: MAX_CONTOUR_ZOOM }];
 }
 
 function thresholdsFor(tiers: LadderTier[], maxZoom: number) {
@@ -157,12 +146,6 @@ function thresholdsFor(tiers: LadderTier[], maxZoom: number) {
   return thresholds;
 }
 
-/** The ground size of one screen pixel at a zoom and latitude. */
-export function metresPerPixel(zoom: number, latitudeDeg: number) {
-  const equatorMetres = WORLD_CIRCUMFERENCE_M * Math.cos((latitudeDeg * Math.PI) / 180);
-  return equatorMetres / (WORLD_WIDTH_ZOOM0_PX * 2 ** zoom);
-}
-
 /** The finest height step that shows at a zoom, or null before any does. */
 export function finestIntervalAt(ladder: ContourLadder, zoom: number) {
   const shown = ladder.tiers.filter((tier) => tier.entryZoom <= zoom);
@@ -174,6 +157,35 @@ export function labelIntervalsAt(ladder: ContourLadder, zoom: number) {
   return ladder.labelTiers
     .filter((tier) => tier.entryZoom <= zoom)
     .map((tier) => tier.interval);
+}
+
+/**
+ * Pick the contour levels MapLibre would request at a zoom, mirroring the protocol threshold
+ * lookup so the prefetch traces exactly what the source will ask for.
+ */
+export function levelsForZoom(thresholds: Record<number, number>, zoom: number): number[] {
+  let selected = -Infinity;
+  let levels: number[] = [];
+  for (const [key, value] of Object.entries(thresholds)) {
+    const entry = Number(key);
+    if (entry <= zoom && entry > selected) {
+      selected = entry;
+      levels = [value];
+    }
+  }
+  return levels;
+}
+
+/**
+ * Version contour cache entries by the global table and request options, never by scene,
+ * so derived products stay reusable across datasets on long-term R2 delivery.
+ */
+export function contourOptionsVersion(
+  elevationUnit: string,
+  overzoom: number,
+  buffer: number,
+): string {
+  return `contours-v1:${elevationUnit}:over${overzoom}:buf${buffer}`;
 }
 
 /** A tile the warm-up may trace ahead, in slippy-map coordinates. */
@@ -213,6 +225,43 @@ export function warmTilesForZoom(
   };
   tiles.sort((left, right) => tileDistance(left, centre) - tileDistance(right, centre));
   return tiles.slice(0, limit);
+}
+
+/**
+ * List the DEM tiles a contour tile reads through its 3×3 neighbourhood, mapped through the
+ * overzoom to at most four parents, so the scheduler warms reusable parents before tracing.
+ */
+export function demParentsForTile(tile: WarmTile, overzoom: number): WarmTile[] {
+  const demZoom = tile.z - overzoom;
+  if (demZoom < 0) return [];
+  if (overzoom <= 0) return [{ z: tile.z, x: tile.x, y: tile.y }];
+  const divisor = 2 ** overzoom;
+  const count = 2 ** demZoom;
+  const parents = new Map<string, WarmTile>();
+  for (let deltaX = -1; deltaX <= 1; deltaX += 1) {
+    for (let deltaY = -1; deltaY <= 1; deltaY += 1) {
+      const rawX = Math.floor((tile.x + deltaX) / divisor);
+      const rawY = Math.floor((tile.y + deltaY) / divisor);
+      const parent = {
+        z: demZoom,
+        x: ((rawX % count) + count) % count,
+        y: Math.min(count - 1, Math.max(0, rawY)),
+      };
+      parents.set(`${parent.z}/${parent.x}/${parent.y}`, parent);
+    }
+  }
+  return [...parents.values()];
+}
+
+/** Dedupe the DEM parents of many contour tiles, keeping the reusable set small. */
+export function demParentsForTiles(tiles: readonly WarmTile[], overzoom: number): WarmTile[] {
+  const parents = new Map<string, WarmTile>();
+  for (const tile of tiles) {
+    for (const parent of demParentsForTile(tile, overzoom)) {
+      parents.set(`${parent.z}/${parent.x}/${parent.y}`, parent);
+    }
+  }
+  return [...parents.values()];
 }
 
 /** Columns spanned by a longitude range, wrapping indices past the 180th meridian. */

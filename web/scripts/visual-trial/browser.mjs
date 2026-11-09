@@ -63,6 +63,8 @@ const PAN_DURATION_MS = 2 * 1000;
 const PAN_DISTANCE_PX = 160;
 const HTTP_CACHE_DIR = path.resolve(import.meta.dirname, "../../.trial-cache/http");
 export const VIEW_TIMEOUT_MS = 60 * 1000;
+// A jump lands exactly, so anything further off means the entry flight overwrote it.
+const SAMPLED_ZOOM_TOLERANCE = 0.05;
 
 const LANDCOVER_COLOUR = "esa_worldcover";
 /** Land Cover selectors accept old and new bundle title casing. */
@@ -180,7 +182,7 @@ export async function newContext(browser, viewport = VIEWPORT_PX) {
   const context = await browser.newContext({ viewport });
   await context.addInitScript(exposeMap);
   await exposeMapModule(context);
-  await exposeMaskReadiness(context);
+  await exposeSceneReadiness(context);
   await exposeLayerReadiness(context);
 
   return context;
@@ -197,15 +199,21 @@ async function exposeMapModule(context) {
   });
 }
 
-async function exposeMaskReadiness(context) {
+async function exposeSceneReadiness(context) {
   await context.route("**/src/scene-mode.ts*", async (route) => {
     const response = await route.fetch();
     const source = await response.text();
-    const exposed = source.replace(
+    const masked = source.replace(
       /this\.isReady = true;/,
       "window.__trialMaskReady = true;\nthis.isReady = true;",
     );
-    if (exposed === source) throw new Error("scene mask readiness hook no longer matches");
+    if (masked === source) throw new Error("scene mask readiness hook no longer matches");
+    // The flight starts after preparation settles, so its landing is a separate signal.
+    const exposed = masked.replace(
+      /isLanded = true;/,
+      "window.__trialFlightLanded = true;\nisLanded = true;",
+    );
+    if (exposed === masked) throw new Error("scene flight readiness hook no longer matches");
 
     await route.fulfill({ response, body: exposed });
   });
@@ -1667,6 +1675,7 @@ function exposeMap() {
   window.__trialErrors = [];
   window.__trialMaskReady = false;
   window.__trialLayersReady = false;
+  window.__trialFlightLanded = false;
   window.__trialGlErrors = [];
   const getError = WebGL2RenderingContext.prototype.getError;
   WebGL2RenderingContext.prototype.getError = function () {
@@ -1783,12 +1792,40 @@ function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// The scene entry is done once the mask, the layers and the flight have all landed.
+export function isEntryReady() {
+  return window.__trialMaskReady === true
+    && window.__trialLayersReady === true
+    && window.__trialFlightLanded === true
+    && window.__map != null
+    && window.__map.isMoving() === false;
+}
+
+export async function waitForEntry(page) {
+  await page.waitForFunction(isEntryReady, null, { timeout: VIEW_TIMEOUT_MS });
+}
+
+// The sampled zoom must equal an explicit request, or the view measured the fitted scene.
+export function sampledZoomMismatch(sample, zoom) {
+  if (zoom === "fitted" || !sample) return null;
+  if (Math.abs(sample.zoom - zoom) <= SAMPLED_ZOOM_TOLERANCE) return null;
+
+  return `sampled zoom ${sample.zoom} is not the requested ${zoom}`;
+}
+
 async function trialView(page, watcher, spot, sceneId, zoom, options) {
   let timedOut = false;
   let sample = null;
   try {
+    // The entry flight lands on the fitted view, so it would overwrite an early jump.
+    await waitForEntry(page);
     if (zoom !== "fitted") await page.evaluate(jumpTo, [spot.centre, zoom]);
     ({ sample, timedOut } = await settledSample(page));
+    const zoomFailure = sampledZoomMismatch(sample, zoom);
+    if (zoomFailure !== null) {
+      watcher.messages.push(zoomFailure);
+      timedOut = true;
+    }
     const ownerFailure = ownerMismatch(spot, sample);
     if (ownerFailure !== null) {
       watcher.messages.push(ownerFailure);

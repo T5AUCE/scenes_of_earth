@@ -2,10 +2,17 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  basemapDescriptor,
+  BASEMAP_MAXZOOM,
+  BASEMAP_SOURCE_ID,
   inverseMercatorY,
+  longitudeDelta,
   mercatorY,
+  predictDestinationCenter,
   targetViewportBounds,
+  tileRangeKey,
   tileInScene,
+  viewportBoundsForCenter,
   type ViewportMap,
 } from "./tile-viewport.ts";
 
@@ -61,6 +68,83 @@ test("the contour viewport keeps the earlier unclamped span above the limit", ()
 
   assert.notEqual(contour.north, clamped.north);
   assert.notEqual(contour.south, clamped.south);
+});
+
+test("the destination prediction extrapolates the centre without moving", () => {
+  const centre = predictDestinationCenter(0, 0, 2, 1, 0.5);
+
+  assert.equal(centre.lng, 1);
+  assert.equal(centre.lat, 0.5);
+});
+
+test("the explicit centre viewport matches the map helper for the same centre", () => {
+  const map = fakeMap(8, 0, 0, 40, 20);
+  const bounds = targetViewportBounds(map, 9)!;
+  const current = { west: -20, south: -10, east: 20, north: 10 };
+  const explicit = viewportBoundsForCenter(current, 0, 0, 8, 9);
+
+  assert.equal(explicit.west, bounds.west);
+  assert.equal(explicit.east, bounds.east);
+});
+
+test("the basemap descriptor prefers the loaded source over the style", () => {
+  const template = "https://tiles.openfreemap.org/planet/{z}/{x}/{y}.pbf";
+  const live = {
+    getSource: (id: string) => id === BASEMAP_SOURCE_ID ? { tiles: [template], maxzoom: 14 } : null,
+    getStyle: () => ({ sources: {} }),
+  };
+  const inline = {
+    getSource: () => null,
+    getStyle: () => ({ sources: { [BASEMAP_SOURCE_ID]: { tiles: [template] } } }),
+  };
+
+  assert.deepEqual(basemapDescriptor(live), { template, maxzoom: 14 });
+  assert.deepEqual(basemapDescriptor(inline), { template, maxzoom: BASEMAP_MAXZOOM });
+  assert.equal(basemapDescriptor({ getSource: () => null }), null);
+});
+
+test("a shifted centre moves the vertical midpoint to the predicted latitude", () => {
+  const current = { west: -1, south: -1, east: 1, north: 1 };
+  const still = viewportBoundsForCenter(current, 0, 0, 8, 8);
+  const north = viewportBoundsForCenter(current, 0, 10, 8, 8);
+
+  assert.ok(Math.abs(still.south + still.north) < 1e-6);
+  assert.ok(north.south > 8 && north.north > 10);
+  assert.ok(north.south < 10 && north.north < 12);
+  assert.equal(north.west, still.west);
+  assert.ok(Math.abs(north.east - north.west - (still.east - still.west)) < 1e-9);
+});
+
+test("high latitudes stay finite around the predicted centre", () => {
+  const current = { west: -1, south: 83.5, east: 1, north: 84.5 };
+  const polar = viewportBoundsForCenter(current, 0, 84, 8, 8);
+
+  assert.ok(Number.isFinite(polar.south) && Number.isFinite(polar.north));
+  assert.ok(polar.north <= 85.05112878 + 1e-9);
+  assert.ok(polar.south < 84 && 84 < polar.north);
+});
+
+test("longitude deltas wrap the dateline instead of spanning the world", () => {
+  assert.equal(longitudeDelta(179, -179), 2);
+  assert.equal(longitudeDelta(-179, 179), -2);
+  assert.equal(longitudeDelta(10, 11), 1);
+  assert.equal(longitudeDelta(10, 10), 0);
+});
+
+test("tile range keys ignore sub-tile pans but move with the covered tiles", () => {
+  const bounds = { west: 0.3, south: 5.3, east: 0.4, north: 5.4 };
+  const nudged = { west: 0.31, south: 5.31, east: 0.41, north: 5.41 };
+  const shifted = { west: 5, south: 5.3, east: 5.1, north: 5.4 };
+
+  assert.equal(tileRangeKey(bounds, 9), tileRangeKey(nudged, 9));
+  assert.notEqual(tileRangeKey(bounds, 9), tileRangeKey(shifted, 9));
+  assert.notEqual(tileRangeKey(bounds, 9), tileRangeKey(bounds, 10));
+});
+
+test("tile range keys clamp rows at the polar limit", () => {
+  const polar = { west: 0, south: 80, east: 1, north: 89 };
+
+  assert.match(tileRangeKey(polar, 4), /:0-\d+$/);
 });
 
 function fakeMap(

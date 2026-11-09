@@ -15,8 +15,30 @@ export const RGBA_CHANNELS = 4;
 const OPAQUE = 255;
 const GAMUT_EPSILON = 1e-6;
 
-/** A lookup table of 256 opaque RGBA entries blended through the gradient's RGB stops. */
-export function lut(stops: number[][]) {
+/** A positioned colour stop, with its place from 0 to 1 along the gradient. */
+export interface PositionedStop {
+  at: number; // 0..1
+  rgb: number[]; // sRGB triple 0..255
+}
+
+/** A lookup table of 256 opaque RGBA entries blended through the gradient stops. */
+export function lut(stops: number[][] | PositionedStop[]) {
+  if (stops.length > 0 && !Array.isArray(stops[0])) {
+    const positioned = [...(stops as PositionedStop[])].sort(byPosition);
+
+    return positionedLut(positioned);
+  }
+
+  return evenLut(stops as number[][]);
+}
+
+/** Order stops along the gradient, so crossing pins reorder instead of tangling. */
+function byPosition(first: PositionedStop, second: PositionedStop) {
+  return first.at - second.at;
+}
+
+/** A lookup table blended through evenly spaced RGB stops. */
+function evenLut(stops: number[][]) {
   const table = new Uint8ClampedArray(LUT_ENTRIES * RGBA_CHANNELS);
   for (let entry = 0; entry < LUT_ENTRIES; entry++) {
     const position = (entry / LAST_ENTRY) * (stops.length - 1);
@@ -32,6 +54,42 @@ export function lut(stops: number[][]) {
     table[entry * RGBA_CHANNELS + COLOR_CHANNELS] = OPAQUE;
   }
   return table;
+}
+
+/** A lookup table interpolated by stop position, flat beyond the outer stops. */
+function positionedLut(stops: PositionedStop[]) {
+  const table = new Uint8ClampedArray(LUT_ENTRIES * RGBA_CHANNELS);
+  for (let entry = 0; entry < LUT_ENTRIES; entry++) {
+    const rgb = colorAtPosition(stops, entry / LAST_ENTRY);
+    for (let channel = 0; channel < COLOR_CHANNELS; channel++) {
+      table[entry * RGBA_CHANNELS + channel] = rgb[channel];
+    }
+
+    table[entry * RGBA_CHANNELS + COLOR_CHANNELS] = OPAQUE;
+  }
+  return table;
+}
+
+/** The RGB at a position from 0 to 1, with coincident stops making a hard edge. */
+function colorAtPosition(stops: PositionedStop[], position: number) {
+  // Exact hits fall through, so the first of a coincident pair still loses to the last.
+  if (position < stops[0].at) return stops[0].rgb;
+  if (position > stops[stops.length - 1].at) return stops[stops.length - 1].rgb;
+  let lower = 0;
+  for (let index = 0; index < stops.length; index++) {
+    if (stops[index].at <= position) lower = index;
+  }
+  let upper = stops.length - 1;
+  for (let index = stops.length - 1; index >= 0; index--) {
+    if (stops[index].at >= position) upper = index;
+  }
+  // An exact hit on coincident stops takes the last one, so the edge stays sharp.
+  if (lower >= upper) return stops[lower].rgb;
+  const low = stops[lower];
+  const high = stops[upper];
+  const fraction = (position - low.at) / (high.at - low.at);
+
+  return low.rgb.map((channel, axis) => channel + (high.rgb[axis] - channel) * fraction);
 }
 
 /** The fitted stops of a layer's scale, or an even spread over its custom range. */

@@ -21,6 +21,7 @@ import {
   displayFailures,
   hitTestAttribution,
   hitTestControl,
+  isEntryReady,
   LANDCOVER_CARD_TEXT,
   LANDCOVER_EDIT_BUTTON,
   LANDCOVER_EDIT_MENU,
@@ -30,9 +31,11 @@ import {
   openChartsGallery,
   openLayoutEditor,
   preflightWebGL,
+  sampledZoomMismatch,
   swappedZoomColour,
   trialLayout,
   trialZoomSpot,
+  waitForEntry,
   withoutClipFilter,
   zoomSceneUrl,
   ZOOM_VARIANTS,
@@ -168,6 +171,68 @@ test("withoutClipFilter lifts the scene clip back to the previous filter", () =>
   assert.equal(withoutClipFilter(plain), plain);
   const blended = ["all", previous, ["==", ["get", "other"], 1]];
   assert.equal(withoutClipFilter(blended), blended);
+});
+
+test("a sampled zoom must equal its requested zoom while fitted views skip the check", () => {
+  assert.equal(sampledZoomMismatch(null, 9), null);
+  assert.equal(sampledZoomMismatch({ zoom: 5.59 }, "fitted"), null);
+  assert.equal(sampledZoomMismatch({ zoom: 9 }, 9), null);
+  assert.equal(sampledZoomMismatch({ zoom: 9.04 }, 9), null);
+  assert.equal(
+    sampledZoomMismatch({ zoom: 5.59 }, 9),
+    "sampled zoom 5.59 is not the requested 9",
+  );
+});
+
+test("entry readiness needs the mask, the layers and a landed flight", () => {
+  const ready = {
+    __trialMaskReady: true,
+    __trialLayersReady: true,
+    __trialFlightLanded: true,
+    __map: { isMoving: () => false },
+  };
+  assert.equal(runInNewContext(`(${isEntryReady})()`, { window: ready }), true);
+
+  const flying = {
+    __trialMaskReady: true,
+    __trialLayersReady: true,
+    __trialFlightLanded: true,
+    __map: { isMoving: () => true },
+  };
+  assert.equal(runInNewContext(`(${isEntryReady})()`, { window: flying }), false);
+
+  const loading = {
+    __trialMaskReady: true,
+    __trialLayersReady: false,
+    __trialFlightLanded: false,
+    __map: { isMoving: () => false },
+  };
+  assert.equal(runInNewContext(`(${isEntryReady})()`, { window: loading }), false);
+
+  // Preparation can settle the mask and layers while the flight has not started yet.
+  const preflight = {
+    __trialMaskReady: true,
+    __trialLayersReady: true,
+    __trialFlightLanded: false,
+    __map: { isMoving: () => false },
+  };
+  assert.equal(runInNewContext(`(${isEntryReady})()`, { window: preflight }), false);
+});
+
+test("entry waiting uses the readiness predicate", async () => {
+  const seen = [];
+  const page = {
+    waitForFunction: async (predicate, argument, options) => {
+      seen.push([predicate.name, argument, options.timeout]);
+    },
+  };
+
+  await waitForEntry(page);
+
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0][0], "isEntryReady");
+  assert.equal(seen[0][1], null);
+  assert.ok(seen[0][2] > 0);
 });
 
 test("a zoom sweep records band medians with deltas against the baseline", async (context) => {

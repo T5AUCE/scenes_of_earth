@@ -31,15 +31,15 @@ import {
   type ShowAsAction,
 } from "../show-as";
 import {
-  customColors,
   customPalette,
-  fieldGradient,
-  MAX_CUSTOM_COLORS,
-  MIN_CUSTOM_COLORS,
+  customStops,
+  fieldStops,
   rgbToHex,
+  type GradientStop,
 } from "../render/palettes";
 import type { InkMenu, LayerDoc, LayerMenu, LayerView, Part } from "../types";
 import { DomNode } from "./dom-node";
+import { GradientStops } from "./gradient-stops";
 import { RangeSection } from "./range-section";
 import { ShowAsSection } from "./show-as-section";
 import { SwatchPicker, type SwatchOption } from "./swatch-picker";
@@ -456,7 +456,7 @@ interface ColourSectionProps {
 /** The palette or ink swatches; the Custom box keeps its last choice across resets. */
 function ColourSection({ menu, onChange }: ColourSectionProps): React.ReactElement {
   const [rememberedPalette, setRememberedPalette] = useState<string | null>(
-    () => (customColors(menu.palette) === null ? null : menu.palette),
+    () => (customStops(menu.palette) === null ? null : menu.palette),
   );
   const [rememberedInk, setRememberedInk] = useState<string | null>(
     () => (menu.ink && isCustomInk(menu.ink) ? menu.ink.value : null),
@@ -496,7 +496,7 @@ function PaletteSection({
   onChange,
 }: PaletteSectionProps): React.ReactElement {
   const group = useId();
-  const customName = customColors(menu.palette) === null ? null : menu.palette;
+  const customName = customStops(menu.palette) === null ? null : menu.palette;
   const selected = customName === null ? menu.palette : "custom";
   const faceColors = facePaletteColors(customName, remembered);
 
@@ -522,8 +522,11 @@ function PaletteSection({
       onChange("palette");
     }
   };
-  const applyCustom = (colors: string[]) => {
-    const next = customPalette(colors);
+  const previewCustom = (stops: GradientStop[]) => {
+    menu.setPalette(customPalette(stops));
+  };
+  const commitCustom = (stops: GradientStop[]) => {
+    const next = customPalette(stops);
     menu.setPalette(next);
     onRemember(next);
     onChange("palette");
@@ -542,7 +545,11 @@ function PaletteSection({
         onSelect={select}
       />
       {menu.custom && customName !== null && (
-        <CustomPaletteEditor colors={customColors(customName)!} onApply={applyCustom} />
+        <GradientStops
+          stops={customStops(customName)!}
+          onPreview={previewCustom}
+          onCommit={commitCustom}
+        />
       )}
     </fieldset>
   );
@@ -706,25 +713,34 @@ function hasWideFaces(menu: NonNullable<LayerView["menu"]>): boolean {
 
 /** The remembered custom gradient, else the one on screen, else an empty Custom box. */
 function facePaletteColors(customName: string | null, remembered: string | null): string[] {
-  if (customName !== null) return customColors(customName)!;
-  if (remembered !== null) return customColors(remembered) ?? [];
+  const shown = customName ?? remembered;
+  if (shown === null) return [];
+  const stops = customStops(shown);
+  if (!stops) return [];
 
-  return [];
+  return stops.map(({ at, rgb }) => `${rgbToHex(rgb)} ${Math.round(at * 100)}%`);
 }
 
 /** The remembered custom gradient, or a three-stop seed from the shown preset. */
 function rememberedOrSeeded(remembered: string | null, palette: string): string {
-  if (remembered !== null && customColors(remembered) !== null) return remembered;
+  if (remembered !== null && customStops(remembered) !== null) return remembered;
 
-  return customPalette(seedColors(palette));
+  return customPalette(seedStops(palette));
 }
 
 // Starting from the gradient on screen keeps the first custom colours familiar.
-function seedColors(palette: string) {
-  const gradient = fieldGradient(palette) ?? [[0, 0, 0], [255, 255, 255]];
+function seedStops(palette: string): GradientStop[] {
+  const gradient = fieldStops(palette) ?? [
+    { at: 0, rgb: [0, 0, 0] },
+    { at: 1, rgb: [255, 255, 255] },
+  ];
   const middle = Math.floor((gradient.length - 1) / 2);
 
-  return [gradient[0], gradient[middle], gradient[gradient.length - 1]].map(rgbToHex);
+  return [
+    { at: 0, rgb: gradient[0].rgb },
+    { at: 0.5, rgb: gradient[middle].rgb },
+    { at: 1, rgb: gradient[gradient.length - 1].rgb },
+  ];
 }
 
 /** The first colour of the shown ink preset, so a first Custom choice stays familiar. */
@@ -734,52 +750,6 @@ function inkSeed(ink: InkMenu) {
 
 function isCustomInk(ink: InkMenu) {
   return ink.value.startsWith("#");
-}
-
-function CustomPaletteEditor({
-  colors,
-  onApply,
-}: {
-  colors: string[];
-  onApply(colors: string[]): void;
-}): React.ReactElement {
-  const edit = (index: number, next: string) => {
-    onApply(colors.map((color, position) => (position === index ? next : color)));
-  };
-  const remove = (index: number) => {
-    onApply(colors.filter((_, position) => position !== index));
-  };
-  const add = () => {
-    onApply([...colors, colors[colors.length - 1]]);
-  };
-
-  return (
-    <div className="custom-colors">
-      {colors.map((color, index) => (
-        <div key={index}>
-          <CommitColorInput
-            value={color}
-            label={`Colour ${index + 1}`}
-            onCommit={(next) => edit(index, next)}
-          />
-          {colors.length > MIN_CUSTOM_COLORS && (
-            <button
-              type="button"
-              aria-label={`Remove colour ${index + 1}`}
-              onClick={() => remove(index)}
-            >
-              {"\u2715"}
-            </button>
-          )}
-        </div>
-      ))}
-      {colors.length < MAX_CUSTOM_COLORS && (
-        <button type="button" onClick={add}>
-          Add colour
-        </button>
-      )}
-    </div>
-  );
 }
 
 function CommitColorInput({
