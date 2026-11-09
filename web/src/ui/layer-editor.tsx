@@ -301,8 +301,8 @@ function OptionsSection({
               }}
             />
             {option.label}
+            {option.note && <span className="option-note">({option.note})</span>}
           </label>
-          {option.note && <p className="option-note">{option.note}</p>}
         </div>
       ))}
       {rows.map((part) => (

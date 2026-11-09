@@ -210,7 +210,7 @@ export class ContourOverlay {
     httpWarmer: HttpWarmer = warmHttp,
   ) {
     const { map, layer, beforeId, display } = context;
-    // The card would set the interval in card type, so it takes the legend caption style.
+    // The interval note shares the isotherm note's style so both legend lines read alike.
     this.legend.className = "legend-contour";
     this.map = map;
     this.dem = dem;

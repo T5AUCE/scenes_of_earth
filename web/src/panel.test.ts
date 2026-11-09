@@ -33,19 +33,19 @@ const hooks = registerHooks({
 });
 const { createPanel } = await import("./panel.ts").finally(() => hooks.deregister());
 
-test("search results show the country's kind instead of the generic level", async (context) => {
+test("search results show the admin level, not the local kind", async (context) => {
   const root = await panelWithHits(context, [areaHit({ kind: "County" })]);
 
-  assert.deepEqual(await resultTexts(context, root), ["Nakuru · Kenya · County"]);
+  assert.deepEqual(await resultTexts(context, root), ["Nakuru · Kenya · ADM1"]);
 });
 
 for (const { level, label } of [
   { level: "state", label: "ADM1" },
   { level: "county", label: "ADM2" },
-  { level: "country", label: "Country" },
+  { level: "country", label: "ADM0" },
   { level: "city", label: "City" },
 ]) {
-  test(`search results without a kind use the ${level} label`, async (context) => {
+  test(`search results use the ${level} label`, async (context) => {
     const root = await panelWithHits(context, [areaHit({ level })]);
 
     assert.deepEqual(await resultTexts(context, root), [`Nakuru · Kenya · ${label}`]);
@@ -56,16 +56,16 @@ test("search results without a parent omit the empty separator", async (context)
   const country = areaHit({ name: "Kenya", parent_name: null, level: "country" });
   const root = await panelWithHits(context, [country]);
 
-  assert.deepEqual(await resultTexts(context, root), ["Kenya · Country"]);
+  assert.deepEqual(await resultTexts(context, root), ["Kenya · ADM0"]);
 });
 
-test("search results preserve an unfamiliar level when it has no kind", async (context) => {
+test("search results preserve an unfamiliar level", async (context) => {
   const root = await panelWithHits(context, [areaHit({ level: "region" })]);
 
   assert.deepEqual(await resultTexts(context, root), ["Nakuru · Kenya · region"]);
 });
 
-test("the level dropdown shows descriptive labels and preserves API values", async (context) => {
+test("the level dropdown shows official admin levels and preserves API values", async (context) => {
   const root = await panelWithHits(context, []);
   const level = root.querySelector<HTMLSelectElement>("select");
   assert.ok(level);
@@ -74,10 +74,10 @@ test("the level dropdown shows descriptive labels and preserves API values", asy
     [...level.options].map((option) => [option.value, option.textContent]),
     [
       ["", "Any Level"],
-      ["country", "ADM0 (country, territory, etc.)"],
-      ["state", "ADM1 (state, county, etc.)"],
-      ["county", "ADM2 (district, county, etc.)"],
-      ["city", "City (urban area)"],
+      ["country", "ADM0"],
+      ["state", "ADM1"],
+      ["county", "ADM2"],
+      ["city", "City"],
     ],
   );
 });

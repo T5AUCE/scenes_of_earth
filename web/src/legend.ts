@@ -57,6 +57,8 @@ export function contourLegendText(interval: number, boldInterval: number, units 
 /** A dashed sample of the isotherm ink and its casing with the interval and bold step. */
 export function isothermLegend(interval: number, ink: InkPaint, units = "°C") {
   const element = document.createElement("div");
+  // Shares the contour line's smaller text so both interval notes read alike and fit one line.
+  element.className = "legend-contour";
   const sample = document.createElement("span");
   sample.className = "legend-isotherm";
   sample.style.background = dashGradient(ink.halo);
@@ -115,6 +117,7 @@ export function dotLegend(
 ) {
   const element = document.createElement("div");
   const unitsCaption = document.createElement("div");
+  unitsCaption.className = "legend-units";
   unitsCaption.textContent = units;
   const boxes = document.createElement("div");
   boxes.className = "legend-dot-row";
@@ -476,6 +479,7 @@ export function gradientLegend(
 ) {
   const element = document.createElement("div");
   const unitsCaption = document.createElement("div");
+  unitsCaption.className = "legend-units";
   unitsCaption.textContent = units;
   element.append(unitsCaption, gradientBar(colors), stopLabels(stops, isBottomOpen));
   return element;
@@ -543,8 +547,8 @@ export function classLegend(
     }
     (group ? lists.get(group)! : element).append(classRow(label, color));
   }
-  // Without families the flat list reuses the family column so its boxes align with geology rows.
-  if (lists.size === 0) element.className = "legend-group-list";
+  // Without families the rows look like geology family headings, minus the expand arrow.
+  if (lists.size === 0) element.className = "legend-class-list";
   return element;
 }
 

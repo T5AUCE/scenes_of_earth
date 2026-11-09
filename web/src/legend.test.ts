@@ -628,7 +628,7 @@ test("the class legend lists only the classes present, in class order", () => {
   );
 });
 
-test("the flat class legend reuses the family-list column of the grouped legend", () => {
+test("the flat class legend uses its own list styled like the family headings", () => {
   const classes = [
     { value: 10, label: "Tree cover", color: "#006400" },
     { value: 20, label: "Shrubland", color: "#ffbb22" },
@@ -638,11 +638,8 @@ test("the flat class legend reuses the family-list column of the grouped legend"
     new Set([10, 20]),
     classColors("esa_worldcover", classes),
   ) as unknown as TestElement;
-  const grouped = groupedLegend(new Set(["Sediments"]));
-  const groupedList = grouped.children[0].children[1];
 
-  assert.equal(legend.className, "legend-group-list");
-  assert.equal(legend.className, groupedList.className);
+  assert.equal(legend.className, "legend-class-list");
   assert.deepEqual(
     legend.children.map((row) => row.textContent),
     ["Tree cover", "Shrubland"],

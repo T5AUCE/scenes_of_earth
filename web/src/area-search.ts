@@ -18,14 +18,14 @@ const SEARCH_DEBOUNCE_MS = 300;
 export const NO_AREA_TEXT = "No area selected";
 const AREA_LEVELS = [
   { value: "", label: "Any Level" },
-  { value: "country", label: "ADM0 (country, territory, etc.)" },
-  { value: "state", label: "ADM1 (state, county, etc.)" },
-  { value: "county", label: "ADM2 (district, county, etc.)" },
-  { value: "city", label: "City (urban area)" },
+  { value: "country", label: "ADM0" },
+  { value: "state", label: "ADM1" },
+  { value: "county", label: "ADM2" },
+  { value: "city", label: "City" },
 ];
-// Results name the level briefly; the dropdown's examples would crowd each hit.
+// Results name the official admin level rather than each country's local word for it.
 const LEVEL_LABELS = new Map([
-  ["country", "Country"],
+  ["country", "ADM0"],
   ["state", "ADM1"],
   ["county", "ADM2"],
   ["city", "City"],
@@ -100,8 +100,8 @@ export function bindAreaSearch(
   }
 
   function showHit(hit: AreaHit, index: number) {
-    const kind = hit.kind ?? LEVEL_LABELS.get(hit.level) ?? hit.level;
-    const text = [hit.name, hit.parent_name, kind].filter(Boolean).join(" · ");
+    const level = LEVEL_LABELS.get(hit.level) ?? hit.level;
+    const text = [hit.name, hit.parent_name, level].filter(Boolean).join(" · ");
     const item = makeHtmlElement("li", text, results);
     item.id = `${results.id}-${index}`;
     item.setAttribute("role", "option");

@@ -62,7 +62,7 @@ import { createIsolineOverlay, type IsolineOverlay } from "./isolines";
 import { FALLBACK_PALETTE_NOTE } from "./layer-menu";
 
 const SERIES_OPACITY = 0.8;
-const SMOOTH_NOTE = "Smoothed for display; values are per cell.";
+const SMOOTH_NOTE = "for display; values are per cell";
 
 // Layers read by the blend share their cached steps with the layer's own view.
 const readers = new WeakMap<Promise<Store>, Map<string, StepReader>>();
