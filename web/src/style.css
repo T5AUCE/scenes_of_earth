@@ -748,7 +748,8 @@ body.scene-mode #panel {
   left: 50%;
   top: 13px;
   width: 2px;
-  height: 30px;
+  /* A pull stretches the stem while its top stays on the bar. */
+  height: calc(30px + var(--pull, 0px));
   margin-left: -1px;
   background: #1f1f1f;
   box-shadow: 0 0 0 1px #fff;
@@ -769,7 +770,7 @@ body.scene-mode #panel {
   width: 16px;
   height: 16px;
   margin-left: -8px;
-  transform: rotate(45deg);
+  transform: translateY(var(--pull, 0px)) rotate(45deg);
   border-radius: 0 50% 50% 50%;
   border: 2px solid #fff;
   box-shadow: 0 0 0 1px #1f1f1f;

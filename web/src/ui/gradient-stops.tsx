@@ -13,7 +13,12 @@ import {
 const POSITION_MIN = 0;
 const POSITION_MAX = 100;
 const DRAG_START_PX = 3;
-const REMOVE_PULL_PX = 48;
+const REMOVE_PULL_PX = 24;
+/** The longest the stem stretches, so a pull feels elastic rather than detaching the pin. */
+const MAX_STRETCH_PX = 12;
+/** A pin set for removal fades over this much pull, never quite vanishing before release. */
+const PULL_FADE_PX = 80;
+const MIN_PULLED_OPACITY = 0.15;
 const SMALL_STEP = 1;
 const LARGE_STEP = 10;
 const HEX_PATTERN = /^#[0-9a-f]{6}$/;
@@ -49,6 +54,7 @@ export function GradientStops({ stops, onPreview, onCommit }: GradientStopsProps
             count={editor.ordered.length}
             selected={stop.id === editor.selectedId}
             removing={stop.id === editor.removingId}
+            pullPx={stop.id === editor.pull?.id ? editor.pull.px : 0}
             {...editor.handleProps(stop)}
           />
         ))}
@@ -81,6 +87,8 @@ interface GradientEditor {
   ordered: UiStop[];
   selectedId: string | null;
   removingId: string | null;
+  /** How far the dragged pin is pulled below the bar, which stretches its stem elastically. */
+  pull: { id: string; px: number } | null;
   announcement: string;
   barProps: {
     ref: React.RefObject<HTMLDivElement | null>;
@@ -103,6 +111,7 @@ function useGradientEditor(
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [pull, setPull] = useState<{ id: string; px: number } | null>(null);
   const bar = useRef<HTMLDivElement>(null);
   const handles = useRef(new Map<string, HTMLDivElement>());
   const well = useRef<HTMLInputElement>(null);
@@ -212,6 +221,7 @@ function useGradientEditor(
     dragging.current = false;
     const pullRemove = removingId === state.id;
     setRemovingId(null);
+    setPull(null);
     if (pullRemove) {
       removeById(state.id, true);
       return;
@@ -224,6 +234,7 @@ function useGradientEditor(
     drag.current = null;
     dragging.current = false;
     setRemovingId(null);
+    setPull(null);
     commitNow(toGradient(draft));
   };
 
@@ -242,8 +253,9 @@ function useGradientEditor(
     pendingFocus.current = state.id;
     preview(next);
     // Pulling a last pair only previews, because release keeps two stops.
-    const pull = clientY - rect.bottom > REMOVE_PULL_PX;
-    setRemovingId(pull && draft.length > MIN_CUSTOM_COLORS ? state.id : null);
+    setPull({ id: state.id, px: Math.max(0, clientY - state.startY) });
+    const pulledOff = clientY - rect.bottom > REMOVE_PULL_PX;
+    setRemovingId(pulledOff && draft.length > MIN_CUSTOM_COLORS ? state.id : null);
   };
   const beginHandleDrag = (event: React.PointerEvent<HTMLDivElement>, stop: UiStop) => {
     if (event.button !== 0) return;
@@ -307,6 +319,7 @@ function useGradientEditor(
     ordered,
     selectedId,
     removingId,
+    pull,
     announcement,
     barProps: {
       ref: bar,
@@ -408,6 +421,7 @@ interface StopHandleProps {
   count: number;
   selected: boolean;
   removing: boolean;
+  pullPx: number;
   register(element: HTMLDivElement | null): void;
   onPointerDown(event: React.PointerEvent<HTMLDivElement>): void;
   onPointerMove(event: React.PointerEvent<HTMLDivElement>): void;
@@ -425,6 +439,7 @@ function StopHandle({
   count,
   selected,
   removing,
+  pullPx,
   register,
   onPointerDown,
   onPointerMove,
@@ -447,7 +462,11 @@ function StopHandle({
       className={["gradient-stop", selected ? "selected" : "", removing ? "removing" : ""]
         .filter(Boolean)
         .join(" ")}
-      style={{ left: `${stop.position}%`, zIndex: selected ? 2 : 1 }}
+      style={{
+        left: `${stop.position}%`,
+        zIndex: selected ? 2 : 1,
+        ...pullStyle(pullPx, removing),
+      } as React.CSSProperties}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -748,4 +767,18 @@ function cancelPreview(frame: React.MutableRefObject<number | null>) {
   if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(frame.current);
   else clearTimeout(frame.current);
   frame.current = null;
+}
+
+/** Stretch the stem with the pull, and fade the pin once the pull would remove it. */
+function pullStyle(pullPx: number, removing: boolean) {
+  if (pullPx <= 0) return {};
+  const stretch = { "--pull": `${stretchPx(pullPx).toFixed(1)}px` };
+  if (!removing) return stretch;
+  const opacity = Math.max(MIN_PULLED_OPACITY, 1 - pullPx / PULL_FADE_PX);
+  return { ...stretch, opacity: opacity.toFixed(2) };
+}
+
+/** Ease a downward pull into a stem stretch that resists more the further it goes. */
+function stretchPx(pullPx: number) {
+  return MAX_STRETCH_PX * (1 - Math.exp(-pullPx / MAX_STRETCH_PX));
 }

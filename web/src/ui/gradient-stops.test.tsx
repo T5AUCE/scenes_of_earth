@@ -202,6 +202,54 @@ test("a hex commit followed by a native change does not revert on blur", async (
   await act(async () => root.unmount());
 });
 
+test("a pulled pin stretches, then fades in place past the removal point", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { GradientStops } = await import("./gradient-stops.tsx");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+
+  await act(async () => root.render(
+    <GradientStops
+      stops={stopsOf([["#000000", 0], ["#888888", 40], ["#ffffff", 100]])}
+      onPreview={() => {}}
+      onCommit={() => {}}
+    />,
+  ));
+
+  mockBarRect(container, { left: 0, width: 200, bottom: 24 });
+  const handle = handleByLabel(container, "Colour 2 of 3");
+  await act(async () => {
+    handle.dispatchEvent(pointerDown(window, 80, 10));
+  });
+  await act(async () => {
+    handle.dispatchEvent(pointerMove(window, 80, 40));
+  });
+  const stretch = Number.parseFloat(handle.style.getPropertyValue("--pull"));
+  assert.ok(stretch > 0 && stretch < 30, `stretch ${stretch} should ease below the 30 px pull`);
+  assert.equal(handle.style.transform, "");
+
+  await act(async () => {
+    handle.dispatchEvent(pointerMove(window, 80, 70));
+  });
+  assert.equal(handle.style.transform, "");
+  assert.ok(Number(handle.style.opacity) < 1, "a pin set for removal fades");
+  assert.ok(Number.parseFloat(handle.style.getPropertyValue("--pull")) <= 12);
+
+  await act(async () => {
+    handle.dispatchEvent(pointerMove(window, 80, 40));
+  });
+
+  await act(async () => {
+    handle.dispatchEvent(pointerUp(window, 80, 40));
+  });
+  assert.equal(handle.style.getPropertyValue("--pull"), "");
+});
+
 test("a pull-to-remove released before its frame never previews the old stops", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
