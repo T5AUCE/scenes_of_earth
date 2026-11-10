@@ -1,6 +1,6 @@
 # Scenes of Earth
 
-<img src="https://github.com/T5AUCE/scenes_of_earth/blob/main/docs/sample_kenya_custom_temp.png" alt="Example Image of Kenya With Custom Temperature Colors" width="1100" height="600">
+<img src="https://github.com/T5AUCE/scenes_of_earth/blob/main/docs/sample_kenya_new.png" alt="Example Image of Kenya With Custom Temperature Colors" width="1100" height="600">
 
 Scenes of Earth is an open-source web application for exploring and sharing climate and geographic data through special interactive maps known as **scenes**, that serve as highly configurable sandboxes for environmental datasets. Users can choose to select a country, state, county, major city, or draw their own region, then explore layers such as rainfall, temperature, terrain, and land cover (more to be added later) using editable layers and a time slider.
 
