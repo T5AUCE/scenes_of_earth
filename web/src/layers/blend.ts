@@ -8,13 +8,14 @@ import {
   removeLayerAndSource,
   setImage,
   setPairOpacities,
+  warmHiddenRaster,
 } from "../map";
 import type { StepReader } from "../step-reader";
 import { displayStops } from "../units";
 import {
   type BivariateAxis,
   lut2d,
-  paintBivariate,
+  paintBivariateInSlices,
   stopsForRange,
 } from "../render/colormap";
 import { crossSampleTable, type SampleTable, sampleTable } from "../render/mercator";
@@ -96,6 +97,7 @@ class Blend implements BlendView {
   private shownTime: string | null = null;
   private shownKey: string | null = null;
   private notedTime: string | null = null;
+  private activePaint: AbortController | null = null;
 
   constructor([rain, temperature]: readonly [LayerDoc, LayerDoc], context: BlendContext) {
     this.context = context;
@@ -172,6 +174,43 @@ class Blend implements BlendView {
     await this.readSteps(steps, false);
   }
 
+  /**
+   * Warm the opening time so the flight never pays for its paint.
+   * Playback keeps using prepare, so this never changes its contract.
+   */
+  async prepareEntry(time: string | null, signal?: AbortSignal): Promise<void> {
+    if (time === null || !this.alive || !this.isShown || this.shownTime === null) return;
+    if (time !== this.shownTime || signal?.aborted) return;
+
+    const requestTime = time;
+    const stops = this.halves.map((half) => this.nativeStops(half));
+    const steps = this.stepsAt(time);
+    if (steps[0] < 0 || steps[1] < 0 || !this.alive) return;
+
+    const values = await this.readSteps(steps, false);
+    if (!this.alive || signal?.aborted || !this.isShown || requestTime !== this.shownTime) return;
+    if (!sameStops(stops, this.halves.map((half) => this.nativeStops(half)))) return;
+
+    const key = this.keyAt(requestTime)!;
+    if (this.fade.holds(key)) {
+      for (const id of this.fadeIds) await warmHiddenRaster(this.context.map, id, signal);
+      return;
+    }
+
+    this.activePaint?.abort();
+    this.activePaint = null;
+    const image = await this.paintStepImage(values, stops, signal);
+    if (!this.alive || signal?.aborted || !this.isShown || requestTime !== this.shownTime) return;
+    if (!sameStops(stops, this.halves.map((half) => this.nativeStops(half)))) return;
+
+    this.fade.show(key, () => image);
+    // The hidden sources prepare under the zoom gate, so the first visible render skips them.
+    for (const id of this.fadeIds) await warmHiddenRaster(this.context.map, id, signal);
+    if (!this.alive || signal?.aborted || !this.isShown || requestTime !== this.shownTime) return;
+
+    await yieldEntryFrame(signal);
+  }
+
   maxLookahead() {
     return Math.min(...this.halves.map(({ reader }) => reader.maxLookahead()));
   }
@@ -191,8 +230,23 @@ class Blend implements BlendView {
 
   restyle() {
     this.showLegend();
+    this.activePaint?.abort();
+    this.activePaint = null;
     this.fade.invalidate();
-    if (this.values && this.shownKey !== null) this.paint(this.values, this.shownKey);
+    if (this.values && this.shownKey !== null && this.shownTime !== null) {
+      const stops = this.halves.map((half) => this.nativeStops(half));
+      const controller = new AbortController();
+      this.activePaint = controller;
+      void this.paint(
+        this.values,
+        this.shownKey,
+        stops,
+        this.shownTime,
+        controller.signal,
+      ).finally(() => {
+        if (this.activePaint === controller) this.activePaint = null;
+      });
+    }
   }
 
   legend() {
@@ -201,6 +255,8 @@ class Blend implements BlendView {
 
   destroy() {
     this.alive = false;
+    this.activePaint?.abort();
+    this.activePaint = null;
     this.fade.invalidate();
     for (const id of this.fadeIds) removeLayerAndSource(this.context.map, id);
   }
@@ -239,14 +295,38 @@ class Blend implements BlendView {
 
     try {
       const steps = this.stepsAt(time);
-      const values = await this.readSteps(steps);
-      if (!this.isCurrent(time)) return;
+      const stops = this.halves.map((half) => this.nativeStops(half));
+      const requestTime = time;
+      const requestKey = this.keyAt(time)!;
+      this.activePaint?.abort();
+      const controller = new AbortController();
+      this.activePaint = controller;
+      let values: Float32Array[];
+      try {
+        values = await this.readSteps(steps);
+      } catch (error) {
+        if (this.activePaint === controller) this.activePaint = null;
+        throw error;
+      }
+      if (!this.isCurrent(requestTime)) {
+        if (this.activePaint === controller) this.activePaint = null;
+        return;
+      }
+      if (!sameStops(stops, this.halves.map((half) => this.nativeStops(half)))) {
+        if (this.activePaint === controller) this.activePaint = null;
+        return;
+      }
 
-      this.paint(values, this.keyAt(time)!);
+      try {
+        await this.paint(values, requestKey, stops, requestTime, controller.signal);
+      } finally {
+        if (this.activePaint === controller) this.activePaint = null;
+      }
       this.halves.forEach(({ reader, time: axis }, index) => {
         reader.prime(steps[index], axis.values.length - 1);
       });
     } catch (error) {
+      if ((error as Error)?.name === "AbortError") return;
       // An error for a step the user has already left is no longer relevant.
       if (!this.isCurrent(time)) return;
 
@@ -282,27 +362,53 @@ class Blend implements BlendView {
     return this.alive && this.isShown && time === this.shownTime;
   }
 
-  private paint(values: Float32Array[], key: string) {
+  private async paint(
+    values: Float32Array[],
+    key: string,
+    stops: number[][],
+    requestTime: string,
+    signal?: AbortSignal,
+  ) {
     this.values = values;
     this.shownKey = key;
-    this.fade.show(key, () => this.paintImage(values));
+    let image: ImageData;
+    try {
+      image = await this.paintStepImage(values, stops, signal);
+    } catch (error) {
+      if ((error as Error)?.name === "AbortError") return;
+
+      throw error;
+    }
+    if (signal?.aborted) return;
+    if (!this.alive || !this.isShown || this.shownTime !== requestTime) return;
+    if (this.keyAt(this.shownTime) !== key) return;
+    if (!sameStops(stops, this.halves.map((half) => this.nativeStops(half)))) return;
+
+    this.fade.show(key, () => image);
   }
 
-  private paintImage(values: Float32Array[]) {
+  /** Paint both inputs through the shared sliced painter the entry warm-up uses. */
+  private paintStepImage(
+    values: Float32Array[],
+    stops: number[][],
+    signal?: AbortSignal,
+  ): Promise<ImageData> {
     const [rain, temperature] = this.halves.map((half, index): BivariateAxis => ({
       values: values[index],
       table: half.table,
-      stops: this.nativeStops(half),
+      stops: stops[index],
     }));
-    const rgba = paintBivariate(rain, temperature, BLEND_COLORS);
-
-    return new ImageData(rgba, this.width, this.height);
+    return paintBivariateInSlices(rain, temperature, BLEND_COLORS, signal).then(
+      (rgba) => new ImageData(rgba, this.width, this.height),
+    );
   }
 
   private async loadNext(time: string) {
+    const stops = this.halves.map((half) => this.nativeStops(half));
     const values = await this.readSteps(this.stepsAt(time), false);
+    const image = await this.paintStepImage(values, stops, undefined);
 
-    return () => this.paintImage(values);
+    return () => image;
   }
 
   private readSteps(steps: number[], isUrgent = true) {
@@ -340,4 +446,34 @@ class Blend implements BlendView {
 
     this.legendBox.replaceChildren(bivariateLegend(BLEND_COLORS, rain, temperature, isFitted));
   }
+}
+
+/** Wait a frame so the preparing note paints before heavy work continues. */
+function yieldEntryFrame(signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(cancelError());
+  return new Promise((done, fail) => {
+    const onFrame = () => {
+      signal?.removeEventListener("abort", onAbort);
+      done();
+    };
+    const onAbort = () => fail(cancelError());
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(onFrame);
+      return;
+    }
+    setTimeout(onFrame, 0);
+  });
+}
+
+function sameStops(first: number[][], second: number[][]): boolean {
+  return first.length === second.length
+    && first.every((stops, index) => stops.length === second[index].length
+      && stops.every((stop, stopIndex) => stop === second[index][stopIndex]));
+}
+
+function cancelError(): Error {
+  const error = new Error("Entry preparation was cancelled");
+  error.name = "AbortError";
+  return error;
 }

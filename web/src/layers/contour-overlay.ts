@@ -17,29 +17,25 @@ import {
   type ContourLadder,
   type LadderTier,
 } from "../contour-ladder";
-import { setPrefetchDisabled } from "../dev-stats";
 import {
   addressSearch,
   contourMaxZoomSetting,
   gestureFlags,
   isGestureActive,
-  prefetchEnabled,
   subscribeGesture,
 } from "../gesture-quality";
 import { makeHtmlElement } from "../html";
 import { contourLegendText } from "../legend";
 import { labelFadeDurationMs } from "../reduced-motion";
 import { contourColor, DEFAULT_CONTOUR_COLOR } from "../render/palettes";
-import { BASEMAP_SOURCE_ID, basemapDescriptor } from "../render/tile-viewport";
 import { convertValue, displayUnitFor, isUnitFor } from "../units";
 import type { LayerContext, Part, TerrainStats, TerrainTiles } from "../types";
 import {
-  TilePrefetchScheduler,
-  type DemFetcher,
-  type HttpWarmer,
-  type TilePrefetchMap,
-  type TilePrefetchWiring,
-} from "./tile-prefetch";
+  CONTOUR_PRELOAD_ID,
+  contourPreloadSource,
+  demFetcherFor,
+} from "./scene-preload";
+import { currentScenePreload, withVisibleDemand, type ScenePreload } from "./tile-prefetch";
 
 export { levelsForZoom } from "../contour-ladder";
 
@@ -81,10 +77,63 @@ export function sharedDemSource(tiles: TerrainTiles): DemSource {
     worker: true,
     cacheSize: DEM_CACHE_TILES,
   });
+  trackVisibleProtocols(source);
   source.setupMaplibre(maplibregl);
   memoizeMissingDemTiles(source);
   demSources.set(key, source);
   return source;
+}
+
+const trackedProtocols = new WeakSet<DemSource>(); // Sources already wrapped.
+
+/**
+ * Suspend background preload launches while a visible contour or DEM protocol request
+ * runs. The plugin protocols call the remote manager directly and never enter the store
+ * broker, so they bracket here instead. Preload tracing calls the manager directly and
+ * never these protocols, so background work never counts itself as visible.
+ */
+export function trackVisibleProtocols(dem: DemSource): void {
+  if (trackedProtocols.has(dem)) return;
+  trackedProtocols.add(dem);
+  dem.contourProtocolV4 = wrapProtocolAction(dem.contourProtocolV4);
+  dem.sharedDemProtocolV4 = wrapProtocolAction(dem.sharedDemProtocolV4);
+  // The registered handlers captured the original actions at construction, so rebuild them here.
+  dem.contourProtocol = compatProtocol(dem.contourProtocolV4);
+  dem.sharedDemProtocol = compatProtocol(dem.sharedDemProtocolV4);
+}
+
+type ProtocolRequest = Parameters<DemSource["contourProtocolV4"]>[0];
+type ProtocolCallback = (
+  error?: Error,
+  data?: unknown,
+  cacheControl?: string,
+  expires?: string,
+) => void;
+
+function wrapProtocolAction(
+  action: DemSource["contourProtocolV4"],
+): DemSource["contourProtocolV4"] {
+  return (request: ProtocolRequest, abort: AbortController) => {
+    return withVisibleDemand(() => action(request, abort));
+  };
+}
+
+function compatProtocol(action: DemSource["contourProtocolV4"]): DemSource["contourProtocol"] {
+  const compat = (request: ProtocolRequest, arg2: AbortController | ProtocolCallback) => {
+    if (arg2 instanceof AbortController) return action(request, arg2);
+    const abort = new AbortController();
+    action(request, abort).then(
+      (result) => arg2(
+        undefined,
+        result.data,
+        result.cacheControl as string | undefined,
+        result.expires as unknown as string | undefined,
+      ),
+      (error: unknown) => arg2(error as Error),
+    );
+    return { cancel: () => abort.abort() };
+  };
+  return compat as DemSource["contourProtocol"];
 }
 
 /**
@@ -194,10 +243,12 @@ export class ContourOverlay {
   private labelId?: string;
   private labelsFrozen = false;
   private labelFadeZeroed = false;
-  private readonly prefetch: TilePrefetchScheduler;
+  private readonly preload: ScenePreload | null;
+  private readonly demMaxzoom: number;
+  private readonly demTemplate: string;
+  private readonly fetcher: ReturnType<typeof demFetcherFor>;
   // Captured here because scene entry replaces the address and drops trial flags.
   private readonly freezeAllowed = gestureFlags(addressSearch()).freezeLabels;
-  private readonly prefetchAllowed = prefetchEnabled(addressSearch());
   private readonly stopGesture: () => void;
 
   constructor(
@@ -205,9 +256,7 @@ export class ContourOverlay {
     dem: DemSource,
     tiles: TerrainTiles,
     stats: TerrainStats,
-    clock: () => number = () => performance.now(),
-    wiring?: TilePrefetchWiring,
-    httpWarmer: HttpWarmer = warmHttp,
+    preload: ScenePreload | null = currentScenePreload(),
   ) {
     const { map, layer, beforeId, display } = context;
     // The interval note shares the isotherm note's style so both legend lines read alike.
@@ -215,6 +264,10 @@ export class ContourOverlay {
     this.map = map;
     this.dem = dem;
     this.stats = stats;
+    this.preload = preload;
+    this.demMaxzoom = cappedDemMaxZoom(tiles.maxzoom);
+    this.demTemplate = tiles.url;
+    this.fetcher = demFetcherFor(dem);
     this.bbox = layer.grid.bbox;
     this.beforeId = beforeId;
     this.color = contourColor(display?.palette ?? DEFAULT_CONTOUR_COLOR)!;
@@ -230,44 +283,19 @@ export class ContourOverlay {
       layerIds: [],
       onToggle: (visible) => {
         this.isOn = visible;
-        if (!visible) this.prefetch.cancelAll();
+        this.setPreloaded(visible);
         // drawView shows every part layer first, so the freeze state decides the labels.
         if (this.freezeAllowed) this.updateLabelVisibility();
         this.updateLegend();
       },
     };
-    const prefetchWiring = wiring ?? {
-      reliefSourceId: `${layer.id}-relief`,
-      basemapSourceId: BASEMAP_SOURCE_ID,
-    };
-    this.prefetch = new TilePrefetchScheduler(
-      map as unknown as TilePrefetchMap,
-      () => ({
-        sourceId: this.lineSourceId,
-        ladder: this.ladder,
-        maxzoom: this.maxzoom,
-        reliefMaxzoom: cappedDemMaxZoom(tiles.maxzoom),
-        elevationUnit: this.elevationUnit,
-        enabled: this.isOn && this.prefetchAllowed,
-        bbox: this.bbox,
-      }),
-      { tileTemplate: tiles.url, fetcher: traceFetcherFor(dem) },
-      prefetchWiring,
-      () => basemapDescriptor(map),
-      httpWarmer,
-      clock,
-    );
-
     this.build();
     map.on("zoomend", this.updateLegend);
     this.updateLegend();
-    setPrefetchDisabled(!this.prefetchAllowed);
+    this.setPreloaded(true);
     // Hidden labels skip placement and collision, so a gesture freezes them until moveend.
     this.stopGesture = subscribeGesture(map, {
-      onStart: () => {
-        this.prefetch.reset();
-        this.setLabelsFrozen(true);
-      },
+      onStart: () => this.setLabelsFrozen(true),
       onEnd: () => this.setLabelsFrozen(false),
     });
     if (isGestureActive(map)) this.setLabelsFrozen(true);
@@ -279,6 +307,26 @@ export class ContourOverlay {
 
     this.elevationUnit = unit;
     this.rebuild();
+  }
+
+  /** Trace the scene's contour tiles ahead of the camera while the lines are on. */
+  private setPreloaded(isPreloaded: boolean) {
+    if (!isPreloaded) {
+      this.preload?.remove(CONTOUR_PRELOAD_ID);
+      return;
+    }
+    this.preload?.add(contourPreloadSource({
+      lineSourceId: this.lineSourceId,
+      plan: () => ({
+        ladder: this.ladder,
+        maxzoom: this.maxzoom,
+        elevationUnit: this.elevationUnit,
+      }),
+      bbox: this.bbox,
+      demMaxzoom: this.demMaxzoom,
+      demTemplate: this.demTemplate,
+      fetcher: this.fetcher,
+    }));
   }
 
   private build() {
@@ -318,8 +366,8 @@ export class ContourOverlay {
     this.map.removeSource(this.labelSourceId);
     this.part.layerIds.length = 0;
     this.labelId = undefined;
-    this.prefetch.reset();
     this.build();
+    this.setPreloaded(this.isOn);
     if (!this.isOn) {
       for (const id of this.part.layerIds) {
         this.map.setLayoutProperty(id, "visibility", "none");
@@ -465,32 +513,12 @@ export class ContourOverlay {
 
   destroy() {
     this.stopGesture();
-    this.prefetch.destroy();
-    setPrefetchDisabled(false);
+    this.preload?.remove(CONTOUR_PRELOAD_ID);
     this.map.off("zoomend", this.updateLegend);
     for (const id of this.part.layerIds) this.map.removeLayer(id);
     this.map.removeSource(this.lineSourceId);
     this.map.removeSource(this.labelSourceId);
   }
-}
-
-/** Read the DEM manager both warmers share with the visible sources. */
-function traceFetcherFor(dem: { manager?: unknown }): DemFetcher | null {
-  const manager = dem as { manager?: DemFetcher };
-  if (!manager.manager) return null;
-  if (typeof manager.manager.fetchContourTile !== "function") return null;
-  return manager.manager;
-}
-
-/**
- * Warm one versioned basemap URL so later visible reads hit the HTTP cache. The resolved
- * body is measured against the speculative budget by the scheduler.
- */
-function warmHttp(url: string, signal: AbortSignal): Promise<unknown> {
-  return fetch(url, { signal }).then((response) => {
-    if (!response.ok) throw new Error(`Bad response: ${response.status} for ${url}`);
-    return response.arrayBuffer();
-  });
 }
 
 function transparentColor(color: string): string {

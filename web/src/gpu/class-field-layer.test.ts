@@ -10,12 +10,13 @@ import {
   THIN_CELL_FLAG,
 } from "./class-field-shaders.ts";
 
-test("class fields retain ids across context loss and release resources on removal", () => {
+test("class fields retain ids across context loss and release resources on removal", async () => {
   const harness = createHarness();
   const field = harness.field;
   field.setIds(new Uint8Array(12).fill(1));
   field.setColors([[10, 20, 30]]);
   field.setEdges(smoothingEdges());
+  await field.prepareFlags();
   field.layer.onAdd!(harness.map, harness.gl);
   field.layer.render(harness.gl, harness.input);
 
@@ -98,6 +99,7 @@ test("a 2048 texture limit splits a long grid into haloed uploads", async () => 
     const harness = createHarness({ nx: 4096, maxTextureSize: 2048 });
     harness.field.setIds(Uint8Array.from({ length: 4096 * 3 }, (_, cell) => 10 + (cell % 2) * 10));
     harness.field.setEdges(smoothingEdges());
+    await harness.field.prepareFlags();
     await harness.field.bakeSettled();
     harness.field.layer.onAdd!(harness.map, harness.gl);
     harness.field.layer.render(harness.gl, harness.input);
@@ -133,6 +135,7 @@ test("band uploads stage across renders while tiles keep drawing", async () => {
     const harness = createHarness({ nx: 100, maxTextureSize: 24 });
     harness.field.setIds(Uint8Array.from({ length: 300 }, (_, cell) => 10 + (cell % 2) * 10));
     harness.field.setEdges(smoothingEdges());
+    await harness.field.prepareFlags();
     await harness.field.bakeSettled();
     harness.field.layer.onAdd!(harness.map, harness.gl);
     const bakes: unknown[] = [];
@@ -231,6 +234,7 @@ test("uniform ids upload set homogeneous flags beside the ids", async () => {
     const ids = new Uint8Array(12).fill(10);
     harness.field.setIds(ids);
     harness.field.setEdges(smoothingEdges());
+    await harness.field.prepareFlags();
     await harness.field.bakeSettled();
     harness.field.layer.onAdd!(harness.map, harness.gl);
     harness.field.layer.render(harness.gl, harness.input);
@@ -247,11 +251,12 @@ test("uniform ids upload set homogeneous flags beside the ids", async () => {
   });
 });
 
-test("a split field uploads cleared homogeneous flags", () => {
+test("a split field uploads cleared homogeneous flags", async () => {
   const harness = createHarness();
   const ids = new Uint8Array([10, 10, 20, 20, 10, 10, 20, 20, 10, 10, 20, 20]);
   harness.field.setIds(ids);
   harness.field.setEdges(smoothingEdges());
+  await harness.field.prepareFlags();
   harness.field.layer.onAdd!(harness.map, harness.gl);
   harness.field.layer.render(harness.gl, harness.input);
 
@@ -272,10 +277,11 @@ test("a zero smoothing radius uploads ids without flags", () => {
   assert.equal(harness.draws.length, 3);
 });
 
-test("flags are built once per data set and reused within one window", () => {
+test("flags are built once per data set and reused within one window", async () => {
   const harness = createHarness();
   harness.field.setIds(new Uint8Array(12).fill(10));
   harness.field.setEdges(smoothingEdges());
+  await harness.field.prepareFlags();
   harness.field.layer.onAdd!(harness.map, harness.gl);
   harness.field.layer.render(harness.gl, harness.input);
   assert.equal(harness.uploads.length, 4);
@@ -286,6 +292,7 @@ test("flags are built once per data set and reused within one window", () => {
   // Rounding and a radius within the small window reuse the cached pair.
   harness.field.setEdges({ ...smoothingEdges(), rounding: 0.5 });
   harness.field.setEdges({ ...smoothingEdges(), smoothRadiusCells: 2 });
+  await harness.field.prepareFlags();
   harness.field.layer.render(harness.gl, harness.input);
   assert.equal(harness.uploads.length, 4);
   assert.ok((harness.uploads[3][8] as Uint8Array).every((flag) => flag === 1));
@@ -297,6 +304,7 @@ test("a radius crossing the stride threshold rebuilds the flags", async () => {
     const ids = new Uint8Array(12).fill(10);
     harness.field.setIds(ids);
     harness.field.setEdges(smoothingEdges());
+    await harness.field.prepareFlags();
     await harness.field.bakeSettled();
     harness.field.layer.onAdd!(harness.map, harness.gl);
     harness.field.layer.render(harness.gl, harness.input);
@@ -305,12 +313,14 @@ test("a radius crossing the stride threshold rebuilds the flags", async () => {
     // Editing the shared ids in place makes the rebuilt flags differ from the cached ones.
     ids.set([20, 20, 20, 20], 4);
     harness.field.setEdges({ ...smoothingEdges(), smoothRadiusCells: 3 });
+    await harness.field.prepareFlags();
     await harness.field.bakeSettled();
     harness.field.layer.render(harness.gl, harness.input);
     assert.equal(harness.uploads.length, 9);
     assert.ok((harness.uploads[5][8] as Uint8Array).every((flag) => flag !== 1));
 
     harness.field.setIds(ids);
+    await harness.field.prepareFlags();
     await harness.field.bakeSettled();
     harness.field.layer.render(harness.gl, harness.input);
     assert.equal(harness.uploads.length, 14);
@@ -336,11 +346,12 @@ test("the flag sampler stays on an integer texture when no flags are uploaded", 
   }
 });
 
-test("the flag sampler follows the companion through positive and zero radius", () => {
+test("the flag sampler follows the companion through positive and zero radius", async () => {
   const harness = createHarness();
   const bindings = trackBindings(harness);
   harness.field.setIds(new Uint8Array(12).fill(10));
   harness.field.setEdges(smoothingEdges());
+  await harness.field.prepareFlags();
   harness.field.layer.onAdd!(harness.map, harness.gl);
   harness.field.layer.render(harness.gl, harness.input);
   assert.equal(bindings.homogeneousIsInteger(), true);
@@ -352,6 +363,7 @@ test("the flag sampler follows the companion through positive and zero radius", 
   assert.equal(harness.uniforms.get("uHomogeneous"), 0);
 
   harness.field.setEdges(smoothingEdges());
+  await harness.field.prepareFlags();
   harness.field.layer.render(harness.gl, harness.input);
   assert.equal(bindings.homogeneousIsInteger(), true);
   assert.equal(harness.uniforms.get("uHomogeneous"), 2);
@@ -363,6 +375,7 @@ test("pending bands keep every sampler on the integer ids texture", async () => 
     const bands = trackBandSamplers(harness);
     harness.field.setIds(Uint8Array.from({ length: 12 }, (_, cell) => 10 + (cell % 2) * 10));
     harness.field.setEdges(smoothingEdges());
+    await harness.field.prepareFlags();
     harness.field.layer.onAdd!(harness.map, harness.gl);
     harness.field.layer.render(harness.gl, harness.input);
 
@@ -378,6 +391,7 @@ test("uniform tiles keep every sampler on the integer ids texture", async () => 
     const bands = trackBandSamplers(harness);
     harness.field.setIds(new Uint8Array(12).fill(10));
     harness.field.setEdges(smoothingEdges());
+    await harness.field.prepareFlags();
     await harness.field.bakeSettled();
     harness.field.layer.onAdd!(harness.map, harness.gl);
     harness.field.layer.render(harness.gl, harness.input);
@@ -388,12 +402,13 @@ test("uniform tiles keep every sampler on the integer ids texture", async () => 
   });
 });
 
-test("disabled bake leaves no band sampler to validate", () => {
-  withSearch("", () => {
+test("disabled bake leaves no band sampler to validate", async () => {
+  await withSearchAsync("", async () => {
     const harness = createHarness();
     const bands = trackBandSamplers(harness);
     harness.field.setIds(Uint8Array.from({ length: 12 }, (_, cell) => 10 + (cell % 2) * 10));
     harness.field.setEdges(smoothingEdges());
+    await harness.field.prepareFlags();
     harness.field.layer.onAdd!(harness.map, harness.gl);
     harness.field.layer.render(harness.gl, harness.input);
 
@@ -411,6 +426,7 @@ test("mixed tiles validate ready bands and fall back the rest on integer ids", a
     ids[2025] = 20;
     harness.field.setIds(ids);
     harness.field.setEdges({ ...smoothingEdges(), smoothRadiusCells: 4 });
+    await harness.field.prepareFlags();
     await harness.field.bakeSettled();
     harness.field.layer.onAdd!(harness.map, harness.gl);
     harness.field.layer.render(harness.gl, harness.input);
@@ -426,6 +442,7 @@ test("colours reuse the baked band without re-uploading it", async () => {
     const harness = createHarness();
     harness.field.setIds(Uint8Array.from({ length: 12 }, (_, cell) => 10 + (cell % 2) * 10));
     harness.field.setEdges(smoothingEdges());
+    await harness.field.prepareFlags();
     await harness.field.bakeSettled();
     harness.field.layer.onAdd!(harness.map, harness.gl);
     harness.field.layer.render(harness.gl, harness.input);
@@ -449,6 +466,7 @@ test("the band uploads two ids with two mask words per texel", async () => {
     const harness = createHarness();
     harness.field.setIds(Uint8Array.from({ length: 12 }, (_, cell) => 10 + (cell % 2) * 10));
     harness.field.setEdges(smoothingEdges());
+    await harness.field.prepareFlags();
     await harness.field.bakeSettled();
     harness.field.layer.onAdd!(harness.map, harness.gl);
     harness.field.layer.render(harness.gl, harness.input);
@@ -463,11 +481,12 @@ test("the band uploads two ids with two mask words per texel", async () => {
   });
 });
 
-test("without the bake flag the layer uploads no band and takes the pre-bake path", () => {
-  withSearch("", () => {
+test("without the bake flag the layer uploads no band and takes the pre-bake path", async () => {
+  await withSearchAsync("", async () => {
     const harness = createHarness();
     harness.field.setIds(new Uint8Array(12).fill(10));
     harness.field.setEdges(smoothingEdges());
+    await harness.field.prepareFlags();
     harness.field.layer.onAdd!(harness.map, harness.gl);
     harness.field.layer.render(harness.gl, harness.input);
 
@@ -483,6 +502,7 @@ test("tiles draw the full path while the band builds off the arrival task", asyn
     const harness = createHarness();
     harness.field.setIds(Uint8Array.from({ length: 12 }, (_, cell) => 10 + (cell % 2) * 10));
     harness.field.setEdges(smoothingEdges());
+    await harness.field.prepareFlags();
     harness.field.layer.onAdd!(harness.map, harness.gl);
     harness.field.layer.render(harness.gl, harness.input);
 
@@ -504,6 +524,7 @@ test("an odd window origin skips its band and keeps the full gather", async () =
     ids[2025] = 20;
     harness.field.setIds(ids);
     harness.field.setEdges({ ...smoothingEdges(), smoothRadiusCells: 4 });
+    await harness.field.prepareFlags();
     await harness.field.bakeSettled();
     const bakes: unknown[] = [];
     const original = harness.gl.uniform1i.bind(harness.gl);
@@ -528,6 +549,7 @@ test("a failed second band upload frees its tile textures", async () => {
     const harness = createHarness({ failUploadAt: 5 });
     harness.field.setIds(Uint8Array.from({ length: 12 }, (_, cell) => 10 + (cell % 2) * 10));
     harness.field.setEdges(smoothingEdges());
+    await harness.field.prepareFlags();
     await harness.field.bakeSettled();
     harness.field.layer.onAdd!(harness.map, harness.gl);
     harness.field.layer.render(harness.gl, harness.input);
@@ -544,6 +566,7 @@ test("a failed third band upload frees its tile textures", async () => {
     const harness = createHarness({ failUploadAt: 6 });
     harness.field.setIds(Uint8Array.from({ length: 12 }, (_, cell) => 10 + (cell % 2) * 10));
     harness.field.setEdges(smoothingEdges());
+    await harness.field.prepareFlags();
     await harness.field.bakeSettled();
     harness.field.layer.onAdd!(harness.map, harness.gl);
     harness.field.layer.render(harness.gl, harness.input);
@@ -560,6 +583,7 @@ test("the baked band reports time and memory per tile", async () => {
     const harness = createHarness();
     harness.field.setIds(Uint8Array.from({ length: 12 }, (_, cell) => 10 + (cell % 2) * 10));
     harness.field.setEdges(smoothingEdges());
+    await harness.field.prepareFlags();
     await harness.field.bakeSettled();
     harness.field.layer.onAdd!(harness.map, harness.gl);
     harness.field.layer.render(harness.gl, harness.input);
@@ -580,6 +604,7 @@ test("removing the layer cancels a pending bake and clears its stats", async () 
     harness.field.setIds(new Uint8Array(12).fill(10));
     harness.field.setEdges(smoothingEdges());
     harness.field.layer.onAdd!(harness.map, harness.gl);
+    await harness.field.prepareFlags();
     const settled = harness.field.bakeSettled();
     harness.field.layer.onRemove!(harness.map, harness.gl);
     await settled;
@@ -600,6 +625,7 @@ test("adding the layer again restarts the bake and removing it clears the stats"
     harness.field.layer.onAdd!(harness.map, harness.gl);
     harness.field.layer.onRemove!(harness.map, harness.gl);
     harness.field.layer.onAdd!(harness.map, harness.gl);
+    await harness.field.prepareFlags();
     await harness.field.bakeSettled();
     harness.field.layer.render(harness.gl, harness.input);
 
@@ -615,6 +641,7 @@ test("a context restore uploads the finished band again", async () => {
     harness.field.setIds(Uint8Array.from({ length: 12 }, (_, cell) => 10 + (cell % 2) * 10));
     harness.field.setEdges(smoothingEdges());
     harness.field.layer.onAdd!(harness.map, harness.gl);
+    await harness.field.prepareFlags();
     await harness.field.bakeSettled();
     harness.field.layer.render(harness.gl, harness.input);
     assert.equal(harness.uploads.length, 7);
@@ -645,6 +672,7 @@ test("a large non-uniform grid stages band uploads within budgets", async () => 
     const cells = Uint8Array.from({ length: size * size }, (_, cell) => 10 + (cell % 2) * 10);
     field.setIds(cells);
     field.setEdges({ ...smoothingEdges(), smoothRadiusCells: 1.5 });
+    await field.prepareFlags();
     await field.bakeSettled();
     field.layer.onAdd!(harness.map, harness.gl);
     const rowBytes = (rows: unknown[][]) => rows.reduce((sum, upload) => (
@@ -675,6 +703,72 @@ test("a large non-uniform grid stages band uploads within budgets", async () => 
   });
 });
 
+test("pending flag builds follow a smoothing-window change", async () => {
+  await withSearchAsync("?bake=1", async () => {
+    const harness = createHarness({ nx: 20 });
+    const ids = new Uint8Array(20 * 3).fill(10);
+    ids[25] = 20;
+    harness.field.setIds(ids);
+    harness.field.setEdges({ ...smoothingEdges(), smoothRadiusCells: 1.5 });
+    const first = harness.field.prepareFlags();
+    harness.field.setEdges({ ...smoothingEdges(), smoothRadiusCells: 3 });
+    await harness.field.prepareFlags();
+    await first.catch(() => {});
+    await harness.field.bakeSettled();
+    harness.field.layer.onAdd!(harness.map, harness.gl);
+    harness.field.layer.render(harness.gl, harness.input);
+
+    const flags = harness.uploads[3][8] as Uint8Array;
+    const expected = homogeneousFlags(ids, 20, 3, 3);
+    markThinCells(ids, 20, 3, expected);
+    assert.deepEqual([...flags], [...expected]);
+  });
+});
+
+test("bounded flag strips match one full flag call", async () => {
+  await withSearchAsync("", async () => {
+    const harness = createHarness({ nx: 64 });
+    const ids = Uint8Array.from({ length: 64 * 3 }, (_, cell) => 10 + (cell % 5 === 0 ? 10 : 0));
+    harness.field.setIds(ids);
+    harness.field.setEdges({ ...smoothingEdges(), smoothRadiusCells: 3 });
+    await harness.field.prepareFlags();
+    harness.field.layer.onAdd!(harness.map, harness.gl);
+    harness.field.layer.render(harness.gl, harness.input);
+
+    const flags = harness.uploads[3][8] as Uint8Array;
+    const expected = homogeneousFlags(ids, 64, 3, 3);
+    markThinCells(ids, 64, 3, expected);
+    assert.deepEqual([...flags], [...expected]);
+  });
+});
+
+test("a lost context rejects preparation instead of passing as cancelled", async () => {
+  const harness = createHarness();
+  harness.field.setIds(new Uint8Array(12).fill(10));
+  harness.field.setEdges(smoothingEdges());
+  await harness.field.prepareFlags();
+  harness.field.layer.onAdd!(harness.map, harness.gl);
+  harness.listeners.get("webglcontextlost")!({ preventDefault: () => {} });
+
+  await assert.rejects(harness.field.warmUp(), (error: unknown) => (
+    (error as Error).name !== "AbortError" && /context/i.test((error as Error).message)
+  ));
+});
+
+test("a caller abort still abandons preparation as cancelled", async () => {
+  const harness = createHarness();
+  harness.field.setIds(new Uint8Array(12).fill(10));
+  harness.field.setEdges(smoothingEdges());
+  await harness.field.prepareFlags();
+  harness.field.layer.onAdd!(harness.map, harness.gl);
+  const controller = new AbortController();
+  controller.abort();
+
+  await assert.rejects(harness.field.warmUp(controller.signal), (error: unknown) => (
+    (error as Error).name === "AbortError"
+  ));
+});
+
 test("staged allocation clears a foreign unpack buffer and image flags", async () => {
   await withSearchAsync("?bake=1", async () => {
     const size = 512;
@@ -692,6 +786,7 @@ test("staged allocation clears a foreign unpack buffer and image flags", async (
     const cells = Uint8Array.from({ length: size * size }, (_, cell) => 10 + (cell % 2) * 10);
     field.setIds(cells);
     field.setEdges({ ...smoothingEdges(), smoothRadiusCells: 1.5 });
+    await field.prepareFlags();
     await field.bakeSettled();
     field.layer.onAdd!(harness.map, harness.gl);
     let finished = false;
@@ -728,6 +823,7 @@ test("later band rows clear a foreign unpack buffer and image flags", async () =
     const cells = Uint8Array.from({ length: size * size }, (_, cell) => 10 + (cell % 2) * 10);
     field.setIds(cells);
     field.setEdges({ ...smoothingEdges(), smoothRadiusCells: 1.5 });
+    await field.prepareFlags();
     await field.bakeSettled();
     field.layer.onAdd!(harness.map, harness.gl);
     unpack.makeClean();

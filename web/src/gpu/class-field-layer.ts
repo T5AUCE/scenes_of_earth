@@ -2,6 +2,7 @@
 import type { CustomLayerInterface, Map as MapLibreMap } from "maplibre-gl";
 
 import { addressSearch, gestureFlags, subscribeGesture } from "../gesture-quality";
+import { yieldToBrowser } from "../data";
 import {
   BAND_BYTES_PER_CELL,
   bakeBandInto,
@@ -69,6 +70,10 @@ const CHANNELS = 4;
 const BAND_IDS_UNIT = 4;
 const BAND_LOW_UNIT = 5;
 const BAND_HIGH_UNIT = 6;
+// Flag strips stay well under a frame while entry keeps responding.
+const FLAG_STRIP_CELLS = 65536;
+const FLAG_STRIP_ROWS = 256;
+const FLAG_BUDGET_MS = 4;
 // One bake slice stays well under a 60 Hz frame so tiles keep drawing the full path meanwhile.
 const BAKE_SLICE_MS = 4;
 // A busy page still gets a slice after this wait so the bake cannot starve.
@@ -108,6 +113,8 @@ export function createClassFieldLayer(options: ClassFieldOptions) {
     setColors: (colors: number[][]) => layer.setColors(colors),
     setEdges: (edges: ClassEdges) => layer.setEdges(edges),
     bakeSettled: () => layer.bakeSettled(),
+    warmUp: (signal?: AbortSignal) => layer.warmUp(signal),
+    prepareFlags: (signal?: AbortSignal) => layer.prepareFlags(signal),
   };
 }
 
@@ -115,6 +122,9 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
   private ids: Uint8Array | null = null;
   private flags: Uint8Array | null = null;
   private flagsWindow: { first: number; span: number } | null = null;
+  private flagGeneration = 0;
+  private flagPromise: Promise<void> | null = null;
+  private pendingWindow: { first: number; span: number } | null = null;
   private bandIds: Uint8Array | null = null;
   private bandLow: Uint32Array | null = null;
   private bandHigh: Uint32Array | null = null;
@@ -150,6 +160,9 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
   override onAdd(map: MapLibreMap, gl: WebGL2RenderingContext) {
     super.onAdd(map, gl);
     this.isRemoved = false;
+    if (this.ids && this.needsFlags() && !this.flags) {
+      void this.ensureFlags().catch(() => {});
+    }
     this.scheduleBandBuild();
     if (!this.fastAllowed || this.stopGesture) return;
     this.stopGesture = subscribeGesture(map, {
@@ -162,6 +175,9 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     this.stopGesture?.();
     this.stopGesture = null;
     this.isRemoved = true;
+    this.flagGeneration += 1;
+    this.flagPromise = null;
+    this.pendingWindow = null;
     this.clearBand();
     super.onRemove();
   }
@@ -169,11 +185,14 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
   setIds(ids: Uint8Array) {
     this.ids = ids;
     this.flags = null;
+    this.flagsWindow = null;
+    this.flagGeneration += 1;
+    this.flagPromise = null;
+    this.pendingWindow = null;
     this.clearBand();
-    this.buildMissingFlags();
-    this.scheduleBandBuild();
     this.isIdsStale = true;
     this.map?.triggerRepaint();
+    void this.ensureFlags().catch(() => {});
   }
 
   setColors(colors: number[][]) {
@@ -201,15 +220,22 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     const hadBake = this.isBakeReady();
     this.edges = edges;
     // A radius crossing the stride threshold needs a new flag window, so drop the cached pair.
-    if (this.flags !== null && !sameWindow(this.flagsWindow, this.wantedWindow())) {
+    // Pending builds retarget too, so a window change while flags build restarts them.
+    if (
+      !sameWindow(this.flagsWindow, this.wantedWindow())
+      || (this.flagPromise && !sameWindow(this.pendingWindow, this.wantedWindow()))
+    ) {
       this.flags = null;
+      this.flagsWindow = null;
+      this.flagGeneration += 1;
+      this.flagPromise = null;
+      this.pendingWindow = null;
       this.clearBand();
     }
-    const hadBuiltFlags = this.flags !== null;
-    this.buildMissingFlags();
-    this.scheduleBandBuild();
+    void this.ensureFlags().catch(() => {});
+    const needs = this.needsFlags();
     // A new companion texture needs an upload, while a radius change within use does not.
-    if (this.ids && (hadFlags !== this.needsFlags() || (!hadBuiltFlags && this.flags !== null))) {
+    if (this.ids && (hadFlags !== needs || (needs && !this.flags))) {
       this.isIdsStale = true;
     }
     if (this.ids && hadBake !== this.isBakeReady() && this.isBakeReady()) {
@@ -221,6 +247,23 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
   /** Resolve when the pending band build finishes so tests can draw the baked path. */
   bakeSettled(): Promise<void> {
     return this.bakePromise ?? Promise.resolve();
+  }
+
+  /**
+   * Build flags in bounded row strips so entry stays responsive while the opening ids settle.
+   * Strips reuse the flag helper with a halo, so the stitched output matches one full call.
+   * The build is shared with the draw, so an abandoned entry waits without cancelling it.
+   */
+  async prepareFlags(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) throw cancelError();
+    await this.ensureFlags();
+    if (signal?.aborted) throw cancelError();
+    while (!sameWindow(this.flagsWindow, this.wantedWindow())) {
+      if (!this.ids || !this.needsFlags()) return;
+
+      await this.ensureFlags();
+      if (signal?.aborted) throw cancelError();
+    }
   }
 
   private needsFlags(): boolean {
@@ -240,16 +283,41 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     return homogeneousWindow(this.edges.smoothRadiusCells);
   }
 
-  private buildMissingFlags(): void {
-    if (!this.ids || this.flags || !this.needsFlags()) return;
+  private ensureFlags(): Promise<void> {
+    if (!this.ids || !this.needsFlags()) return Promise.resolve();
+    if (this.flags && sameWindow(this.flagsWindow, this.wantedWindow())) {
+      return Promise.resolve();
+    }
+    if (this.flagPromise) {
+      if (sameWindow(this.pendingWindow, this.wantedWindow())) return this.flagPromise;
 
-    // Flags are built at load so the draw frame only uploads the cached textures.
-    // Colours reuse the flags untouched because only ids and the radius feed them.
+      this.flagGeneration += 1;
+      this.flagPromise = null;
+      this.pendingWindow = null;
+    }
+
+    const generation = ++this.flagGeneration;
+    const ids = this.ids;
     const { nx, ny } = this.options.grid;
     const radius = this.edges.smoothRadiusCells ?? 0;
-    this.flags = homogeneousFlags(this.ids, nx, ny, radius);
-    markThinCells(this.ids, nx, ny, this.flags);
-    this.flagsWindow = homogeneousWindow(radius);
+    this.pendingWindow = this.wantedWindow();
+    this.flagPromise = buildFlagsInStrips(ids, nx, ny, radius).then((built) => {
+      if (generation !== this.flagGeneration || this.isRemoved) return;
+      if (this.ids !== ids) return;
+      if (!sameWindow(built.window, this.wantedWindow())) return;
+
+      this.flags = built.flags;
+      this.flagsWindow = built.window;
+      this.isIdsStale = true;
+      this.scheduleBandBuild();
+      this.map?.triggerRepaint();
+    }).finally(() => {
+      if (generation === this.flagGeneration) {
+        this.flagPromise = null;
+        this.pendingWindow = null;
+      }
+    });
+    return this.flagPromise;
   }
 
   private clearBand(): void {
@@ -365,6 +433,8 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
       this.isPaletteStale = false;
     }
     if (this.isIdsStale) {
+      // Flags build in strips after the ids arrive, so the first upload waits for them.
+      if (this.needsFlags() && !this.flags) return;
       // A zero radius never samples the flags, so land cover uploads ids alone.
       const flags = this.needsFlags() ? this.flags! : undefined;
       this.uploadTiles(gl, gpu, this.options.grid, this.ids!, flags, WIDE_HALO_CELLS);
@@ -598,6 +668,42 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     gl.bindTexture(gl.TEXTURE_2D, band.high);
     gl.activeTexture(gl.TEXTURE0);
   }
+}
+
+/**
+ * Build flags in bounded cell strips with a halo, so entry keeps responding.
+ * Each strip reuses the flag helper and only its core rows are kept, so the
+ * stitched output matches one full call with the same tie behaviour.
+ */
+async function buildFlagsInStrips(
+  ids: Uint8Array,
+  nx: number,
+  ny: number,
+  radius: number,
+): Promise<{ flags: Uint8Array; window: { first: number; span: number } }> {
+  const window = homogeneousWindow(radius);
+  const halo = Math.max(window.span, 2);
+  const flags = new Uint8Array(nx * ny);
+  if (nx <= 0 || ny <= 0) return { flags, window };
+
+  const stripRows = Math.max(1, Math.min(FLAG_STRIP_ROWS, Math.floor(FLAG_STRIP_CELLS / nx)));
+  let sliceMs = performance.now();
+  for (let startRow = 0; startRow < ny; startRow += stripRows) {
+    const endRow = Math.min(ny, startRow + stripRows);
+    const haloStart = Math.max(0, startRow - halo);
+    const haloEnd = Math.min(ny, endRow + halo);
+    const height = haloEnd - haloStart;
+    const stripIds = ids.subarray(haloStart * nx, haloEnd * nx);
+    const stripFlags = homogeneousFlags(stripIds, nx, height, radius);
+    markThinCells(stripIds, nx, height, stripFlags);
+    const coreStart = (startRow - haloStart) * nx;
+    flags.set(stripFlags.subarray(coreStart, coreStart + (endRow - startRow) * nx), startRow * nx);
+    if (performance.now() - sliceMs < FLAG_BUDGET_MS) continue;
+
+    await yieldToBrowser();
+    sliceMs = performance.now();
+  }
+  return { flags, window };
 }
 
 function sameWindow(
@@ -845,6 +951,12 @@ function bakeStatsScope(): BakeStatsScope | undefined {
 function clearBakeStats(id: string): void {
   const stats = bakeStatsScope();
   if (stats) delete stats[id];
+}
+
+function cancelError(): Error {
+  const error = new Error("Entry preparation was cancelled");
+  error.name = "AbortError";
+  return error;
 }
 
 function classFieldProgram(bake: boolean): TiledProgram {

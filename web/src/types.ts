@@ -423,6 +423,11 @@ export interface LayerView {
   isFrameReady?(time: string, next: string): boolean;
   /** Decode the step into the cache without drawing, so play never shows a half step. */
   prepare?(time: string): Promise<void>;
+  /**
+   * Prepare the current time for entry before the opening flight, including first-render work.
+   * Playback keeps using prepare, so this never changes its contract.
+   */
+  prepareEntry?(time: string | null, signal?: AbortSignal): Promise<void>;
   /** How many steps ahead of the shown one the layer keeps decoded, which bounds the lookahead. */
   maxLookahead?(): number;
   /** Lets the steps `prepare` warmed be evicted again once the clock stops needing them. */

@@ -15,14 +15,19 @@ import {
 } from "./render/isolines";
 import {
   HALO_WIDTH_PX,
+  MIN_DOT_RADIUS_PX,
   POSITION_JITTER_RATIO,
   VALUE_RADIUS_EXPONENT,
   dotAppearance,
   dotLattice,
   highZoomDotOpacity,
+  highZoomDotSizeScale,
   levelRadiusPx,
   levelSpacingPx,
+  representativeRadiusPx,
+  representativeSpacingPx,
   siteNoise,
+  writeContinuousLattice,
   type DotLattice,
 } from "./render/lattice";
 import { type InkPaint, rgbCss } from "./render/palettes";
@@ -37,13 +42,17 @@ const ISOTHERM_SAMPLE_GAP_PX = 6;
 
 const DOT_SWATCH_PX = 48;
 const DOT_SWATCH_GAP_PX = 2;
-const MOST_DOTS_PER_SIDE = 3;
-const FEWEST_DOTS_PER_SIDE = 2;
 const MAX_DOTS_PER_SIDE = 6;
-const MIN_THREE_DOT_RADIUS_PX = 1.5;
-const MIN_FULL_DOT_RADIUS_PX = 1.2;
 // Matches HALO_ALPHA in gpu/field-marks-shaders.ts.
 const DOT_SWATCH_HALO_ALPHA = 0.7;
+
+// Each preview site keeps the shader's jitter, cached once because the grid is bounded.
+const SITE_JITTER: { x: number; y: number }[] = [];
+for (let row = 0; row < MAX_DOTS_PER_SIDE; row++) {
+  for (let column = 0; column < MAX_DOTS_PER_SIDE; column++) {
+    SITE_JITTER.push(siteNoise(column, row));
+  }
+}
 
 const BIVARIATE_SIZE_PX = 112;
 const BIVARIATE_GRID_ALPHA = 0.35;
@@ -97,15 +106,14 @@ function dashGradient(color: number[]) {
 /** The legend line for cells inside the area that have no data, which the marks layer hatches. */
 export function hatchLegend() {
   const element = document.createElement("div");
-  element.textContent = "Hatched: no data";
+  element.textContent = "No data";
   return element;
 }
 
 /**
- * Swatches that show the dots of the value labelled below as a grid of whole dots. The lowest
- * value is left out because its dots have no area.
- * The dots of a swatch ink the same share of its box as the map's dots ink of the map at the
- * current zoom and density, so the caller redraws it when either changes.
+ * Swatches that show the dots of the value labelled below at the map's dot size. The lowest
+ * value is left out because its dots have no area. Rebuild the legend when the style changes
+ * and repaint its retained canvases when the zoom or density changes.
  */
 export function dotLegend(
   stops: number[],
@@ -115,6 +123,57 @@ export function dotLegend(
   density: number,
   ink: InkPaint,
 ) {
+  return createDotLegend(stops, units, grid, zoom, density, ink, pixelRatio()).element;
+}
+
+/** A dot legend whose canvases stay while the zoom or density repaints them in place. */
+export interface DotLegendHandle {
+  element: HTMLElement;
+  repaint(zoom: number, density: number, pixelRatio: number): void;
+}
+
+/** One retained swatch canvas with the context its repaints reuse. */
+interface RetainedSwatch {
+  canvas: HTMLCanvasElement;
+  context: CanvasRenderingContext2D;
+}
+
+/**
+ * Build a dot legend and paint its swatches at the map's dot size. The handle repaints the
+ * retained canvases without rebuilding the legend or allocating per-dot objects.
+ */
+export function createDotLegend(
+  stops: number[],
+  units: string,
+  grid: GridDoc,
+  zoom: number,
+  density: number,
+  ink: InkPaint,
+  pixelRatio: number,
+): DotLegendHandle {
+  const shell = buildDotShell(stops, units, grid, ink);
+  const repaint = createSwatchRepaint(shell);
+  repaint(zoom, density, pixelRatio);
+
+  return { element: shell.element, repaint };
+}
+
+interface DotShell {
+  element: HTMLElement;
+  swatches: RetainedSwatch[];
+  positions: number[];
+  inkCss: string;
+  haloCss: string;
+  cellDegrees: { width: number; height: number };
+  latitude: number;
+}
+
+function buildDotShell(
+  stops: number[],
+  units: string,
+  grid: GridDoc,
+  ink: InkPaint,
+): DotShell {
   const element = document.createElement("div");
   const unitsCaption = document.createElement("div");
   unitsCaption.className = "legend-units";
@@ -127,40 +186,127 @@ export function dotLegend(
   const columns = `repeat(${ticks.length}, ${DOT_SWATCH_PX + DOT_SWATCH_GAP_PX}px)`;
   boxes.style.gridTemplateColumns = columns;
   labels.style.gridTemplateColumns = columns;
-  const lattice = dotSwatchLattice(grid, zoom, pixelRatio(), density);
-  const dotsPerSide = dotsPerSideFor(ticks[0].position, lattice);
+  const positions = ticks.map(({ position }) => position);
+  const inkCss = rgbCss(ink.ink);
+  const haloCss = rgbCss(ink.halo);
+  const [west, south, east, north] = grid.bbox;
+  const cellDegrees = { width: (east - west) / grid.nx, height: (north - south) / grid.ny };
+  const latitude = (south + north) / 2;
+  const swatches: RetainedSwatch[] = [];
   for (const { position, value } of ticks) {
-    boxes.append(dotSwatch(position, ink, lattice, dotsPerSide));
+    const canvas = document.createElement("canvas");
+    canvas.className = "legend-dot-box";
+    canvas.style.width = `${DOT_SWATCH_PX}px`;
+    canvas.style.height = `${DOT_SWATCH_PX}px`;
+    boxes.append(canvas);
+    swatches.push({ canvas, context: canvas.getContext("2d")! });
     const label = document.createElement("span");
     label.textContent = openLabel(position, value, false);
     labels.append(label);
   }
   element.append(unitsCaption, boxes, labels);
-  return element;
+
+  return { element, swatches, positions, inkCss, haloCss, cellDegrees, latitude };
 }
 
-// The lowest value decides the base grid because its dots are the smallest.
-function dotsPerSideFor(lowestPosition: number, lattice: DotSwatchLattice) {
-  const radiusPx = swatchRadiusPx(lowestPosition, lattice, MOST_DOTS_PER_SIDE);
-  const base = radiusPx >= MIN_THREE_DOT_RADIUS_PX ? MOST_DOTS_PER_SIDE : FEWEST_DOTS_PER_SIDE;
-  return Math.max(1, Math.min(Math.round(base * lattice.density), maxDotsPerSide(lattice)));
+function createSwatchRepaint(shell: DotShell): DotLegendHandle["repaint"] {
+  const lattice: DotLattice = {
+    level: 0,
+    fade: 0,
+    sidesPx: { width: 1, height: 1 },
+    aimedPx: 1,
+    density: 1,
+    pixelRatio: 1,
+    zoom: 0,
+  };
+  let lastZoom = NaN;
+  let lastDensity = NaN;
+  let lastRatio = NaN;
+
+  return (nextZoom, nextDensity, nextRatio) => {
+    if (nextZoom === lastZoom && nextDensity === lastDensity && nextRatio === lastRatio) return;
+
+    lastZoom = nextZoom;
+    lastDensity = nextDensity;
+    lastRatio = nextRatio;
+    writeContinuousLattice(
+      lattice,
+      shell.cellDegrees,
+      shell.latitude,
+      nextZoom,
+      nextDensity,
+      nextRatio,
+    );
+    const radiusPx = representativeRadiusPx(lattice);
+    // The swatch shrinks with the map, so its reach check uses the displayed size.
+    const sizeScale = highZoomDotSizeScale(nextZoom, nextRatio);
+    const count = previewDotsPerSide(
+      representativeSpacingPx(lattice),
+      radiusPx * sizeScale,
+      (HALO_WIDTH_PX / nextRatio) * sizeScale,
+    );
+    const opacity = highZoomDotOpacity(nextZoom, nextRatio);
+    for (let index = 0; index < shell.swatches.length; index++) {
+      paintSwatch(
+        shell.swatches[index],
+        shell.positions[index],
+        shell.inkCss,
+        shell.haloCss,
+        radiusPx,
+        count,
+        opacity,
+        nextRatio,
+        sizeScale,
+      );
+    }
+  };
 }
 
-// Rounding keeps the grid responsive to density while the full dot stays near the readable radius.
-function maxDotsPerSide(lattice: DotSwatchLattice) {
-  const fullRadiusPx = Math.sqrt((lattice.inkShare * DOT_SWATCH_PX ** 2) / Math.PI);
-  return Math.min(
-    MAX_DOTS_PER_SIDE,
-    Math.max(1, Math.round(fullRadiusPx / MIN_FULL_DOT_RADIUS_PX)),
-  );
-}
+function paintSwatch(
+  swatch: RetainedSwatch,
+  position: number,
+  inkCss: string,
+  haloCss: string,
+  radiusPx: number,
+  dotsPerSide: number,
+  opacity: number,
+  pixelRatio: number,
+  sizeScale: number,
+) {
+  const { canvas, context } = swatch;
+  const backingPx = Math.round(DOT_SWATCH_PX * pixelRatio);
+  if (canvas.width !== backingPx || canvas.height !== backingPx) {
+    canvas.width = backingPx;
+    canvas.height = backingPx;
+  }
+  // Resizing clears the transform, so reset it before every redraw.
+  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  context.clearRect(0, 0, DOT_SWATCH_PX, DOT_SWATCH_PX);
+  if (opacity === 0) return;
 
-/** The radius that makes the box's dots ink the share of it that the map's dots ink. */
-function swatchRadiusPx(position: number, lattice: DotSwatchLattice, dotsPerSide: number) {
-  const fullRadiusPx = Math.sqrt(
-    (lattice.inkShare * DOT_SWATCH_PX ** 2) / (Math.PI * dotsPerSide ** 2),
-  );
-  return fullRadiusPx * position ** VALUE_RADIUS_EXPONENT;
+  // The size fade shrinks the radius first, so tiny swatch dots fade rather than persisting.
+  const fullPx = radiusPx * position ** VALUE_RADIUS_EXPONENT * sizeScale;
+  const drawnPx = fullPx >= MIN_DOT_RADIUS_PX ? fullPx : MIN_DOT_RADIUS_PX;
+  const fullAlpha = fullPx >= MIN_DOT_RADIUS_PX ? 1 : (fullPx / MIN_DOT_RADIUS_PX) ** 2;
+  const spacingPx = DOT_SWATCH_PX / dotsPerSide;
+  const haloPx = (HALO_WIDTH_PX / pixelRatio) * sizeScale;
+  for (let row = 0; row < dotsPerSide; row++) {
+    for (let column = 0; column < dotsPerSide; column++) {
+      const jitter = SITE_JITTER[row * MAX_DOTS_PER_SIDE + column];
+      const x = (column + 0.5 + jitter.x * POSITION_JITTER_RATIO) * spacingPx;
+      const y = (row + 0.5 + jitter.y * POSITION_JITTER_RATIO) * spacingPx;
+      const dotOpacity = fullAlpha;
+      const haloOpacity = DOT_SWATCH_HALO_ALPHA * fullAlpha;
+      fillCircle(context, x, y, drawnPx + haloPx, haloCss, haloOpacity);
+      fillCircle(context, x, y, drawnPx, inkCss, dotOpacity);
+    }
+  }
+  // The composed swatch fades once, so overlapping dot and halo alphas scale together.
+  context.globalCompositeOperation = "destination-in";
+  context.globalAlpha = opacity;
+  context.fillRect(0, 0, DOT_SWATCH_PX, DOT_SWATCH_PX);
+  context.globalCompositeOperation = "source-over";
+  context.globalAlpha = 1;
 }
 
 /** A dot of a legend swatch in css px, with its sub-pixel fade applied to radius and opacity. */
@@ -171,7 +317,7 @@ export interface DotSwatchDot {
   opacity: number;
 }
 
-/** Refreshes a zoom-dependent legend after each zoom, but only while it is switched on. */
+/** Refreshes a zoom-dependent legend on every map render, but only while it is switched on. */
 export function createZoomWatch(map: Pick<MapLibreMap, "on" | "off">, refresh: () => void) {
   let isActive = false;
   return {
@@ -179,46 +325,25 @@ export function createZoomWatch(map: Pick<MapLibreMap, "on" | "off">, refresh: (
       if (next === isActive) return;
 
       isActive = next;
-      if (next) map.on("zoomend", refresh);
-      else map.off("zoomend", refresh);
+      if (next) map.on("render", refresh);
+      else map.off("render", refresh);
     },
   };
 }
 
 /**
- * Identify a dot legend's output so callers skip rebuilding when the level and swatch
- * inputs are unchanged. Every input that changes the swatches or labels is in the key,
- * while the raw zoom is represented by its lattice so a zoom that keeps the level keeps
- * the key. The legend output for an unchanged key is identical.
+ * Identify a dot legend's structure so callers rebuild only when the style or labels change.
+ * The zoom and densities only repaint the retained canvases, so they stay out of the key.
  */
 export function dotLegendKey(
   stops: number[],
   units: string,
   grid: GridDoc,
-  zoom: number,
-  density: number,
   ink: InkPaint,
   hasHatched: boolean,
 ): string {
   const ticks = legendTicks(stops).slice(1);
-  const lattice = dotSwatchLattice(grid, zoom, pixelRatio(), density);
-  const dotsPerSide = dotsPerSideFor(ticks[0]?.position ?? 0, lattice);
-  return JSON.stringify([
-    ticks,
-    units,
-    grid.bbox,
-    grid.nx,
-    grid.ny,
-    lattice.level,
-    lattice.fade,
-    lattice.inkShare,
-    lattice.opacity,
-    lattice.pixelRatio,
-    lattice.density,
-    dotsPerSide,
-    ink,
-    hasHatched,
-  ]);
+  return JSON.stringify([ticks, units, grid.bbox, grid.nx, grid.ny, ink, hasHatched]);
 }
 
 /** The map's dot lattice with how much it inks and how visible its dots are. */
@@ -258,59 +383,52 @@ function fullValueInkShare(lattice: DotLattice) {
 }
 
 function levelInkShare(
-  { sidesPx, aimedPx, pixelRatio, density }: DotLattice,
+  { sidesPx, aimedPx, pixelRatio, density, zoom }: DotLattice,
   level: number,
 ) {
   const spacingPx = levelSpacingPx(sidesPx, level);
-  const radiusPx = levelRadiusPx(sidesPx, level, aimedPx, pixelRatio, density);
+  // The cap bounds the share at close zoom while the size fade leaves it alone.
+  const radiusPx = levelRadiusPx(sidesPx, level, aimedPx, pixelRatio, density, zoom);
   return Math.PI * radiusPx ** 2 / (spacingPx.x * spacingPx.y);
 }
 
-function dotSwatch(
-  position: number,
-  ink: InkPaint,
-  lattice: DotSwatchLattice,
+/**
+ * How many whole sample sites fit across a swatch box at the map's spacing. The radius keeps
+ * the map size, so the reach check only lowers the count and one centred dot always remains.
+ */
+export function previewDotsPerSide(
+  spacingPx: number,
+  radiusPx: number,
+  haloPx: number,
+): number {
+  const roomy = Math.max(1, Math.min(MAX_DOTS_PER_SIDE, Math.floor(DOT_SWATCH_PX / spacingPx) + 1));
+  for (let dots = roomy; dots > 1; dots--) {
+    if (swatchFits(dots, spacingPx, radiusPx, haloPx)) return dots;
+  }
+
+  return 1;
+}
+
+function swatchFits(
   dotsPerSide: number,
-) {
-  const swatch = document.createElement("canvas");
-  swatch.className = "legend-dot-box";
-  swatch.style.width = `${DOT_SWATCH_PX}px`;
-  swatch.style.height = `${DOT_SWATCH_PX}px`;
-  swatch.width = DOT_SWATCH_PX * lattice.pixelRatio;
-  swatch.height = DOT_SWATCH_PX * lattice.pixelRatio;
-  const context = swatch.getContext("2d")!;
-  context.scale(lattice.pixelRatio, lattice.pixelRatio);
-  drawSwatchDots(context, position, ink, lattice, dotsPerSide);
-  return swatch;
+  spacingPx: number,
+  radiusPx: number,
+  haloPx: number,
+): boolean {
+  const firstPx = (DOT_SWATCH_PX - (dotsPerSide - 1) * spacingPx) / 2;
+  const reachPx = radiusPx + haloPx + POSITION_JITTER_RATIO * spacingPx;
+
+  return firstPx - reachPx >= 0;
 }
 
 function pixelRatio() {
   return typeof window === "undefined" ? 1 : window.devicePixelRatio;
 }
 
-function drawSwatchDots(
-  context: CanvasRenderingContext2D,
-  position: number,
-  ink: InkPaint,
-  lattice: DotSwatchLattice,
-  dotsPerSide: number,
-) {
-  const haloWidthPx = haloReachPx(lattice);
-  for (const { x, y, radiusPx, opacity } of dotSwatchDots(position, lattice, dotsPerSide)) {
-    const haloOpacity = DOT_SWATCH_HALO_ALPHA * opacity;
-    fillCircle(context, x, y, radiusPx + haloWidthPx, ink.halo, haloOpacity);
-    fillCircle(context, x, y, radiusPx, ink.ink, opacity);
-  }
-}
-
-/** The halo width in css px, which the shader adds in device px so high-DPI screens narrow it. */
-function haloReachPx(lattice: DotSwatchLattice) {
-  return HALO_WIDTH_PX / lattice.pixelRatio;
-}
-
 /**
  * A square grid of whole dots centred in their sites, each shifted by the shader's site jitter.
- * The dots share the radius that gives the map's ink share, so none leaves the box.
+ * The dots use the map's radius at the lattice, so the count sets the layout while the radius
+ * keeps the map size.
  */
 export function dotSwatchDots(
   position: number,
@@ -320,7 +438,10 @@ export function dotSwatchDots(
   if (lattice.opacity === 0) return [];
 
   const spacingPx = DOT_SWATCH_PX / dotsPerSide;
-  const appearance = dotAppearance(swatchRadiusPx(position, lattice, dotsPerSide));
+  // The swatch reports the displayed radius, shrunk through the close-zoom size fade.
+  const sizeScale = highZoomDotSizeScale(lattice.zoom, lattice.pixelRatio);
+  const fullPx = representativeRadiusPx(lattice) * position ** VALUE_RADIUS_EXPONENT * sizeScale;
+  const appearance = dotAppearance(fullPx);
   const dots: DotSwatchDot[] = [];
   for (let row = 0; row < dotsPerSide; row++) {
     for (let column = 0; column < dotsPerSide; column++) {
@@ -341,11 +462,11 @@ function fillCircle(
   x: number,
   y: number,
   radiusPx: number,
-  color: number[],
+  css: string,
   opacity: number,
 ) {
   context.globalAlpha = opacity;
-  context.fillStyle = rgbCss(color);
+  context.fillStyle = css;
   context.beginPath();
   context.arc(x, y, radiusPx, 0, Math.PI * 2);
   context.fill();
@@ -576,7 +697,7 @@ export function classNoDataLegend() {
   row.className = "legend-nodata";
   swatch.className = "legend-swatch legend-hatch";
   const name = document.createElement("span");
-  name.textContent = "Hatched: no data";
+  name.textContent = "No data";
   row.append(swatch, name);
   return row;
 }

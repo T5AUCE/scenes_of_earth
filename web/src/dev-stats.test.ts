@@ -6,26 +6,26 @@ import type { AsyncReadable } from "zarrita";
 
 import { assertSameNode } from "./testing/dom-assert.ts";
 import {
+  beginPreload,
   DevStatsLoop,
   formatBytes,
   formatDevStats,
   formatGpuPart,
-  formatPrefetchPart,
+  formatPreloadPart,
   formatTileSettlePart,
   framesPerSecond,
   layerForSource,
   noteSceneOpen,
   noteSceneReady,
-  noteSpeculativeHit,
-  noteSpeculativeMiss,
-  noteSpeculativeWasted,
+  notePreloadHit,
+  notePreloadMiss,
+  preloadSnapshot,
   pruneStamps,
   renderDevStats,
-  resetSpeculativeStats,
   sceneLoadStats,
-  setPrefetchDisabled,
+  setPreloadDisabled,
+  setPreloadProgress,
   shouldShowDevStats,
-  speculativeSnapshot,
   startDevStats,
   TileSettleTracker,
   worstFrameMs,
@@ -612,6 +612,153 @@ test("a second load wave in one gesture reopens until all sources load", () => {
   tracker.stop();
 });
 
+test("a removed source never queries its manager after delete-before-metadata", () => {
+  let now = 1000;
+  const map = removalTileMap(() => 8);
+  map.live.add("terrain-contours");
+  const tracker = new TileSettleTracker(map, () => now);
+  tracker.start();
+
+  map.emit("movestart", {});
+  map.emit("sourcedataloading", { sourceId: "terrain-contours" });
+  map.live.delete("terrain-contours");
+  now += 40;
+  map.emit("sourcedata", { sourceId: "terrain-contours", isSourceLoaded: false });
+
+  assert.deepEqual(map.errors, []);
+  assert.equal(tracker.snapshot().contours.settleMs, 40);
+  assert.equal(tracker.snapshot().contours.requests, 1);
+  tracker.stop();
+});
+
+test("a pending source removed on exit settles without a manager error", () => {
+  let now = 1000;
+  const map = removalTileMap(() => 8);
+  map.live.add("terrain-contours");
+  const tracker = new TileSettleTracker(map, () => now);
+  tracker.start();
+
+  map.emit("movestart", {});
+  map.emit("sourcedataloading", { sourceId: "terrain-contours" });
+  map.live.delete("terrain-contours");
+  now += 50;
+  map.emit("moveend", {});
+
+  assert.deepEqual(map.errors, []);
+  assert.equal(tracker.snapshot().contours.settleMs, 50);
+  tracker.stop();
+});
+
+test("a units rebuild keeps waiting for the recreated source without errors", () => {
+  let now = 1000;
+  const map = removalTileMap(() => 8);
+  map.live.add("terrain-relief");
+  const tracker = new TileSettleTracker(map, () => now);
+  tracker.start();
+
+  map.emit("movestart", {});
+  map.emit("sourcedataloading", { sourceId: "terrain-relief" });
+  map.live.delete("terrain-relief");
+  map.emit("sourcedata", { sourceId: "terrain-relief", isSourceLoaded: false });
+
+  assert.deepEqual(map.errors, []);
+
+  map.live.add("terrain-relief");
+  map.emit("sourcedataloading", { sourceId: "terrain-relief" });
+  map.emit("sourcedata", { sourceId: "terrain-relief", isSourceLoaded: false });
+
+  assert.equal(tracker.snapshot().terrain.settleMs, null);
+  assert.deepEqual(map.errors, []);
+
+  map.loaded.add("terrain-relief");
+  now += 40;
+  map.emit("sourcedata", { sourceId: "terrain-relief", isSourceLoaded: true });
+
+  assert.equal(tracker.snapshot().terrain.settleMs, 40);
+  assert.deepEqual(map.errors, []);
+  tracker.stop();
+});
+
+test("a loaded sibling waits for its pending sibling without errors", () => {
+  let now = 1000;
+  const map = removalTileMap(() => 8);
+  map.live.add("terrain-contours");
+  map.live.add("terrain-labels-contours");
+  map.loaded.add("terrain-contours");
+  const tracker = new TileSettleTracker(map, () => now);
+  tracker.start();
+
+  map.emit("movestart", {});
+  map.emit("sourcedataloading", { sourceId: "terrain-contours" });
+  map.emit("sourcedataloading", { sourceId: "terrain-labels-contours" });
+  now += 40;
+  map.emit("sourcedata", { sourceId: "terrain-contours", isSourceLoaded: true });
+
+  assert.equal(tracker.snapshot().contours.settleMs, null);
+  assert.deepEqual(map.errors, []);
+
+  map.loaded.add("terrain-labels-contours");
+  now += 40;
+  map.emit("sourcedata", { sourceId: "terrain-labels-contours", isSourceLoaded: true });
+
+  assert.equal(tracker.snapshot().contours.settleMs, 80);
+  assert.deepEqual(map.errors, []);
+  tracker.stop();
+});
+
+test("a late removal event after settle leaves the settle time alone", () => {
+  let now = 1000;
+  const map = removalTileMap(() => 8);
+  map.live.add("terrain-contours");
+  map.loaded.add("terrain-contours");
+  const tracker = new TileSettleTracker(map, () => now);
+  tracker.start();
+
+  map.emit("movestart", {});
+  now += 30;
+  map.emit("moveend", {});
+
+  assert.equal(tracker.snapshot().contours.settleMs, 30);
+
+  map.live.delete("terrain-contours");
+  map.emit("sourcedata", { sourceId: "terrain-contours", isSourceLoaded: false });
+
+  assert.deepEqual(map.errors, []);
+  assert.equal(tracker.snapshot().contours.settleMs, 30);
+  tracker.stop();
+});
+
+test("a repeat entry after removal starts from live sources only", () => {
+  let now = 1000;
+  const map = removalTileMap(() => 8);
+  map.live.add("terrain-contours");
+  const tracker = new TileSettleTracker(map, () => now);
+  tracker.start();
+
+  map.emit("movestart", {});
+  map.emit("sourcedataloading", { sourceId: "terrain-contours" });
+  map.live.delete("terrain-contours");
+  now += 20;
+  map.emit("moveend", {});
+
+  assert.deepEqual(map.errors, []);
+  assert.equal(tracker.snapshot().contours.settleMs, 20);
+
+  map.live.add("openmaptiles");
+  map.loaded.add("openmaptiles");
+  map.emit("movestart", {});
+
+  assert.deepEqual(tracker.snapshot().contours, { settleMs: null, requests: 0 });
+
+  now += 30;
+  map.emit("moveend", {});
+
+  assert.deepEqual(map.errors, []);
+  assert.equal(tracker.snapshot().contours.settleMs, 30);
+  assert.equal(tracker.snapshot().basemap.settleMs, 30);
+  tracker.stop();
+});
+
 test("the tile badge part lists each layer once", () => {
   const text = formatTileSettlePart({
     terrain: { settleMs: 120, requests: 12 },
@@ -622,69 +769,61 @@ test("the tile badge part lists each layer once", () => {
   assert.equal(text, "tiles terrain 120 ms 12 req basemap — 0 req contours 80 ms 2 req");
 });
 
-test("speculative counters accumulate per source for the badge", () => {
-  resetSpeculativeStats();
-  noteSpeculativeHit("contours");
-  noteSpeculativeMiss("contours");
-  noteSpeculativeWasted("terrain");
-  noteSpeculativeWasted("terrain");
+test("preload counters accumulate per source and reset when a scene opens", () => {
+  beginPreload();
+  notePreloadHit("contours");
+  notePreloadMiss("contours");
+  notePreloadMiss("terrain");
+  setPreloadProgress(5, 12, 2048);
 
-  assert.deepEqual(speculativeSnapshot(), {
-    terrain: { hits: 0, misses: 0, wasted: 2 },
-    basemap: { hits: 0, misses: 0, wasted: 0 },
-    contours: { hits: 1, misses: 1, wasted: 0 },
+  assert.deepEqual(preloadSnapshot(), {
+    progress: { done: 5, total: 12, bytes: 2048 },
+    counts: {
+      terrain: { hits: 0, misses: 1 },
+      basemap: { hits: 0, misses: 0 },
+      contours: { hits: 1, misses: 1 },
+    },
   });
-  assert.equal(
-    formatPrefetchPart(speculativeSnapshot()),
-    "prefetch terrain 0 hit 0 miss 2 wasted — basemap 0 hit 0 miss 0 wasted —"
-      + " contours 1 hit 1 miss 0 wasted 50%",
-  );
-  resetSpeculativeStats();
+  beginPreload();
 
-  assert.deepEqual(speculativeSnapshot().contours, { hits: 0, misses: 0, wasted: 0 });
+  assert.deepEqual(preloadSnapshot().counts.contours, { hits: 0, misses: 0 });
+  assert.deepEqual(preloadSnapshot().progress, { done: 0, total: 0, bytes: 0 });
 });
 
-test("the prefetch badge shows the hit rate and off when disabled", () => {
-  resetSpeculativeStats();
+test("the preload badge shows progress, hit rates and off when disabled", () => {
+  beginPreload();
+  const snapshot = {
+    progress: { done: 62, total: 246, bytes: 8.1 * 1024 * 1024 },
+    counts: {
+      terrain: { hits: 91, misses: 9 },
+      basemap: { hits: 7, misses: 1 },
+      contours: { hits: 0, misses: 0 },
+    },
+  };
   assert.equal(
-    formatPrefetchPart({
-      terrain: { hits: 79, misses: 1776, wasted: 67 },
-      basemap: { hits: 20, misses: 1178, wasted: 577 },
-      contours: { hits: 0, misses: 899, wasted: 6 },
-    }),
-    "prefetch terrain 79 hit 1776 miss 67 wasted 4%"
-      + " basemap 20 hit 1178 miss 577 wasted 2% contours 0 hit 899 miss 6 wasted 0%",
+    formatPreloadPart(snapshot),
+    "preload 62/246 tiles 8.1 MB hit terrain 91% basemap 88% contours —",
   );
-  setPrefetchDisabled(true);
+  const stats = {
+    fps: 60,
+    worstMs: 33,
+    zoom: 5.25,
+    loadMs: null,
+    requests: 2,
+    bytes: 1536,
+    gpuMs: {},
+    gpuUnavailable: true,
+    longtasks: 0,
+  };
+  assert.ok(formatDevStats({ ...stats, preload: snapshot }).includes(" · preload 62/246"));
+  assert.equal(formatDevStats({ ...stats, preload: preloadSnapshot() }).includes("preload"), false);
+  setPreloadDisabled(true);
   try {
-    assert.equal(
-      formatPrefetchPart({
-        terrain: { hits: 0, misses: 0, wasted: 0 },
-        basemap: { hits: 0, misses: 0, wasted: 0 },
-        contours: { hits: 0, misses: 0, wasted: 0 },
-      }),
-      "prefetch off",
-    );
-    assert.ok(formatDevStats({
-      fps: 60,
-      worstMs: 33,
-      zoom: 5.25,
-      loadMs: null,
-      requests: 2,
-      bytes: 1536,
-      gpuMs: {},
-      gpuUnavailable: true,
-      longtasks: 0,
-      prefetch: {
-        terrain: { hits: 0, misses: 0, wasted: 0 },
-        basemap: { hits: 0, misses: 0, wasted: 0 },
-        contours: { hits: 0, misses: 0, wasted: 0 },
-      },
-    }).includes("prefetch off"));
+    assert.equal(formatPreloadPart(snapshot), "preload off");
+    assert.ok(formatDevStats({ ...stats, preload: snapshot }).includes("preload off"));
   } finally {
-    setPrefetchDisabled(false);
+    setPreloadDisabled(false);
   }
-  resetSpeculativeStats();
 });
 
 test("the badge line gains the tile part only while tracking", () => {
@@ -727,6 +866,40 @@ function tileMap(zoom: () => number) {
     loaded,
     getZoom: zoom,
     isSourceLoaded: (id: string) => loaded.has(id),
+    on: (type: string, listener: (event: object) => void) => {
+      const entries = listeners.get(type) ?? new Set<(event: object) => void>();
+      entries.add(listener);
+      listeners.set(type, entries);
+    },
+    off: (type: string, listener: (event: object) => void) => {
+      listeners.get(type)?.delete(listener);
+    },
+    emit: (type: string, event: object) => {
+      for (const listener of [...(listeners.get(type) ?? [])]) listener(event);
+    },
+  };
+}
+
+// A map double that models MapLibre removal, so missing managers fire an error.
+function removalTileMap(zoom: () => number) {
+  const listeners = new Map<string, Set<(event: object) => void>>();
+  const live = new Set<string>();
+  const loaded = new Set<string>();
+  const errors: string[] = [];
+  return {
+    live,
+    loaded,
+    errors,
+    getZoom: zoom,
+    getSource: (id: string) => (live.has(id) ? {} : undefined),
+    getStyle: () => ({ sources: Object.fromEntries([...live].map((id) => [id, {}])) }),
+    isSourceLoaded: (id: string) => {
+      if (!live.has(id)) {
+        errors.push(`There is no tile manager with ID '${id}'`);
+        return false;
+      }
+      return loaded.has(id);
+    },
     on: (type: string, listener: (event: object) => void) => {
       const entries = listeners.get(type) ?? new Set<(event: object) => void>();
       entries.add(listener);

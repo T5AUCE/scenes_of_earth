@@ -133,7 +133,11 @@ export function showScaleBar(map: MapLibreMap, elevationUnit = "m") {
 export function fitToBbox(
   map: MapLibreMap,
   [west, south, east, north]: Bbox,
-  options: { padding?: PaddingOptions; duration?: number; maxZoom?: number } = {},
+  options: {
+    padding?: PaddingOptions;
+    duration?: number;
+    maxZoom?: number;
+  } = {},
 ) {
   map.fitBounds(
     [
@@ -287,6 +291,151 @@ export function setPairOpacities(
 /** Replaces the picture of a layer added with addImageLayer. */
 export function setImage(map: MapLibreMap, id: string, image: ImageData) {
   (map.getSource(id) as unknown as DrawableImage | undefined)?.updateImage({ image });
+}
+
+function cancelError(): Error {
+  const error = new Error("Entry preparation was cancelled");
+  error.name = "AbortError";
+  return error;
+}
+
+/**
+ * Warm a hidden raster through its real source so the first visible render skips the upload.
+ * The layer is made used with zero opacity, so nothing shows while the source prepares.
+ * Polling only runs while the layer is made used, so a zoom-hidden source cannot deadlock it.
+ * A loaded flag alone never certifies new bytes, so one frame runs before the flag is read.
+ */
+export async function warmHiddenRaster(
+  map: MapLibreMap,
+  id: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted) throw cancelError();
+  if (typeof map.getLayer !== "function" || !map.getLayer(id)) return;
+  if (typeof map.isSourceLoaded !== "function") return;
+
+  const layer = map.getLayer(id) as { minzoom?: number; maxzoom?: number } | undefined;
+  const minzoom = layer?.minzoom ?? 0;
+  const maxzoom = layer?.maxzoom ?? MAX_ZOOM;
+  let opacity: unknown;
+  try {
+    opacity = map.getPaintProperty(id, "raster-opacity");
+  } catch {
+    opacity = undefined;
+  }
+  try {
+    map.setLayerZoomRange(id, 0, MAX_ZOOM);
+    map.setPaintProperty(id, "raster-opacity", 0);
+    map.triggerRepaint();
+    await frameOnce(signal);
+    await waitForSource(map, id, signal);
+  } finally {
+    try {
+      map.setLayerZoomRange(id, minzoom, maxzoom);
+      if (typeof opacity === "number") map.setPaintProperty(id, "raster-opacity", opacity);
+    } catch {
+      // A torn-down map must not hide the warm-up result the caller already holds.
+    }
+  }
+  if (signal?.aborted) throw cancelError();
+}
+
+function waitForSource(map: MapLibreMap, id: string, signal?: AbortSignal): Promise<void> {
+  return new Promise((done, fail) => {
+    if (signal?.aborted) {
+      fail(cancelError());
+      return;
+    }
+    let isSettled = false;
+    let frame: number | ReturnType<typeof setTimeout> | undefined;
+    const timer = setTimeout(() => {
+      if (isSettled) return;
+      isSettled = true;
+      cancelFrame(frame);
+      signal?.removeEventListener("abort", onAbort);
+      fail(new Error(`Entry image ${id} never became ready`));
+    }, 2000);
+    const check = () => {
+      if (isSettled) return;
+      if (signal?.aborted) {
+        isSettled = true;
+        cancelFrame(frame);
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        fail(cancelError());
+        return;
+      }
+      try {
+        if (map.isSourceLoaded(id)) {
+          isSettled = true;
+          cancelFrame(frame);
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", onAbort);
+          done();
+          return;
+        }
+      } catch (error) {
+        isSettled = true;
+        cancelFrame(frame);
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        fail(error);
+        return;
+      }
+      map.triggerRepaint();
+      frame = requestFrame(check);
+    };
+    const onAbort = () => {
+      if (isSettled) return;
+      isSettled = true;
+      cancelFrame(frame);
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      fail(cancelError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    check();
+  });
+}
+
+/** Wait one frame so a hidden source prepares its current image before the flag is read. */
+function frameOnce(signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(cancelError());
+  return new Promise((done, fail) => {
+    const onAbort = () => {
+      cancelFrame(frame);
+      fail(cancelError());
+    };
+    const frame = requestFrame(() => {
+      signal?.removeEventListener("abort", onAbort);
+      done();
+    });
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function requestFrame(task: () => void): number | ReturnType<typeof setTimeout> {
+  try {
+    if (typeof requestAnimationFrame === "function") {
+      return requestAnimationFrame(() => task());
+    }
+  } catch {
+    // A missing frame scheduler falls through to the timer below.
+  }
+  return setTimeout(task, 16);
+}
+
+function cancelFrame(frame: number | ReturnType<typeof setTimeout> | undefined): void {
+  if (frame === undefined) return;
+  try {
+    if (typeof cancelAnimationFrame === "function" && typeof frame === "number") {
+      cancelAnimationFrame(frame);
+      return;
+    }
+  } catch {
+    // A missing canceller falls through to clearing the timer.
+  }
+  clearTimeout(frame as ReturnType<typeof setTimeout>);
 }
 
 /** Removes a layer and its source, whichever of them exist. */

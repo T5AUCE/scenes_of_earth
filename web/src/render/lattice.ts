@@ -37,6 +37,15 @@ const DOT_RADIUS_PX = DOT_RADIUS_RATIO * MIN_SPACING_PX;
 /** The largest dot radius in css px at the default density, reached once the level stops rising. */
 export const MAX_DOT_RADIUS_PX = 3 * DOT_RADIUS_PX;
 
+/** The widest close-zoom dot in css px, the ordinary full-value radius at two aimed spacings. */
+export const CLOSE_RADIUS_CAP_PX = 2 * DOT_RADIUS_RATIO * MIN_SPACING_PX;
+
+/** The close-zoom cap starts here, leaving ordinary zooms exactly as before. */
+export const CLOSE_RADIUS_CAP_START_ZOOM = 13;
+
+/** The close-zoom cap is complete here, bounding every active nominal radius. */
+export const CLOSE_RADIUS_CAP_END_ZOOM = 15;
+
 /** Dots that would be smaller than this radius in css px fade out by area instead. */
 export const MIN_DOT_RADIUS_PX = 0.5;
 
@@ -197,6 +206,35 @@ export function maxDotRadiusPx(
 }
 
 /**
+ * Bound a level's maximum radius for close-zoom display without touching density selection.
+ * The lattice stops subdividing once saturated while the camera keeps magnifying, so the
+ * nominal radius would keep growing past ordinary sizes. Identity holds through the cap
+ * start and every active radius is bounded from the cap end, independent of density.
+ */
+export function limitCloseRadiusPx(baseRadiusPx: number, zoom: number) {
+  const span = CLOSE_RADIUS_CAP_END_ZOOM - CLOSE_RADIUS_CAP_START_ZOOM;
+  const progress = Math.min(1, Math.max(0, (zoom - CLOSE_RADIUS_CAP_START_ZOOM) / span));
+  const eased = progress * progress * (3 - 2 * progress);
+  const cappedPx = Math.min(baseRadiusPx, CLOSE_RADIUS_CAP_PX);
+
+  return baseRadiusPx + (cappedPx - baseRadiusPx) * eased;
+}
+
+/**
+ * Shrink the dot lattice's on-screen size through the precision fade. The square root follows
+ * the fading ink while the counter-zoom cancels the camera magnification after the fade
+ * starts, because the root alone still lets unsaturated dots grow. One below the fade and
+ * zero at its end.
+ */
+export function highZoomDotSizeScale(zoom: number, pixelRatio: number) {
+  const opacity = highZoomDotOpacity(zoom, pixelRatio);
+  if (opacity <= 0) return 0;
+
+  const startZoom = highZoomFadeStartZoom(pixelRatio);
+  return Math.sqrt(opacity) * 2 ** -Math.max(0, zoom - startZoom);
+}
+
+/**
  * Shrink the largest dot radius so the most jittered, largest dot with its fading edge and halo
  * stays within its sub-cell, whichever axis of the stretched Mercator spacing is shorter.
  */
@@ -218,6 +256,7 @@ export function levelSpacingPx(sidesPx: { width: number; height: number }, level
 
 /**
  * The dot lattice at a zoom, with a density whose dots the shortest cell axis can hold.
+ * The zoom only bounds the display radius, so density fitting keeps the unmodified base.
  */
 export interface DotLattice {
   level: number;
@@ -226,11 +265,13 @@ export interface DotLattice {
   aimedPx: number;
   density: number;
   pixelRatio: number;
+  zoom: number;
 }
 
 /**
  * The largest dot radius in css px at a level as the shader draws it. The shader works in device
- * px, so containment leaves room for the device-px edge and halo.
+ * px, so containment leaves room for the device-px edge and halo. A zoom bounds close-zoom
+ * display without changing which density fits.
  */
 export function levelRadiusPx(
   sidesPx: { width: number; height: number },
@@ -238,13 +279,17 @@ export function levelRadiusPx(
   aimedPx: number,
   pixelRatio: number,
   density = DEFAULT_DENSITY_RATIO,
+  zoom?: number,
 ) {
-  const spacingPx = levelSpacingPx(sidesPx, level);
+  const divisor = 2 ** level;
+  const spacingXPx = sidesPx.width / divisor;
+  const spacingYPx = sidesPx.height / divisor;
   const cellPx = Math.sqrt(sidesPx.width * sidesPx.height);
-  const zoomCapPx = maxDotRadiusPx(cellPx / 2 ** level, level, aimedPx, density);
+  const baseCapPx = maxDotRadiusPx(cellPx / divisor, level, aimedPx, density);
+  const zoomCapPx = zoom === undefined ? baseCapPx : limitCloseRadiusPx(baseCapPx, zoom);
   return containedRadiusPx(
-    spacingPx.x * pixelRatio,
-    spacingPx.y * pixelRatio,
+    spacingXPx * pixelRatio,
+    spacingYPx * pixelRatio,
     zoomCapPx * pixelRatio,
     HALO_WIDTH_PX,
   ) / pixelRatio;
@@ -268,7 +313,77 @@ export function dotLattice(
   const aimedPx = aimedSpacingPx(zoom, fitting);
   const { level, fade } = levelFor(cellPx, aimedPx, previousLevel);
 
-  return { level, fade, sidesPx, aimedPx, density: fitting, pixelRatio };
+  return { level, fade, sidesPx, aimedPx, density: fitting, pixelRatio, zoom };
+}
+
+/**
+ * Fill a lattice for an already-fitted density without another containment search. Tween and
+ * preview frames reuse one lattice this way while the settled resolver keeps its quantised fit.
+ */
+export function writeContinuousLattice(
+  lattice: DotLattice,
+  cellDegrees: { width: number; height: number },
+  latitude: number,
+  zoom: number,
+  density: number,
+  pixelRatio: number,
+): DotLattice {
+  const worldPx = WORLD_PX_AT_ZOOM_0 * 2 ** zoom;
+  const pxPerDegree = worldPx / 360;
+  const stretch = 1 / Math.cos(latitude / DEGREES_PER_RADIAN);
+  // Same math as cellSidesPx, written in place so tween frames skip its object.
+  lattice.sidesPx.width = pxPerDegree * cellDegrees.width;
+  lattice.sidesPx.height = pxPerDegree * cellDegrees.height * stretch;
+  const cellPx = Math.sqrt(lattice.sidesPx.width * lattice.sidesPx.height);
+  lattice.aimedPx = aimedSpacingPx(zoom, density);
+  lattice.zoom = zoom;
+  const exact = Math.log2(cellPx / lattice.aimedPx);
+  const level = Math.min(MAX_LEVEL, Math.max(MIN_LEVEL, Math.floor(exact)));
+  lattice.level = level;
+  // Stateless like levelFor without a previous level, so the map and the preview agree at rest.
+  lattice.fade = level === MAX_LEVEL ? 0 : levelFade(exact - level);
+  lattice.density = density;
+  lattice.pixelRatio = pixelRatio;
+
+  return lattice;
+}
+
+/**
+ * The full-value dot radius that represents a lattice's mixed parent and child sites. Area
+ * mixing keeps each effective site's ink, so the preview shows mean site area rather than
+ * every jittered dot. At the maximum level the fade is zero and the capped radius stays.
+ */
+export function representativeRadiusPx(lattice: DotLattice): number {
+  const parentPx = levelRadiusPx(
+    lattice.sidesPx,
+    lattice.level,
+    lattice.aimedPx,
+    lattice.pixelRatio,
+    lattice.density,
+    lattice.zoom,
+  );
+  if (lattice.fade === 0) return parentPx;
+
+  const childPx = levelRadiusPx(
+    lattice.sidesPx,
+    lattice.level + 1,
+    lattice.aimedPx,
+    lattice.pixelRatio,
+    lattice.density,
+    lattice.zoom,
+  );
+  const sites = 1 + 3 * lattice.fade;
+
+  return Math.sqrt(((1 - lattice.fade) * parentPx ** 2 + 4 * lattice.fade * childPx ** 2) / sites);
+}
+
+/**
+ * The effective dot spacing of a lattice in css px, mixing the parent and child site counts.
+ * The preview fits its sample count to this spacing while the radius above keeps the map size.
+ */
+export function representativeSpacingPx(lattice: DotLattice): number {
+  const cellPx = Math.sqrt(lattice.sidesPx.width * lattice.sidesPx.height);
+  return cellPx / (2 ** lattice.level * Math.sqrt(1 + 3 * lattice.fade));
 }
 
 function containedDensity(
@@ -327,10 +442,14 @@ export function dotAppearance(radiusPx: number) {
  * before that.
  */
 export function highZoomDotOpacity(zoom: number, pixelRatio: number) {
-  const endZoom = HIGH_ZOOM_FADE_END_ZOOM - Math.log2(Math.max(1, pixelRatio));
-  const startZoom = endZoom - HIGH_ZOOM_FADE_SPAN_ZOOM;
+  const startZoom = highZoomFadeStartZoom(pixelRatio);
   const progress = Math.min(1, Math.max(0, (zoom - startZoom) / HIGH_ZOOM_FADE_SPAN_ZOOM));
   return 1 - progress * progress * (3 - 2 * progress);
+}
+
+// The fade start moves one zoom earlier per doubled pixel ratio, alongside the fade end.
+function highZoomFadeStartZoom(pixelRatio: number) {
+  return HIGH_ZOOM_FADE_END_ZOOM - Math.log2(Math.max(1, pixelRatio)) - HIGH_ZOOM_FADE_SPAN_ZOOM;
 }
 
 /**

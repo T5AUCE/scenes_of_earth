@@ -31,7 +31,9 @@ import { CLASS_FIELD_VERTEX } from "./class-field-shaders";
  * along a texel while a dot there shrinks from `uParentRadiusPx`. Below level 1 the parent's own
  * bytes come from `uParentIds`, which has the size of `uIds`. `uDots` draws the dots and `uHatch`
  * the no-data hatch, whose screen-space lines are measured through `uPixelRatio`. `uDotOpacity`
- * fades dots and halos out before float32 grid coordinates break them up at high zoom.
+ * fades the composed dot and halo together before float32 grid coordinates break them up at
+ * high zoom, while `uSizeScale` shrinks their radius through the same fade. Hatch stays
+ * independent of both.
  *
  * While a step fades into the next, `uIds` and `uParentIds` hold the step it leaves and
  * `uNextIds` and `uNextParentIds` the step it enters, laid out the same way. Each dot's area
@@ -74,6 +76,7 @@ uniform bool uDots;
 uniform bool uHatch;
 uniform float uPixelRatio;
 uniform float uDotOpacity;
+uniform float uSizeScale;
 out vec4 fragColor;
 
 const uint HATCH = 254u;
@@ -245,14 +248,16 @@ float areaMix(float from, float to, float amount) {
 
 // A dot below the minimum radius keeps that radius and fades by area instead.
 Mark markAt(float distancePx, float radiusPx, float weight) {
+  // The size fade shrinks the radius first, so tiny dots fade rather than leaving specks.
+  float scaledPx = radiusPx * uSizeScale;
   float minRadiusPx = MIN_DOT_RADIUS_PX * uPixelRatio;
-  float opacity = weight * min(1.0, pow(radiusPx / minRadiusPx, 2.0));
+  float opacity = weight * min(1.0, pow(scaledPx / minRadiusPx, 2.0));
   if (opacity == 0.0) return Mark(0.0, 0.0);
 
-  float drawnRadiusPx = max(radiusPx, minRadiusPx);
-  float dotAlpha = coverage(distancePx, drawnRadiusPx) * opacity;
+  float drawnPx = max(scaledPx, minRadiusPx);
+  float dotAlpha = coverage(distancePx, drawnPx) * opacity;
   float haloAlpha = uHalo
-    ? HALO_ALPHA * coverage(distancePx, drawnRadiusPx + HALO_WIDTH_PX) * opacity
+    ? HALO_ALPHA * coverage(distancePx, drawnPx + HALO_WIDTH_PX * uSizeScale) * opacity
     : 0.0;
   return Mark(dotAlpha, haloAlpha);
 }
@@ -329,10 +334,11 @@ void main() {
     }
   }
 
-  mark = Mark(mark.dotAlpha * uDotOpacity, mark.haloAlpha * uDotOpacity);
-
-  float alpha = mark.dotAlpha + mark.haloAlpha * (1.0 - mark.dotAlpha);
-  vec3 color = uInk * mark.dotAlpha + uHaloInk * mark.haloAlpha * (1.0 - mark.dotAlpha);
+  // The composed dot and halo fade once together, so their overlap never fades twice.
+  float dotsAlpha = mark.dotAlpha + mark.haloAlpha * (1.0 - mark.dotAlpha);
+  vec3 dotsColor = uInk * mark.dotAlpha + uHaloInk * mark.haloAlpha * (1.0 - mark.dotAlpha);
+  float alpha = dotsAlpha * uDotOpacity;
+  vec3 color = dotsColor * uDotOpacity;
   if (uHatch && isHatchedAt(position)) {
     float hatchAlpha = hatchCoverage();
     color = uInk * hatchAlpha + color * (1.0 - hatchAlpha);

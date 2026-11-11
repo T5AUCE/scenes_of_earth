@@ -131,7 +131,7 @@ test("a failed outline fetch shows an outline-unavailable notice", async (contex
 
   assert.equal(harness.notices.length, 1);
   assert.match(harness.notices[0], /outline unavailable/i);
-  assert.equal(harness.chosenText(), "Nakuru (approximate outline)");
+  assert.equal(harness.chosenText(), "Currently selected - Nakuru (approximate outline)");
 });
 
 test("a stale failed outline fetch stays silent", async (context) => {
@@ -162,7 +162,7 @@ test("a stale failed outline fetch stays silent", async (context) => {
   assert.deepEqual(harness.sources.at(-1), outlineB());
   assert.equal(harness.sources.length, 1);
   assert.deepEqual(harness.notices, []);
-  assert.equal(harness.chosenText(), "Second");
+  assert.equal(harness.chosenText(), "Currently selected - Second");
 });
 
 function gate(): { promise: Promise<Response>; resolve(response: Response): void } {

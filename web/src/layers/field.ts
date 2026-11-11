@@ -1,5 +1,13 @@
 /** Draw field time series as colour fills or fallback marks with shared cached values. */
-import { arrayDoc, decode, readArray, readMask, readSteps, type Store } from "../data";
+import {
+  arrayDoc,
+  decodeInSlices,
+  isCancel,
+  readArray,
+  readMask,
+  readSteps,
+  type Store,
+} from "../data";
 import {
   defaultInk,
   defaultPalette as layerDefaultPalette,
@@ -11,12 +19,13 @@ import { makeHtmlElement } from "../html";
 import { createFieldMarksLayer } from "../gpu/field-marks-layer";
 import { keepThroughContextLoss } from "../gpu/tiled-layer";
 import {
+  createDotLegend,
   createZoomWatch,
-  dotLegend,
   dotLegendKey,
   gradientLegend,
   hatchLegend,
   isothermLegend,
+  type DotLegendHandle,
 } from "../legend";
 import {
   addImagePair,
@@ -24,11 +33,12 @@ import {
   removeLayerAndSource,
   setImage,
   setPairOpacities,
+  warmHiddenRaster,
 } from "../map";
 import { prefersReducedMotion } from "../reduced-motion";
 import { createStepReader, type StepReader } from "../step-reader";
 import { displayStops, displayUnitFor, isUnitFor, unitOptions } from "../units";
-import { lut, paintColormap, stopsForRange } from "../render/colormap";
+import { lut, paintColormapInSlices, stopsForRange } from "../render/colormap";
 import {
   DEFAULT_DENSITY_RATIO,
   hasHatchedCells,
@@ -95,6 +105,7 @@ class FieldView implements LayerView {
   private readonly drawLatestStep;
   private readonly dotsZoomWatch;
   private lastLegendKey: string | null = null;
+  private dotSwatches: DotLegendHandle | null = null;
   private palette: string;
   // Only a layer with dots or isotherms draws its ink, so the empty default is never painted.
   private ink: string;
@@ -108,6 +119,7 @@ class FieldView implements LayerView {
   private alive = true;
   // A slow read of an older step must not overwrite the one being displayed.
   private shownStep = -1;
+  private activePaint: AbortController | null = null;
   private marksStep: number | null = null;
   private readonly marksFade = new MarksFade({
     read: (step) => Promise.all([this.readStep.read(step, false), this.mask]),
@@ -171,7 +183,7 @@ class FieldView implements LayerView {
     this.readStep = fieldReader(layer, store);
     this.drawLatestStep = latestOnly((step: number) => this.drawStep(step));
 
-    this.dotsZoomWatch = createZoomWatch(map, () => this.showLegend());
+    this.dotsZoomWatch = createZoomWatch(map, () => this.repaintDotSwatches());
     this.showLegend();
     this.menu = this.createMenu();
     this.parts = [
@@ -221,26 +233,25 @@ class FieldView implements LayerView {
 
   private showLegend() {
     const key = this.legendKey();
-    if (key === this.lastLegendKey) return;
-    this.lastLegendKey = key;
-    const element = this.legendOf();
-    if (this.hasHatched) element.append(hatchLegend());
-    this.legendBox.replaceChildren(element);
+    if (key !== this.lastLegendKey) {
+      this.lastLegendKey = key;
+      const element = this.legendOf();
+      if (this.hasHatched) element.append(hatchLegend());
+      this.legendBox.replaceChildren(element);
+    }
+    this.repaintDotSwatches();
   }
 
-  // The key holds every input that changes the legend's output, so a skipped rebuild
-  // draws exactly what a rebuild would. Dots use their lattice so a zoom that keeps the
-  // level and swatch keeps the key.
+  // The key holds the style and label inputs, so a skipped rebuild keeps the retained canvases.
+  // The zoom and densities only repaint those canvases and stay out of the key.
   private legendKey(): string {
-    const { layer, map } = this.context;
+    const { layer } = this.context;
     if (this.draw === "dots") {
       const stops = displayStops(this.stops, layer.units, this.units, rangeDecimals(layer));
       return `dots:${dotLegendKey(
         stops,
         this.units,
         layer.grid,
-        map.getZoom(),
-        this.density,
         inkPaint(this.ink),
         this.hasHatched,
       )}`;
@@ -256,20 +267,37 @@ class FieldView implements LayerView {
     const { layer, map } = this.context;
     const stops = displayStops(this.stops, layer.units, this.units, rangeDecimals(layer));
     if (this.draw === "dots") {
-      return dotLegend(
+      const handle = createDotLegend(
         stops,
         this.units,
         layer.grid,
         map.getZoom(),
-        this.density,
+        this.renderedDensity(),
         inkPaint(this.ink),
+        map.getPixelRatio(),
       );
+      this.dotSwatches = handle;
+      return handle.element;
     }
+    this.dotSwatches = null;
     if (this.draw === "isolines") {
       return isothermLegend(this.isolines!.interval, inkPaint(this.ink), this.units);
     }
 
     return gradientLegend(this.colors, stops, this.units, this.range !== null);
+  }
+
+  /** The density the dots draw now, which eases toward the saved target after a slider change. */
+  private renderedDensity(): number {
+    return this.marks ? this.marks.renderedDensity() : this.density;
+  }
+
+  // Repaint the retained swatches from the live camera and density without another map frame.
+  private repaintDotSwatches() {
+    if (this.draw !== "dots" || !this.dotSwatches || !this.marks) return;
+
+    const { map } = this.context;
+    this.dotSwatches.repaint(map.getZoom(), this.marks.renderedDensity(), map.getPixelRatio());
   }
 
   private createDensityControl(): LayerControl {
@@ -399,6 +427,8 @@ class FieldView implements LayerView {
   private restyle() {
     this.colors = lut(gradientOf(this.palette));
     this.stops = stopsForRange(this.fittedStops, this.range);
+    this.activePaint?.abort();
+    this.activePaint = null;
     this.fade.invalidate();
     this.marksFade.clear();
     this.marksStep = null;
@@ -499,10 +529,11 @@ class FieldView implements LayerView {
 
   private async loadNext(step: number) {
     const [values, mask] = await Promise.all([this.readStep.read(step, false), this.mask]);
+    const image = await this.paintStepImage(values, undefined);
 
     return () => {
       if (this.marks) this.marksFade.cache(step, this.marksOf(values, mask));
-      return this.paintImage(values);
+      return image;
     };
   }
 
@@ -553,6 +584,115 @@ class FieldView implements LayerView {
     }
   }
 
+  /**
+   * Warm the opening time on the map context so the flight never pays for it.
+   * Playback keeps using prepare, so this never changes its contract.
+   */
+  async prepareEntry(time: string | null, signal?: AbortSignal): Promise<void> {
+    if (time === null || signal?.aborted) return;
+    const step = stepAt(this.time.values, this.time.end, time);
+    if (step < 0 || !this.alive || !this.draw || signal?.aborted) return;
+
+    const draw = this.draw;
+    const colors = this.colors;
+    const stops = this.stops;
+    const values = await this.readStep.read(step, false);
+    if (!this.alive || signal?.aborted || this.draw !== draw) return;
+    if (this.colors !== colors || this.stops !== stops || step !== this.shownStep) return;
+
+    if (draw === "colour") {
+      await this.warmColour(values, step, signal, draw, colors, stops);
+    } else if (draw === "dots") {
+      await this.warmDots(values, step, signal, draw);
+    } else if (draw === "isolines") {
+      await this.warmIsolines(values, step, signal, draw);
+    }
+    if (!this.alive || signal?.aborted) return;
+
+    await nextEntryFrame(signal);
+  }
+
+  private async warmColour(
+    values: Float32Array,
+    step: number,
+    signal: AbortSignal | undefined,
+    draw: Draw | null,
+    colors: Uint8ClampedArray,
+    stops: number[],
+  ) {
+    // A held CPU image still needs its native upload, so warm the real sources instead of skipping.
+    if (this.fade.holds(step)) {
+      for (const id of this.fadeIds) await warmHiddenRaster(this.context.map, id, signal);
+      return;
+    }
+
+    this.activePaint?.abort();
+    this.activePaint = null;
+    const image = await this.paintStepImage(values, signal);
+    if (!this.alive || signal?.aborted || this.draw !== draw) return;
+    if (this.colors !== colors || this.stops !== stops || step !== this.shownStep) return;
+
+    this.fade.show(step, () => image);
+    // The hidden sources prepare under the zoom gate, so the first visible render skips them.
+    for (const id of this.fadeIds) await warmHiddenRaster(this.context.map, id, signal);
+    if (!this.alive || signal?.aborted || this.draw !== draw) return;
+    if (this.colors !== colors || this.stops !== stops || step !== this.shownStep) return;
+
+    if (this.marks) {
+      const [, mask] = await Promise.all([Promise.resolve(), this.mask]);
+      if (!this.alive || signal?.aborted || this.draw !== draw) return;
+
+      const state = this.marksFade.get(step) ?? this.marksOf(values, mask);
+      this.marksFade.cache(step, state);
+      this.marksStep = step;
+    }
+  }
+
+  private async warmDots(
+    values: Float32Array,
+    step: number,
+    signal: AbortSignal | undefined,
+    draw: Draw | null,
+  ) {
+    const [, mask] = await Promise.all([Promise.resolve(), this.mask]);
+    if (!this.alive || signal?.aborted || this.draw !== draw) return;
+
+    const state = this.marksFade.get(step) ?? this.marksOf(values, mask);
+    if (!this.alive || signal?.aborted || this.draw !== draw) return;
+    if (step !== this.shownStep) return;
+
+    this.marksFade.cache(step, state);
+    this.showMarks(state);
+    this.marksStep = step;
+    if (!this.marks) return;
+
+    try {
+      await this.marks.warmUp(signal);
+    } catch (error) {
+      if (signal?.aborted) return;
+
+      throw error;
+    }
+  }
+
+  private async warmIsolines(
+    values: Float32Array,
+    step: number,
+    signal: AbortSignal | undefined,
+    draw: Draw | null,
+  ) {
+    if (!this.isolines || !this.alive || signal?.aborted || this.draw !== draw) return;
+
+    // Tracing stays synchronous because its helper lives outside the entry scope.
+    this.isolines.prepareStep(step, values);
+    if (!this.alive || signal?.aborted || this.draw !== draw) return;
+    if (step !== this.shownStep) return;
+
+    this.isolines.setValues(values, step);
+    this.isolines.setVisible(true);
+    await waitForIsolines(this.isolines, step, signal);
+  }
+
   maxLookahead() {
     return this.readStep.maxLookahead();
   }
@@ -568,6 +708,8 @@ class FieldView implements LayerView {
 
   show(next: Draw | null) {
     this.draw = next;
+    this.activePaint?.abort();
+    this.activePaint = null;
     this.dotsZoomWatch.setActive(next === "dots");
     this.hideStep();
     this.showLegend();
@@ -596,10 +738,11 @@ class FieldView implements LayerView {
       const [values, mask] = await Promise.all([this.readStep.read(step), this.mask]);
       if (!this.alive || step !== this.shownStep) return;
 
-      this.drawValues(values, step, mask);
+      await this.drawValues(values, step, mask);
 
       this.readStep.prime(step, this.time.values.length - 1);
     } catch (error) {
+      if (isCancel(error)) return;
       // An error for a step the user has already left is no longer relevant.
       if (!this.alive || step !== this.shownStep) return;
 
@@ -609,7 +752,7 @@ class FieldView implements LayerView {
     }
   }
 
-  private drawValues(
+  private async drawValues(
     values: Float32Array,
     step: number,
     mask: ArrayLike<number> | null,
@@ -622,17 +765,34 @@ class FieldView implements LayerView {
       if (this.draw === "colour") this.marksStep = step;
     }
     if (this.draw === "colour") {
-      this.fade.show(step, () => this.paintImage(values));
+      const draw = this.draw;
+      const colors = this.colors;
+      const stops = this.stops;
+      this.activePaint?.abort();
+      const controller = new AbortController();
+      this.activePaint = controller;
+      let image: ImageData;
+      try {
+        image = await this.paintStepImage(values, controller.signal);
+      } finally {
+        if (this.activePaint === controller) this.activePaint = null;
+      }
+      if (controller.signal.aborted) return;
+      if (!this.alive || step !== this.shownStep || this.draw !== draw) return;
+      if (this.colors !== colors || this.stops !== stops) return;
+
+      this.fade.show(step, () => image);
     } else if (this.draw === "isolines") {
       this.isolines!.setValues(values, step);
       this.isolines!.setVisible(true);
     }
   }
 
-  private paintImage(values: Float32Array) {
-    const rgba = paintColormap(values, this.table, this.colors, this.stops);
-
-    return new ImageData(rgba, this.table.width, this.table.height);
+  /** Paint one step through the shared sliced painter the entry warm-up uses. */
+  private paintStepImage(values: Float32Array, signal?: AbortSignal): Promise<ImageData> {
+    return paintColormapInSlices(values, this.table, this.colors, this.stops, signal).then(
+      (rgba) => new ImageData(rgba, this.table.width, this.table.height),
+    );
   }
 
   private marksOf(values: Float32Array, mask: ArrayLike<number> | null): MarksState {
@@ -663,6 +823,8 @@ class FieldView implements LayerView {
 
   destroy() {
     this.alive = false;
+    this.activePaint?.abort();
+    this.activePaint = null;
     this.dotsZoomWatch.setActive(false);
     this.stopKeepingMarks?.();
     this.fade.invalidate();
@@ -684,15 +846,127 @@ export function fieldReader(layer: LayerDoc, store: Promise<Store>): StepReader 
     layer.grid,
     async (step) => {
       const raw = await readArray(await store, valueArray.path, [step, null, null]);
-      return decode(raw, valueArray);
+      return decodeInSlices(raw, valueArray);
     },
     async (first, count) => {
       const steps = await readSteps(await store, valueArray.path, first, count);
-      return steps.map((raw) => decode(raw, valueArray));
+      const decoded: Float32Array[] = [];
+      for (const raw of steps) {
+        decoded.push(await decodeInSlices(raw, valueArray));
+      }
+      return decoded;
     },
   );
   byLayer.set(layer.id, reader);
   return reader;
+}
+
+/** Wait a frame so the preparing note paints before heavy work continues. */
+function nextEntryFrame(signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(cancelError());
+  return new Promise((done, fail) => {
+    const onFrame = () => {
+      signal?.removeEventListener("abort", onAbort);
+      done();
+    };
+    const onAbort = () => fail(cancelError());
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(onFrame);
+      return;
+    }
+    setTimeout(onFrame, 0);
+  });
+}
+
+function cancelError(): Error {
+  const error = new Error("Entry preparation was cancelled");
+  error.name = "AbortError";
+  return error;
+}
+
+/** Wait for the overlay to hold the warmed step, so the flight never traces mid-flight. */
+function waitForIsolines(
+  isolines: IsolineOverlay,
+  step: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted) return Promise.reject(cancelError());
+  if (isolines.isReady(step, step)) return Promise.resolve();
+  return new Promise((done, fail) => {
+    let isSettled = false;
+    let frame: number | ReturnType<typeof setTimeout> | undefined;
+    const timer = setTimeout(() => {
+      if (isSettled) return;
+      isSettled = true;
+      cancelFrame(frame);
+      signal?.removeEventListener("abort", onAbort);
+      fail(new Error("Entry isotherms never became ready"));
+    }, 2000);
+    const check = () => {
+      if (isSettled) return;
+      if (signal?.aborted) {
+        isSettled = true;
+        cancelFrame(frame);
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        fail(cancelError());
+        return;
+      }
+      try {
+        if (isolines.isReady(step, step)) {
+          isSettled = true;
+          cancelFrame(frame);
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", onAbort);
+          done();
+          return;
+        }
+      } catch (error) {
+        isSettled = true;
+        cancelFrame(frame);
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        fail(error);
+        return;
+      }
+      frame = nextFrame(check);
+    };
+    const onAbort = () => {
+      if (isSettled) return;
+      isSettled = true;
+      cancelFrame(frame);
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      fail(cancelError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    check();
+  });
+}
+
+function nextFrame(task: () => void): number | ReturnType<typeof setTimeout> {
+  try {
+    if (typeof requestAnimationFrame === "function") {
+      return requestAnimationFrame(() => task());
+    }
+  } catch {
+    // A missing frame scheduler falls through to the timer below.
+  }
+  return setTimeout(task, 16);
+}
+
+function cancelFrame(frame: number | ReturnType<typeof setTimeout> | undefined): void {
+  if (frame === undefined) return;
+  try {
+    if (typeof cancelAnimationFrame === "function" && typeof frame === "number") {
+      cancelAnimationFrame(frame);
+      return;
+    }
+  } catch {
+    // A missing canceller falls through to clearing the timer.
+  }
+  clearTimeout(frame as ReturnType<typeof setTimeout>);
 }
 
 function keyOf(step: number) {

@@ -12,6 +12,11 @@ type StepSlices = ArrayLike<number> & { subarray(start: number, end: number): Ar
 
 type Encoding = Pick<ArrayDoc, "scale_factor" | "add_offset" | "fill">;
 
+// A slice stays well under a frame while entry keeps the previous pixels responsive.
+const SLICE_BUDGET_MS = 4;
+// Budget checks run this often so one expensive batch cannot overrun the frame.
+const DECODE_CHECK_CELLS = 4096;
+
 // An opened array keeps the shard indexes it has read, so it is opened once per path.
 const openedArrays = new WeakMap<object, Map<string, Promise<OpenedArray>>>();
 
@@ -62,11 +67,73 @@ export function arrayDoc(layer: LayerDoc, role: string) {
 /** Applies scale factor and offset; fill values become NaN. */
 export function decode(raw: ArrayLike<number>, doc: Encoding) {
   const values = new Float32Array(raw.length);
-  for (let index = 0; index < raw.length; index++) {
-    const isFill = raw[index] === doc.fill;
-    values[index] = isFill ? NaN : raw[index] * doc.scale_factor + doc.add_offset;
-  }
+  decodeRange(raw, doc, values, 0, raw.length);
   return values;
+}
+
+/**
+ * Decode in bounded slices so the preparing note paints while entry reads.
+ * The output matches decode exactly.
+ */
+export async function decodeInSlices(
+  raw: ArrayLike<number>,
+  doc: Encoding,
+  signal?: AbortSignal,
+) {
+  const values = new Float32Array(raw.length);
+  let sliceMs = performance.now();
+  for (let index = 0; index < raw.length; index++) {
+    values[index] = decodeOne(raw[index], doc);
+    if ((index + 1) % DECODE_CHECK_CELLS !== 0) continue;
+    if (signal?.aborted) throw cancelError();
+    if (performance.now() - sliceMs < SLICE_BUDGET_MS) continue;
+
+    await yieldToBrowser(signal);
+    sliceMs = performance.now();
+  }
+  if (signal?.aborted) throw cancelError();
+  return values;
+}
+
+/** Yield to the browser so the preparing note paints and input stays responsive. */
+export function yieldToBrowser(signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(cancelError());
+  return new Promise((done, fail) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      done();
+    }, 0);
+    const onAbort = () => {
+      clearTimeout(timer);
+      fail(cancelError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** Whether the error ends an abandoned entry, which must stay silent. */
+export function isCancel(error: unknown): boolean {
+  return (error as Error)?.name === "AbortError";
+}
+
+function cancelError(): Error {
+  const error = new Error("Entry preparation was cancelled");
+  error.name = "AbortError";
+  return error;
+}
+
+function decodeRange(
+  raw: ArrayLike<number>,
+  doc: Encoding,
+  values: Float32Array,
+  start: number,
+  end: number,
+) {
+  for (let index = start; index < end; index++) values[index] = decodeOne(raw[index], doc);
+}
+
+function decodeOne(rawValue: number, doc: Encoding): number {
+  return rawValue === doc.fill ? NaN : rawValue * doc.scale_factor + doc.add_offset;
 }
 
 function openedArray(store: Store, path: string) {

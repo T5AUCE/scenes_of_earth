@@ -16,10 +16,12 @@ interface SwatchPickerProps {
   options: SwatchOption[];
   /** The selected option value, or "custom" while a custom choice applies. */
   value: string;
-  /** The default option value, named with " (default)" for screen readers only. */
+  /** The default option value, named with a " (default)" suffix. */
   defaultValue: string;
   /** Wide two-per-row tiles for gradients and class blocks, else small squares. */
   tiles?: boolean;
+  /** Whether to show the selected name below the swatches. */
+  showCaption?: boolean;
   onSelect(value: string): void;
 }
 
@@ -31,6 +33,7 @@ export function SwatchPicker({
   value,
   defaultValue,
   tiles = false,
+  showCaption = true,
   onSelect,
 }: SwatchPickerProps): React.ReactElement {
   const selected = options.find((option) => option.value === value);
@@ -43,20 +46,22 @@ export function SwatchPicker({
             group={group}
             option={option}
             checked={option.value === value}
-            accessibleName={accessibleName(option, defaultValue)}
+            accessibleName={swatchAccessibleName(option, defaultValue)}
             onSelect={onSelect}
           />
         ))}
       </div>
-      <div className="swatch-caption" aria-hidden="true">
-        {selected ? accessibleName(selected, defaultValue) : ""}
-      </div>
+      {showCaption && (
+        <div className="swatch-caption" aria-hidden="true">
+          {selected ? swatchAccessibleName(selected, defaultValue) : ""}
+        </div>
+      )}
     </>
   );
 }
 
-/** The accessible name of one box, with the default named for screen readers only. */
-function accessibleName(option: SwatchOption, defaultValue: string): string {
+/** Format an option label for headings and accessible names. */
+export function swatchAccessibleName(option: SwatchOption, defaultValue: string): string {
   return option.value === defaultValue ? `${option.label} (default)` : option.label;
 }
 

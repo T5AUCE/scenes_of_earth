@@ -12,6 +12,9 @@ const hooks = registerHooks({
 });
 const {
   AREA_JITTER_RATIO,
+  CLOSE_RADIUS_CAP_END_ZOOM,
+  CLOSE_RADIUS_CAP_PX,
+  CLOSE_RADIUS_CAP_START_ZOOM,
   DENSITY_STEP_LOG2,
   DOT_RADIUS_RATIO,
   EDGE_PX,
@@ -44,14 +47,17 @@ const {
   dotRadiusPx,
   hasHatchedCells,
   highZoomDotOpacity,
+  highZoomDotSizeScale,
   isHatched,
   levelFor,
   levelRadiusPx,
   levelSpacingPx,
+  limitCloseRadiusPx,
   markBytes,
   maxDotRadiusPx,
   positionBytes,
   quantiseDensity,
+  representativeRadiusPx,
   siteNoise,
   slotPosition,
 } = await import("./lattice.ts").finally(() => hooks.deregister());
@@ -483,6 +489,116 @@ test("the level radius follows the shorter axis and leaves room for the device-p
   assert.ok(levelRadiusPx(sidesPx, 0, 15, 1) < zoomCapPx);
   assert.ok(levelRadiusPx(sidesPx, 0, 15, 2) > levelRadiusPx(sidesPx, 0, 15, 1));
   assert.ok(Math.abs(levelRadiusPx(sidesPx, 0, 15, 2) - Math.min(limitAt(2), zoomCapPx)) < 1e-9);
+});
+
+test("the close-zoom cap names the ordinary full-value radius at two aimed spacings", () => {
+  assert.ok(Math.abs(CLOSE_RADIUS_CAP_PX - 5.4) < 1e-9);
+  assert.ok(Math.abs(CLOSE_RADIUS_CAP_PX - 2 * DOT_RADIUS_RATIO * MIN_SPACING_PX) < 1e-9);
+  assert.equal(CLOSE_RADIUS_CAP_START_ZOOM, 13);
+  assert.equal(CLOSE_RADIUS_CAP_END_ZOOM, 15);
+});
+
+test("the close-zoom cap holds every radius identical through zoom 13", () => {
+  for (const basePx of [0.5, 2.4, 5.4, 8.1, 22.91]) {
+    for (const zoom of [3, 6, 10, 12, 13]) {
+      assert.equal(limitCloseRadiusPx(basePx, zoom), basePx, `radius ${basePx} zoom ${zoom}`);
+    }
+  }
+});
+
+test("the close-zoom cap eases every larger radius to the cap by zoom 15", () => {
+  assert.ok(Math.abs(limitCloseRadiusPx(2.4, 15) - 2.4) < 1e-9);
+  assert.ok(Math.abs(limitCloseRadiusPx(5.4, 15) - CLOSE_RADIUS_CAP_PX) < 1e-9);
+  assert.ok(Math.abs(limitCloseRadiusPx(8.1, 15) - CLOSE_RADIUS_CAP_PX) < 1e-9);
+  assert.ok(Math.abs(limitCloseRadiusPx(22.91, 15) - CLOSE_RADIUS_CAP_PX) < 1e-9);
+  // Halfway through the envelope the saturated radius sits halfway to the cap.
+  const midway = limitCloseRadiusPx(8.1, 14);
+  assert.ok(Math.abs(midway - (8.1 + CLOSE_RADIUS_CAP_PX) / 2) < 1e-9);
+  let previous = 8.1;
+  for (let zoom = 13; zoom <= 15; zoom += 0.125) {
+    const capped = limitCloseRadiusPx(8.1, zoom);
+    assert.ok(capped <= previous + 1e-12, `zoom ${zoom}`);
+    assert.ok(capped >= CLOSE_RADIUS_CAP_PX - 1e-12, `zoom ${zoom}`);
+    previous = capped;
+  }
+});
+
+test("every sampled active radius stays identical at ordinary zooms and bounded at z15", () => {
+  const cells = [
+    { width: 0.1, height: 0.1 },
+    { width: 0.05, height: 0.05 },
+    { width: 1 / 120, height: 1 / 120 },
+  ];
+  for (const cell of cells) {
+    for (const latitude of [0, 60, 84]) {
+      for (const pixelRatio of [1, 1.2, 2, 3, 4]) {
+        for (const density of [MIN_DENSITY_RATIO, 0.9, 1, 1.1, MAX_DENSITY_RATIO]) {
+          for (let zoom = 3; zoom <= 13; zoom += 0.125) {
+            const lattice = dotLattice(cell, latitude, zoom, density, pixelRatio);
+            const uncapped = { ...lattice, zoom: CLOSE_RADIUS_CAP_START_ZOOM };
+            assert.ok(
+              Math.abs(representativeRadiusPx(lattice) - representativeRadiusPx(uncapped)) < 1e-9,
+              `${cell.width} ${latitude} DPR ${pixelRatio} density ${density} zoom ${zoom}`,
+            );
+          }
+          for (let zoom = 15; zoom <= 18; zoom += 0.125) {
+            const lattice = dotLattice(cell, latitude, zoom, density, pixelRatio);
+            assert.ok(
+              representativeRadiusPx(lattice) <= CLOSE_RADIUS_CAP_PX + 1e-9,
+              `${cell.width} ${latitude} DPR ${pixelRatio} density ${density} zoom ${zoom}`,
+            );
+          }
+        }
+      }
+    }
+  }
+});
+
+test("the high-zoom size scale rests at one below the fade and zero at its end", () => {
+  for (const pixelRatio of [1, 1.2, 2, 3, 4]) {
+    const endZoom = HIGH_ZOOM_FADE_END_ZOOM - Math.log2(Math.max(1, pixelRatio));
+    const startZoom = endZoom - HIGH_ZOOM_FADE_SPAN_ZOOM;
+    for (const zoom of [startZoom - 2, startZoom - 0.5, startZoom]) {
+      assert.equal(highZoomDotSizeScale(zoom, pixelRatio), 1, `DPR ${pixelRatio} zoom ${zoom}`);
+    }
+    assert.equal(highZoomDotSizeScale(endZoom, pixelRatio), 0);
+    assert.equal(highZoomDotSizeScale(endZoom + 1, pixelRatio), 0);
+  }
+});
+
+test("the high-zoom size scale follows the fading ink with counter-zoom", () => {
+  const middle = HIGH_ZOOM_FADE_END_ZOOM - HIGH_ZOOM_FADE_SPAN_ZOOM / 2;
+  assert.ok(Math.abs(highZoomDotSizeScale(middle, 1) - Math.sqrt(0.5) * 2 ** -0.25) < 1e-9);
+  assert.ok(Math.abs(highZoomDotSizeScale(17.75, 1) - 0.594604) < 1e-5);
+});
+
+test("no fixed-density displayed radius grows through any close fade", () => {
+  const cells = [
+    { width: 0.1, height: 0.1 },
+    { width: 0.05, height: 0.05 },
+    { width: 1 / 120, height: 1 / 120 },
+  ];
+  for (const cell of cells) {
+    for (const latitude of [0, 60, 84]) {
+      for (const pixelRatio of [1, 1.2, 2, 3, 4]) {
+        for (const density of [MIN_DENSITY_RATIO, 0.9, 1, 1.1, MAX_DENSITY_RATIO]) {
+          const endZoom = HIGH_ZOOM_FADE_END_ZOOM - Math.log2(Math.max(1, pixelRatio));
+          const startZoom = endZoom - HIGH_ZOOM_FADE_SPAN_ZOOM;
+          let previous = Infinity;
+          for (let zoom = startZoom; zoom <= endZoom + 1e-9; zoom += 0.125) {
+            const lattice = dotLattice(cell, latitude, zoom, density, pixelRatio);
+            const displayed = representativeRadiusPx(lattice)
+              * highZoomDotSizeScale(zoom, pixelRatio);
+            assert.ok(
+              displayed <= previous + 1e-9,
+              `${cell.width} ${latitude} DPR ${pixelRatio} density ${density} zoom ${zoom}`,
+            );
+            previous = displayed;
+          }
+        }
+      }
+    }
+  }
 });
 
 function ownedSlots(cell: number, level: number) {

@@ -1,166 +1,91 @@
-/** Bounded destination-aware tile preparation shared by DEM, contours and basemap. */
-import type { Map as MapLibreMap } from "maplibre-gl";
+/** Bounded scene-entry download scheduler that fills an in-memory tile store. */
+import { addProtocol } from "maplibre-gl";
+import type { Map as MapLibreMap, RequestParameters } from "maplibre-gl";
 
+import type { WarmTile } from "../contour-ladder";
 import {
-  CONTOUR_OVERZOOM,
-  contourOptionsVersion,
-  demParentsForTile,
-  demParentsForTiles,
-  levelsForZoom,
-  warmTilesForZoom,
-  type ContourLadder,
-  type WarmTile,
-} from "../contour-ladder";
-import { subscribeGesture } from "../gesture-quality";
-import {
-  longitudeDelta,
-  predictDestinationCenter,
-  tileInScene,
-  tileRangeKey,
-  viewportBoundsForCenter,
-  type BasemapDescriptor,
-  type ViewportMap,
-} from "../render/tile-viewport";
-import {
-  noteSpeculativeHit,
-  noteSpeculativeMiss,
-  noteSpeculativeWasted,
+  beginPreload,
+  notePreloadHit,
+  notePreloadMiss,
+  setPreloadProgress,
   type TileLayerKey,
 } from "../dev-stats";
-import { convertValue } from "../units";
-import type { Bbox } from "../types";
 
-/** Candidate tiles kept per source, so one viewport never warms a pyramid. */
-export const PREFETCH_MAX_PER_SOURCE = 12;
-/** Extra upstream requests started per prediction, covering DEM and basemap warming. */
-export const PREFETCH_MAX_HTTP_PER_PREDICTION = 24;
-/** DEM and basemap fetches running at once, leaving headroom for visible tiles. */
-export const PREFETCH_NETWORK_LANES = 2;
-/** Contour traces running at once, so speculation never crowds the visible trace. */
-export const PREFETCH_TRACE_LANES = 1;
-/** Bytes the scheduler may cause the manager to hold before new work waits. */
-export const SPECULATIVE_BUDGET_BYTES = 48 * 1024 * 1024;
-/** Bounded memo size for missing and already consumed tiles. */
+/** Bytes the store and the running downloads may hold together before new work is dropped. */
+export const PRELOAD_BUDGET_BYTES = 24 * 1024 * 1024;
+/** Bounded memo size for missing and already counted tiles. */
 export const MAX_MEMO_TILES = 2000;
 
-// A 512 square float DEM dominates the budget, while PBFs stay small.
-const DEM_TILE_EST_BYTES = 1024 * 1024;
-const CONTOUR_TILE_EST_BYTES = 32 * 1024;
-const BASEMAP_TILE_EST_BYTES = 128 * 1024;
-// A traced parent stays decoded as a padded float grid in the manager's parsed cache.
-const DECODED_DEM_BYTES = 4 * 514 * 514;
-// Sequential revalidation can still leave two misses in the smallest cache.
-const TRACE_WORKER_RESERVE_REQUESTS = 2;
-// The worker fetches up to four parents at once, so a trace holds every speculation DEM lane.
-const TRACE_DEM_RESERVE_LANES = 2;
+/** How long optional entry preload may run before unfinished work is dropped. */
+export const PRELOAD_ENTRY_BUDGET_MS = 5 * 1000;
 
-// Half a second ahead covers a fast zoom step without fetching a pyramid.
-const PREDICTION_HORIZON_SECS = 0.5;
-const MIN_ZOOM_VELOCITY_PER_SEC = 0.5;
-const MIN_PAN_DEG_PER_SEC = 0.05;
-// Predictions never exceed the highest consumer ceiling below.
-const MAX_RAW_ZOOM = 24;
-// The plugin materializes one pixel of padding before tracing, matching the overlay.
-const CONTOUR_BUFFER_PX = 1;
+const STORE_PROTOCOL = "soetile";
 
-const LAYER_FOR_KIND: Record<JobKind, TileLayerKey> = {
-  dem: "terrain",
-  trace: "contours",
-  basemap: "basemap",
-};
-
-/** What the scheduler reads from the contour overlay on every prediction. */
-export interface ContourPrefetchPlan {
-  sourceId: string;
-  ladder: ContourLadder;
-  maxzoom: number;
-  reliefMaxzoom: number;
-  elevationUnit: string;
-  enabled: boolean;
-  bbox: Bbox;
+/** One unit of preload work, such as a tile download or a contour trace. */
+export interface PreloadTask {
+  /** Dedupes the task. A download uses its tile URL, which is also its store key. */
+  key: string;
+  /** Bytes reserved against the budget while the task runs. */
+  estimatedBytes: number;
+  /** Do the work and resolve with the downloaded body, or nothing when it lives elsewhere. */
+  run(abort: AbortController): Promise<Blob | undefined>;
+  /** Store keys that must already be prepared before this task may launch. */
+  needs?: string[];
 }
 
-/** Source ids the scheduler treats as visible work that outranks speculation. */
-export interface TilePrefetchWiring {
-  reliefSourceId: string;
-  basemapSourceId: string;
+/** A pluggable kind of preload, such as the DEM pyramid, the basemap or the contour traces. */
+export interface PreloadSource {
+  id: string;
+  /** The dev readout layer that credits this source's hit rate. */
+  layer: TileLayerKey;
+  /** Tasks running at once, which keeps preload from crowding visible requests. */
+  lanes: number;
+  /** Another source whose tasks must finish before this one starts. */
+  after?: string;
+  /** The tasks for a scene fitted at this zoom, in priority order and inside the budget. */
+  tasks(fittedZoom: number): PreloadTask[];
+  /** The task key a visible tile load would use, or null for another source's load. */
+  visibleKey(sourceId: string, tile: WarmTile): string | null;
+  /**
+   * The style-owned identity this source resolves, or null while unresolved. A change aborts
+   * the source's generation and frees its store, while a source without one never resets.
+   */
+  revisionKey?(): string | null;
+  /** A shared visible download for this key through the source's own cache when possible. */
+  loadShared?(key: string): (() => Promise<Blob | undefined>) | undefined;
 }
 
-/** The map surface the scheduler predicts from and warms for. */
-export type TilePrefetchMap = ViewportMap
-  & Pick<MapLibreMap, "on" | "off">
-  & Partial<Pick<MapLibreMap, "isSourceLoaded">>;
+/** The map surface the scheduler listens to and rewrites tile requests on. */
+export type PreloadMap = Pick<MapLibreMap, "on" | "off" | "setTransformRequest">;
 
 /**
- * The DEM manager subset the scheduler warms through. Routing DEM warming through the
- * manager shares its URL-keyed tile cache with the contour worker's own downloads and
- * reference-counts cancellation, instead of racing it with a separate HTTP warmer.
+ * Count preload outcomes for the dev readout. A hit is the first visible load of a tile that
+ * preload had finished or still had in flight. A miss is a first visible load nothing prepared.
+ * Only loads after the camera lands count, because the flight in passes through zooms that
+ * preload never plans.
  */
-export interface DemFetcher {
-  fetchTile?(z: number, x: number, y: number, abort: AbortController): Promise<unknown>;
-  fetchContourTile?(
-    z: number,
-    x: number,
-    y: number,
-    options: unknown,
-    cancel: AbortController,
-  ): Promise<unknown>;
+export interface PreloadTelemetry {
+  begin(): void;
+  progress(done: number, total: number, bytes: number): void;
+  hit(layer: TileLayerKey): void;
+  miss(layer: TileLayerKey): void;
 }
 
-/** Warm one versioned basemap URL so later visible reads hit the HTTP cache. */
-export type HttpWarmer = (url: string, signal: AbortSignal) => Promise<unknown>;
-
-/**
- * Count speculation outcomes for the dev readout. A hit is the first visible request that
- * found a tile already warm or in flight. A miss is a visible request nothing had prepared.
- * Wasted work was cancelled, forgotten unused under the budget, or left over at destroy.
- */
-export interface PrefetchTelemetry {
-  hit(source: TileLayerKey): void;
-  miss(source: TileLayerKey): void;
-  wasted(source: TileLayerKey): void;
+interface SourceState {
+  source: PreloadSource;
+  queue: PreloadTask[];
+  total: number;
+  done: number;
 }
-
-type JobKind = "dem" | "trace" | "basemap";
 
 interface Job {
-  kind: JobKind;
   key: string;
+  state: SourceState;
   abort: AbortController;
-  generation: number;
+  download: Promise<Blob | undefined>;
   reservedBytes: number;
   cancelled: boolean;
   settled: boolean;
-  reused: boolean;
-}
-
-type ParentState = "ready" | "wait" | "drop";
-
-interface Destination {
-  raw: number;
-  lng: number;
-  lat: number;
-}
-
-/** The zoom each consumer requests at for a destination, with its own rounding and ceiling. */
-interface ConsumerZooms {
-  contour: number;
-  relief: number[];
-  basemap: number;
-}
-
-interface ContourCandidate {
-  key: string;
-  tile: WarmTile;
-  options: Record<string, unknown>;
-  parents: WarmTile[];
-}
-
-/** The contour, DEM and basemap candidates for one destination. */
-interface WantedTiles {
-  contour: ContourCandidate[];
-  dem: WarmTile[];
-  basemap: string[];
 }
 
 /** A key set that forgets its oldest key at the cap, so memos never grow forever. */
@@ -194,795 +119,829 @@ export class BoundedKeySet {
 }
 
 /**
- * Warm the predicted destination viewport and directional pan neighbours through the real
- * DEM manager cache and versioned basemap URLs, never per frame. Visible demand promotes
- * matching jobs and never waits on speculation, while speculation keeps a small always-on
- * share of two network lanes and one trace lane so it runs during movement. Every key
- * holds tile coordinates plus versioned options instead of scene identity, so a long-term
- * CDN cache serves any scene.
- *
- * The byte ledger counts what this scheduler caused the manager to hold. The manager offers
- * no eviction API, so admission only refuses new work at the budget and never forgets an
- * entry the manager still owns. Only basemap entries leave early, because their bodies
- * are not kept by the manager. A result larger than its reservation is counted as measured.
+ * Downloaded tile bodies keyed by URL rather than scene, so any scene or a later shared
+ * mirror reads the same entries. A visible read of a tile that is still downloading waits
+ * for that download instead of starting a second one. Retained bodies and outstanding
+ * reservations share one budget, so a completion that would overflow the combined total
+ * is discarded while the network fallback stays available.
  */
-export class TilePrefetchScheduler {
-  private readonly map: TilePrefetchMap;
-  private readonly plan: () => ContourPrefetchPlan | null;
-  private readonly demTemplate: string;
-  private readonly demFetcher: DemFetcher | null;
-  private readonly wiring: TilePrefetchWiring;
-  private readonly basemapSource: () => BasemapDescriptor | null;
-  private readonly httpWarmer: HttpWarmer;
-  private readonly clock: () => number;
-  private readonly telemetry: PrefetchTelemetry;
+export class TileStore {
+  private readonly blobs = new Map<string, Blob>();
+  private readonly loading = new Map<string, Promise<Blob | undefined>>();
+  private readonly flights = new Map<string, Promise<Blob | undefined>>();
+  private readonly absent = new Map<string, Error>();
+  private readonly limitBytes: number;
+  private heldBytes = 0;
+  private reservedBytes = 0;
+
+  constructor(limitBytes: number = Number.POSITIVE_INFINITY) {
+    this.limitBytes = limitBytes;
+  }
+
+  get bytes(): number {
+    return this.heldBytes;
+  }
+
+  get reserved(): number {
+    return this.reservedBytes;
+  }
+
+  /** Track a scheduler reservation while its download runs. */
+  reserve(bytes: number): void {
+    this.reservedBytes += bytes;
+  }
+
+  /** Release a scheduler reservation once its download settles. */
+  release(bytes: number): void {
+    this.reservedBytes = Math.max(0, this.reservedBytes - bytes);
+  }
+
+  has(key: string): boolean {
+    return this.blobs.has(key) || this.loading.has(key);
+  }
+
+  /** The stored 404 for a key that failed, so joined readers never fetch it again. */
+  absentError(key: string): Error | undefined {
+    return this.absent.get(key);
+  }
+
+  /** The finished body, or a promise of it that still rejects for joined readers on failure. */
+  read(key: string): Blob | Promise<Blob | undefined> | undefined {
+    return this.blobs.get(key) ?? this.loading.get(key);
+  }
+
+  /**
+   * Join an in-flight fetch for this key or start it. Visible and preload readers share the
+   * one download whichever of them arrives first, and the entry leaves once it settles.
+   */
+  share(key: string, load: () => Promise<Blob | undefined>): Promise<Blob | undefined> {
+    const flying = this.flights.get(key);
+    if (flying) return flying;
+    const flight = load().then(
+      (blob) => {
+        if (this.flights.get(key) === flight) this.flights.delete(key);
+        return blob;
+      },
+      (error: unknown) => {
+        if (this.flights.get(key) === flight) this.flights.delete(key);
+        throw error;
+      },
+    );
+    this.flights.set(key, flight);
+    return flight;
+  }
+
+  /**
+   * Keep the body of a download once it finishes. Only a live owner retains its body, so a
+   * completion that arrives after its cancellation or replacement never stores a stale blob,
+   * while a newer entry for the same key always wins over the older registration.
+   */
+  hold(
+    key: string,
+    download: Promise<Blob | undefined>,
+    isLive: () => boolean = alwaysLive,
+    reservationBytes = 0,
+  ): Promise<Blob | undefined> {
+    this.loading.set(key, download);
+    download.catch(aboutUnobservedFailure);
+    return download.then(
+      (blob) => {
+        const isCurrent = this.loading.get(key) === download;
+        if (isCurrent) this.loading.delete(key);
+        if (isCurrent && isLive()) this.keep(key, blob, reservationBytes);
+        return blob;
+      },
+      (error: unknown) => {
+        const isCurrent = this.loading.get(key) === download;
+        if (isCurrent) this.loading.delete(key);
+        if (isCurrent && isLive()) this.rememberAbsent(key, error);
+        throw error;
+      },
+    );
+  }
+
+  /** Drop a body and its flights, so a removed generation never shares its download. */
+  delete(key: string): void {
+    this.loading.delete(key);
+    this.flights.delete(key);
+    const blob = this.blobs.get(key);
+    if (!blob) return;
+    this.blobs.delete(key);
+    this.heldBytes -= blob.size;
+  }
+
+  /** Forget an aborted flight without touching a newer entry, so a replacement starts its own. */
+  dropFlight(key: string, flight: Promise<Blob | undefined>): void {
+    if (this.flights.get(key) === flight) this.flights.delete(key);
+  }
+
+  /** Forget a pending download after its abort, without touching a newer entry for the key. */
+  dropPending(key: string, download: Promise<Blob | undefined>): void {
+    if (this.loading.get(key) === download) this.loading.delete(key);
+  }
+
+  clear(): void {
+    this.blobs.clear();
+    this.loading.clear();
+    this.flights.clear();
+    this.absent.clear();
+    this.heldBytes = 0;
+    this.reservedBytes = 0;
+  }
+
+  private keep(key: string, blob: Blob | undefined, reservationBytes = 0): void {
+    if (!blob) return;
+    const others = this.reservedBytes - reservationBytes;
+    if (this.heldBytes + others + blob.size > this.limitBytes) return;
+    this.blobs.set(key, blob);
+    this.heldBytes += blob.size;
+  }
+
+  private rememberAbsent(key: string, error: unknown): void {
+    if (!isMissingResponse(error)) return;
+    this.absent.delete(key);
+    this.absent.set(key, error as Error);
+    if (this.absent.size <= MAX_MEMO_TILES) return;
+    const oldest = this.absent.keys().next();
+    if (!oldest.done) this.absent.delete(oldest.value);
+  }
+}
+
+function alwaysLive(): boolean {
+  return true;
+}
+
+/** An unobserved download failure stays silent here because joined readers still see it. */
+function aboutUnobservedFailure(): void {}
+
+/**
+ * Download a scene's tiles in the background once it is visible. Every source lists its own
+ * tasks inside its own fixed budget, and this scheduler runs them on a few low-priority lanes
+ * under one global byte budget. Visible requests never wait on it: MapLibre reads a stored
+ * tile through the store protocol, joins a download already running, and fetches anything
+ * else itself. A replaced or removed source, and the scene exit, abort their work, and a
+ * stale completion can never record a result for a newer plan.
+ */
+export class ScenePreload {
+  private readonly map: PreloadMap;
+  private readonly telemetry: PreloadTelemetry;
   private readonly budgetBytes: number;
-  private readonly stopListening: () => void;
-  // A cancelled job leaves this map but keeps its lane and reservation until it settles.
+  private readonly store: TileStore;
+  private readonly sources = new Map<string, SourceState>();
+  private readonly planned = new Set<string>();
+  private readonly ownership = new Map<string, Set<string>>();
+  private readonly revisions = new Map<string, string | null>();
+  private readonly occupied = new Map<string, number>();
+  // A cancelled job leaves this map but keeps its lanes and reservation until it settles.
   private readonly active = new Map<string, Job>();
-  private readonly warmed = new Map<string, { kind: JobKind; bytes: number }>();
-  // Decoded parents stay in the manager's parsed cache, so their bytes are never released.
-  private readonly decoded = new Set<string>();
-  private readonly consumed = new BoundedKeySet(MAX_MEMO_TILES);
+  private readonly ready = new Set<string>();
   private readonly missing = new BoundedKeySet(MAX_MEMO_TILES);
-  private demQueue: WarmTile[] = [];
-  private traceQueue: ContourCandidate[] = [];
-  private basemapQueue: string[] = [];
-  private basemap: BasemapDescriptor | null | undefined;
-  private generation = 0;
-  private networkLanes = 0;
-  private demLanes = 0;
-  private traceLanes = 0;
-  private speculativeBytes = 0;
-  private peakSpeculativeBytes = 0;
-  private planCount = 0;
-  private lastSignature: string | null = null;
-  private startedForPrediction = 0;
-  private lastZoom: number | null = null;
-  private lastLng = 0;
-  private lastLat = 0;
-  private lastTimeMs = 0;
-  private zoomVelocityPerSec = 0;
-  private lngVelocityPerSec = 0;
-  private latVelocityPerSec = 0;
+  private readonly counted = new BoundedKeySet(MAX_MEMO_TILES);
+  private readonly keyEpochs = new Map<string, number>();
+  private readonly wakeListeners = new Set<() => void>();
+  private epochCounter = 0;
+  private visibleDemands = 0;
+  private readonly stopListening: () => void;
+  private stopWaitingForLanding: () => void = () => {};
+  private reservedBytes = 0;
+  private fittedZoom: number | null = null;
+  private isLanded = false;
+  private isRewriting = false;
   private destroyed = false;
 
   constructor(
-    map: TilePrefetchMap,
-    plan: () => ContourPrefetchPlan | null,
-    dem: { tileTemplate: string; fetcher: DemFetcher | null },
-    wiring: TilePrefetchWiring,
-    basemap: () => BasemapDescriptor | null,
-    httpWarmer: HttpWarmer,
-    clock: () => number = () => performance.now(),
-    telemetry: PrefetchTelemetry = defaultTelemetry(),
-    budgetBytes: number = SPECULATIVE_BUDGET_BYTES,
+    map: PreloadMap,
+    telemetry: PreloadTelemetry = defaultTelemetry(),
+    budgetBytes: number = PRELOAD_BUDGET_BYTES,
   ) {
     this.map = map;
-    this.plan = plan;
-    this.demTemplate = dem.tileTemplate;
-    this.demFetcher = dem.fetcher;
-    this.wiring = wiring;
-    this.basemapSource = basemap;
-    this.httpWarmer = httpWarmer;
-    this.clock = clock;
     this.telemetry = telemetry;
     this.budgetBytes = budgetBytes;
-    // Real camera updates emit move then zoom at the same position, so both funnel
-    // through one sampler that ignores the duplicate notification.
-    const sampled = () => {
-      this.trackVelocity(this.clock());
-      this.consider();
-    };
-    const visibleLoading = (event: object) => this.onVisibleLoading(event);
-    const resume = () => this.consider();
-    const styleChanged = () => this.resolveBasemap();
-    map.on("zoom", sampled);
-    map.on("move", sampled);
+    this.store = new TileStore(budgetBytes);
+    ensureStoreProtocol();
+    activeStore = this.store;
+    activePreload = this;
+    telemetry.begin();
+    const visibleLoading = (event: object) => this.countVisibleLoad(event);
+    const restyle = () => this.resyncPlans();
     map.on("sourcedataloading", visibleLoading);
-    map.on("sourcedata", resume);
-    map.on("idle", resume);
-    map.on("styledata", styleChanged);
-    const stopGesture = subscribeGesture(map, {
-      onStart: () => {
-        if (this.destroyed) return;
-        this.cancelAll();
-        this.resetVelocity();
-      },
-      onEnd: () => {
-        if (this.destroyed) return;
-        this.resetVelocity();
-        this.consider();
-      },
-    });
+    map.on("sourcedata", restyle);
+    map.on("styledata", restyle);
     this.stopListening = () => {
-      map.off("zoom", sampled);
-      map.off("move", sampled);
       map.off("sourcedataloading", visibleLoading);
-      map.off("sourcedata", resume);
-      map.off("idle", resume);
-      map.off("styledata", styleChanged);
-      stopGesture();
+      map.off("sourcedata", restyle);
+      map.off("styledata", restyle);
     };
   }
 
-  /** Abort speculative work and forget the prediction, keeping warmed tiles for return pans. */
-  reset(): void {
-    this.cancelAll();
-    this.resetVelocity();
+  /** Register a source, replacing and aborting an earlier one with the same id. */
+  add(source: PreloadSource): void {
+    if (this.destroyed) return;
+    this.remove(source.id);
+    const state: SourceState = { source, queue: [], total: 0, done: 0 };
+    this.sources.set(source.id, state);
+    if (this.fittedZoom === null) return;
+    this.plan(state);
+    this.pump();
   }
 
-  /** Abort every scheduler-owned job, promoted ones included, and drop the queued prediction. */
-  cancelAll(): void {
-    this.abortInflight(true);
-    this.demQueue = [];
-    this.traceQueue = [];
-    this.basemapQueue = [];
-    this.lastSignature = null;
-    this.startedForPrediction = 0;
+  /** Forget a source, abort what it still runs and free the bodies only it listed. */
+  remove(id: string): void {
+    const state = this.sources.get(id);
+    if (!state) return;
+    this.sources.delete(id);
+    for (const job of [...this.active.values()]) {
+      if (job.state === state) this.cancelJob(job);
+    }
+    this.forgetOwned(id);
+    this.report();
+    this.pump();
   }
 
+  /** Begin downloading for a scene that the camera fits at this zoom. */
+  start(fittedZoom: number): void {
+    if (this.destroyed || this.fittedZoom !== null) return;
+    this.fittedZoom = fittedZoom;
+    this.waitForLanding();
+    for (const state of this.sources.values()) this.plan(state);
+    this.pump();
+  }
+
+  /** Abort everything, free the store and hand tile requests back to MapLibre. */
   destroy(): void {
     if (this.destroyed) return;
-    this.cancelAll();
     this.destroyed = true;
-    for (const entry of this.warmed.values()) this.telemetry.wasted(LAYER_FOR_KIND[entry.kind]);
-    this.warmed.clear();
-    this.decoded.clear();
-    this.consumed.clear();
+    for (const job of [...this.active.values()]) this.cancelJob(job);
+    this.sources.clear();
+    this.planned.clear();
+    this.ownership.clear();
+    this.revisions.clear();
+    this.occupied.clear();
+    this.ready.clear();
     this.missing.clear();
-    this.speculativeBytes = 0;
+    this.counted.clear();
+    this.keyEpochs.clear();
+    this.visibleDemands = 0;
+    this.store.clear();
+    if (activeStore === this.store) activeStore = null;
+    if (activePreload === this) activePreload = null;
+    if (this.isRewriting) this.map.setTransformRequest(null);
     this.stopListening();
+    this.stopWaitingForLanding();
+    this.wake();
   }
 
-  /** Ledger bytes, entries, peak, memo size and completed plans, for review and tests. */
-  speculativeUsage(): {
-    bytes: number;
-    entries: number;
-    peak: number;
-    missing: number;
-    consumed: number;
-    plans: number;
-  } {
-    return {
-      bytes: this.speculativeBytes,
-      entries: this.warmed.size,
-      peak: this.peakSpeculativeBytes,
-      missing: this.missing.size,
-      consumed: this.consumed.size,
-      plans: this.planCount,
-    };
+  /** Tasks finished and planned across all sources, with the bytes the store holds. */
+  progress(): { done: number; total: number; bytes: number } {
+    let done = 0;
+    let total = 0;
+    for (const state of this.sources.values()) {
+      done += state.done;
+      total += state.total;
+    }
+    return { done, total, bytes: this.store.bytes };
   }
 
-  private consider(): void {
+  /** Whether every planned task has settled, so failures and drops never block entry. */
+  isSettled(): boolean {
+    const { done, total } = this.progress();
+    return done >= total;
+  }
+
+  /**
+   * Wait until every planned task settles. Dropped budgets and failed downloads count as
+   * settled because they still record a result, so only an abort keeps this waiting.
+   */
+  async settled(signal?: AbortSignal): Promise<void> {
+    while (true) {
+      if (this.destroyed) throw new DOMException("Aborted", "AbortError");
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      if (this.isSettled()) return;
+      await this.waitForWake(signal);
+    }
+  }
+
+  /** Drop queued work and abort running work after the entry budget expires. */
+  expireEntryBudget(): void {
     if (this.destroyed) return;
-    const current = this.plan();
-    if (!current?.enabled) {
-      this.cancelAll();
-      return;
+    for (const state of this.sources.values()) {
+      if (state.queue.length > 0) {
+        state.total -= state.queue.length;
+        state.queue = [];
+      }
     }
-    const destination = this.destination();
-    if (!destination) return;
-    if (this.basemap === undefined) this.resolveBasemap();
-    const zooms = consumerZooms(current, this.basemap ?? null, destination.raw);
-    const signature = this.coverageSignature(current, zooms, destination);
-    if (signature === null) return;
-    if (signature !== this.lastSignature) this.replan(current, zooms, destination, signature);
-    this.pump(current);
+    for (const job of [...this.active.values()]) this.expireJob(job);
+    this.report();
   }
 
-  /** Resolve the basemap, treating a changed source as a new style whose work is stale at once. */
-  private resolveBasemap(): void {
-    const previous = this.basemap;
-    this.basemap = this.basemapSource();
-    if (previous === undefined || sameBasemap(previous, this.basemap)) return;
-    this.generation += 1;
-    this.cancelAll();
-  }
-
-  /**
-   * Key the tiles every consumer would request, so unchanged coverage skips candidate
-   * enumeration while sub-tile pans and duplicate notifications cost a few tile indices.
-   */
-  private coverageSignature(
-    current: ContourPrefetchPlan,
-    zooms: ConsumerZooms,
-    destination: Destination,
-  ): string | null {
-    const ranges: string[] = [];
-    for (const zoom of new Set([zooms.contour, ...zooms.relief, zooms.basemap])) {
-      if (zoom < 0) continue;
-      const bounds = destinationBounds(this.map, destination, zoom);
-      if (!bounds) return null;
-      ranges.push(tileRangeKey(bounds, zoom));
-    }
-    const levels = levelsForZoom(current.ladder.thresholds, zooms.contour);
-
-    return [
-      this.generation,
-      current.sourceId,
-      current.elevationUnit,
-      current.bbox.join(","),
-      levels.join(","),
-      this.basemap?.template ?? "",
-      ...ranges,
-    ].join("|");
-  }
-
-  private replan(
-    current: ContourPrefetchPlan,
-    zooms: ConsumerZooms,
-    destination: Destination,
-    signature: string,
-  ): void {
-    const wanted = wantedTiles(this.map, current, this.basemap ?? null, zooms, destination);
-    this.lastSignature = signature;
-    this.startedForPrediction = 0;
-    this.planCount += 1;
-    this.demQueue = wanted.dem;
-    this.traceQueue = wanted.contour;
-    this.basemapQueue = wanted.basemap;
-    this.cancelObsolete(wanted);
-  }
-
-  private cancelObsolete(wanted: WantedTiles): void {
-    const keys = new Set([
-      ...wanted.dem.map((tile) => tileUrl(this.demTemplate, tile)),
-      ...wanted.contour.map((candidate) => candidate.key),
-      ...wanted.basemap,
-    ]);
-    for (const job of [...this.active.values()]) {
-      if (!keys.has(job.key)) this.cancelJob(job, false);
-    }
-  }
-
-  private destination(): Destination | null {
-    const zoom = this.map.getZoom();
-    const center = this.map.getCenter();
-    if (!Number.isFinite(zoom) || !Number.isFinite(center.lng) || !Number.isFinite(center.lat)) {
-      return null;
-    }
-    const zoomVelocity = Math.abs(this.zoomVelocityPerSec) < MIN_ZOOM_VELOCITY_PER_SEC
-      ? 0
-      : this.zoomVelocityPerSec;
-    const panning = Math.hypot(this.lngVelocityPerSec, this.latVelocityPerSec)
-      >= MIN_PAN_DEG_PER_SEC;
-    const lngVelocity = panning ? this.lngVelocityPerSec : 0;
-    const latVelocity = panning ? this.latVelocityPerSec : 0;
-    const raw = zoom + zoomVelocity * PREDICTION_HORIZON_SECS;
-
-    return {
-      raw: Math.min(MAX_RAW_ZOOM, Math.max(0, raw)),
-      ...predictDestinationCenter(
-        center.lng,
-        center.lat,
-        lngVelocity,
-        latVelocity,
-        PREDICTION_HORIZON_SECS,
-      ),
-    };
-  }
-
-  private trackVelocity(nowMs: number): void {
-    const zoom = this.map.getZoom();
-    const { lng, lat } = this.map.getCenter();
-    const first = this.lastZoom === null;
-    const unchanged = zoom === this.lastZoom && lng === this.lastLng && lat === this.lastLat;
-    const elapsedMs = Math.max(1, nowMs - this.lastTimeMs);
-    const zoomDelta = zoom - (this.lastZoom ?? zoom);
-    const lngDelta = longitudeDelta(this.lastLng, lng);
-    const latDelta = lat - this.lastLat;
-    this.lastTimeMs = nowMs;
-    // The duplicate of a move-plus-zoom pair carries no new state, so velocity survives it.
-    if (first || unchanged) {
-      this.lastZoom = zoom;
-      this.lastLng = lng;
-      this.lastLat = lat;
-      return;
-    }
-    if (this.reversed(zoomDelta, lngDelta, latDelta)) this.cancelAll();
-    this.zoomVelocityPerSec = zoomDelta / elapsedMs * 1000;
-    this.lngVelocityPerSec = lngDelta / elapsedMs * 1000;
-    this.latVelocityPerSec = latDelta / elapsedMs * 1000;
-    this.lastZoom = zoom;
-    this.lastLng = lng;
-    this.lastLat = lat;
-  }
-
-  /** Whether the camera turned back, so the old destination prediction is stale. */
-  private reversed(zoomDelta: number, lngDelta: number, latDelta: number): boolean {
-    if (zoomDelta !== 0) {
-      return this.zoomVelocityPerSec !== 0
-        && Math.sign(zoomDelta) !== Math.sign(this.zoomVelocityPerSec);
-    }
-    return this.lngVelocityPerSec * lngDelta + this.latVelocityPerSec * latDelta < 0;
-  }
-
-  private resetVelocity(): void {
-    this.lastZoom = null;
-    this.zoomVelocityPerSec = 0;
-    this.lngVelocityPerSec = 0;
-    this.latVelocityPerSec = 0;
-  }
-
-  /** Credit visible demand, which promotes the matching job so it survives re-plans. */
-  private onVisibleLoading(event: object): void {
-    const { sourceId, tile } = event as {
-      sourceId?: unknown;
-      tile?: { tileID?: { canonical?: WarmTile } };
-    };
-    const current = this.plan();
-    if (!current || typeof sourceId !== "string") return;
-    if (!visibleIds(current, this.wiring).includes(sourceId)) return;
-    const canonical = tile?.tileID?.canonical;
-    if (canonical) this.noteVisibleDemand(current, sourceId, canonical);
-  }
-
-  /**
-   * Count the first visible use of a tile that speculation prepared. A job still in flight
-   * is marked reused so it can no longer be cancelled, while the manager's reference counts
-   * keep the visible request independent of it.
-   */
-  private noteVisibleDemand(current: ContourPrefetchPlan, sourceId: string, tile: WarmTile): void {
-    if (!current.enabled) return;
-    const target = this.visibleTarget(current, sourceId, tile);
-    if (!target) return;
-    const job = this.active.get(target.key);
-    if (job) {
-      if (job.reused) return;
-      job.reused = true;
-      this.telemetry.hit(LAYER_FOR_KIND[job.kind]);
-      return;
-    }
-    const entry = this.warmed.get(target.key);
-    if (entry) {
-      this.consume(target.key, entry.bytes);
-      this.telemetry.hit(LAYER_FOR_KIND[entry.kind]);
-      return;
-    }
-    if (!this.consumed.has(target.key)) this.telemetry.miss(LAYER_FOR_KIND[target.kind]);
-  }
-
-  private visibleTarget(
-    current: ContourPrefetchPlan,
-    sourceId: string,
-    tile: WarmTile,
-  ): { kind: JobKind; key: string } | null {
-    if (sourceId === this.wiring.reliefSourceId) {
-      return { kind: "dem", key: tileUrl(this.demTemplate, tile) };
-    }
-    if (sourceId === current.sourceId) {
-      const candidate = contourCandidate(current, tile);
-      return candidate ? { kind: "trace", key: candidate.key } : null;
-    }
-    if (sourceId === this.wiring.basemapSourceId && this.basemap) {
-      return { kind: "basemap", key: tileUrl(this.basemap.template, tile) };
-    }
-    return null;
-  }
-
-  /** Hand a warmed tile to visible ownership, so it leaves the speculative ledger. */
-  private consume(key: string, bytes: number): void {
-    this.warmed.delete(key);
-    this.addBytes(-bytes);
-    this.consumed.add(key);
-  }
-
-  /**
-   * Abort in-flight jobs for a stale prediction. Promoted jobs survive a re-plan because
-   * the manager keeps the visible request alive, while a forced release drops the
-   * scheduler's own reference for the same reason.
-   */
-  private abortInflight(force = false): void {
-    for (const job of [...this.active.values()]) this.cancelJob(job, force);
-  }
-
-  private cancelJob(job: Job, force = false): void {
-    if (job.cancelled || (job.reused && !force)) return;
-    job.cancelled = true;
-    this.active.delete(job.key);
-    job.abort.abort();
-    if (!job.reused) this.telemetry.wasted(LAYER_FOR_KIND[job.kind]);
-  }
-
-  /** Start queued candidates while lanes and budget allow, even while visible tiles load. */
-  private pump(current: ContourPrefetchPlan | null = this.plan()): void {
-    if (this.destroyed || !current?.enabled) return;
-    this.demQueue = this.drain(this.demQueue, (tile) => this.tryStartDem(tile));
-    this.traceQueue = this.drain(this.traceQueue, (candidate) => this.tryStartTrace(candidate));
-    this.basemapQueue = this.drain(this.basemapQueue, (url) => this.tryStartBasemap(url));
-  }
-
-  /** Run the queue in order, keeping blocked items and stopping at the first full lane. */
-  private drain<T>(queue: T[], tryStart: (item: T) => "started" | "drop" | "wait" | "stop"): T[] {
-    const kept: T[] = [];
-    for (const [index, item] of queue.entries()) {
-      const outcome = tryStart(item);
-      if (outcome === "wait") kept.push(item);
-      if (outcome === "stop") return [...kept, ...queue.slice(index)];
-    }
-    return kept;
-  }
-
-  private tryStartDem(tile: WarmTile): "started" | "drop" | "stop" {
-    const fetch = this.demFetcher?.fetchTile;
-    if (!fetch) return "drop";
-    const url = tileUrl(this.demTemplate, tile);
-    if (this.isPrepared(url)) return "drop";
-    if (this.demLanes + 1 > PREFETCH_NETWORK_LANES) return "stop";
-    if (!this.networkAvailable() || !this.admit(DEM_TILE_EST_BYTES)) return "stop";
-    this.startJob("dem", url, DEM_TILE_EST_BYTES, 1, (abort) => {
-      return fetch.call(this.demFetcher, tile.z, tile.x, tile.y, abort);
+  /** Wait for the next progress report or expiry instead of polling on a timer. */
+  private waitForWake(signal?: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new DOMException("Aborted", "AbortError"));
+        return;
+      }
+      const onAbort = () => {
+        this.wakeListeners.delete(onWake);
+        reject(new DOMException("Aborted", "AbortError"));
+      };
+      const onWake = () => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      };
+      this.wakeListeners.add(onWake);
+      signal?.addEventListener("abort", onAbort, { once: true });
     });
-    return "started";
   }
 
-  private tryStartTrace(candidate: ContourCandidate): "started" | "drop" | "wait" | "stop" {
-    const fetch = this.demFetcher?.fetchContourTile;
-    if (!fetch) return "drop";
-    if (this.isPrepared(candidate.key)) return "drop";
-    if (this.traceLanes >= PREFETCH_TRACE_LANES) return "stop";
-    const parents = this.parentState(candidate);
-    if (parents !== "ready") return parents;
-    // Charge the worst case so eviction cannot push a prediction past its bound.
-    const allowanceCost = candidate.parents.length + TRACE_WORKER_RESERVE_REQUESTS;
-    if (this.startedForPrediction + allowanceCost > PREFETCH_MAX_HTTP_PER_PREDICTION) {
-      return "stop";
+  // The flight keeps the map rendering, so the first idle after it starts is the landing.
+  private waitForLanding(): void {
+    const landed = () => {
+      this.isLanded = true;
+      this.map.off("idle", landed);
+    };
+    this.map.on("idle", landed);
+    this.stopWaitingForLanding = () => this.map.off("idle", landed);
+  }
+
+  private plan(state: SourceState): void {
+    const tasks = state.source.tasks(this.fittedZoom!);
+    if (state.source.revisionKey) this.revisions.set(state.source.id, state.source.revisionKey());
+    const owned = new Set<string>();
+    for (const task of tasks) {
+      if (!this.planned.has(task.key)) this.keyEpochs.set(task.key, (this.epochCounter += 1));
+      owned.add(task.key);
+      this.planned.add(task.key);
     }
-    if (this.demLanes + TRACE_DEM_RESERVE_LANES > PREFETCH_NETWORK_LANES) return "stop";
-    if (!this.networkAvailable()) return "stop";
-    const fresh = candidate.parents.map((parent) => tileUrl(this.demTemplate, parent))
-      .filter((url) => !this.decoded.has(url));
-    // Tracing decodes the parents inside the worker, where the manager keeps them for good.
-    const decodedBytes = this.decodedBytes(fresh);
-    if (!this.admit(CONTOUR_TILE_EST_BYTES + decodedBytes)) return "stop";
-    for (const url of fresh) this.decoded.add(url);
-    this.addBytes(decodedBytes);
-    this.startJob(
-      "trace",
-      candidate.key,
-      CONTOUR_TILE_EST_BYTES,
-      allowanceCost,
-      async (abort) => {
-        await this.revalidateParents(candidate, abort);
-        const { z, x, y } = candidate.tile;
-        return fetch.call(this.demFetcher, z, x, y, candidate.options, abort);
-      },
-    );
-    return "started";
+    this.ownership.set(state.source.id, owned);
+    state.queue = tasks.filter((task) => !this.isPrepared(task.key));
+    state.total = tasks.length;
+    state.done = tasks.length - state.queue.length;
+    this.rewriteStoredRequests();
+    this.report();
   }
 
-  private decodedBytes(urls: readonly string[]): number {
-    return urls.length * DECODED_DEM_BYTES;
+  /** Start queued tasks while lanes and budget allow, source by source in registration order. */
+  private pump(): void {
+    if (this.destroyed || this.fittedZoom === null) return;
+    for (const state of this.sources.values()) this.fill(state);
   }
 
-  /**
-   * Touch each parent through the public manager path one at a time, so a parent its cache
-   * evicted is refetched under this job's network lane instead of unseen inside the worker.
-   */
-  private async revalidateParents(
-    candidate: ContourCandidate,
-    abort: AbortController,
-  ): Promise<void> {
-    const fetch = this.demFetcher?.fetchTile;
-    if (!fetch) return;
-    for (const { z, x, y } of candidate.parents) {
-      await fetch.call(this.demFetcher, z, x, y, abort);
+  private fill(state: SourceState): void {
+    if (this.visibleDemands > 0) {
+      this.report();
+      return;
     }
+    if (this.isWaiting(state)) return;
+    while (this.freeLanes(state.source) > 0 && state.queue.length > 0) {
+      const task = state.queue[0];
+      if (this.isPrepared(task.key)) {
+        state.queue.shift();
+        state.done += 1;
+        continue;
+      }
+      if (task.needs !== undefined && !task.needs.every((need) => this.isPrepared(need))) {
+        state.queue.shift();
+        state.total -= 1;
+        continue;
+      }
+      if (!this.admit(task.estimatedBytes)) {
+        // The budget is spent, so the rest of this source's plan is dropped.
+        state.total -= state.queue.length;
+        state.queue = [];
+        break;
+      }
+      state.queue.shift();
+      this.launch(state, task);
+    }
+    this.report();
   }
 
-  private tryStartBasemap(url: string): "started" | "drop" | "stop" {
-    if (this.isPrepared(url)) return "drop";
-    if (!this.networkAvailable() || !this.admit(BASEMAP_TILE_EST_BYTES)) return "stop";
-    this.startJob("basemap", url, BASEMAP_TILE_EST_BYTES, 1, (abort) => {
-      return this.httpWarmer(url, abort.signal);
-    });
-    return "started";
+  private freeLanes(source: PreloadSource): number {
+    return source.lanes - (this.occupied.get(source.id) ?? 0);
   }
 
-  private isPrepared(key: string): boolean {
-    return this.active.has(key) || this.warmed.has(key) || this.consumed.has(key)
-      || this.missing.has(key);
+  private occupy(id: string, delta: number): void {
+    this.occupied.set(id, Math.max(0, (this.occupied.get(id) ?? 0) + delta));
   }
 
-  private networkAvailable(): boolean {
-    return this.networkLanes < PREFETCH_NETWORK_LANES
-      && this.startedForPrediction < PREFETCH_MAX_HTTP_PER_PREDICTION;
+  private isWaiting(state: SourceState): boolean {
+    const gate = this.sources.get(state.source.after ?? "");
+    return gate !== undefined
+      && (gate.queue.length > 0 || (this.occupied.get(gate.source.id) ?? 0) > 0);
   }
 
-  /** A trace with a known-missing parent is dropped, while one with an unseen parent waits. */
-  private parentState(candidate: ContourCandidate): ParentState {
-    if (!this.demFetcher?.fetchTile) return "ready";
-    const urls = candidate.parents.map((parent) => tileUrl(this.demTemplate, parent));
-    if (urls.some((url) => this.missing.has(url))) return "drop";
-    const seen = urls.every((url) => this.warmed.has(url) || this.consumed.has(url));
-    return seen ? "ready" : "wait";
-  }
-
-  /** Report whether a reservation fits, forgetting old basemap entries the manager never kept. */
   private admit(bytes: number): boolean {
-    while (this.speculativeBytes + bytes > this.budgetBytes) {
-      if (!this.forgetOldestBasemap()) return false;
-    }
-    return true;
+    return this.store.bytes + this.reservedBytes + bytes <= this.budgetBytes;
   }
 
-  private forgetOldestBasemap(): boolean {
-    for (const [key, entry] of this.warmed) {
-      if (entry.kind !== "basemap") continue;
-      this.warmed.delete(key);
-      this.addBytes(-entry.bytes);
-      this.telemetry.wasted(LAYER_FOR_KIND[entry.kind]);
-      return true;
-    }
-    return false;
-  }
-
-  private startJob(
-    kind: JobKind,
-    key: string,
-    reservedBytes: number,
-    allowanceCost: number,
-    launch: (abort: AbortController) => Promise<unknown>,
-  ): void {
+  private launch(state: SourceState, task: PreloadTask): void {
+    const abort = new AbortController();
+    const flight = this.store.share(task.key, () => runPreloadTask(task, abort));
     const job: Job = {
-      kind,
-      key,
-      abort: new AbortController(),
-      generation: this.generation,
-      reservedBytes,
+      key: task.key,
+      state,
+      abort,
+      download: flight,
+      reservedBytes: task.estimatedBytes,
       cancelled: false,
       settled: false,
-      reused: false,
     };
-    this.addBytes(reservedBytes);
-    this.active.set(key, job);
-    // A trace holds every speculation DEM lane because its worker can miss all parents at once.
-    if (kind === "trace") this.traceLanes += 1;
-    if (kind === "dem") this.demLanes += 1;
-    if (kind === "trace") this.demLanes += TRACE_DEM_RESERVE_LANES;
-    this.networkLanes += 1;
-    this.startedForPrediction += allowanceCost;
-    new Promise<unknown>((resolve) => resolve(launch(job.abort))).then(
-      (data) => this.settle(job, data, null),
-      (error: unknown) => this.settle(job, undefined, error),
+    this.reservedBytes += job.reservedBytes;
+    this.store.reserve(job.reservedBytes);
+    this.occupy(state.source.id, 1);
+    this.active.set(job.key, job);
+    // The hold rejection is observed here because settlement already listens on the flight.
+    this.store.hold(job.key, flight, () => this.isJobLive(job), job.reservedBytes).then(
+      () => undefined,
+      () => undefined,
+    );
+    flight.then(
+      () => this.settle(job, null),
+      (error: unknown) => this.settle(job, { error }),
     );
   }
 
   /**
    * Settle one job exactly once, whatever its state. Only a current, uncancelled job may
-   * record a result, so a stale completion can never remove or mark its replacement.
+   * record a result, so a stale completion can never mark a replacement plan's tile.
    */
-  private settle(job: Job, data: unknown, error: unknown): void {
+  private settle(job: Job, failure: { error: unknown } | null): void {
     if (job.settled) return;
     job.settled = true;
-    this.addBytes(-job.reservedBytes);
-    if (job.kind === "trace") this.traceLanes -= 1;
-    if (job.kind === "dem") this.demLanes -= 1;
-    if (job.kind === "trace") this.demLanes -= TRACE_DEM_RESERVE_LANES;
-    this.networkLanes -= 1;
+    this.reservedBytes -= job.reservedBytes;
+    this.store.release(job.reservedBytes);
+    this.occupy(job.state.source.id, -1);
     if (this.active.get(job.key) === job) this.active.delete(job.key);
     if (this.destroyed) return;
-    if (!job.cancelled && job.generation === this.generation) {
-      if (error !== null) this.rememberFailure(job, error);
-      else this.rememberResult(job, data);
+    if (!job.cancelled && this.sources.get(job.state.source.id) === job.state) {
+      job.state.done += 1;
+      this.record(job.key, failure);
     }
+    this.report();
     this.pump();
   }
 
-  private rememberFailure(job: Job, error: unknown): void {
-    if (isMissingResponse(error)) this.missing.add(job.key);
+  private record(key: string, failure: { error: unknown } | null): void {
+    if (failure === null) this.ready.add(key);
+    else if (isMissingResponse(failure.error)) this.missing.add(key);
   }
 
-  private rememberResult(job: Job, data: unknown): void {
-    if (job.reused) {
-      this.consumed.add(job.key);
-      return;
+  private cancelJob(job: Job): void {
+    if (job.cancelled) return;
+    job.cancelled = true;
+    if (this.active.get(job.key) === job) this.active.delete(job.key);
+    this.store.dropFlight(job.key, job.download);
+    this.store.dropPending(job.key, job.download);
+    job.abort.abort();
+  }
+
+  /** Abort one running job and count it as settled so the entry budget ends promptly. */
+  private expireJob(job: Job): void {
+    if (job.settled) return;
+    job.settled = true;
+    job.cancelled = true;
+    if (this.active.get(job.key) === job) this.active.delete(job.key);
+    this.reservedBytes -= job.reservedBytes;
+    this.store.release(job.reservedBytes);
+    this.occupy(job.state.source.id, -1);
+    this.store.dropFlight(job.key, job.download);
+    this.store.dropPending(job.key, job.download);
+    job.abort.abort();
+    if (this.sources.get(job.state.source.id) === job.state) job.state.done += 1;
+  }
+
+  /** Whether a job still owns its key, so late completions cannot retain stale bodies. */
+  private isJobLive(job: Job): boolean {
+    return !job.cancelled
+      && !this.destroyed
+      && this.active.get(job.key) === job
+      && this.sources.get(job.state.source.id) === job.state;
+  }
+
+  /** Move a visibly demanded task to the front of its queue, ahead of background order. */
+  prioritizeVisible(key: string): void {
+    if (this.destroyed || this.fittedZoom === null) return;
+    for (const state of this.sources.values()) {
+      const index = state.queue.findIndex((task) => task.key === key);
+      if (index > 0) {
+        const [task] = state.queue.splice(index, 1);
+        state.queue.unshift(task);
+        this.pump();
+      }
     }
-    const bytes = Math.max(1, measuredBytes(data, job.reservedBytes));
-    this.warmed.delete(job.key);
-    this.warmed.set(job.key, { kind: job.kind, bytes });
-    this.addBytes(bytes);
   }
 
-  private addBytes(delta: number): void {
-    this.speculativeBytes = Math.max(0, this.speculativeBytes + delta);
-    this.peakSpeculativeBytes = Math.max(this.peakSpeculativeBytes, this.speculativeBytes);
+  /** Whether this URL still belongs to a planned generation, so visible holds stay owned. */
+  hasPlanned(key: string): boolean {
+    return this.planned.has(key);
   }
+
+  /** The current generation of a planned key, or null while unplanned. */
+  epochFor(key: string): number | null {
+    if (!this.planned.has(key)) return null;
+    return this.keyEpochs.get(key) ?? null;
+  }
+
+  /** Whether a captured generation still owns its key, so stale holds never retain. */
+  isLiveEpoch(key: string, epoch: number): boolean {
+    return this.planned.has(key) && this.keyEpochs.get(key) === epoch;
+  }
+
+  /** Pause background launches while a visible download needs the network. */
+  beginVisibleDemand(): void {
+    this.visibleDemands += 1;
+  }
+
+  /** Resume background launches after a visible download settles. */
+  endVisibleDemand(): void {
+    this.visibleDemands = Math.max(0, this.visibleDemands - 1);
+    this.pump();
+  }
+
+  /** A manager-backed loader for this key when a participating source shares one. */
+  findSharedLoader(key: string): (() => Promise<Blob | undefined>) | undefined {
+    for (const { source } of this.sources.values()) {
+      const loader = source.loadShared?.(key);
+      if (loader !== undefined) return loader;
+    }
+    return undefined;
+  }
+
+  /** Replan sources whose style-owned identity changed, waking ones that resolved late. */
+  private resyncPlans(): void {
+    if (this.destroyed) return;
+    for (const state of [...this.sources.values()]) {
+      const fingerprint = state.source.revisionKey?.();
+      if (fingerprint === undefined) continue;
+      if (this.revisions.get(state.source.id) === fingerprint) continue;
+      if (this.fittedZoom === null) {
+        this.revisions.set(state.source.id, fingerprint);
+        continue;
+      }
+      this.resetSource(state);
+    }
+  }
+
+  /** Replan a source whose style identity changed, freeing the old generation first. */
+  private resetSource(state: SourceState): void {
+    for (const job of [...this.active.values()]) {
+      if (job.state === state) this.cancelJob(job);
+    }
+    this.forgetOwned(state.source.id);
+    this.plan(state);
+    this.pump();
+  }
+
+  /** Drop one source's planned keys and bodies that no other source still lists. */
+  private forgetOwned(id: string): void {
+    for (const key of this.ownership.get(id) ?? []) {
+      if (!this.isOwnedElsewhere(key, id)) this.forgetKey(key);
+    }
+    this.ownership.delete(id);
+    this.revisions.delete(id);
+  }
+
+  private isOwnedElsewhere(key: string, except: string): boolean {
+    for (const [id, owned] of this.ownership) {
+      if (id !== except && owned.has(key)) return true;
+    }
+    return false;
+  }
+
+  private forgetKey(key: string): void {
+    this.store.delete(key);
+    this.ready.delete(key);
+    this.planned.delete(key);
+  }
+
+  /** Route participating tile requests through the store protocol, from the first plan on. */
+  private rewriteStoredRequests(): void {
+    if (this.isRewriting) return;
+    this.isRewriting = true;
+    this.map.setTransformRequest((url: string, type?: string): RequestParameters | undefined => {
+      return type === "Tile" && this.planned.has(url)
+        ? { url: `${STORE_PROTOCOL}://${url}` }
+        : undefined;
+    });
+  }
+
+  /** Credit the first visible load of a tile, which preload either prepared or missed. */
+  private countVisibleLoad(event: object): void {
+    const { sourceId, tile } = event as {
+      sourceId?: unknown;
+      tile?: { tileID?: { canonical?: WarmTile } };
+    };
+    const canonical = tile?.tileID?.canonical;
+    if (!this.isLanded || typeof sourceId !== "string" || !canonical) return;
+    for (const { source } of this.sources.values()) {
+      const key = source.visibleKey(sourceId, canonical);
+      if (key !== null) this.countDemand(source.layer, key);
+    }
+  }
+
+  private countDemand(layer: TileLayerKey, key: string): void {
+    if (this.counted.has(key) || this.missing.has(key)) return;
+    this.counted.add(key);
+    if (this.ready.has(key) || this.active.has(key)) this.telemetry.hit(layer);
+    else this.telemetry.miss(layer);
+  }
+
+  private isPrepared(key: string): boolean {
+    return this.active.has(key)
+      || this.ready.has(key)
+      || this.missing.has(key)
+      || this.store.absentError(key) !== undefined
+      || this.store.has(key);
+  }
+
+  private report(): void {
+    const { done, total, bytes } = this.progress();
+    this.telemetry.progress(done, total, bytes);
+    this.wake();
+  }
+
+  /** Resolve the current settled waiters so a new plan or expiry is noticed at once. */
+  private wake(): void {
+    if (this.wakeListeners.size === 0) return;
+    const listeners = [...this.wakeListeners];
+    this.wakeListeners.clear();
+    for (const listener of listeners) listener();
+  }
+}
+
+let current: ScenePreload | null = null;
+let activePreload: ScenePreload | null = null;
+
+/** Start the preload for a scene that is opening, closing the previous one. */
+export function openScenePreload(map: PreloadMap): ScenePreload {
+  closeScenePreload();
+  current = new ScenePreload(map);
+  return current;
+}
+
+/** The preload of the open scene, which its layers register their sources with. */
+export function currentScenePreload(): ScenePreload | null {
+  return current;
+}
+
+/** Abort the open scene's preload and free what it holds. */
+export function closeScenePreload(): void {
+  current?.destroy();
+  current = null;
+}
+
+let activeStore: TileStore | null = null;
+let isProtocolAdded = false;
+
+function ensureStoreProtocol(): void {
+  if (isProtocolAdded) return;
+  isProtocolAdded = true;
+  addProtocol(STORE_PROTOCOL, serveStoredTile);
 }
 
 /**
- * Pick each consumer's request zoom the way MapLibre does. Vector sources floor the zoom,
- * while raster-dem rounds it, so relief covers both neighbours and every consumer is clamped
- * to its own ceiling rather than filtered away above it.
+ * Suspend background launches while visible protocol work needs the network. Protocol
+ * handlers call the remote manager directly and never enter the store broker, so they
+ * bracket here instead while preload tracing calls the manager directly and never counts.
  */
-function consumerZooms(
-  current: ContourPrefetchPlan,
-  basemap: BasemapDescriptor | null,
-  raw: number,
-): ConsumerZooms {
-  const vector = Math.floor(raw);
-  const relief = [Math.floor(raw), Math.round(raw)]
-    .map((zoom) => Math.min(zoom, current.reliefMaxzoom));
-
-  return {
-    contour: Math.min(vector, current.maxzoom),
-    relief: [...new Set(relief)],
-    basemap: basemap ? Math.min(vector, basemap.maxzoom) : -1,
-  };
-}
-
-/**
- * Build per-consumer destination candidates from the predicted viewport, filtered to the
- * scene. Relief warms its own zooms, contours warm their DEM parents first and then trace,
- * and the basemap warms its resolved template up to its own ceiling.
- */
-function wantedTiles(
-  map: TilePrefetchMap,
-  current: ContourPrefetchPlan,
-  basemap: BasemapDescriptor | null,
-  zooms: ConsumerZooms,
-  destination: Destination,
-): WantedTiles {
-  const tilesAt = (zoom: number) => {
-    const bounds = destinationBounds(map, destination, zoom);
-    return bounds ? viewportTilesAt(bounds, zoom, current.bbox) : [];
-  };
-  const contourTiles = tilesAt(zooms.contour);
-  const contour = contourTiles.flatMap((tile) => contourCandidate(current, tile) ?? []);
-  const parents = demParentsForTiles(contour.map((candidate) => candidate.tile), CONTOUR_OVERZOOM);
-  const relief = interleaveAll(zooms.relief.map(tilesAt)).slice(0, PREFETCH_MAX_PER_SOURCE);
-  const basemapTiles = basemap && zooms.basemap >= 0
-    ? tilesAt(zooms.basemap).slice(0, PREFETCH_MAX_PER_SOURCE)
-    : [];
-
-  return {
-    contour,
-    dem: dedupeTiles([...parents, ...relief]),
-    basemap: basemapTiles.map((tile) => tileUrl(basemap!.template, tile)),
-  };
-}
-
-/** The trace a contour tile needs, or null when no level shows at its zoom. */
-function contourCandidate(current: ContourPrefetchPlan, tile: WarmTile): ContourCandidate | null {
-  const levels = levelsForZoom(current.ladder.thresholds, tile.z);
-  if (levels.length === 0) return null;
-  const options = contourRequestOptions(levels, current.elevationUnit);
-  const version = contourOptionsVersion(current.elevationUnit, CONTOUR_OVERZOOM, CONTOUR_BUFFER_PX);
-
-  return {
-    key: contourCacheKey(tile, options, version),
-    tile,
-    options,
-    parents: demParentsForTile(tile, CONTOUR_OVERZOOM),
-  };
-}
-
-/** Viewport tiles at one zoom for one bounds, filtered to the scene. */
-function viewportTilesAt(
-  bounds: { west: number; south: number; east: number; north: number },
-  zoom: number,
-  bbox: Bbox,
-): WarmTile[] {
-  return warmTilesForZoom(
-    bounds.west,
-    bounds.south,
-    bounds.east,
-    bounds.north,
-    zoom,
-    PREFETCH_MAX_PER_SOURCE,
-  ).filter((tile) => tileInScene(tile, bbox));
-}
-
-/** Dedupe tiles by coordinates while keeping the first consumer's order. */
-function dedupeTiles(tiles: readonly WarmTile[]): WarmTile[] {
-  const seen = new Map<string, WarmTile>();
-  for (const tile of tiles) {
-    const key = tileKey(tile);
-    if (!seen.has(key)) seen.set(key, tile);
+export async function withVisibleDemand<T>(work: () => Promise<T>): Promise<T> {
+  // The open scene can change while the work runs, so the release must target this owner.
+  const owner = activePreload;
+  owner?.beginVisibleDemand();
+  try {
+    return await work();
+  } finally {
+    owner?.endVisibleDemand();
   }
-  return [...seen.values()];
 }
 
-/** Alternate several candidate lists so no zoom starves the others. */
-function interleaveAll(lists: readonly (readonly WarmTile[])[]): WarmTile[] {
-  const interleaved: WarmTile[] = [];
-  const longest = Math.max(0, ...lists.map((list) => list.length));
-  for (let index = 0; index < longest; index += 1) {
-    for (const list of lists) {
-      if (index < list.length) interleaved.push(list[index]);
+/** Answer a rewritten tile request from the store, falling back to the network if it vanished. */
+export async function serveStoredTile(
+  parameters: { url: string },
+  abort: AbortController,
+): Promise<{ data: ArrayBuffer }> {
+  const url = parameters.url.slice(`${STORE_PROTOCOL}://`.length);
+  const store = activeStore;
+  const owner = activePreload;
+  throwIfCallerAborted(abort.signal);
+  const entry = store?.read(url);
+  if (entry instanceof Blob) {
+    throwIfCallerAborted(abort.signal);
+    return { data: await joinCallerAbort(entry.arrayBuffer(), abort.signal) };
+  }
+  if (entry === undefined) {
+    const absent = store?.absentError(url);
+    if (absent) throw absent;
+  }
+  throwIfCallerAborted(abort.signal);
+  if (!store) return { data: await fetchArrayBuffer(url, abort.signal) };
+  owner?.prioritizeVisible(url);
+  const epoch = owner?.epochFor(url) ?? null;
+  const isVisibleLive = () => {
+    if (activePreload !== owner || owner === null) return false;
+    if (epoch === null) return true;
+    return owner.isLiveEpoch(url, epoch);
+  };
+  const shared = owner?.findSharedLoader(url);
+  const loader = shared ?? (() => downloadVisibleBlob(url));
+  // One demand covers the join and the fresh flight that follows, so nothing launches between them.
+  owner?.beginVisibleDemand();
+  try {
+    if (entry !== undefined) {
+      try {
+        const blob = await joinCallerAbort(entry, abort.signal);
+        throwIfCallerAborted(abort.signal);
+        if (blob) return { data: await joinCallerAbort(blob.arrayBuffer(), abort.signal) };
+      } catch (error: unknown) {
+        if (abort.signal.aborted) throw error;
+        if (isMissingResponse(error)) throw error;
+      }
     }
+    const flight = store.share(url, loader);
+    void store.hold(url, flight, isVisibleLive).then(
+      () => undefined,
+      () => undefined,
+    );
+    let blob: Blob | undefined;
+    try {
+      blob = await joinCallerAbort(flight, abort.signal);
+    } catch (error: unknown) {
+      if (abort.signal.aborted) throw error;
+      if (isMissingResponse(error)) throw error;
+      throwIfCallerAborted(abort.signal);
+      const retry = store.share(url, loader);
+      void store.hold(url, retry, isVisibleLive).then(
+        () => undefined,
+        () => undefined,
+      );
+      const retryBlob = await joinCallerAbort(retry, abort.signal);
+      throwIfCallerAborted(abort.signal);
+      if (!retryBlob) return { data: await fetchArrayBuffer(url, abort.signal) };
+      return { data: await joinCallerAbort(retryBlob.arrayBuffer(), abort.signal) };
+    }
+    throwIfCallerAborted(abort.signal);
+    if (!blob) return { data: await fetchArrayBuffer(url, abort.signal) };
+    return { data: await joinCallerAbort(blob.arrayBuffer(), abort.signal) };
+  } finally {
+    owner?.endVisibleDemand();
   }
-  return interleaved;
 }
 
-/** The destination viewport from the predicted centre, halved per level. */
-function destinationBounds(
-  map: TilePrefetchMap,
-  destination: Destination,
-  zoom: number,
-): { west: number; south: number; east: number; north: number } | null {
-  const canvas = map.getCanvas();
-  if (!canvas?.clientWidth || !canvas.clientHeight) return null;
-  const bounds = map.getBounds();
-  const current = {
-    west: bounds.getWest(),
-    south: bounds.getSouth(),
-    east: bounds.getEast(),
-    north: bounds.getNorth(),
-  };
-
-  return viewportBoundsForCenter(current, destination.lng, destination.lat, map.getZoom(), zoom);
+/** Run a task so a synchronous throw still settles its job instead of escaping the pump. */
+function runPreloadTask(task: PreloadTask, abort: AbortController): Promise<Blob | undefined> {
+  return new Promise<Blob | undefined>((resolve) => resolve(task.run(abort)));
 }
 
-/** Visible source ids whose loads promote matching speculative jobs. */
-function visibleIds(current: ContourPrefetchPlan, wiring: TilePrefetchWiring): readonly string[] {
-  return [wiring.reliefSourceId, current.sourceId, wiring.basemapSourceId];
+/** Wait for a shared download while letting this reader cancel promptly without aborting it. */
+function joinCallerAbort<T>(task: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
+  return new Promise<T>((resolve, reject) => {
+    const cancel = () => reject(new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", cancel, { once: true });
+    task.then(
+      (value) => {
+        signal.removeEventListener("abort", cancel);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", cancel);
+        reject(error);
+      },
+    );
+  });
 }
 
-function sameBasemap(left: BasemapDescriptor | null, right: BasemapDescriptor | null): boolean {
-  return left?.template === right?.template && left?.maxzoom === right?.maxzoom;
+function throwIfCallerAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw new DOMException("Aborted", "AbortError");
 }
 
-/** Fill a tile template with slippy-map coordinates, keyed by URL rather than scene. */
-export function tileUrl(template: string, tile: WarmTile): string {
-  return template.replace("{z}", String(tile.z)).replace("{x}", String(tile.x))
-    .replace("{y}", String(tile.y));
+/** Fetch a visibly demanded tile at normal priority, keeping background downloads low. */
+async function downloadVisibleBlob(url: string): Promise<Blob> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Bad response: ${response.status} for ${url}`);
+  return response.blob();
 }
 
-/** The dedupe key for a contour trace, versioned by table and options rather than scene. */
-export function contourCacheKey(tile: WarmTile, options: unknown, version: string): string {
-  return `${version}:${tile.z}/${tile.x}/${tile.y}:${stableOptions(options)}`;
+/** Fetch a tile for one caller alone, so its abort never touches a shared download. */
+async function fetchArrayBuffer(url: string, signal: AbortSignal): Promise<ArrayBuffer> {
+  const response = await fetch(url, { signal });
+  if (!response.ok) throw new Error(`Bad response: ${response.status} for ${url}`);
+  return response.arrayBuffer();
 }
 
-/** The protocol options a warmed trace shares with the visible source cache entries. */
-function contourRequestOptions(levels: number[], elevationUnit: string): Record<string, unknown> {
-  const options: Record<string, unknown> = {
-    levels,
-    overzoom: CONTOUR_OVERZOOM,
-    buffer: CONTOUR_BUFFER_PX,
-  };
-  // The DEM holds metres, so feet contours scale elevations before tracing them.
-  if (elevationUnit === "ft") options.multiplier = convertValue(1, "m", "ft");
-  return options;
-}
-
-/** Stable JSON for option dedupe, with sorted keys so key order never splits the cache. */
-function stableOptions(options: unknown): string {
-  if (options === null || typeof options !== "object") return JSON.stringify(options);
-  const entries = Object.entries(options as Record<string, unknown>);
-  entries.sort(([first], [second]) => (first < second ? -1 : 1));
-
-  return `{${entries.map(([key, value]) => `${JSON.stringify(key)}:${stableOptions(value)}`)}}`;
-}
-
-/** Stable tile key for coverage comparisons. */
-export function tileKey(tile: WarmTile): string {
-  return `${tile.z}/${tile.x}/${tile.y}`;
-}
-
-/** Measured bytes from a completed body, falling back to the reservation estimate. */
-function measuredBytes(data: unknown, estimated: number): number {
-  if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) return data.byteLength;
-  const body = (data as { arrayBuffer?: unknown; data?: unknown } | null)?.arrayBuffer
-    ?? (data as { data?: unknown } | null)?.data;
-  if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) return body.byteLength;
-  if (typeof Blob !== "undefined" && body instanceof Blob) return body.size;
-  return estimated;
-}
-
-/** Whether an HTTP failure is a missing ocean tile that should not warm again. */
+/** Whether an HTTP failure is a missing ocean tile that should not download again. */
 function isMissingResponse(error: unknown): boolean {
   const message = (error as Error)?.message ?? "";
-
   return message.includes("Bad response: 404");
 }
 
 /** The dev-stats telemetry used outside tests. */
-function defaultTelemetry(): PrefetchTelemetry {
+function defaultTelemetry(): PreloadTelemetry {
   return {
-    hit: (source) => noteSpeculativeHit(source),
-    miss: (source) => noteSpeculativeMiss(source),
-    wasted: (source) => noteSpeculativeWasted(source),
+    begin: beginPreload,
+    progress: setPreloadProgress,
+    hit: notePreloadHit,
+    miss: notePreloadMiss,
   };
 }

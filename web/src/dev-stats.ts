@@ -19,7 +19,7 @@ const CONTOUR_SUFFIX = "-contours";
 
 /** The map surface the dev badge reads. Tile listeners stay optional for tests. */
 export type DevStatsMap = Pick<MapLibreMap, "getZoom">
-  & Partial<Pick<MapLibreMap, "on" | "off" | "isSourceLoaded" | "getStyle">>;
+  & Partial<Pick<MapLibreMap, "on" | "off" | "isSourceLoaded" | "getSource" | "getStyle">>;
 
 /** One per-step tile layer in the dev readout. */
 export type TileLayerKey = "terrain" | "basemap" | "contours";
@@ -296,60 +296,75 @@ export function layerForSource(sourceId: string | undefined): TileLayerKey | nul
   return null;
 }
 
-/** Speculative prefetch outcomes per source, so the gain is visible on any machine. */
-export interface SpeculativeCounts {
+/** Visible first loads that scene preload had ready or had missed, per source. */
+export interface PreloadCounts {
   hits: number;
   misses: number;
-  wasted: number;
 }
 
-/** Cumulative speculative outcomes, reset only by tests or a new page load. */
-export const speculativeStats: Record<TileLayerKey, SpeculativeCounts> = {
-  terrain: { hits: 0, misses: 0, wasted: 0 },
-  basemap: { hits: 0, misses: 0, wasted: 0 },
-  contours: { hits: 0, misses: 0, wasted: 0 },
+/** How much of the scene preload has finished, in tasks and downloaded bytes. */
+export interface PreloadProgress {
+  done: number;
+  total: number;
+  bytes: number;
+}
+
+/** The preload numbers the badge shows. */
+export interface PreloadSnapshot {
+  progress: PreloadProgress;
+  counts: Record<TileLayerKey, PreloadCounts>;
+}
+
+const preloadCounts: Record<TileLayerKey, PreloadCounts> = {
+  terrain: { hits: 0, misses: 0 },
+  basemap: { hits: 0, misses: 0 },
+  contours: { hits: 0, misses: 0 },
 };
+let preloadProgress: PreloadProgress = { done: 0, total: 0, bytes: 0 };
+let preloadDisabled = false;
 
-/** Count the first visible request that found a tile warm or already in flight. */
-export function noteSpeculativeHit(source: TileLayerKey): void {
-  speculativeStats[source].hits += 1;
-}
-
-/** Count a visible request that no speculation had prepared. */
-export function noteSpeculativeMiss(source: TileLayerKey): void {
-  speculativeStats[source].misses += 1;
-}
-
-/** Count speculative work cancelled, forgotten unused or left over at teardown. */
-export function noteSpeculativeWasted(source: TileLayerKey): void {
-  speculativeStats[source].wasted += 1;
-}
-
-/** Clear the speculative counters, used by tests between predictions. */
-export function resetSpeculativeStats(): void {
+/** Clear the preload numbers when a scene opens, so the badge shows this scene only. */
+export function beginPreload(): void {
   for (const key of ["terrain", "basemap", "contours"] as const) {
-    speculativeStats[key] = { hits: 0, misses: 0, wasted: 0 };
+    preloadCounts[key] = { hits: 0, misses: 0 };
   }
+  preloadProgress = { done: 0, total: 0, bytes: 0 };
 }
 
-let prefetchDisabled = false;
-
-/** Remember whether `?prefetch=0` disabled speculation, so the badge says so. */
-export function setPrefetchDisabled(disabled: boolean): void {
-  prefetchDisabled = disabled;
+/** Count the first visible load of a tile that preload had ready or still downloading. */
+export function notePreloadHit(source: TileLayerKey): void {
+  preloadCounts[source].hits += 1;
 }
 
-/** Whether speculation is disabled, so the badge shows off instead of counts. */
-export function isPrefetchDisabled(): boolean {
-  return prefetchDisabled;
+/** Count the first visible load of a tile that preload had not prepared. */
+export function notePreloadMiss(source: TileLayerKey): void {
+  preloadCounts[source].misses += 1;
 }
 
-/** Copy the speculative counters so the badge never mutates tracker state. */
-export function speculativeSnapshot(): Record<TileLayerKey, SpeculativeCounts> {
+/** Record how many preload tasks have finished out of those planned, and the bytes held. */
+export function setPreloadProgress(done: number, total: number, bytes: number): void {
+  preloadProgress = { done, total, bytes };
+}
+
+/** Remember whether `?preload=0` disabled preload, so the badge says so. */
+export function setPreloadDisabled(disabled: boolean): void {
+  preloadDisabled = disabled;
+}
+
+/** Whether preload is disabled, so the badge shows off instead of numbers. */
+export function isPreloadDisabled(): boolean {
+  return preloadDisabled;
+}
+
+/** Copy the preload numbers so the badge never mutates tracker state. */
+export function preloadSnapshot(): PreloadSnapshot {
   return {
-    terrain: { ...speculativeStats.terrain },
-    basemap: { ...speculativeStats.basemap },
-    contours: { ...speculativeStats.contours },
+    progress: { ...preloadProgress },
+    counts: {
+      terrain: { ...preloadCounts.terrain },
+      basemap: { ...preloadCounts.basemap },
+      contours: { ...preloadCounts.contours },
+    },
   };
 }
 
@@ -364,6 +379,8 @@ function eventLoaded(event: unknown): boolean {
 
 function sourceLoaded(map: DevStatsMap, sourceId: string | undefined): boolean {
   if (!sourceId || typeof map.isSourceLoaded !== "function") return false;
+  // A removed source counts as loaded because querying it would fire a Map error.
+  if (!sourceExists(map, sourceId)) return true;
   try {
     return map.isSourceLoaded(sourceId);
   } catch {
@@ -371,11 +388,29 @@ function sourceLoaded(map: DevStatsMap, sourceId: string | undefined): boolean {
   }
 }
 
+function sourceExists(map: DevStatsMap, sourceId: string): boolean {
+  // Doubles without the API keep the old lookup so existing tests stay honest.
+  if (typeof map.getSource !== "function") return true;
+  try {
+    return map.getSource(sourceId) !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+function retireRemovedSources(map: DevStatsMap, sourceIds: Set<string>): void {
+  // The style drops its manager before the removal event, so retired IDs must never block.
+  for (const sourceId of [...sourceIds]) {
+    if (!sourceExists(map, sourceId)) sourceIds.delete(sourceId);
+  }
+}
+
 function allSourcesLoaded(
   map: DevStatsMap,
-  sourceIds: ReadonlySet<string>,
+  sourceIds: Set<string>,
   loadedId?: string,
 ): boolean {
+  retireRemovedSources(map, sourceIds);
   for (const sourceId of sourceIds) {
     if (sourceId === loadedId) continue;
     if (!sourceLoaded(map, sourceId)) return false;
@@ -426,7 +461,7 @@ function snapshot(
     gpuUnavailable: gpu.unavailable,
     bake: readBakeSnapshot(),
     longtasks,
-    prefetch: speculativeSnapshot(),
+    preload: preloadSnapshot(),
   };
 }
 
@@ -473,8 +508,8 @@ export interface DevStatsSnapshot {
   longtasks: number;
   /** Per-layer settle times after the last zoom step, present only while tracking. */
   tiles?: TileSettleSnapshot;
-  /** Speculative prefetch outcomes per source, hidden until the first warm. */
-  prefetch?: Record<TileLayerKey, SpeculativeCounts>;
+  /** Scene preload progress and hit rates, hidden until a scene plans its first task. */
+  preload?: PreloadSnapshot;
 }
 
 /** One layer's band-bake cost for the dev readout. */
@@ -496,7 +531,7 @@ export function formatDevStats(snapshot: DevStatsSnapshot): string {
     + ` · ${formatGpuPart(snapshot.gpuMs, snapshot.gpuUnavailable)}`
     + formatBakeSuffix(snapshot.bake)
     + formatTileSuffix(snapshot.tiles)
-    + formatPrefetchSuffix(snapshot.prefetch)
+    + formatPreloadSuffix(snapshot.preload)
     + ` · ${snapshot.longtasks} long`;
 }
 
@@ -536,34 +571,25 @@ function formatTileSuffix(tiles?: TileSettleSnapshot): string {
   return ` · ${formatTileSettlePart(tiles)}`;
 }
 
-/** Build the badge's prefetch part from the speculative counters. */
-export function formatPrefetchPart(
-  prefetch: Record<TileLayerKey, SpeculativeCounts>,
-): string {
-  if (isPrefetchDisabled()) return "prefetch off";
-  return `prefetch ${formatPrefetchSource("terrain", prefetch.terrain)}`
-    + ` ${formatPrefetchSource("basemap", prefetch.basemap)}`
-    + ` ${formatPrefetchSource("contours", prefetch.contours)}`;
+/** Build the badge's preload part from the progress and the per-source hit rates. */
+export function formatPreloadPart(preload: PreloadSnapshot): string {
+  if (isPreloadDisabled()) return "preload off";
+  const { done, total, bytes } = preload.progress;
+  const { terrain, basemap, contours } = preload.counts;
+  return `preload ${done}/${total} tiles ${formatBytes(bytes)}`
+    + ` hit terrain ${formatHitRate(terrain)} basemap ${formatHitRate(basemap)}`
+    + ` contours ${formatHitRate(contours)}`;
 }
 
-/** The prefetch suffix for the badge line. It stays empty until the first warm. */
-function formatPrefetchSuffix(prefetch?: Record<TileLayerKey, SpeculativeCounts>): string {
-  if (isPrefetchDisabled()) return " · prefetch off";
-  if (!prefetch) return "";
-  const empty = (counts: SpeculativeCounts) => counts.hits === 0
-    && counts.misses === 0
-    && counts.wasted === 0;
-  if (empty(prefetch.terrain) && empty(prefetch.basemap) && empty(prefetch.contours)) return "";
-  return ` · ${formatPrefetchPart(prefetch)}`;
+/** The preload suffix for the badge line. It stays empty until a scene plans preload work. */
+function formatPreloadSuffix(preload?: PreloadSnapshot): string {
+  if (isPreloadDisabled()) return " · preload off";
+  if (!preload || preload.progress.total === 0) return "";
+  return ` · ${formatPreloadPart(preload)}`;
 }
 
-function formatPrefetchSource(name: string, counts: SpeculativeCounts): string {
-  return `${name} ${counts.hits} hit ${counts.misses} miss ${counts.wasted} wasted`
-    + ` ${formatHitRate(counts)}`;
-}
-
-/** Hit share of decided speculative tiles, or a dash before the first decision. */
-function formatHitRate(counts: SpeculativeCounts): string {
+/** Hit share of decided first visible loads, or a dash before the first one. */
+function formatHitRate(counts: PreloadCounts): string {
   const decided = counts.hits + counts.misses;
   if (decided === 0) return "—";
   return `${Math.round(counts.hits / decided * 100)}%`;

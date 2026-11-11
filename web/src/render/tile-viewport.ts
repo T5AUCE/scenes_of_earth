@@ -1,7 +1,7 @@
-/** Viewport-to-tiles math shared by the contour warmer and the shade prefetch. */
+/** Viewport and scene-to-tiles math shared by the scene preload and the shade prefetch. */
 import type { Map as MapLibreMap } from "maplibre-gl";
 
-import type { WarmTile } from "../contour-ladder";
+import { warmTilesForZoom, type WarmTile } from "../contour-ladder";
 import type { Bbox } from "../types";
 
 /** Web Mercator stays finite below this latitude in degrees. */
@@ -13,7 +13,7 @@ export const BASEMAP_SOURCE_ID = "openmaptiles";
 /** The map surface the viewport math reads: zoom, centre, bounds and canvas size. */
 export type ViewportMap = Pick<MapLibreMap, "getZoom" | "getCenter" | "getBounds" | "getCanvas">;
 
-/** Switches for the viewport projection that only the shade prefetch uses today. */
+/** Switches for the viewport projection. */
 export interface ViewportOptions {
   clampLatitude?: boolean;
 }
@@ -21,9 +21,8 @@ export interface ViewportOptions {
 /**
  * The viewport as it will be when MapLibre switches to the target zoom's tiles, with the same
  * centre and a span halved per level. Raster tiles round the zoom, so the shade prefetch looks
- * half a level ahead through the switch offset while the contour warmer passes none. A missing
- * or zero-size canvas yields null so neither warmer starts without a visible map. Only the
- * shade caller clamps latitudes because the contour math keeps its earlier unclamped span.
+ * half a level ahead through the switch offset. A missing or zero-size canvas yields null so
+ * the prefetch never starts without a visible map.
  */
 export function targetViewportBounds(
   map: ViewportMap,
@@ -43,9 +42,8 @@ export function targetViewportBounds(
 }
 
 /**
- * Project the viewport for an explicit centre, so the scheduler can score a predicted
- * destination without moving the camera. The span halves per zoom level around the given
- * centre, matching the map behaviour the target helper observes.
+ * Project the viewport for an explicit centre without moving the camera. The span halves
+ * per zoom level around the given centre, matching the map behaviour the target helper observes.
  */
 export function viewportBoundsForCenter(
   current: { west: number; south: number; east: number; north: number },
@@ -73,51 +71,6 @@ export function viewportBoundsForCenter(
     east: centreLng + halfSpan,
     north: inverseMercatorY(centreY - halfHeight),
   };
-}
-
-/**
- * Extrapolate the centre destination from the measured pan velocity, wrapping longitude
- * and clamping latitude, so directional neighbours warm ahead of the viewport.
- */
-export function predictDestinationCenter(
-  lng: number,
-  lat: number,
-  lngVelocityPerSec: number,
-  latVelocityPerSec: number,
-  horizonSecs: number,
-): { lng: number; lat: number } {
-  return {
-    lng: wrapLongitude(lng + lngVelocityPerSec * horizonSecs),
-    lat: clampLatitudeValue(lat + latVelocityPerSec * horizonSecs),
-  };
-}
-
-/** Shortest wrapped longitude step from one meridian to another, in degrees. */
-export function longitudeDelta(fromLng: number, toLng: number): number {
-  return ((toLng - fromLng + 540) % 360 + 360) % 360 - 180;
-}
-
-/**
- * The tile ranges a viewport covers at one zoom, so planning reruns only when the covered
- * tiles change and sub-tile pans keep the same key.
- */
-export function tileRangeKey(
-  bounds: { west: number; south: number; east: number; north: number },
-  zoom: number,
-): string {
-  const count = 2 ** zoom;
-  const firstColumn = Math.floor((bounds.west + 180) / 360 * count);
-  const lastColumn = Math.floor((bounds.east + 180) / 360 * count);
-  const firstRow = tileRow(bounds.north, count);
-  const lastRow = tileRow(bounds.south, count);
-
-  return `${zoom}:${firstColumn}-${lastColumn}:${firstRow}-${lastRow}`;
-}
-
-function tileRow(latitude: number, count: number): number {
-  const row = Math.floor(mercatorY(clampLatitudeValue(latitude)) * count);
-
-  return Math.min(count - 1, Math.max(0, row));
 }
 
 /** The cap the OpenFreeMap TileJSON advertises for its versioned vector tiles. */
@@ -180,6 +133,30 @@ export function tileInScene(tile: WarmTile, bbox: Bbox): boolean {
   );
 }
 
+/**
+ * The tiles that cover a scene bbox from one zoom down to the deepest zoom whose whole level
+ * still fits the tile budget, coarsest zoom first and nearest the centre first within a zoom.
+ * A level that would overflow the budget is left out entirely, because a partial deeper level
+ * would only help the middle of the scene.
+ */
+export function scenePyramidTiles(
+  bbox: Bbox,
+  firstZoom: number,
+  lastZoom: number,
+  maxTiles: number,
+): WarmTile[] {
+  const tiles: WarmTile[] = [];
+  for (let zoom = Math.max(0, firstZoom); zoom <= lastZoom; zoom += 1) {
+    const remaining = maxTiles - tiles.length;
+    // One tile past the remaining budget is enough to tell that the level does not fit.
+    const level = warmTilesForZoom(bbox[0], bbox[1], bbox[2], bbox[3], zoom, remaining + 1)
+      .filter((tile) => tileInScene(tile, bbox));
+    if (level.length > remaining) break;
+    tiles.push(...level);
+  }
+  return tiles;
+}
+
 /** Web Mercator y of a latitude in degrees. */
 export function mercatorY(latitude: number): number {
   const radians = latitude * Math.PI / 180;
@@ -213,9 +190,4 @@ function clampLatitudeValue(latitude: number): number {
     Math.max(latitude, -WEB_MERCATOR_MAX_LAT_DEG),
     WEB_MERCATOR_MAX_LAT_DEG,
   );
-}
-
-/** Wrap a longitude to the map's principal range, keeping destination keys stable. */
-function wrapLongitude(longitude: number): number {
-  return ((longitude + 180) % 360 + 360) % 360 - 180;
 }

@@ -35,11 +35,11 @@ export function gestureFlags(search: string): GestureQualityFlags {
 }
 
 /**
- * Read whether the bounded tile prefetch scheduler runs, which needs an explicit `?prefetch=1`
- * because the user's trial found it wasted far more requests than it saved.
+ * Read whether the scene preload runs. It stays on unless its parameter is exactly "0", which
+ * lets a trial compare a scene with and without the background downloads.
  */
-export function prefetchEnabled(search: string): boolean {
-  return flagOptIn(search, "prefetch");
+export function preloadEnabled(search: string): boolean {
+  return flagEnabled(search, "preload");
 }
 
 /**

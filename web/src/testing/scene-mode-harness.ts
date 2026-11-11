@@ -47,10 +47,6 @@ const dependencies = {
       map.removeLayer(id);
       map.removeSource(id);
     }
-    export function moveLabelsIntoArea() {
-      globalThis.sceneModeTest.labelMoves++;
-      return () => {};
-    }
   `,
   "./render/mercator": `
     export const shiftLongitudes = (coordinates) => coordinates;
@@ -66,6 +62,7 @@ const dependencies = {
         stopClamp() { flight.stopClamp(); },
         start() {
           globalThis.sceneModeTest.land = onLanded;
+          flight.started = true;
           if (globalThis.sceneModeTest.landImmediately) onLanded();
         },
       };
@@ -132,18 +129,53 @@ const dependencies = {
         slots.onCharts(globalThis.sceneModeTest.initialCharts);
       }
       const snapshot = {
-        display: { layers: {}, off: new Set(), showAs: {} },
+        display: {
+          layers: {},
+          off: new Set(),
+          showAs: {},
+          outline: { shown: true, color: "graphite", widthPx: 1.5 },
+        },
         allocation: { owner: null, draws: new Map(), as: new Map() },
         on: new Set(),
       };
+      const listeners = new Set();
       const mountStore = globalThis.sceneModeTest.mountStore ?? {
         getSnapshot: () => snapshot,
-        subscribe: () => () => {},
-        dispatch: () => {},
+        subscribe: (listener) => {
+          listeners.add(listener);
+          return () => {
+            listeners.delete(listener);
+          };
+        },
+        dispatch: (action) => {
+          if (action?.kind === "display" && typeof action.update === "function") {
+            const next = {
+              layers: { ...snapshot.display.layers },
+              off: new Set(snapshot.display.off),
+              showAs: { ...snapshot.display.showAs },
+              outline: { ...snapshot.display.outline },
+            };
+            action.update(next);
+            snapshot.display = next;
+            for (const listener of [...listeners]) listener();
+          }
+        },
       };
       globalThis.sceneModeTest.mountStore = mountStore;
-      return {
-        timeline: {
+      mountStore.subscribe(() => {
+        const outline = snapshot.display.outline;
+        if (!outline) return;
+        const layer = map.layers.get("soe-area-outline");
+        if (!layer) return;
+        layer.layout.visibility = outline.shown ? "visible" : "none";
+        layer.paint ??= {};
+        layer.paint["line-color"] = outline.color;
+        layer.paint["line-width"] = outline.widthPx;
+      });
+      const requestedTime = globalThis.sceneModeTest.requestedTime;
+      const timeline = requestedTime == null
+        ? null
+        : {
           times: ["2020-01-01", "2020-02-01"],
           goTo(time) {
             (globalThis.sceneModeTest.restoredTimes ??= []).push(time);
@@ -151,7 +183,9 @@ const dependencies = {
             slots.onTime?.(time, time.slice(0, 7));
           },
           move() {},
-        },
+        };
+      return {
+        timeline,
         layerIds,
         store: mountStore,
         addNote: (note) => {
@@ -162,9 +196,38 @@ const dependencies = {
             if (index >= 0) notes.splice(index, 1);
           };
         },
-        whenFirstDataReady: () => {
-          const data = globalThis.sceneModeTest.data;
-          return { ready: data.promise, cancel: () => {} };
+        whenEntryReady: (getTime, getGeneration) => {
+          const harness = globalThis.sceneModeTest;
+          const data = harness.data;
+          const store = harness.mountStore;
+          const preparationTime = getTime();
+          (harness.preparationTimes ??= []).push(preparationTime);
+          let cancelReady = () => {};
+          const ready = Promise.race([
+            data.promise.then(() => {
+              const snapshot = store?.getSnapshot?.() ?? { allocation: null, display: null };
+              return {
+                time: preparationTime,
+                generation: getGeneration?.() ?? 0,
+                allocation: snapshot.allocation,
+                display: snapshot.display,
+              };
+            }),
+            new Promise((_, reject) => {
+              cancelReady = () => {
+                const error = new Error("Entry preparation was cancelled");
+                error.name = "AbortError";
+                reject(error);
+              };
+            }),
+          ]);
+          return {
+            ready,
+            cancel: () => cancelReady(),
+            retarget: () => {
+              harness.retargetCount = (harness.retargetCount ?? 0) + 1;
+            },
+          };
         },
         unmount() {
           for (const id of this.layerIds) map.removeLayer(id);
@@ -221,9 +284,11 @@ export async function exitActiveHarness(): Promise<void> {
 export function createHarness() {
   const map = new TestMap();
   const roots = { column: element(), timeBar: element(), dialog: element() };
+  const bodyClasses = new Set<string>();
   const harness = {
     map,
     roots,
+    bodyClasses,
     geometry: deferred(),
     data: deferredSignal(),
     notes: [] as string[],
@@ -242,19 +307,47 @@ export function createHarness() {
     initialCharts: null as string | null,
     restoredTimes: [] as string[],
     syncNotices: [] as (string | null)[],
-    labelMoves: 0,
+    requestedTime: null as string | null,
+    preparationTimes: [] as (string | null)[],
+    retargetCount: 0,
     landImmediately: false,
     land: () => {},
     resize: () => {},
-    flight: { zoom: 5, refit() {}, stopClamp() {} },
+    flight: {
+      zoom: 5,
+      refit() {},
+      stopClamp() {},
+      started: false,
+    },
     mode: createSceneMode(map as unknown as MapLibreMap, roots as unknown as SceneRoots),
     enter(time: string | null = null) {
+      this.requestedTime = time;
       this.mode.enter(SCENE, { time, entry: "replace" });
     },
   };
+  const originalEnter = harness.mode.enter.bind(harness.mode);
+  harness.mode.enter = ((...args: Parameters<typeof originalEnter>) => {
+    harness.requestedTime = (args[1] as { time?: string | null }).time ?? null;
+    return originalEnter(...args);
+  }) as typeof harness.mode.enter;
   Object.assign(globalThis, {
     sceneModeTest: harness,
-    document: { body: { classList: { add() {}, remove() {} } }, createElement: element },
+    document: {
+      body: {
+        offsetHeight: 0,
+        classList: {
+          add(...names: string[]) {
+            for (const name of names) bodyClasses.add(name);
+          },
+          remove(...names: string[]) {
+            for (const name of names) bodyClasses.delete(name);
+          },
+          contains: (name: string) => bodyClasses.has(name),
+        },
+      },
+      documentElement: { offsetHeight: 0, style: { setProperty() {}, removeProperty() {} } },
+      createElement: element,
+    },
     history: { state: null, replaceState() {} },
     getComputedStyle: () => ({ getPropertyValue: () => "#faf8f3" }),
   });
@@ -265,7 +358,11 @@ export function createHarness() {
 
 /** Create a minimal stub element for harness roots. */
 export function element() {
-  return { append() {}, replaceChildren() {}, hidden: false };
+  return {
+    append() {},
+    replaceChildren() {},
+    hidden: false,
+  };
 }
 
 /** Create a manually settled geometry promise for the harness. */
@@ -297,6 +394,8 @@ interface TestLayer {
   minzoom?: number;
   maxzoom?: number;
   layout: { visibility: string };
+  paint?: Record<string, unknown>;
+  type?: string;
 }
 
 /** Minimal map double tracking zoom ranges and listeners. */
@@ -317,6 +416,7 @@ export class TestMap {
     ["overview", { id: "overview", minzoom: 1, maxzoom: 4, layout: { visibility: "visible" } }],
   ]);
   readonly sources = new Map<string, object>();
+  readonly filters = new Map<string, unknown>();
   readonly listeners = new Map<string, Set<(event: object) => void>>();
   rangeWrites = 0;
   readyOnAdd = false;
@@ -325,13 +425,37 @@ export class TestMap {
 
   getCenter() { return { lng: 37, lat: 0 }; }
   getZoom() { return 5; }
+  stop() {}
   getLayer(id: string) { return this.layers.get(id); }
   getSource(id: string) { return this.sources.get(id); }
   removeLayer(id: string) { this.layers.delete(id); }
   removeSource(id: string) { this.sources.delete(id); }
   moveLayer() {}
-  setPaintProperty() {}
+  setPaintProperty(id: string, name: string, value: unknown) {
+    const layer = this.layers.get(id);
+    if (!layer) return;
+    layer.paint ??= {};
+    layer.paint[name] = value;
+  }
+  getLayoutProperty(id: string, name: string) {
+    if (name === "visibility") return this.layers.get(id)?.layout.visibility;
+    return undefined;
+  }
+  setLayoutProperty(id: string, name: string, value: unknown) {
+    const layer = this.layers.get(id);
+    if (!layer) return;
+    if (name === "visibility") {
+      layer.layout ??= { visibility: "visible" };
+      layer.layout.visibility = value as string;
+    }
+  }
+  getFilter(id: string) { return this.filters.get(id); }
+  setFilter(id: string, filter: unknown) {
+    if (filter === null || filter === undefined) this.filters.delete(id);
+    else this.filters.set(id, filter);
+  }
   flyTo() {}
+  setTransformRequest() {}
 
   addSource(id: string, source: object) {
     this.sources.set(id, source);

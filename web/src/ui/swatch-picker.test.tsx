@@ -140,6 +140,40 @@ test("choosing a box selects it and shows its ring, check and caption", async (c
   await act(async () => root.unmount());
 });
 
+test("hiding the caption keeps the radio names", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SwatchPicker } = await import("./swatch-picker.tsx");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+
+  await act(async () => root.render(
+    <SwatchPicker
+      legend="Colours"
+      group="palette"
+      options={paletteOptions()}
+      value="ink-blue"
+      defaultValue="ink-blue"
+      tiles
+      showCaption={false}
+      onSelect={() => {}}
+    />,
+  ));
+
+  const radios = [...container.querySelectorAll('input[type="radio"]')] as HTMLInputElement[];
+  assert.deepEqual(
+    radios.map((radio) => radio.getAttribute("aria-label")),
+    ["Ink blue (default)", "Batlow", "Custom"],
+  );
+  assert.equal(container.querySelector(".swatch-caption"), null);
+
+  await act(async () => root.unmount());
+});
+
 test("gradient faces blend colours while block faces keep one span per colour", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());

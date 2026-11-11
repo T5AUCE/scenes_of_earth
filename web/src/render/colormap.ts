@@ -1,4 +1,5 @@
 /** Map sampled field values and class ids to univariate or bivariate colours. */
+import { yieldToBrowser } from "../data";
 import type { SampleTable } from "./mercator";
 
 const LUT_ENTRIES = 256;
@@ -14,6 +15,10 @@ export const RGBA_CHANNELS = 4;
 
 const OPAQUE = 255;
 const GAMUT_EPSILON = 1e-6;
+// Entry slices stay well under a frame while the previous pixels stay responsive.
+const SLICE_BUDGET_MS = 4;
+// Budget checks run this often so one expensive overlap cannot overrun the frame.
+const PAINT_CHECK_PIXELS = 4096;
 
 /** A positioned colour stop, with its place from 0 to 1 along the gradient. */
 export interface PositionedStop {
@@ -218,15 +223,50 @@ export function paintBivariate(
 ) {
   const rgba = new Uint8ClampedArray(rows.table.src.length * RGBA_CHANNELS);
   for (let pixel = 0; pixel < rows.table.src.length; pixel++) {
-    const rowValue = valueAt(rows, pixel);
-    const columnValue = valueAt(columns, pixel);
-    if (Number.isNaN(rowValue) || Number.isNaN(columnValue)) continue;
-
-    const row = Math.round(stopPosition(rowValue, rows.stops) * (LUT2D_SIZE - 1));
-    const column = Math.round(stopPosition(columnValue, columns.stops) * (LUT2D_SIZE - 1));
-    const colorStart = (row * LUT2D_SIZE + column) * RGBA_CHANNELS;
-    rgba.set(colors.subarray(colorStart, colorStart + RGBA_CHANNELS), pixel * RGBA_CHANNELS);
+    writeBivariatePixel(rgba, pixel, rows, columns, colors);
   }
+  return rgba;
+}
+
+function writeBivariatePixel(
+  rgba: Uint8ClampedArray,
+  pixel: number,
+  rows: BivariateAxis,
+  columns: BivariateAxis,
+  colors: Uint8ClampedArray,
+) {
+  const rowValue = valueAt(rows, pixel);
+  const columnValue = valueAt(columns, pixel);
+  if (Number.isNaN(rowValue) || Number.isNaN(columnValue)) return;
+
+  const row = Math.round(stopPosition(rowValue, rows.stops) * (LUT2D_SIZE - 1));
+  const column = Math.round(stopPosition(columnValue, columns.stops) * (LUT2D_SIZE - 1));
+  const colorStart = (row * LUT2D_SIZE + column) * RGBA_CHANNELS;
+  rgba.set(colors.subarray(colorStart, colorStart + RGBA_CHANNELS), pixel * RGBA_CHANNELS);
+}
+
+/**
+ * Colour both inputs in bounded slices so entry keeps responding while painting.
+ * The output matches paintBivariate exactly.
+ */
+export async function paintBivariateInSlices(
+  rows: BivariateAxis,
+  columns: BivariateAxis,
+  colors: Uint8ClampedArray,
+  signal?: AbortSignal,
+) {
+  const rgba = new Uint8ClampedArray(rows.table.src.length * RGBA_CHANNELS);
+  let sliceMs = performance.now();
+  for (let pixel = 0; pixel < rows.table.src.length; pixel++) {
+    writeBivariatePixel(rgba, pixel, rows, columns, colors);
+    if ((pixel + 1) % PAINT_CHECK_PIXELS !== 0) continue;
+    if (signal?.aborted) throw cancelError();
+    if (performance.now() - sliceMs < SLICE_BUDGET_MS) continue;
+
+    await yieldToBrowser(signal);
+    sliceMs = performance.now();
+  }
+  if (signal?.aborted) throw cancelError();
   return rgba;
 }
 
@@ -298,16 +338,59 @@ export function paintColormap(
 ) {
   const rgba = new Uint8ClampedArray(table.src.length * RGBA_CHANNELS);
   for (let pixel = 0; pixel < table.src.length; pixel++) {
-    const cell = table.src[pixel];
-    const nearest = values[cell];
-    const value = Number.isNaN(nearest) ? overlappingValue(values, table, pixel) : nearest;
-    if (Number.isNaN(value)) continue;
-
-    const position = stopPosition(value, stops);
-    const colorStart = Math.round(position * LAST_ENTRY) * RGBA_CHANNELS;
-    rgba.set(colors.subarray(colorStart, colorStart + RGBA_CHANNELS), pixel * RGBA_CHANNELS);
+    writeColormapPixel(rgba, pixel, values, table, colors, stops);
   }
   return rgba;
+}
+
+function writeColormapPixel(
+  rgba: Uint8ClampedArray,
+  pixel: number,
+  values: Float32Array,
+  table: SampleTable,
+  colors: Uint8ClampedArray,
+  stops: number[],
+) {
+  const cell = table.src[pixel];
+  const nearest = values[cell];
+  const value = Number.isNaN(nearest) ? overlappingValue(values, table, pixel) : nearest;
+  if (Number.isNaN(value)) return;
+
+  const position = stopPosition(value, stops);
+  const colorStart = Math.round(position * LAST_ENTRY) * RGBA_CHANNELS;
+  rgba.set(colors.subarray(colorStart, colorStart + RGBA_CHANNELS), pixel * RGBA_CHANNELS);
+}
+
+/**
+ * Colour values in bounded slices so entry keeps responding while painting.
+ * The output matches paintColormap exactly.
+ */
+export async function paintColormapInSlices(
+  values: Float32Array,
+  table: SampleTable,
+  colors: Uint8ClampedArray,
+  stops: number[],
+  signal?: AbortSignal,
+) {
+  const rgba = new Uint8ClampedArray(table.src.length * RGBA_CHANNELS);
+  let sliceMs = performance.now();
+  for (let pixel = 0; pixel < table.src.length; pixel++) {
+    writeColormapPixel(rgba, pixel, values, table, colors, stops);
+    if ((pixel + 1) % PAINT_CHECK_PIXELS !== 0) continue;
+    if (signal?.aborted) throw cancelError();
+    if (performance.now() - sliceMs < SLICE_BUDGET_MS) continue;
+
+    await yieldToBrowser(signal);
+    sliceMs = performance.now();
+  }
+  if (signal?.aborted) throw cancelError();
+  return rgba;
+}
+
+function cancelError(): Error {
+  const error = new Error("Entry preparation was cancelled");
+  error.name = "AbortError";
+  return error;
 }
 
 function overlappingValue(values: Float32Array, table: SampleTable, pixel: number) {

@@ -4,6 +4,8 @@ import { test, type TestContext } from "node:test";
 
 import type { Map as MapLibreMap } from "maplibre-gl";
 
+import { closeScenePreload, openScenePreload } from "./tile-prefetch.ts";
+
 const TERRAIN_SOURCES = ["terrain-relief", "terrain-contours"];
 const WARNING = "Terrain shading or contour tiles could not be loaded";
 
@@ -44,15 +46,24 @@ const hooks = registerHooks({
     return next(specifier, context);
   },
 });
-const { createTerrainView, MAX_MISSING_TILES, terrainPrefetchWiring, watchTerrainTiles } =
-  await import("./terrain.ts");
+const { createTerrainView, MAX_MISSING_TILES, watchTerrainTiles } = await import("./terrain.ts");
 hooks.deregister();
 
-test("the prefetch wiring names the visible relief and basemap sources", () => {
-  assert.deepEqual(terrainPrefetchWiring("terrain"), {
-    reliefSourceId: "terrain-relief",
-    basemapSourceId: "openmaptiles",
-  });
+test("a terrain view plans its elevation tiles with the preload until it is destroyed", (t) => {
+  t.mock.method(globalThis, "fetch", () => new Promise(() => {}));
+  const { map } = terrainMap();
+  const preload = openScenePreload({ ...map, setTransformRequest() {} } as never);
+  try {
+    const view = createTestTerrainView(map);
+    preload.start(9.5);
+    assert.ok(preload.progress().total > 0);
+
+    view.destroy();
+
+    assert.equal(preload.progress().total, 0);
+  } finally {
+    closeScenePreload();
+  }
 });
 
 test("a cancellation or missing tile is ignored", (context) => {

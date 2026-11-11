@@ -211,7 +211,8 @@ export function createIsolineOverlay(
     },
 
     isReady(fromStep, toStep) {
-      return fromStep === toStep || (isSettled(fromStep) && isSettled(toStep));
+      // Equal steps still wait for the newly set source, so entry never certifies a pending set.
+      return isSettled(fromStep) && isSettled(toStep);
     },
 
     select(step) {

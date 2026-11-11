@@ -32,6 +32,7 @@ const {
   classLegend,
   classNoDataLegend,
   contourLegendText,
+  createDotLegend,
   createZoomWatch,
   dotLegend,
   dotLegendKey,
@@ -39,22 +40,28 @@ const {
   dotSwatchLattice,
   gradientLegend,
   isothermLegend,
+  previewDotsPerSide,
 } = legendModule;
 const {
   DENSITY_STEP_LOG2,
   DOT_RADIUS_RATIO,
+  CLOSE_RADIUS_CAP_PX,
   HALO_WIDTH_PX,
   MAX_DENSITY_RATIO,
   MIN_DENSITY_LOG2,
   MIN_DENSITY_RATIO,
+  MIN_DOT_RADIUS_PX,
   MIN_SPACING_PX,
   POSITION_JITTER_RATIO,
   VALUE_RADIUS_EXPONENT,
   aimedSpacingPx,
   areaNoise,
   dotRadiusPx,
+  highZoomDotOpacity,
+  highZoomDotSizeScale,
   levelRadiusPx,
-  slotPosition,
+  representativeRadiusPx,
+  representativeSpacingPx,
 } = latticeModule;
 
 const KENYA_RAINFALL_STOPS = [0, 10, 30, 40, 60, 80, 100, 130, 200];
@@ -260,48 +267,57 @@ function renderDotLegend({
   ) as unknown as TestElement;
 }
 
-test("the dot legend key keeps its level across a zoom and moves with it", () => {
-  const keyAt = (zoom: number, density = 1, ink = "navy") =>
-    dotLegendKey(
-      KENYA_RAINFALL_STOPS,
-      "mm/month",
-      KENYA_RAINFALL_GRID,
-      zoom,
-      density,
-      inkPaint(ink),
-      false,
-    );
-  const latticeAt = (zoom: number) => dotSwatchLattice(KENYA_RAINFALL_GRID, zoom, 1, 1);
-
-  const zoom = 10;
-  assert.equal(keyAt(zoom), keyAt(zoom));
-  assert.equal(keyAt(zoom, 1, "navy") === keyAt(zoom, 1, "charcoal"), false);
-  assert.equal(keyAt(zoom) === keyAt(zoom, MAX_DENSITY_RATIO), false);
-
-  const higher = zoom + 3;
-  if (latticeAt(higher).level === latticeAt(zoom).level) {
-    assert.equal(keyAt(higher), keyAt(zoom));
-  } else {
-    assert.equal(keyAt(higher) === keyAt(zoom), false);
-  }
-});
-
-test("the dot legend key matches the stateless lattice the canvas draws", () => {
-  // Just below a level boundary, where a remembered level would hold the coarser lattice.
-  const zoom = 10.2;
-  const lattice = dotSwatchLattice(KENYA_RAINFALL_GRID, zoom, 1, 1);
-  const key = JSON.parse(dotLegendKey(
+test("the dot legend key keeps its structure across zooms and moves with style", () => {
+  const key = dotLegendKey(
     KENYA_RAINFALL_STOPS,
     "mm/month",
     KENYA_RAINFALL_GRID,
-    zoom,
-    1,
     inkPaint("navy"),
     false,
-  )) as unknown[];
-  // The key lists ticks, units, bbox, nx and ny before the lattice level and fade.
-  assert.equal(key[5], lattice.level);
-  assert.equal(key[6], lattice.fade);
+  );
+
+  assert.equal(
+    key,
+    dotLegendKey(KENYA_RAINFALL_STOPS, "mm/month", KENYA_RAINFALL_GRID, inkPaint("navy"), false),
+  );
+  assert.notEqual(
+    key,
+    dotLegendKey(KENYA_RAINFALL_STOPS, "mm/month", KENYA_RAINFALL_GRID, inkPaint("charcoal"), false),
+  );
+  assert.notEqual(
+    key,
+    dotLegendKey(KENYA_RAINFALL_STOPS, "mm/month", KENYA_RAINFALL_GRID, inkPaint("navy"), true),
+  );
+  assert.notEqual(
+    key,
+    dotLegendKey([0, 100, 200], "mm/month", KENYA_RAINFALL_GRID, inkPaint("navy"), false),
+  );
+});
+
+test("the dot legend repaints its retained canvases without rebuilding", () => {
+  const handle = createDotLegend(
+    KENYA_RAINFALL_STOPS,
+    "mm/month",
+    KENYA_RAINFALL_GRID,
+    5,
+    1,
+    inkPaint("navy"),
+    1,
+  );
+  const boxes = (handle.element as unknown as TestElement).children[1];
+  const swatch = boxes.children[0];
+  const arcsBefore = swatch.arcs.length;
+  const transformsBefore = swatch.transforms.length;
+
+  handle.repaint(5, 1, 1);
+
+  assert.equal(swatch.arcs.length, arcsBefore);
+  assert.equal(swatch.transforms.length, transformsBefore);
+
+  handle.repaint(6, 1, 1);
+
+  assert.equal((handle.element as unknown as TestElement).children[1].children[0], swatch);
+  assert.ok(swatch.transforms.length > transformsBefore);
 });
 
 test("every swatch holds a clean grid of whole dots centred in their sites", () => {
@@ -320,32 +336,158 @@ test("every swatch holds a clean grid of whole dots centred in their sites", () 
   }
 });
 
-test("a swatch keeps three dots a side only while its smallest dot stays readable", () => {
-  const arcsPerSwatch = (stops: number[]) => {
-    const legend = renderDotLegend({ stops });
-    return legend.children[1].children[0].arcs.length;
-  };
+test("a swatch keeps a bounded count set by the map spacing and radius", () => {
+  for (const { grid, zoom, density } of SHARE_CASES) {
+    const lattice = dotSwatchLattice(grid, zoom, 1, density);
+    const count = previewDotsPerSide(
+      representativeSpacingPx(lattice),
+      representativeRadiusPx(lattice),
+      HALO_WIDTH_PX,
+    );
 
-  assert.equal(arcsPerSwatch(KENYA_RAINFALL_STOPS), 2 * 2 ** 2);
-  assert.equal(arcsPerSwatch([0, 100, 200]), 2 * 3 ** 2);
+    assert.ok(count >= 1 && count <= 6, `zoom ${zoom} density ${density}`);
+    const legend = renderDotLegend({ zoom, density });
+    const arcs = legend.children[1].children[0].arcs.length;
+
+    assert.equal(arcs, 2 * count ** 2);
+  }
 });
 
-test("a swatch inks the share of its box that the map inks, at several zooms and densities", () => {
+test("a swatch draws the representative radius with the value exponent", () => {
   for (const { grid, zoom, density } of SHARE_CASES) {
     const lattice = dotSwatchLattice(grid, zoom, 1, density);
     assert.ok(lattice.level >= 0, `zoom ${zoom}`);
-    for (const dotsPerSide of [2, 3]) {
-      for (const position of [0.3, 1]) {
-        const swatchShare = inkShareOf(dotSwatchDots(position, lattice, dotsPerSide));
-        const mapShare = mapInkShare(lattice, position);
+    const fullPx = representativeRadiusPx(lattice);
+    for (const position of [0.3, 1]) {
+      const dots = dotSwatchDots(position, lattice, 2);
+      const scaledPx = fullPx * position ** VALUE_RADIUS_EXPONENT;
+      const scaledRadius = scaledPx >= MIN_DOT_RADIUS_PX ? scaledPx : MIN_DOT_RADIUS_PX;
+      const scaledAlpha = scaledPx >= MIN_DOT_RADIUS_PX ? 1 : (scaledPx / MIN_DOT_RADIUS_PX) ** 2;
 
-        assert.ok(
-          Math.abs(swatchShare / mapShare - 1) < 1e-9,
-          `zoom ${zoom} density ${density} ${dotsPerSide} a side position ${position}`,
-        );
-      }
+      assert.ok(
+        Math.abs(dots[0].radiusPx - scaledRadius) < 1e-9,
+        `zoom ${zoom} density ${density} position ${position}`,
+      );
+      assert.ok(
+        Math.abs(dots[0].opacity / lattice.opacity - scaledAlpha) < 1e-9,
+        `zoom ${zoom} density ${density} position ${position}`,
+      );
     }
   }
+});
+
+test("close zoom bounds every reported radius while ordinary zoom stays put", () => {
+  for (const zoom of [5, 10, 13]) {
+    const lattice = dotSwatchLattice(KENYA_RAINFALL_GRID, zoom, 1, 1);
+    const dots = dotSwatchDots(1, lattice, 2);
+    assert.ok(Math.abs(dots[0].radiusPx - representativeRadiusPx(lattice)) < 1e-9, `zoom ${zoom}`);
+    assert.ok(Math.abs(dots[0].opacity - lattice.opacity) < 1e-9, `zoom ${zoom}`);
+  }
+  for (const zoom of [15, 16, 17]) {
+    const lattice = dotSwatchLattice(KENYA_RAINFALL_GRID, zoom, 1, 1);
+    assert.ok(representativeRadiusPx(lattice) <= CLOSE_RADIUS_CAP_PX + 1e-9, `zoom ${zoom}`);
+    const dots = dotSwatchDots(1, lattice, 2);
+    assert.ok(dots[0].radiusPx <= CLOSE_RADIUS_CAP_PX + 1e-9, `zoom ${zoom}`);
+  }
+});
+
+test("close zoom shrinks the reported dots through the size fade", () => {
+  const lattice = dotSwatchLattice(KENYA_RAINFALL_GRID, 17.75, 1, 1);
+  const sizeScale = highZoomDotSizeScale(17.75, 1);
+  const q = highZoomDotOpacity(17.75, 1);
+  assert.ok(Math.abs(sizeScale - 0.594604) < 1e-5);
+  assert.ok(Math.abs(q - 0.5) < 1e-9);
+  const dots = dotSwatchDots(1, lattice, 2);
+  const fullPx = representativeRadiusPx(lattice) * sizeScale;
+  assert.ok(fullPx >= MIN_DOT_RADIUS_PX);
+  assert.ok(Math.abs(dots[0].radiusPx - fullPx) < 1e-9);
+  assert.ok(Math.abs(dots[0].opacity - q) < 1e-9);
+
+  const faintLattice = dotSwatchLattice(KENYA_RAINFALL_GRID, 17.9, 1, 1);
+  const faintScale = highZoomDotSizeScale(17.9, 1);
+  const faintQ = highZoomDotOpacity(17.9, 1);
+  const faint = dotSwatchDots(0.15, faintLattice, 2);
+  const faintPx = representativeRadiusPx(faintLattice) * 0.15 ** VALUE_RADIUS_EXPONENT * faintScale;
+  assert.ok(faintPx < MIN_DOT_RADIUS_PX);
+  assert.equal(faint[0].radiusPx, MIN_DOT_RADIUS_PX);
+  assert.ok(Math.abs(faint[0].opacity - (faintPx / MIN_DOT_RADIUS_PX) ** 2 * faintQ) < 1e-9);
+});
+
+test("the swatch fades its composed dots once instead of per circle", () => {
+  const legend = renderDotLegend({ zoom: 17.75 });
+  const q = highZoomDotOpacity(17.75, 1);
+  const swatch = legend.children[1].children.at(-1);
+  assert.ok(swatch.fills.length > 0);
+  // Circles paint at their ordinary tiny-dot and halo alphas, undimmed by the fade.
+  assert.ok(swatch.fills.some((fill) => Math.abs(fill.alpha - 1) < 1e-9));
+  assert.ok(swatch.fills.some((fill) => Math.abs(fill.alpha - 0.7) < 1e-9));
+  assert.ok(swatch.fills.every((fill) => fill.composite === "source-over"));
+  // One full-canvas destination-in fill attenuates the composed swatch by the fade.
+  assert.equal(swatch.rectFills.length, 1);
+  const attenuation = swatch.rectFills[0];
+  assert.equal(attenuation.composite, "destination-in");
+  assert.ok(Math.abs(attenuation.alpha - q) < 1e-9);
+  assert.equal(attenuation.width, BOX_PX);
+  assert.equal(attenuation.height, BOX_PX);
+});
+
+test("the faded swatch resets its compositing for the next repaint", () => {
+  const handle = createDotLegend(
+    KENYA_RAINFALL_STOPS,
+    "mm/month",
+    KENYA_RAINFALL_GRID,
+    17.75,
+    1,
+    inkPaint("navy"),
+    1,
+  );
+  handle.repaint(5, 1, 1);
+  const boxes = (handle.element as unknown as TestElement).children[1];
+  for (const swatch of boxes.children) {
+    assert.ok(swatch.fills.every((fill) => fill.composite === "source-over"));
+    assert.ok(swatch.rectFills.length > 0);
+    assert.ok(swatch.rectFills.every((rect) => rect.composite === "destination-in"));
+  }
+});
+
+test("an identical repaint paints no new dots or attenuation", () => {
+  const handle = createDotLegend(
+    KENYA_RAINFALL_STOPS,
+    "mm/month",
+    KENYA_RAINFALL_GRID,
+    17.75,
+    1,
+    inkPaint("navy"),
+    1,
+  );
+  const boxes = (handle.element as unknown as TestElement).children[1];
+  const swatch = boxes.children[0];
+  const arcs = swatch.arcs.length;
+  const attenuations = swatch.rectFills.length;
+  assert.ok(arcs > 0 && attenuations > 0);
+
+  handle.repaint(17.75, 1, 1);
+
+  assert.equal(swatch.arcs.length, arcs);
+  assert.equal(swatch.rectFills.length, attenuations);
+  assert.equal(boxes.children[0], swatch);
+
+  handle.repaint(17.75, MAX_DENSITY_RATIO, 1);
+
+  assert.equal(boxes.children[0], swatch);
+  assert.equal(swatch.rectFills.length, attenuations + 1);
+});
+
+test("the swatches clear their attenuation at zero fade while labels remain", () => {
+  const legend = renderDotLegend({ zoom: 20 });
+  const [, boxes, labels] = legend.children;
+
+  assert.ok(boxes.children.every((swatch) => swatch.arcs.length === 0));
+  assert.ok(boxes.children.every((swatch) => swatch.rectFills.length === 0));
+  assert.deepEqual(
+    labels.children.map((label) => label.textContent),
+    ["30", "60", "100", "≥ 200"],
+  );
 });
 
 test("the dot swatch share does not change with the density but its dots shrink", () => {
@@ -357,16 +499,29 @@ test("the dot swatch share does not change with the density but its dots shrink"
   assert.ok(dense.fade > sparse.fade);
 });
 
-test("the swatch grid scales with the density while its ink share stays put", () => {
+test("the swatch grid follows the selected count while its ink share stays put", () => {
   const dotsAt = (density: number, zoom: number) => {
     const legend = renderDotLegend({ zoom, density });
     return legend.children[1].children[0].arcs.length / 2;
   };
+  const countAt = (density: number, zoom: number) => {
+    const lattice = dotSwatchLattice(KENYA_RAINFALL_GRID, zoom, 1, density);
+    return previewDotsPerSide(
+      representativeSpacingPx(lattice),
+      representativeRadiusPx(lattice),
+      HALO_WIDTH_PX,
+    ) ** 2;
+  };
 
   for (const zoom of [5, 10]) {
-    assert.equal(dotsAt(MIN_DENSITY_RATIO, zoom), 1);
-    assert.equal(dotsAt(1, zoom), 2 ** 2);
-    assert.equal(dotsAt(MAX_DENSITY_RATIO, zoom), 3 ** 2);
+    const sparse = dotsAt(MIN_DENSITY_RATIO, zoom);
+    const middle = dotsAt(1, zoom);
+    const dense = dotsAt(MAX_DENSITY_RATIO, zoom);
+
+    assert.equal(sparse, countAt(MIN_DENSITY_RATIO, zoom));
+    assert.equal(middle, countAt(1, zoom));
+    assert.equal(dense, countAt(MAX_DENSITY_RATIO, zoom));
+    assert.ok(sparse >= 1 && sparse <= middle && middle <= dense);
   }
 });
 
@@ -434,25 +589,28 @@ test("a higher value inks more of the dot swatch by the radius exponent", () => 
   assert.ok(Math.abs(inkOf(0.3) / inkOf(1) - 0.3 ** (2 * VALUE_RADIUS_EXPONENT)) < 1e-9);
 });
 
-test("no swatch dot or halo crosses the box edge at any zoom or density", () => {
+test("no selected swatch dot or halo crosses the box edge at any zoom or density", () => {
   const grids = [KENYA_RAINFALL_GRID, HIGH_LATITUDE_GRID];
   for (const grid of grids) {
     for (let zoom = 2; zoom < 18; zoom += 0.25) {
       for (const density of [0.5, 1, 2]) {
         const lattice = dotSwatchLattice(grid, zoom, 1, density);
-        for (const dotsPerSide of [2, 3]) {
-          for (const position of [0.15, 0.6, 1]) {
-            const dots = dotSwatchDots(position, lattice, dotsPerSide);
-            const message = `zoom ${zoom} density ${density} position ${position}`;
+        const dotsPerSide = previewDotsPerSide(
+          representativeSpacingPx(lattice),
+          representativeRadiusPx(lattice),
+          HALO_WIDTH_PX,
+        );
+        for (const position of [0.15, 0.6, 1]) {
+          const dots = dotSwatchDots(position, lattice, dotsPerSide);
+          const message = `zoom ${zoom} density ${density} position ${position}`;
 
-            assert.ok(dots.every((dot) => {
-              const reachPx = dot.radiusPx + HALO_WIDTH_PX;
-              return dot.x - reachPx >= 0
-                && dot.x + reachPx <= BOX_PX
-                && dot.y - reachPx >= 0
-                && dot.y + reachPx <= BOX_PX;
-            }), message);
-          }
+          assert.ok(dots.every((dot) => {
+            const reachPx = dot.radiusPx + HALO_WIDTH_PX;
+            return dot.x - reachPx >= 0
+              && dot.x + reachPx <= BOX_PX
+              && dot.y - reachPx >= 0
+              && dot.y + reachPx <= BOX_PX;
+          }), message);
         }
       }
     }
@@ -504,7 +662,33 @@ test("the dot swatch halo is the shader's device-px width at every pixel ratio",
     assert.ok(Math.abs(retinaGap - HALO_WIDTH_PX / 2) < 1e-9);
     assert.equal(retina.width, 96);
     assert.equal(retina.height, 96);
-    assert.equal(retina.scales[0], 2);
+    assert.equal(retina.transforms[0], 2);
+    assert.equal(normal.transforms[0], 1);
+  } finally {
+    Reflect.deleteProperty(globalThis, "window");
+  }
+});
+
+test("a fractional backing store survives zoom and density repaints", () => {
+  Object.assign(globalThis, { window: { devicePixelRatio: 1.2 } });
+  try {
+    const handle = createDotLegend(
+      KENYA_RAINFALL_STOPS,
+      "mm/month",
+      KENYA_RAINFALL_GRID,
+      5,
+      1,
+      inkPaint("navy"),
+      1.2,
+    );
+    const boxes = (handle.element as unknown as TestElement).children[1];
+    for (const swatch of boxes.children) swatch.sizeWrites = 0;
+
+    handle.repaint(6, 1, 1.2);
+    handle.repaint(6, MAX_DENSITY_RATIO, 1.2);
+
+    assert.ok(boxes.children.every((swatch) => swatch.sizeWrites === 0));
+    assert.ok(boxes.children.every((swatch) => swatch.transforms.at(-1) === 1.2));
   } finally {
     Reflect.deleteProperty(globalThis, "window");
   }
@@ -526,7 +710,7 @@ test("the zoom watch listens only while active and never twice", () => {
   watch.setActive(false);
   watch.setActive(false);
 
-  assert.deepEqual(calls, ["on zoomend", "off zoomend", "on zoomend", "off zoomend"]);
+  assert.deepEqual(calls, ["on render", "off render", "on render", "off render"]);
 });
 
 test("Kenya rainfall keeps numeric ticks at palette positions with its units shown once", () => {
@@ -756,7 +940,7 @@ test("the no-data legend row names its hatched swatch", () => {
   const row = classNoDataLegend() as unknown as TestElement;
   const [swatch, label] = row.children;
 
-  assert.equal(label.textContent, "Hatched: no data");
+  assert.equal(label.textContent, "No data");
   assert.equal(swatch.className, "legend-swatch legend-hatch");
 });
 
@@ -775,13 +959,17 @@ class TestElement {
   readonly style: Record<string, string> = {};
   readonly tagName: string;
   className = "";
-  width = 0;
-  height = 0;
+  private backingWidth = 0;
+  private backingHeight = 0;
+  sizeWrites = 0;
   image: { data: Uint8ClampedArray; width: number; height: number } | null = null;
   readonly attributes: Record<string, string> = {};
-  readonly fills: { color: string }[] = [];
+  readonly fills: { color: string; alpha: number; composite: string }[] = [];
+  readonly rectFills: { alpha: number; composite: string; width: number; height: number }[] = [];
   readonly arcs: number[] = [];
   readonly scales: number[] = [];
+  readonly transforms: number[] = [];
+  clearCount = 0;
   hidden = false;
   type = "";
   private readonly clickListeners: (() => void)[] = [];
@@ -789,6 +977,24 @@ class TestElement {
 
   constructor(tagName: string) {
     this.tagName = tagName;
+  }
+
+  get width(): number {
+    return this.backingWidth;
+  }
+
+  set width(value: number) {
+    this.backingWidth = value;
+    this.sizeWrites += 1;
+  }
+
+  get height(): number {
+    return this.backingHeight;
+  }
+
+  set height(value: number) {
+    this.backingHeight = value;
+    this.sizeWrites += 1;
   }
 
   get textContent(): string {
@@ -820,6 +1026,7 @@ class TestElement {
     const context = {
       fillStyle: "",
       globalAlpha: 1,
+      globalCompositeOperation: "source-over",
       createImageData: (width: number, height: number) => ({
         data: new Uint8ClampedArray(width * height * 4),
         width,
@@ -828,16 +1035,33 @@ class TestElement {
       putImageData: (image: { data: Uint8ClampedArray; width: number; height: number }) => {
         this.image = image;
       },
-      fillRect() {},
+      fillRect: (x: number, y: number, width: number, height: number) => {
+        this.rectFills.push({
+          alpha: context.globalAlpha,
+          composite: context.globalCompositeOperation,
+          width,
+          height,
+        });
+      },
       scale: (ratio: number) => {
         this.scales.push(ratio);
+      },
+      setTransform: (ratio: number) => {
+        this.transforms.push(ratio);
+      },
+      clearRect: () => {
+        this.clearCount += 1;
       },
       beginPath() {},
       arc: (_x: number, _y: number, radiusPx: number) => {
         this.arcs.push(radiusPx);
       },
       fill: () => {
-        this.fills.push({ color: context.fillStyle });
+        this.fills.push({
+          color: context.fillStyle,
+          alpha: context.globalAlpha,
+          composite: context.globalCompositeOperation,
+        });
       },
     };
     return context;
@@ -847,59 +1071,4 @@ class TestElement {
 function inkShareOf(dots: { radiusPx: number; opacity: number }[]) {
   const inkPx = dots.reduce((ink, dot) => ink + Math.PI * dot.radiusPx ** 2 * dot.opacity, 0);
   return inkPx / BOX_PX ** 2;
-}
-
-// A block average checks the shader's cell ownership through lattice fades.
-function mapInkShare(
-  lattice: ReturnType<typeof dotSwatchLattice>,
-  position: number,
-) {
-  const { level, fade, sidesPx, aimedPx, density } = lattice;
-  const radiusAt = (dotLevel: number) =>
-    levelRadiusPx(sidesPx, dotLevel, aimedPx, 1, density);
-  const cells = [-1, 0, 1];
-  let inkPx = 0;
-  for (const cellColumn of cells) {
-    for (const cellRow of cells) {
-      const columns = ownedSlots(cellColumn, level);
-      const rows = ownedSlots(cellRow, level);
-      for (const row of rows) {
-        for (const column of columns) {
-          const was = dotRadiusPx(position, radiusAt(level), areaNoise(column, row, level));
-          const will = dotRadiusPx(
-            position,
-            radiusAt(level + 1),
-            areaNoise(2 * column, 2 * row, level + 1),
-          );
-          const radiusPx = fade === 0
-            ? was
-            : Math.sqrt(was ** 2 + (will ** 2 - was ** 2) * fade);
-          inkPx += Math.PI * radiusPx ** 2;
-        }
-      }
-      if (fade === 0) continue;
-
-      const childColumns = ownedSlots(cellColumn, level + 1);
-      const childRows = ownedSlots(cellRow, level + 1);
-      for (const row of childRows) {
-        for (const column of childColumns) {
-          if (column % 2 === 0 && row % 2 === 0) continue;
-
-          const noise = areaNoise(column, row, level + 1);
-          const radiusPx = dotRadiusPx(position, radiusAt(level + 1), noise);
-          inkPx += fade * Math.PI * radiusPx ** 2;
-        }
-      }
-    }
-  }
-  const cellAreaPx = sidesPx.width * sidesPx.height;
-  return inkPx / (cells.length ** 2 * cellAreaPx);
-}
-
-function ownedSlots(cell: number, level: number) {
-  const slots = [];
-  for (let slot = (cell - 1) * 2 ** level; slot <= (cell + 1) * 2 ** level; slot++) {
-    if (Math.floor(slotPosition(slot, level)) === cell) slots.push(slot);
-  }
-  return slots;
 }

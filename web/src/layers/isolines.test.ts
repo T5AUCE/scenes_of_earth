@@ -524,6 +524,19 @@ test("equal steps do no work and keep the single set", () => {
   assert.equal(overlay.isReady(0, 0), true);
 });
 
+test("an equal step still waits for its newly set source", () => {
+  const { map, setLoaded } = fakeMap();
+  const overlay = mountOverlay(map);
+  setLoaded("temperature-isotherms-a", false);
+  setLoaded("temperature-isotherms-b", false);
+  overlay.setValues([0, 30, 30, 0], 0);
+
+  assert.equal(overlay.isReady(0, 0), false);
+  setLoaded("temperature-isotherms-a", true);
+
+  assert.equal(overlay.isReady(0, 0), true);
+});
+
 test("a step at minus one fades to and from empty", () => {
   const { map, layers } = fakeMap();
   const overlay = mountOverlay(map);

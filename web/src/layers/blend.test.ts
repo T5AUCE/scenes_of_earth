@@ -11,7 +11,7 @@ const hooks = registerHooks({
     if (source && context.parentURL?.endsWith("/src/layers/blend.ts")) {
       return { url: `data:text/javascript,${encodeURIComponent(source)}`, shortCircuit: true };
     }
-    if (context.parentURL?.includes("/src/") && specifier.startsWith(".")) {
+    if (context.parentURL?.includes("/web/src/") && specifier.startsWith(".")) {
       const extension = specifier.endsWith(".ts") ? "" : ".ts";
       return next(new URL(`${specifier}${extension}`, context.parentURL).href, context);
     }
@@ -49,6 +49,9 @@ function mockModule(specifier: string) {
         export const maxTextureSize = () => 64;
         export const setImage = (map, id, image) => {
           (globalThis.capturedImages ??= []).push(image);
+        };
+        export const warmHiddenRaster = async () => {
+          (globalThis.warmedIds ??= []).push("warmed");
         };
       `;
     case "./field":
@@ -344,6 +347,7 @@ test("a range change during a fade repaints one image and drops the other", asyn
   const painted = images().length;
 
   view.restyle();
+  await flush();
 
   assert.equal(images().length, painted + 1);
   assert.deepEqual(opacities().at(-1), [0.8, 0]);
@@ -438,6 +442,28 @@ test("the missing-step note appears at the midpoint when a half ends", async () 
   view.setFrame!("2026-09-01", "2026-10-01", 0.75);
 
   assert.match(note.textContent, /^No temperature for/);
+});
+
+test("entry warms the real source even when the image is already held", async () => {
+  const { view, flush } = mountFadingBlend();
+  await showFirstStep(view, flush);
+  Object.assign(globalThis, { warmedIds: [] });
+  const warming = view.prepareEntry!(FADE_TIMES[0]);
+  await flush();
+  await warming;
+
+  assert.ok((globalThis as { warmedIds: unknown[] }).warmedIds.length > 0);
+});
+
+test("a scrub during an ordinary paint never publishes the older time", async () => {
+  const { view, flush, reports } = mountFadingBlend();
+  view.show("colour");
+  view.setTime(FADE_TIMES[0]);
+  view.setTime(FADE_TIMES[1]);
+  await flush();
+
+  assert.equal(reports.length, 0);
+  assert.equal(view.isFrameReady!(FADE_TIMES[1], FADE_TIMES[2]), false);
 });
 
 const failedSteps = new Set<number>();

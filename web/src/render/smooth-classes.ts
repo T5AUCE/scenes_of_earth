@@ -1,3 +1,4 @@
+import { yieldToBrowser } from "../data";
 import type { Bbox } from "../types";
 
 interface Grid {
@@ -20,18 +21,66 @@ const CORNER_COUNT = 4;
 const KERNEL_SIZE = 4;
 // Weights of different classes that differ by less than this are treated as a tie.
 const TIE_TOLERANCE = 1e-6;
+// Entry slices stay well under a frame while the previous pixels stay responsive.
+const SLICE_BUDGET_MS = 4;
+// Budget checks run this often so one expensive batch cannot overrun the frame.
+const CLASS_CHECK_CELLS = 4096;
 
 /** Map cell values to one-based class IDs and reserve zero for missing or unknown values. */
 export function cellClassIds(values: Float32Array, classValues: number[]) {
+  const indexByValue = buildClassIndex(classValues);
+  const ids = new Uint8Array(values.length);
+  writeClassIds(values, indexByValue, ids, 0, values.length);
+  return ids;
+}
+
+/**
+ * Map cell values in bounded slices so entry keeps responding while decoding.
+ * The output matches cellClassIds exactly.
+ */
+export async function cellClassIdsInSlices(
+  values: Float32Array,
+  classValues: number[],
+  signal?: AbortSignal,
+) {
+  const indexByValue = buildClassIndex(classValues);
+  const ids = new Uint8Array(values.length);
+  let sliceMs = performance.now();
+  for (let start = 0; start < values.length; start += CLASS_CHECK_CELLS) {
+    if (signal?.aborted) throw cancelError();
+    const end = Math.min(values.length, start + CLASS_CHECK_CELLS);
+    writeClassIds(values, indexByValue, ids, start, end);
+    if (performance.now() - sliceMs < SLICE_BUDGET_MS) continue;
+
+    await yieldToBrowser(signal);
+    sliceMs = performance.now();
+  }
+  if (signal?.aborted) throw cancelError();
+  return ids;
+}
+
+function buildClassIndex(classValues: number[]) {
   const indexByValue = new Uint8Array(Math.max(...classValues) + 1);
   classValues.forEach((value, index) => {
     indexByValue[value] = index + 1;
   });
+  return indexByValue;
+}
 
-  const ids = new Uint8Array(values.length);
-  // Indexing by NaN or a fractional value gives undefined, which `| 0` turns into 0.
-  for (let cell = 0; cell < values.length; cell++) ids[cell] = indexByValue[values[cell]] | 0;
-  return ids;
+function writeClassIds(
+  values: Float32Array,
+  indexByValue: Uint8Array,
+  ids: Uint8Array,
+  start: number,
+  end: number,
+) {
+  for (let cell = start; cell < end; cell++) ids[cell] = indexByValue[values[cell]] | 0;
+}
+
+function cancelError(): Error {
+  const error = new Error("Entry preparation was cancelled");
+  error.name = "AbortError";
+  return error;
 }
 
 /**

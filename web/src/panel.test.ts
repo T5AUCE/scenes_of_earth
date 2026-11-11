@@ -162,7 +162,7 @@ test("search works before the layer list arrives", async (context) => {
   );
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(root.querySelector(".chosen")?.textContent, "Nakuru");
+  assert.equal(root.querySelector(".chosen")?.textContent, "Currently selected - Nakuru");
 
   const build = [...root.querySelectorAll("button")].find(
     (button) => button.textContent === "Build scene",

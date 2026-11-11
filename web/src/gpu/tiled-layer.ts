@@ -116,6 +116,48 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
     // The first visible draw compiles, so hidden layers never pay for a program.
   }
 
+  /**
+   * Compile and upload on the map context while hidden, so entry never pays mid-flight.
+   * Visible draws keep their own path. The GL bindings MapLibre caches are saved and
+   * restored, so a promise-driven upload cannot corrupt later native draws. A failure
+   * rejects so entry never certifies an unprepared layer.
+   */
+  async warmUp(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) throw cancelError();
+    if (this.isFailed) throw new Error(`${this.program.name} already failed`);
+    if (this.isContextLost) {
+      if (signal?.aborted) throw cancelError();
+
+      throw new Error(`${this.program.name} lost its context`);
+    }
+    if (!this.map || !this.gl) {
+      if (signal?.aborted) throw cancelError();
+
+      throw new Error(`${this.program.name} has no map`);
+    }
+    if (!this.hasData()) return;
+
+    // The save precedes every compile and upload so foreign bindings survive both paths.
+    const gl = this.gl;
+    const saved = saveGlState(gl);
+    try {
+      if (!this.gpu) {
+        this.build();
+        if (!this.gpu) throw new Error(`Cannot prepare ${this.program.name.toLowerCase()}`);
+      }
+      if (signal?.aborted) throw cancelError();
+
+      this.uploadStaleData(gl, this.gpu);
+    } catch (error) {
+      if ((error as Error)?.name !== "AbortError") this.fail(error as Error);
+
+      throw error;
+    } finally {
+      restoreGlState(gl, saved);
+    }
+    if (signal?.aborted) throw cancelError();
+  }
+
   private readonly onContextLost = (event: Event) => {
     event.preventDefault();
     this.gpu = null;
@@ -578,4 +620,55 @@ export function clearGpuUnavailable(): void {
   } catch {
     // A missing window must not break the restore it cleans up after.
   }
+}
+
+interface SavedGlState {
+  program: WebGLProgram | null;
+  vertexArray: WebGLVertexArrayObject | null;
+  arrayBuffer: WebGLBuffer | null;
+  activeTexture: number;
+  boundTextures: (WebGLTexture | null)[];
+  unpackAlignment: number;
+}
+
+/** Save the bindings warm-up changes, so their restore keeps MapLibre's cache correct. */
+function saveGlState(gl: WebGL2RenderingContext): SavedGlState {
+  const boundTextures: (WebGLTexture | null)[] = [];
+  const activeTexture = gl.getParameter(gl.ACTIVE_TEXTURE) as number;
+  for (let unit = 0; unit < 7; unit++) {
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    boundTextures.push(gl.getParameter(gl.TEXTURE_BINDING_2D) as WebGLTexture | null);
+  }
+  gl.activeTexture(activeTexture);
+  return {
+    program: gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram | null,
+    vertexArray: gl.getParameter(gl.VERTEX_ARRAY_BINDING) as WebGLVertexArrayObject | null,
+    arrayBuffer: gl.getParameter(gl.ARRAY_BUFFER_BINDING) as WebGLBuffer | null,
+    activeTexture,
+    boundTextures,
+    unpackAlignment: gl.getParameter(gl.UNPACK_ALIGNMENT) as number,
+  };
+}
+
+/** Restore the bindings warm-up changed, so later draws see the state the cache expects. */
+function restoreGlState(gl: WebGL2RenderingContext, saved: SavedGlState): void {
+  try {
+    gl.useProgram(saved.program);
+    gl.bindVertexArray(saved.vertexArray);
+    gl.bindBuffer(gl.ARRAY_BUFFER, saved.arrayBuffer);
+    for (let unit = 0; unit < saved.boundTextures.length; unit++) {
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, saved.boundTextures[unit]);
+    }
+    gl.activeTexture(saved.activeTexture);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, saved.unpackAlignment);
+  } catch {
+    // A restore must not hide the upload result the caller already holds.
+  }
+}
+
+function cancelError(): Error {
+  const error = new Error("Entry preparation was cancelled");
+  error.name = "AbortError";
+  return error;
 }

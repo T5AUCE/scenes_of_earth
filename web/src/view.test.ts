@@ -18,7 +18,7 @@ interface ReadyGate {
 
 interface ViewRecord {
   layerId: string;
-  prepareCalls: string[];
+  prepareCalls: (string | null)[];
   showCalls: unknown[];
 }
 
@@ -70,21 +70,46 @@ function freshState(): ViewTestState {
       const state = globalThis.viewTest as ViewTestState;
       const record: ViewRecord = { layerId: context.layer.id, prepareCalls: [], showCalls: [] };
       state.records.push(record);
+      const loadEntry = (stepTime: string | null, signal?: AbortSignal) => {
+        record.prepareCalls.push(stepTime);
+        return new Promise<void>((resolve, reject) => {
+          const key = `${context.layer.id}:${stepTime}`;
+          state.pendingReads.set(key, { resolve, reject });
+          signal?.addEventListener(
+            "abort",
+            () => {
+              if (state.pendingReads.get(key)) {
+                state.pendingReads.delete(key);
+                const error = new Error("Entry preparation was cancelled");
+                error.name = "AbortError";
+                reject(error);
+              }
+            },
+            { once: true },
+          );
+        });
+      };
+      const loader = {
+        load(stepTime: string | null, signal?: AbortSignal) {
+          return loadEntry(stepTime, signal);
+        },
+      };
       return {
         parts: [{ id: context.layer.id, label: context.layer.id, layerIds: [] as string[] }],
         options: [],
         time: context.layer.time,
         ready: state.readyGates.get(context.layer.id)?.promise,
-        loader: {
-          load(stepTime: string) {
-            record.prepareCalls.push(stepTime);
-            return new Promise<void>((resolve, reject) => {
-              state.pendingReads.set(`${context.layer.id}:${stepTime}`, { resolve, reject });
-            });
-          },
-        },
+        loader,
         async prepare(stepTime: string) {
-          return this.loader.load(stepTime);
+          return loader.load(stepTime);
+        },
+        async prepareEntry(stepTime: string | null, signal?: AbortSignal) {
+          if (signal?.aborted) {
+            const error = new Error("Entry preparation was cancelled");
+            error.name = "AbortError";
+            throw error;
+          }
+          return loader.load(stepTime, signal);
         },
         setTime() {},
         show(draw: unknown) {
@@ -147,9 +172,9 @@ afterEach(async () => {
 
 function firstDataOf(mounted: ReturnType<typeof mountScene>) {
   const getTime = () => (globalThis.viewTest as ViewTestState).currentTime;
-  const firstData = mounted.whenFirstDataReady(getTime);
+  const firstData = mounted.whenEntryReady(getTime, () => 0);
 
-  return { waiting: firstData.ready, cancel: firstData.cancel };
+  return { waiting: firstData.ready, cancel: firstData.cancel, retarget: firstData.retarget };
 }
 
 test("preparation keeps its receiver and blocks the wait until its read settles", async () => {
@@ -203,8 +228,9 @@ test("switching colour awaits the drawn layer and drops the hidden one", async (
   await settle();
   assert.deepEqual(recordFor("b").prepareCalls, ["2020-01-01"]);
 
-  readFor("a:2020-01-01").resolve();
-  await settle();
+  const pending = (globalThis.viewTest as ViewTestState).pendingReads;
+  assert.equal(pending.has("a:2020-01-01"), false);
+  assert.equal(pending.has("b:2020-01-01"), true);
   assert.equal(isWaitingSettled(), false);
 
   readFor("b:2020-01-01").resolve();
@@ -228,6 +254,11 @@ test("a static-only deferred ready blocks the wait until it settles", async () =
   assert.equal(isWaitingSettled(), false);
 
   readyFor("a").resolve();
+  await settle();
+  assert.deepEqual(recordFor("a").prepareCalls, [null]);
+  assert.equal(isWaitingSettled(), false);
+
+  readFor("a:null").resolve();
   await waiting;
 
   assert.equal(isWaitingSettled(), true);
@@ -324,7 +355,7 @@ function deferredUnit(): ReadyGate {
   return { promise, resolve };
 }
 
-function track(promise: Promise<void>): () => boolean {
+function track(promise: Promise<unknown>): () => boolean {
   let settled = false;
   void promise.then(() => {
     settled = true;
@@ -334,6 +365,7 @@ function track(promise: Promise<void>): () => boolean {
 }
 
 async function settle() {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 

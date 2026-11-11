@@ -40,6 +40,9 @@ function viewMockModule(specifier: string) {
         export const arrayDoc = (layer) => layer.arrays.value;
         export const readArray = async () => Float32Array.of(10, 20, 0, 10);
         export const decode = (raw) => raw;
+        export const decodeInSlices = async (raw) => raw;
+        export const isCancel = (error) => error?.name === "AbortError";
+        export const yieldToBrowser = async () => {};
         export const readMask = async () => globalThis.__mask ?? Uint8Array.of(1, 1, 0, 1);
       `;
     case "../legend":
@@ -65,6 +68,7 @@ function viewMockModule(specifier: string) {
         };
         export const maxTextureSize = () => 64;
         export const setImage = (map, id, image) => { map.image = image; };
+        export const warmHiddenRaster = async () => {};
       `;
     default:
       return null;
@@ -434,6 +438,14 @@ test("the coastal fill picks the nearer source across unequal distances", () => 
   assert.equal(filled[12], 1);
 });
 
+test("invalid coastal dimensions fall back to metre cells for window and distance", () => {
+  const ids = Uint8Array.of(1, CLASS_HATCH_ID);
+  const mask = Uint8Array.of(1, 1);
+  const filled = fillCoastalGaps(ids, mask, 2, 1, 1, NaN, NaN);
+
+  assert.deepEqual([...filled], [1, 1]);
+});
+
 test("geology fill hides a coastal hatch while land cover keeps it", async () => {
   (globalThis as { __mask?: Uint8Array }).__mask = Uint8Array.of(1, 1, 1, 1);
   (globalThis as { __noDataLegendCalls?: unknown[] }).__noDataLegendCalls = [];
@@ -644,7 +656,7 @@ function createViewHarness(
         classes,
       },
       arrays: { value: { path: "value" } },
-      grid: { bbox: [36, -2, 37, -1], nx: 2, ny: 2 },
+      grid: { bbox: [36, -2, 37, -1], nx: 2, ny: 2, res: 0.5 },
     },
     slots: { fill: "outline", shade: "outline", marks: "outline", lines: "outline", ...slots },
     shift: 0,

@@ -16,6 +16,7 @@ import type { AreaFeature, AreaHit, Bbox } from "./types";
 
 const SEARCH_DEBOUNCE_MS = 300;
 export const NO_AREA_TEXT = "No area selected";
+const AREA_PREFIX = "Currently selected - ";
 const AREA_LEVELS = [
   { value: "", label: "Any Level" },
   { value: "country", label: "ADM0" },
@@ -117,7 +118,7 @@ export function bindAreaSearch(
   function pick(hit: AreaHit) {
     onPick(hit);
     closeResults();
-    chosen.textContent = hit.name;
+    chosen.textContent = `${AREA_PREFIX}${hit.name}`;
     search.value = hit.name;
     fitToBbox(map, hit.bbox, { padding: BROWSE_PADDING_PX, maxZoom: BROWSE_MAX_ZOOM });
     drawPickedOutline(hit);
@@ -132,7 +133,7 @@ export function bindAreaSearch(
     } catch {
       if (thisPick !== pickCount) return;
       geometry = bboxGeometry(hit.bbox);
-      chosen.textContent = `${hit.name} (approximate outline)`;
+      chosen.textContent = `${AREA_PREFIX}${hit.name} (approximate outline)`;
       const notice = `Outline unavailable for ${hit.name}; showing an approximate outline.`;
       onOutlineNotice?.(notice);
     }

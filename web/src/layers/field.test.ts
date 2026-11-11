@@ -7,7 +7,7 @@ import type { LayerContext, LayerDoc } from "../types.ts";
 const hooks = registerHooks({
   resolve(specifier, context, next) {
     const source = mockModule(specifier);
-    if (source && context.parentURL?.endsWith("/src/layers/field.ts")) {
+    if (source && context.parentURL?.includes("/src/")) {
       return { url: `data:text/javascript,${encodeURIComponent(source)}`, shortCircuit: true };
     }
     if (context.parentURL?.includes("/src/") && specifier.startsWith(".")) {
@@ -25,6 +25,9 @@ function mockModule(specifier: string) {
       return `
         export const arrayDoc = () => ({ path: "value" });
         export const decode = () => null;
+        export const decodeInSlices = async (raw) => raw;
+        export const isCancel = (error) => error?.name === "AbortError";
+        export const yieldToBrowser = async () => {};
         export const readArray = async () => null;
         export const readSteps = async () => [];
         export const readMask = async () => globalThis.fieldMask;
@@ -56,6 +59,10 @@ function mockModule(specifier: string) {
       return `
         const element = () => ({ children: [], append(child) { this.children.push(child); } });
         export const createZoomWatch = () => ({ setActive() {} });
+        export const createDotLegend = () => ({
+          element: element(),
+          repaint() {},
+        });
         export const dotLegend = element;
         export const dotLegendKey = (...parts) => JSON.stringify(parts);
         export const gradientLegend = element;
@@ -68,6 +75,9 @@ function mockModule(specifier: string) {
         export const maxTextureSize = () => 64;
         export const removeLayerAndSource = () => {};
         export const setImage = () => {};
+        export const warmHiddenRaster = async () => {
+          (globalThis.warmedIds ??= []).push("warmed");
+        };
         export const setPairOpacities = (map, ids, opacities) => {
           globalThis.capturedOpacities.push([...opacities]);
         };
@@ -91,6 +101,8 @@ function mockModule(specifier: string) {
           isReady: (positions) => globalThis.markUploaded.has(positions),
           setDots(isOn) { globalThis.dotsCalls.push(isOn); },
           setHatch(hasHatch) { globalThis.hatchCalls.push(hasHatch); },
+          renderedDensity: () => globalThis.renderedDensity ?? 1,
+          warmUp: async () => {},
         });
       `;
     case "../gpu/tiled-layer":
@@ -179,7 +191,6 @@ function mockModule(specifier: string) {
               return held.includes(step) && loaded;
             },
             isReady(from, to) {
-              if (from === to) return true;
               return overlay.isSettled(from) && overlay.isSettled(to);
             },
             holds(step) { return held.includes(step); },
@@ -704,6 +715,28 @@ test("dots draw a step they were handed again without rereading it", async () =>
   assert.equal(pendingReads.length, 0);
 });
 
+test("entry warms the real source even when the image is already held", async () => {
+  const { view, flush } = mountField([COMPLETE, COMPLETE, COMPLETE]);
+  await showFirstStep(view, flush);
+  Object.assign(globalThis, { warmedIds: [] });
+  const warming = view.prepareEntry!(TIMES[0]);
+  await flush();
+  await warming;
+
+  assert.ok((globalThis as { warmedIds: unknown[] }).warmedIds.length > 0);
+});
+
+test("an aborted entry settles at once without warming", async () => {
+  const { view, flush } = mountField([COMPLETE, COMPLETE, COMPLETE]);
+  await showFirstStep(view, flush);
+  Object.assign(globalThis, { warmedIds: [] });
+  const controller = new AbortController();
+  controller.abort();
+  await view.prepareEntry!(TIMES[0], controller.signal);
+
+  assert.equal((globalThis as { warmedIds: unknown[] }).warmedIds.length, 0);
+});
+
 async function prepareStep(
   view: ReturnType<typeof createSeriesView>,
   flush: () => Promise<void>,
@@ -842,7 +875,12 @@ function mountWithEncodings(steps: number[][], encodings: string[], end = "2026-
     arrays: {},
   } as unknown as LayerDoc;
   const view = createSeriesView({
-    map: { setPaintProperty() {}, addLayer() {}, getZoom: () => 3 },
+    map: {
+      setPaintProperty() {},
+      addLayer() {},
+      getZoom: () => 3,
+      getPixelRatio: () => 1,
+    },
     store: Promise.resolve({}),
     layer,
     shift: 0,

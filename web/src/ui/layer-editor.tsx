@@ -42,7 +42,7 @@ import { DomNode } from "./dom-node";
 import { GradientStops } from "./gradient-stops";
 import { RangeSection } from "./range-section";
 import { ShowAsSection } from "./show-as-section";
-import { SwatchPicker, type SwatchOption } from "./swatch-picker";
+import { SwatchPicker, swatchAccessibleName, type SwatchOption } from "./swatch-picker";
 import { useSceneStore } from "./use-scene-store";
 
 const COLOUR_NOTICE = "Only one layer can use colour unless layers are combined.";
@@ -507,6 +507,11 @@ function PaletteSection({
     blocks: menu.blocks,
   }));
   if (menu.custom) options.push({ value: "custom", label: "Custom", colors: faceColors });
+  // The heading already names the selection so the caption below would repeat it.
+  const selectedOption = options.find((option) => option.value === selected);
+  const heading = selectedOption
+    ? `${menu.heading} — ${swatchAccessibleName(selectedOption, menu.defaultPalette)}`
+    : menu.heading;
 
   const select = (next: string) => {
     if (next !== "custom") {
@@ -534,14 +539,15 @@ function PaletteSection({
 
   return (
     <fieldset className="editor-colours">
-      <legend>{menu.heading}</legend>
+      <legend>{heading}</legend>
       <SwatchPicker
-        legend={menu.heading}
+        legend={heading}
         group={group}
         options={options}
         value={selected}
         defaultValue={menu.defaultPalette}
         tiles={hasWideFaces(menu)}
+        showCaption={false}
         onSelect={select}
       />
       {menu.custom && customName !== null && (

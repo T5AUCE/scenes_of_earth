@@ -1261,7 +1261,11 @@ test("palette choices are swatches with Custom last and no extra chrome", async 
   ));
 
   const group = container.querySelector(".editor-colours [role=\"radiogroup\"]") as HTMLElement;
-  assert.equal(group.getAttribute("aria-label"), "Colours");
+  assert.equal(group.getAttribute("aria-label"), "Colours — Ink blue (default)");
+  assert.equal(
+    container.querySelector(".editor-colours legend")?.textContent,
+    "Colours — Ink blue (default)",
+  );
   const radios = [...group.querySelectorAll('input[type="radio"]')] as HTMLInputElement[];
   assert.deepEqual(radios.map((radio) => radio.value), ["ink-blue", "batlow", "custom"]);
   assert.deepEqual(
@@ -1271,7 +1275,7 @@ test("palette choices are swatches with Custom last and no extra chrome", async 
   assert.equal(container.querySelector(".swatch-default"), null);
   assert.equal(container.querySelector(".mode-switch"), null);
   assert.doesNotMatch(container.textContent ?? "", /currently shows/);
-  assert.equal(container.querySelector(".swatch-caption")?.textContent, "Ink blue (default)");
+  assert.equal(container.querySelector(".swatch-caption"), null);
 
   await act(async () => root.unmount());
 });
@@ -1309,6 +1313,10 @@ test("picking a palette swatch applies it", async (context) => {
       .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assert.equal(paletteValue, "batlow");
+  assert.equal(
+    container.querySelector(".editor-colours legend")?.textContent,
+    "Colours — Batlow",
+  );
 
   await act(async () => root.unmount());
 });
@@ -1411,8 +1419,10 @@ test("ink choices are swatches and Reset keeps a stored custom ink", async (cont
 
   const group = container.querySelector(".editor-colours [role=\"radiogroup\"]") as HTMLElement;
   assert.equal(group.getAttribute("aria-label"), "Dot ink");
+  assert.equal(container.querySelector(".editor-colours legend")?.textContent, "Dot ink");
   const radios = [...group.querySelectorAll('input[type="radio"]')] as HTMLInputElement[];
   assert.deepEqual(radios.map((radio) => radio.value), ["navy", "white", "custom"]);
+  assert.equal(container.querySelector(".swatch-caption")?.textContent, "Navy (default)");
   assert.equal(container.querySelector(".mode-switch"), null);
   assert.doesNotMatch(container.textContent ?? "", /currently shows/);
 

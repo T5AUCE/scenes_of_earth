@@ -6,11 +6,9 @@ import {
   BASEMAP_MAXZOOM,
   BASEMAP_SOURCE_ID,
   inverseMercatorY,
-  longitudeDelta,
   mercatorY,
-  predictDestinationCenter,
+  scenePyramidTiles,
   targetViewportBounds,
-  tileRangeKey,
   tileInScene,
   viewportBoundsForCenter,
   type ViewportMap,
@@ -70,13 +68,6 @@ test("the contour viewport keeps the earlier unclamped span above the limit", ()
   assert.notEqual(contour.south, clamped.south);
 });
 
-test("the destination prediction extrapolates the centre without moving", () => {
-  const centre = predictDestinationCenter(0, 0, 2, 1, 0.5);
-
-  assert.equal(centre.lng, 1);
-  assert.equal(centre.lat, 0.5);
-});
-
 test("the explicit centre viewport matches the map helper for the same centre", () => {
   const map = fakeMap(8, 0, 0, 40, 20);
   const bounds = targetViewportBounds(map, 9)!;
@@ -103,7 +94,7 @@ test("the basemap descriptor prefers the loaded source over the style", () => {
   assert.equal(basemapDescriptor({ getSource: () => null }), null);
 });
 
-test("a shifted centre moves the vertical midpoint to the predicted latitude", () => {
+test("a shifted centre moves the vertical midpoint to the given latitude", () => {
   const current = { west: -1, south: -1, east: 1, north: 1 };
   const still = viewportBoundsForCenter(current, 0, 0, 8, 8);
   const north = viewportBoundsForCenter(current, 0, 10, 8, 8);
@@ -115,7 +106,7 @@ test("a shifted centre moves the vertical midpoint to the predicted latitude", (
   assert.ok(Math.abs(north.east - north.west - (still.east - still.west)) < 1e-9);
 });
 
-test("high latitudes stay finite around the predicted centre", () => {
+test("high latitudes stay finite around the given centre", () => {
   const current = { west: -1, south: 83.5, east: 1, north: 84.5 };
   const polar = viewportBoundsForCenter(current, 0, 84, 8, 8);
 
@@ -124,27 +115,42 @@ test("high latitudes stay finite around the predicted centre", () => {
   assert.ok(polar.south < 84 && 84 < polar.north);
 });
 
-test("longitude deltas wrap the dateline instead of spanning the world", () => {
-  assert.equal(longitudeDelta(179, -179), 2);
-  assert.equal(longitudeDelta(-179, 179), -2);
-  assert.equal(longitudeDelta(10, 11), 1);
-  assert.equal(longitudeDelta(10, 10), 0);
+test("the scene pyramid lists whole levels coarsest first until the next would overflow", () => {
+  const tiles = scenePyramidTiles([10, 10, 12, 12], 5, 12, 40);
+
+  assert.ok(tiles.length > 0 && tiles.length <= 40);
+  const zooms = tiles.map((tile) => tile.z);
+  assert.deepEqual(zooms, [...zooms].sort((first, second) => first - second));
+  assert.ok(tiles.every((tile) => tileInScene(tile, [10, 10, 12, 12])));
+  const deepest = Math.max(...zooms);
+  const nextLevel = scenePyramidTiles([10, 10, 12, 12], deepest + 1, deepest + 1, 1000);
+  assert.ok(tiles.length + nextLevel.length > 40);
 });
 
-test("tile range keys ignore sub-tile pans but move with the covered tiles", () => {
-  const bounds = { west: 0.3, south: 5.3, east: 0.4, north: 5.4 };
-  const nudged = { west: 0.31, south: 5.31, east: 0.41, north: 5.41 };
-  const shifted = { west: 5, south: 5.3, east: 5.1, north: 5.4 };
+test("the scene pyramid keeps the tiles nearest the centre first within a level", () => {
+  const tiles = scenePyramidTiles([0, 0, 8, 8], 6, 6, 500);
+  const centre = tiles[0];
 
-  assert.equal(tileRangeKey(bounds, 9), tileRangeKey(nudged, 9));
-  assert.notEqual(tileRangeKey(bounds, 9), tileRangeKey(shifted, 9));
-  assert.notEqual(tileRangeKey(bounds, 9), tileRangeKey(bounds, 10));
+  assert.deepEqual([centre.x, centre.y], [32, 31]);
 });
 
-test("tile range keys clamp rows at the polar limit", () => {
-  const polar = { west: 0, south: 80, east: 1, north: 89 };
+test("the scene pyramid wraps a scene that crosses the antimeridian", () => {
+  const tiles = scenePyramidTiles([171, 50, 231, 55], 4, 4, 100);
+  const columns = new Set(tiles.map((tile) => tile.x));
 
-  assert.match(tileRangeKey(polar, 4), /:0-\d+$/);
+  assert.ok(columns.has(15) && columns.has(0) && columns.has(2));
+  assert.ok(tiles.every((tile) => tile.x >= 0 && tile.x < 16));
+});
+
+test("a first zoom past the last zoom lists nothing", () => {
+  const tiles = scenePyramidTiles([10, 10, 10.1, 10.1], 12, 12, 10);
+
+  assert.ok(tiles.length > 0 && tiles.every((tile) => tile.z === 12));
+  assert.equal(scenePyramidTiles([10, 10, 12, 12], 13, 12, 10).length, 0);
+});
+
+test("a level beyond a zero budget is never listed", () => {
+  assert.deepEqual(scenePyramidTiles([10, 10, 12, 12], 5, 12, 0), []);
 });
 
 function fakeMap(

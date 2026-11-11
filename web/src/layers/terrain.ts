@@ -4,7 +4,6 @@ import type { Map as MapLibreMap } from "maplibre-gl";
 import { addressSearch, shadeFadeEnabled } from "../gesture-quality";
 import { removeLayerAndSource } from "../map";
 import { CONTOUR_COLORS, contourColor, DEFAULT_CONTOUR_COLOR } from "../render/palettes";
-import { BASEMAP_SOURCE_ID } from "../render/tile-viewport";
 import { displayUnitFor, isUnitFor, unitOptions } from "../units";
 import type {
   LayerContext,
@@ -22,8 +21,9 @@ import {
   terrainTileBounds,
 } from "./contour-overlay";
 import { RELIEF_STRENGTH, reliefPaint } from "./relief";
+import { DEM_PRELOAD_ID, demFetcherFor, demPreloadSource } from "./scene-preload";
 import { ShadeRaster } from "./shade-raster";
-import type { TilePrefetchWiring } from "./tile-prefetch";
+import { currentScenePreload } from "./tile-prefetch";
 
 // Shade over a colour fill is eased so the colour stays readable.
 const COLOUR_UNDER_FACTOR = 0.75;
@@ -80,14 +80,16 @@ export function createTerrainView(context: LayerContext): LayerView {
     },
   };
 
-  const contourOverlay = new ContourOverlay(
-    context,
-    dem,
-    tiles,
-    stats as TerrainStats,
-    undefined,
-    terrainPrefetchWiring(layer.id),
-  );
+  // The contour traces wait for the elevation tiles, so the DEM registers first.
+  const preload = currentScenePreload();
+  preload?.add(demPreloadSource({
+    template: tiles.url,
+    maxzoom: cappedDemMaxZoom(tiles.maxzoom),
+    bbox: layer.grid.bbox,
+    reliefSourceId: id,
+    fetcher: demFetcherFor(dem),
+  }));
+  const contourOverlay = new ContourOverlay(context, dem, tiles, stats as TerrainStats, preload);
   const stopWatchingTiles = watchTerrainTiles(
     map,
     [id, ...contourOverlay.contourSourceIds],
@@ -151,17 +153,10 @@ export function createTerrainView(context: LayerContext): LayerView {
     legend: () => contourOverlay.legend,
     destroy: () => {
       stopWatchingTiles();
+      preload?.remove(DEM_PRELOAD_ID);
       contourOverlay.destroy();
       shading.destroy();
     },
-  };
-}
-
-/** Visible source ids the prefetch scheduler treats as outranking speculation. */
-export function terrainPrefetchWiring(layerId: string): TilePrefetchWiring {
-  return {
-    reliefSourceId: `${layerId}-relief`,
-    basemapSourceId: BASEMAP_SOURCE_ID,
   };
 }
 
