@@ -311,55 +311,7 @@ export function layerForSource(sourceId: string | undefined): TileLayerKey | nul
   return null;
 }
 
-/** Visible first loads that scene preload had ready or had missed, per source. */
-export interface PreloadCounts {
-  hits: number;
-  misses: number;
-}
-
-/** How much of the scene preload has finished, in tasks and downloaded bytes. */
-export interface PreloadProgress {
-  done: number;
-  total: number;
-  bytes: number;
-}
-
-/** The preload numbers the badge shows. */
-export interface PreloadSnapshot {
-  progress: PreloadProgress;
-  counts: Record<TileLayerKey, PreloadCounts>;
-}
-
-const preloadCounts: Record<TileLayerKey, PreloadCounts> = {
-  terrain: { hits: 0, misses: 0 },
-  basemap: { hits: 0, misses: 0 },
-  contours: { hits: 0, misses: 0 },
-};
-let preloadProgress: PreloadProgress = { done: 0, total: 0, bytes: 0 };
 let preloadDisabled = false;
-
-/** Clear the preload numbers when a scene opens, so the badge shows this scene only. */
-export function beginPreload(): void {
-  for (const key of ["terrain", "basemap", "contours"] as const) {
-    preloadCounts[key] = { hits: 0, misses: 0 };
-  }
-  preloadProgress = { done: 0, total: 0, bytes: 0 };
-}
-
-/** Count the first visible load of a tile that preload had ready or still downloading. */
-export function notePreloadHit(source: TileLayerKey): void {
-  preloadCounts[source].hits += 1;
-}
-
-/** Count the first visible load of a tile that preload had not prepared. */
-export function notePreloadMiss(source: TileLayerKey): void {
-  preloadCounts[source].misses += 1;
-}
-
-/** Record how many preload tasks have finished out of those planned, and the bytes held. */
-export function setPreloadProgress(done: number, total: number, bytes: number): void {
-  preloadProgress = { done, total, bytes };
-}
 
 /** Remember whether `?preload=0` disabled preload, so the badge says so. */
 export function setPreloadDisabled(disabled: boolean): void {
@@ -371,16 +323,54 @@ export function isPreloadDisabled(): boolean {
   return preloadDisabled;
 }
 
-/** Copy the preload numbers so the badge never mutates tracker state. */
-export function preloadSnapshot(): PreloadSnapshot {
-  return {
-    progress: { ...preloadProgress },
-    counts: {
-      terrain: { ...preloadCounts.terrain },
-      basemap: { ...preloadCounts.basemap },
-      contours: { ...preloadCounts.contours },
-    },
-  };
+/** Warmed HTTP-cache requests per layer, counted while a scene preload runs. */
+export type WarmerCounts = Record<TileLayerKey, number>;
+
+/** How many warmer tasks have finished out of those planned. */
+export interface WarmerProgress {
+  done: number;
+  total: number;
+}
+
+/** The warmer numbers the badge shows. */
+export interface WarmerSnapshot {
+  progress: WarmerProgress;
+  counts: WarmerCounts;
+}
+
+let warmerOnFlag = false;
+let warmerProgress: WarmerProgress = { done: 0, total: 0 };
+const warmerCounts: WarmerCounts = { terrain: 0, basemap: 0, contours: 0 };
+
+/** Remember whether a scene preload runs, so the badge shows its counts. */
+export function setWarmerEnabled(enabled: boolean): void {
+  warmerOnFlag = enabled;
+}
+
+/** Whether a scene preload runs, so the badge shows its counts. */
+export function isWarmerEnabled(): boolean {
+  return warmerOnFlag;
+}
+
+/** Clear the warmer numbers when a scene opens, so the badge shows this scene only. */
+export function beginWarmer(): void {
+  warmerProgress = { done: 0, total: 0 };
+  for (const key of ["terrain", "basemap", "contours"] as const) warmerCounts[key] = 0;
+}
+
+/** Count one warmer fetch for its layer. */
+export function noteWarmerRequest(source: TileLayerKey): void {
+  warmerCounts[source] += 1;
+}
+
+/** Record how many warmer tasks have finished out of those planned. */
+export function setWarmerProgress(done: number, total: number): void {
+  warmerProgress = { done, total };
+}
+
+/** Copy the warmer numbers so the badge never mutates tracker state. */
+export function warmerSnapshot(): WarmerSnapshot {
+  return { progress: { ...warmerProgress }, counts: { ...warmerCounts } };
 }
 
 function sourceIdOf(event: unknown): string | undefined {
@@ -476,8 +466,8 @@ function snapshot(
     gpuUnavailable: gpu.unavailable,
     bake: readBakeSnapshot(),
     longtasks,
-    preload: preloadSnapshot(),
     entry: entryStats.waitMs === null ? undefined : { ...entryStats },
+    warmer: isWarmerEnabled() ? warmerSnapshot() : undefined,
   };
 }
 
@@ -524,8 +514,8 @@ export interface DevStatsSnapshot {
   longtasks: number;
   /** Per-layer settle times after the last zoom step, present only while tracking. */
   tiles?: TileSettleSnapshot;
-  /** Scene preload progress and hit rates, hidden until a scene plans its first task. */
-  preload?: PreloadSnapshot;
+  /** Warmer progress and request counts, present only while a scene preload runs. */
+  warmer?: WarmerSnapshot;
   /** Pre-flight wait and landing-to-fade gap of the last entry, absent outside an entry. */
   entry?: EntryStats;
 }
@@ -556,7 +546,8 @@ export function formatDevStats(snapshot: DevStatsSnapshot): string {
   const loading = formatEntrySuffix(snapshot.entry)
     + formatBakeSuffix(snapshot.bake)
     + formatTileSuffix(snapshot.tiles)
-    + formatPreloadSuffix(snapshot.preload)
+    + formatPreloadSuffix()
+    + formatWarmerSuffix(snapshot.warmer)
     + ` · ${snapshot.longtasks} long`;
 
   return `${frame}\n${loading.slice(" · ".length)}`;
@@ -606,28 +597,23 @@ function formatTileSuffix(tiles?: TileSettleSnapshot): string {
   return ` · ${formatTileSettlePart(tiles)}`;
 }
 
-/** Build the badge's preload part from the progress and the per-source hit rates. */
-export function formatPreloadPart(preload: PreloadSnapshot): string {
-  if (isPreloadDisabled()) return "preload off";
-  const { done, total, bytes } = preload.progress;
-  const { terrain, basemap, contours } = preload.counts;
-  return `preload ${done}/${total} tiles ${formatBytes(bytes)}`
-    + ` hit terrain ${formatHitRate(terrain)} basemap ${formatHitRate(basemap)}`
-    + ` contours ${formatHitRate(contours)}`;
-}
-
-/** The preload suffix for the badge line. It stays empty until a scene plans preload work. */
-function formatPreloadSuffix(preload?: PreloadSnapshot): string {
+/** The preload suffix for the badge line, shown only when preload is disabled. */
+function formatPreloadSuffix(): string {
   if (isPreloadDisabled()) return " · preload off";
-  if (!preload || preload.progress.total === 0) return "";
-  return ` · ${formatPreloadPart(preload)}`;
+  return "";
 }
 
-/** Hit share of decided first visible loads, or a dash before the first one. */
-function formatHitRate(counts: PreloadCounts): string {
-  const decided = counts.hits + counts.misses;
-  if (decided === 0) return "—";
-  return `${Math.round(counts.hits / decided * 100)}%`;
+/** Build the badge's warmer part from its progress and per-layer request counts. */
+export function formatWarmerPart(warmer: WarmerSnapshot): string {
+  const { done, total } = warmer.progress;
+  const { terrain, basemap, contours } = warmer.counts;
+  return `warmer ${done}/${total} tiles terrain ${terrain} basemap ${basemap} contours ${contours}`;
+}
+
+/** The warmer suffix for the badge line. It stays empty unless a scene preload runs. */
+function formatWarmerSuffix(warmer?: WarmerSnapshot): string {
+  if (!warmer) return "";
+  return ` · ${formatWarmerPart(warmer)}`;
 }
 
 function formatTileLayer(name: string, stats: TileStepStats): string {

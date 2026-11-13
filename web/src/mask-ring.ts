@@ -1,13 +1,9 @@
 /**
- * Builds a world-wide mask polygon with the scene area cut out of it.
+ * Builds the ring that covers the world outside the scene area for the `within` label clip.
  *
- * MapLibre tiles the polygon with geojson-vt and then decides which rings are holes only from
- * their winding. Quantising a tiny island to the tile grid can flip that winding, which makes
- * every later hole (the mainland) part of the wrong polygon and fills the tile white over the
- * area. A hole that touches the clipped tile box on several sides is also dropped by earcut. So
- * the mask has no holes at all. Each island is joined to the ring around it by a zero-width
- * slit, and the result is one ring. Lakes use the same slit with the lake as the outer ring, so
- * nested islands stay cut out.
+ * The map mask is drawn on the GPU, so this ring only feeds MapLibre's tiled filter until the
+ * label clip is replaced. That filter decides holes from winding alone, so the ring has no
+ * holes. Each island is joined to the ring around it by a zero-width slit.
  */
 
 const HALF_WORLD_DEG = 180;
@@ -28,62 +24,6 @@ export function maskRing(islands: Ring[]): Ring {
   const canonical = Math.sign(signedArea(world));
 
   return keyholeRing(world, islands, canonical);
-}
-
-/**
- * Returns the world mask plus one mask polygon per lake, with nested islands cut back out.
- * Every water polygon keeps the world winding so MapLibre paints it as a separate polygon.
- */
-export function buildMaskRings(exteriors: Ring[], interiors: Ring[]): Ring[] {
-  const parents = parentIndex([...exteriors, ...interiors]);
-  const topLevel = exteriors.filter((ring) => parents.get(ring) === null);
-  const centred = topLevel.length > 0 ? topLevel : exteriors;
-  const world = worldRing(centred.length > 0 ? centred : interiors);
-  const canonical = Math.sign(signedArea(world));
-  const worldKeyhole = keyholeRing(world, topLevel, canonical);
-  const lakeKeyholes = interiors.map((lake) => {
-    const children = exteriors.filter((land) => parents.get(land) === lake);
-
-    return keyholeRing(lake, children, canonical);
-  });
-
-  return [worldKeyhole, ...lakeKeyholes];
-}
-
-function parentIndex(rings: Ring[]): Map<Ring, Ring | null> {
-  const parents = new Map<Ring, Ring | null>();
-  for (const ring of rings) parents.set(ring, parentOf(ring, rings));
-
-  return parents;
-}
-
-function parentOf(ring: Ring, candidates: Ring[]): Ring | null {
-  let parent: Ring | null = null;
-  let parentArea = Infinity;
-  for (const candidate of candidates) {
-    if (candidate === ring) continue;
-    if (!isInsideRing(candidate, ring[0])) continue;
-    const area = Math.abs(signedArea(candidate));
-    if (area < parentArea) {
-      parent = candidate;
-      parentArea = area;
-    }
-  }
-
-  return parent;
-}
-
-function isInsideRing(outer: Ring, point: Position): boolean {
-  let inside = false;
-  for (let i = 0, j = outer.length - 1; i < outer.length; j = i++) {
-    const [x1, y1] = outer[i];
-    const [x2, y2] = outer[j];
-    if (y1 > point[1] === y2 > point[1]) continue;
-    const crossing = x1 + ((point[1] - y1) / (y2 - y1)) * (x2 - x1);
-    if (crossing > point[0]) inside = !inside;
-  }
-
-  return inside;
 }
 
 // The ring is one world wide and centred on the area, as MapLibre cannot cut holes in a wider one.

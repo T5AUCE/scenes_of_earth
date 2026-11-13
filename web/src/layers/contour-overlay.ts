@@ -35,7 +35,7 @@ import {
   contourPreloadSource,
   demFetcherFor,
 } from "./scene-preload";
-import { currentScenePreload, withVisibleDemand, type ScenePreload } from "./tile-prefetch";
+import { currentScenePreload, type ScenePreloader } from "./tile-prefetch";
 
 export { levelsForZoom } from "../contour-ladder";
 
@@ -46,7 +46,7 @@ const BOLD_LINE_WIDTH_PX = 1.1;
 const LABEL_SIZE_PX = 10;
 const LABEL_SPACING_PX = 350;
 const LABEL_HALO_WIDTH_PX = 1;
-const LABEL_MAX_ANGLE_DEG = 120;
+const LABEL_MAX_ANGLE_DEG = 45;
 const PAGE_BACKGROUND_PROPERTY = "--page-background";
 
 // Version 0.1.1 materializes only one pixel of padding before tracing contours.
@@ -77,63 +77,10 @@ export function sharedDemSource(tiles: TerrainTiles): DemSource {
     worker: true,
     cacheSize: DEM_CACHE_TILES,
   });
-  trackVisibleProtocols(source);
   source.setupMaplibre(maplibregl);
   memoizeMissingDemTiles(source);
   demSources.set(key, source);
   return source;
-}
-
-const trackedProtocols = new WeakSet<DemSource>(); // Sources already wrapped.
-
-/**
- * Suspend background preload launches while a visible contour or DEM protocol request
- * runs. The plugin protocols call the remote manager directly and never enter the store
- * broker, so they bracket here instead. Preload tracing calls the manager directly and
- * never these protocols, so background work never counts itself as visible.
- */
-export function trackVisibleProtocols(dem: DemSource): void {
-  if (trackedProtocols.has(dem)) return;
-  trackedProtocols.add(dem);
-  dem.contourProtocolV4 = wrapProtocolAction(dem.contourProtocolV4);
-  dem.sharedDemProtocolV4 = wrapProtocolAction(dem.sharedDemProtocolV4);
-  // The registered handlers captured the original actions at construction, so rebuild them here.
-  dem.contourProtocol = compatProtocol(dem.contourProtocolV4);
-  dem.sharedDemProtocol = compatProtocol(dem.sharedDemProtocolV4);
-}
-
-type ProtocolRequest = Parameters<DemSource["contourProtocolV4"]>[0];
-type ProtocolCallback = (
-  error?: Error,
-  data?: unknown,
-  cacheControl?: string,
-  expires?: string,
-) => void;
-
-function wrapProtocolAction(
-  action: DemSource["contourProtocolV4"],
-): DemSource["contourProtocolV4"] {
-  return (request: ProtocolRequest, abort: AbortController) => {
-    return withVisibleDemand(() => action(request, abort));
-  };
-}
-
-function compatProtocol(action: DemSource["contourProtocolV4"]): DemSource["contourProtocol"] {
-  const compat = (request: ProtocolRequest, arg2: AbortController | ProtocolCallback) => {
-    if (arg2 instanceof AbortController) return action(request, arg2);
-    const abort = new AbortController();
-    action(request, abort).then(
-      (result) => arg2(
-        undefined,
-        result.data,
-        result.cacheControl as string | undefined,
-        result.expires as unknown as string | undefined,
-      ),
-      (error: unknown) => arg2(error as Error),
-    );
-    return { cancel: () => abort.abort() };
-  };
-  return compat as DemSource["contourProtocol"];
 }
 
 /**
@@ -243,7 +190,7 @@ export class ContourOverlay {
   private labelId?: string;
   private labelsFrozen = false;
   private labelFadeZeroed = false;
-  private readonly preload: ScenePreload | null;
+  private readonly preload: ScenePreloader | null;
   private readonly demMaxzoom: number;
   private readonly demTemplate: string;
   private readonly fetcher: ReturnType<typeof demFetcherFor>;
@@ -256,7 +203,7 @@ export class ContourOverlay {
     dem: DemSource,
     tiles: TerrainTiles,
     stats: TerrainStats,
-    preload: ScenePreload | null = currentScenePreload(),
+    preload: ScenePreloader | null = currentScenePreload(),
   ) {
     const { map, layer, beforeId, display } = context;
     // The interval note shares the isotherm note's style so both legend lines read alike.
@@ -316,7 +263,6 @@ export class ContourOverlay {
       return;
     }
     this.preload?.add(contourPreloadSource({
-      lineSourceId: this.lineSourceId,
       plan: () => ({
         ladder: this.ladder,
         maxzoom: this.maxzoom,

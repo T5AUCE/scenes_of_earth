@@ -86,7 +86,6 @@ export function createTerrainView(context: LayerContext): LayerView {
     template: tiles.url,
     maxzoom: cappedDemMaxZoom(tiles.maxzoom),
     bbox: layer.grid.bbox,
-    reliefSourceId: id,
     fetcher: demFetcherFor(dem),
   }));
   const contourOverlay = new ContourOverlay(context, dem, tiles, stats as TerrainStats, preload);

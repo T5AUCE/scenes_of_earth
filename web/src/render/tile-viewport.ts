@@ -157,6 +157,95 @@ export function scenePyramidTiles(
   return tiles;
 }
 
+/** Ancestor tiles warmed per zoom level on each dwell, so fallback stays covered. */
+export const DWELL_ANCESTOR_TILES_PER_LEVEL = 12;
+/** Next-level tiles warmed around the viewport on each dwell. */
+export const DWELL_CHILD_TILES = 48;
+/** Tiles warmed two levels down around the viewport centre on each dwell. */
+export const DWELL_GRANDCHILD_TILES = 16;
+/** Total tile requests a single dwell may issue across all levels. */
+export const DWELL_REQUEST_CAP = 64;
+
+/** The viewport a dwell warms, in degrees. */
+export interface DwellViewport {
+  west: number;
+  south: number;
+  east: number;
+  north: number;
+}
+
+/**
+ * Intersect a dwell viewport with a scene bbox, or null when they do not overlap.
+ * Longitudes wrap past the antimeridian so crossing scenes still clip.
+ */
+export function clipViewportToBbox(
+  viewport: DwellViewport,
+  bbox: Bbox,
+): DwellViewport | null {
+  const south = Math.max(viewport.south, bbox[1]);
+  const north = Math.min(viewport.north, bbox[3]);
+  if (south > north) return null;
+  const viewportWest = toLongitude360(viewport.west);
+  const viewportWidth = viewport.east >= viewport.west
+    ? viewport.east - viewport.west
+    : viewport.east - viewport.west + 360;
+  const boxWest = toLongitude360(bbox[0]);
+  const boxWidth = bbox[2] - bbox[0];
+  const shiftedWest = viewportWest + Math.round((boxWest - viewportWest) / 360) * 360;
+  const overlapWest = Math.max(shiftedWest, boxWest);
+  const overlapEast = Math.min(shiftedWest + viewportWidth, boxWest + boxWidth);
+  if (overlapWest > overlapEast) return null;
+  let west = overlapWest;
+  let east = overlapEast;
+  while (west > 180) {
+    west -= 360;
+    east -= 360;
+  }
+  while (west <= -180) {
+    west += 360;
+    east += 360;
+  }
+
+  return {
+    west,
+    south,
+    east,
+    north,
+  };
+}
+
+/**
+ * The tiles a dwell warms after the camera rests: the viewport's ancestors from the fitted
+ * zoom to just below the current integer zoom, then the next level down and a smaller ring
+ * two levels down. Ancestors come first so fallback coverage wins when the cap truncates,
+ * and the centre-first order of each level keeps the middle warm while edges can wait.
+ */
+export function dwellWarmTiles(
+  viewport: DwellViewport,
+  fittedZoom: number,
+  currentZoom: number,
+): WarmTile[] {
+  const current = Math.floor(currentZoom);
+  const first = Math.max(0, Math.floor(fittedZoom));
+  const warmed: WarmTile[] = [];
+  const collect = (zoom: number, limit: number): void => {
+    warmed.push(...warmTilesForZoom(
+      viewport.west,
+      viewport.south,
+      viewport.east,
+      viewport.north,
+      zoom,
+      limit,
+    ));
+  };
+  for (let zoom = first; zoom < current; zoom += 1) {
+    collect(zoom, DWELL_ANCESTOR_TILES_PER_LEVEL);
+  }
+  collect(current + 1, DWELL_CHILD_TILES);
+  collect(current + 2, DWELL_GRANDCHILD_TILES);
+  return warmed.slice(0, DWELL_REQUEST_CAP);
+}
+
 /** Web Mercator y of a latitude in degrees. */
 export function mercatorY(latitude: number): number {
   const radians = latitude * Math.PI / 180;
@@ -190,4 +279,8 @@ function clampLatitudeValue(latitude: number): number {
     Math.max(latitude, -WEB_MERCATOR_MAX_LAT_DEG),
     WEB_MERCATOR_MAX_LAT_DEG,
   );
+}
+
+function toLongitude360(longitude: number): number {
+  return ((longitude % 360) + 360) % 360;
 }

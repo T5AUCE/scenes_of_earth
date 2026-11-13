@@ -5,6 +5,9 @@ import {
   basemapDescriptor,
   BASEMAP_MAXZOOM,
   BASEMAP_SOURCE_ID,
+  clipViewportToBbox,
+  DWELL_REQUEST_CAP,
+  dwellWarmTiles,
   inverseMercatorY,
   mercatorY,
   scenePyramidTiles,
@@ -149,8 +152,71 @@ test("a first zoom past the last zoom lists nothing", () => {
   assert.equal(scenePyramidTiles([10, 10, 12, 12], 13, 12, 10).length, 0);
 });
 
+test("a dwell warms ancestors first and stays inside the request cap", () => {
+  const viewport = { west: -20, south: -10, east: 20, north: 10 };
+  const tiles = dwellWarmTiles(viewport, 5, 9.3);
+  const zooms = tiles.map((tile) => tile.z);
+
+  assert.ok(tiles.length > 0 && tiles.length <= DWELL_REQUEST_CAP);
+  assert.deepEqual(zooms, [...zooms].sort((first, second) => first - second));
+  assert.ok(Math.min(...zooms) >= 5 && Math.max(...zooms) <= 11);
+  const ancestors = tiles.filter((tile) => tile.z < 9);
+  for (let zoom = 5; zoom < 9; zoom += 1) {
+    assert.ok(ancestors.filter((tile) => tile.z === zoom).length <= 12);
+  }
+  assert.ok(tiles.filter((tile) => tile.z === 10).length <= 48);
+  assert.ok(tiles.filter((tile) => tile.z === 11).length <= 16);
+});
+
+test("a dwell at the fitted zoom warms only the next two levels", () => {
+  const viewport = { west: -20, south: -10, east: 20, north: 10 };
+  const tiles = dwellWarmTiles(viewport, 8, 8);
+
+  assert.ok(tiles.length > 0 && tiles.every((tile) => tile.z === 9 || tile.z === 10));
+});
+
+test("a dwell after a zoom out warms nothing below the current zoom", () => {
+  const viewport = { west: -20, south: -10, east: 20, north: 10 };
+  const tiles = dwellWarmTiles(viewport, 9, 6);
+
+  assert.ok(tiles.length > 0 && tiles.every((tile) => tile.z >= 7));
+});
+
 test("a level beyond a zero budget is never listed", () => {
   assert.deepEqual(scenePyramidTiles([10, 10, 12, 12], 5, 12, 0), []);
+});
+
+test("a clipped viewport keeps the overlap and drops a disjoint one", () => {
+  const overlap = clipViewportToBbox(
+    { west: 36, south: -2, east: 38, north: 0 },
+    [36.5, -1.5, 37.5, -0.5],
+  );
+
+  assert.deepEqual(overlap, { west: 36.5, south: -1.5, east: 37.5, north: -0.5 });
+  assert.equal(
+    clipViewportToBbox({ west: -20, south: -10, east: 20, north: 10 }, [36.5, -1.5, 37.5, -0.5]),
+    null,
+  );
+});
+
+test("a clipped viewport wraps a scene that crosses the antimeridian", () => {
+  const overlap = clipViewportToBbox(
+    { west: 170, south: 40, east: -170, north: 60 },
+    [171, 50, 231, 55],
+  );
+
+  assert.deepEqual(overlap, { west: 171, south: 50, east: 190, north: 55 });
+  assert.deepEqual(
+    clipViewportToBbox({ west: 175, south: -20, east: -175, north: -15 }, [176, -19, 182, -16]),
+    { west: 176, south: -19, east: 182, north: -16 },
+  );
+  assert.deepEqual(
+    clipViewportToBbox(
+      { west: -179.5, south: -20, east: -178.5, north: -15 },
+      [176, -19, 182, -16],
+    ),
+    { west: -179.5, south: -19, east: -178.5, north: -16 },
+  );
 });
 
 function fakeMap(

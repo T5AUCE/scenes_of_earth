@@ -1,10 +1,7 @@
 /** Switch one map between the world and a single scene, holding the camera and masking the rest. */
 import type {
   FilterSpecification,
-  GeoJSONSource,
   Map as MapLibreMap,
-  MapEventType,
-  MapSourceDataEvent,
   VisibilitySpecification,
 } from "maplibre-gl";
 
@@ -36,15 +33,16 @@ import {
   type EntryReveal,
 } from "./entry-curtain";
 import { makeHtmlElement } from "./html";
+import { createMaskLayers } from "./gpu/mask-layer";
+import { keepThroughContextLoss } from "./gpu/tiled-layer";
 import { polygonParts } from "./label-filter";
 import { basemapPreloadSource } from "./layers/scene-preload";
 import {
   closeScenePreload,
   currentScenePreload,
   openScenePreload,
-  PRELOAD_WARM_CAP_MS,
 } from "./layers/tile-prefetch";
-import { buildMaskRings } from "./mask-ring";
+import { maskRing } from "./mask-ring";
 import { MAX_ZOOM, removeLayerAndSource, WORLD_VIEW } from "./map";
 import { resetFetchStats } from "./merging-store";
 import { shiftLongitudes, worldShift } from "./render/mercator";
@@ -62,14 +60,12 @@ import {
 } from "./ui/panel-contract";
 import { type EntryPreparation, mountScene, OUTLINE_ID } from "./view";
 
-type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
-
 const MASK_ID = "soe-scene-mask";
 const FADE_ID = "soe-scene-fade";
 const MASK_OPACITY = 1;
 // Outside labels show through this much of the page background, so they read as faded.
 const FADE_OPACITY = 0.6;
-// Hidden fills stay fully transparent until the reveal stages the scene under the curtain.
+// Hidden masks stay fully transparent until the reveal stages the scene under the curtain.
 const HIDDEN_OPACITY = 0;
 const PAGE_BACKGROUND_PROPERTY = "--page-background";
 
@@ -110,6 +106,13 @@ export interface EntryPanel {
   setInert(isInert: boolean): void;
   hideAreaOutline(): void;
   showAreaOutline(): void;
+}
+
+/** The two GPU layers that cover the outside, and the call that stops keeping them alive. */
+interface MaskLayers {
+  mask: ReturnType<typeof createMaskLayers>[number];
+  fade: ReturnType<typeof createMaskLayers>[number];
+  release(): void;
 }
 
 /** Group the scene's column and time bar with its full-view dialog. */
@@ -199,7 +202,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       },
     });
 
-    // The basemap registers after the layer sources, so terrain gets the byte budget first.
+    // The basemap registers after the layer sources, so DEM and trace tasks queue first.
     preload?.add(basemapPreloadSource(map, scene.area.bbox));
     restoreTime(mounted.timeline, linkedTime);
     sceneLayerIds = mounted.layerIds;
@@ -350,6 +353,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     const entryRun = new AbortController();
     const flight = flyIn(map, scene, roots);
     let reveal: EntryReveal | null = null;
+    let masks: MaskLayers | null = null;
     let curtainId = 0;
     let isPreparing = true;
     let landedMs = 0;
@@ -374,7 +378,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       syncLayers(layerIds) {
         sceneLayerIds = [...layerIds];
         dataLayers.sync([...layerIds, OUTLINE_ID]);
-        liftSceneSymbols(map, sceneLayerIds);
+        placeSceneSymbols(map, sceneLayerIds);
       },
       close() {
         entryRun.abort();
@@ -385,6 +389,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
         stopGesture();
         stopDetails();
         stopEntryContextLoss();
+        masks?.release();
         closeScenePreload();
         setPreloadDisabled(false);
         removeLayerAndSource(map, FADE_ID);
@@ -428,7 +433,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       const fittedZoom = flight.zoom ?? map.getZoom();
       currentScenePreload()?.start(fittedZoom);
       try {
-        const preparation = await prepareBeforeFlight(fittedZoom);
+        const preparation = await prepareBeforeFlight();
         if (isStale()) return;
 
         noteEntryWait(performance.now() - sceneLoadStats.startMs);
@@ -442,30 +447,30 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     }
 
     // Everything that could pause the transition finishes here, so nothing waits once it starts.
-    async function prepareBeforeFlight(fittedZoom: number): Promise<EntryPreparation> {
+    async function prepareBeforeFlight(): Promise<EntryPreparation> {
       const [, preparation] = await Promise.all([
-        prepareHiddenMask(scene, entryRun.signal),
+        addMasksWhenLoaded(),
         mounted.prepareEntry(() => clock.time, entryRun.signal),
-        warmDestination(fittedZoom),
       ]);
 
       return settleOnCurrentEntry(preparation);
     }
 
-    // Only the destination view holds the flight, so deeper levels keep warming behind it.
-    async function warmDestination(fittedZoom: number) {
-      const preload = currentScenePreload();
-      if (!preload) return;
-
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const capped = new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, PRELOAD_WARM_CAP_MS);
+    // An abandoned entry settles the geometry wait at once so a known failure shows promptly.
+    async function addMasksWhenLoaded() {
+      const { signal } = entryRun;
+      const aborted = new Promise<null>((resolve) => {
+        if (signal.aborted) resolve(null);
+        else signal.addEventListener("abort", () => resolve(null), { once: true });
       });
-      try {
-        await Promise.race([preload.settledThrough(fittedZoom, entryRun.signal), capped]);
-      } finally {
-        clearTimeout(timer);
-      }
+      const loaded = loadAreaFeature(scene.area.geometry_href).catch((error) => {
+        throw new Error(`Area outline: ${error.message}`);
+      });
+      const feature = await Promise.race([loaded, aborted]);
+      if (feature === null || signal.aborted) return;
+
+      const failMask = (error: Error) => failEntry(new Error(`Area mask: ${error.message}`));
+      masks = addHiddenMask(map, feature, scene.area.bbox, failMask);
     }
 
     // The build panel slides out with the flight while the scene UI stays hidden and inert.
@@ -544,9 +549,9 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       for (const symbol of basemap.symbols) {
         if (map.getLayer(symbol)) map.moveLayer(symbol, FADE_ID);
       }
-      map.setPaintProperty(MASK_ID, "fill-opacity", MASK_OPACITY);
-      map.setPaintProperty(FADE_ID, "fill-opacity", FADE_OPACITY);
-      liftSceneSymbols(map, sceneLayerIds);
+      masks?.mask.setOpacity(MASK_OPACITY);
+      masks?.fade.setOpacity(FADE_OPACITY);
+      placeSceneSymbols(map, sceneLayerIds);
       savedBasemapFilters ??= clipBasemapToArea(map, scene.area.bbox, new Set(sceneLayerIds));
       dataLayers.show();
       isStaged = true;
@@ -622,27 +627,6 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
     history.replaceState(null, "", location.pathname);
     exit();
-  }
-
-  async function prepareHiddenMask(
-    scene: Scene,
-    signal: AbortSignal,
-  ): Promise<AreaFeature | null> {
-    // An abandoned entry settles the geometry wait at once so a known failure shows promptly.
-    const aborted = new Promise<null>((resolve) => {
-      if (signal.aborted) resolve(null);
-      else signal.addEventListener("abort", () => resolve(null), { once: true });
-    });
-    const loaded = loadAreaFeature(scene.area.geometry_href).catch((error) => {
-      throw new Error(`Area outline: ${error.message}`);
-    });
-    const feature = await Promise.race([loaded, aborted]);
-    if (feature === null || signal.aborted) return null;
-
-    const isReady = await loadHiddenMask(map, feature, scene.area.bbox, signal);
-    if (!isReady || signal.aborted) return null;
-
-    return feature;
   }
 }
 
@@ -905,101 +889,34 @@ function makeColumn(scene: Scene, column: HTMLElement, leave: () => void) {
   return cards;
 }
 
-function loadHiddenMask(
-  map: MapLibreMap,
-  feature: AreaFeature,
-  bbox: Bbox,
-  signal: AbortSignal,
-): Promise<boolean> {
-  return new Promise((resolve, reject) => {
-    map.on("sourcedata", onData);
-    map.on("error", onError);
-    signal.addEventListener("abort", onAbort, { once: true });
-    try {
-      addHiddenMask(map, feature, bbox);
-      checkReady();
-    } catch (error) {
-      cleanup();
-      reject(error);
-    }
-
-    function onData(event: MapSourceDataEvent) {
-      if (event.sourceId !== MASK_ID || !event.isSourceLoaded) return;
-
-      checkReady();
-    }
-
-    function onError(event: MapEventType["error"] & { sourceId?: string }) {
-      if (event.sourceId !== MASK_ID) return;
-
-      cleanup();
-      reject(new Error(`Area mask: ${event.error.message}`));
-    }
-
-    function onAbort() {
-      cleanup();
-      resolve(false);
-    }
-
-    function checkReady() {
-      if (!map.getLayer(MASK_ID) || !map.isSourceLoaded(MASK_ID)) return;
-
-      cleanup();
-      resolve(true);
-    }
-
-    function cleanup() {
-      map.off("sourcedata", onData);
-      map.off("error", onError);
-      signal.removeEventListener("abort", onAbort);
-    }
-  });
-}
-
 // Everything outside the area is blanked, which also crops the cell edges of the layers below.
 function addHiddenMask(
   map: MapLibreMap,
   feature: AreaFeature,
   bbox: Bbox,
-) {
+  onFail: (error: Error) => void,
+): MaskLayers {
   const shift = worldShift(bbox);
   const { exteriors, interiors } = outlines(feature.geometry);
-  const lands = exteriors.map((ring) => shiftLongitudes(ring, shift) as number[][]);
-  const waters = interiors.map((ring) => shiftLongitudes(ring, shift) as number[][]);
-  const maskRings = buildMaskRings(lands, waters);
+  const rings = [...exteriors, ...interiors]
+    .map((ring) => shiftLongitudes(ring, shift) as number[][]);
+  // Both start transparent so the basemap stays stable while required work settles.
+  const options = { rings, color: pageBackground(), opacity: HIDDEN_OPACITY, onFail };
+  // The fade is a second layer above the basemap symbols, so outside labels read as dimmed.
+  const [mask, fade] = createMaskLayers(options, [MASK_ID, FADE_ID]);
+  map.addLayer(mask.layer);
+  map.addLayer(fade.layer);
+  const stopKeepingMask = keepThroughContextLoss(map, mask.layer, undefined);
+  const stopKeepingFade = keepThroughContextLoss(map, fade.layer, undefined);
 
-  const maskFeature = {
-    type: "Feature",
-    properties: {},
-    // Lakes are cut out of the area so they blank again, with land islands cut back out of each lake.
-    geometry: { type: "MultiPolygon", coordinates: maskRings.map((ring) => [ring]) },
+  return {
+    mask,
+    fade,
+    release() {
+      stopKeepingMask();
+      stopKeepingFade();
+    },
   };
-
-  // Simplifying would treat the two sides of each slit separately and leave hairline gaps.
-  map.addSource(MASK_ID, { type: "geojson", data: maskFeature as GeoJsonData, tolerance: 0 });
-  // Both fills start transparent so the basemap stays stable while required work settles.
-  // The reveal snaps at once because the default 300 ms tween would show data early.
-  map.addLayer({
-    id: MASK_ID,
-    type: "fill",
-    source: MASK_ID,
-    paint: {
-      "fill-color": pageBackground(),
-      "fill-opacity": HIDDEN_OPACITY,
-      "fill-opacity-transition": { duration: 0, delay: 0 },
-    },
-  });
-  // The fade shares the mask source so outside labels dim without a second geometry.
-  map.addLayer({
-    id: FADE_ID,
-    type: "fill",
-    source: MASK_ID,
-    paint: {
-      "fill-color": pageBackground(),
-      "fill-opacity": HIDDEN_OPACITY,
-      "fill-opacity-transition": { duration: 0, delay: 0 },
-    },
-  });
 }
 
 /** Drop basemap geometry below the lowest scene layer, keeping every relative order. */
@@ -1097,13 +1014,14 @@ function bboxMaskGeometry([west, south, east, north]: Bbox) {
   ];
   return {
     type: "MultiPolygon",
-    coordinates: buildMaskRings([ring], []).map((ring) => [ring]),
+    coordinates: [[maskRing([ring])]],
   };
 }
 
-/** Scene symbols stay above the fade so their own labels keep full strength. */
-function liftSceneSymbols(map: MapLibreMap, sceneLayerIds: readonly string[]): void {
-  for (const id of sceneSymbols(map, sceneLayerIds)) map.moveLayer(id);
+/** Scene symbols sit under the mask so labels are cut at the outline, not drawn outside it. */
+function placeSceneSymbols(map: MapLibreMap, sceneLayerIds: readonly string[]): void {
+  const beforeId = map.getLayer(MASK_ID) ? MASK_ID : undefined;
+  for (const id of sceneSymbols(map, sceneLayerIds)) map.moveLayer(id, beforeId);
   if (map.getLayer(OUTLINE_ID)) map.moveLayer(OUTLINE_ID);
 }
 

@@ -49,14 +49,15 @@ const hooks = registerHooks({
 const { createTerrainView, MAX_MISSING_TILES, watchTerrainTiles } = await import("./terrain.ts");
 hooks.deregister();
 
-test("a terrain view plans its elevation tiles with the preload until it is destroyed", (t) => {
+test("a terrain view warms its elevation tiles with the HTTP-cache warmer", (t) => {
   t.mock.method(globalThis, "fetch", () => new Promise(() => {}));
   const { map } = terrainMap();
-  const preload = openScenePreload({ ...map, setTransformRequest() {} } as never);
+  const preload = openScenePreload(map as never);
   try {
     const view = createTestTerrainView(map);
     preload.start(9.5);
     assert.ok(preload.progress().total > 0);
+    assert.equal(preload.progress().bytes, 0);
 
     view.destroy();
 

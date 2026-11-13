@@ -11,7 +11,6 @@ import {
 import {
   EvaluationParameters,
 } from "../../node_modules/maplibre-gl/src/style/evaluation_parameters.ts";
-import mlcontour from "maplibre-contour";
 
 import type { LayerContext, TerrainStats, TerrainTiles } from "../types.ts";
 import {
@@ -20,7 +19,6 @@ import {
   levelsForZoom,
   MAX_MISSING_DEM_TILES,
   memoizeMissingDemTiles,
-  trackVisibleProtocols,
 } from "./contour-overlay.ts";
 import { contourLadder } from "../contour-ladder.ts";
 import { LABEL_FADE_MS } from "../reduced-motion.ts";
@@ -30,7 +28,7 @@ import {
   demPreloadSource,
   type DemFetcher,
 } from "./scene-preload.ts";
-import { ScenePreload, type PreloadTelemetry } from "./tile-prefetch.ts";
+import { TileWarmer } from "./tile-warmer.ts";
 
 Object.assign(globalThis, {
   document: { createElement: () => ({}), documentElement: {} },
@@ -446,108 +444,26 @@ test("destroying the overlay aborts its traces and stops planning them", async (
   assert.equal(preload.progress().total, 0);
 });
 
-test("a visible contour tile load credits one hit after the overlay traced it", async () => {
+test("the overlay traces the scene's contour tiles through the warmer too", async () => {
   const warm = warmingDem();
-  const { map, preload, overlay, telemetry } = preloadedOverlay(warm.dem);
-  try {
-    preload.start(5.5);
-    await settleWarming(warm);
-    preload.noteLanded();
-    const traced = warm.calls[0];
-    const loading = { sourceId: "terrain-contours", tile: { tileID: { canonical: traced } } };
-
-    map.emit("sourcedataloading", loading);
-    map.emit("sourcedataloading", loading);
-
-    assert.deepEqual(telemetry.counts, ["hit contours"]);
-  } finally {
-    overlay.destroy();
-    preload.destroy();
-  }
-});
-
-test("a visible contour protocol request suspends background launches", async () => {
-  const dem = new mlcontour.DemSource({
-    url: TILES.url,
-    encoding: TILES.encoding,
-    maxzoom: cappedDemMaxZoom(TILES.maxzoom),
-    worker: false,
-    cacheSize: 120,
-  });
-  const manager = dem.manager as unknown as {
-    getTile(url: string, abort: AbortController): Promise<{ data: Blob }>;
-    decodeImage(
-      blob: Blob,
-      encoding: string,
-      abort: AbortController,
-    ): Promise<{ width: number; height: number; data: Float32Array }>;
-  };
-  const started: string[] = [];
-  const releases = new Map<string, Array<() => void>>();
-  const gate = (url: string): Promise<void> => {
-    return new Promise<void>((resolve) => {
-      const pending = releases.get(url) ?? [];
-      pending.push(resolve);
-      releases.set(url, pending);
-    });
-  };
-  manager.decodeImage = async () => {
-    return { width: 16, height: 16, data: new Float32Array(16 * 16).fill(100) };
-  };
-  manager.getTile = (async (url: string) => {
-    started.push(url);
-    await gate(url);
-    return { data: new Blob(["dem"]) };
-  }) as typeof manager.getTile;
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (url: string) => {
-    started.push(url);
-    await gate(url);
-    return new Response("dem", { status: 200 });
-  }) as typeof fetch;
-  trackVisibleProtocols(dem);
-  const release = (key: string) => {
-    const pending = releases.get(key) ?? [];
-    releases.delete(key);
-    for (const resolve of pending) resolve();
-  };
   const map = fakeMap();
-  const preload = new ScenePreload(map as never, fakeTelemetry());
-  preload.add(demPreloadSource({
+  const warmer = new TileWarmer(map as never);
+  warmer.add(demPreloadSource({
     template: TILES.url,
     maxzoom: cappedDemMaxZoom(TILES.maxzoom),
     bbox: [-5, -5, 5, 5],
-    reliefSourceId: "terrain-relief",
-    fetcher: dem.manager as never,
+    fetcher: (warm.dem as unknown as { manager: DemFetcher }).manager,
   }));
+  const overlay = new ContourOverlay(layerContext(map), warm.dem as never, TILES, STATS, warmer);
   try {
-    preload.start(9.737);
-    await settled();
-    assert.ok(started.length >= 2);
-    const background = [...started];
+    warmer.start(5.5);
+    await settleWarming(warm);
 
-    const base = dem.contourProtocolUrl({ thresholds: { 10: [50] }, overzoom: 1, buffer: 1 });
-    const url = base.replace("{z}", "10").replace("{x}", "100").replace("{y}", "100");
-    const visible = dem.contourProtocolV4({ url }, new AbortController());
-    for (let round = 0; round < 50 && started.length === background.length; round += 1) {
-      await Promise.resolve();
-    }
-    assert.ok(started.length > background.length);
-    const before = started.length;
-    release(background[0]);
-    await settled();
-
-    assert.equal(started.length, before);
-    for (const key of [...releases.keys()]) {
-      if (!background.includes(key)) release(key);
-    }
-    const result = await visible;
-    assert.ok(result.data.byteLength >= 0);
-    await settled();
-    assert.ok(started.length > before);
+    assert.ok(warm.calls.length > 0);
+    assert.deepEqual(warmer.progress().bytes, 0);
   } finally {
-    globalThis.fetch = originalFetch;
-    preload.destroy();
+    overlay.destroy();
+    warmer.destroy();
   }
 });
 
@@ -618,31 +534,18 @@ function overlayWithDem(
   return new ContourOverlay(layerContext(map), dem as never, TILES, STATS);
 }
 
-/** Build an overlay registered with a scene preload whose downloads the test controls. */
+/** Build an overlay registered with a scene warmer whose downloads the test controls. */
 function preloadedOverlay(dem: WarmingDem["dem"]) {
   const map = fakeMap();
-  const telemetry = fakeTelemetry();
-  const preload = new ScenePreload(map as never, telemetry);
+  const preload = new TileWarmer(map as never);
   preload.add(demPreloadSource({
     template: TILES.url,
     maxzoom: cappedDemMaxZoom(TILES.maxzoom),
     bbox: [-5, -5, 5, 5],
-    reliefSourceId: "terrain-relief",
     fetcher: (dem as unknown as { manager: DemFetcher }).manager,
   }));
   const overlay = new ContourOverlay(layerContext(map), dem as never, TILES, STATS, preload);
-  return { map, preload, overlay, telemetry };
-}
-
-function fakeTelemetry() {
-  const telemetry = {
-    counts: [] as string[],
-    begin() {},
-    progress() {},
-    hit: (layer: string) => void telemetry.counts.push(`hit ${layer}`),
-    miss: (layer: string) => void telemetry.counts.push(`miss ${layer}`),
-  };
-  return telemetry as typeof telemetry & PreloadTelemetry;
+  return { map, preload, overlay };
 }
 
 // The worker keys its contour cache by tile plus encoded options, so equal URLs share traces.

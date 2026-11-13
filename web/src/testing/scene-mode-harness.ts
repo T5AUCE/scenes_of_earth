@@ -40,6 +40,35 @@ const dependencies = {
     export const polygonParts = (type, coordinates) => [coordinates];
     export const tileAreaGeometry = (geometry) => geometry;
   `,
+  // The real mask needs WebGL, so the double records what scene mode asks of it.
+  "./gpu/mask-layer": `
+    export function createMaskLayers(options, ids) {
+      const test = globalThis.sceneModeTest;
+      test.maskFail = options.onFail;
+      test.maskRings = options.rings;
+      return ids.map((id) => {
+        const layer = {
+          id,
+          type: "custom",
+          layout: { visibility: "visible" },
+          paint: { "fill-opacity": options.opacity },
+        };
+        return {
+          layer,
+          setOpacity(opacity) {
+            layer.paint["fill-opacity"] = opacity;
+          },
+        };
+      });
+    }
+  `,
+  "./gpu/tiled-layer": `
+    export function keepThroughContextLoss(map, layer) {
+      const kept = globalThis.sceneModeTest.keptLayers;
+      kept.add(layer.id);
+      return () => kept.delete(layer.id);
+    }
+  `,
   "./map": `
     export const MAX_ZOOM = 24;
     export const WORLD_VIEW = { center: [0, 20], zoom: 1.5 };
@@ -388,6 +417,10 @@ export function createHarness() {
     geometry: deferred(),
     data: deferredSignal(),
     notes: [] as string[],
+    // The layers kept through a context loss, which must be empty once the scene closes.
+    keptLayers: new Set<string>(),
+    maskFail: null as null | ((error: Error) => void),
+    maskRings: null as null | number[][][],
     times: [] as [string | null, string | null][],
     panelStore: null as unknown,
     mountStore: null as unknown,
@@ -600,9 +633,7 @@ export class TestMap {
     },
   };
   rangeWrites = 0;
-  readyOnAdd = false;
   failMaskLayer = false;
-  private maskLoaded = false;
 
   getContainer() { return this.container; }
   getCanvas() { return this.canvas as unknown as HTMLCanvasElement; }
@@ -646,11 +677,6 @@ export class TestMap {
   flyTo() {}
   setTransformRequest() {}
 
-  addSource(id: string, source: object) {
-    this.sources.set(id, source);
-    this.maskLoaded = this.readyOnAdd;
-  }
-
   addLayer(layer: TestLayer) {
     if (this.failMaskLayer) throw new Error("mask setup failed");
 
@@ -661,15 +687,6 @@ export class TestMap {
     assert.ok(minzoom <= maxzoom);
     Object.assign(this.layers.get(id)!, { minzoom, maxzoom });
     this.rangeWrites++;
-  }
-
-  isSourceLoaded(id: string) {
-    return this.sources.has(id) && this.maskLoaded;
-  }
-
-  finishMask() {
-    this.maskLoaded = true;
-    this.emit("sourcedata", { sourceId: MASK_ID, isSourceLoaded: true });
   }
 
   on(type: string, listener: (event: object) => void) {

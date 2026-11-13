@@ -8,7 +8,15 @@ import {
   type ContourLadder,
   type WarmTile,
 } from "../contour-ladder";
-import { BASEMAP_SOURCE_ID, basemapDescriptor, scenePyramidTiles } from "../render/tile-viewport";
+import {
+  basemapDescriptor,
+  clipViewportToBbox,
+  dwellWarmTiles,
+  scenePyramidTiles,
+  tileInScene,
+  type BasemapDescriptor,
+  type DwellViewport,
+} from "../render/tile-viewport";
 import { convertValue } from "../units";
 import type { Bbox } from "../types";
 import type { PreloadSource, PreloadTask } from "./tile-prefetch";
@@ -30,9 +38,6 @@ export const DEM_PRELOAD_ID = "dem";
 export const CONTOUR_PRELOAD_ID = "contours";
 export const BASEMAP_PRELOAD_ID = "basemap";
 
-// Mapterhorn webp tiles measure 165-192 KB at z8-10 and less at the flat deep levels.
-const DEM_TILE_EST_BYTES = 192 * 1024;
-const BASEMAP_TILE_EST_BYTES = 64 * 1024;
 // The plugin materializes one pixel of padding before tracing, matching the overlay.
 const CONTOUR_BUFFER_PX = 1;
 // Traces never run deeper than this zoom, matching the overlay ceiling.
@@ -55,7 +60,6 @@ export interface DemPreloadOptions {
   template: string;
   maxzoom: number;
   bbox: Bbox;
-  reliefSourceId: string;
   fetcher: DemFetcher | null;
 }
 
@@ -68,7 +72,6 @@ export interface ContourPlan {
 
 /** What the contour source needs to trace the scene's tiles ahead of the camera. */
 export interface ContourPreloadOptions {
-  lineSourceId: string;
   plan: () => ContourPlan;
   bbox: Bbox;
   demMaxzoom: number;
@@ -79,8 +82,7 @@ export interface ContourPreloadOptions {
 type BasemapMap = Parameters<typeof basemapDescriptor>[0];
 
 /**
- * Route preload through the DEM manager that the contour worker also reads. One download then
- * fills the worker's tile cache for tracing and the store for the hillshade, instead of two.
+ * Share the contour worker's DEM manager cache while hillshade tiles use HTTP caching.
  */
 export function demFetcherFor(dem: { manager?: unknown }): DemFetcher | null {
   return (dem as { manager?: DemFetcher }).manager ?? null;
@@ -88,69 +90,61 @@ export function demFetcherFor(dem: { manager?: unknown }): DemFetcher | null {
 
 /** Elevation tiles for relief and contour parents, from one level above the fitted zoom down. */
 export function demPreloadSource(options: DemPreloadOptions): PreloadSource {
-  const urlToTile = new Map<string, WarmTile>();
   return {
     id: DEM_PRELOAD_ID,
     layer: "terrain",
     lanes: DEM_PRELOAD_LANES,
     tasks: (fittedZoom) => {
-      const tiles = demPlanTiles(options.bbox, options.maxzoom, fittedZoom);
-      urlToTile.clear();
-      for (const tile of tiles) urlToTile.set(tileUrl(options.template, tile), tile);
-      return tiles.map((tile) => demTask(options, tile));
+      return demPlanTiles(options.bbox, options.maxzoom, fittedZoom)
+        .map((tile) => demTask(options, tile));
     },
-    visibleKey: (sourceId, tile) => {
-      return sourceId === options.reliefSourceId ? tileUrl(options.template, tile) : null;
-    },
-    loadShared: (key) => {
-      const tile = urlToTile.get(key);
-      if (!tile) return undefined;
-      return () => fetchDemBlob(options.fetcher, tile, key, new AbortController(), undefined);
+    dwell: (viewport, fittedZoom, currentZoom) => {
+      return dwellTilesForBbox(viewport, options.bbox, fittedZoom, currentZoom)
+        .filter((tile) => tile.z <= options.maxzoom)
+        .map((tile) => demTask(options, tile));
     },
   };
 }
 
 /** Contour traces for the same pyramid, run once the elevation tiles they read are in. */
 export function contourPreloadSource(options: ContourPreloadOptions): PreloadSource {
+  // Dwell warming feeds on-demand traces through the DEM disk entries, so no dwell plan here.
   return {
     id: CONTOUR_PRELOAD_ID,
     layer: "contours",
     lanes: CONTOUR_PRELOAD_LANES,
     after: DEM_PRELOAD_ID,
     tasks: (fittedZoom) => contourTasks(options, fittedZoom),
-    visibleKey: (sourceId, tile) => {
-      if (sourceId !== options.lineSourceId) return null;
-      return contourCandidate(options.plan(), tile)?.key ?? null;
-    },
   };
 }
 
 /** Vector basemap tiles from the fitted zoom to about z12. */
 export function basemapPreloadSource(map: BasemapMap, bbox: Bbox): PreloadSource {
-  // Visible loads are keyed by the template that the last plan resolved.
-  let template: string | null = null;
   return {
     id: BASEMAP_PRELOAD_ID,
     layer: "basemap",
     lanes: BASEMAP_PRELOAD_LANES,
     tasks(fittedZoom) {
       const basemap = basemapDescriptor(map);
-      template = basemap?.template ?? null;
       if (!basemap) return [];
-      const lastZoom = Math.min(basemap.maxzoom, BASEMAP_PRELOAD_MAX_ZOOM);
-      const firstZoom = Math.min(Math.floor(fittedZoom), lastZoom);
-      return scenePyramidTiles(bbox, firstZoom, lastZoom, BASEMAP_PRELOAD_TILES)
-        .map((tile) => downloadTask(
-          tileUrl(basemap.template, tile),
-          BASEMAP_TILE_EST_BYTES,
-          tile.z,
-        ));
+      const firstZoom = Math.min(
+        Math.floor(fittedZoom),
+        basemap.maxzoom,
+        BASEMAP_PRELOAD_MAX_ZOOM,
+      );
+      return toBasemapTasks(
+        basemap,
+        scenePyramidTiles(bbox, firstZoom, BASEMAP_PRELOAD_MAX_ZOOM, BASEMAP_PRELOAD_TILES),
+      );
     },
-    visibleKey: (sourceId, tile) => {
-      return template !== null && sourceId === BASEMAP_SOURCE_ID ? tileUrl(template, tile) : null;
+    dwell(viewport, fittedZoom, currentZoom) {
+      const basemap = basemapDescriptor(map);
+      if (!basemap) return [];
+      return toBasemapTasks(
+        basemap,
+        dwellTilesForBbox(viewport, bbox, fittedZoom, currentZoom),
+      );
     },
-    // The live template is the identity so only a replacement replans.
-    revisionKey: () => basemapDescriptor(map)?.template ?? null,
   };
 }
 
@@ -224,11 +218,29 @@ function tileKey(tile: WarmTile): string {
   return `${tile.z}/${tile.x}/${tile.y}`;
 }
 
+function dwellTilesForBbox(
+  viewport: DwellViewport,
+  bbox: Bbox,
+  fittedZoom: number,
+  currentZoom: number,
+): WarmTile[] {
+  const clipped = clipViewportToBbox(viewport, bbox);
+  if (clipped === null) return [];
+  return dwellWarmTiles(clipped, fittedZoom, currentZoom)
+    .filter((tile) => tileInScene(tile, bbox));
+}
+
+function toBasemapTasks(basemap: BasemapDescriptor, tiles: WarmTile[]): PreloadTask[] {
+  const lastZoom = Math.min(basemap.maxzoom, BASEMAP_PRELOAD_MAX_ZOOM);
+  return tiles
+    .filter((tile) => tile.z <= lastZoom)
+    .map((tile) => downloadTask(tileUrl(basemap.template, tile), tile.z));
+}
+
 function demTask(options: DemPreloadOptions, tile: WarmTile): PreloadTask {
   const url = tileUrl(options.template, tile);
   return {
     key: url,
-    estimatedBytes: DEM_TILE_EST_BYTES,
     zoom: tile.z,
     run: (abort) => fetchDemBlob(options.fetcher, tile, url, abort, "low"),
   };
@@ -255,7 +267,6 @@ function contourTasks(options: ContourPreloadOptions, fittedZoom: number): Prelo
       const needs = parents.map((parent) => tileUrl(demTemplate, parent));
       return [{
         key: candidate.key,
-        estimatedBytes: parents.length * DEM_TILE_EST_BYTES,
         zoom: tile.z,
         needs,
         run: async (abort: AbortController) => {
@@ -386,8 +397,8 @@ function stableOptions(options: unknown): string {
   return `{${entries.map(([key, value]) => `${JSON.stringify(key)}:${stableOptions(value)}`)}}`;
 }
 
-function downloadTask(url: string, estimatedBytes: number, zoom: number): PreloadTask {
-  return { key: url, estimatedBytes, zoom, run: (abort) => downloadBlob(url, abort.signal) };
+function downloadTask(url: string, zoom: number): PreloadTask {
+  return { key: url, zoom, run: (abort) => downloadBlob(url, abort.signal) };
 }
 
 // Low priority keeps these requests behind the visible ones in the browser's own queue.

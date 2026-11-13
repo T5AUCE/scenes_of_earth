@@ -6,31 +6,32 @@ import type { AsyncReadable } from "zarrita";
 
 import { assertSameNode } from "./testing/dom-assert.ts";
 import {
-  beginPreload,
+  beginWarmer,
   DevStatsLoop,
   formatBytes,
   formatDevStats,
   formatGpuPart,
-  formatPreloadPart,
   formatTileSettlePart,
+  formatWarmerPart,
   framesPerSecond,
   layerForSource,
   entryStats,
+  isWarmerEnabled,
   noteEntryGap,
   noteEntryWait,
   noteSceneOpen,
   noteSceneReady,
-  notePreloadHit,
-  notePreloadMiss,
-  preloadSnapshot,
+  noteWarmerRequest,
   pruneStamps,
   renderDevStats,
   sceneLoadStats,
   setPreloadDisabled,
-  setPreloadProgress,
+  setWarmerEnabled,
+  setWarmerProgress,
   shouldShowDevStats,
   startDevStats,
   TileSettleTracker,
+  warmerSnapshot,
   worstFrameMs,
 } from "./dev-stats.ts";
 import { fetchStats, mergingStore, noteFetch, resetFetchStats } from "./merging-store.ts";
@@ -808,41 +809,7 @@ test("the tile badge part lists each layer once", () => {
   assert.equal(text, "tiles terrain 120 ms 12 req basemap — 0 req contours 80 ms 2 req");
 });
 
-test("preload counters accumulate per source and reset when a scene opens", () => {
-  beginPreload();
-  notePreloadHit("contours");
-  notePreloadMiss("contours");
-  notePreloadMiss("terrain");
-  setPreloadProgress(5, 12, 2048);
-
-  assert.deepEqual(preloadSnapshot(), {
-    progress: { done: 5, total: 12, bytes: 2048 },
-    counts: {
-      terrain: { hits: 0, misses: 1 },
-      basemap: { hits: 0, misses: 0 },
-      contours: { hits: 1, misses: 1 },
-    },
-  });
-  beginPreload();
-
-  assert.deepEqual(preloadSnapshot().counts.contours, { hits: 0, misses: 0 });
-  assert.deepEqual(preloadSnapshot().progress, { done: 0, total: 0, bytes: 0 });
-});
-
-test("the preload badge shows progress, hit rates and off when disabled", () => {
-  beginPreload();
-  const snapshot = {
-    progress: { done: 62, total: 246, bytes: 8.1 * 1024 * 1024 },
-    counts: {
-      terrain: { hits: 91, misses: 9 },
-      basemap: { hits: 7, misses: 1 },
-      contours: { hits: 0, misses: 0 },
-    },
-  };
-  assert.equal(
-    formatPreloadPart(snapshot),
-    "preload 62/246 tiles 8.1 MB hit terrain 91% basemap 88% contours —",
-  );
+test("the badge says preload off when disabled", () => {
   const stats = {
     fps: 60,
     worstMs: 33,
@@ -854,12 +821,10 @@ test("the preload badge shows progress, hit rates and off when disabled", () => 
     gpuUnavailable: true,
     longtasks: 0,
   };
-  assert.ok(formatDevStats({ ...stats, preload: snapshot }).includes("\npreload 62/246"));
-  assert.equal(formatDevStats({ ...stats, preload: preloadSnapshot() }).includes("preload"), false);
+  assert.equal(formatDevStats(stats).includes("preload off"), false);
   setPreloadDisabled(true);
   try {
-    assert.equal(formatPreloadPart(snapshot), "preload off");
-    assert.ok(formatDevStats({ ...stats, preload: snapshot }).includes("preload off"));
+    assert.ok(formatDevStats(stats).includes("preload off"));
   } finally {
     setPreloadDisabled(false);
   }
@@ -896,6 +861,60 @@ test("the badge line gains the tile part only while tracking", () => {
     },
   });
   assert.ok(withTiles.includes("tiles terrain 120 ms 3 req"));
+});
+
+test("the warmer badge shows progress and per-layer request counts", () => {
+  setWarmerEnabled(true);
+  try {
+    beginWarmer();
+    noteWarmerRequest("terrain");
+    noteWarmerRequest("terrain");
+    noteWarmerRequest("basemap");
+    setWarmerProgress(4, 96);
+
+    assert.deepEqual(warmerSnapshot(), {
+      progress: { done: 4, total: 96 },
+      counts: { terrain: 2, basemap: 1, contours: 0 },
+    });
+    assert.equal(
+      formatWarmerPart(warmerSnapshot()),
+      "warmer 4/96 tiles terrain 2 basemap 1 contours 0",
+    );
+    const stats = {
+      fps: 60,
+      worstMs: 33,
+      zoom: 5.25,
+      loadMs: null,
+      requests: 2,
+      bytes: 1536,
+      gpuMs: {},
+      gpuUnavailable: true,
+      longtasks: 0,
+    };
+    assert.ok(formatDevStats({ ...stats, warmer: warmerSnapshot() }).includes("warmer 4/96"));
+    beginWarmer();
+
+    assert.deepEqual(warmerSnapshot().counts, { terrain: 0, basemap: 0, contours: 0 });
+  } finally {
+    setWarmerEnabled(false);
+  }
+});
+
+test("the badge line hides the warmer part without warmer data", () => {
+  assert.equal(isWarmerEnabled(), false);
+  const text = formatDevStats({
+    fps: 60,
+    worstMs: 33,
+    zoom: 5.25,
+    loadMs: null,
+    requests: 2,
+    bytes: 1536,
+    gpuMs: {},
+    gpuUnavailable: true,
+    longtasks: 0,
+  });
+
+  assert.ok(!text.includes("warmer"));
 });
 
 function tileMap(zoom: () => number) {

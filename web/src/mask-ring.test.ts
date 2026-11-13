@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { GeoJSONVT } from "@maplibre/geojson-vt";
 import earcut from "earcut";
 
-import { buildMaskRings, maskRing } from "./mask-ring.ts";
+import { maskRing } from "./mask-ring.ts";
 
 type Ring = number[][];
 
@@ -86,12 +86,6 @@ test("mask tiles never fill over slivers around an outline crossing the antimeri
   assertNoOverfilledTiles(outlineAcrossAntimeridian());
 });
 
-test("mask tiles leave a nested island bare while covering its lake", () => {
-  const { exteriors, interiors } = mainlandWithLakeAndIsland();
-
-  assertNoOverfilledTiles(exteriors, interiors);
-});
-
 // Lists slivers first so MapLibre reads the flipped winding that breaks the old mask.
 const mainlandWithSlivers = () => [
   ...slivers(50, 7, [0, 40], 7),
@@ -102,11 +96,6 @@ const outlineAcrossAntimeridian = () => [
   ...slivers(60, 11, [179, -20], 4),
   roughOutline([179, -20], 3, 0.002, 5),
 ];
-
-const mainlandWithLakeAndIsland = () => ({
-  exteriors: [square(-10, -10, 20), square(-2, -2, 4)],
-  interiors: [square(-6, -6, 12)],
-});
 
 const square = (west: number, south: number, size: number): Ring => [
   [west, south],
@@ -146,12 +135,11 @@ function random(seed: number) {
   };
 }
 
-function assertNoOverfilledTiles(exteriors: Ring[], interiors: Ring[] = []) {
-  const maskRings = buildMaskRings(exteriors, interiors);
+function assertNoOverfilledTiles(areaRings: Ring[]) {
   const mask = {
     type: "Feature",
     properties: {},
-    geometry: { type: "MultiPolygon", coordinates: maskRings.map((ring) => [ring]) },
+    geometry: { type: "MultiPolygon", coordinates: [[maskRing(areaRings)]] },
   };
   const tiler = new GeoJSONVT(mask, {
     maxZoom: 18,
@@ -163,7 +151,6 @@ function assertNoOverfilledTiles(exteriors: Ring[], interiors: Ring[] = []) {
     updateable: true,
   });
 
-  const areaRings = [...exteriors, ...interiors];
   const wrong: string[] = [];
   for (let zoom = 0; zoom <= MAX_TILE_ZOOM; zoom++) {
     for (const [x, y] of tilesOverArea(areaRings, zoom)) {
