@@ -2504,6 +2504,87 @@ test("leaving during the flight restores the page and starts nothing", async () 
   assert.ok(!harness.events.includes("curtain"));
 });
 
+test("the picked outline stays during Preparing and hides at flight start", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  await settle();
+
+  assert.deepEqual(harness.statuses, [PREPARING]);
+  assert.equal(harness.outlineHides, 0);
+
+  await finishPreparation(harness);
+
+  assert.deepEqual(harness.events, ["fly"]);
+  assert.deepEqual(harness.statuses, [PREPARING, ""]);
+  assert.equal(harness.outlineHides, 1);
+  assert.equal(harness.outlineShows, 0);
+});
+
+test("the picked outline hides at flight start with reduced motion", async () => {
+  const previous = (globalThis as Record<string, unknown>).matchMedia;
+  (globalThis as Record<string, unknown>).matchMedia = (query: string) => ({
+    matches: String(query).includes("reduce"),
+  });
+  try {
+    const harness = phasedHarness();
+    harness.enter();
+    await finishPreparation(harness);
+
+    assert.ok(harness.bodyClasses.has("scene-flying"));
+    assert.equal(harness.outlineHides, 1);
+    assert.deepEqual(harness.statuses, [PREPARING, ""]);
+
+    await exitActiveHarness();
+  } finally {
+    if (previous === undefined) Reflect.deleteProperty(globalThis, "matchMedia");
+    else (globalThis as Record<string, unknown>).matchMedia = previous;
+  }
+});
+
+test("the picked outline returns after leaving the scene", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  await finishPreparation(harness);
+
+  assert.equal(harness.outlineHides, 1);
+
+  harness.mode.exit();
+  await settle();
+
+  assert.equal(harness.outlineShows, 1);
+  assertEntryClosed(harness);
+});
+
+test("the picked outline returns after a failed entry", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  await settle();
+  harness.data.reject(new Error("data unavailable"));
+  await settle();
+  await settle();
+
+  assert.equal(harness.statuses.at(-1), "data unavailable");
+  assert.equal(harness.outlineShows, 1);
+  assertEntryClosed(harness);
+});
+
+test("a replaced scene shows the outline on close and hides it at the next flight", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  await finishPreparation(harness);
+
+  assert.equal(harness.outlineHides, 1);
+
+  harness.enter();
+  await settle();
+
+  assert.equal(harness.outlineShows, 1);
+
+  await finishPreparation(harness);
+
+  assert.equal(harness.outlineHides, 2);
+});
+
 test("leaving while the curtain covers finishes it and releases every lock", async () => {
   const harness = phasedHarness();
   harness.enter();

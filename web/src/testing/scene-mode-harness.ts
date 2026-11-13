@@ -427,6 +427,8 @@ export function createHarness() {
     styleWrites: [] as [string, string][],
     inertPanel: false,
     busyPanel: false,
+    outlineHides: 0,
+    outlineShows: 0,
     // Both default on so most tests see a finished entry; phase tests switch them off.
     landImmediately: true,
     autoReveal: true,
@@ -459,6 +461,12 @@ export function createHarness() {
       },
       setInert(isInert: boolean) {
         harness.inertPanel = isInert;
+      },
+      hideAreaOutline() {
+        harness.outlineHides += 1;
+      },
+      showAreaOutline() {
+        harness.outlineShows += 1;
       },
     },
     mode: createSceneMode(map as unknown as MapLibreMap, roots as unknown as SceneRoots),

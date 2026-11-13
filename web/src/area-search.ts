@@ -54,6 +54,11 @@ export function bindAreaSearch(
   let shownHits: AreaHit[] = [];
   let hitItems: HTMLElement[] = [];
   let activeIndex = -1;
+  // Hiding keeps the geometry so leaving the scene can show it again.
+  let lastOutline: GeoJSON.Geometry | null = null;
+  let isOutlineHidden = false;
+  // A failure notice must not overwrite the entry status while the outline is hidden.
+  let outlineNotice: string | null = null;
 
   const scheduleSearch = () => {
     clearTimeout(searchTimer);
@@ -68,7 +73,7 @@ export function bindAreaSearch(
   search.onblur = closeResults;
   level.onchange = scheduleSearch;
 
-  return { clearOutline };
+  return { hideOutline, showOutline };
 
   async function runSearch() {
     const thisSearch = ++searchCount;
@@ -120,6 +125,8 @@ export function bindAreaSearch(
     closeResults();
     chosen.textContent = `${AREA_PREFIX}${hit.name}`;
     search.value = hit.name;
+    isOutlineHidden = false;
+    outlineNotice = null;
     fitToBbox(map, hit.bbox, { padding: BROWSE_PADDING_PX, maxZoom: BROWSE_MAX_ZOOM });
     drawPickedOutline(hit);
   }
@@ -128,25 +135,32 @@ export function bindAreaSearch(
   async function drawPickedOutline(hit: AreaHit) {
     const thisPick = ++pickCount;
     let geometry: AreaFeature["geometry"];
+    let pendingNotice: string | null = null;
     try {
       geometry = (await getArea(hit.id)).geometry;
     } catch {
       if (thisPick !== pickCount) return;
       geometry = bboxGeometry(hit.bbox);
       chosen.textContent = `${AREA_PREFIX}${hit.name} (approximate outline)`;
-      const notice = `Outline unavailable for ${hit.name}; showing an approximate outline.`;
-      onOutlineNotice?.(notice);
+      pendingNotice = `Outline unavailable for ${hit.name}; showing an approximate outline.`;
+      if (!isOutlineHidden) onOutlineNotice?.(pendingNotice);
     }
     if (thisPick !== pickCount) return;
 
     const shifted = shiftLongitudes(geometry.coordinates, worldShift(hit.bbox));
-    showPickedOutline(map, { ...geometry, coordinates: shifted } as GeoJSON.Geometry);
+    lastOutline = { ...geometry, coordinates: shifted } as GeoJSON.Geometry;
+    outlineNotice = isOutlineHidden ? pendingNotice : null;
+    if (isOutlineHidden) return;
+    showPickedOutline(map, lastOutline);
   }
 
   // Clearing the search forgets the area, so Build asks for a new pick.
   function deselectArea() {
     onClear();
     pickCount++;
+    lastOutline = null;
+    outlineNotice = null;
+    isOutlineHidden = false;
     chosen.textContent = NO_AREA_TEXT;
     clearPickedOutline(map);
   }
@@ -198,9 +212,17 @@ export function bindAreaSearch(
     search.removeAttribute("aria-activedescendant");
   }
 
-  function clearOutline() {
-    pickCount++;
+  function hideOutline() {
+    isOutlineHidden = true;
     clearPickedOutline(map);
+  }
+
+  function showOutline() {
+    isOutlineHidden = false;
+    if (!lastOutline) return;
+    showPickedOutline(map, lastOutline);
+    if (outlineNotice) onOutlineNotice?.(outlineNotice);
+    outlineNotice = null;
   }
 }
 

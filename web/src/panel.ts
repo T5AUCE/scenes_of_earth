@@ -171,13 +171,14 @@ export async function createPanel(
   async function enterScene(scene: Scene, options: EnterOptions, thisRun: number) {
     const ready = typeof sceneMode === "function" ? await sceneMode() : sceneMode;
     if (thisRun !== run) return;
-    areaSearch.clearOutline();
     ready.enter(scene, {
       ...options,
       buildPanel: {
         showStatus,
         setBusy,
         setInert: (isInert) => (root.inert = isInert),
+        hideAreaOutline: () => areaSearch.hideOutline(),
+        showAreaOutline: () => areaSearch.showOutline(),
       },
     });
   }

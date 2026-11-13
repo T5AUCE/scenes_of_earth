@@ -108,6 +108,8 @@ export interface EntryPanel {
   showStatus(text: string): void;
   setBusy(isBusy: boolean): void;
   setInert(isInert: boolean): void;
+  hideAreaOutline(): void;
+  showAreaOutline(): void;
 }
 
 /** Group the scene's column and time bar with its full-view dialog. */
@@ -405,6 +407,8 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
         setInputLocked(false);
         if (isPreparing) entryPanel?.showStatus("");
         if (isPreparing) entryPanel?.setBusy(false);
+        // The area stays selected, so its outline returns with the build panel.
+        entryPanel?.showAreaOutline();
       },
     };
 
@@ -469,6 +473,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       isPreparing = false;
       entryPanel?.showStatus("");
       entryPanel?.setBusy(false);
+      entryPanel?.hideAreaOutline();
       document.body.classList.add(FLYING_CLASS);
       // Reduced motion hides the panel at once, so no slide duration is needed.
       if (prefersReducedMotion()) return;

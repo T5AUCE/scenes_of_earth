@@ -342,6 +342,82 @@ test("a finished build shows Preparing scene… until the scene reports back", a
   );
 });
 
+test("the picked outline survives Build until the scene hides it and returns when shown", async (context) => {
+  const window = new Window();
+  context.after(() => window.happyDOM.abort());
+  installBrowser(context, window);
+  (globalThis as { getComputedStyle: unknown }).getComputedStyle = () => ({
+    getPropertyValue: () => "",
+  });
+  context.after(() => {
+    delete (globalThis as { getComputedStyle?: unknown }).getComputedStyle;
+  });
+  context.mock.method(globalThis, "fetch", async (url: string, init?: RequestInit) => {
+    if (url === "/api/layers") {
+      return Response.json({
+        request_step: "P1M",
+        default: ["terrain"],
+        layers: [{ id: "terrain", title: "Terrain", time_varying: false, time: null }],
+      });
+    }
+    if (url.startsWith("/api/areas/search?")) return Response.json([areaHit()]);
+    if (url === "/api/areas/cgaz%3AADM1%3ANAKURU") {
+      return Response.json({ ...areaHit(), geometry: bboxFeature() });
+    }
+    if (url === "/api/scenes" && init?.method === "POST") {
+      return Response.json({ id: "s", status: "done", bundle_url: "https://bundles.test/s" });
+    }
+    return Response.json({
+      id: "s",
+      version: "0.7",
+      area: { geometry_href: "area.geojson" },
+      data: { href: "data.zarr" },
+      layers: [],
+    });
+  });
+  const mapIds = new Set<string>();
+  const map = {
+    fitBounds() {},
+    getLayer: (id: string) => (mapIds.has(id) ? {} : undefined),
+    getSource: (id: string) => (mapIds.has(id) ? {} : undefined),
+    addSource: (id: string) => mapIds.add(id),
+    addLayer: (spec: { id: string }) => mapIds.add(spec.id),
+    removeLayer: (id: string) => mapIds.delete(id),
+    removeSource: (id: string) => mapIds.delete(id),
+  };
+  const root = document.createElement("div");
+  document.body.append(root);
+  let received: { hideAreaOutline(): void; showAreaOutline(): void } | undefined;
+  await createPanel(root, map as unknown as MapLibreMap, {
+    enter: (_scene, options) => {
+      received = options.buildPanel;
+    },
+  });
+  const search = root.querySelector<HTMLInputElement>("[role=combobox]")!;
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  search.value = "Nakuru";
+  search.dispatchEvent(new window.Event("input"));
+  context.mock.timers.tick(SEARCH_DEBOUNCE_MS);
+  await new Promise((resolve) => setImmediate(resolve));
+  root.querySelector("[role=option]")!.dispatchEvent(
+    new window.Event("mousedown", { bubbles: true, cancelable: true }),
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  const build = [...root.querySelectorAll("button")].find(
+    (button) => button.textContent === "Build scene",
+  )!;
+
+  build.click();
+  for (let turn = 0; turn < 20; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(received);
+  assert.equal(mapIds.has("soe-picked-area"), true);
+  received.hideAreaOutline();
+  assert.equal(mapIds.has("soe-picked-area"), false);
+  received.showAreaOutline();
+  assert.equal(mapIds.has("soe-picked-area"), true);
+});
+
 test("repick clears a build and a stale 503 never overwrites a newer run", async (context) => {
   const window = new Window();
   context.after(() => window.happyDOM.abort());

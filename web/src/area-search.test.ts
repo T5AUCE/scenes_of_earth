@@ -165,6 +165,112 @@ test("a stale failed outline fetch stays silent", async (context) => {
   assert.equal(harness.chosenText(), "Currently selected - Second");
 });
 
+test("hiding keeps the geometry so showing draws it again", async (context) => {
+  const harness = await searchWithHits(context, [areaHit()], (url) => {
+    if (url.startsWith("/api/areas/")) {
+      return Promise.resolve(Response.json({ ...areaHit(), geometry: outlineA() }));
+    }
+    return null;
+  });
+
+  await harness.pick(0);
+  await flush();
+
+  assert.equal(harness.hasOutline(), true);
+
+  harness.hideOutline();
+
+  assert.equal(harness.hasOutline(), false);
+
+  harness.showOutline();
+
+  assert.equal(harness.hasOutline(), true);
+  assert.deepEqual(harness.sources.at(-1), outlineA());
+});
+
+test("a pending outline fetch stays hidden until it is shown", async (context) => {
+  const outline = gate();
+  const harness = await searchWithHits(context, [areaHit()], (url) => {
+    if (url.startsWith("/api/areas/")) return outline.promise;
+    return null;
+  });
+
+  await harness.pick(0);
+  await flush();
+
+  harness.hideOutline();
+  outline.resolve(Response.json({ ...areaHit(), geometry: outlineA() }));
+  await flush();
+
+  assert.equal(harness.hasOutline(), false);
+
+  harness.showOutline();
+  await flush();
+
+  assert.equal(harness.hasOutline(), true);
+  assert.deepEqual(harness.sources.at(-1), outlineA());
+});
+
+test("clearing the search forgets the outline so showing stays empty", async (context) => {
+  const harness = await searchWithHits(context, [areaHit()], (url) => {
+    if (url.startsWith("/api/areas/")) {
+      return Promise.resolve(Response.json({ ...areaHit(), geometry: outlineA() }));
+    }
+    return null;
+  });
+
+  await harness.pick(0);
+  await flush();
+
+  assert.equal(harness.hasOutline(), true);
+
+  harness.clearSearch();
+  await flush();
+
+  assert.equal(harness.hasOutline(), false);
+
+  harness.showOutline();
+
+  assert.equal(harness.hasOutline(), false);
+});
+
+test("a pick made while hidden draws its outline", async (context) => {
+  const harness = await searchWithHits(context, [areaHit()], (url) => {
+    if (url.startsWith("/api/areas/")) {
+      return Promise.resolve(Response.json({ ...areaHit(), geometry: outlineA() }));
+    }
+    return null;
+  });
+
+  harness.hideOutline();
+  await harness.pick(0);
+  await flush();
+
+  assert.equal(harness.hasOutline(), true);
+});
+
+test("a failed fetch while hidden keeps its notice until the outline is shown", async (context) => {
+  const outline = gate();
+  const harness = await searchWithHits(context, [areaHit()], (url) => {
+    if (url.startsWith("/api/areas/")) return outline.promise;
+    return null;
+  });
+
+  await harness.pick(0);
+  harness.hideOutline();
+  outline.resolve(new Response("", { status: 500 }));
+  await flush();
+
+  assert.equal(harness.chosenText(), "Currently selected - Nakuru (approximate outline)");
+  assert.deepEqual(harness.notices, []);
+  assert.equal(harness.hasOutline(), false);
+
+  harness.showOutline();
+
+  assert.equal(harness.notices.length, 1);
+  assert.equal(harness.hasOutline(), true);
+});
+
 function gate(): { promise: Promise<Response>; resolve(response: Response): void } {
   let resolve!: (response: Response) => void;
   const promise = new Promise<Response>((accept) => {
@@ -182,6 +288,10 @@ async function searchWithHits(
   notices: string[];
   chosenText(): string | null;
   pick(index: number): Promise<void>;
+  hasOutline(): boolean;
+  hideOutline(): void;
+  showOutline(): void;
+  clearSearch(): void;
 }> {
   const window = new Window();
   context.after(() => window.happyDOM.abort());
@@ -194,20 +304,28 @@ async function searchWithHits(
     assert.fail(`Unexpected request: ${url}`);
   });
   const sources: unknown[] = [];
+  const outlineLayers = new Set<string>();
   const map = {
     fitBounds() {},
-    getLayer() {
-      return undefined;
+    getLayer(id: string) {
+      return outlineLayers.has(id) ? {} : undefined;
     },
-    getSource() {
-      return undefined;
+    getSource(id: string) {
+      return outlineLayers.has(id) ? {} : undefined;
     },
-    addSource(_id: string, source: { data: unknown }) {
+    addSource(id: string, source: { data: unknown }) {
       sources.push(source.data);
+      outlineLayers.add(id);
     },
-    addLayer() {},
-    removeLayer() {},
-    removeSource() {},
+    addLayer(spec: { id: string }) {
+      outlineLayers.add(spec.id);
+    },
+    removeLayer(id: string) {
+      outlineLayers.delete(id);
+    },
+    removeSource(id: string) {
+      outlineLayers.delete(id);
+    },
   } as unknown as MapLibreMap;
   const root = document.createElement("div");
   document.body.append(root);
@@ -215,9 +333,15 @@ async function searchWithHits(
   const chosen = document.createElement("div");
   root.append(chosen);
   const notices: string[] = [];
-  bindAreaSearch({ search, level, results, chosen }, map, () => {}, () => {}, (text) => {
-    notices.push(text);
-  });
+  const controls = bindAreaSearch(
+    { search, level, results, chosen },
+    map,
+    () => {},
+    () => {},
+    (text) => {
+      notices.push(text);
+    },
+  );
   context.mock.timers.enable({ apis: ["setTimeout"] });
 
   const pick = async (index: number) => {
@@ -234,7 +358,22 @@ async function searchWithHits(
     );
     await flush();
   };
-  return { sources, notices, chosenText: () => chosen.textContent, pick };
+  const clearSearch = () => {
+    const box = document.querySelector<HTMLInputElement>("[role=combobox]");
+    assert.ok(box);
+    box.value = "";
+    box.dispatchEvent(new window.Event("input"));
+  };
+  return {
+    sources,
+    notices,
+    chosenText: () => chosen.textContent,
+    pick,
+    hasOutline: () => outlineLayers.has("soe-picked-area"),
+    hideOutline: () => controls.hideOutline(),
+    showOutline: () => controls.showOutline(),
+    clearSearch,
+  };
 }
 
 function outlineA(): { type: string; coordinates: number[][][] } {
