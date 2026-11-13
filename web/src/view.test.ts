@@ -172,9 +172,10 @@ afterEach(async () => {
 
 function firstDataOf(mounted: ReturnType<typeof mountScene>) {
   const getTime = () => (globalThis.viewTest as ViewTestState).currentTime;
-  const firstData = mounted.whenEntryReady(getTime, () => 0);
+  const controller = new AbortController();
+  const waiting = mounted.prepareEntry(getTime, controller.signal);
 
-  return { waiting: firstData.ready, cancel: firstData.cancel, retarget: firstData.retarget };
+  return { waiting, cancel: () => controller.abort() };
 }
 
 test("preparation keeps its receiver and blocks the wait until its read settles", async () => {
@@ -216,31 +217,61 @@ test("a selected later month keeps the wait after the first month settles", asyn
   mounted.unmount();
 });
 
-test("switching colour awaits the drawn layer and drops the hidden one", async () => {
+test("a colour switch during preparation is caught by comparing the result", async () => {
   const { mounted } = mountTwoLayers();
   const { waiting, cancel } = firstDataOf(mounted);
-  const isWaitingSettled = track(waiting);
+  const staleOutcome = waiting.then(() => "ready", (error: Error) => error.name);
+  const first = globalThis.viewTest as ViewTestState;
   await settle();
   assert.deepEqual(recordFor("a").prepareCalls, ["2020-01-01"]);
   assert.deepEqual(recordFor("b").prepareCalls, []);
+  const before = mounted.store.getSnapshot();
 
   mounted.store.dispatch({ kind: "choose", unit: "b", draw: "colour" });
   await settle();
-  assert.deepEqual(recordFor("b").prepareCalls, ["2020-01-01"]);
+  assert.notEqual(mounted.store.getSnapshot().allocation, before.allocation);
+  assert.equal(first.pendingReads.has("a:2020-01-01"), true);
+  cancel();
+  assert.equal(await staleOutcome, "AbortError");
 
-  const pending = (globalThis.viewTest as ViewTestState).pendingReads;
-  assert.equal(pending.has("a:2020-01-01"), false);
-  assert.equal(pending.has("b:2020-01-01"), true);
-  assert.equal(isWaitingSettled(), false);
+  const second = mounted.prepareEntry(() => first.currentTime, new AbortController().signal);
+  const isSecondSettled = track(second);
+  await settle();
+  assert.deepEqual(recordFor("b").prepareCalls, ["2020-01-01"]);
+  assert.equal(isSecondSettled(), false);
 
   readFor("b:2020-01-01").resolve();
-  await waiting;
-  assert.equal(isWaitingSettled(), true);
+  const preparation = await second;
 
-  mounted.store.dispatch({ kind: "choose", unit: "a", draw: "colour" });
+  assert.equal(preparation.allocation, mounted.store.getSnapshot().allocation);
+  assert.notEqual(preparation.allocation, before.allocation);
+  mounted.unmount();
+});
+
+test("aborting a preparation rejects it and stops its reads", async () => {
+  const { mounted } = mountTwoLayers();
+  const { waiting, cancel } = firstDataOf(mounted);
+  const outcome = waiting.then(() => "ready", (error: Error) => error.name);
   await settle();
-  assert.deepEqual(recordFor("a").prepareCalls, ["2020-01-01"]);
-  assert.deepEqual(recordFor("b").prepareCalls, ["2020-01-01"]);
+  assert.ok((globalThis.viewTest as ViewTestState).pendingReads.has("a:2020-01-01"));
+
+  cancel();
+
+  assert.equal(await outcome, "AbortError");
+  assert.equal((globalThis.viewTest as ViewTestState).pendingReads.size, 0);
+  mounted.unmount();
+});
+
+test("one failing layer rejects the preparation and aborts the other reads", async () => {
+  const { mounted } = mountTwoLayers();
+  mounted.store.dispatch({ kind: "choose", unit: "b", draw: "colour" });
+  const { waiting, cancel } = firstDataOf(mounted);
+  const outcome = waiting.then(() => "ready", (error: Error) => error.message);
+  await settle();
+
+  readFor("b:2020-01-01").reject(new Error("read failed"));
+
+  assert.equal(await outcome, "read failed");
   cancel();
   mounted.unmount();
 });

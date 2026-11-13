@@ -15,6 +15,9 @@ import {
   formatTileSettlePart,
   framesPerSecond,
   layerForSource,
+  entryStats,
+  noteEntryGap,
+  noteEntryWait,
   noteSceneOpen,
   noteSceneReady,
   notePreloadHit,
@@ -89,7 +92,7 @@ test("the badge line stays compact with a missing load", () => {
     longtasks: 0,
   });
 
-  assert.equal(text, "60 fps · worst 33 ms · z 5.3 · load — · 2 req 1.5 KB · gpu n/a · 0 long");
+  assert.equal(text, "60 fps · worst 33 ms · z 5.3 · load — · 2 req 1.5 KB · gpu n/a\n0 long");
 });
 
 test("the badge line rounds the load time", () => {
@@ -108,7 +111,7 @@ test("the badge line rounds the load time", () => {
   assert.equal(
     text,
     "59 fps · worst 50 ms · z 4.0 · load 842 ms · 14 req 512 B"
-      + " · gpu geology-classes 6.1 ms rain-dots 0.9 ms · 3 long",
+      + " · gpu geology-classes 6.1 ms rain-dots 0.9 ms\n3 long",
   );
 });
 
@@ -133,6 +136,42 @@ test("the scene timing measures open to drawn", () => {
   noteSceneReady(1842);
 
   assert.equal(sceneLoadStats.loadMs, 842);
+});
+
+test("the entry part shows the wait and the landing gap on the second line", () => {
+  const text = formatDevStats({
+    fps: 60,
+    worstMs: 33,
+    zoom: 5.25,
+    loadMs: null,
+    requests: 2,
+    bytes: 1536,
+    gpuMs: {},
+    gpuUnavailable: true,
+    longtasks: 0,
+    entry: { waitMs: 1240.4, gapMs: 17.6 },
+  });
+
+  assert.equal(
+    text,
+    "60 fps · worst 33 ms · z 5.3 · load — · 2 req 1.5 KB · gpu n/a\n"
+      + "entry wait 1240 ms gap 18 ms · 0 long",
+  );
+});
+
+test("the entry part shows a dash until the fade has started", () => {
+  noteSceneOpen(0);
+  noteEntryWait(900);
+
+  assert.deepEqual({ ...entryStats }, { waitMs: 900, gapMs: null });
+
+  noteEntryGap(20);
+
+  assert.deepEqual({ ...entryStats }, { waitMs: 900, gapMs: 20 });
+
+  noteSceneOpen(0);
+
+  assert.deepEqual({ ...entryStats }, { waitMs: null, gapMs: null });
 });
 
 test("the fetch counter totals covering requests", () => {
@@ -815,7 +854,7 @@ test("the preload badge shows progress, hit rates and off when disabled", () => 
     gpuUnavailable: true,
     longtasks: 0,
   };
-  assert.ok(formatDevStats({ ...stats, preload: snapshot }).includes(" · preload 62/246"));
+  assert.ok(formatDevStats({ ...stats, preload: snapshot }).includes("\npreload 62/246"));
   assert.equal(formatDevStats({ ...stats, preload: preloadSnapshot() }).includes("preload"), false);
   setPreloadDisabled(true);
   try {

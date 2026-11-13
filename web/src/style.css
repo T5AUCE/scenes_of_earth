@@ -175,11 +175,12 @@ button {
 
 #dev-stats {
   top: 34px;
+  white-space: pre-line;
 }
 
 body.has-dev-stats #panel {
-  top: 64px;
-  max-height: calc(100% - 80px);
+  top: 80px;
+  max-height: calc(100% - 96px);
 }
 
 #panel {
@@ -319,8 +320,158 @@ body.has-dev-stats #panel {
   margin: 4px 0;
 }
 
-body.scene-mode #panel {
+/* The build panel slides out on the flight and the scene UI slides in on the shared reveal. */
+/* Both defaults live on :root so the runtime overrides on it reach the slides. */
+:root {
+  --entry-flight-ms: 850ms;
+  --entry-reveal-ms: 650ms;
+}
+
+body {
+  --entry-panel-out: calc(var(--entry-flight-ms) * 200 / 850);
+  --entry-cards-start: calc(var(--entry-reveal-ms) * 0 / 650);
+  --entry-card-duration: calc(var(--entry-reveal-ms) * 280 / 650);
+  --entry-card-stagger: calc(var(--entry-reveal-ms) * 40 / 650);
+  --entry-time-bar-start: calc(var(--entry-reveal-ms) * 100 / 650);
+  --entry-time-bar-duration: calc(var(--entry-reveal-ms) * 300 / 650);
+  --entry-notices-start: calc(var(--entry-reveal-ms) * 200 / 650);
+  --entry-notices-duration: calc(var(--entry-reveal-ms) * 300 / 650);
+  /* A future top bar adds .entry-from-top and slides down once the notices are in. */
+  --entry-top-bar-start: calc(var(--entry-reveal-ms) * 350 / 650);
+  --entry-top-bar-duration: calc(var(--entry-reveal-ms) * 300 / 650);
+}
+
+body.scene-entering #scene-column,
+body.scene-entering #time-bar {
+  visibility: hidden;
+}
+
+/* Without motion the build panel simply goes. */
+body.scene-flying #panel {
   display: none;
+}
+
+.entry-curtain {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  transition-property: opacity;
+  transition-timing-function: ease-out;
+}
+
+.entry-curtain.fading {
+  opacity: 0;
+}
+
+@keyframes entry-slide-out-left {
+  to {
+    transform: translateX(-120%);
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+@keyframes entry-slide-in-right {
+  from {
+    transform: translateX(120%);
+    opacity: 0;
+  }
+}
+
+@keyframes entry-slide-in-bottom {
+  from {
+    transform: translateY(120%);
+    opacity: 0;
+  }
+}
+
+@keyframes entry-slide-in-top {
+  from {
+    transform: translateY(-120%);
+    opacity: 0;
+  }
+}
+
+/* The scene marks the end of the slides by this animation, so late cards and notices skip them. */
+@keyframes entry-slides-end {
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  body.scene-flying #panel {
+    display: block;
+    animation: entry-slide-out-left var(--entry-panel-out) ease-in forwards;
+  }
+
+  body.scene-ui-sliding {
+    animation: entry-slides-end var(--entry-reveal-ms) linear;
+  }
+
+  /* The slide starts outside the scroll box, so it would otherwise flash a scrollbar. */
+  body.scene-ui-sliding #scene-column .cards {
+    overflow-x: hidden;
+  }
+
+  body.scene-ui-sliding #scene-column > header,
+  body.scene-ui-sliding #scene-column .card {
+    --entry-card-index: 8;
+    animation: entry-slide-in-right var(--entry-card-duration) ease-out backwards;
+    animation-delay: calc(
+      var(--entry-cards-start) + var(--entry-card-index) * var(--entry-card-stagger)
+    );
+  }
+
+  body.scene-ui-sliding #scene-column > header {
+    --entry-card-index: 0;
+  }
+
+  body.scene-ui-sliding #scene-column .card:nth-child(1) {
+    --entry-card-index: 1;
+  }
+
+  body.scene-ui-sliding #scene-column .card:nth-child(2) {
+    --entry-card-index: 2;
+  }
+
+  body.scene-ui-sliding #scene-column .card:nth-child(3) {
+    --entry-card-index: 3;
+  }
+
+  body.scene-ui-sliding #scene-column .card:nth-child(4) {
+    --entry-card-index: 4;
+  }
+
+  body.scene-ui-sliding #scene-column .card:nth-child(5) {
+    --entry-card-index: 5;
+  }
+
+  body.scene-ui-sliding #scene-column .card:nth-child(6) {
+    --entry-card-index: 6;
+  }
+
+  body.scene-ui-sliding #scene-column .card:nth-child(7) {
+    --entry-card-index: 7;
+  }
+
+  body.scene-ui-sliding #time-bar {
+    animation: entry-slide-in-bottom var(--entry-time-bar-duration) ease-out backwards;
+    animation-delay: var(--entry-time-bar-start);
+  }
+
+  body.scene-ui-sliding #scene-column .notice,
+  body.scene-ui-sliding #scene-column > .scene-panel {
+    animation: entry-slide-in-right var(--entry-notices-duration) ease-out backwards;
+    animation-delay: var(--entry-notices-start);
+  }
+
+  body.scene-ui-sliding .entry-from-top {
+    animation: entry-slide-in-top var(--entry-top-bar-duration) ease-out backwards;
+    animation-delay: var(--entry-top-bar-start);
+  }
 }
 
 .timeline {

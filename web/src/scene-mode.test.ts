@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { afterEach, test } from "node:test";
 
@@ -24,17 +25,14 @@ registerHooks({
   },
 });
 
+import { REVEAL_MS } from "./entry-curtain.ts";
 import { assertSameNode } from "./testing/dom-assert.ts";
-import { isPreloadDisabled } from "./dev-stats.ts";
+import { entryStats, isPreloadDisabled } from "./dev-stats.ts";
 import { DEFAULT_OUTLINE, storeMapDetailsShown } from "./display-state.ts";
-import {
-  currentScenePreload,
-  PRELOAD_ENTRY_BUDGET_MS,
-} from "./layers/tile-prefetch.ts";
+import { currentScenePreload, PRELOAD_WARM_CAP_MS } from "./layers/tile-prefetch.ts";
 import {
   createHarness,
   DATA_IDS,
-  deferredSignal,
   exitActiveHarness,
   FEATURE,
   MASK_ID,
@@ -46,8 +44,21 @@ import type { Scene } from "./types.ts";
 
 const FADE_ID = "soe-scene-fade";
 const FADE_OPACITY = 0.6;
+const PREPARING = "Preparing scene…";
 
 const BASEMAP_TEMPLATE = "https://tiles.example.test/planet/{z}/{x}/{y}.pbf";
+
+const SCENE_TIMINGS = [
+  "--entry-cards-start",
+  "--entry-card-duration",
+  "--entry-card-stagger",
+  "--entry-time-bar-start",
+  "--entry-time-bar-duration",
+  "--entry-notices-start",
+  "--entry-notices-duration",
+  "--entry-top-bar-start",
+  "--entry-top-bar-duration",
+];
 
 afterEach(resetHarness);
 
@@ -84,33 +95,6 @@ test("the preload switch off opens no preload and the badge says so", (t) => {
 
   assert.equal(currentScenePreload(), null);
   assert.equal(isPreloadDisabled(), true);
-});
-
-test("delayed geometry and mask tiles keep data hidden through resize until ready", async () => {
-  const harness = createHarness();
-  harness.enter();
-  const baseline = captureListeners(harness.map);
-  harness.data.resolve();
-  assertDataHidden(harness.map);
-  harness.resize();
-  assertDataHidden(harness.map);
-
-  harness.geometry.resolve(FEATURE);
-  await settle();
-  assert.ok(harness.map.getLayer(MASK_ID));
-  assertDataHidden(harness.map);
-  harness.map.emit("sourcedata", { sourceId: MASK_ID, isSourceLoaded: false });
-  harness.map.emit("sourcedata", { sourceId: MASK_ID, isSourceLoaded: true });
-  harness.map.emit("sourcedata", { sourceId: "rain", isSourceLoaded: true });
-  await settle();
-  assertDataHidden(harness.map);
-  assert.ok(harness.map.getLayer(FADE_ID));
-
-  harness.map.finishMask();
-  await settle();
-  assertRanges(harness.map, [[4.75, 24], [6, 12], [4.75, 24], [4, 4]]);
-  assertFadeCovers(harness.map);
-  assertListenersRemoved(harness.map, baseline);
 });
 
 test("basemap geometry stays below scene data with the mask above both", async () => {
@@ -299,6 +283,11 @@ test("a camera gesture hides basemap symbols and restores the details choice", a
   try {
     harness.enter();
     storeMapDetailsShown(true);
+    harness.data.resolve();
+    harness.geometry.resolve(FEATURE);
+    await settle();
+    harness.map.finishMask();
+    await settle();
     assert.equal(visibilities.get("label_city"), "visible");
 
     visibilities.clear();
@@ -317,6 +306,49 @@ test("a camera gesture hides basemap symbols and restores the details choice", a
     else globals.localStorage = previousStorage;
     storeMapDetailsShown(false);
   }
+});
+
+test("basemap symbols stay visible until the curtain stages when details are off", async () => {
+  storeMapDetailsShown(false);
+  const harness = phasedHarness();
+  (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
+    layers: [
+      { id: "background", type: "background" },
+      { id: "label_city", type: "symbol" },
+    ],
+  });
+  for (const id of ["background", "label_city"]) {
+    harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
+  }
+  const visibilityOf = () => harness.map.getLayer("label_city")?.layout.visibility;
+  harness.enter();
+  await settle();
+  assert.equal(visibilityOf(), "visible");
+
+  // An early toggle or gesture must not hide the names before the curtain.
+  storeMapDetailsShown(false);
+  assert.equal(visibilityOf(), "visible");
+  harness.map.emit("movestart");
+  harness.map.emit("moveend");
+  assert.equal(visibilityOf(), "visible");
+
+  await finishPreparation(harness);
+  assert.deepEqual(harness.events, ["fly"]);
+  assert.equal(visibilityOf(), "visible");
+
+  harness.land();
+  await settle();
+  assert.ok(harness.events.includes("curtain"));
+  assert.equal(visibilityOf(), "visible");
+
+  harness.curtain!.cover();
+  assert.equal(visibilityOf(), "none");
+
+  harness.curtain!.fade();
+  harness.curtain!.finish();
+  assert.equal(visibilityOf(), "none");
+
+  storeMapDetailsShown(false);
 });
 
 test("the basemap clip keeps an area crossing 180 in its 0 to 360 frame", async () => {
@@ -831,104 +863,22 @@ test("the Map details toggle defaults off and persists per browser", async (cont
   await act(async () => column!.unmount());
 });
 
-test("the flight waits for the mask and the first data", async () => {
-  const harness = createHarness();
-  harness.enter();
-  const waitingLand = harness.land;
-  assert.ok(harness.notes.includes("Preparing scene..."));
-
-  harness.geometry.resolve(FEATURE);
-  harness.data.resolve();
-  await settle();
-  assert.equal(harness.land, waitingLand);
-  assert.ok(harness.notes.includes("Preparing scene..."));
-
-  harness.map.finishMask();
-  await settle();
-
-  assert.notEqual(harness.land, waitingLand);
-  assert.ok(!harness.notes.includes("Preparing scene..."));
-  assertRanges(harness.map, [[4.75, 24], [6, 12], [4.75, 24], [4, 4]]);
-});
-
-test("pending readiness never lifts the flight on a timer", async () => {
-  const harness = createHarness();
-  harness.enter();
-  const waitingLand = harness.land;
-
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.equal(harness.land, waitingLand);
-
-  await new Promise((resolve) => setTimeout(resolve, 1600));
-
-  assert.equal(harness.land, waitingLand);
-  assert.ok(harness.notes.includes("Preparing scene..."));
-});
-
-test("a rejected entry shows its failure without waiting for geometry", async () => {
-  const harness = createHarness();
-  harness.enter();
-  await settle();
-  const waitingLand = harness.land;
-  harness.data.reject(new Error("data unavailable"));
-  await settle();
-  await settle();
-
-  assert.equal(harness.land, waitingLand);
-  assert.deepEqual(harness.notes, ["data unavailable"]);
-  harness.geometry.resolve(FEATURE);
-  harness.map.finishMask();
-  await settle();
-
-  assert.equal(harness.land, waitingLand);
-  assert.deepEqual(harness.notes, ["data unavailable"]);
-});
-
-test("a scrub during the wait retargets instead of flying stale", async () => {
-  const harness = createHarness();
-  harness.enter("2020-01-01");
-  await settle();
-  const waitingLand = harness.land;
-  assert.deepEqual(harness.preparationTimes, ["2020-01-01"]);
-  assert.equal(harness.retargetCount, 0);
-  harness.geometry.resolve(FEATURE);
-  await settle();
-  harness.map.finishMask();
-  harness.onTime!("2020-02-01", "2020-02");
-  assert.equal(harness.retargetCount, 1);
-  assert.deepEqual(harness.preparationTimes, ["2020-01-01"]);
-  const staleData = harness.data;
-  const currentData = deferredSignal();
-  harness.data = currentData;
-  staleData.resolve();
-  await settle();
-  assert.equal(harness.land, waitingLand);
-  assert.deepEqual(harness.preparationTimes, ["2020-01-01", "2020-02-01"]);
-  currentData.resolve();
-  await settle();
-
-  assert.notEqual(harness.land, waitingLand);
-  assert.deepEqual(harness.restoredTimes, ["2020-01-01"]);
-});
-
 test("a static entry with no linked time still flies once ready", async () => {
   const harness = createHarness();
   harness.enter(null);
-  const waitingLand = harness.land;
   harness.geometry.resolve(FEATURE);
   harness.data.resolve();
   await settle();
   harness.map.finishMask();
   await settle();
 
-  assert.notEqual(harness.land, waitingLand);
-  assert.ok(!harness.notes.includes("Preparing scene..."));
+  assert.ok(harness.events.includes("curtain"));
+  assert.equal(harness.statuses.at(-1), "");
 });
 
 test("closing during the wait starts no flight", async () => {
   const harness = createHarness();
   harness.enter();
-  const waitingLand = harness.land;
   harness.mode.exit();
   const writes = harness.map.rangeWrites;
   harness.geometry.resolve(FEATURE);
@@ -937,148 +887,10 @@ test("closing during the wait starts no flight", async () => {
   await settle();
   await new Promise((resolve) => setTimeout(resolve, 50));
 
-  assert.equal(harness.land, waitingLand);
+  assert.deepEqual(harness.events, []);
   assert.deepEqual(harness.notes, []);
   assert.equal(harness.map.rangeWrites, writes);
   assertListenersRemoved(harness.map);
-});
-
-test("rejected geometry keeps data hidden after landing and refitting", async () => {
-  const harness = createHarness();
-  harness.enter();
-  const baseline = captureListeners(harness.map);
-  await settle();
-  harness.data.resolve();
-  harness.geometry.reject(new Error("geometry unavailable"));
-  await settle();
-  harness.land();
-  harness.resize();
-
-  assertDataHidden(harness.map);
-  assert.equal(harness.map.getLayer(MASK_ID), undefined);
-  assert.deepEqual(harness.notes, ["Area outline: geometry unavailable"]);
-  assertListenersRemoved(harness.map, baseline);
-});
-
-test("mask worker failure stays hidden even if later events claim readiness", async () => {
-  const harness = createHarness();
-  harness.enter();
-  const baseline = captureListeners(harness.map);
-  harness.data.resolve();
-  harness.geometry.resolve(FEATURE);
-  await settle();
-  harness.map.emit("error", { sourceId: MASK_ID, error: new Error("worker failed") });
-  await settle();
-  harness.map.finishMask();
-  harness.land();
-  harness.resize();
-  await settle();
-
-  assertDataHidden(harness.map);
-  assert.deepEqual(harness.notes, ["Area mask: worker failed"]);
-  assertListenersRemoved(harness.map, baseline);
-});
-
-test("mask readiness preserves own ranges and toggles through refits and landing", async () => {
-  const harness = createHarness();
-  harness.enter();
-  harness.data.resolve();
-  harness.map.getLayer("relief")!.layout.visibility = "none";
-  harness.geometry.resolve(FEATURE);
-  await settle();
-  harness.map.emit("error", { sourceId: "rain", error: new Error("unrelated") });
-  harness.map.finishMask();
-  await settle();
-
-  assertRanges(harness.map, [[4.75, 24], [6, 12], [4.75, 24], [4, 4]]);
-  assert.equal(harness.map.getLayer("relief")!.layout.visibility, "none");
-  harness.flight.zoom = 8;
-  harness.resize();
-  assertRanges(harness.map, [[7.75, 24], [7.75, 12], [7.75, 24], [4, 4]]);
-  harness.map.getLayer("rain")!.layout.visibility = "none";
-  harness.land();
-  assertRanges(harness.map, [[0, 24], [6, 12], [0, 24], [1, 4]]);
-  assert.equal(harness.map.getLayer("relief")!.layout.visibility, "none");
-  assert.equal(harness.map.getLayer("rain")!.layout.visibility, "none");
-  assert.deepEqual(harness.notes, []);
-});
-
-test("a preparation-time refit upward resyncs the data gate with the mask", async () => {
-  const harness = createHarness();
-  harness.enter();
-  harness.data.resolve();
-  assertDataHidden(harness.map);
-  harness.flight.zoom = 7;
-  harness.resize();
-  assertDataHidden(harness.map);
-  harness.geometry.resolve(FEATURE);
-  await settle();
-  assert.equal(maskFillOpacity(harness.map), 0);
-  assert.equal(fadeFillOpacity(harness.map), 0);
-  assertDataHidden(harness.map);
-  harness.map.finishMask();
-  await settle();
-
-  assert.equal(harness.flight.zoom, 7);
-  assertRanges(harness.map, [[6.75, 24], [6.75, 12], [6.75, 24], [4, 4]]);
-  assert.ok(JSON.stringify(maskFillOpacity(harness.map)).includes("6.75"));
-  assert.ok(JSON.stringify(maskFillOpacity(harness.map)).includes("5.5"));
-  assertFadeCovers(harness.map);
-  harness.land();
-  assertRanges(harness.map, [[0, 24], [6, 12], [0, 24], [1, 4]]);
-});
-
-test("a preparation-time refit downward resyncs the data gate with the mask", async () => {
-  const harness = createHarness();
-  harness.enter();
-  harness.data.resolve();
-  assertDataHidden(harness.map);
-  harness.flight.zoom = 3;
-  harness.resize();
-  assertDataHidden(harness.map);
-  harness.geometry.resolve(FEATURE);
-  await settle();
-  assert.equal(maskFillOpacity(harness.map), 0);
-  assert.equal(fadeFillOpacity(harness.map), 0);
-  assertDataHidden(harness.map);
-  harness.map.finishMask();
-  await settle();
-
-  assert.equal(harness.flight.zoom, 3);
-  assertRanges(harness.map, [[2.75, 24], [6, 12], [2.75, 24], [2.75, 4]]);
-  assert.ok(JSON.stringify(maskFillOpacity(harness.map)).includes("2.75"));
-  assert.ok(JSON.stringify(maskFillOpacity(harness.map)).includes("1.5"));
-  assertFadeCovers(harness.map);
-  harness.land();
-  assertRanges(harness.map, [[0, 24], [6, 12], [0, 24], [1, 4]]);
-});
-
-test("an already loaded mask restores ranges without another source event", async () => {
-  const harness = createHarness();
-  harness.map.readyOnAdd = true;
-  harness.enter();
-  const baseline = captureListeners(harness.map);
-  harness.data.resolve();
-  harness.geometry.resolve(FEATURE);
-  await settle();
-
-  assertRanges(harness.map, [[4.75, 24], [6, 12], [4.75, 24], [4, 4]]);
-  assertListenersRemoved(harness.map, baseline);
-});
-
-test("a synchronous landing cannot bypass pending mask readiness", async () => {
-  const harness = createHarness();
-  harness.landImmediately = true;
-  harness.enter();
-  harness.data.resolve();
-  assertDataHidden(harness.map);
-  harness.geometry.resolve(FEATURE);
-  await settle();
-  assertDataHidden(harness.map);
-  harness.map.finishMask();
-  await settle();
-
-  assertRanges(harness.map, [[0, 24], [6, 12], [0, 24], [1, 4]]);
 });
 
 test("closing during geometry loading ignores late completion", async () => {
@@ -1138,22 +950,6 @@ test("scene entry adds no tile warm-up listeners", async () => {
   assert.equal(harness.map.listeners.get("zoom")?.size ?? 0, 0);
   assert.equal(harness.map.listeners.get("move")?.size ?? 0, 0);
   assertListenersRemoved(harness.map);
-});
-
-test("synchronous mask setup failure leaves data hidden and removes listeners", async () => {
-  const harness = createHarness();
-  harness.map.failMaskLayer = true;
-  harness.enter();
-  const baseline = captureListeners(harness.map);
-  harness.data.resolve();
-  harness.geometry.resolve(FEATURE);
-  await settle();
-  harness.land();
-  harness.resize();
-
-  assertDataHidden(harness.map);
-  assert.deepEqual(harness.notes, ["mask setup failed"]);
-  assertListenersRemoved(harness.map, baseline);
 });
 
 test("the panel owner pushes history and forwards notice options to reopen", () => {
@@ -1358,54 +1154,6 @@ test("the owner and real panel keep history through Back and Forward", async (co
   await act(async () => {
     harness.mode.exit();
   });
-});
-
-test("a units change refreshes the gate and drops removed contour ids", async () => {
-  const harness = createHarness();
-  harness.enter();
-  harness.data.resolve();
-  harness.geometry.resolve(FEATURE);
-  await settle();
-  harness.map.finishMask();
-  await settle();
-
-  const moved: [string, string | undefined][] = [];
-  const originalMove = harness.map.moveLayer.bind(harness.map);
-  harness.map.moveLayer = ((id: string, beforeId?: string) => {
-    moved.push([id, beforeId]);
-    return originalMove(id, beforeId);
-  }) as typeof harness.map.moveLayer;
-  harness.map.layers.set("contours-ft", {
-    id: "contours-ft",
-    minzoom: 7,
-    maxzoom: 12,
-    layout: { visibility: "visible" },
-    type: "symbol",
-  });
-  harness.map.layers.delete("contours");
-  harness.onUnits!("ft", { terrain: "ft" }, ["relief", "contours-ft", "rain", "overview"]);
-
-  assert.equal(harness.map.getLayer("contours-ft")!.minzoom, 7);
-  harness.flight.zoom = 8;
-  harness.resize();
-  assert.equal(harness.map.getLayer("contours-ft")!.minzoom, 7.75);
-  assert.equal(harness.map.getLayer("contours"), undefined);
-  assert.ok(harness.map.getLayer(FADE_ID));
-  assert.deepEqual(moved, [["contours-ft", undefined]]);
-
-  moved.length = 0;
-  harness.map.layers.set("contours", {
-    id: "contours",
-    minzoom: 6,
-    maxzoom: 12,
-    layout: { visibility: "visible" },
-    type: "symbol",
-  });
-  harness.map.layers.delete("contours-ft");
-  harness.onUnits!("m", { terrain: "m" }, ["relief", "contours", "rain", "overview"]);
-
-  assert.ok(harness.map.getLayer(FADE_ID));
-  assert.deepEqual(moved, [["contours", undefined]]);
 });
 
 test("chart commits update the share link without clobbering display or history", () => {
@@ -2124,102 +1872,7 @@ test("initial oversized entry clears its warning on a fitting edit", async (cont
   for (const url of urls) assert.ok(url.length <= 8192);
 });
 
-test("a delayed preload holds the flight while the basemap stays stable", async () => {
-  const harness = createHarness();
-  (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
-    layers: [
-      { id: "background", type: "background" },
-      { id: "label_city", type: "symbol" },
-    ],
-  });
-  for (const id of ["background", "label_city"]) {
-    harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
-  }
-  const writes: [string, unknown][] = [];
-  const stub = harness.map as unknown as Record<string, unknown>;
-  stub.getFilter = () => undefined;
-  stub.setFilter = (id: string, filter: unknown) => {
-    writes.push([id, filter]);
-  };
-  harness.enter();
-  const preload = currentScenePreload()!;
-  let release!: (blob: Blob | undefined) => void;
-  const gate = new Promise<Blob | undefined>((resolve) => {
-    release = resolve;
-  });
-  preload.add({
-    id: "delayed",
-    layer: "terrain",
-    lanes: 1,
-    tasks: () => [{ key: "delayed-tile", estimatedBytes: 1, run: () => gate }],
-    visibleKey: () => null,
-  });
-  harness.data.resolve();
-  harness.geometry.resolve(FEATURE);
-  await settle();
-  harness.map.finishMask();
-  await settle();
-  const waitingLand = harness.land;
-  assert.equal(harness.land, waitingLand);
-  assertDataHidden(harness.map);
-  assert.ok(harness.map.getLayer(MASK_ID));
-  assert.equal(writes.length, 0);
-
-  release(new Blob(["x"]));
-  await settle();
-  await settle();
-  assert.notEqual(harness.land, waitingLand);
-  assertRanges(harness.map, [[4.75, 24], [6, 12], [4.75, 24], [4, 4]]);
-  assert.ok(writes.length > 0);
-  assertFadeCovers(harness.map);
-});
-
-test("slow data and a slow mask each hold the single coordinated flight", async () => {
-  const first = createHarness();
-  first.enter();
-  first.geometry.resolve(FEATURE);
-  await settle();
-  first.map.finishMask();
-  await settle();
-  const waitingFirst = first.land;
-  assert.equal(first.land, waitingFirst);
-  assertDataHidden(first.map);
-  first.data.resolve();
-  await settle();
-  await settle();
-  assert.notEqual(first.land, waitingFirst);
-  await exitActiveHarness();
-
-  const second = createHarness();
-  second.enter();
-  second.data.resolve();
-  await settle();
-  const waitingSecond = second.land;
-  assert.equal(second.land, waitingSecond);
-  assertDataHidden(second.map);
-  second.geometry.resolve(FEATURE);
-  await settle();
-  second.map.finishMask();
-  await settle();
-  assert.notEqual(second.land, waitingSecond);
-  assertRanges(second.map, [[4.75, 24], [6, 12], [4.75, 24], [4, 4]]);
-});
-
-test("a synchronous landing still waits for hidden work and reveals together", async () => {
-  const harness = createHarness();
-  harness.landImmediately = true;
-  harness.enter();
-  harness.data.resolve();
-  assertDataHidden(harness.map);
-  harness.geometry.resolve(FEATURE);
-  await settle();
-  assertDataHidden(harness.map);
-  harness.map.finishMask();
-  await settle();
-  assertRanges(harness.map, [[0, 24], [6, 12], [0, 24], [1, 4]]);
-});
-
-test("exiting during a delayed preload starts no flight and stages nothing", async () => {
+test("exiting during a delayed preload aborts it and stages nothing", async () => {
   const harness = createHarness();
   harness.enter();
   const preload = currentScenePreload()!;
@@ -2237,142 +1890,83 @@ test("exiting during a delayed preload starts no flight and stages nothing", asy
   harness.data.resolve();
   harness.geometry.resolve(FEATURE);
   await settle();
-  harness.map.finishMask();
-  await settle();
-  const waitingLand = harness.land;
   const writes = harness.map.rangeWrites;
   harness.mode.exit();
   release(new Blob(["x"]));
   await settle();
   await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.equal(harness.land, waitingLand);
+  assert.ok(!harness.events.includes("curtain"));
   assert.equal(harness.map.rangeWrites, writes);
   assert.equal(harness.map.getLayer(MASK_ID), undefined);
+  assert.equal(currentScenePreload(), null);
   assert.deepEqual(harness.notes, []);
   assertListenersRemoved(harness.map);
 });
 
-test("a failed preload task never blocks the coordinated flight", async () => {
-  const harness = createHarness();
+test("the flight waits for preparation and the destination warm", async () => {
+  const harness = phasedHarness();
   harness.enter();
-  const preload = currentScenePreload()!;
-  preload.add({
-    id: "missing",
+  let release!: (blob: Blob | undefined) => void;
+  const gate = new Promise<Blob | undefined>((resolve) => {
+    release = resolve;
+  });
+  currentScenePreload()!.add({
+    id: "delayed",
+    layer: "terrain",
+    lanes: 1,
+    tasks: () => [{ key: "delayed-tile", estimatedBytes: 1, run: () => gate }],
+    visibleKey: () => null,
+  });
+  await finishPreparation(harness);
+
+  assert.deepEqual(harness.events, []);
+  assert.deepEqual(harness.statuses, [PREPARING]);
+  assert.ok(!harness.bodyClasses.has("scene-flying"));
+  assert.equal(harness.legendsReady, true);
+
+  release(new Blob(["x"]));
+  await settle();
+
+  assert.deepEqual(harness.events, ["fly"]);
+  assert.ok(harness.bodyClasses.has("scene-flying"));
+});
+
+test("deeper preload levels do not hold the flight or the spinner", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  currentScenePreload()!.add({
+    id: "deep",
     layer: "terrain",
     lanes: 1,
     tasks: () => [{
-      key: "missing-tile",
+      key: "deep-tile",
       estimatedBytes: 1,
-      run: () => Promise.reject(new Error("Bad response: 404 for missing-tile")),
+      zoom: 9,
+      run: () => new Promise<Blob | undefined>(() => {}),
     }],
     visibleKey: () => null,
   });
-  harness.data.resolve();
-  harness.geometry.resolve(FEATURE);
-  await settle();
-  harness.map.finishMask();
-  await settle();
-  assertRanges(harness.map, [[4.75, 24], [6, 12], [4.75, 24], [4, 4]]);
-  assertFadeCovers(harness.map);
+  assert.equal(harness.busyPanel, true);
+  await finishPreparation(harness);
+
+  assert.deepEqual(harness.events, ["fly"]);
+  assert.equal(harness.busyPanel, false);
 });
 
-test("the outline stays hidden until liftoff and returns on failure", async () => {
-  const shown = createHarness();
-  shown.map.layers.set("soe-area-outline", {
-    id: "soe-area-outline",
-    layout: { visibility: "visible" },
-  });
-  shown.enter();
-  const outline = shown.map.layers.get("soe-area-outline") as { layout: { visibility?: string } };
-  assert.equal(outline.layout.visibility, "none");
-  shown.data.resolve();
-  shown.geometry.resolve(FEATURE);
-  await settle();
-  shown.map.finishMask();
-  await settle();
-  assert.equal(outline.layout.visibility, "visible");
+test("closing while preparing clears the spinner with the status", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+
+  assert.equal(harness.busyPanel, true);
   await exitActiveHarness();
 
-  const failed = createHarness();
-  failed.map.layers.set("soe-area-outline", {
-    id: "soe-area-outline",
-    layout: { visibility: "visible" },
-  });
-  failed.enter();
-  const failedOutline = failed.map.layers.get("soe-area-outline") as {
-    layout: { visibility?: string };
-  };
-  assert.equal(failedOutline.layout.visibility, "none");
-  await settle();
-  failed.data.reject(new Error("data unavailable"));
-  await settle();
-  await settle();
-  assert.equal(failedOutline.layout.visibility, "visible");
-  assert.deepEqual(failed.notes, ["data unavailable"]);
+  assert.equal(harness.busyPanel, false);
+  assert.deepEqual(harness.statuses, [PREPARING, ""]);
 });
 
-test("the mask, clip, data and flight start in one tick after the wait", async () => {
-  const harness = createHarness();
-  (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
-    layers: [
-      { id: "background", type: "background" },
-      { id: "label_city", type: "symbol" },
-    ],
-  });
-  for (const id of ["background", "label_city"]) {
-    harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
-  }
-  const writes: [string, unknown][] = [];
-  const stub = harness.map as unknown as Record<string, unknown>;
-  stub.getFilter = () => undefined;
-  stub.setFilter = (id: string, filter: unknown) => {
-    writes.push([id, filter]);
-  };
-  harness.enter();
-  const waitingLand = harness.land;
-  harness.data.resolve();
-  assertDataHidden(harness.map);
-  assert.equal(writes.length, 0);
-  harness.geometry.resolve(FEATURE);
-  await settle();
-  assertDataHidden(harness.map);
-  assert.equal(harness.land, waitingLand);
-  assert.equal(writes.length, 0);
-  harness.map.finishMask();
-  await settle();
-  assert.notEqual(harness.land, waitingLand);
-  assertRanges(harness.map, [[4.75, 24], [6, 12], [4.75, 24], [4, 4]]);
-  assert.ok(writes.length > 0);
-  assertFadeCovers(harness.map);
-});
-
-test("waiting fills stay transparent at and above the fitted zoom through resize", async () => {
-  for (const zoom of [5, 6]) {
-    const harness = createHarness();
-    harness.map.getZoom = () => zoom;
-    harness.enter();
-    harness.data.resolve();
-    harness.geometry.resolve(FEATURE);
-    await settle();
-    assert.ok(harness.map.getLayer(MASK_ID));
-    assert.equal(maskFillOpacity(harness.map), 0);
-    assert.equal(fadeFillOpacity(harness.map), 0);
-    assertDataHidden(harness.map);
-    harness.resize();
-    assert.equal(maskFillOpacity(harness.map), 0);
-    assert.equal(fadeFillOpacity(harness.map), 0);
-    assertDataHidden(harness.map);
-    harness.map.finishMask();
-    await settle();
-    await settle();
-    assertFadeCovers(harness.map);
-    await exitActiveHarness();
-  }
-});
-
-test("a stalled optional preload expires after the entry budget", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
-  const harness = createHarness();
+test("a stalled destination warm holds the flight only until its cap", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const harness = phasedHarness();
   harness.enter();
   const preload = currentScenePreload()!;
   let aborted = false;
@@ -2393,30 +1987,473 @@ test("a stalled optional preload expires after the entry budget", async (t) => {
   });
   harness.data.resolve();
   harness.geometry.resolve(FEATURE);
-  t.mock.timers.tick(0);
-  await flush();
-  await flush();
+  await turns();
   harness.map.finishMask();
-  t.mock.timers.tick(0);
-  await flush();
-  await flush();
-  const waitingLand = harness.land;
-  assert.equal(harness.land, waitingLand);
-  assert.equal(preload.isSettled(), false);
-  t.mock.timers.tick(PRELOAD_ENTRY_BUDGET_MS);
-  await flush();
-  await flush();
-  await flush();
-  assert.notEqual(harness.land, waitingLand);
+  await turns();
+
+  assert.deepEqual(harness.events, []);
+
+  context.mock.timers.tick(PRELOAD_WARM_CAP_MS - 1);
+  await turns();
+
+  assert.deepEqual(harness.events, []);
+
+  context.mock.timers.tick(1);
+  await turns();
+
+  assert.deepEqual(harness.events, ["fly"]);
+  assert.equal(aborted, false);
+  assert.deepEqual(preload.progress(), { done: 0, total: 1, bytes: 0 });
+  await exitActiveHarness();
   assert.equal(aborted, true);
-  assert.equal(preload.isSettled(), true);
-  const progress = preload.progress();
-  assert.ok(progress.done >= progress.total);
+});
+
+test("the basemap preload registers after the layer sources", async () => {
+  const harness = createHarness();
+  harness.map.sources.set("openmaptiles", { tiles: [BASEMAP_TEMPLATE], maxzoom: 14 });
+  const registered: string[] = [];
+  (harness as unknown as Record<string, unknown>).onMount = () => {
+    currentScenePreload()!.add({
+      id: "dem",
+      layer: "terrain",
+      lanes: 1,
+      tasks: () => [],
+      visibleKey: () => null,
+    });
+  };
+  harness.enter();
+  const sources = (currentScenePreload() as unknown as { sources: Map<string, unknown> }).sources;
+  registered.push(...sources.keys());
+
+  assert.equal(registered[0], "dem");
+  assert.equal(registered.length, 2);
+});
+
+test("entry waits, flies with the panel, then stages and reveals the UI together", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+
+  assert.ok(harness.bodyClasses.has("scene-mode"));
+  assert.ok(harness.bodyClasses.has("scene-entering"));
+  assert.ok(!harness.bodyClasses.has("scene-flying"));
+  assertInputLocked(harness, true);
+  assert.deepEqual(harness.statuses, [PREPARING]);
+  assert.deepEqual(harness.events, []);
+  assertDataHidden(harness.map);
+
+  await settle();
+  assert.deepEqual(harness.events, []);
+  assert.ok(!harness.bodyClasses.has("scene-flying"));
+  assert.deepEqual(harness.statuses, [PREPARING]);
+  assert.deepEqual(harness.styleWrites, []);
+
+  await finishPreparation(harness);
+  assert.deepEqual(harness.events, ["fly"]);
+  assert.equal(harness.flight.holds, 0);
+  // Only the build panel leaves with the flight; the scene UI stays hidden and inert.
+  assert.ok(harness.bodyClasses.has("scene-entering"));
+  assert.ok(harness.bodyClasses.has("scene-flying"));
+  assert.ok(!harness.bodyClasses.has("scene-ui-sliding"));
+  assertInputLocked(harness, true);
+  assert.deepEqual(harness.statuses, [PREPARING, ""]);
+  assert.deepEqual(harness.styleWrites, [["--entry-flight-ms", "1200ms"]]);
+  assert.notEqual(entryStats.waitMs, null);
+  assertDataHidden(harness.map);
+
+  harness.land();
+  await settle();
+  assert.deepEqual(harness.events, ["fly", "land", "curtain"]);
+  assertDataHidden(harness.map);
+  assert.equal(maskFillOpacity(harness.map), 0);
+  assert.equal(fadeFillOpacity(harness.map), 0);
+  assert.equal(harness.flight.holds, 0);
+  assertInputLocked(harness, true);
+
+  harness.curtain!.cover();
+  assert.deepEqual(harness.events, ["fly", "land", "curtain", "cover", "hold"]);
+  assertRanges(harness.map, [[0, 24], [6, 12], [0, 24], [1, 4]]);
+  assert.equal(maskFillOpacity(harness.map), 1);
+  assert.equal(fadeFillOpacity(harness.map), FADE_OPACITY);
+  assert.ok(harness.bodyClasses.has("scene-entering"));
+  assert.ok(!harness.bodyClasses.has("scene-ui-sliding"));
+  assertInputLocked(harness, true);
+
+  harness.curtain!.fade();
+  assert.ok(!harness.bodyClasses.has("scene-entering"));
+  assert.ok(harness.bodyClasses.has("scene-flying"));
+  assert.ok(harness.bodyClasses.has("scene-ui-sliding"));
+  assert.deepEqual(harness.styleWrites.at(-1), ["--entry-reveal-ms", `${REVEAL_MS}ms`]);
+  assert.notEqual(entryStats.gapMs, null);
+  assertInputLocked(harness, true);
+  assert.deepEqual(harness.statuses, [PREPARING, ""]);
+
+  harness.curtain!.finish();
+  assert.ok(harness.bodyClasses.has("scene-flying"));
+  assertInputLocked(harness, false);
+  assert.deepEqual(harness.statuses, [PREPARING, ""]);
+});
+
+test("the scene UI starts with the fade, on the shared duration, with legends filled", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  await finishPreparation(harness);
+  harness.land();
+  await settle();
+  harness.curtain!.cover();
+
+  assert.equal(harness.atFade, null);
+  assert.ok(!harness.bodyClasses.has("scene-ui-sliding"));
+
+  harness.curtain!.fade();
+
+  assert.ok(harness.atFade);
+  assert.equal(harness.atFade.legendsReady, true);
+  assert.ok(harness.atFade.classes.includes("scene-ui-sliding"));
+  assert.ok(!harness.atFade.classes.includes("scene-entering"));
+  assert.deepEqual(harness.atFade.styleWrites.at(-1), ["--entry-reveal-ms", `${REVEAL_MS}ms`]);
+  assert.ok(harness.events.indexOf("cover") < harness.events.indexOf("fade"));
+});
+
+test("the panel phase scales to the flight duration but unlocks only at the reveal", async () => {
+  const harness = phasedHarness();
+  harness.flight.durationMs = 1500;
+  harness.enter();
+  await finishPreparation(harness);
+
+  assert.ok(harness.bodyClasses.has("scene-entering"));
+  assert.ok(harness.bodyClasses.has("scene-flying"));
+  assert.ok(!harness.bodyClasses.has("scene-ui-sliding"));
+  assertInputLocked(harness, true);
+  assert.deepEqual(harness.styleWrites, [["--entry-flight-ms", "1500ms"]]);
+
+  harness.land();
+  await settle();
+  assert.ok(harness.events.includes("curtain"));
+  assertInputLocked(harness, true);
+
+  harness.curtain!.cover();
+  assertInputLocked(harness, true);
+  harness.curtain!.fade();
+  assertInputLocked(harness, true);
+  harness.curtain!.finish();
+  assertInputLocked(harness, false);
+
   await exitActiveHarness();
 });
 
-test("a required failure presents immediately during stalled optional work", async () => {
-  const harness = createHarness();
+test("the flight duration reaches the slides instead of the fixed default", () => {
+  const sheet = readFileSync(new URL("./style.css", import.meta.url), "utf8");
+  const rootBlocks = cssBlocks(sheet, ":root");
+  const bodyBlocks = cssBlocks(sheet, "body");
+
+  // The defaults live on :root, the element carrying the runtime overrides.
+  assert.ok(rootBlocks.some((block) => block.includes("--entry-flight-ms: 850ms")));
+  assert.ok(rootBlocks.some((block) => block.includes(`--entry-reveal-ms: ${REVEAL_MS}ms`)));
+  // Body must not declare its own values, or the overrides could never reach the slides below.
+  assert.ok(bodyBlocks.every((block) => !block.includes("--entry-flight-ms:")));
+  assert.ok(bodyBlocks.every((block) => !block.includes("--entry-reveal-ms:")));
+  // The panel scales with the flight while every scene slide scales with the shared reveal.
+  const [panelTimes, panelOver] = timingFactors(bodyBlocks, "--entry-panel-out", "flight");
+  assert.ok(1700 * panelTimes / panelOver > 850 * panelTimes / panelOver);
+  for (const name of SCENE_TIMINGS) {
+    const [times, over] = timingFactors(bodyBlocks, name, "reveal");
+    assert.equal(over, REVEAL_MS);
+    assert.ok(times >= 0);
+  }
+  // The reveal window holds the whole stagger, from the first slide to the last.
+  assert.ok(cssBlocks(sheet, "body.scene-ui-sliding").some((block) => {
+    return block.includes("animation: entry-slides-end var(--entry-reveal-ms) linear;");
+  }));
+  const factor = (name: string) => timingFactors(bodyBlocks, name, "reveal")[0];
+  assert.equal(factor("--entry-cards-start"), 0);
+  assert.equal(
+    factor("--entry-top-bar-start") + factor("--entry-top-bar-duration"),
+    REVEAL_MS,
+  );
+});
+
+test("the sliding styles end with the slide animation and a later close clears them", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  await finishPreparation(harness);
+  assert.ok(!harness.bodyClasses.has("scene-ui-sliding"));
+  harness.land();
+  await settle();
+  harness.curtain!.cover();
+  harness.curtain!.fade();
+  assert.ok(harness.bodyClasses.has("scene-ui-sliding"));
+  harness.curtain!.finish();
+  assertInputLocked(harness, false);
+
+  const end = (animationName: string, target: object = document.body) => {
+    for (const listener of [...(harness.bodyListeners.get("animationend") ?? [])]) {
+      listener({ target, animationName });
+    }
+  };
+  end("another-animation");
+  end("entry-slides-end", {});
+  assert.ok(harness.bodyClasses.has("scene-ui-sliding"));
+
+  end("entry-slides-end");
+  assert.ok(!harness.bodyClasses.has("scene-ui-sliding"));
+  assert.ok(harness.bodyClasses.has("scene-flying"));
+  assert.equal(harness.bodyListeners.get("animationend")?.size, 0);
+
+  await exitActiveHarness();
+  assert.ok(!harness.bodyClasses.has("scene-flying"));
+  assert.deepEqual(harness.styleWrites.at(-1), ["--entry-reveal-ms", ""]);
+});
+
+test("the flight waits for preparation and the curtain waits for the landing", async () => {
+  const early = phasedHarness();
+  early.landImmediately = true;
+  early.enter();
+  await settle();
+  assert.deepEqual(early.events, []);
+  assertDataHidden(early.map);
+
+  await finishPreparation(early);
+  assert.deepEqual(early.events, ["fly", "land", "curtain"]);
+  await exitActiveHarness();
+
+  const late = phasedHarness();
+  late.enter();
+  await settle();
+  await finishPreparation(late);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual(late.events, ["fly"]);
+});
+
+test("slow data and a slow mask each hold the curtain back", async () => {
+  const first = phasedHarness();
+  first.landImmediately = true;
+  first.enter();
+  first.geometry.resolve(FEATURE);
+  await settle();
+  first.map.finishMask();
+  await settle();
+  assert.ok(!first.events.includes("curtain"));
+  first.data.resolve();
+  await settle();
+  assert.ok(first.events.includes("curtain"));
+  await exitActiveHarness();
+
+  const second = phasedHarness();
+  second.landImmediately = true;
+  second.enter();
+  second.data.resolve();
+  await settle();
+  assert.ok(!second.events.includes("curtain"));
+  second.geometry.resolve(FEATURE);
+  await settle();
+  assert.ok(!second.events.includes("curtain"));
+  second.map.finishMask();
+  await settle();
+  assert.ok(second.events.includes("curtain"));
+});
+
+test("delayed geometry and mask tiles hold the curtain through resize", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  const baseline = captureListeners(harness.map);
+  await settle();
+  harness.data.resolve();
+  harness.resize();
+  assertDataHidden(harness.map);
+
+  harness.geometry.resolve(FEATURE);
+  await settle();
+  assert.ok(harness.map.getLayer(MASK_ID));
+  assert.ok(harness.map.getLayer(FADE_ID));
+  harness.map.emit("sourcedata", { sourceId: MASK_ID, isSourceLoaded: false });
+  harness.map.emit("sourcedata", { sourceId: "rain", isSourceLoaded: true });
+  await settle();
+  assert.deepEqual(harness.events, []);
+  assert.equal(harness.flight.refits, 1);
+
+  harness.map.finishMask();
+  await settle();
+  assert.deepEqual(harness.events, ["fly"]);
+  harness.land();
+  await settle();
+  assert.ok(harness.events.includes("curtain"));
+  assertListenersRemoved(harness.map, baseline);
+});
+
+test("an already loaded mask needs no further source event", async () => {
+  const harness = phasedHarness();
+  harness.map.readyOnAdd = true;
+  harness.enter();
+  harness.data.resolve();
+  harness.geometry.resolve(FEATURE);
+  harness.land();
+  await settle();
+  harness.land();
+  await settle();
+
+  assert.ok(harness.events.includes("curtain"));
+});
+
+test("a scrub while preparing is caught before the curtain and prepared again", async () => {
+  const harness = phasedHarness();
+  harness.enter("2020-01-01");
+  await settle();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+  harness.map.finishMask();
+  harness.onTime!("2020-02-01", "2020-02");
+  harness.data.resolve();
+  await settle();
+
+  assert.deepEqual(harness.preparationTimes, ["2020-01-01", "2020-02-01"]);
+  assert.deepEqual(harness.events, ["fly"]);
+
+  harness.land();
+  await settle();
+  assert.ok(harness.events.includes("curtain"));
+  assert.deepEqual(harness.restoredTimes, ["2020-01-01"]);
+});
+
+test("a failure before the flight shows in the build panel and no scene UI", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  await settle();
+  harness.data.reject(new Error("data unavailable"));
+  await settle();
+  await settle();
+
+  assert.deepEqual(harness.statuses, [PREPARING, "data unavailable"]);
+  assertEntryClosed(harness);
+  assertSceneUiNeverShown(harness);
+  assert.ok(!harness.events.includes("fly"));
+  harness.geometry.resolve(FEATURE);
+  harness.map.finishMask();
+  harness.land();
+  await settle();
+  assert.ok(!harness.events.includes("curtain"));
+  assert.deepEqual(harness.statuses, [PREPARING, "data unavailable"]);
+});
+
+test("a failure during the flight brings the build panel back with the error", async () => {
+  const harness = phasedHarness();
+  let backed = false;
+  Object.assign(globalThis, {
+    history: {
+      get state() {
+        return null;
+      },
+      pushState() {},
+      replaceState() {},
+      back() {
+        backed = true;
+      },
+    },
+  });
+  harness.mode.enter(SCENE, { time: null, entry: "push", buildPanel: harness.buildPanel });
+  await finishPreparation(harness);
+  assert.ok(harness.bodyClasses.has("scene-flying"));
+  assert.deepEqual(harness.statuses, [PREPARING, ""]);
+
+  harness.map.loseContext();
+  await settle();
+
+  assert.equal(backed, true);
+  assert.ok(!harness.bodyClasses.has("scene-flying"));
+  assert.ok(harness.bodyClasses.has("scene-entering"));
+  assert.equal(harness.statuses.at(-1), "WebGL context was lost during entry");
+  assertSceneUiNeverShown(harness);
+  assertInputLocked(harness, true);
+
+  harness.land();
+  await settle();
+  assert.ok(!harness.events.includes("curtain"));
+});
+
+test("a pushed-entry failure keeps the error for Back and shows no scene UI", async () => {
+  const harness = phasedHarness();
+  let backed = false;
+  Object.assign(globalThis, {
+    history: {
+      get state() {
+        return null;
+      },
+      pushState() {},
+      replaceState() {},
+      back() {
+        backed = true;
+      },
+    },
+  });
+  harness.mode.enter(SCENE, { time: null, entry: "push", buildPanel: harness.buildPanel });
+  await settle();
+
+  harness.data.reject(new Error("data unavailable"));
+  await settle();
+  await settle();
+
+  assert.equal(backed, true);
+  assert.ok(harness.bodyClasses.has("scene-entering"));
+  assert.ok(!harness.bodyClasses.has("scene-flying"));
+  assert.equal(harness.statuses.at(-1), "data unavailable");
+  assertSceneUiNeverShown(harness);
+  assertInputLocked(harness, true);
+
+  harness.mode.exit();
+  await settle();
+
+  assertEntryClosed(harness);
+  assert.equal(harness.statuses.at(-1), "data unavailable");
+});
+
+test("rejected geometry closes the scene with its message and removes listeners", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  await settle();
+  harness.data.resolve();
+  harness.geometry.reject(new Error("geometry unavailable"));
+  await settle();
+  harness.land();
+  harness.resize();
+
+  assert.equal(harness.statuses.at(-1), "Area outline: geometry unavailable");
+  assert.equal(harness.map.getLayer(MASK_ID), undefined);
+  assertEntryClosed(harness);
+  assertListenersRemoved(harness.map);
+});
+
+test("a mask worker failure closes the scene even if later events claim readiness", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  harness.data.resolve();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+  harness.map.emit("error", { sourceId: MASK_ID, error: new Error("worker failed") });
+  await settle();
+  harness.map.finishMask();
+  harness.land();
+  await settle();
+
+  assert.equal(harness.statuses.at(-1), "Area mask: worker failed");
+  assert.ok(!harness.events.includes("curtain"));
+  assertEntryClosed(harness);
+  assertListenersRemoved(harness.map);
+});
+
+test("a synchronous mask setup failure closes the scene and removes listeners", async () => {
+  const harness = phasedHarness();
+  harness.map.failMaskLayer = true;
+  harness.enter();
+  harness.data.resolve();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+
+  assert.equal(harness.statuses.at(-1), "mask setup failed");
+  assertEntryClosed(harness);
+  assertListenersRemoved(harness.map);
+});
+
+test("a required failure shows at once while optional work is stalled", async () => {
+  const harness = phasedHarness();
   harness.enter();
   const preload = currentScenePreload()!;
   preload.add({
@@ -2435,110 +2472,315 @@ test("a required failure presents immediately during stalled optional work", asy
   harness.geometry.reject(new Error("mask unavailable"));
   await settle();
   await settle();
+
+  assert.equal(harness.statuses.at(-1), "Area outline: mask unavailable");
+  assertEntryClosed(harness);
+});
+
+test("leaving during preparation clears the status and restores input", async () => {
+  const harness = phasedHarness();
+  harness.enter();
   await settle();
-  assert.deepEqual(harness.notes, ["Area outline: mask unavailable"]);
-  const outline = harness.map.layers.get("soe-area-outline");
-  if (outline) assert.equal(outline.layout.visibility, "visible");
-  assert.equal(preload.isSettled(), true);
+  assert.ok(!harness.bodyClasses.has("scene-flying"));
+  harness.mode.exit();
+
+  assert.deepEqual(harness.statuses, [PREPARING, ""]);
+  assertEntryClosed(harness);
+  assert.ok(!harness.bodyClasses.has("scene-ui-sliding"));
+});
+
+test("leaving during the flight restores the page and starts nothing", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  await finishPreparation(harness);
+  assert.ok(harness.bodyClasses.has("scene-flying"));
+  harness.mode.exit();
+
+  assert.deepEqual(harness.statuses, [PREPARING, ""]);
+  assertEntryClosed(harness);
+  assert.ok(!harness.bodyClasses.has("scene-flying"));
+  harness.land();
+  await settle();
+  assert.ok(!harness.events.includes("curtain"));
+});
+
+test("leaving while the curtain covers finishes it and releases every lock", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  await settle();
+  await finishPreparation(harness);
+  harness.land();
+  await settle();
+  harness.curtain!.cover();
+  harness.mode.exit();
+
+  assert.equal(harness.curtain!.isCancelled, true);
+  assert.equal(harness.map.getLayer(MASK_ID), undefined);
+  assertEntryClosed(harness);
+  assert.ok(!harness.bodyClasses.has("scene-flying"));
+});
+
+test("a replaced entry never reveals the scene it replaced", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  await settle();
+  await finishPreparation(harness);
+  const staleLand = harness.land;
+  harness.enter();
+  staleLand();
+  await settle();
+
+  assert.ok(!harness.events.includes("curtain"));
+  assert.equal(harness.flight.holds, 0);
+});
+
+test("a resize during entry only refits the flight", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  await settle();
+  harness.resize();
+
+  assert.equal(harness.flight.refits, 1);
+  assert.ok(!harness.events.includes("curtain"));
+  assertDataHidden(harness.map);
+});
+
+test("a context loss before landing closes the entry and releases input", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  await finishPreparation(harness);
+  assert.deepEqual(harness.events, ["fly"]);
+
+  harness.map.loseContext();
+  await settle();
+  await settle();
+
+  assert.equal(harness.statuses.at(-1), "WebGL context was lost during entry");
+  assertEntryClosed(harness);
+  assert.equal(harness.map.canvasListeners.get("webglcontextlost")?.size ?? 0, 0);
+  assertListenersRemoved(harness.map);
+});
+
+test("a context loss after the curtain starts still releases input", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  await settle();
+  await finishPreparation(harness);
+  harness.land();
+  await settle();
+  assert.ok(harness.events.includes("curtain"));
+  assert.ok(!harness.events.includes("cover"));
+
+  harness.map.loseContext();
+  await settle();
+
+  assert.ok(harness.events.includes("cover"));
+  assert.ok(harness.events.includes("hold"));
+  assert.ok(harness.events.includes("fade"));
+  assertInputLocked(harness, false);
+  assert.equal(harness.map.canvasListeners.get("webglcontextlost")?.size ?? 0, 0);
+
+  await exitActiveHarness();
+  assertEntryClosed(harness);
+});
+
+test("a resize after landing waits for the new fit before staging", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  await finishPreparation(harness);
+  assert.deepEqual(harness.events, ["fly"]);
+
+  harness.land();
+  harness.resize();
+  await settle();
+  assert.deepEqual(harness.events, ["fly", "land"]);
+  assert.equal(harness.flight.refits, 1);
+
+  harness.land();
+  await settle();
+  assert.ok(harness.events.includes("curtain"));
+
   await exitActiveHarness();
 });
 
-test("an outline switched off during the wait stays off at liftoff", async () => {
-  const harness = createHarness();
+test("a change after the curtain starts reprepares instead of staging stale work", async () => {
+  const harness = phasedHarness();
+  (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
+    layers: [
+      { id: "background", type: "background" },
+      { id: "label_city", type: "symbol" },
+    ],
+  });
+  for (const id of ["background", "label_city"]) {
+    harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
+  }
+  const writes: [string, unknown][] = [];
+  const stub = harness.map as unknown as Record<string, unknown>;
+  stub.getFilter = () => undefined;
+  stub.setFilter = (id: string, filter: unknown) => {
+    writes.push([id, filter]);
+  };
+  const moved: [string, string | undefined][] = [];
+  const originalMove = harness.map.moveLayer.bind(harness.map);
+  harness.map.moveLayer = ((id: string, beforeId?: string) => {
+    moved.push([id, beforeId]);
+    return originalMove(id, beforeId);
+  }) as typeof harness.map.moveLayer;
+  harness.enter("2020-01-01");
+  await settle();
+  await finishPreparation(harness);
+  harness.land();
+  await settle();
+  assert.ok(harness.events.includes("curtain"));
+  assert.equal(harness.flight.holds, 0);
+
+  const stale = harness.curtain!;
+  harness.onTime!("2020-02-01", "2020-02");
+  stale.cover();
+  await settle();
+  await settle();
+
+  assert.equal(harness.flight.holds, 0);
+  assertDataHidden(harness.map);
+  assert.deepEqual(harness.preparationTimes, ["2020-01-01", "2020-02-01"]);
+  assert.equal(harness.events.filter((event) => event === "curtain").length, 2);
+  assert.ok(stale !== harness.curtain);
+
+  const fresh = harness.curtain!;
+  fresh.cover();
+  assert.equal(harness.flight.holds, 1);
+  assertRanges(harness.map, [[0, 24], [6, 12], [0, 24], [1, 4]]);
+  assert.ok(writes.length > 0);
+  fresh.fade();
+  assertInputLocked(harness, true);
+  fresh.finish();
+  assertInputLocked(harness, false);
+
+  const curtains = harness.events.filter((event) => event === "curtain").length;
+  const preparations = harness.preparationTimes.length;
+  const fades = harness.events.filter((event) => event === "fade").length;
+  stale.fade();
+  await settle();
+
+  assert.equal(harness.events.filter((event) => event === "curtain").length, curtains);
+  assert.equal(harness.preparationTimes.length, preparations);
+  assert.equal(harness.events.filter((event) => event === "fade").length, fades);
+  assert.equal(harness.flight.holds, 1);
+  assertInputLocked(harness, false);
+
+  harness.mode.exit();
+  await settle();
+
+  assertEntryClosed(harness);
+  const restored = new Map(writes);
+  assert.equal(restored.get("background"), null);
+  assert.equal(restored.get("label_city"), null);
+  assert.ok(moved.some(([id, before]) => id === "background" && before === undefined));
+  assert.ok(moved.some(([id, before]) => id === "label_city" && before === undefined));
+  assert.equal(harness.map.getLayer(MASK_ID), undefined);
+  assert.equal(harness.map.getLayer(FADE_ID), undefined);
+});
+
+test("reduced motion skips sliding and a later preference change starts nothing", async () => {
+  const previous = (globalThis as Record<string, unknown>).matchMedia;
+  (globalThis as Record<string, unknown>).matchMedia = (query: string) => ({
+    matches: String(query).includes("reduce"),
+  });
+  try {
+    const harness = phasedHarness();
+    harness.enter();
+    await settle();
+    assert.ok(!harness.bodyClasses.has("scene-flying"));
+    await finishPreparation(harness);
+
+    assert.ok(harness.bodyClasses.has("scene-flying"));
+    assert.ok(!harness.bodyClasses.has("scene-ui-sliding"));
+    assert.deepEqual(harness.styleWrites, []);
+    assertInputLocked(harness, true);
+    harness.land();
+    await settle();
+    harness.curtain!.cover();
+    harness.curtain!.fade();
+    assertInputLocked(harness, true);
+    harness.curtain!.finish();
+
+    assert.ok(harness.bodyClasses.has("scene-flying"));
+    assert.ok(!harness.bodyClasses.has("scene-ui-sliding"));
+    assert.equal(harness.bodyListeners.get("animationend")?.size ?? 0, 0);
+    assertInputLocked(harness, false);
+    assert.deepEqual(harness.statuses, [PREPARING, ""]);
+
+    (globalThis as Record<string, unknown>).matchMedia = () => ({ matches: false });
+    for (const listener of [...(harness.bodyListeners.get("animationend") ?? [])]) {
+      listener({ target: document.body, animationName: "entry-slides-end" });
+    }
+    assert.ok(!harness.bodyClasses.has("scene-ui-sliding"));
+
+    await exitActiveHarness();
+  } finally {
+    if (previous === undefined) Reflect.deleteProperty(globalThis, "matchMedia");
+    else (globalThis as Record<string, unknown>).matchMedia = previous;
+  }
+});
+
+test("the outline waits for the stage and keeps the display choice it was given", async () => {
+  const harness = phasedHarness();
   harness.map.layers.set("soe-area-outline", {
     id: "soe-area-outline",
+    minzoom: 0,
+    maxzoom: 24,
     layout: { visibility: "visible" },
   });
   harness.enter();
-  const preload = currentScenePreload()!;
-  let release!: (blob: Blob | undefined) => void;
-  const gate = new Promise<Blob | undefined>((resolve) => {
-    release = resolve;
-  });
-  preload.add({
-    id: "delayed",
-    layer: "terrain",
-    lanes: 1,
-    tasks: () => [{ key: "delayed-tile", estimatedBytes: 1, run: () => gate }],
-    visibleKey: () => null,
-  });
-  harness.data.resolve();
-  harness.geometry.resolve(FEATURE);
-  await settle();
-  harness.map.finishMask();
-  await settle();
   const outline = harness.map.layers.get("soe-area-outline")!;
-  assert.equal(outline.layout.visibility, "none");
-  const store = harness.mountStore as {
-    dispatch(action: { kind: string; update(display: never): void }): void;
-  };
-  store.dispatch({
-    kind: "display",
-    update: (display) => {
-      (display as { outline: { shown: boolean } }).outline.shown = false;
-    },
-  });
-  assert.equal(outline.layout.visibility, "none");
-  release(new Blob(["x"]));
-  await settle();
-  await settle();
-  assert.equal(outline.layout.visibility, "none");
-  await exitActiveHarness();
-});
+  assert.deepEqual([outline.minzoom, outline.maxzoom], [24, 24]);
 
-test("outline colour and width edits during the wait reveal the latest choice", async () => {
-  const harness = createHarness();
-  harness.map.layers.set("soe-area-outline", {
-    id: "soe-area-outline",
-    layout: { visibility: "visible" },
-  });
-  harness.enter();
-  const preload = currentScenePreload()!;
-  let release!: (blob: Blob | undefined) => void;
-  const gate = new Promise<Blob | undefined>((resolve) => {
-    release = resolve;
-  });
-  preload.add({
-    id: "delayed",
-    layer: "terrain",
-    lanes: 1,
-    tasks: () => [{ key: "delayed-tile", estimatedBytes: 1, run: () => gate }],
-    visibleKey: () => null,
-  });
-  harness.data.resolve();
-  harness.geometry.resolve(FEATURE);
-  await settle();
-  harness.map.finishMask();
-  await settle();
-  const outline = harness.map.layers.get("soe-area-outline") as {
-    layout: { visibility?: string };
-    paint?: Record<string, unknown>;
-  };
-  assert.equal(outline.layout.visibility, "none");
   const store = harness.mountStore as {
     dispatch(action: { kind: string; update(display: never): void }): void;
   };
   store.dispatch({
     kind: "display",
     update: (display) => {
-      const outlineState = (display as { outline: { color: string; widthPx: number } }).outline;
-      outlineState.color = "#ff0000";
-      outlineState.widthPx = 3;
+      const state = (display as { outline: { shown: boolean; color: string; widthPx: number } });
+      state.outline.shown = false;
+      state.outline.color = "#ff0000";
+      state.outline.widthPx = 3;
     },
   });
+  await settle();
+  await finishPreparation(harness);
+  harness.land();
+  await settle();
+  assert.deepEqual([outline.minzoom, outline.maxzoom], [24, 24]);
+
+  harness.curtain!.cover();
+
+  assert.deepEqual([outline.minzoom, outline.maxzoom], [0, 24]);
   assert.equal(outline.layout.visibility, "none");
-  release(new Blob(["x"]));
-  await settle();
-  await settle();
-  assert.equal(outline.layout.visibility, "visible");
   assert.equal(outline.paint?.["line-color"], "#ff0000");
   assert.equal(outline.paint?.["line-width"], 3);
-  await exitActiveHarness();
 });
 
-test("a low start stages no basemap filters until landing", async () => {
-  const harness = createHarness();
-  harness.map.getZoom = () => 1.5;
+test("the stage keeps each layer's own range and visibility", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  harness.map.getLayer("relief")!.layout.visibility = "none";
+  await settle();
+  await finishPreparation(harness);
+  harness.land();
+  await settle();
+  harness.map.emit("error", { sourceId: "rain", error: new Error("unrelated") });
+  harness.curtain!.cover();
+  harness.map.getLayer("rain")!.layout.visibility = "none";
+  harness.resize();
+
+  assertRanges(harness.map, [[0, 24], [6, 12], [0, 24], [1, 4]]);
+  assert.equal(harness.map.getLayer("relief")!.layout.visibility, "none");
+  assert.equal(harness.map.getLayer("rain")!.layout.visibility, "none");
+});
+
+test("the stage hides basemap features and orders layers only inside the curtain", async () => {
+  const harness = phasedHarness();
   (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
     layers: [
       { id: "background", type: "background" },
@@ -2555,70 +2797,176 @@ test("a low start stages no basemap filters until landing", async () => {
     writes.push([id, filter]);
   };
   harness.enter();
-  harness.data.resolve();
-  harness.geometry.resolve(FEATURE);
   await settle();
-  harness.map.finishMask();
-  await settle();
-  await settle();
-  // The cover is still opening at liftoff, so destructive filters wait for landing.
-  assert.equal(writes.length, 0);
-  const mask = maskFillOpacity(harness.map);
-  const maskTransition = maskFillTransition(harness.map);
-  assert.deepEqual(maskTransition, { duration: 0, delay: 0 });
-  assert.equal(evaluatedFillOpacity(0, mask, maskTransition, 1.5, 0), 0);
+  await finishPreparation(harness);
   harness.land();
   await settle();
+  assert.equal(writes.length, 0);
+
+  harness.curtain!.cover();
+
   assert.ok(writes.length > 0);
-  await exitActiveHarness();
+  assertRanges(harness.map, [[0, 24], [6, 12], [0, 24], [1, 4]]);
+  assertFadeCovers(harness.map);
 });
 
-test("hidden fills snap to opaque at and above the fitted zoom", async () => {
-  for (const zoom of [5, 6]) {
-    const harness = createHarness();
-    harness.map.getZoom = () => zoom;
-    harness.enter();
-    harness.data.resolve();
-    harness.geometry.resolve(FEATURE);
-    await settle();
-    harness.map.finishMask();
-    await settle();
-    await settle();
-    const maskOpacity = maskFillOpacity(harness.map);
-    const maskTransition = maskFillTransition(harness.map);
-    const fadeOpacity = fadeFillOpacity(harness.map);
-    const fadeTransition = fadeFillTransition(harness.map);
-    assert.deepEqual(maskTransition, { duration: 0, delay: 0 });
-    assert.deepEqual(fadeTransition, { duration: 0, delay: 0 });
-    assert.equal(evaluatedFillOpacity(0, maskOpacity, maskTransition, zoom, 0), 1);
-    assert.equal(evaluatedFillOpacity(0, maskOpacity, maskTransition, zoom, 150), 1);
-    assert.equal(evaluatedFillOpacity(0, fadeOpacity, fadeTransition, zoom, 0), FADE_OPACITY);
-    assert.equal(evaluatedFillOpacity(0, fadeOpacity, fadeTransition, zoom, 150), FADE_OPACITY);
-    await exitActiveHarness();
-  }
-});
-
-test("a synchronous landing reveals without a paint tween", async () => {
-  const harness = createHarness();
-  harness.landImmediately = true;
+test("the fills stay transparent until the stage and then snap with no paint tween", async () => {
+  const harness = phasedHarness();
   harness.enter();
+  await settle();
+  await finishPreparation(harness);
+  harness.resize();
+  assert.equal(maskFillOpacity(harness.map), 0);
+  assert.equal(fadeFillOpacity(harness.map), 0);
+  harness.land();
+  await settle();
+  harness.curtain!.cover();
+
+  const maskTransition = maskFillTransition(harness.map);
+  const fadeTransition = fadeFillTransition(harness.map);
+  assert.deepEqual(maskTransition, { duration: 0, delay: 0 });
+  assert.deepEqual(fadeTransition, { duration: 0, delay: 0 });
+  const zoom = harness.map.getZoom();
+  assert.equal(evaluatedFillOpacity(0, maskFillOpacity(harness.map), maskTransition, zoom, 0), 1);
+  assert.equal(
+    evaluatedFillOpacity(0, fadeFillOpacity(harness.map), fadeTransition, zoom, 0),
+    FADE_OPACITY,
+  );
+});
+
+test("a failed preload task never blocks the entry", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  currentScenePreload()!.add({
+    id: "missing",
+    layer: "terrain",
+    lanes: 1,
+    tasks: () => [{
+      key: "missing-tile",
+      estimatedBytes: 1,
+      run: () => Promise.reject(new Error("Bad response: 404 for missing-tile")),
+    }],
+    visibleKey: () => null,
+  });
+  await settle();
+  await finishPreparation(harness);
+  harness.land();
+  await settle();
+
+  assert.ok(harness.events.includes("curtain"));
+});
+
+test("a units change after the stage keeps each layer's own range", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  await settle();
+  await finishPreparation(harness);
+  harness.land();
+  await settle();
+  harness.curtain!.cover();
+
+  const moved: [string, string | undefined][] = [];
+  const originalMove = harness.map.moveLayer.bind(harness.map);
+  harness.map.moveLayer = ((id: string, beforeId?: string) => {
+    moved.push([id, beforeId]);
+    return originalMove(id, beforeId);
+  }) as typeof harness.map.moveLayer;
+  harness.map.layers.set("contours-ft", {
+    id: "contours-ft",
+    minzoom: 7,
+    maxzoom: 12,
+    layout: { visibility: "visible" },
+    type: "symbol",
+  });
+  harness.map.layers.delete("contours");
+  harness.onUnits!("ft", { terrain: "ft" }, ["relief", "contours-ft", "rain", "overview"]);
+
+  assert.equal(harness.map.getLayer("contours-ft")!.minzoom, 7);
+  harness.resize();
+  assert.equal(harness.map.getLayer("contours-ft")!.minzoom, 7);
+  assert.equal(harness.map.getLayer("contours"), undefined);
+  assert.ok(harness.map.getLayer(FADE_ID));
+  assert.deepEqual(moved, [["contours-ft", undefined]]);
+
+  moved.length = 0;
+  harness.map.layers.set("contours", {
+    id: "contours",
+    minzoom: 6,
+    maxzoom: 12,
+    layout: { visibility: "visible" },
+    type: "symbol",
+  });
+  harness.map.layers.delete("contours-ft");
+  harness.onUnits!("m", { terrain: "m" }, ["relief", "contours", "rain", "overview"]);
+
+  assert.equal(harness.map.getLayer("contours")!.minzoom, 6);
+  assert.deepEqual(moved, [["contours", undefined]]);
+});
+
+/** A harness whose landing and curtain wait for the test, so each phase can be inspected. */
+function phasedHarness() {
+  const harness = createHarness();
+  harness.landImmediately = false;
+  harness.autoReveal = false;
+
+  return harness;
+}
+
+/** Flush promise turns without timers, so tests with mocked timers can still advance. */
+async function turns() {
+  for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+
+/** Prove the scene UI never started, since a failure leaves only the build panel visible. */
+function assertSceneUiNeverShown(harness: ReturnType<typeof createHarness>) {
+  assert.ok(!harness.classLog.includes("scene-ui-sliding"));
+  const reveals = harness.styleWrites.filter(
+    ([name, value]) => name === "--entry-reveal-ms" && value,
+  );
+  assert.deepEqual(reveals, []);
+}
+
+/** Settle everything entry prepares, which is the layer data and the hidden mask. */
+async function finishPreparation(harness: ReturnType<typeof createHarness>) {
   harness.data.resolve();
   harness.geometry.resolve(FEATURE);
   await settle();
   harness.map.finishMask();
   await settle();
-  await settle();
-  const maskOpacity = maskFillOpacity(harness.map);
-  const maskTransition = maskFillTransition(harness.map);
-  const fadeOpacity = fadeFillOpacity(harness.map);
-  const fadeTransition = fadeFillTransition(harness.map);
-  const zoom = harness.map.getZoom();
-  assert.deepEqual(maskTransition, { duration: 0, delay: 0 });
-  assert.deepEqual(fadeTransition, { duration: 0, delay: 0 });
-  assert.equal(evaluatedFillOpacity(0, maskOpacity, maskTransition, zoom, 0), 1);
-  assert.equal(evaluatedFillOpacity(0, fadeOpacity, fadeTransition, zoom, 0), FADE_OPACITY);
-  await exitActiveHarness();
-});
+}
+
+/** Collect every declaration block for one selector from the style sheet. */
+function cssBlocks(sheet: string, selector: string): string[] {
+  const pattern = new RegExp(`${selector}\\s*\\{([^}]*)\\}`, "g");
+
+  return [...sheet.matchAll(pattern)].map((match) => match[1]);
+}
+
+/** The stylesheet's default flight length, which every derived entry timing divides by. */
+/** Read the scaling factors of one derived entry timing for the flight or reveal base. */
+function timingFactors(blocks: string[], name: string, base: string): [number, number] {
+  for (const block of blocks) {
+    const match = new RegExp(`${name}: calc\\(var\\(--entry-${base}-ms\\) \\* (\\d+) / (\\d+)\\)`)
+      .exec(block);
+    if (match) return [Number(match[1]), Number(match[2])];
+  }
+  assert.fail(`expected ${name} to scale the ${base} duration`);
+}
+
+function assertInputLocked(harness: ReturnType<typeof createHarness>, isLocked: boolean) {
+  assert.equal(harness.map.container.inert, isLocked);
+  assert.equal((harness.roots.column as { inert?: boolean }).inert, isLocked);
+  assert.equal((harness.roots.timeBar as { inert?: boolean }).inert, isLocked);
+  assert.equal(harness.inertPanel, isLocked);
+}
+
+function assertEntryClosed(harness: ReturnType<typeof createHarness>) {
+  assertInputLocked(harness, false);
+  assert.ok(!harness.bodyClasses.has("scene-mode"));
+  assert.ok(!harness.bodyClasses.has("scene-entering"));
+  assert.equal(harness.flight.isStopped, true);
+  assert.equal(harness.roots.column.hidden, true);
+}
 
 function maskFillOpacity(map: TestMap) {
   const layer = map.getLayer(MASK_ID) as unknown as { paint?: Record<string, unknown> };
@@ -2673,10 +3021,6 @@ function evaluatedFillOpacity(
     evaluate(a: unknown, b: unknown): number;
   };
   return value.evaluate({}, {});
-}
-
-async function flush() {
-  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 function assertDataHidden(map: TestMap) {

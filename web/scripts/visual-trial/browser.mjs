@@ -204,14 +204,14 @@ async function exposeSceneReadiness(context) {
     const response = await route.fetch();
     const source = await response.text();
     const masked = source.replace(
-      /this\.isReady = true;/,
-      "window.__trialMaskReady = true;\nthis.isReady = true;",
+      /this\.isShown = true;/,
+      "window.__trialMaskReady = true;\nthis.isShown = true;",
     );
     if (masked === source) throw new Error("scene mask readiness hook no longer matches");
     // The flight starts after preparation settles, so its landing is a separate signal.
     const exposed = masked.replace(
-      /isLanded = true;/,
-      "window.__trialFlightLanded = true;\nisLanded = true;",
+      /flight\.hold\(\);/,
+      "window.__trialFlightLanded = true;\nflight.hold();",
     );
     if (exposed === masked) throw new Error("scene flight readiness hook no longer matches");
 

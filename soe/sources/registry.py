@@ -72,7 +72,6 @@ class RealSource(ChirpsReader, CopernicusDemReader, WorldCoverReader, LithologyR
 
     The lithology map is read from its COG in the cubes folder.
     """
-
     synthetic = False
 
     def __init__(

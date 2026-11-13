@@ -12,6 +12,9 @@ export const TAB_LABELS: Record<PanelTab, string> = {
   credits: "Credits",
 };
 
+/** The build panel status while the entry waits, owned by the entry until the flight starts. */
+export const PREPARING_STATUS = "Preparing scene…";
+
 /** Where the full view should land after its content commits. */
 export interface FullOpenOptions {
   scrollToNotices?: boolean;

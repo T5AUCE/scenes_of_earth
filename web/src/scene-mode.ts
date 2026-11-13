@@ -1,6 +1,5 @@
 /** Switch one map between the world and a single scene, holding the camera and masking the rest. */
 import type {
-  ExpressionSpecification,
   FilterSpecification,
   GeoJSONSource,
   Map as MapLibreMap,
@@ -10,11 +9,19 @@ import type {
 } from "maplibre-gl";
 
 import { loadAreaFeature } from "./api";
-import { noteSceneOpen, noteSceneReady, setPreloadDisabled } from "./dev-stats";
+import {
+  noteEntryGap,
+  noteEntryWait,
+  noteSceneOpen,
+  noteSceneReady,
+  sceneLoadStats,
+  setPreloadDisabled,
+} from "./dev-stats";
 import {
   loadMapDetailsShown,
   subscribeMapDetails,
 } from "./display-state";
+import { prefersReducedMotion } from "./reduced-motion";
 import {
   addressSearch,
   gestureFlags,
@@ -22,6 +29,12 @@ import {
   subscribeGesture,
   type GestureQualityFlags,
 } from "./gesture-quality";
+import {
+  nextEntryFrame,
+  REVEAL_MS,
+  revealUnderCurtain,
+  type EntryReveal,
+} from "./entry-curtain";
 import { makeHtmlElement } from "./html";
 import { polygonParts } from "./label-filter";
 import { basemapPreloadSource } from "./layers/scene-preload";
@@ -29,7 +42,7 @@ import {
   closeScenePreload,
   currentScenePreload,
   openScenePreload,
-  PRELOAD_ENTRY_BUDGET_MS,
+  PRELOAD_WARM_CAP_MS,
 } from "./layers/tile-prefetch";
 import { buildMaskRings } from "./mask-ring";
 import { MAX_ZOOM, removeLayerAndSource, WORLD_VIEW } from "./map";
@@ -44,9 +57,10 @@ import { createScenePanel } from "./ui/scene-panel";
 import {
   PANEL_TABS,
   type FullOpenOptions,
+  PREPARING_STATUS,
   type PanelTab,
 } from "./ui/panel-contract";
-import { mountScene, OUTLINE_ID } from "./view";
+import { type EntryPreparation, mountScene, OUTLINE_ID } from "./view";
 
 type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
 
@@ -55,16 +69,20 @@ const FADE_ID = "soe-scene-fade";
 const MASK_OPACITY = 1;
 // Outside labels show through this much of the page background, so they read as faded.
 const FADE_OPACITY = 0.6;
-// The mask fades in between these distances (in zoom levels) below the fitted zoom.
-const MASK_FADE_START_ZOOM = 1.5;
-const MASK_FADE_END_ZOOM = 0.25;
-// Data layers appear once the mask is opaque, so their uncropped bbox never shows through it.
-const DATA_APPEARS_ZOOM = MASK_FADE_END_ZOOM;
-// Hidden fills stay fully transparent until the coordinated start reveals the flight.
+// Hidden fills stay fully transparent until the reveal stages the scene under the curtain.
 const HIDDEN_OPACITY = 0;
-// Entry never flies on a timer because the flight waits until required work is ready or fails.
-const PREPARING_NOTE = "Preparing scene...";
 const PAGE_BACKGROUND_PROPERTY = "--page-background";
+
+// The body carries the entry phase, so the style sheet can hide and slide the interface.
+const ENTERING_CLASS = "scene-entering";
+const FLYING_CLASS = "scene-flying";
+const SLIDING_CLASS = "scene-ui-sliding";
+// The build panel slides out over the flight, so it leaves as the camera does.
+const ENTRY_FLIGHT_PROPERTY = "--entry-flight-ms";
+// The scene UI slides on the same window as the curtain cross-fade.
+const ENTRY_REVEAL_PROPERTY = "--entry-reveal-ms";
+// The style sheet runs this animation on the body for as long as the slides last.
+const SLIDES_END_ANIMATION = "entry-slides-end";
 
 const DOCK_GAP_PX = 8;
 
@@ -82,6 +100,14 @@ export interface EnterOptions {
   time: string | null;
   entry: SceneEntry;
   display?: DisplayTokens;
+  buildPanel?: EntryPanel;
+}
+
+/** The build panel as entry sees it: it shows progress and failures and ignores input meanwhile. */
+export interface EntryPanel {
+  showStatus(text: string): void;
+  setBusy(isBusy: boolean): void;
+  setInert(isInert: boolean): void;
 }
 
 /** Group the scene's column and time bar with its full-view dialog. */
@@ -108,12 +134,14 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   let sceneLayerIds: string[] = [];
   let savedBasemapOrder: string[] | null = null;
   let savedBasemapFilters: Map<string, FilterSpecification | undefined> | null = null;
-  // Each entry gets a number so stale preparation never starts a replaced flight.
+  // Each entry gets a number so stale preparation never reveals a replaced scene.
   let entryGeneration = 0;
+  let entryPanel: EntryPanel | undefined;
+  let isSliding = false;
 
   return { enter, exit, sceneId: () => current?.id ?? null, showFullscreen };
 
-  function enter(scene: Scene, { time: linkedTime, entry, display }: EnterOptions) {
+  function enter(scene: Scene, { time: linkedTime, entry, display, buildPanel }: EnterOptions) {
     // A stale pick fit must not steer the new entry, so the camera freezes first.
     map.stop();
     leaveCurrentScene();
@@ -122,8 +150,9 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     resetFetchStats();
     // Captured here because publishing the entry replaces the address and drops trial flags.
     const flags = gestureFlags(addressSearch());
-    openPreload(scene.area.bbox, preloadEnabled(addressSearch()));
+    const preload = openPreload(preloadEnabled(addressSearch()));
 
+    entryPanel = buildPanel;
     const cards = openColumn(scene, entry);
     const clock = createSceneClock(scene.id);
     // A list holds the deferred call because the checker keeps a narrowed let at null.
@@ -168,6 +197,8 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       },
     });
 
+    // The basemap registers after the layer sources, so terrain gets the byte budget first.
+    preload?.add(basemapPreloadSource(map, scene.area.bbox));
     restoreTime(mounted.timeline, linkedTime);
     sceneLayerIds = mounted.layerIds;
     const panel = mountPanel(scene, mounted.timeline, clock, mounted.store);
@@ -177,7 +208,8 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     clock.publishEntry(entry);
     clock.markEntered();
 
-    current = startScene(scene, mounted, panel, clock, flags);
+    lockEntry();
+    current = startScene(scene, mounted, panel, clock, flags, () => leave(entry !== "replace"));
     const initialIds = pendingLayerIds[0];
     if (initialIds) current.syncLayers(initialIds);
     panel.setTime(clock.time, clock.label);
@@ -212,9 +244,10 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   }
 
   // The layers register their own sources when they mount, so the preload opens before them.
-  function openPreload(bbox: Bbox, isEnabled: boolean) {
+  function openPreload(isEnabled: boolean) {
     setPreloadDisabled(!isEnabled);
-    if (isEnabled) openScenePreload(map).add(basemapPreloadSource(map, bbox));
+
+    return isEnabled ? openScenePreload(map) : null;
   }
 
   function leaveCurrentScene() {
@@ -229,10 +262,22 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
   }
 
   function openColumn(scene: Scene, entry: SceneEntry) {
-    document.body.classList.add("scene-mode");
-    roots.column.hidden = false;
-
     return makeColumn(scene, roots.column, () => leave(entry !== "replace"));
+  }
+
+  // The interface is laid out but hidden, so the fit can measure it before anything shows.
+  function lockEntry() {
+    document.body.classList.add("scene-mode", ENTERING_CLASS);
+    roots.column.hidden = false;
+    setInputLocked(true);
+  }
+
+  // The map and interface ignore input while the scene opens, so nothing can move the camera.
+  function setInputLocked(isLocked: boolean) {
+    for (const element of [map.getContainer(), roots.column, roots.timeBar]) {
+      element.inert = isLocked;
+    }
+    entryPanel?.setInert(isLocked);
   }
 
   function mountPanel(
@@ -259,20 +304,29 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     return panel;
   }
 
+  /**
+   * Open the scene without a pause once it moves. All waiting happens first while the build panel
+   * says so. Then the panel slides out with the flight, a still picture covers the map while the
+   * scene is staged, and the picture cross-fades as the scene UI slides in and input unlocks.
+   */
   function startScene(
     scene: Scene,
     mounted: ReturnType<typeof mountScene>,
     panel: ReturnType<typeof createScenePanel>,
     clock: SceneClock,
     flags: GestureQualityFlags,
+    leaveScene: () => void,
   ): ActiveScene {
-    const dataLayers = new SceneDataLayers(map, mounted.layerIds);
+    const dataLayers = new SceneDataLayers(map, [...mounted.layerIds, OUTLINE_ID]);
     const symbolBaseline = snapshotBasemapSymbols(map, new Set(sceneLayerIds));
     // A details change mid-gesture waits for moveend so frozen symbols stay hidden.
     let labelsFrozen = false;
+    // Labels stay until the curtain covers, so early toggles and gestures wait for the stage.
+    let isStaged = false;
     const generation = entryGeneration;
     const stopGesture = subscribeGesture(map, {
       onStart: () => {
+        if (!isStaged) return;
         if (!flags.freezeLabels) return;
         labelsFrozen = true;
         setBasemapSymbolsVisible(map, false, symbolBaseline);
@@ -286,39 +340,29 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       },
     });
     const stopDetails = subscribeMapDetails((shown) => {
+      if (!isStaged) return;
       if (labelsFrozen) return;
       setBasemapSymbolsVisible(map, shown, symbolBaseline);
       syncFadeVisible(map, shown);
     });
-    setBasemapSymbolsVisible(map, loadMapDetailsShown(), symbolBaseline);
-    const maskLoad = new AbortController();
-    let hasStaged = false;
-    let pendingBasemapClip: { bbox: Bbox; sceneIds: string[] } | null = null;
-    // Once landed, nothing depends on zoom, so the elastic zoom-out dip stays clean.
-    let isLanded = false;
-    // The flight lifts off after the mask and the first data, so the fade reads its fit meanwhile.
-    const flight = flyIn(map, scene, roots, () => {
-      isLanded = true;
-      dataLayers.update(undefined);
-      refreshMaskAndLabels(undefined);
-      applyPendingBasemapClip();
-    });
-    const fadeZoom = () => (isLanded ? undefined : flight.zoom);
-    let isGone = false;
+    const entryRun = new AbortController();
+    const flight = flyIn(map, scene, roots);
+    let reveal: EntryReveal | null = null;
+    let curtainId = 0;
+    let isPreparing = true;
+    let landedMs = 0;
+    const canvas = map.getCanvas();
+    const onEntryContextLost = () => {
+      if (reveal) reveal.cancel();
+      else failEntry(new Error("WebGL context was lost during entry"));
+    };
+    canvas.addEventListener("webglcontextlost", onEntryContextLost);
 
-    dataLayers.update(fadeZoom());
-    const outlineGate = gateOutlineDuringPreparation(map, mounted.store);
+    entryPanel?.showStatus(PREPARING_STATUS);
+    entryPanel?.setBusy(true);
+    void run();
 
-    const removePreparing = mounted.addNote(PREPARING_NOTE);
-    const stopWaiting = waitForReadiness(startTransition, generation);
-
-    const stopWatchingResize = watchResize(() => {
-      flight.refit();
-      // The gate stores its fitted zoom, so a preparation refit resyncs it while hidden.
-      dataLayers.update(fadeZoom());
-      if (!hasStaged) keepMaskHidden(map);
-      else refreshMaskAndLabels(fadeZoom());
-    });
+    const stopWatchingResize = watchResize(() => flight.refit());
     const stopDocking = watchDocking(roots);
 
     return {
@@ -327,21 +371,18 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       clock,
       syncLayers(layerIds) {
         sceneLayerIds = [...layerIds];
-        dataLayers.sync(layerIds);
+        dataLayers.sync([...layerIds, OUTLINE_ID]);
         liftSceneSymbols(map, sceneLayerIds);
       },
       close() {
-        isGone = true;
-        stopWaiting();
-        outlineGate.stop();
-        pendingBasemapClip = null;
-        removePreparing();
-        maskLoad.abort();
+        entryRun.abort();
+        reveal?.cancel();
+        flight.stop();
         stopWatchingResize();
         stopDocking();
-        flight.stopClamp();
         stopGesture();
         stopDetails();
+        stopEntryContextLoss();
         closeScenePreload();
         setPreloadDisabled(false);
         removeLayerAndSource(map, FADE_ID);
@@ -356,270 +397,218 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
         sceneLayerIds = [];
         roots.column.replaceChildren();
         roots.column.hidden = true;
-        document.body.classList.remove("scene-mode");
+        stopSliding();
+        document.body.classList.remove("scene-mode", ENTERING_CLASS, FLYING_CLASS);
+        // Some test doubles stub only setProperty, so the cleanup tolerates its absence.
+        document.documentElement.style.removeProperty?.(ENTRY_FLIGHT_PROPERTY);
+        document.documentElement.style.removeProperty?.(ENTRY_REVEAL_PROPERTY);
+        setInputLocked(false);
+        if (isPreparing) entryPanel?.showStatus("");
+        if (isPreparing) entryPanel?.setBusy(false);
       },
     };
 
-    function startTransition(preparation: {
-      time: string | null;
-      allocation: unknown;
-      display: unknown;
-    }) {
-      if (isGone || generation !== entryGeneration) return;
-      // A toggle or scrub while loading retargets, so a stale flight never lifts off.
-      if (clock.time !== preparation.time) return;
+    function isStale() {
+      return entryRun.signal.aborted || generation !== entryGeneration;
+    }
+
+    function stopEntryContextLoss() {
+      canvas.removeEventListener("webglcontextlost", onEntryContextLost);
+    }
+
+    async function run() {
+      // The status paints before heavy work begins, so the old pixels stay responsive.
+      await nextEntryFrame();
+      if (isStale()) return;
+
+      const fittedZoom = flight.zoom ?? map.getZoom();
+      currentScenePreload()?.start(fittedZoom);
+      try {
+        const preparation = await prepareBeforeFlight(fittedZoom);
+        if (isStale()) return;
+
+        noteEntryWait(performance.now() - sceneLoadStats.startMs);
+        beginFlightPhase(flight.durationMs);
+        await flight.start();
+        currentScenePreload()?.noteLanded();
+        await coverWhenLanded(preparation);
+      } catch (error) {
+        failEntry(error);
+      }
+    }
+
+    // Everything that could pause the transition finishes here, so nothing waits once it starts.
+    async function prepareBeforeFlight(fittedZoom: number): Promise<EntryPreparation> {
+      const [, preparation] = await Promise.all([
+        prepareHiddenMask(scene, entryRun.signal),
+        mounted.prepareEntry(() => clock.time, entryRun.signal),
+        warmDestination(fittedZoom),
+      ]);
+
+      return settleOnCurrentEntry(preparation);
+    }
+
+    // Only the destination view holds the flight, so deeper levels keep warming behind it.
+    async function warmDestination(fittedZoom: number) {
+      const preload = currentScenePreload();
+      if (!preload) return;
+
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const capped = new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, PRELOAD_WARM_CAP_MS);
+      });
+      try {
+        await Promise.race([preload.settledThrough(fittedZoom, entryRun.signal), capped]);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    // The build panel slides out with the flight while the scene UI stays hidden and inert.
+    function beginFlightPhase(durationMs: number) {
+      isPreparing = false;
+      entryPanel?.showStatus("");
+      entryPanel?.setBusy(false);
+      document.body.classList.add(FLYING_CLASS);
+      // Reduced motion hides the panel at once, so no slide duration is needed.
+      if (prefersReducedMotion()) return;
+
+      document.documentElement.style.setProperty(ENTRY_FLIGHT_PROPERTY, `${durationMs}ms`);
+    }
+
+    // A toggle or scrub while loading is caught here, so a stale preparation never reveals.
+    async function settleOnCurrentEntry(preparation: EntryPreparation): Promise<EntryPreparation> {
+      let latest = preparation;
+      while (!isStale() && !isCurrent(latest)) {
+        latest = await mounted.prepareEntry(() => clock.time, entryRun.signal);
+      }
+
+      return latest;
+    }
+
+    function isCurrent(preparation: EntryPreparation) {
       const snapshot = mounted.store.getSnapshot();
-      if (snapshot.allocation !== preparation.allocation) return;
-      if (snapshot.display !== preparation.display) return;
 
-      stopWaiting();
-      removePreparing();
-      // One coordinated start owns every visual so late completions cannot reveal a replaced scene.
-      if (isGone || generation !== entryGeneration) return;
-      hasStaged = true;
-      const fitZoom = flight.zoom ?? map.getZoom();
-      const startZoom = map.getZoom();
-      const staged = stageSceneVisuals(map, scene, sceneLayerIds, fitZoom, startZoom);
-      savedBasemapOrder = staged.order;
-      pendingBasemapClip = staged.pendingClip;
-      outlineGate.stop();
-      dataLayers.show();
-      revealLatestOutline(map, mounted.store, outlineGate.previous);
-      syncFadeVisible(map);
-      noteSceneReady(performance.now());
-      currentScenePreload()?.start(fitZoom);
-      flight.start();
+      return clock.time === preparation.time
+        && snapshot.allocation === preparation.allocation
+        && snapshot.display === preparation.display;
     }
 
-    // Destructive basemap filters wait for landing unless the fitted cover is already opaque.
-    function applyPendingBasemapClip() {
-      if (!pendingBasemapClip) return;
-      savedBasemapFilters = clipBasemapToArea(
+    // The failure hides the scene UI again so only the build panel shows the message.
+    function failEntry(error: unknown) {
+      const isAbandoned = isStale();
+      entryRun.abort();
+      if (isAbandoned || (error as Error)?.name === "AbortError") return;
+
+      isPreparing = false;
+      stopSliding();
+      document.body.classList.remove(FLYING_CLASS);
+      document.body.classList.add(ENTERING_CLASS);
+      entryPanel?.showStatus((error as Error).message ?? String(error));
+      entryPanel?.setBusy(false);
+      leaveScene();
+    }
+
+    async function coverWhenLanded(preparation: EntryPreparation) {
+      const latest = await settleOnCurrentEntry(preparation);
+      await flight.settled();
+      if (isStale()) return;
+
+      landedMs ||= performance.now();
+      const id = ++curtainId;
+      reveal = revealUnderCurtain(
         map,
-        pendingBasemapClip.bbox,
-        new Set(pendingBasemapClip.sceneIds),
+        () => stageScene(latest, id),
+        () => beginRevealPhase(latest, id),
+        () => finishReveal(id),
       );
-      pendingBasemapClip = null;
     }
 
-    function waitForReadiness(
-      onReady: (preparation: {
-        time: string | null;
-        allocation: unknown;
-        display: unknown;
-      }) => void,
-      generation: number,
-    ) {
-      let isDone = false;
-      let cancelEntry: (() => void) | null = null;
-      let retargetEntry: (() => void) | null = null;
-      const originalUpdate = clock.update.bind(clock);
-      clock.update = (newTime, newLabel) => {
-        originalUpdate(newTime, newLabel);
-        retargetEntry?.();
-      };
-      void run();
+    // This runs inside the curtain's render event, so none of it shows before the picture covers.
+    function stageScene(preparation: EntryPreparation, id: number) {
+      if (isStale() || id !== curtainId) return;
+      if (!isCurrent(preparation)) {
+        void reprepareAndRecurtain();
+        return;
+      }
 
-      return () => {
-        isDone = true;
-        cancelEntry?.();
-        maskLoad.abort();
-      };
+      const basemap = basemapLayers(map, new Set(sceneLayerIds));
+      savedBasemapOrder ??= basemap.all;
+      const geometry = basemap.all.filter((layer) => !basemap.symbols.includes(layer));
+      lowerBasemapGeometry(map, sceneLayerIds, geometry);
+      for (const symbol of basemap.symbols) {
+        if (map.getLayer(symbol)) map.moveLayer(symbol, FADE_ID);
+      }
+      map.setPaintProperty(MASK_ID, "fill-opacity", MASK_OPACITY);
+      map.setPaintProperty(FADE_ID, "fill-opacity", FADE_OPACITY);
+      liftSceneSymbols(map, sceneLayerIds);
+      savedBasemapFilters ??= clipBasemapToArea(map, scene.area.bbox, new Set(sceneLayerIds));
+      dataLayers.show();
+      isStaged = true;
+      const shown = loadMapDetailsShown();
+      setBasemapSymbolsVisible(map, shown, symbolBaseline);
+      syncFadeVisible(map, shown);
+      flight.hold();
+      noteSceneReady(performance.now());
+    }
 
-      async function run() {
-        // The note paints before heavy work begins, so the old pixels stay responsive.
-        await nextEntryFrame();
-        if (isDone || isGone || generation !== entryGeneration) return;
-
-        // The clock already holds the restored time, so a shared link warms its own month.
-        const entry = startEntryPreparation();
-        cancelEntry = entry.cancel;
-        retargetEntry = entry.retarget;
-        const maskPromise = startMaskPreparation();
-        const preloadPromise = startPreloadPreparation();
-        const entryOutcomePromise = entry.ready.then(
-          (preparation) => ({ ok: true as const, preparation }),
-          (error) => ({ ok: false as const, error }),
+    // A scrub after the curtain starts reprepares instead, so stale work never shows.
+    async function reprepareAndRecurtain() {
+      if (isStale()) return;
+      curtainId++;
+      const old = reveal;
+      old?.retire();
+      if (reveal === old) reveal = null;
+      try {
+        await coverWhenLanded(
+          await mounted.prepareEntry(() => clock.time, entryRun.signal),
         );
-        const [entryOutcome, maskOutcome] = await Promise.all([
-          entryOutcomePromise,
-          maskPromise,
-        ]);
-        if (!entryOutcome.ok || !maskOutcome.ok) {
-          currentScenePreload()?.expireEntryBudget();
-          if (isDone || isGone || generation !== entryGeneration) return;
+      } catch (error) {
+        failEntry(error);
+      }
+    }
 
-          const failure = pickFailure(entryOutcome, maskOutcome);
-          if (failure) failEntry(failure);
-          return;
-        }
-        const preloadOutcome = await preloadPromise;
-        if (isDone || isGone || generation !== entryGeneration) return;
-
-        if (!preloadOutcome.ok) {
-          failEntry(preloadOutcome.error);
-          return;
-        }
-        // The mask stays valid while time retargets, so only entry restarts here.
-        await settleEntryRetarget(entryOutcome.preparation);
+    // The fade starts, so the scene UI slides in on the same window while staying inert.
+    function beginRevealPhase(preparation: EntryPreparation, id: number) {
+      if (isStale() || id !== curtainId) return;
+      if (!isCurrent(preparation)) {
+        void reprepareAndRecurtain();
+        return;
       }
 
-      async function settleEntryRetarget(
-        preparation: { time: string | null; allocation: unknown; display: unknown },
-      ) {
-        let current = preparation;
-        while (true) {
-          if (isDone || isGone || generation !== entryGeneration) return;
+      noteEntryGap(performance.now() - landedMs);
+      stopEntryContextLoss();
+      document.body.classList.remove(ENTERING_CLASS);
+      // The sliding styles need an animation to end them, so reduced motion skips them entirely.
+      if (prefersReducedMotion()) return;
 
-          const currentTime = clock.time;
-          const snapshot = mounted.store.getSnapshot();
-          if (
-            current.time === currentTime
-            && current.allocation === snapshot.allocation
-            && current.display === snapshot.display
-          ) {
-            onReady({ ...current });
-            return;
-          }
-          // Toggle or scrub while the mask settled retargets instead of flying stale.
-          const retry = startEntryPreparation();
-          cancelEntry = retry.cancel;
-          retargetEntry = retry.retarget;
-          const outcome = await retry.ready.then(
-            (next) => ({ ok: true as const, next }),
-            (error: unknown) => ({ ok: false as const, error }),
-          );
-          if (isDone || isGone || generation !== entryGeneration) return;
+      document.documentElement.style.setProperty(ENTRY_REVEAL_PROPERTY, `${REVEAL_MS}ms`);
+      document.body.classList.add(SLIDING_CLASS);
+      isSliding = true;
+      document.body.addEventListener("animationend", endSlidingOnSlidesEnd);
+    }
 
-          if (!outcome.ok) {
-            failEntry(outcome.error);
-            return;
-          }
-          current = outcome.next;
-        }
-      }
+    // The cross-fade completed, so the visible interface unlocks.
+    function finishReveal(id: number) {
+      if (isStale() || id !== curtainId) return;
 
-      function pickFailure(
-        entryOutcome: { ok: boolean; error?: unknown },
-        maskOutcome: { ok: boolean; error?: unknown },
-      ): unknown {
-        const errors = [entryOutcome, maskOutcome]
-          .filter((outcome) => !outcome.ok)
-          .map((outcome) => (outcome as { error: unknown }).error);
-        return errors.find((error) => error && (error as Error).name !== "AbortError") ?? null;
-      }
-
-      function startEntryPreparation() {
-        const prepared = mounted.whenEntryReady(() => clock.time, () => generation);
-        const ready = prepared.ready.then((result) => ({
-          time: (result.time ?? null) as string | null,
-          allocation: result.allocation,
-          display: result.display,
-        }));
-        void prepared.ready.then(
-          () => {},
-          () => maskLoad.abort(),
-        );
-        return { ready, cancel: prepared.cancel, retarget: prepared.retarget };
-      }
-
-      async function startMaskPreparation(): Promise<
-        { ok: true; feature: AreaFeature } | { ok: false; error: unknown }
-      > {
-        try {
-          const feature = await prepareHiddenMask(scene, maskLoad.signal);
-          if (isDone || isGone || generation !== entryGeneration) {
-            return { ok: false, error: null };
-          }
-          if (!feature) return { ok: false, error: null };
-          return { ok: true, feature };
-        } catch (error) {
-          if (maskLoad.signal.aborted) return { ok: false, error: null };
-
-          cancelEntry?.();
-          currentScenePreload()?.expireEntryBudget();
-          return { ok: false, error };
-        }
-      }
-
-      async function startPreloadPreparation(): Promise<
-        { ok: true } | { ok: false; error: unknown }
-      > {
-        try {
-          const preload = currentScenePreload();
-          if (!preload) return { ok: true };
-          if (isDone || isGone || generation !== entryGeneration) {
-            return { ok: false, error: null };
-          }
-          preload.start(flight.zoom ?? map.getZoom());
-          await waitForBoundedPreload(preload, maskLoad.signal);
-          if (isDone || isGone || generation !== entryGeneration) {
-            return { ok: false, error: null };
-          }
-          return { ok: true };
-        } catch (error) {
-          if (maskLoad.signal.aborted) return { ok: false, error: null };
-
-          return { ok: false, error };
-        }
-      }
-
-      function waitForBoundedPreload(
-        preload: NonNullable<ReturnType<typeof currentScenePreload>>,
-        signal: AbortSignal,
-      ): Promise<boolean> {
-        return new Promise<boolean>((resolve, reject) => {
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          const cleanup = () => {
-            if (timer !== undefined) clearTimeout(timer);
-            signal.removeEventListener("abort", onAbort);
-          };
-          const onAbort = () => {
-            cleanup();
-            reject(new DOMException("Aborted", "AbortError"));
-          };
-          signal.addEventListener("abort", onAbort, { once: true });
-          preload.settled(signal).then(
-            () => {
-              cleanup();
-              resolve(false);
-            },
-            (error: unknown) => {
-              cleanup();
-              reject(error);
-            },
-          );
-          timer = setTimeout(() => {
-            preload.expireEntryBudget();
-            cleanup();
-            resolve(true);
-          }, PRELOAD_ENTRY_BUDGET_MS);
-        });
-      }
-
-      function failEntry(error: unknown) {
-        if (isDone || isGone || generation !== entryGeneration) return;
-        isDone = true;
-        outlineGate.stop();
-        removePreparing();
-        revealLatestOutline(map, mounted.store, outlineGate.previous);
-        // A null or abandoned entry is silent, so only real failures get a note.
-        if (error && (error as Error).name !== "AbortError") {
-          mounted.addNote((error as Error).message ?? String(error));
-        }
-      }
+      setInputLocked(false);
     }
   }
 
-  /** Wait a frame so the preparing note paints before heavy work continues. */
-  function nextEntryFrame(): Promise<void> {
-    return new Promise((done) => {
-      if (typeof requestAnimationFrame === "function") {
-        requestAnimationFrame(() => done());
-        return;
-      }
-      setTimeout(done, 0);
-    });
+  // Cards and notes added later must not wait for the entry delays, so the sliding styles end.
+  function endSlidingOnSlidesEnd(event: AnimationEvent) {
+    if (event.target === document.body && event.animationName === SLIDES_END_ANIMATION) {
+      stopSliding();
+    }
+  }
+
+  function stopSliding() {
+    if (!isSliding) return;
+
+    isSliding = false;
+    document.body.classList.remove(SLIDING_CLASS);
+    document.body.removeEventListener("animationend", endSlidingOnSlidesEnd);
   }
 
   // Back goes through history when this page pushed the entry, so Back and the button agree.
@@ -628,26 +617,6 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
     history.replaceState(null, "", location.pathname);
     exit();
-  }
-
-  /** Show the settled background once the flight has landed. */
-  function refreshMaskAndLabels(fittedZoom: number | undefined) {
-    if (map.getLayer(MASK_ID)) {
-      map.setPaintProperty(MASK_ID, "fill-opacity", maskOpacity(fittedZoom));
-    }
-    if (map.getLayer(FADE_ID)) {
-      map.setPaintProperty(FADE_ID, "fill-opacity", fadeOpacity(fittedZoom));
-    }
-  }
-
-  /** Keep both fills fully transparent while required work stays pending. */
-  function keepMaskHidden(map: MapLibreMap) {
-    if (map.getLayer(MASK_ID)) {
-      map.setPaintProperty(MASK_ID, "fill-opacity", HIDDEN_OPACITY);
-    }
-    if (map.getLayer(FADE_ID)) {
-      map.setPaintProperty(FADE_ID, "fill-opacity", HIDDEN_OPACITY);
-    }
   }
 
   async function prepareHiddenMask(
@@ -669,113 +638,6 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     if (!isReady || signal.aborted) return null;
 
     return feature;
-  }
-
-  function stageSceneVisuals(
-    map: MapLibreMap,
-    scene: Scene,
-    sceneIds: readonly string[],
-    fitZoom: number,
-    startZoom: number,
-  ): { order: string[]; pendingClip: { bbox: Bbox; sceneIds: string[] } | null } {
-    const basemap = basemapLayers(map, new Set(sceneIds));
-    const order = basemap.all;
-    const nonSymbols = basemap.all.filter((id) => !basemap.symbols.includes(id));
-    lowerBasemapGeometry(map, sceneIds, nonSymbols);
-    for (const id of basemap.symbols) {
-      if (map.getLayer(id)) map.moveLayer(id, FADE_ID);
-    }
-    // The camera-zoom cover takes over now, so data shows through while the flight runs.
-    if (map.getLayer(MASK_ID)) {
-      map.setPaintProperty(MASK_ID, "fill-opacity", maskOpacity(fitZoom));
-    }
-    if (map.getLayer(FADE_ID)) {
-      map.setPaintProperty(FADE_ID, "fill-opacity", fadeOpacity(fitZoom));
-    }
-    liftSceneSymbols(map, sceneIds);
-    // Destructive filters apply at once only under an already opaque cover.
-    if (maskCoverProgress(startZoom, fitZoom) >= 1) {
-      savedBasemapFilters = clipBasemapToArea(map, scene.area.bbox, new Set(sceneIds));
-      return { order, pendingClip: null };
-    }
-    return { order, pendingClip: { bbox: scene.area.bbox, sceneIds: [...sceneIds] } };
-  }
-}
-
-/** Hide the outline until liftoff, so the stable basemap shows no scene pixels. */
-function hideSceneOutline(map: MapLibreMap): string | undefined {
-  try {
-    if (!map.getLayer(OUTLINE_ID)) return undefined;
-    let previous: string | undefined;
-    try {
-      if (typeof map.getLayoutProperty === "function") {
-        previous = map.getLayoutProperty(OUTLINE_ID, "visibility") as string | undefined;
-      } else {
-        const layer = map.getLayer(OUTLINE_ID) as unknown as {
-          layout?: { visibility?: string };
-        };
-        previous = layer?.layout?.visibility;
-      }
-    } catch {
-      previous = undefined;
-    }
-    setLayerVisible(map, OUTLINE_ID, "none");
-    return previous;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Keep display edits hidden until liftoff so no outline pixel shows early. */
-function gateOutlineDuringPreparation(
-  map: MapLibreMap,
-  store: { subscribe(listener: () => void): () => void },
-): { stop(): void; previous: string | undefined } {
-  const previous = hideSceneOutline(map);
-  let stopStore: () => void = () => {};
-  try {
-    stopStore = store.subscribe(() => {
-      try {
-        if (map.getLayer(OUTLINE_ID)) setLayerVisible(map, OUTLINE_ID, "none");
-      } catch {
-      }
-    });
-  } catch {
-  }
-  return { stop: stopStore, previous };
-}
-
-/** Display edits during preparation change the choice so liftoff reads the current state. */
-function revealLatestOutline(
-  map: MapLibreMap,
-  store: { getSnapshot(): unknown },
-  fallback: string | undefined,
-) {
-  try {
-    const outline = (store.getSnapshot() as { display?: { outline?: { shown?: boolean } } })
-      .display?.outline;
-    if (outline && typeof outline.shown === "boolean") {
-      setLayerVisible(map, OUTLINE_ID, outline.shown ? "visible" : "none");
-      return;
-    }
-  } catch {
-  }
-  revealSceneOutline(map, fallback);
-}
-
-/** Reveal the outline at liftoff, restoring the choice the display state requested. */
-function revealSceneOutline(map: MapLibreMap, previous: string | undefined) {
-  try {
-    if (!map.getLayer(OUTLINE_ID)) return;
-    if (previous === undefined || previous === "visible") {
-      setLayerVisible(map, OUTLINE_ID, "visible");
-    } else if (previous === "none") {
-      setLayerVisible(map, OUTLINE_ID, "none");
-    } else {
-      setLayerVisible(map, OUTLINE_ID, "visible");
-    }
-  } catch {
-    // A torn-down map must not block the transition the outline belongs to.
   }
 }
 
@@ -843,63 +705,54 @@ function bottomExtent(element: Element | null): number {
 }
 
 /**
- * Gate scene data until liftoff without changing visibility or native zoom bounds.
- * A ready layer stays at its fitted minimum while the camera runs, then lands on native.
+ * Hide scene data and the area outline until the reveal, without touching their visibility
+ * or native zoom bounds. A hidden layer is limited to its highest zoom, and a shown one is
+ * restored to its own range.
  */
 export class SceneDataLayers {
   private readonly map: MapLibreMap;
   private readonly ranges: { id: string; minzoom: number; maxzoom: number; ref: unknown }[];
-  private isReady = false;
-  private fittedZoom: number | undefined;
+  private isShown = false;
 
   constructor(map: MapLibreMap, layerIds: string[]) {
     this.map = map;
-    this.ranges = layerIds.map((id) => {
-      const layer = map.getLayer(id);
-      return {
-        id,
-        minzoom: layer?.minzoom ?? 0,
-        maxzoom: layer?.maxzoom ?? MAX_ZOOM,
-        ref: layer,
-      };
-    });
-    this.update(undefined);
-  }
-
-  update(fittedZoom: number | undefined) {
-    this.fittedZoom = fittedZoom;
-    for (const { id, minzoom, maxzoom } of this.ranges) {
-      const minimum = this.isReady ? Math.max(minzoom, dataMinZoom(fittedZoom)) : maxzoom;
-      this.map.setLayerZoomRange(id, Math.min(minimum, maxzoom), maxzoom);
-    }
+    this.ranges = layerIds.map((id) => nativeRange(map, id));
+    this.apply();
   }
 
   show() {
-    this.isReady = true;
-    this.update(this.fittedZoom);
+    this.isShown = true;
+    this.apply();
   }
 
   /**
    * Track recreated layers after a units change. Dropped ids leave the gate and new ids join
-   * with their native zooms. The current mask gate applies before the next paint.
+   * with their native zooms, while unchanged layers keep the ranges they were first seen with.
    */
   sync(layerIds: string[]) {
     const kept = new Map(this.ranges.map((range) => [range.id, range]));
     this.ranges.length = 0;
     for (const id of layerIds) {
-      const layer = this.map.getLayer(id);
-      const native = {
-        id,
-        minzoom: layer?.minzoom ?? 0,
-        maxzoom: layer?.maxzoom ?? MAX_ZOOM,
-        ref: layer,
-      };
       const previous = kept.get(id);
-      // Recreated layers need fresh native zooms; unchanged layers retain their original ranges.
-      this.ranges.push(previous && previous.ref === layer ? previous : native);
+      const native = nativeRange(this.map, id);
+      this.ranges.push(previous && previous.ref === native.ref ? previous : native);
     }
-    this.update(this.fittedZoom);
+    this.apply();
   }
+
+  private apply() {
+    for (const { id, minzoom, maxzoom } of this.ranges) {
+      if (!this.map.getLayer(id)) continue;
+
+      this.map.setLayerZoomRange(id, this.isShown ? minzoom : maxzoom, maxzoom);
+    }
+  }
+}
+
+function nativeRange(map: MapLibreMap, id: string) {
+  const layer = map.getLayer(id);
+
+  return { id, minzoom: layer?.minzoom ?? 0, maxzoom: layer?.maxzoom ?? MAX_ZOOM, ref: layer };
 }
 
 function createSceneClock(sceneId: string) {
@@ -1144,38 +997,12 @@ function addHiddenMask(
   });
 }
 
-/** Show a layer without depending on the map double, so tests stay honest about visibility. */
-function setLayerVisible(map: MapLibreMap, id: string, visibility: "visible" | "none") {
-  try {
-    if (!map.getLayer(id)) return;
-    const styled = map as unknown as { setLayoutProperty?: unknown };
-    if (typeof styled.setLayoutProperty === "function") {
-      (styled as {
-        setLayoutProperty(id: string, name: string, value: unknown): void;
-      }).setLayoutProperty(id, "visibility", visibility);
-      return;
-    }
-  } catch {
-    return;
-  }
-  try {
-    const layer = map.getLayer(id) as unknown as { layout?: { visibility?: string } };
-    if (layer && typeof layer === "object") {
-      layer.layout ??= {};
-      layer.layout.visibility = visibility;
-    }
-  } catch {
-    // A torn-down map must not block the transition the layer belongs to.
-  }
-}
-
 /** Drop basemap geometry below the lowest scene layer, keeping every relative order. */
 function lowerBasemapGeometry(
   map: MapLibreMap,
   sceneLayerIds: readonly string[],
   nonSymbols: readonly string[],
 ): void {
-  if (typeof map.getStyle !== "function") return;
   const layers = map.getStyle()?.layers ?? [];
   const anchor = layers.find(
     (layer) => sceneLayerIds.includes(layer.id) && map.getLayer(layer.id),
@@ -1196,7 +1023,6 @@ function basemapLayers(
 ): { symbols: string[]; all: string[] } {
   const symbols: string[] = [];
   const all: string[] = [];
-  if (typeof map.getStyle !== "function") return { symbols, all };
   for (const layer of map.getStyle()?.layers ?? []) {
     if (sceneIds.has(layer.id) || layer.id.startsWith("soe-")) continue;
     all.push(layer.id);
@@ -1225,7 +1051,6 @@ function clipBasemapToArea(
   sceneIds: ReadonlySet<string>,
 ): Map<string, FilterSpecification | undefined> {
   const baseline = new Map<string, FilterSpecification | undefined>();
-  if (typeof map.getFilter !== "function" || typeof map.setFilter !== "function") return baseline;
   const keep = ["!", ["within", bboxMaskGeometry(bbox)]] as unknown as FilterSpecification;
   for (const id of basemapLayers(map, sceneIds).all) {
     if (!map.getLayer(id)) continue;
@@ -1245,7 +1070,7 @@ function restoreBasemapFilters(
   map: MapLibreMap,
   baseline: ReadonlyMap<string, FilterSpecification | undefined> | null,
 ): void {
-  if (!baseline || typeof map.setFilter !== "function") return;
+  if (!baseline) return;
   for (const [id, previous] of baseline) {
     if (!map.getLayer(id)) continue;
     try {
@@ -1287,9 +1112,6 @@ function snapshotBasemapSymbols(
   sceneIds: ReadonlySet<string>,
 ): Map<string, VisibilitySpecification | undefined> {
   const baseline = new Map<string, VisibilitySpecification | undefined>();
-  if (typeof map.getStyle !== "function" || typeof map.getLayoutProperty !== "function") {
-    return baseline;
-  }
   for (const layer of map.getStyle()?.layers ?? []) {
     if (layer.type !== "symbol" || sceneIds.has(layer.id) || layer.id.startsWith("soe-")) continue;
     if (!map.getLayer(layer.id)) continue;
@@ -1304,7 +1126,6 @@ function setBasemapSymbolsVisible(
   visible: boolean,
   baseline: ReadonlyMap<string, VisibilitySpecification | undefined>,
 ): void {
-  if (typeof map.setLayoutProperty !== "function") return;
   for (const [id] of baseline) {
     if (!map.getLayer(id)) continue;
     map.setLayoutProperty(id, "visibility", visible ? "visible" : ("none" as const));
@@ -1313,7 +1134,7 @@ function setBasemapSymbolsVisible(
 
 /** Hide the outside-dimming fill when details are off, since it dims nothing then. */
 function syncFadeVisible(map: MapLibreMap, shown = loadMapDetailsShown()): void {
-  if (typeof map.setLayoutProperty !== "function" || !map.getLayer(FADE_ID)) return;
+  if (!map.getLayer(FADE_ID)) return;
   map.setLayoutProperty(FADE_ID, "visibility", shown ? "visible" : "none");
 }
 
@@ -1322,7 +1143,6 @@ function restoreBasemapSymbols(
   map: MapLibreMap,
   baseline: ReadonlyMap<string, VisibilitySpecification | undefined>,
 ): void {
-  if (typeof map.setLayoutProperty !== "function") return;
   for (const [id, original] of baseline) {
     if (!map.getLayer(id)) continue;
     // An unset original clears the property back to the style default.
@@ -1337,42 +1157,6 @@ function outlines(geometry: AreaFeature["geometry"]) {
     exteriors: parts.map((part) => part[0]),
     interiors: parts.flatMap((part) => part.slice(1)),
   };
-}
-
-const dataMinZoom = (fittedZoom: number | undefined) =>
-  fittedZoom === undefined ? 0 : fittedZoom - DATA_APPEARS_ZOOM;
-
-/** How much of the camera-zoom cover shows at a zoom below its fit, from hidden to opaque. */
-function maskCoverProgress(zoom: number, fitZoom: number) {
-  const spanZoom = MASK_FADE_START_ZOOM - MASK_FADE_END_ZOOM;
-  return Math.min(1, Math.max(0, (zoom - (fitZoom - MASK_FADE_START_ZOOM)) / spanZoom));
-}
-
-// Fades in while zooming toward the area, and is complete once the view is held to it.
-function maskOpacity(fittedZoom: number | undefined): number | ExpressionSpecification {
-  return opacityFor(MASK_OPACITY, fittedZoom);
-}
-
-// The fade dims outside labels with the same zoom behaviour as the mask beneath them.
-function fadeOpacity(fittedZoom?: number): number | ExpressionSpecification {
-  return opacityFor(FADE_OPACITY, fittedZoom);
-}
-
-function opacityFor(
-  maximum: number,
-  fittedZoom: number | undefined,
-): number | ExpressionSpecification {
-  if (fittedZoom === undefined) return maximum;
-
-  return [
-    "interpolate",
-    ["linear"],
-    ["zoom"],
-    fittedZoom - MASK_FADE_START_ZOOM,
-    0,
-    fittedZoom - MASK_FADE_END_ZOOM,
-    maximum,
-  ];
 }
 
 function pageBackground() {

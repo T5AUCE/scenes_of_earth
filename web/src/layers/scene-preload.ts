@@ -140,7 +140,11 @@ export function basemapPreloadSource(map: BasemapMap, bbox: Bbox): PreloadSource
       const lastZoom = Math.min(basemap.maxzoom, BASEMAP_PRELOAD_MAX_ZOOM);
       const firstZoom = Math.min(Math.floor(fittedZoom), lastZoom);
       return scenePyramidTiles(bbox, firstZoom, lastZoom, BASEMAP_PRELOAD_TILES)
-        .map((tile) => downloadTask(tileUrl(basemap.template, tile), BASEMAP_TILE_EST_BYTES));
+        .map((tile) => downloadTask(
+          tileUrl(basemap.template, tile),
+          BASEMAP_TILE_EST_BYTES,
+          tile.z,
+        ));
     },
     visibleKey: (sourceId, tile) => {
       return template !== null && sourceId === BASEMAP_SOURCE_ID ? tileUrl(template, tile) : null;
@@ -225,6 +229,7 @@ function demTask(options: DemPreloadOptions, tile: WarmTile): PreloadTask {
   return {
     key: url,
     estimatedBytes: DEM_TILE_EST_BYTES,
+    zoom: tile.z,
     run: (abort) => fetchDemBlob(options.fetcher, tile, url, abort, "low"),
   };
 }
@@ -251,6 +256,7 @@ function contourTasks(options: ContourPreloadOptions, fittedZoom: number): Prelo
       return [{
         key: candidate.key,
         estimatedBytes: parents.length * DEM_TILE_EST_BYTES,
+        zoom: tile.z,
         needs,
         run: async (abort: AbortController) => {
           await warmDemParents(fetcher, demTemplate, tile, abort);
@@ -380,8 +386,8 @@ function stableOptions(options: unknown): string {
   return `{${entries.map(([key, value]) => `${JSON.stringify(key)}:${stableOptions(value)}`)}}`;
 }
 
-function downloadTask(url: string, estimatedBytes: number): PreloadTask {
-  return { key: url, estimatedBytes, run: (abort) => downloadBlob(url, abort.signal) };
+function downloadTask(url: string, estimatedBytes: number, zoom: number): PreloadTask {
+  return { key: url, estimatedBytes, zoom, run: (abort) => downloadBlob(url, abort.signal) };
 }
 
 // Low priority keeps these requests behind the visible ones in the browser's own queue.

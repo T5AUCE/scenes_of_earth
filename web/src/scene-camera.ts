@@ -4,7 +4,10 @@ import { fitCamera, fitToBbox, lockPan } from "./map";
 import { prefersReducedMotion } from "./reduced-motion";
 import type { Scene } from "./types";
 
-const FLY_DURATION_MS = 1800;
+// The flight grows with the zoom distance, so a short hop does not drag.
+const FLY_BASE_MS = 700;
+const FLY_PER_ZOOM_MS = 450;
+const FLY_MAX_MS = 1800;
 const SNAP_BACK_MS = 250;
 
 const USER_INPUT_EVENTS = ["wheel", "mousedown", "touchstart"];
@@ -14,6 +17,7 @@ const LISTEN_FIRST = { capture: true, passive: false };
 // Zooming out may pass the fitted zoom by this much before it eases back.
 const FIT_OVERSHOOT_ZOOM = 0.15;
 const FIT_TOLERANCE_ZOOM = 0.001;
+const FIT_TOLERANCE_DEG = 1e-4;
 
 // Space kept between the fitted area and whatever covers or borders the map.
 const EDGE_MARGIN_PX = 24;
@@ -28,80 +32,159 @@ interface CameraRoots {
   timeBar: HTMLElement;
 }
 
-/** Fit the area into the uncovered map, then hold its view with elastic zoom-out. */
-export function flyIn(
-  map: MapLibreMap,
-  scene: Scene,
-  roots: CameraRoots,
-  onLanded: () => void,
-) {
+/**
+ * Fit the area into the uncovered map. The flight is one native fit; `hold` then limits the
+ * view to the area with elastic zoom-out, and is called once the scene is staged.
+ */
+export function flyIn(map: MapLibreMap, scene: Scene, roots: CameraRoots) {
   let padding = scenePadding(roots);
-  let camera = fitCamera(map, scene.area.bbox, padding);
-  let fitted = camera;
+  let fitted = fitCamera(map, scene.area.bbox, padding);
   let hold: ReturnType<typeof holdView> | null = null;
-  let isStarted = false;
+  let stopLanding = () => {};
+  let stopSettling = () => {};
+  let isLanded = false;
+  let settlePromise: Promise<void> | null = null;
+  let finishSettle: (() => void) | null = null;
 
   return {
     get zoom() {
       return fitted?.zoom;
     },
 
-    stopClamp: () => hold?.stop(),
+    // The build panel slide-out scales with this, so it leaves with the camera.
+    get durationMs() {
+      return flightDuration(fitted ? Math.abs(fitted.zoom - map.getZoom()) : Infinity);
+    },
 
     // The window changed size, so the area is centred again in the space that is left.
     refit() {
       const nextPadding = scenePadding(roots);
       const next = fitCamera(map, scene.area.bbox, nextPadding);
       if (!next) return;
+
       padding = nextPadding;
-      camera = next;
-      if (!hold) {
-        fitted = next;
+      fitted = next;
+      if (hold) {
+        hold.refit(next);
         return;
       }
-
-      hold.refit(next);
-      fitted = next;
+      if (isLanded) moveToFit();
     },
 
-    // The opening waits for the mask and the first data, so the flight lifts off here.
-    start() {
-      if (isStarted) return;
-      isStarted = true;
-      fitToBbox(map, scene.area.bbox, { padding, duration: flightDuration() });
-      hold = camera ? holdView(map, camera, onLanded) : null;
+    start: () => new Promise<void>((resolve) => {
+      let isCorrected = false;
+      const land = () => {
+        if (fitted && !isCorrected && !isAtFit(map, fitted)) {
+          isCorrected = true;
+          // A resize or an interruption moved the target, so one short ease finishes the fit.
+          map.easeTo({ ...fitted, duration: SNAP_BACK_MS, easing: easeOut });
+          return;
+        }
+        stopLanding();
+        isLanded = true;
+        resolve();
+      };
+      const duration = flightDuration(fitted ? Math.abs(fitted.zoom - map.getZoom()) : Infinity);
+      stopLanding = () => map.off("moveend", land);
+      map.on("moveend", land);
+      fitToBbox(map, scene.area.bbox, { padding, duration });
+      if (!map.isMoving()) land();
+    }),
+
+    settled() {
+      return settlePromise ?? Promise.resolve();
+    },
+
+    hold() {
+      if (fitted) hold ??= holdView(map, fitted);
+    },
+
+    stop() {
+      stopLanding();
+      resolveSettle();
+      hold?.stop();
     },
   };
+
+  // A resize after landing moves at once, so staging can install limits around the new fit.
+  function moveToFit() {
+    const target = fitted;
+    if (!target) return;
+    if (isAtFit(map, target)) {
+      resolveSettle();
+      return;
+    }
+
+    ensureSettleListener();
+    map.easeTo({
+      center: target.center,
+      zoom: target.zoom,
+      duration: SNAP_BACK_MS,
+      easing: easeOut,
+    });
+  }
+
+  // One waiter survives every replacement fit, so an earlier settled call still lands.
+  function ensureSettleListener() {
+    if (settlePromise) return;
+
+    settlePromise = new Promise<void>((resolve) => {
+      finishSettle = resolve;
+    });
+    const onMoveEnd = () => {
+      if (!fitted || !isAtFit(map, fitted)) return;
+
+      resolveSettle();
+    };
+    stopSettling = () => {
+      map.off("moveend", onMoveEnd);
+      stopSettling = () => {};
+    };
+    map.on("moveend", onMoveEnd);
+  }
+
+  function resolveSettle() {
+    stopSettling();
+    const finish = finishSettle;
+    settlePromise = null;
+    finishSettle = null;
+    finish?.();
+  }
+}
+
+function isAtFit(map: MapLibreMap, fitted: FittedCamera) {
+  const { lng, lat } = map.getCenter();
+
+  return Math.abs(map.getZoom() - fitted.zoom) <= FIT_TOLERANCE_ZOOM
+    && Math.abs(lng - fitted.center.lng) <= FIT_TOLERANCE_DEG
+    && Math.abs(lat - fitted.center.lat) <= FIT_TOLERANCE_DEG;
 }
 
 function scenePadding(roots: CameraRoots): PaddingOptions {
-  const column = roots.column.getBoundingClientRect();
-  const timeBar = roots.timeBar.getBoundingClientRect();
+  // Offsets ignore the entry slides, so the fit never depends on how far a panel has moved.
   const edges = { top: EDGE_MARGIN_PX, bottom: EDGE_MARGIN_PX, left: EDGE_MARGIN_PX };
 
   if (matchMedia(PHONE_QUERY).matches) {
     const badge = document.getElementById(STATUS_BADGE_ID)!.getBoundingClientRect();
     const top = badge.bottom + EDGE_MARGIN_PX;
-    const bottom = window.innerHeight - column.top + EDGE_MARGIN_PX;
+    const bottom = window.innerHeight - roots.column.offsetTop + EDGE_MARGIN_PX;
 
     return { ...edges, top, right: EDGE_MARGIN_PX, bottom };
   }
 
-  const right = window.innerWidth - column.left + EDGE_MARGIN_PX;
-  const timeBarTop = timeBar.height ? timeBar.top : window.innerHeight;
+  const right = window.innerWidth - roots.column.offsetLeft + EDGE_MARGIN_PX;
+  const timeBarTop = roots.timeBar.offsetHeight ? roots.timeBar.offsetTop : window.innerHeight;
   const bottom = window.innerHeight - timeBarTop + EDGE_MARGIN_PX;
 
   return { ...edges, right, bottom };
 }
 
 // The limits start after the flight, because they would cut it short.
-function holdView(map: MapLibreMap, first: FittedCamera, onLanded: () => void) {
+function holdView(map: MapLibreMap, first: FittedCamera) {
   let fitted = first;
-  let isHolding = false;
   let isSnapping = false;
   // Set when the user took over from the snap-back, until that gesture has ended.
   let isSnapBackPaused = false;
-  let stopPanLock = () => {};
   const canvasContainer = map.getCanvasContainer();
 
   const snapBack = () => {
@@ -137,30 +220,19 @@ function holdView(map: MapLibreMap, first: FittedCamera, onLanded: () => void) {
     map.stop();
   };
 
-  const apply = () => {
-    map.off("moveend", apply);
-    isHolding = true;
-    map.setMinZoom(fitted.zoom - FIT_OVERSHOOT_ZOOM);
-    map.on("zoomend", snapBack);
-    map.on("moveend", endMove);
-    stopPanLock = lockPan(map, fitted);
+  map.setMinZoom(fitted.zoom - FIT_OVERSHOOT_ZOOM);
+  map.on("zoomend", snapBack);
+  map.on("moveend", endMove);
+  let stopPanLock = lockPan(map, fitted);
 
-    for (const type of USER_INPUT_EVENTS) {
-      canvasContainer.addEventListener(type, takeOverFromSnapBack, LISTEN_FIRST);
-    }
-
-    onLanded();
-  };
-
-  if (map.isMoving()) map.on("moveend", apply);
-  else apply();
+  for (const type of USER_INPUT_EVENTS) {
+    canvasContainer.addEventListener(type, takeOverFromSnapBack, LISTEN_FIRST);
+  }
 
   return {
     refit(next: FittedCamera) {
       const wasAtFit = map.getZoom() <= fitted.zoom + FIT_TOLERANCE_ZOOM;
       fitted = next;
-      if (!isHolding) return;
-
       stopPanLock();
       map.setMinZoom(next.zoom - FIT_OVERSHOOT_ZOOM);
       stopPanLock = lockPan(map, next);
@@ -169,7 +241,6 @@ function holdView(map: MapLibreMap, first: FittedCamera, onLanded: () => void) {
     },
 
     stop() {
-      map.off("moveend", apply);
       map.off("moveend", endMove);
       map.off("zoomend", snapBack);
 
@@ -205,5 +276,9 @@ export function watchResize(onSettled: () => void) {
   };
 }
 
-/** Respect reduced motion for scene entry and return flights. */
-export const flightDuration = () => (prefersReducedMotion() ? 0 : FLY_DURATION_MS);
+/** How long a flight over this many zoom levels takes, or zero when reduced motion is asked. */
+export function flightDuration(zoomLevels = Infinity) {
+  if (prefersReducedMotion()) return 0;
+
+  return Math.min(FLY_MAX_MS, FLY_BASE_MS + FLY_PER_ZOOM_MS * zoomLevels);
+}

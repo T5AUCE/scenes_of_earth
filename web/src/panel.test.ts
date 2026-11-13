@@ -274,6 +274,74 @@ test("build shows Starting build… before the POST resolves", async (context) =
   assert.equal(status.textContent, "Starting build…");
 });
 
+test("a finished build shows Preparing scene… until the scene reports back", async (context) => {
+  const window = new Window();
+  context.after(() => window.happyDOM.abort());
+  installBrowser(context, window);
+  const previousStyle = (globalThis as { getComputedStyle?: unknown }).getComputedStyle;
+  (globalThis as { getComputedStyle: unknown }).getComputedStyle = () => ({
+    getPropertyValue: () => "",
+  });
+  context.after(() => {
+    if (previousStyle) {
+      (globalThis as { getComputedStyle: unknown }).getComputedStyle = previousStyle;
+    } else {
+      delete (globalThis as { getComputedStyle?: unknown }).getComputedStyle;
+    }
+  });
+  context.mock.method(globalThis, "fetch", async (url: string, init?: RequestInit) => {
+    if (url === "/api/layers") {
+      return Response.json({
+        request_step: "P1M",
+        default: ["terrain"],
+        layers: [{ id: "terrain", title: "Terrain", time_varying: false, time: null }],
+      });
+    }
+    if (url.startsWith("/api/areas/search?")) return Response.json([areaHit()]);
+    if (url === "/api/areas/cgaz%3AADM1%3ANAKURU") {
+      return Response.json({ ...areaHit(), geometry: bboxFeature() });
+    }
+    if (url === "/api/scenes" && init?.method === "POST") {
+      return Response.json({ id: "s", status: "done", bundle_url: "https://bundles.test/s" });
+    }
+    return Response.json({
+      id: "s",
+      version: "0.7",
+      area: { geometry_href: "area.geojson" },
+      data: { href: "data.zarr" },
+      layers: [],
+    });
+  });
+  const map = { fitBounds() {}, getLayer() {}, getSource() {}, addSource() {}, addLayer() {} };
+  const root = document.createElement("div");
+  document.body.append(root);
+  await createPanel(root, map as unknown as MapLibreMap, { enter() {} });
+  const search = root.querySelector<HTMLInputElement>("[role=combobox]")!;
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  search.value = "Nakuru";
+  search.dispatchEvent(new window.Event("input"));
+  context.mock.timers.tick(SEARCH_DEBOUNCE_MS);
+  await new Promise((resolve) => setImmediate(resolve));
+  root.querySelector("[role=option]")!.dispatchEvent(
+    new window.Event("mousedown", { bubbles: true, cancelable: true }),
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  const build = [...root.querySelectorAll("button")].find(
+    (button) => button.textContent === "Build scene",
+  )!;
+
+  build.click();
+  for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(root.querySelector(".status")!.textContent, "Preparing scene…");
+  assert.equal(root.querySelector(".status")!.classList.contains("busy"), true);
+  assert.equal(
+    [...root.querySelectorAll("button")].find((button) => button.textContent === "Build scene")!
+      .disabled,
+    true,
+  );
+});
+
 test("repick clears a build and a stale 503 never overwrites a newer run", async (context) => {
   const window = new Window();
   context.after(() => window.happyDOM.abort());
@@ -411,6 +479,7 @@ test("repick clears a build and a stale 503 never overwrites a newer run", async
   assert.equal(postCalls, 2);
 
   await assertDeferredSceneEntries(context);
+  await assertSceneEntryHooks(context);
   await assertLazySceneBoundary();
   await assertLazySceneRetry();
 });
@@ -487,6 +556,51 @@ async function assertDeferredSceneEntries(context: TestContext): Promise<void> {
       action === "failure" ? "Could not open scene first: module unavailable" : "",
     );
   }
+}
+
+async function assertSceneEntryHooks(context: TestContext): Promise<void> {
+  context.mock.method(globalThis, "fetch", async (url: string) => {
+    if (url === "/api/layers") {
+      return Response.json({ request_step: "P1M", default: [], layers: [] });
+    }
+    if (url.startsWith("/api/scenes/")) {
+      return Response.json({ status: "done", bundle_url: "https://bundles.test/s" });
+    }
+
+    return Response.json({
+      id: "s",
+      version: "0.7",
+      area: { geometry_href: "area.geojson" },
+      data: { href: "data.zarr" },
+      layers: [],
+    });
+  });
+  const root = document.createElement("div");
+  let received: {
+    showStatus(text: string): void;
+    setBusy(isBusy: boolean): void;
+    setInert(isInert: boolean): void;
+  } | undefined;
+  const map = { fitBounds() {}, getLayer() {}, getSource() {}, addSource() {}, addLayer() {} };
+  const panel = await createPanel(root, map as unknown as MapLibreMap, {
+    enter: (_scene, options) => {
+      received = options.buildPanel;
+    },
+  });
+
+  await panel.openScene("s", { time: null, entry: "push" });
+
+  assert.ok(received);
+  received.showStatus("Preparing scene…");
+  assert.equal(root.querySelector(".status")!.textContent, "Preparing scene…");
+  received.setBusy(true);
+  assert.equal(root.querySelector(".status")!.classList.contains("busy"), true);
+  received.setBusy(false);
+  assert.equal(root.querySelector(".status")!.classList.contains("busy"), false);
+  received.setInert(true);
+  assert.equal(root.inert, true);
+  received.setInert(false);
+  assert.equal(root.inert, false);
 }
 
 function bboxFeature(): { type: "Polygon"; coordinates: number[][][] } {

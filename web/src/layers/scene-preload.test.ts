@@ -292,6 +292,25 @@ test("basemap preload waits for a resolved source and keys visible loads by its 
   assert.equal(source.visibleKey("terrain-relief", { z: 9, x: 1, y: 2 }), null);
 });
 
+test("preload tasks carry their tile zoom so entry waits only through the fit", () => {
+  const dem = demSource(SMALL_SCENE).tasks(9.3);
+  assert.ok(dem.length > 0);
+  assert.ok(dem.every((task) => typeof task.zoom === "number"));
+  assert.ok(dem.some((task) => task.zoom === 9));
+  assert.ok(dem.some((task) => (task.zoom ?? 0) > 9));
+
+  const basemap = basemapPreloadSource(basemapMap(LIBERTY, 14), SMALL_SCENE).tasks(9.3);
+  assert.ok(basemap.length > 0);
+  assert.ok(basemap.every((task) => typeof task.zoom === "number"));
+  assert.ok(basemap.some((task) => task.zoom === 9));
+
+  const plan = contourPlan("m");
+  const traced = contourSource(SMALL_SCENE, plan, fakeManager().fetcher).tasks(9.3);
+  assert.ok(traced.length > 0);
+  assert.ok(traced.every((task) => typeof task.zoom === "number"));
+  assert.ok(traced.some((task) => task.zoom === 9));
+});
+
 test("the DEM fetcher is the shared manager when one exists", () => {
   const manager = {};
 

@@ -16,8 +16,8 @@ export const PRELOAD_BUDGET_BYTES = 24 * 1024 * 1024;
 /** Bounded memo size for missing and already counted tiles. */
 export const MAX_MEMO_TILES = 2000;
 
-/** How long optional entry preload may run before unfinished work is dropped. */
-export const PRELOAD_ENTRY_BUDGET_MS = 5 * 1000;
+/** How long entry waits for the destination tiles before flying anyway. */
+export const PRELOAD_WARM_CAP_MS = 10 * 1000;
 
 const STORE_PROTOCOL = "soetile";
 
@@ -27,6 +27,8 @@ export interface PreloadTask {
   key: string;
   /** Bytes reserved against the budget while the task runs. */
   estimatedBytes: number;
+  /** The tile zoom this task serves, so the entry wait can skip deeper levels. */
+  zoom?: number;
   /** Do the work and resolve with the downloaded body, or nothing when it lives elsewhere. */
   run(abort: AbortController): Promise<Blob | undefined>;
   /** Store keys that must already be prepared before this task may launch. */
@@ -84,6 +86,7 @@ interface Job {
   abort: AbortController;
   download: Promise<Blob | undefined>;
   reservedBytes: number;
+  zoom?: number;
   cancelled: boolean;
   settled: boolean;
 }
@@ -302,7 +305,6 @@ export class ScenePreload {
   private epochCounter = 0;
   private visibleDemands = 0;
   private readonly stopListening: () => void;
-  private stopWaitingForLanding: () => void = () => {};
   private reservedBytes = 0;
   private fittedZoom: number | null = null;
   private isLanded = false;
@@ -362,7 +364,6 @@ export class ScenePreload {
   start(fittedZoom: number): void {
     if (this.destroyed || this.fittedZoom !== null) return;
     this.fittedZoom = fittedZoom;
-    this.waitForLanding();
     for (const state of this.sources.values()) this.plan(state);
     this.pump();
   }
@@ -387,7 +388,6 @@ export class ScenePreload {
     if (activePreload === this) activePreload = null;
     if (this.isRewriting) this.map.setTransformRequest(null);
     this.stopListening();
-    this.stopWaitingForLanding();
     this.wake();
   }
 
@@ -414,33 +414,43 @@ export class ScenePreload {
    */
   async settled(signal?: AbortSignal): Promise<void> {
     while (true) {
-      if (this.destroyed) throw new DOMException("Aborted", "AbortError");
-      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      if (this.destroyed || signal?.aborted) throw new DOMException("Aborted", "AbortError");
       if (this.isSettled()) return;
       await this.waitForWake(signal);
     }
   }
 
-  /** Drop queued work and abort running work after the entry budget expires. */
-  expireEntryBudget(): void {
-    if (this.destroyed) return;
-    for (const state of this.sources.values()) {
-      if (state.queue.length > 0) {
-        state.total -= state.queue.length;
-        state.queue = [];
-      }
+  /** Whether every planned task through this zoom has settled, deeper levels excluded. */
+  isSettledThrough(zoom: number): boolean {
+    for (const job of this.active.values()) {
+      if (isThroughZoom(job.zoom, zoom)) return false;
     }
-    for (const job of [...this.active.values()]) this.expireJob(job);
-    this.report();
+    for (const state of this.sources.values()) {
+      if (state.queue.some((task) => isThroughZoom(task.zoom, zoom))) return false;
+    }
+    return true;
   }
 
-  /** Wait for the next progress report or expiry instead of polling on a timer. */
+  /**
+   * Wait only for the destination view. Tasks deeper than the fitted zoom keep running
+   * in the background, so a slow pyramid cannot hold the flight back.
+   */
+  async settledThrough(zoom: number, signal?: AbortSignal): Promise<void> {
+    while (true) {
+      if (this.destroyed || signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      if (this.isSettledThrough(zoom)) return;
+      await this.waitForWake(signal);
+    }
+  }
+
+  /** Mark the camera landing, so later visible loads count as hits or misses. */
+  noteLanded(): void {
+    this.isLanded = true;
+  }
+
+  /** Wait for the next progress report instead of polling on a timer. */
   private waitForWake(signal?: AbortSignal): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      if (signal?.aborted) {
-        reject(new DOMException("Aborted", "AbortError"));
-        return;
-      }
       const onAbort = () => {
         this.wakeListeners.delete(onWake);
         reject(new DOMException("Aborted", "AbortError"));
@@ -452,16 +462,6 @@ export class ScenePreload {
       this.wakeListeners.add(onWake);
       signal?.addEventListener("abort", onAbort, { once: true });
     });
-  }
-
-  // The flight keeps the map rendering, so the first idle after it starts is the landing.
-  private waitForLanding(): void {
-    const landed = () => {
-      this.isLanded = true;
-      this.map.off("idle", landed);
-    };
-    this.map.on("idle", landed);
-    this.stopWaitingForLanding = () => this.map.off("idle", landed);
   }
 
   private plan(state: SourceState): void {
@@ -492,9 +492,9 @@ export class ScenePreload {
       this.report();
       return;
     }
-    if (this.isWaiting(state)) return;
     while (this.freeLanes(state.source) > 0 && state.queue.length > 0) {
       const task = state.queue[0];
+      if (this.isWaiting(state, task)) break;
       if (this.isPrepared(task.key)) {
         state.queue.shift();
         state.done += 1;
@@ -525,10 +525,14 @@ export class ScenePreload {
     this.occupied.set(id, Math.max(0, (this.occupied.get(id) ?? 0) + delta));
   }
 
-  private isWaiting(state: SourceState): boolean {
+  // A task only waits for gate work at or below its own zoom, because its inputs are never deeper.
+  private isWaiting(state: SourceState, task: PreloadTask): boolean {
     const gate = this.sources.get(state.source.after ?? "");
-    return gate !== undefined
-      && (gate.queue.length > 0 || (this.occupied.get(gate.source.id) ?? 0) > 0);
+    if (gate === undefined) return false;
+    if (gate.queue.some((queued) => isThroughZoom(queued.zoom, task.zoom ?? Infinity))) return true;
+    return [...this.active.values()].some((job) => {
+      return job.state === gate && isThroughZoom(job.zoom, task.zoom ?? Infinity);
+    });
   }
 
   private admit(bytes: number): boolean {
@@ -544,6 +548,7 @@ export class ScenePreload {
       abort,
       download: flight,
       reservedBytes: task.estimatedBytes,
+      zoom: task.zoom,
       cancelled: false,
       settled: false,
     };
@@ -594,21 +599,6 @@ export class ScenePreload {
     this.store.dropFlight(job.key, job.download);
     this.store.dropPending(job.key, job.download);
     job.abort.abort();
-  }
-
-  /** Abort one running job and count it as settled so the entry budget ends promptly. */
-  private expireJob(job: Job): void {
-    if (job.settled) return;
-    job.settled = true;
-    job.cancelled = true;
-    if (this.active.get(job.key) === job) this.active.delete(job.key);
-    this.reservedBytes -= job.reservedBytes;
-    this.store.release(job.reservedBytes);
-    this.occupy(job.state.source.id, -1);
-    this.store.dropFlight(job.key, job.download);
-    this.store.dropPending(job.key, job.download);
-    job.abort.abort();
-    if (this.sources.get(job.state.source.id) === job.state) job.state.done += 1;
   }
 
   /** Whether a job still owns its key, so late completions cannot retain stale bodies. */
@@ -761,9 +751,7 @@ export class ScenePreload {
     this.wake();
   }
 
-  /** Resolve the current settled waiters so a new plan or expiry is noticed at once. */
   private wake(): void {
-    if (this.wakeListeners.size === 0) return;
     const listeners = [...this.wakeListeners];
     this.wakeListeners.clear();
     for (const listener of listeners) listener();
@@ -934,6 +922,11 @@ async function fetchArrayBuffer(url: string, signal: AbortSignal): Promise<Array
 function isMissingResponse(error: unknown): boolean {
   const message = (error as Error)?.message ?? "";
   return message.includes("Bad response: 404");
+}
+
+// Tasks without a zoom predate the fitted wait, so they still hold it back.
+function isThroughZoom(taskZoom: number | undefined, zoom: number): boolean {
+  return taskZoom === undefined || taskZoom <= zoom;
 }
 
 /** The dev-stats telemetry used outside tests. */

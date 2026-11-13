@@ -29,6 +29,7 @@ import {
   setLayerDisplay,
   storeOutline,
 } from "./display-state";
+import { nextEntryFrame } from "./entry-curtain";
 import { makeHtmlElement } from "./html";
 import { BLEND, blendPair } from "./layers/allocate";
 import { BLEND_TITLE, type BlendView, createBlendView } from "./layers/blend";
@@ -286,16 +287,13 @@ export function mountScene(
   const layerIds = views.flatMap((view) => view.parts.flatMap((part) => part.layerIds));
   if (blend) layerIds.push(...blend.parts[0].layerIds);
   // Entry warms the current allocation and first-render work while the old pixels stay.
-  const whenEntryReady = (
-    getTime: () => string | null,
-    getGeneration?: () => number,
-  ) => waitForEntryPreparation(
+  const prepareEntry = (getTime: () => string | null, signal: AbortSignal) => prepareEntryLayers(
     sceneStore as SceneStore,
     views,
     blend,
     timeline,
-    getTime,
-    getGeneration ?? (() => 0),
+    getTime(),
+    signal,
   );
 
   // The try block assigns the store, so reaching here means it exists.
@@ -305,241 +303,62 @@ export function mountScene(
     timeline,
     layerIds,
     store: sceneStore as SceneStore,
-    whenEntryReady,
+    prepareEntry,
   };
 }
 
-/** The time an entry preparation warmed, so liftoff can revalidate it before flying. */
+/** What an entry preparation warmed, so staging can check that nothing changed since. */
 export interface EntryPreparation {
-  time: string | undefined;
-  generation: number;
+  time: string | null;
   allocation: unknown;
   display: unknown;
 }
 
 /**
- * Warm the drawn layers for entry, including first-render work, without hiding failures.
- * The coordinator keeps generation and time identity so stale reads never certify readiness.
+ * Warm every drawn layer for entry, including first-render work, and fail on the first error.
+ * A change to the time or choices after this returns is caught by comparing the result.
  */
-function waitForEntryPreparation(
+async function prepareEntryLayers(
   store: SceneStore,
   views: LayerView[],
   blend: BlendView | null,
   timeline: ReturnType<typeof createSceneTimeline>,
-  getTime: () => string | null,
-  getGeneration: () => number,
-): { ready: Promise<EntryPreparation>; cancel(): void; retarget(): void } {
-  const tracker = new EntryReadiness(store, views, blend, timeline, getTime, getGeneration);
-  return {
-    ready: tracker.finished,
-    cancel: () => tracker.cancel(),
-    retarget: () => tracker.retarget(),
-  };
+  time: string | null,
+  signal: AbortSignal,
+): Promise<EntryPreparation> {
+  // The note paints before heavy work begins, so the old pixels stay responsive.
+  await nextEntryFrame();
+  if (signal.aborted) throw cancelError();
+
+  const { allocation, display } = store.getSnapshot();
+  const layerTime = time ?? timeline?.times[0];
+  const abort = new AbortController();
+  const stop = () => abort.abort();
+  signal.addEventListener("abort", stop, { once: true });
+  try {
+    await Promise.all(
+      drawnViews(store, views, blend).map((view) => settleEntry(view, layerTime, abort.signal)),
+    );
+  } catch (error) {
+    abort.abort();
+    throw error;
+  } finally {
+    signal.removeEventListener("abort", stop);
+  }
+  // A loaded flag alone never certifies new bytes, so one frame runs before the result counts.
+  await nextEntryFrame();
+  if (signal.aborted) throw cancelError();
+
+  return { time, allocation, display };
 }
 
-/** Own the entry wait so stale work never certifies and allocation changes reprepare. */
-class EntryReadiness {
-  readonly finished: Promise<EntryPreparation>;
-  private readonly settled = new Map<LayerView, {
-    time: string | undefined;
-    allocation: unknown;
-    display: unknown;
-  }>();
-  private readonly pending = new Map<LayerView, {
-    request: object;
-    time: string | undefined;
-    allocation: unknown;
-    display: unknown;
-    generation: number;
-    controller: AbortController;
-  }>();
-  private isDone = false;
-  private isCancelled = false;
-  private stopStore = () => {};
-  private finishOk: (preparation: EntryPreparation) => void = () => {};
-  private finishBad: (error: unknown) => void = () => {};
-
-  constructor(
-    private readonly store: SceneStore,
-    private readonly views: LayerView[],
-    private readonly blend: BlendView | null,
-    private readonly timeline: ReturnType<typeof createSceneTimeline>,
-    private readonly getTime: () => string | null,
-    private readonly getGeneration: () => number,
-  ) {
-    this.finished = new Promise<EntryPreparation>((resolve, reject) => {
-      this.finishOk = resolve;
-      this.finishBad = reject;
-    });
-    void this.start();
-    this.stopStore = this.store.subscribe(() => this.reconcile());
+function drawnViews(store: SceneStore, views: LayerView[], blend: BlendView | null) {
+  const drawn = views.filter((view) => isDrawn(store, view));
+  if (blend && typeof store.getSnapshot().allocation.draws.get(BLEND) === "string") {
+    drawn.push(blend);
   }
 
-  cancel() {
-    if (this.isDone) return;
-    this.isDone = true;
-    this.isCancelled = true;
-    for (const { controller } of this.pending.values()) controller.abort();
-    this.pending.clear();
-    this.stopStore();
-    this.finishBad(cancelError());
-  }
-
-  retarget() {
-    this.reconcile();
-  }
-
-  private async start() {
-    // The note paints before heavy work begins, so the old pixels stay responsive.
-    await nextEntryFrame();
-    if (this.isCancelled) return;
-
-    this.reconcile();
-  }
-
-  private reconcile() {
-    if (this.isDone) return;
-    const time = this.getTime() ?? this.timeline?.times[0];
-    const generation = this.getGeneration();
-    const { allocation, display } = this.store.getSnapshot();
-    const drawn = this.drawnViews();
-    for (const view of drawn) {
-      const asked = this.pending.get(view);
-      if (asked) {
-        const isRetarget = asked.time !== time
-          || asked.generation !== generation
-          || asked.allocation !== allocation
-          || asked.display !== display;
-        if (isRetarget) {
-          asked.controller.abort();
-          this.pending.delete(view);
-        } else continue;
-      }
-      const kept = this.settled.get(view);
-      const isStale = !kept
-        || kept.time !== time
-        || kept.allocation !== allocation
-        || kept.display !== display;
-      if (isStale) this.awaitEntry(view, time, allocation, display, generation);
-    }
-    for (const view of [...this.pending.keys()]) {
-      if (!drawn.includes(view)) {
-        this.pending.get(view)?.controller.abort();
-        this.pending.delete(view);
-      }
-    }
-    if (this.pending.size === 0) this.finishSettled(time, allocation, display, generation);
-  }
-
-  private drawnViews() {
-    const drawn = this.views.filter((view) => isDrawn(this.store, view));
-    if (this.blend && typeof this.store.getSnapshot().allocation.draws.get(BLEND) === "string") {
-      drawn.push(this.blend);
-    }
-
-    return drawn;
-  }
-
-  private awaitEntry(
-    view: LayerView,
-    time: string | undefined,
-    allocation: unknown,
-    display: unknown,
-    generation: number,
-  ) {
-    const request = {};
-    const controller = new AbortController();
-    this.pending.set(view, { request, time, allocation, display, generation, controller });
-    settleEntry(view, time, controller.signal).then(
-      () => {
-        const asked = this.pending.get(view);
-        if (!asked || asked.request !== request) {
-          this.reconcile();
-          return;
-        }
-        this.pending.delete(view);
-        if (this.isDone || this.isCancelled) return;
-        // A toggle or scrub while loading retargets, so stale work never certifies.
-        if (asked.time !== (this.getTime() ?? this.timeline?.times[0])) {
-          this.reconcile();
-          return;
-        }
-        if (asked.generation !== this.getGeneration()) {
-          this.reconcile();
-          return;
-        }
-        const snapshot = this.store.getSnapshot();
-        if (asked.allocation !== snapshot.allocation || asked.display !== snapshot.display) {
-          this.reconcile();
-          return;
-        }
-        if (!this.drawnViews().includes(view)) {
-          this.reconcile();
-          return;
-        }
-
-        this.settled.set(view, { time, allocation, display });
-        this.reconcile();
-      },
-      (error) => {
-        const asked = this.pending.get(view);
-        if (!asked || asked.request !== request) {
-          this.reconcile();
-          return;
-        }
-        this.pending.delete(view);
-        if (this.isDone || this.isCancelled) return;
-        if ((error as Error)?.name === "AbortError") {
-          this.reconcile();
-          return;
-        }
-
-        this.fail(error);
-      },
-    );
-  }
-
-  private finishSettled(
-    time: string | undefined,
-    allocation: unknown,
-    display: unknown,
-    generation: number,
-  ) {
-    if (this.isDone || this.isCancelled) return;
-    if (generation !== this.getGeneration()) return;
-    if (time !== (this.getTime() ?? this.timeline?.times[0])) return;
-    const snapshot = this.store.getSnapshot();
-    if (allocation !== snapshot.allocation || display !== snapshot.display) return;
-
-    void nextEntryFrame().then(() => {
-      if (this.isCancelled) return;
-      if (generation !== this.getGeneration()) {
-        this.reconcile();
-        return;
-      }
-      if (time !== (this.getTime() ?? this.timeline?.times[0])) {
-        this.reconcile();
-        return;
-      }
-      const latest = this.store.getSnapshot();
-      if (allocation !== latest.allocation || display !== latest.display) {
-        this.reconcile();
-        return;
-      }
-
-      this.isDone = true;
-      this.stopStore();
-      this.finishOk({ time, generation, allocation, display });
-    });
-  }
-
-  private fail(error: unknown) {
-    this.isDone = true;
-    for (const { controller } of this.pending.values()) controller.abort();
-    this.pending.clear();
-    this.stopStore();
-    this.finishBad(error);
-  }
+  return drawn;
 }
 
 async function settleEntry(
@@ -565,17 +384,6 @@ function cancelError(): Error {
   const error = new Error("Entry preparation was cancelled");
   error.name = "AbortError";
   return error;
-}
-
-/** Wait a frame so the preparing note paints before heavy work continues. */
-function nextEntryFrame(): Promise<void> {
-  return new Promise((done) => {
-    if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(() => done());
-      return;
-    }
-    setTimeout(done, 0);
-  });
 }
 
 function unitsEqual(first: Record<string, string>, second: Record<string, string>) {

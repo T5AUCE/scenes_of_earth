@@ -549,7 +549,7 @@ test("relief strength updates only the main hillshade and zero stays flat on zoo
   view.destroy();
 });
 
-test("shared relief and contour layers keep their mask-gated zoom bounds", (context) => {
+test("shared relief and contour layers hide until the reveal shows them", (context) => {
   mockPage(context);
   const map = new TestMap();
   const view = createTerrainView(layerContext(map));
@@ -558,72 +558,70 @@ test("shared relief and contour layers keep their mask-gated zoom bounds", (cont
   assert.equal(relief.tileSize, 512);
   assert.equal(relief.maxzoom, 11);
   const ids = view.parts.flatMap((part) => part.layerIds);
-  const native = ids.map((id) => ({ id, min: map.layers.get(id).minzoom ?? 0 }));
+  const native = ids.map((id) => ({
+    id,
+    min: map.layers.get(id).minzoom ?? 0,
+    max: map.layers.get(id).maxzoom ?? 24,
+  }));
   const gate = new SceneDataLayers(map as unknown as MapLibreMap, ids);
-  for (const id of ids) assert.equal(map.layers.get(id).minzoom, 24);
-  gate.update(5);
+  for (const { id, max } of native) {
+    assert.equal(map.layers.get(id).minzoom, max);
+    assert.equal(map.layers.get(id).maxzoom, max);
+  }
   gate.show();
-  for (const { id, min } of native) assert.equal(map.layers.get(id).minzoom, Math.max(min, 4.75));
-  gate.update(undefined);
-  for (const { id, min } of native) assert.equal(map.layers.get(id).minzoom, min);
+  for (const { id, min, max } of native) {
+    assert.equal(map.layers.get(id).minzoom, min);
+    assert.equal(map.layers.get(id).maxzoom, max);
+  }
   view.destroy();
   assert.equal(map.layers.size, 1);
   assert.equal(map.sources.size, 0);
 });
 
-test("switching units refreshes the mask gate and drops removed tiers", (context) => {
+test("switching units refreshes the reveal gate and drops removed tiers", (context) => {
   mockPage(context);
   const map = new TestMap();
   const view = createTerrainView(layerContext(map, KENYA));
   const ids = view.parts.flatMap((part) => part.layerIds);
   const gate = new SceneDataLayers(map as unknown as MapLibreMap, ids);
-  gate.update(5);
   gate.show();
 
   const layersBeforeFeet = new Map(ids.map((id) => [id, map.layers.get(id)]));
   view.menu?.units?.set("ft");
   const feetIds = view.parts.flatMap((part) => part.layerIds);
-  // Persisting layers still show the mask gate, so only rebuilt tiers carry fresh native zooms.
+  // Persisting layers keep their objects, so only rebuilt tiers carry fresh ranges.
   const feetNative = feetIds
     .filter((id) => map.layers.get(id) !== layersBeforeFeet.get(id))
-    .map((id) => ({ id, min: map.layers.get(id)?.minzoom ?? 0 }));
+    .map((id) => ({
+      id,
+      min: map.layers.get(id)?.minzoom ?? 0,
+      max: map.layers.get(id)?.maxzoom ?? 24,
+    }));
   assert.ok(!feetIds.includes("terrain-contours-10"));
   assert.ok(feetNative.length > 0);
   gate.sync(feetIds);
-  gate.update(undefined);
-  for (const { id, min } of feetNative) {
+  for (const { id, min, max } of feetNative) {
     assert.equal(map.layers.get(id)?.minzoom, min);
-  }
-  gate.update(5);
-  for (const { id, min } of feetNative) {
-    assert.equal(map.layers.get(id)?.minzoom, Math.max(min, 4.75));
-  }
-  gate.update(undefined);
-  for (const { id, min } of feetNative) {
-    assert.equal(map.layers.get(id)?.minzoom, min);
+    assert.equal(map.layers.get(id)?.maxzoom, max);
   }
 
   const layersBeforeMetres = new Map(feetIds.map((id) => [id, map.layers.get(id)]));
   view.menu?.units?.set("m");
   const metreIds = view.parts.flatMap((part) => part.layerIds);
-  // Persisting layers still show the mask gate, so only rebuilt tiers carry fresh native zooms.
+  // Persisting layers keep their objects, so only rebuilt tiers carry fresh ranges.
   const metreNative = metreIds
     .filter((id) => map.layers.get(id) !== layersBeforeMetres.get(id))
-    .map((id) => ({ id, min: map.layers.get(id)?.minzoom ?? 0 }));
+    .map((id) => ({
+      id,
+      min: map.layers.get(id)?.minzoom ?? 0,
+      max: map.layers.get(id)?.maxzoom ?? 24,
+    }));
   assert.ok(metreIds.includes("terrain-contours-10"));
   assert.ok(metreNative.length > 0);
   gate.sync(metreIds);
-  gate.update(undefined);
-  for (const { id, min } of metreNative) {
+  for (const { id, min, max } of metreNative) {
     assert.equal(map.layers.get(id)?.minzoom, min);
-  }
-  gate.update(5);
-  for (const { id, min } of metreNative) {
-    assert.equal(map.layers.get(id)?.minzoom, Math.max(min, 4.75));
-  }
-  gate.update(undefined);
-  for (const { id, min } of metreNative) {
-    assert.equal(map.layers.get(id)?.minzoom, min);
+    assert.equal(map.layers.get(id)?.maxzoom, max);
   }
   view.destroy();
 });

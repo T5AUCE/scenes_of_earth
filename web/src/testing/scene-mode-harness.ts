@@ -54,22 +54,120 @@ const dependencies = {
   `,
   "./scene-camera": `
     export const flightDuration = () => 0;
-    export function flyIn(map, scene, roots, onLanded) {
-      const flight = globalThis.sceneModeTest.flight;
+    export function flyIn() {
+      const test = globalThis.sceneModeTest;
+      const flight = test.flight;
       return {
         get zoom() { return flight.zoom; },
-        refit() { flight.refit(); },
-        stopClamp() { flight.stopClamp(); },
+        get durationMs() { return flight.durationMs; },
+        refit() {
+          flight.refits += 1;
+          if ((flight.isLanded || flight.relanding) && flight.holds === 0) {
+            flight.isLanded = false;
+            if (!flight.relanding) {
+              flight.relanding = new Promise((resolve) => {
+                flight.finishRelanding = resolve;
+              });
+            }
+            test.land = () => {
+              flight.isLanded = true;
+              test.events.push("land");
+              const finish = flight.finishRelanding;
+              flight.relanding = null;
+              flight.finishRelanding = null;
+              finish?.();
+            };
+          }
+        },
+        stop() { flight.isStopped = true; },
+        settled() { return flight.relanding ?? Promise.resolve(); },
+        hold() {
+          test.events.push("hold");
+          flight.holds += 1;
+        },
         start() {
-          globalThis.sceneModeTest.land = onLanded;
-          flight.started = true;
-          if (globalThis.sceneModeTest.landImmediately) onLanded();
+          test.events.push("fly");
+          flight.isStarted = true;
+          flight.isLanded = false;
+          flight.relanding = null;
+          flight.finishRelanding = null;
+          return new Promise((resolve) => {
+            test.land = () => {
+              flight.isLanded = true;
+              flight.relanding = null;
+              flight.finishRelanding = null;
+              test.events.push("land");
+              resolve();
+            };
+            if (test.landImmediately) test.land();
+          });
         },
       };
     }
     export function watchResize(onResize) {
       globalThis.sceneModeTest.resize = onResize;
       return () => {};
+    }
+  `,
+  "./entry-curtain": `
+    export const nextEntryFrame = () => Promise.resolve();
+    // Mirrors the real reveal window so stubbed entries time the UI the same way.
+    export const REVEAL_MS = 650;
+    export function revealUnderCurtain(map, stage, onFadeStart, onFadeEnd) {
+      const test = globalThis.sceneModeTest;
+      let finishDone;
+      const done = new Promise((resolve) => { finishDone = resolve; });
+      const curtain = {
+        isCovered: false,
+        isFading: false,
+        isCancelled: false,
+        isRetired: false,
+        // The real curtain stages inside the map's render event.
+        cover() {
+          if (curtain.isCovered || curtain.isRetired) return;
+          curtain.isCovered = true;
+          test.events.push("cover");
+          stage();
+        },
+        fade() {
+          if (curtain.isFading || curtain.isRetired) return;
+          curtain.isFading = true;
+          test.events.push("fade");
+          onFadeStart();
+          test.atFade = test.snapshotFade();
+        },
+        finish() {
+          if (curtain.isFading && !curtain.isRetired) {
+            test.events.push("end");
+            onFadeEnd();
+          }
+          finishDone();
+        },
+        retire() {
+          if (curtain.isRetired) return;
+          curtain.isRetired = true;
+          curtain.finish();
+        },
+      };
+      test.events.push("curtain");
+      test.curtain = curtain;
+      if (test.autoReveal) {
+        curtain.cover();
+        curtain.fade();
+        curtain.finish();
+      }
+      return {
+        done,
+        cancel() {
+          curtain.isCancelled = true;
+          curtain.cover();
+          curtain.fade();
+          curtain.finish();
+        },
+        retire() {
+          curtain.retire();
+        },
+      };
     }
   `,
   "./ui/scene-panel": `
@@ -114,6 +212,7 @@ const dependencies = {
   "./view": `
     export const OUTLINE_ID = "soe-area-outline";
     export function mountScene(map, scene, slots) {
+      globalThis.sceneModeTest.onMount?.();
       globalThis.sceneModeTest.onUnits = slots.onUnits;
       globalThis.sceneModeTest.onTime = slots.onTime;
       globalThis.sceneModeTest.onPlayingChange = slots.onPlayingChange;
@@ -196,38 +295,33 @@ const dependencies = {
             if (index >= 0) notes.splice(index, 1);
           };
         },
-        whenEntryReady: (getTime, getGeneration) => {
+        prepareEntry: (getTime, signal) => {
           const harness = globalThis.sceneModeTest;
-          const data = harness.data;
           const store = harness.mountStore;
           const preparationTime = getTime();
           (harness.preparationTimes ??= []).push(preparationTime);
-          let cancelReady = () => {};
-          const ready = Promise.race([
-            data.promise.then(() => {
+          const aborted = new Promise((_, reject) => {
+            const cancel = () => {
+              const error = new Error("Entry preparation was cancelled");
+              error.name = "AbortError";
+              reject(error);
+            };
+            if (signal.aborted) cancel();
+            else signal.addEventListener("abort", cancel, { once: true });
+          });
+          return Promise.race([
+            harness.data.promise.then(() => {
+              // The real layers fill their legends from decoded data before entry is ready.
+              harness.legendsReady = true;
               const snapshot = store?.getSnapshot?.() ?? { allocation: null, display: null };
               return {
                 time: preparationTime,
-                generation: getGeneration?.() ?? 0,
                 allocation: snapshot.allocation,
                 display: snapshot.display,
               };
             }),
-            new Promise((_, reject) => {
-              cancelReady = () => {
-                const error = new Error("Entry preparation was cancelled");
-                error.name = "AbortError";
-                reject(error);
-              };
-            }),
+            aborted,
           ]);
-          return {
-            ready,
-            cancel: () => cancelReady(),
-            retarget: () => {
-              harness.retargetCount = (harness.retargetCount ?? 0) + 1;
-            },
-          };
         },
         unmount() {
           for (const id of this.layerIds) map.removeLayer(id);
@@ -285,10 +379,12 @@ export function createHarness() {
   const map = new TestMap();
   const roots = { column: element(), timeBar: element(), dialog: element() };
   const bodyClasses = new Set<string>();
+  const bodyListeners = new Map<string, Set<(event: object) => void>>();
   const harness = {
     map,
     roots,
     bodyClasses,
+    bodyListeners,
     geometry: deferred(),
     data: deferredSignal(),
     notes: [] as string[],
@@ -309,20 +405,66 @@ export function createHarness() {
     syncNotices: [] as (string | null)[],
     requestedTime: null as string | null,
     preparationTimes: [] as (string | null)[],
-    retargetCount: 0,
-    landImmediately: false,
+    // The order in which the entry phases happened, so tests can assert it.
+    events: [] as string[],
+    // Every class the body ever received, so tests can prove the scene UI never showed.
+    classLog: [] as string[],
+    legendsReady: false,
+    // The state at the moment the fade started, which is when the scene UI slides in.
+    atFade: null as null | {
+      legendsReady: boolean;
+      classes: string[];
+      styleWrites: [string, string][];
+    },
+    snapshotFade() {
+      return {
+        legendsReady: harness.legendsReady,
+        classes: [...bodyClasses],
+        styleWrites: [...harness.styleWrites],
+      };
+    },
+    statuses: [] as string[],
+    styleWrites: [] as [string, string][],
+    inertPanel: false,
+    busyPanel: false,
+    // Both default on so most tests see a finished entry; phase tests switch them off.
+    landImmediately: true,
+    autoReveal: true,
     land: () => {},
     resize: () => {},
+    curtain: null as null | {
+      isCovered: boolean;
+      isFading: boolean;
+      isCancelled: boolean;
+      cover(): void;
+      fade(): void;
+      finish(): void;
+    },
     flight: {
       zoom: 5,
-      refit() {},
-      stopClamp() {},
-      started: false,
+      durationMs: 1200,
+      refits: 0,
+      holds: 0,
+      isStarted: false,
+      isStopped: false,
+      isLanded: false,
+      relanding: null as Promise<void> | null,
+    },
+    buildPanel: {
+      showStatus(text: string) {
+        harness.statuses.push(text);
+      },
+      setBusy(isBusy: boolean) {
+        harness.busyPanel = isBusy;
+      },
+      setInert(isInert: boolean) {
+        harness.inertPanel = isInert;
+      },
     },
     mode: createSceneMode(map as unknown as MapLibreMap, roots as unknown as SceneRoots),
     enter(time: string | null = null) {
       this.requestedTime = time;
-      this.mode.enter(SCENE, { time, entry: "replace" });
+      this.mode.enter(SCENE, { time, entry: "replace", buildPanel: this.buildPanel });
     },
   };
   const originalEnter = harness.mode.enter.bind(harness.mode);
@@ -335,9 +477,18 @@ export function createHarness() {
     document: {
       body: {
         offsetHeight: 0,
+        addEventListener(type: string, listener: (event: object) => void) {
+          bodyListeners.set(type, new Set([...(bodyListeners.get(type) ?? []), listener]));
+        },
+        removeEventListener(type: string, listener: (event: object) => void) {
+          bodyListeners.get(type)?.delete(listener);
+        },
         classList: {
           add(...names: string[]) {
-            for (const name of names) bodyClasses.add(name);
+            for (const name of names) {
+              bodyClasses.add(name);
+              harness.classLog.push(name);
+            }
           },
           remove(...names: string[]) {
             for (const name of names) bodyClasses.delete(name);
@@ -345,10 +496,21 @@ export function createHarness() {
           contains: (name: string) => bodyClasses.has(name),
         },
       },
-      documentElement: { offsetHeight: 0, style: { setProperty() {}, removeProperty() {} } },
+      documentElement: {
+        offsetHeight: 0,
+        style: {
+          setProperty(name: string, value: string) {
+            harness.styleWrites.push([name, value]);
+          },
+          removeProperty(name: string) {
+            harness.styleWrites.push([name, ""]);
+          },
+        },
+      },
       createElement: element,
     },
     history: { state: null, replaceState() {} },
+    location: (globalThis as Record<string, unknown>).location ?? { pathname: "/", search: "" },
     getComputedStyle: () => ({ getPropertyValue: () => "#faf8f3" }),
   });
   active = harness;
@@ -415,14 +577,33 @@ export class TestMap {
     ["rain", { id: "rain", minzoom: 0, maxzoom: 24, layout: { visibility: "visible" } }],
     ["overview", { id: "overview", minzoom: 1, maxzoom: 4, layout: { visibility: "visible" } }],
   ]);
+  readonly container = { inert: false };
   readonly sources = new Map<string, object>();
   readonly filters = new Map<string, unknown>();
   readonly listeners = new Map<string, Set<(event: object) => void>>();
+  readonly canvasListeners = new Map<string, Set<(event: object) => void>>();
+  readonly canvas = {
+    addEventListener: (type: string, listener: (event: object) => void) => {
+      if (!this.canvasListeners.has(type)) this.canvasListeners.set(type, new Set());
+      this.canvasListeners.get(type)!.add(listener);
+    },
+    removeEventListener: (type: string, listener: (event: object) => void) => {
+      this.canvasListeners.get(type)?.delete(listener);
+    },
+  };
   rangeWrites = 0;
   readyOnAdd = false;
   failMaskLayer = false;
   private maskLoaded = false;
 
+  getContainer() { return this.container; }
+  getCanvas() { return this.canvas as unknown as HTMLCanvasElement; }
+  loseContext() {
+    for (const listener of [...(this.canvasListeners.get("webglcontextlost") ?? [])]) {
+      listener({});
+    }
+  }
+  getStyle() { return { layers: [...this.layers.values()] }; }
   getCenter() { return { lng: 37, lat: 0 }; }
   getZoom() { return 5; }
   stop() {}

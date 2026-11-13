@@ -8,6 +8,7 @@ import { createMonthSelect } from "./month-select";
 import { submitAndPoll } from "./scene-build";
 import type { EnterOptions } from "./scene-mode";
 import type { AreaHit, Layer, Scene, SceneRequest } from "./types";
+import { PREPARING_STATUS } from "./ui/panel-contract";
 
 interface SceneMode {
   enter(scene: Scene, options: EnterOptions): void;
@@ -69,6 +70,11 @@ export async function createPanel(
     status.textContent = text;
   }
 
+  function setBusy(isBusy: boolean) {
+    build.disabled = isBusy;
+    status.classList.toggle("busy", isBusy);
+  }
+
   function handlePick(hit: AreaHit) {
     area = hit;
     run++;
@@ -115,6 +121,7 @@ export async function createPanel(
     status.textContent = "Starting build…";
     status.classList.add("busy");
     const thisRun = ++run;
+    let enteredScene = false;
 
     try {
       const finished = await submitAndPoll(
@@ -129,9 +136,12 @@ export async function createPanel(
         return;
       }
 
-      status.textContent = "Bundle ready.";
+      status.textContent = PREPARING_STATUS;
       const scene = await loadScene(finished.bundle_url!);
-      if (thisRun === run) await enterScene(scene, { time: null, entry: "push" }, thisRun);
+      if (thisRun === run) {
+        await enterScene(scene, { time: null, entry: "push" }, thisRun);
+        enteredScene = true;
+      }
     } catch (error) {
       if (thisRun !== run) return;
 
@@ -139,7 +149,7 @@ export async function createPanel(
         ? `Error ${error.status}: ${error.message}`
         : `Error: ${(error as Error).message}`;
     } finally {
-      if (thisRun === run) {
+      if (thisRun === run && !enteredScene) {
         build.disabled = false;
         status.classList.remove("busy");
       }
@@ -157,12 +167,19 @@ export async function createPanel(
     return body;
   }
 
-  // The scene draws its own outline.
+  // The scene draws its own outline, and reports its progress and failures back through the status.
   async function enterScene(scene: Scene, options: EnterOptions, thisRun: number) {
     const ready = typeof sceneMode === "function" ? await sceneMode() : sceneMode;
     if (thisRun !== run) return;
     areaSearch.clearOutline();
-    ready.enter(scene, options);
+    ready.enter(scene, {
+      ...options,
+      buildPanel: {
+        showStatus,
+        setBusy,
+        setInert: (isInert) => (root.inert = isInert),
+      },
+    });
   }
 }
 

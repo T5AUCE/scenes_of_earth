@@ -452,7 +452,7 @@ test("a visible contour tile load credits one hit after the overlay traced it", 
   try {
     preload.start(5.5);
     await settleWarming(warm);
-    map.emit("idle");
+    preload.noteLanded();
     const traced = warm.calls[0];
     const loading = { sourceId: "terrain-contours", tile: { tileID: { canonical: traced } } };
 

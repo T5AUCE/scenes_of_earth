@@ -40,6 +40,9 @@ export interface TileSettleSnapshot {
 /** Opening start and open-to-drawn time for the current scene. */
 export const sceneLoadStats = { startMs: 0, loadMs: null as number | null };
 
+/** The wait before the entry flight and the gap from landing to the fade start, in milliseconds. */
+export const entryStats = { waitMs: null as number | null, gapMs: null as number | null };
+
 /** Decide whether the dev readout may run for this build and address. */
 export function shouldShowDevStats(dev: boolean, search: string): boolean {
   if (dev) return true;
@@ -55,6 +58,18 @@ function hasDebugParam(search: string): boolean {
 export function noteSceneOpen(nowMs: number): void {
   sceneLoadStats.startMs = nowMs;
   sceneLoadStats.loadMs = null;
+  entryStats.waitMs = null;
+  entryStats.gapMs = null;
+}
+
+/** Remember how long the entry waited for preparation before the flight began. */
+export function noteEntryWait(waitMs: number): void {
+  entryStats.waitMs = waitMs;
+}
+
+/** Remember how long staging took between the landing and the start of the fade. */
+export function noteEntryGap(gapMs: number): void {
+  entryStats.gapMs = gapMs;
 }
 
 /** Remember when the layers drew so the readout shows the open-to-drawn time. */
@@ -462,6 +477,7 @@ function snapshot(
     bake: readBakeSnapshot(),
     longtasks,
     preload: preloadSnapshot(),
+    entry: entryStats.waitMs === null ? undefined : { ...entryStats },
   };
 }
 
@@ -510,6 +526,14 @@ export interface DevStatsSnapshot {
   tiles?: TileSettleSnapshot;
   /** Scene preload progress and hit rates, hidden until a scene plans its first task. */
   preload?: PreloadSnapshot;
+  /** Pre-flight wait and landing-to-fade gap of the last entry, absent outside an entry. */
+  entry?: EntryStats;
+}
+
+/** How long the last entry waited before its flight and between landing and fade start. */
+export interface EntryStats {
+  waitMs: number | null;
+  gapMs: number | null;
 }
 
 /** One layer's band-bake cost for the dev readout. */
@@ -522,17 +546,28 @@ export interface BakeStats {
   gpuBytes: number;
 }
 
-/** Build the compact badge line from one snapshot. */
+/** Build the two badge lines from one snapshot, frame and request costs above loading detail. */
 export function formatDevStats(snapshot: DevStatsSnapshot): string {
   const load = snapshot.loadMs === null ? "—" : `${Math.round(snapshot.loadMs)} ms`;
-  return `${snapshot.fps} fps · worst ${snapshot.worstMs.toFixed(0)} ms`
+  const frame = `${snapshot.fps} fps · worst ${snapshot.worstMs.toFixed(0)} ms`
     + ` · z ${snapshot.zoom.toFixed(1)} · load ${load}`
     + ` · ${snapshot.requests} req ${formatBytes(snapshot.bytes)}`
-    + ` · ${formatGpuPart(snapshot.gpuMs, snapshot.gpuUnavailable)}`
+    + ` · ${formatGpuPart(snapshot.gpuMs, snapshot.gpuUnavailable)}`;
+  const loading = formatEntrySuffix(snapshot.entry)
     + formatBakeSuffix(snapshot.bake)
     + formatTileSuffix(snapshot.tiles)
     + formatPreloadSuffix(snapshot.preload)
     + ` · ${snapshot.longtasks} long`;
+
+  return `${frame}\n${loading.slice(" · ".length)}`;
+}
+
+/** The entry suffix for the badge line, empty until an entry has waited. */
+function formatEntrySuffix(entry?: EntryStats): string {
+  if (!entry || entry.waitMs === null) return "";
+  const gap = entry.gapMs === null ? "—" : `${Math.round(entry.gapMs)} ms`;
+
+  return ` · entry wait ${Math.round(entry.waitMs)} ms gap ${gap}`;
 }
 
 /** Build the badge's GPU part from the last per-layer timings. */

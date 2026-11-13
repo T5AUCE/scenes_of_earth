@@ -136,41 +136,43 @@ test("the byte budget drops the rest of a plan and shrinks the planned total", a
   t.preload.destroy();
 });
 
-test("a stalled request expires to a terminal settled plan", async () => {
+test("settled waits for every planned task and wakes on each report", async () => {
   const t = setup();
-  const feed = fakeSource("dem", ["8/0/0"], { lanes: 1, abortable: false });
+  const feed = fakeSource("dem", ["8/0/0", "8/0/1"], { lanes: 2 });
   t.preload.add(feed.source);
   t.preload.start(8);
   await settled();
+  let isDone = false;
+  const waiting = t.preload.settled().then(() => {
+    isDone = true;
+  });
 
-  assert.equal(t.preload.isSettled(), false);
-  t.preload.expireEntryBudget();
-  await settled();
-
-  assert.equal(t.preload.isSettled(), true);
-  assert.deepEqual(t.preload.progress(), { done: 1, total: 1, bytes: 0 });
   feed.finish("8/0/0", 4);
   await settled();
-  assert.deepEqual(t.preload.progress(), { done: 1, total: 1, bytes: 0 });
+
+  assert.equal(isDone, false);
+
+  feed.finish("8/0/1", 4);
+  await waiting;
+
+  assert.equal(t.preload.isSettled(), true);
   t.preload.destroy();
 });
 
-test("a stalled trace gate expires without blocking its dependent", async () => {
+test("settled rejects when aborted or when the preload is destroyed", async () => {
   const t = setup();
-  const dem = fakeSource("dem", ["8/0/0"], { lanes: 1, abortable: false });
-  const traces = fakeSource("contours", ["9/0/0"], { lanes: 1, after: "dem", layer: "contours" });
-  t.preload.add(traces.source);
-  t.preload.add(dem.source);
+  t.preload.add(fakeSource("dem", ["8/0/0"], { lanes: 1 }).source);
   t.preload.start(8);
   await settled();
+  const abort = new AbortController();
+  const aborted = t.preload.settled(abort.signal);
+  const destroyed = t.preload.settled();
 
-  assert.equal(t.preload.isSettled(), false);
-  t.preload.expireEntryBudget();
-  await settled();
-
-  assert.equal(t.preload.isSettled(), true);
-  assert.deepEqual(t.preload.progress(), { done: 1, total: 1, bytes: 0 });
+  abort.abort();
   t.preload.destroy();
+
+  await assert.rejects(aborted, { name: "AbortError" });
+  await assert.rejects(destroyed, { name: "AbortError" });
 });
 
 test("stored tiles are rewritten from the first download on and undone at the end", async () => {
@@ -263,6 +265,99 @@ test("a missing tile is remembered while other failures download again", async (
   t.preload.destroy();
 });
 
+test("settledThrough waits only for the fitted zoom while deeper work continues", async () => {
+  const t = setup();
+  let releaseFit!: (blob: Blob | undefined) => void;
+  let releaseDeep!: (blob: Blob | undefined) => void;
+  const fitGate = new Promise<Blob | undefined>((resolve) => {
+    releaseFit = resolve;
+  });
+  const deepGate = new Promise<Blob | undefined>((resolve) => {
+    releaseDeep = resolve;
+  });
+  t.preload.add({
+    id: "dem",
+    layer: "terrain",
+    lanes: 2,
+    tasks: () => [
+      { key: "fit-tile", estimatedBytes: 0, zoom: 8, run: () => fitGate },
+      { key: "deep-tile", estimatedBytes: 0, zoom: 12, run: () => deepGate },
+    ],
+    visibleKey: () => null,
+  } satisfies PreloadSource);
+  t.preload.start(8);
+  await settled();
+
+  assert.equal(t.preload.isSettledThrough(8), false);
+  let throughDone = false;
+  const through = t.preload.settledThrough(8).then(() => {
+    throughDone = true;
+  });
+  let allDone = false;
+  const all = t.preload.settled().then(() => {
+    allDone = true;
+  });
+  await settled();
+
+  assert.equal(throughDone, false);
+  assert.equal(allDone, false);
+
+  releaseFit(undefined);
+  await through;
+  await settled();
+
+  assert.equal(throughDone, true);
+  assert.equal(t.preload.isSettledThrough(8), true);
+  assert.equal(t.preload.isSettled(), false);
+  assert.equal(allDone, false);
+
+  releaseDeep(undefined);
+  await all;
+
+  assert.equal(t.preload.isSettled(), true);
+  assert.equal(allDone, true);
+  t.preload.destroy();
+});
+
+test("a gated source runs its fitted-zoom task while the gate has deeper work", async () => {
+  const t = setup();
+  const gates = new Map<string, (blob: Blob | undefined) => void>();
+  const gated = (key: string) => {
+    return new Promise<Blob | undefined>((resolve) => gates.set(key, resolve));
+  };
+  t.preload.add({
+    id: "dem",
+    layer: "terrain",
+    lanes: 2,
+    tasks: () => [
+      { key: "dem-8", estimatedBytes: 0, zoom: 8, run: () => gated("dem-8") },
+      { key: "dem-12", estimatedBytes: 0, zoom: 12, run: () => gated("dem-12") },
+    ],
+    visibleKey: () => null,
+  } satisfies PreloadSource);
+  t.preload.add({
+    id: "contours",
+    layer: "contours",
+    lanes: 1,
+    after: "dem",
+    tasks: () => [{ key: "trace-8", estimatedBytes: 0, zoom: 8, run: () => gated("trace-8") }],
+    visibleKey: () => null,
+  } satisfies PreloadSource);
+  t.preload.start(8);
+  await settled();
+
+  assert.equal(gates.has("trace-8"), false);
+  gates.get("dem-8")!(undefined);
+  await settled();
+  assert.equal(gates.has("trace-8"), true);
+  gates.get("trace-8")!(undefined);
+  await t.preload.settledThrough(8);
+
+  assert.equal(t.preload.isSettledThrough(8), true);
+  assert.equal(t.preload.isSettled(), false);
+  t.preload.destroy();
+});
+
 test("the first visible load after landing counts one hit or miss for its layer", async () => {
   const t = setup();
   const dem = fakeSource("dem", ["8/0/0", "8/0/1"], { lanes: 1 });
@@ -278,7 +373,7 @@ test("the first visible load after landing counts one hit or miss for its layer"
   t.map.emit("sourcedataloading", loading("dem", { z: 8, x: 0, y: 1 }));
   assert.deepEqual(t.telemetry.counts, []);
 
-  t.map.emit("idle", {});
+  t.preload.noteLanded();
   t.map.emit("sourcedataloading", loading("dem", { z: 8, x: 0, y: 0 }));
   t.map.emit("sourcedataloading", loading("dem", { z: 8, x: 0, y: 0 }));
   t.map.emit("sourcedataloading", loading("dem", { z: 8, x: 0, y: 1 }));
@@ -297,7 +392,7 @@ test("a tile known to be missing counts neither a hit nor a miss", async () => {
   feed.fail("8/0/0", "Bad response: 404");
   await settled();
 
-  t.map.emit("idle", {});
+  t.preload.noteLanded();
   t.map.emit("sourcedataloading", loading("dem", { z: 8, x: 0, y: 0 }));
 
   assert.deepEqual(t.telemetry.counts, []);
