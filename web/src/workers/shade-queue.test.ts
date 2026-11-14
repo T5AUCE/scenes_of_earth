@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { DemCache, MAX_CONCURRENT_SHADE_JOBS, ShadeQueue } from "./shade-queue.ts";
+import {
+  BACKGROUND_SHADE_LANE,
+  DEM_CACHE_TILES,
+  DEMAND_SHADE_LANE,
+  DemCache,
+  MAX_CONCURRENT_SHADE_JOBS,
+  ShadeQueue,
+  ShadeWorkerPool,
+  type ShadePoolRequest,
+  type ShadeWorkerHandle,
+} from "./shade-queue.ts";
 
 test("jobs that need the same tile share one load", async () => {
   const fetch = deferredFetch();
@@ -191,5 +201,207 @@ function deferredFetch() {
       });
     },
     resolve: (url: string, values: Float32Array) => resolvers.get(url)?.(values),
+  };
+}
+
+test("each lane starts its own worker and keeps its messages", () => {
+  const workers: StubWorker[] = [];
+  const pool = new ShadeWorkerPool(() => {
+    workers.push(stubWorker());
+    return workers.at(-1)!;
+  });
+  const responses: unknown[] = [];
+  pool.onresponse = (response) => void responses.push(response);
+
+  pool.send(DEMAND_SHADE_LANE, shadeMessage(1));
+  pool.send(BACKGROUND_SHADE_LANE, shadeMessage(2));
+
+  assert.equal(workers.length, 2);
+  assert.deepEqual(workers[0].sent, [shadeMessage(1)]);
+  assert.deepEqual(workers[1].sent, [shadeMessage(2)]);
+
+  workers[1].reply({ id: 2 });
+  assert.deepEqual(responses, [{ id: 2 }]);
+  pool.terminate();
+});
+
+test("a stalled background lane never blocks the demand lane", () => {
+  const workers: StubWorker[] = [];
+  const pool = new ShadeWorkerPool(() => {
+    workers.push(stubWorker());
+    return workers.at(-1)!;
+  });
+  const responses: unknown[] = [];
+  pool.onresponse = (response) => void responses.push(response);
+
+  pool.send(BACKGROUND_SHADE_LANE, shadeMessage(2));
+  pool.send(DEMAND_SHADE_LANE, shadeMessage(1));
+
+  // The demand worker answers while the background job is still stalled.
+  assert.equal(workers.length, 2);
+  workers[1].reply({ id: 1 });
+  assert.deepEqual(responses, [{ id: 1 }]);
+  pool.terminate();
+});
+
+test("a cancel reaches only the lane holding the job", () => {
+  const workers: StubWorker[] = [];
+  const pool = new ShadeWorkerPool(() => {
+    workers.push(stubWorker());
+    return workers.at(-1)!;
+  });
+
+  pool.send(DEMAND_SHADE_LANE, shadeMessage(1));
+  pool.send(BACKGROUND_SHADE_LANE, shadeMessage(2));
+  pool.cancel(2);
+  pool.cancel(7);
+
+  assert.deepEqual(workers[0].sent, [shadeMessage(1)]);
+  assert.deepEqual(workers[1].sent, [shadeMessage(2), { id: 2, type: "cancel" }]);
+  pool.terminate();
+});
+
+test("a failed lane restarts on its next job while the other lane keeps going", () => {
+  const workers: StubWorker[] = [];
+  const pool = new ShadeWorkerPool(() => {
+    workers.push(stubWorker());
+    return workers.at(-1)!;
+  });
+  const failed: number[] = [];
+  pool.onlaneerror = (lane) => void failed.push(lane);
+
+  pool.send(DEMAND_SHADE_LANE, shadeMessage(1));
+  pool.send(BACKGROUND_SHADE_LANE, shadeMessage(2));
+  workers[1].fail();
+
+  assert.deepEqual(failed, [BACKGROUND_SHADE_LANE]);
+  assert.equal(workers[1].terminated, true);
+  pool.cancel(2);
+  pool.send(BACKGROUND_SHADE_LANE, shadeMessage(3));
+
+  assert.equal(workers.length, 3);
+  assert.deepEqual(workers[2].sent, [shadeMessage(3)]);
+  assert.deepEqual(workers[0].sent, [shadeMessage(1)]);
+  pool.terminate();
+});
+
+test("terminating the pool stops every lane and forgets its jobs", () => {
+  const workers: StubWorker[] = [];
+  const pool = new ShadeWorkerPool(() => {
+    workers.push(stubWorker());
+    return workers.at(-1)!;
+  });
+
+  pool.send(DEMAND_SHADE_LANE, shadeMessage(1));
+  pool.send(BACKGROUND_SHADE_LANE, shadeMessage(2));
+  pool.terminate();
+
+  assert.ok(workers.every((worker) => worker.terminated));
+  pool.cancel(1);
+  assert.equal(workers.length, 2);
+});
+
+test("cancelled queued jobs leave no bookkeeping without worker replies", () => {
+  const workers: StubWorker[] = [];
+  const pool = new ShadeWorkerPool(() => {
+    workers.push(stubWorker());
+    return workers.at(-1)!;
+  });
+
+  for (let id = 1; id <= 1000; id += 1) {
+    pool.send(DEMAND_SHADE_LANE, shadeMessage(id));
+  }
+  for (let id = 1; id <= 1000; id += 1) {
+    pool.cancel(id);
+  }
+
+  assert.equal(pendingJobs(pool), 0);
+  assert.equal(
+    workers[0].sent.filter((message) => message.type === "cancel").length,
+    1000,
+  );
+  pool.cancel(1);
+  assert.equal(
+    workers[0].sent.filter((message) => message.type === "cancel").length,
+    1000,
+  );
+  pool.terminate();
+});
+
+test("two workers keep twelve decoded tiles each for a total of twenty-four", async () => {
+  assert.equal(DEM_CACHE_TILES, 12);
+  const firstFetch = immediateFetch();
+  const secondFetch = immediateFetch();
+  const first = new DemCache(firstFetch.load);
+  const second = new DemCache(secondFetch.load);
+
+  await holdNeighbourhood(first, 1);
+  await holdNeighbourhood(second, 101);
+  assert.equal(cacheSize(first), 18);
+  assert.equal(cacheSize(second), 18);
+
+  first.release(1);
+  second.release(101);
+  assert.equal(cacheSize(first), 12);
+  assert.equal(cacheSize(second), 12);
+  assert.equal(cacheSize(first) + cacheSize(second), 24);
+  // Owned neighbourhoods survive while the oldest idle tiles evict first.
+  await first.load("a0", 3);
+  assert.equal(firstFetch.calls.filter((url) => url === "a0").length, 2);
+  await first.load("b0", 3);
+  assert.equal(firstFetch.calls.filter((url) => url === "b0").length, 1);
+  first.release(2);
+  first.release(3);
+  second.release(102);
+});
+
+/** Nine disjoint tiles owned by one job, so active loads count toward the bound. */
+async function holdNeighbourhood(cache: DemCache, owner: number): Promise<void> {
+  for (let tile = 0; tile < 9; tile += 1) {
+    await cache.load(`a${tile}`, owner);
+    await cache.load(`b${tile}`, owner + 1);
+  }
+}
+
+function cacheSize(cache: DemCache): number {
+  return (cache as unknown as { entries: Map<string, unknown> }).entries.size;
+}
+
+function pendingJobs(pool: ShadeWorkerPool): number {
+  return (pool as unknown as { jobLane: Map<number, number> }).jobLane.size;
+}
+
+interface StubWorker extends ShadeWorkerHandle {
+  sent: ShadePoolRequest[];
+  terminated: boolean;
+  reply(response: { id: number }): void;
+  fail(): void;
+}
+
+const DEM_URL = "https://example.test/{z}/{x}/{y}.webp";
+
+/** One shade request with its tile derived from its id, so lane tests stay distinct. */
+function shadeMessage(id: number): ShadePoolRequest {
+  return { type: "shade", id, tile: { z: 5, x: id, y: 2 }, strength: 2, demUrl: DEM_URL };
+}
+
+function stubWorker(): StubWorker {
+  return {
+    sent: [],
+    terminated: false,
+    onmessage: null,
+    onerror: null,
+    postMessage(message: ShadePoolRequest) {
+      this.sent.push(message);
+    },
+    terminate() {
+      this.terminated = true;
+    },
+    reply(response: { id: number }) {
+      this.onmessage?.({ data: response } as MessageEvent<any>);
+    },
+    fail() {
+      this.onerror?.({} as ErrorEvent);
+    },
   };
 }

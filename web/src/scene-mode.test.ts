@@ -2253,6 +2253,20 @@ test("a pushed-entry failure keeps the error for Back and shows no scene UI", as
   assert.equal(harness.statuses.at(-1), "data unavailable");
 });
 
+test("an abort the entry did not cause still fails it with a message", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  await settle();
+  const error = new Error("Entry preparation was cancelled");
+  error.name = "AbortError";
+  harness.data.reject(error);
+  await settle();
+  await settle();
+
+  assert.deepEqual(harness.statuses, [PREPARING, "Entry preparation was cancelled"]);
+  assertEntryClosed(harness);
+});
+
 test("rejected geometry closes the scene with its message and removes listeners", async () => {
   const harness = phasedHarness();
   harness.enter();
@@ -2545,6 +2559,41 @@ test("a resize after landing waits for the new fit before staging", async () => 
   harness.land();
   await settle();
   assert.ok(harness.events.includes("curtain"));
+
+  await exitActiveHarness();
+});
+
+test("a direct-link entry refits the relief base to the fitted zoom after landing", async () => {
+  const harness = phasedHarness();
+  // The camera still flies from the world view, so the fitted zoom differs from the map zoom.
+  harness.map.getZoom = () => 1;
+  harness.enter();
+  await finishPreparation(harness);
+  harness.land();
+  await settle();
+
+  assert.ok(harness.events.includes("curtain"));
+  assert.equal(harness.flight.zoom, 5);
+  assert.equal(harness.terrainBaseZooms.length, 1);
+  assert.equal(harness.terrainBaseZooms[0][0], harness.map);
+  assert.equal(harness.terrainBaseZooms[0][1], 5);
+
+  await exitActiveHarness();
+});
+
+test("a refit after landing moves the relief base with the flight", async () => {
+  const harness = phasedHarness();
+  harness.enter();
+  await finishPreparation(harness);
+  harness.land();
+  await settle();
+  assert.deepEqual(harness.terrainBaseZooms.map(([, zoom]) => zoom), [5]);
+
+  harness.flight.zoom = 7;
+  harness.resize();
+
+  assert.equal(harness.flight.refits, 1);
+  assert.deepEqual(harness.terrainBaseZooms.map(([, zoom]) => zoom), [5, 7]);
 
   await exitActiveHarness();
 });

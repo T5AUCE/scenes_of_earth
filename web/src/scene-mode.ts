@@ -37,6 +37,7 @@ import { createMaskLayers } from "./gpu/mask-layer";
 import { keepThroughContextLoss } from "./gpu/tiled-layer";
 import { polygonParts } from "./label-filter";
 import { basemapPreloadSource } from "./layers/scene-preload";
+import { setTerrainBaseZoom } from "./layers/terrain";
 import {
   closeScenePreload,
   currentScenePreload,
@@ -368,7 +369,10 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     entryPanel?.setBusy(true);
     void run();
 
-    const stopWatchingResize = watchResize(() => flight.refit());
+    const stopWatchingResize = watchResize(() => {
+      flight.refit();
+      refitTerrainBase();
+    });
     const stopDocking = watchDocking(roots);
 
     return {
@@ -508,7 +512,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     function failEntry(error: unknown) {
       const isAbandoned = isStale();
       entryRun.abort();
-      if (isAbandoned || (error as Error)?.name === "AbortError") return;
+      if (isAbandoned) return;
 
       isPreparing = false;
       stopSliding();
@@ -519,11 +523,17 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       leaveScene();
     }
 
+    // The flight already fits the scene bounds with its padding, so its zoom refits the base.
+    function refitTerrainBase() {
+      setTerrainBaseZoom(map, flight.zoom ?? map.getZoom());
+    }
+
     async function coverWhenLanded(preparation: EntryPreparation) {
       const latest = await settleOnCurrentEntry(preparation);
       await flight.settled();
       if (isStale()) return;
 
+      refitTerrainBase();
       landedMs ||= performance.now();
       const id = ++curtainId;
       reveal = revealUnderCurtain(

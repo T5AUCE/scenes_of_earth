@@ -20,7 +20,7 @@ export type ShadeWorkerResponse =
 
 const ABORT_MESSAGE = "aborted";
 
-// Neighbouring tiles share borders, so a few decoded tiles spare most refetching and decoding.
+// Neighbouring tiles share borders, so 12 decoded tiles per worker spare most refetching.
 const tileCache = new DemCache(fetchHeights);
 // Visible tiles arrive in bursts and neighbours overlap, so a few lanes share the loads.
 const jobQueue = new ShadeQueue(MAX_CONCURRENT_SHADE_JOBS);

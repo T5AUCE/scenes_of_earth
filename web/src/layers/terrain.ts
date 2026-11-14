@@ -1,8 +1,6 @@
 /** Combine terrain shading with contours and adapt relief strength to colour fills. */
 import type { Map as MapLibreMap } from "maplibre-gl";
 
-import { addressSearch, shadeFadeEnabled } from "../gesture-quality";
-import { removeLayerAndSource } from "../map";
 import { CONTOUR_COLORS, contourColor, DEFAULT_CONTOUR_COLOR } from "../render/palettes";
 import { displayUnitFor, isUnitFor, unitOptions } from "../units";
 import type {
@@ -11,7 +9,6 @@ import type {
   LayerMenu,
   LayerView,
   TerrainStats,
-  TerrainTiles,
   UnitsMenu,
 } from "../types";
 import {
@@ -20,7 +17,7 @@ import {
   sharedDemSource,
   terrainTileBounds,
 } from "./contour-overlay";
-import { RELIEF_STRENGTH, reliefPaint } from "./relief";
+import { RELIEF_STRENGTH } from "./relief";
 import { DEM_PRELOAD_ID, demFetcherFor, demPreloadSource } from "./scene-preload";
 import { ShadeRaster } from "./shade-raster";
 import { currentScenePreload } from "./tile-prefetch";
@@ -46,157 +43,27 @@ type TerrainSourceState = {
   hasLoadedTile: boolean;
 };
 
+/**
+ * A terrain view with its relief base refit. The scene refits the pinned base once entry
+ * lands, because the shading only sees the mount-time zoom while the camera still flies.
+ */
+export interface TerrainView extends LayerView {
+  /** Refit the pinned relief base to the fitted zoom, warming its levels. */
+  setBaseZoom(zoom: number): void;
+}
+
+const liveTerrainBases = new Map<ShadeRaster, MapLibreMap>();
+
 /** Terrain shading from Mapterhorn tiles and contour lines for one terrain layer. */
-export function createTerrainView(context: LayerContext): LayerView {
-  const { map, layer, report } = context;
+export function createTerrainView(context: LayerContext): TerrainView {
+  const { map, layer, slots, report } = context;
   const { tiles, stats } = layer;
   if (!tiles || !stats) throw new Error("Terrain needs tile metadata and summary statistics");
 
   const dem = sharedDemSource(tiles);
   const id = `${layer.id}-relief`;
-  // Scene entry drops trial parameters from the address bar, so the flag is read once here.
-  const shading = shadeFadeEnabled(addressSearch())
-    ? shadeRasterShading(context, id, tiles)
-    : hillshadeShading(context, id, tiles);
-
-  let strengthValue = RELIEF_STRENGTH.initial;
-  let isUnderColour = false;
-  const applyStrength = () => {
-    shading.setStrength(strengthValue * (isUnderColour ? COLOUR_UNDER_FACTOR : 1));
-  };
-
-  const strength: LayerControl = {
-    label: "Relief strength",
-    hint: "Change intensity using slider",
-    min: RELIEF_STRENGTH.min,
-    max: RELIEF_STRENGTH.max,
-    step: RELIEF_STRENGTH.step,
-    get value() {
-      return strengthValue;
-    },
-    set: (value) => {
-      strengthValue = value;
-      applyStrength();
-    },
-  };
-
-  // The contour traces wait for the elevation tiles, so the DEM registers first.
-  const preload = currentScenePreload();
-  preload?.add(demPreloadSource({
-    template: tiles.url,
-    maxzoom: cappedDemMaxZoom(tiles.maxzoom),
-    bbox: layer.grid.bbox,
-    fetcher: demFetcherFor(dem),
-  }));
-  const contourOverlay = new ContourOverlay(context, dem, tiles, stats as TerrainStats, preload);
-  const stopWatchingTiles = watchTerrainTiles(
-    map,
-    [id, ...contourOverlay.contourSourceIds],
-    report,
-  );
-
-  let palette = context.display?.palette ?? DEFAULT_CONTOUR_COLOR;
-  let elevationUnit = displayUnitFor(layer.units, context.display?.units);
-  const menuUpdates = new EventTarget();
-  const menu: LayerMenu = {
-    title: layer.title,
-    heading: "Contour colour",
-    blocks: true,
-    palettes: CONTOUR_COLORS.map(({ name, label, color }) => ({ name, label, colors: [color] })),
-    defaultPalette: DEFAULT_CONTOUR_COLOR,
-    custom: false,
-    updates: menuUpdates,
-    get palette() {
-      return palette;
-    },
-    setPalette(name) {
-      palette = name;
-      contourOverlay.setColor(contourColor(name)!);
-    },
-    units: createUnitsMenu(),
-  };
-
-  function createUnitsMenu(): UnitsMenu | undefined {
-    const options = unitOptions(layer.units);
-    if (!options) return undefined;
-
-    return {
-      options,
-      defaultUnit: layer.units,
-      get value() {
-        return elevationUnit;
-      },
-      set: (unit) => {
-        if (!isUnitFor(layer.units, unit) || unit === elevationUnit) return;
-
-        elevationUnit = unit;
-        contourOverlay.setUnits(unit);
-        menuUpdates.dispatchEvent(new Event("change"));
-      },
-    };
-  }
-
-  return {
-    parts: [
-      { id: layer.id, label: "Relief", layerIds: [id], controls: [strength] },
-      contourOverlay.part,
-    ],
-    options: [],
-    menu,
-    time: null,
-    setTime: () => {},
-    setColourUnder: (isUnder) => {
-      isUnderColour = isUnder;
-      applyStrength();
-    },
-    legend: () => contourOverlay.legend,
-    destroy: () => {
-      stopWatchingTiles();
-      preload?.remove(DEM_PRELOAD_ID);
-      contourOverlay.destroy();
-      shading.destroy();
-    },
-  };
-}
-
-interface ReliefShading {
-  setStrength(strength: number): void;
-  destroy(): void;
-}
-
-function hillshadeShading(context: LayerContext, id: string, tiles: TerrainTiles): ReliefShading {
-  const { map, layer, slots } = context;
-  // Separate translucent hillshades would darken loaded areas while other tiles are pending.
-  map.addSource(id, {
-    type: "raster-dem",
-    // Relief fetches tiles directly so it never waits behind contour tracing.
-    tiles: [tiles.url],
-    encoding: tiles.encoding,
-    tileSize: tiles.tile_size,
-    maxzoom: cappedDemMaxZoom(tiles.maxzoom),
-    attribution: tiles.source.attribution,
-    ...terrainTileBounds(layer.grid.bbox),
-  });
-  map.addLayer(
-    { id, type: "hillshade", source: id, paint: reliefPaint(RELIEF_STRENGTH.initial) },
-    slots.shade,
-  );
-  return {
-    setStrength: (strength) => {
-      const exaggeration = reliefPaint(strength)["hillshade-exaggeration"];
-      map.setPaintProperty(id, "hillshade-exaggeration", exaggeration);
-    },
-    destroy: () => removeLayerAndSource(map, id),
-  };
-}
-
-function shadeRasterShading(
-  context: LayerContext,
-  id: string,
-  tiles: TerrainTiles,
-): ReliefShading {
-  const { map, layer, slots } = context;
-  return new ShadeRaster(map, {
+  // Worker-shaded raster tiles fade in natively, so relief never pops in.
+  const shading = new ShadeRaster(map, {
     id,
     tiles,
     maxzoom: cappedDemMaxZoom(tiles.maxzoom),
@@ -205,6 +72,140 @@ function shadeRasterShading(
     strength: RELIEF_STRENGTH.initial,
     beforeId: slots.shade,
   });
+  const preload = currentScenePreload();
+  let contourOverlay: ContourOverlay | undefined;
+  let stopWatchingTiles: (() => void) | undefined;
+  try {
+    let strengthValue = RELIEF_STRENGTH.initial;
+    let isUnderColour = false;
+    const applyStrength = () => {
+      shading.setStrength(strengthValue * (isUnderColour ? COLOUR_UNDER_FACTOR : 1));
+    };
+
+    const strength: LayerControl = {
+      label: "Relief strength",
+      hint: "Change intensity using slider",
+      min: RELIEF_STRENGTH.min,
+      max: RELIEF_STRENGTH.max,
+      step: RELIEF_STRENGTH.step,
+      get value() {
+        return strengthValue;
+      },
+      set: (value) => {
+        strengthValue = value;
+        applyStrength();
+      },
+    };
+
+    // The contour traces wait for the elevation tiles, so the DEM registers first.
+    preload?.add(demPreloadSource({
+      template: tiles.url,
+      maxzoom: cappedDemMaxZoom(tiles.maxzoom),
+      bbox: layer.grid.bbox,
+      fetcher: demFetcherFor(dem),
+    }));
+    contourOverlay = new ContourOverlay(context, dem, tiles, stats as TerrainStats, preload);
+    const overlay = contourOverlay;
+    stopWatchingTiles = watchTerrainTiles(
+      map,
+      [id, ...overlay.contourSourceIds],
+      report,
+    );
+    const stop = stopWatchingTiles;
+
+    let palette = context.display?.palette ?? DEFAULT_CONTOUR_COLOR;
+    let elevationUnit = displayUnitFor(layer.units, context.display?.units);
+    const menuUpdates = new EventTarget();
+    const menu: LayerMenu = {
+      title: layer.title,
+      heading: "Contour colour",
+      blocks: true,
+      palettes: CONTOUR_COLORS.map(({ name, label, color }) => ({ name, label, colors: [color] })),
+      defaultPalette: DEFAULT_CONTOUR_COLOR,
+      custom: false,
+      updates: menuUpdates,
+      get palette() {
+        return palette;
+      },
+      setPalette(name) {
+        palette = name;
+        overlay.setColor(contourColor(name)!);
+      },
+      units: createUnitsMenu(),
+    };
+
+    function createUnitsMenu(): UnitsMenu | undefined {
+      const options = unitOptions(layer.units);
+      if (!options) return undefined;
+
+      return {
+        options,
+        defaultUnit: layer.units,
+        get value() {
+          return elevationUnit;
+        },
+        set: (unit) => {
+          if (!isUnitFor(layer.units, unit) || unit === elevationUnit) return;
+
+          elevationUnit = unit;
+          overlay.setUnits(unit);
+          menuUpdates.dispatchEvent(new Event("change"));
+        },
+      };
+    }
+
+    // The registry fills only after the terrain mounts, so a failed setup never forwards zooms.
+    liveTerrainBases.set(shading, map);
+    return {
+      parts: [
+        { id: layer.id, label: "Relief", layerIds: [id], controls: [strength] },
+        overlay.part,
+      ],
+      options: [],
+      menu,
+      time: null,
+      setTime: () => {},
+      setColourUnder: (isUnder) => {
+        isUnderColour = isUnder;
+        applyStrength();
+      },
+      setBaseZoom: (zoom) => {
+        shading.setBaseZoom(zoom);
+      },
+      legend: () => overlay.legend,
+      destroy: () => {
+        try {
+          stop();
+          preload?.remove(DEM_PRELOAD_ID);
+          overlay.destroy();
+        } finally {
+          liveTerrainBases.delete(shading);
+          shading.destroy();
+        }
+      },
+    };
+  } catch (error) {
+    // A failed mount leaves no view to destroy, so the shading rolls back here.
+    try {
+      stopWatchingTiles?.();
+      contourOverlay?.destroy();
+      preload?.remove(DEM_PRELOAD_ID);
+    } finally {
+      liveTerrainBases.delete(shading);
+      shading.destroy();
+    }
+    throw error;
+  }
+}
+
+/**
+ * Refit every live terrain base on one map to the fitted zoom. Entry calls this after
+ * landing and on every refit, so the mount-time zoom never pins the wrong levels.
+ */
+export function setTerrainBaseZoom(map: MapLibreMap, zoom: number): void {
+  for (const [shading, owner] of liveTerrainBases) {
+    if (owner === map) shading.setBaseZoom(zoom);
+  }
 }
 
 // Missing ocean tiles stay missing, so a bounded memo warns once per tile instead of every zoom.

@@ -427,6 +427,24 @@ test("isolines stall while the next set is not loaded", async () => {
   assert.equal(isolineFrames().at(-1)?.mix, 0.5);
 });
 
+test("entry proceeds when the isolines miss their deadline", async (context) => {
+  const { view, flush } = mountIsolineField([COMPLETE, COMPLETE, COMPLETE]);
+  view.show("isolines");
+  view.setTime(TIMES[0]);
+  await flush();
+  Object.assign(globalThis, { isolineLoaded: false });
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+
+  const preparing = view.prepareEntry!(TIMES[0]);
+  for (let turn = 0; turn < 20; turn += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+    pendingReads.splice(0).forEach((resolve) => resolve());
+    context.mock.timers.tick(200);
+  }
+
+  await assert.doesNotReject(preparing);
+});
+
 test("isolines with equal steps do no work", async () => {
   const { view, flush } = mountIsolineField([COMPLETE, COMPLETE, COMPLETE]);
   view.show("isolines");

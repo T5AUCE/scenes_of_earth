@@ -1656,10 +1656,13 @@ async function trialPage(context, appUrl, spot, sceneId, options) {
     await openScene(page, appUrl, sceneId, spot);
     const records = [];
     for (const [index, zoom] of spot.zooms.entries()) {
-      records.push(await trialView(page, watcher, spot, sceneId, zoom, {
+      const { record, hasFailed } = await trialView(page, watcher, spot, sceneId, zoom, {
         ...options,
         checkContext: spot.landcover && index === 0 && options.renderer === "gpu",
-      }));
+      });
+      records.push(record);
+      // A failed entry never recovers, so every later zoom would only wait out its timeout.
+      if (hasFailed) break;
     }
     return records;
   } catch (error) {
@@ -1815,6 +1818,7 @@ export function sampledZoomMismatch(sample, zoom) {
 
 async function trialView(page, watcher, spot, sceneId, zoom, options) {
   let timedOut = false;
+  let hasFailed = false;
   let sample = null;
   try {
     // The entry flight lands on the fitted view, so it would overwrite an early jump.
@@ -1855,7 +1859,10 @@ async function trialView(page, watcher, spot, sceneId, zoom, options) {
     }
   } catch (error) {
     watcher.messages.push(`view failed: ${error.message.split("\n")[0]}`);
+    const status = await panelStatus(page);
+    if (status) watcher.messages.push(`build panel: ${status}`);
     timedOut = true;
+    hasFailed = true;
   }
 
   const mapErrors = await page.evaluate(() => window.__trialErrors.splice(0));
@@ -1873,7 +1880,17 @@ async function trialView(page, watcher, spot, sceneId, zoom, options) {
     await page.screenshot({ path: path.join(options.out, file) });
   }
 
-  return record;
+  return { record, hasFailed };
+}
+
+// The panel holds the real entry error, while the view only reports that it was cancelled.
+async function panelStatus(page) {
+  try {
+    const text = await page.locator("#panel .status").first().textContent({ timeout: 1000 });
+    return text?.trim() ?? "";
+  } catch {
+    return "";
+  }
 }
 
 // The sampled owner must equal the requested one, or the view measured the wrong layer.

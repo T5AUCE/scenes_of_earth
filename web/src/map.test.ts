@@ -45,6 +45,19 @@ test("an aborted warming settles at once with cancellation", async () => {
   assert.equal(map.repaints, 0);
 });
 
+test("warming settles when the source misses its deadline", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const map = fakeRasterMap(false);
+
+  const warming = warmHiddenRaster(map as never, "blend-series");
+  for (let turn = 0; turn < 5; turn += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+    context.mock.timers.tick(2000);
+  }
+
+  await assert.doesNotReject(warming);
+});
+
 function fakeRasterMap(isLoaded: boolean) {
   const zoomWrites: [number, number][] = [];
   return {

@@ -12,7 +12,6 @@ const WARNING = "Terrain shading or contour tiles could not be loaded";
 const rootUrl = new URL("./", import.meta.url).href;
 const mockModules = {
   "maplibre-gl": `export const addProtocol = () => {};`,
-  "../map": `export const removeLayerAndSource = () => {};`,
   "./contour-overlay": `
     export const sharedDemSource = () => ({
       sharedDemProtocolUrl: "dem://{z}/{x}/{y}",
@@ -21,6 +20,11 @@ const mockModules = {
     export const terrainTileBounds = () => ({});
     export const cappedDemMaxZoom = (maxzoom) => maxzoom;
     export class ContourOverlay {
+      constructor() {
+        if (globalThis.contourOverlayShouldThrow) {
+          throw new Error("Contour setup failed");
+        }
+      }
       part = { id: "contours", label: "Contours", layerIds: [] };
       contourSourceIds = ["terrain-contours", "terrain-labels-contours"];
       units = "m";
@@ -46,7 +50,13 @@ const hooks = registerHooks({
     return next(specifier, context);
   },
 });
-const { createTerrainView, MAX_MISSING_TILES, watchTerrainTiles } = await import("./terrain.ts");
+const {
+  createTerrainView,
+  MAX_MISSING_TILES,
+  setTerrainBaseZoom,
+  watchTerrainTiles,
+} = await import("./terrain.ts");
+const { ShadeRaster } = await import("./shade-raster.ts");
 hooks.deregister();
 
 test("a terrain view warms its elevation tiles with the HTTP-cache warmer", (t) => {
@@ -311,6 +321,68 @@ test("a source's success clears only its own warning", (context) => {
   assert.deepEqual(reporter.notes, []);
 });
 
+test("the terrain view exposes its relief base refit", () => {
+  const { map } = terrainMap();
+  const view = createTestTerrainView(map);
+
+  assert.equal(typeof view.setBaseZoom, "function");
+
+  view.destroy();
+});
+
+test("entry refits every terrain base on its map", (t) => {
+  const seen: number[] = [];
+  t.mock.method(ShadeRaster.prototype, "setBaseZoom", (zoom: number) => {
+    seen.push(zoom);
+  });
+  const { map } = terrainMap();
+  const { map: otherMap } = terrainMap();
+  const view = createTestTerrainView(map);
+  const other = createTestTerrainView(otherMap);
+
+  setTerrainBaseZoom(map, 5);
+
+  assert.deepEqual(seen, [5]);
+
+  view.setBaseZoom(6);
+
+  assert.deepEqual(seen, [5, 6]);
+
+  view.destroy();
+  setTerrainBaseZoom(map, 7);
+
+  assert.deepEqual(seen, [5, 6]);
+
+  other.destroy();
+});
+
+test("a failed contour setup rolls back its shading registration", (t) => {
+  const seen: number[] = [];
+  t.mock.method(ShadeRaster.prototype, "setBaseZoom", (zoom: number) => {
+    seen.push(zoom);
+  });
+  const { map, removed } = terrainMap();
+  const flag = globalThis as { contourOverlayShouldThrow?: boolean };
+  flag.contourOverlayShouldThrow = true;
+  try {
+    assert.throws(() => createTestTerrainView(map), /Contour setup failed/);
+  } finally {
+    flag.contourOverlayShouldThrow = false;
+  }
+
+  assert.ok(removed.includes("terrain-relief"));
+  setTerrainBaseZoom(map as unknown as MapLibreMap, 5);
+
+  assert.deepEqual(seen, []);
+
+  const view = createTestTerrainView(map);
+  setTerrainBaseZoom(map as unknown as MapLibreMap, 5);
+
+  assert.deepEqual(seen, [5]);
+
+  view.destroy();
+});
+
 function fakeMap() {
   const listeners = new Map<string, Set<(event: object) => void>>();
 
@@ -356,17 +428,8 @@ function failure() {
   return { name: "Error", message: "Network request failed" };
 }
 
-test("relief loads Mapterhorn tiles directly instead of the contour protocol", () => {
-  const sources = new Map<string, { tiles?: unknown }>();
-  const map = {
-    addSource(id: string, source: { tiles?: unknown }) {
-      sources.set(id, source);
-    },
-    addLayer() {},
-    on() {},
-    off() {},
-    setPaintProperty() {},
-  };
+test("relief loads worker-shaded raster tiles instead of the contour protocol", () => {
+  const { map, sources } = terrainMap();
   const tiles = {
     url: "https://example.test/{z}/{x}/{y}",
     encoding: "terrarium",
@@ -400,40 +463,34 @@ test("relief loads Mapterhorn tiles directly instead of the contour protocol", (
     report: () => () => {},
   } as unknown as Parameters<typeof createTerrainView>[0]);
 
-  assert.deepEqual(sources.get("terrain-relief")?.tiles, [tiles.url]);
+  const relief = sources.get("terrain-relief")!;
+  assert.equal(relief.type, "raster");
+  assert.match((relief.tiles as string[])[0], /^soeshade:\/\/\d+\/0\/\{z\}\/\{x\}\/\{y\}$/);
 
   view.destroy();
 });
 
-test("relief stays a hillshade layer unless the shade fade flag is set", () => {
-  const { map, layers } = terrainMap();
+test("relief is always a fading raster layer", () => {
+  const { map, layers, removed } = terrainMap();
 
   const view = createTestTerrainView(map);
 
-  assert.equal(layers[0].type, "hillshade");
+  assert.equal(layers[0].type, "raster");
+  assert.equal((layers[0].paint as Record<string, unknown>)["raster-fade-duration"], 250);
+
   view.destroy();
-});
 
-test("the shade fade flag draws relief as a fading raster layer", () => {
-  const { map, sources, layers } = terrainMap();
-  globalThis.location = { search: "?shadeFade=1" } as Location;
-
-  try {
-    const view = createTestTerrainView(map);
-
-    assert.equal(sources.get("terrain-relief")?.type, "raster");
-    assert.equal(layers[0].type, "raster");
-    assert.equal((layers[0].paint as Record<string, unknown>)["raster-fade-duration"], 250);
-    view.destroy();
-  } finally {
-    Reflect.deleteProperty(globalThis, "location");
-  }
+  assert.ok(removed.includes("terrain-relief"));
 });
 
 test("terrain offers metres and feet and forwards the choice to contours", () => {
   const map = {
     addSource() {},
     addLayer() {},
+    getLayer: () => undefined,
+    getSource: () => undefined,
+    removeLayer() {},
+    removeSource() {},
     on() {},
     off() {},
     setPaintProperty() {},
@@ -485,21 +542,28 @@ test("terrain offers metres and feet and forwards the choice to contours", () =>
 
 function terrainMap() {
   const sources = new Map<string, { type?: unknown; tiles?: unknown }>();
-  const layers: { type: string; paint?: unknown }[] = [];
+  const layers: { id: string; type: string; paint?: unknown }[] = [];
+  const removed: string[] = [];
   const map = {
     addSource(id: string, source: { tiles?: unknown }) {
       sources.set(id, source);
     },
-    addLayer(layer: { type: string }) {
+    addLayer(layer: { id: string; type: string }) {
       layers.push(layer);
     },
-    getLayer: () => undefined,
-    getSource: () => undefined,
+    getLayer: (id: string) => layers.find((layer) => layer.id === id),
+    getSource: (id: string) => sources.get(id),
+    removeLayer(id: string) {
+      removed.push(id);
+    },
+    removeSource(id: string) {
+      removed.push(id);
+    },
     on() {},
     off() {},
     setPaintProperty() {},
   };
-  return { map, sources, layers };
+  return { map, sources, layers, removed };
 }
 
 function createTestTerrainView(map: ReturnType<typeof terrainMap>["map"]) {

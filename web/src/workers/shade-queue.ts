@@ -2,6 +2,7 @@
  * The shade worker's bounded job queue and ref-counted DEM cache, with no worker globals so
  * tests can drive the slow-load, eviction and cancellation paths directly.
  */
+import type { ShadeTileId } from "./shade-tile";
 
 /** Decoded DEM heights in metres row by row, or null when the tile does not exist. */
 export type DemHeights = Float32Array | null;
@@ -9,8 +10,8 @@ export type DemHeights = Float32Array | null;
 /** Fetch and decode one DEM tile, stopping early when its signal aborts. */
 export type FetchDemHeights = (url: string, signal: AbortSignal) => Promise<DemHeights>;
 
-/** Decoded DEM tiles the worker keeps between jobs; each holds about 1 MiB. */
-export const DEM_CACHE_TILES = 24;
+/** Decoded DEM heights the worker keeps between jobs; 12 per worker, 24 across both lanes. */
+export const DEM_CACHE_TILES = 12;
 
 /** Shade jobs the worker runs at once; the rest wait in order until a lane frees or cancels. */
 export const MAX_CONCURRENT_SHADE_JOBS = 4;
@@ -119,5 +120,94 @@ export class ShadeQueue {
   /** Drop a queued job before it starts; a running job keeps its lane until it settles. */
   cancel(id: number): boolean {
     return this.queued.delete(id);
+  }
+}
+
+/** Shade workers the pool starts, one per lane so background work never blocks demand. */
+export const SHADE_POOL_LANES = 2;
+
+/** Visible tiles and slider re-shades, which must never wait behind preshading. */
+export const DEMAND_SHADE_LANE = 0;
+
+/** Pinned and ancestor preshading, which yields its lane on every strength change. */
+export const BACKGROUND_SHADE_LANE = 1;
+
+/** A message the pool routes to one lane; request ids stay unique across lanes. */
+export type ShadePoolRequest =
+  | { type: "shade"; id: number; tile: ShadeTileId; strength: number; demUrl: string }
+  | { type: "cancel"; id: number };
+
+/** A worker the pool starts lazily, matching the shade worker's message shape. */
+export interface ShadeWorkerHandle {
+  postMessage(message: ShadePoolRequest): void;
+  terminate(): void;
+  // Responses carry bitmaps the pool never reads, so the event stays untyped here.
+  onmessage: ((event: MessageEvent<any>) => void) | null;
+  onerror: ((event: ErrorEvent) => void) | null;
+}
+
+/**
+ * Run one shading worker per lane, so background preshading never queues behind a visible
+ * tile or a slider re-shade. Lanes start on first use and restart after a lane fails, while
+ * the client keeps matching answers to requests by id across every lane.
+ */
+export class ShadeWorkerPool {
+  private readonly workers: (ShadeWorkerHandle | null)[];
+  private readonly jobLane = new Map<number, number>();
+  onresponse: ((response: unknown) => void) | null = null;
+  onlaneerror: ((lane: number) => void) | null = null;
+
+  constructor(
+    private readonly createWorker: () => ShadeWorkerHandle,
+    private readonly laneCount: number = SHADE_POOL_LANES,
+  ) {
+    this.workers = Array.from({ length: laneCount }, () => null);
+  }
+
+  /** Send a message on one lane, starting its worker when this is its first job. */
+  send(lane: number, message: ShadePoolRequest): void {
+    const worker = this.laneWorker(lane);
+    this.jobLane.set(message.id, lane);
+    worker.postMessage(message);
+  }
+
+  /** Forward a cancellation to whichever lane still holds the job, if any. */
+  cancel(id: number): void {
+    const lane = this.jobLane.get(id);
+    if (lane === undefined) return;
+    this.jobLane.delete(id);
+    this.workers[lane]?.postMessage({ id, type: "cancel" });
+  }
+
+  /** Stop every lane and forget its jobs, so a scene exit frees both workers. */
+  terminate(): void {
+    for (let lane = 0; lane < this.workers.length; lane += 1) this.dropLane(lane);
+    this.jobLane.clear();
+  }
+
+  /** Drop a failed lane so its next job restarts it; the client rejects what it owed. */
+  dropLane(lane: number): void {
+    this.workers[lane]?.terminate();
+    this.workers[lane] = null;
+    for (const [id, jobLane] of this.jobLane) {
+      if (jobLane === lane) this.jobLane.delete(id);
+    }
+  }
+
+  private laneWorker(lane: number): ShadeWorkerHandle {
+    const running = this.workers[lane];
+    if (running) return running;
+
+    const worker = this.createWorker();
+    worker.onmessage = (event) => {
+      this.jobLane.delete(event.data.id);
+      this.onresponse?.(event.data);
+    };
+    worker.onerror = () => {
+      this.dropLane(lane);
+      this.onlaneerror?.(lane);
+    };
+    this.workers[lane] = worker;
+    return worker;
   }
 }

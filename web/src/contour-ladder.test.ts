@@ -21,7 +21,7 @@ import {
   levelsForZoom,
   warmTilesForZoom,
 } from "./contour-ladder.ts";
-import { RELIEF_STRENGTH, reliefPaint } from "./layers/relief.ts";
+import { RELIEF_STRENGTH } from "./layers/relief.ts";
 import type { LayerContext, TerrainStats, TerrainTiles } from "./types.ts";
 
 const FIJI = makeStats(1, 820, 6, 14);
@@ -504,12 +504,11 @@ test("relief stays single-layered through zoom and source loading events", (cont
   const map = new TestMap();
   const view = createTerrainView(layerContext(map));
   const reliefId = "terrain-relief";
-  const initialPaint = reliefPaint(RELIEF_STRENGTH.initial);
-  const hillshades = [...map.layers.values()].filter((layer) => layer.type === "hillshade");
+  const rasters = [...map.layers.values()].filter((layer) => layer.type === "raster");
 
   assert.deepEqual(view.parts[0].layerIds, [reliefId]);
   assert.ok(!map.sources.has(`${reliefId}-backdrop`));
-  assert.deepEqual(hillshades.map((layer) => layer.id), [reliefId]);
+  assert.deepEqual(rasters.map((layer) => layer.id), [reliefId]);
   map.zooming = true;
   map.emit("zoomstart");
   map.emit("dataloading", { sourceId: reliefId });
@@ -517,35 +516,23 @@ test("relief stays single-layered through zoom and source loading events", (cont
   map.zooming = false;
   map.emit("zoomend");
 
-  assert.deepEqual(map.layers.get(reliefId).paint, initialPaint);
+  assert.deepEqual(map.layers.get(reliefId).paint, { "raster-fade-duration": 250 });
   assert.ok(map.paints.every(([id]) => id !== reliefId && id !== `${reliefId}-backdrop`));
   view.destroy();
   assert.equal(map.sources.size, 0);
   assert.ok([...map.listeners.values()].every((listeners) => listeners.size === 0));
 });
 
-test("relief strength updates only the main hillshade and zero stays flat on zoom", (context) => {
+test("relief strength offers the configured range on the raster layer", (context) => {
   mockPage(context);
   const map = new TestMap();
   const view = createTerrainView(layerContext(map));
   const strength = view.parts[0].controls![0];
 
-  for (const value of [RELIEF_STRENGTH.max, RELIEF_STRENGTH.min]) {
-    map.paints.length = 0;
-    strength.set(value);
-
-    const expectedPaint = [
-      "terrain-relief",
-      reliefPaint(value)["hillshade-exaggeration"],
-    ];
-    assert.deepEqual(map.paints, [expectedPaint]);
-  }
-  map.zooming = true;
-  map.emit("zoomstart");
-  map.zooming = false;
-  map.emit("zoomend");
-
-  assert.deepEqual(map.layers.get("terrain-relief").paint, reliefPaint(0));
+  assert.equal(strength.label, "Relief strength");
+  assert.equal(strength.min, RELIEF_STRENGTH.min);
+  assert.equal(strength.max, RELIEF_STRENGTH.max);
+  assert.equal(strength.value, RELIEF_STRENGTH.initial);
   view.destroy();
 });
 
@@ -554,7 +541,8 @@ test("shared relief and contour layers hide until the reveal shows them", (conte
   const map = new TestMap();
   const view = createTerrainView(layerContext(map));
   const relief = map.sources.get("terrain-relief")!;
-  assert.deepEqual(relief.tiles, [TILES.url]);
+  assert.equal(relief.type, "raster");
+  assert.match(relief.tiles[0], /^soeshade:\/\/\d+\/0\/\{z\}\/\{x\}\/\{y\}$/);
   assert.equal(relief.tileSize, 512);
   assert.equal(relief.maxzoom, 11);
   const ids = view.parts.flatMap((part) => part.layerIds);
@@ -715,7 +703,7 @@ class TestMap {
   }
 
   getCanvas() {
-    return { clientWidth: 1280, clientHeight: 800 };
+    return Object.assign(new EventTarget(), { clientWidth: 1280, clientHeight: 800 });
   }
 
   getBounds() {
@@ -729,6 +717,10 @@ class TestMap {
 
   getLayer(id: string) {
     return this.layers.get(id);
+  }
+
+  getSource(id: string) {
+    return this.sources.get(id);
   }
 
   addSource(id: string, source: object) {

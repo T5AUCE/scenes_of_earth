@@ -34,6 +34,7 @@ import {
   sampledZoomMismatch,
   swappedZoomColour,
   trialLayout,
+  trialSpot,
   trialZoomSpot,
   waitForEntry,
   withoutClipFilter,
@@ -217,6 +218,37 @@ test("entry readiness needs the mask, the layers and a landed flight", () => {
     __map: { isMoving: () => false },
   };
   assert.equal(runInNewContext(`(${isEntryReady})()`, { window: preflight }), false);
+});
+
+test("a failed entry records the panel message and skips the remaining zooms", async () => {
+  let waits = 0;
+  const page = {
+    on: () => {},
+    goto: async () => {},
+    waitForFunction: async () => {
+      waits += 1;
+      if (waits > 1) throw new Error("Entry preparation was cancelled");
+    },
+    locator: () => ({
+      first: () => ({ textContent: async () => " Entry isotherms never became ready " }),
+    }),
+    evaluate: async () => [],
+    close: async () => {},
+  };
+  const spot = { name: "Chile", zooms: ["fitted", 8, 9], enable: [], layers: [] };
+
+  const records = await trialSpot(
+    { newPage: async () => page },
+    "http://example.test",
+    spot,
+    "scene",
+    {},
+  );
+
+  assert.equal(records.length, 1);
+  assert.equal(waits, 2);
+  assert.ok(records[0].error_samples.includes("build panel: Entry isotherms never became ready"));
+  assert.equal(records[0].timed_out, true);
 });
 
 test("entry waiting uses the readiness predicate", async () => {

@@ -896,12 +896,13 @@ function waitForIsolines(
   return new Promise((done, fail) => {
     let isSettled = false;
     let frame: number | ReturnType<typeof setTimeout> | undefined;
+    // Stalled frames must not fail the entry, so the lines may paint a moment late instead.
     const timer = setTimeout(() => {
       if (isSettled) return;
       isSettled = true;
       cancelFrame(frame);
       signal?.removeEventListener("abort", onAbort);
-      fail(new Error("Entry isotherms never became ready"));
+      done();
     }, 2000);
     const check = () => {
       if (isSettled) return;

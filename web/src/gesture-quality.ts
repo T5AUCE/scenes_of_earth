@@ -43,14 +43,6 @@ export function preloadEnabled(search: string): boolean {
 }
 
 /**
- * Read whether terrain shading is drawn as fading raster tiles shaded in a worker, which needs
- * an explicit `?shadeFade=1` because its look and cost are still being compared with the hillshade.
- */
-export function shadeFadeEnabled(search: string): boolean {
-  return flagOptIn(search, "shadeFade");
-}
-
-/**
  * Read the measurement-only pixel-ratio cap from the address bar. Returns undefined when
  * absent so the map keeps its default ratio.
  */

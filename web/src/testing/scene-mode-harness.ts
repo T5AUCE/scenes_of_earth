@@ -69,6 +69,12 @@ const dependencies = {
       return () => kept.delete(layer.id);
     }
   `,
+  // The real terrain shades DEM tiles, so the double only records the base refits.
+  "./layers/terrain": `
+    export function setTerrainBaseZoom(map, zoom) {
+      globalThis.sceneModeTest.terrainBaseZooms.push([map, zoom]);
+    }
+  `,
   "./map": `
     export const MAX_ZOOM = 24;
     export const WORLD_VIEW = { center: [0, 20], zoom: 1.5 };
@@ -440,6 +446,8 @@ export function createHarness() {
     preparationTimes: [] as (string | null)[],
     // The order in which the entry phases happened, so tests can assert it.
     events: [] as string[],
+    // Every fitted zoom the scene asked the relief base to pin, so tests can assert it.
+    terrainBaseZooms: [] as [unknown, number][],
     // Every class the body ever received, so tests can prove the scene UI never showed.
     classLog: [] as string[],
     legendsReady: false,
