@@ -18,15 +18,15 @@ export const BOLD_LINE_WIDTH_PX = 1.1;
 /** The most tiers a ladder holds, which is the metres chain; the shader loops over all of them. */
 export const MAX_TIERS = INTERVAL_CHAIN_M.length;
 
-// Flat ground at an exact contour height, such as sea at 0 m, would otherwise fill solid.
-const SLOPED_FROM_M_PER_PX = 0.001;
-const SLOPED_TO_M_PER_PX = 0.004;
+// Ground whose taps all agree, such as sea at 0 m, would otherwise fill solid at a contour height.
+const FLAT_RANGE_M = 0.01;
+// A terrace rim has a slope near zero, so this floor keeps its line while the bias exceeds a pixel.
+const MIN_SLOPE_M_PER_CSS_PX = 0.0005;
 // A terrace at an exact contour height counts as below it, like the tracer's strict crossing.
 export const TIE_BIAS_M = 0.001;
 // Lines closer than about 5 CSS px fade out, and are gone at about 1.5 px.
 const CLEAN_FADE_FROM_LINES_PER_PX = 0.2;
 const CLEAN_FADE_TO_LINES_PER_PX = 0.65;
-const MIN_LINES_PER_PX = 1e-6;
 
 /** One height step as the shader draws it. */
 export interface ContourTier {
@@ -75,12 +75,22 @@ export function fillTierAlphas(
   return alphas.some((alpha) => alpha > 0);
 }
 
-/** The cubic B-spline over 4x4 texels inside the middle cell, with its slope per texel. */
+/** A height field at one pixel, with its slope in metres per pixel and the heights it came from. */
+export interface HeightSurface {
+  height: number;
+  gradientX: number;
+  gradientY: number;
+  minM: number;
+  maxM: number;
+}
+
+/** The cubic B-spline over 4x4 texels inside the middle cell, with its slope per screen pixel. */
 export function smoothSurfaceOf(
   heights: readonly (readonly number[])[],
   fractionX: number,
   fractionY: number,
-): { height: number; slopeX: number; slopeY: number } {
+  pixelsPerTexel = 1,
+): HeightSurface {
   const [weightsX, slopesX] = bSplineWeights(fractionX);
   const [weightsY, slopesY] = bSplineWeights(fractionY);
   const origin = heights[1][1];
@@ -93,7 +103,34 @@ export function smoothSurfaceOf(
     slopeX += slopesX[columnIndex] * weightsY[rowIndex] * above;
     slopeY += weightsX[columnIndex] * slopesY[rowIndex] * above;
   }));
-  return { height: origin + relative, slopeX, slopeY };
+  const all = heights.flat();
+  return {
+    height: origin + relative,
+    gradientX: slopeX / pixelsPerTexel,
+    gradientY: slopeY / pixelsPerTexel,
+    minM: Math.min(...all),
+    maxM: Math.max(...all),
+  };
+}
+
+/**
+ * Mix two height fields into one, so a blend of two levels draws a single line that glides
+ * instead of two partial ones. Returns the arguments of `contourCoverage`.
+ */
+export function blendSurfaces(
+  first: HeightSurface,
+  second: HeightSurface,
+  secondWeight: number,
+): { height: number; metresPerPixel: number; rangeM: number } {
+  const mix = (from: number, to: number) => from * (1 - secondWeight) + to * secondWeight;
+  return {
+    height: mix(first.height, second.height),
+    metresPerPixel: Math.hypot(
+      mix(first.gradientX, second.gradientX),
+      mix(first.gradientY, second.gradientY),
+    ),
+    rangeM: Math.max(first.maxM, second.maxM) - Math.min(first.minM, second.minM),
+  };
 }
 
 function bSplineWeights(fraction: number): [number[], number[]] {
@@ -116,20 +153,24 @@ function bSplineWeights(fraction: number): [number[], number[]] {
 
 /**
  * The coverage of the strongest tier at one pixel, from the height there and how many metres
- * the height changes per device pixel. The pixel ratio keeps the widths, the fade and the flat
- * guard in CSS pixels.
+ * the height changes per device pixel, and the range of the heights the surface was built from.
+ * The pixel ratio keeps the widths, the fade and the slope floor in CSS pixels.
  */
 export function contourCoverage(
   height: number,
   metresPerPixel: number,
   tiers: readonly ContourTier[],
   pixelRatio: number,
+  heightRangeM = Infinity,
 ): number {
+  if (heightRangeM <= FLAT_RANGE_M) return 0;
+
+  const slope = Math.max(metresPerPixel, MIN_SLOPE_M_PER_CSS_PX / pixelRatio);
   let strongest = 0;
   for (const tier of tiers) {
     if (tier.alpha <= 0) continue;
 
-    const linesPerPixel = Math.max(metresPerPixel / tier.intervalM, MIN_LINES_PER_PX);
+    const linesPerPixel = slope / tier.intervalM;
     const level = (height - TIE_BIAS_M) / tier.intervalM;
     const distancePx = Math.abs(fract(level + 0.5) - 0.5) / linesPerPixel;
     const line = clamp(tier.widthPx * pixelRatio * 0.5 + 0.5 - distancePx);
@@ -140,14 +181,10 @@ export function contourCoverage(
     );
     strongest = Math.max(strongest, line * (1 - crowding) * tier.alpha);
   }
-  return strongest * smoothstep(
-    SLOPED_FROM_M_PER_PX,
-    SLOPED_TO_M_PER_PX,
-    metresPerPixel * pixelRatio,
-  );
+  return strongest;
 }
 
-/** The contour fragment shader, which mixes the lines of up to two height textures. */
+/** The contour fragment shader, which mixes the height fields of up to two textures. */
 export const CONTOUR_FRAGMENT_SHADER = demFragmentShader(`
 uniform float uIntervals[${MAX_TIERS}];
 uniform float uTierAlpha[${MAX_TIERS}];
@@ -156,14 +193,16 @@ uniform float uPixelRatio;
 uniform vec3 uColour;
 out vec4 outColour;
 
+struct HeightSample {
+  float origin;
+  float relative;
+  vec2 gradient;
+  float lowest;
+  float highest;
+};
+
 // The slope needs each texel's own weight, so all 16 are read, relative to one for precision.
-void smoothHeightAt(
-  sampler2D heights,
-  vec2 uv,
-  out float origin,
-  out float relative,
-  out float metresPerPixel
-) {
+HeightSample smoothHeightAt(sampler2D heights, vec2 uv) {
   vec2 coord = uv * DEM_TILE_PX + DEM_HALO_PX - 0.5;
   vec2 base = floor(coord);
   vec2 f = coord - base;
@@ -183,13 +222,17 @@ void smoothHeightAt(
 
   ivec2 first = ivec2(base) - 1;
   ivec2 last = ivec2(DEM_TEXTURE_PX) - 1;
-  origin = texelFetch(heights, clamp(first + 1, ivec2(0), last), 0).r;
-  relative = 0.0;
+  float origin = texelFetch(heights, clamp(first + 1, ivec2(0), last), 0).r;
+  float relative = 0.0;
+  float lowest = 0.0;
+  float highest = 0.0;
   vec2 slope = vec2(0.0);
   for (int row = 0; row < 4; row++) {
     for (int column = 0; column < 4; column++) {
       ivec2 texel = clamp(first + ivec2(column, row), ivec2(0), last);
       float height = texelFetch(heights, texel, 0).r - origin;
+      lowest = min(lowest, height);
+      highest = max(highest, height);
       relative += weightsX[column] * weightsY[row] * height;
       slope += vec2(slopesX[column] * weightsY[row], weightsX[column] * slopesY[row]) * height;
     }
@@ -198,17 +241,21 @@ void smoothHeightAt(
   // The uv derivatives are smooth, unlike the quantized heights, so the slope stays steady.
   vec2 texelsPerPixelX = dFdx(uv) * DEM_TILE_PX;
   vec2 texelsPerPixelY = dFdy(uv) * DEM_TILE_PX;
-  metresPerPixel = length(vec2(dot(slope, texelsPerPixelX), dot(slope, texelsPerPixelY)));
+  vec2 gradient = vec2(dot(slope, texelsPerPixelX), dot(slope, texelsPerPixelY));
+  return HeightSample(origin, relative, gradient, lowest, highest);
 }
 
-float contourCoverage(float origin, float relative, float metresPerPixel) {
+float contourCoverage(HeightSample surface) {
+  if (surface.highest - surface.lowest <= ${glslFloat(FLAT_RANGE_M)}) return 0.0;
+
+  float slope = max(length(surface.gradient), ${glslFloat(MIN_SLOPE_M_PER_CSS_PX)} / uPixelRatio);
   float strongest = 0.0;
   for (int tier = 0; tier < ${MAX_TIERS}; tier++) {
     if (uTierAlpha[tier] <= 0.0) continue;
 
-    float linesPerPixel = max(metresPerPixel / uIntervals[tier], ${glslFloat(MIN_LINES_PER_PX)});
-    float aboveLevelM = mod(origin, uIntervals[tier]) + relative - ${glslFloat(TIE_BIAS_M)};
-    float level = aboveLevelM / uIntervals[tier];
+    float linesPerPixel = slope / uIntervals[tier];
+    float nearM = mod(surface.origin, uIntervals[tier]) + surface.relative;
+    float level = (nearM - ${glslFloat(TIE_BIAS_M)}) / uIntervals[tier];
     float distancePx = abs(fract(level + 0.5) - 0.5) / linesPerPixel;
     float line = clamp(uTierWidth[tier] * uPixelRatio * 0.5 + 0.5 - distancePx, 0.0, 1.0);
     float crowding = smoothstep(
@@ -218,27 +265,22 @@ float contourCoverage(float origin, float relative, float metresPerPixel) {
     );
     strongest = max(strongest, line * (1.0 - crowding) * uTierAlpha[tier]);
   }
-  return strongest * smoothstep(
-    ${glslFloat(SLOPED_FROM_M_PER_PX)},
-    ${glslFloat(SLOPED_TO_M_PER_PX)},
-    metresPerPixel * uPixelRatio
-  );
+  return strongest;
 }
 
-vec4 contourLine(sampler2D heights, vec2 uv) {
-  float origin;
-  float relative;
-  float metresPerPixel;
-  smoothHeightAt(heights, uv, origin, relative, metresPerPixel);
-  float coverage = contourCoverage(origin, relative, metresPerPixel);
-  return vec4(uColour * coverage, coverage);
-}
-
-// Both levels mix here in one pass, so a blend keeps the full strength of its lines.
+// Two levels mix their height fields, because mixing their lines would show both traces.
 void main() {
-  vec4 colour = contourLine(uHeightsA, vUvA) * uWeights.x;
-  if (uWeights.y > 0.0) colour += contourLine(uHeightsB, vUvB) * uWeights.y;
-  outColour = colour;
+  HeightSample surface = smoothHeightAt(uHeightsA, vUvA);
+  if (uWeights.y > 0.0) {
+    HeightSample second = smoothHeightAt(uHeightsB, vUvB);
+    float offset = second.origin - surface.origin;
+    surface.relative = uWeights.x * surface.relative + uWeights.y * (second.relative + offset);
+    surface.gradient = uWeights.x * surface.gradient + uWeights.y * second.gradient;
+    surface.lowest = min(surface.lowest, second.lowest + offset);
+    surface.highest = max(surface.highest, second.highest + offset);
+  }
+  float coverage = contourCoverage(surface);
+  outColour = vec4(uColour * coverage, coverage);
 }`);
 
 function fract(value: number): number {

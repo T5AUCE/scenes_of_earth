@@ -16,8 +16,10 @@ import {
   fillTierAlphas,
   MAX_TIERS,
   MINOR_LINE_WIDTH_PX,
+  blendSurfaces,
   smoothSurfaceOf,
   tierUniformsOf,
+  type HeightSurface,
   TIE_BIAS_M,
   type ContourTier,
 } from "./contour-shaders.ts";
@@ -122,15 +124,44 @@ test("the pixel ratio scales the width in device pixels", () => {
   assert.ok(dense > normal);
 });
 
-test("flat ground at a contour height draws nothing", () => {
-  assert.equal(contourCoverage(0, 0, [tier(100)], 1), 0);
-  assert.equal(contourCoverage(0, 0.0005, [tier(100)], 1), 0);
-  assert.ok(contourCoverage(TIE_BIAS_M, 0.0025, [tier(100)], 1) > 0);
-  assertClose(
-    contourCoverage(TIE_BIAS_M, 0.01, [tier(100)], 1),
-    CONTOUR_OPACITY * (MINOR_LINE_WIDTH_PX / 2 + 0.5),
-    "gentle slope",
-  );
+test("a surface whose taps all agree draws nothing, such as sea at 0 m or a flat lake", () => {
+  const sea = smoothSurfaceOf(flatTaps(0), 0.4, 0.6);
+  const lake = smoothSurfaceOf(flatTaps(1720), 0.4, 0.6);
+
+  for (const pixelRatio of [1, 2]) {
+    assert.equal(contourCoverage(sea.height, 0, [tier(100)], pixelRatio, rangeOf(sea)), 0);
+    assert.equal(contourCoverage(lake.height, 0, [tier(10)], pixelRatio, rangeOf(lake)), 0);
+    assert.equal(contourCoverage(lake.height + TIE_BIAS_M, 0.01, [tier(10)], pixelRatio, 0), 0);
+  }
+});
+
+test("a gentle 0.5 percent slope keeps its full line at any zoom", () => {
+  const texelM = 76;
+
+  for (const zoom of [12, 14, 16]) {
+    const metresPerPixel = 0.005 * texelM / 2 ** (zoom - 11);
+    const coverage = contourCoverage(LINE_HEIGHT_M, metresPerPixel, [tier(100)], 1, 3);
+
+    assertClose(coverage, CONTOUR_OPACITY * (MINOR_LINE_WIDTH_PX / 2 + 0.5), `zoom ${zoom}`);
+  }
+});
+
+test("a terrace rim keeps a continuous line across zoom 12, 14 and 16", () => {
+  const terraceRim = Array.from({ length: 4 }, () => [101, 100, 100, 100]);
+  const crossing = rimCrossing(terraceRim, LINE_HEIGHT_M);
+  const full = CONTOUR_OPACITY * (MINOR_LINE_WIDTH_PX / 2 + 0.5);
+
+  for (const zoom of [12, 14, 16]) {
+    const pixelsPerTexel = 2 ** (zoom - 11);
+    const coverageAt = (offsetTexels: number) => {
+      const surface = smoothSurfaceOf(terraceRim, crossing + offsetTexels, 0.5);
+      const slope = Math.abs(surface.gradientX) / pixelsPerTexel;
+      return contourCoverage(surface.height, slope, [tier(100)], 1, rangeOf(surface));
+    };
+
+    assertClose(coverageAt(0), full, `zoom ${zoom} on the line`);
+    assert.ok(coverageAt(0.05 / pixelsPerTexel) > 0.8 * full, `zoom ${zoom} beside the line`);
+  }
 });
 
 test("lines fade out as their spacing falls below about five pixels", () => {
@@ -179,21 +210,23 @@ test("the shader loops over the ladder arrays with the gradient length and no fw
   assert.ok(!CONTOUR_FRAGMENT_SHADER.includes("NaN"));
   assert.ok(!CONTOUR_FRAGMENT_SHADER.includes("${"));
   assert.ok(!CONTOUR_FRAGMENT_SHADER.includes("fwidth("));
-  assert.ok(CONTOUR_FRAGMENT_SHADER.includes("length(vec2(dot(slope, texelsPerPixelX)"));
+  assert.ok(CONTOUR_FRAGMENT_SHADER.includes("dot(slope, texelsPerPixelX)"));
+  assert.ok(CONTOUR_FRAGMENT_SHADER.includes("length(surface.gradient)"));
   assert.ok(!CONTOUR_FRAGMENT_SHADER.includes("dFdx(height)"));
   assert.ok(CONTOUR_FRAGMENT_SHADER.includes(`uIntervals[${MAX_TIERS}]`));
   assert.ok(CONTOUR_FRAGMENT_SHADER.includes(`tier < ${MAX_TIERS}`));
 });
 
 test("the shader carries the guard and fade constants of the reference", () => {
-  for (const constant of ["0.001", "0.004", "0.2", "0.65"]) {
+  for (const constant of ["0.01", "0.0005", "0.2", "0.65"]) {
     assert.ok(CONTOUR_FRAGMENT_SHADER.includes(constant), `missing ${constant}`);
   }
 });
 
-test("the shader carries the tie bias and scales the flat guard by the pixel ratio", () => {
-  assert.ok(CONTOUR_FRAGMENT_SHADER.includes("- 0.001;"));
-  assert.ok(CONTOUR_FRAGMENT_SHADER.includes("metresPerPixel * uPixelRatio\n  );"));
+test("the shader carries the tie bias and floors the slope in CSS pixels", () => {
+  assert.ok(CONTOUR_FRAGMENT_SHADER.includes("nearM - 0.001"));
+  assert.ok(CONTOUR_FRAGMENT_SHADER.includes("0.0005 / uPixelRatio"));
+  assert.ok(CONTOUR_FRAGMENT_SHADER.includes("surface.highest - surface.lowest <= 0.01"));
 });
 
 test("a whole-metre plateau at a contour height draws no line inside it", () => {
@@ -202,8 +235,8 @@ test("a whole-metre plateau at a contour height draws no line inside it", () => 
   const surface = smoothSurfaceOf(plateau, 0.3, 0.7);
 
   assert.equal(surface.height, 100);
-  assert.equal(surface.slopeX, 0);
-  assert.equal(contourCoverage(surface.height, 0, [tier(100)], 1), 0);
+  assert.equal(surface.gradientX, 0);
+  assert.equal(contourCoverage(surface.height, 0, [tier(100)], 1, rangeOf(surface)), 0);
 });
 
 test("a terrace at the contour height is below it, whichever side the neighbour is", () => {
@@ -212,8 +245,9 @@ test("a terrace at the contour height is below it, whichever side the neighbour 
     let strongest = 0;
     for (let fraction = 0; fraction <= 1; fraction += 0.001) {
       const surface = smoothSurfaceOf(heights, fraction, 0.5);
-      const slope = Math.abs(surface.slopeX) / pixelsPerTexel;
-      strongest = Math.max(strongest, contourCoverage(surface.height, slope, [tier(100)], 1));
+      const slope = Math.abs(surface.gradientX) / pixelsPerTexel;
+      const coverage = contourCoverage(surface.height, slope, [tier(100)], 1, rangeOf(surface));
+      strongest = Math.max(strongest, coverage);
     }
     return strongest;
   };
@@ -237,10 +271,10 @@ test("the B-spline slope matches a finite difference and is zero at a saddle cen
   const aside = smoothSurfaceOf(bumpy, 0.3, 0.6 + step);
   const below = smoothSurfaceOf(bumpy, 0.3, 0.6 - step);
 
-  assertClose(centre.slopeX, 0);
-  assertClose(centre.slopeY, 0);
-  assertClose(sampled.slopeX, (ahead.height - behind.height) / (2 * step));
-  assertClose(sampled.slopeY, (aside.height - below.height) / (2 * step));
+  assertClose(centre.gradientX, 0);
+  assertClose(centre.gradientY, 0);
+  assertClose(sampled.gradientX, (ahead.height - behind.height) / (2 * step));
+  assertClose(sampled.gradientY, (aside.height - below.height) / (2 * step));
 });
 
 test("a saddle's slope grows off its centre so the lines of its branches stay drawn", () => {
@@ -249,28 +283,112 @@ test("a saddle's slope grows off its centre so the lines of its branches stay dr
   const centre = smoothSurfaceOf(saddle, 0.5, 0.5);
   const off = smoothSurfaceOf(saddle, 0.8, 0.5);
 
-  assert.ok(Math.hypot(off.slopeX, off.slopeY) > Math.hypot(centre.slopeX, centre.slopeY));
+  const lengthOf = (surface: HeightSurface) => Math.hypot(surface.gradientX, surface.gradientY);
+
+  assert.ok(lengthOf(off) > lengthOf(centre));
 });
 
-test("sea at 0 m stays unfilled with a tier at 0 m", () => {
-  assert.equal(contourCoverage(0, 0, [tier(100), tier(10)], 1), 0);
-  assert.equal(contourCoverage(0, 0, [tier(100), tier(10)], 2), 0);
-});
-
-test("the flat guard passes the same slope per CSS pixel at pixel ratio 1 and 2", () => {
-  const metresPerCssPixel = 0.003;
+test("the slope floor passes the same slope per CSS pixel at pixel ratio 1 and 2", () => {
+  const metresPerCssPixel = 0.0003;
   const lineOf = (pixelRatio: number) => MINOR_LINE_WIDTH_PX * pixelRatio / 2 + 0.5;
 
-  const normal = contourCoverage(TIE_BIAS_M, metresPerCssPixel, [tier(100)], 1);
-  const dense = contourCoverage(TIE_BIAS_M, metresPerCssPixel / 2, [tier(100)], 2);
+  const normal = contourCoverage(LINE_HEIGHT_M, metresPerCssPixel, [tier(100)], 1, 1);
+  const dense = contourCoverage(LINE_HEIGHT_M, metresPerCssPixel / 2, [tier(100)], 2, 1);
 
   assert.ok(normal > 0);
   assertClose(normal / lineOf(1), dense / lineOf(2));
 });
 
+test("a blend mid-way between two levels draws one line where their lines are 3 px apart", () => {
+  const gradient = 0.5;
+  const at = (offsetPx: number, shiftPx: number): HeightSurface => ({
+    height: LINE_HEIGHT_M + gradient * (offsetPx - shiftPx),
+    gradientX: gradient,
+    gradientY: 0,
+    minM: 0,
+    maxM: 3,
+  });
+  const tiers = [tier(100)];
+  const runsOf = (coverageAtPx: (offsetPx: number) => number) => {
+    let runs = 0;
+    let inside = false;
+    for (let offsetPx = -10; offsetPx <= 10; offsetPx += 0.01) {
+      const covered = coverageAtPx(offsetPx) > 0.1;
+      if (covered && !inside) runs += 1;
+      inside = covered;
+    }
+    return runs;
+  };
+  const coverageOf = (blended: { height: number; metresPerPixel: number; rangeM: number }) =>
+    contourCoverage(blended.height, blended.metresPerPixel, tiers, 1, blended.rangeM);
+
+  const mixedHeights = runsOf((offsetPx) => coverageOf(
+    blendSurfaces(at(offsetPx, 0), at(offsetPx, 3), 0.5),
+  ));
+  const mixedLines = runsOf((offsetPx) => (
+    coverageOf(blendSurfaces(at(offsetPx, 0), at(offsetPx, 0), 0))
+    + coverageOf(blendSurfaces(at(offsetPx, 3), at(offsetPx, 3), 0))
+  ) / 2);
+
+  assert.equal(mixedHeights, 1);
+  assert.equal(mixedLines, 2);
+});
+
+test("a blend at weight 0 or 1 equals the single level", () => {
+  const firstTaps = [[0, 1, 2, 3], [0, 4, 8, 3], [0, 5, 9, 3], [0, 1, 2, 3]];
+  const secondTaps = [[0, 2, 6, 3], [1, 3, 7, 3], [0, 5, 9, 3], [2, 1, 2, 3]];
+  const first = smoothSurfaceOf(firstTaps, 0.3, 0.6, 2);
+  const second = smoothSurfaceOf(secondTaps, 0.5, 0.2, 4);
+  const single = (surface: HeightSurface) => ({
+    height: surface.height,
+    metresPerPixel: Math.hypot(surface.gradientX, surface.gradientY),
+    rangeM: surface.maxM - surface.minM,
+  });
+
+  assert.deepEqual(blendSurfaces(first, second, 0), single(first));
+  assert.deepEqual(blendSurfaces(first, second, 1), single(second));
+});
+
+test("a blend of flat surfaces draws nothing, such as sea or a terrace at any weight", () => {
+  const flat = (height: number) => smoothSurfaceOf(flatTaps(height), 0.4, 0.6, 2);
+
+  for (const weight of [0, 0.3, 0.5, 1]) {
+    for (const height of [0, 1720]) {
+      const blended = blendSurfaces(flat(height), flat(height), weight);
+
+      assert.equal(contourCoverage(
+        blended.height + TIE_BIAS_M,
+        blended.metresPerPixel,
+        [tier(10)],
+        1,
+        blended.rangeM,
+      ), 0);
+    }
+  }
+});
+
 test("the shader skips the second sampler unless its weight is positive", () => {
   assert.ok(CONTOUR_FRAGMENT_SHADER.includes("if (uWeights.y > 0.0)"));
 });
+
+function rangeOf(surface: HeightSurface): number {
+  return surface.maxM - surface.minM;
+}
+
+function flatTaps(height: number): number[][] {
+  return Array.from({ length: 4 }, () => Array<number>(4).fill(height));
+}
+
+function rimCrossing(heights: number[][], height: number): number {
+  let low = 0;
+  let high = 1;
+  for (let step = 0; step < 60; step++) {
+    const middle = (low + high) / 2;
+    if (smoothSurfaceOf(heights, middle, 0.5).height > height) low = middle;
+    else high = middle;
+  }
+  return low;
+}
 
 function tier(intervalM: number, options: Partial<ContourTier> = {}): ContourTier {
   return { intervalM, alpha: CONTOUR_OPACITY, widthPx: MINOR_LINE_WIDTH_PX, ...options };
