@@ -1739,13 +1739,19 @@ async function openScene(page, appUrl, sceneId, spot) {
 // A layer id owns the map's colour through as, while the blend also switches its halves off.
 function allocationQuery(spot) {
   const colour = effectiveColour(spot);
-  if (colour === null) return "";
-  if (colour !== BLEND_UNIT) return `&as=${colour}:colour`;
+  const terrain = terrainQuery();
+  if (colour === null) return terrain;
+  if (colour !== BLEND_UNIT) return `&as=${colour}:colour${terrain}`;
 
   const halves = BLEND_HALVES.filter((half) => (spot.layers ?? []).includes(half));
-  if (halves.length === 0) return `&as=${BLEND_UNIT}:colour`;
+  if (halves.length === 0) return `&as=${BLEND_UNIT}:colour${terrain}`;
 
-  return `&as=${BLEND_UNIT}:colour&off=${halves.join(",")}`;
+  return `&as=${BLEND_UNIT}:colour&off=${halves.join(",")}${terrain}`;
+}
+
+// The GPU terrain path is opt-in, so the default trial keeps measuring the raster path.
+function terrainQuery() {
+  return process.env.SOE_TERRAIN_GPU === "1" ? "&terrain=gpu" : "";
 }
 
 // Land-cover spots leave Temperature owning colour by default, so they request esa_worldcover.
@@ -2259,7 +2265,33 @@ function takeSample([linePattern, labelPattern]) {
         .map((label) => label.innerText.trim()),
     ),
     colourOwner,
+    pool: poolRecord(),
   };
+
+  function poolRecord() {
+    const stats = typeof window.__getDemPoolStats === "function"
+      ? window.__getDemPoolStats()
+      : null;
+    if (!stats) return null;
+    const timings = window.__gpuMs ?? {};
+    return {
+      textures: stats.textures,
+      textureMB: stats.textureBytes / (1024 * 1024),
+      inflight: stats.inflight,
+      queued: stats.queueDepth,
+      requests: stats.requests,
+      decodeMs: stats.meanDecodeMs,
+      reliefMs: layerMs(timings, "-relief"),
+      contourMs: layerMs(timings, "-contour-lines"),
+    };
+  }
+
+  function layerMs(timings, suffix) {
+    for (const name of Object.keys(timings ?? {})) {
+      if (name.endsWith(suffix)) return timings[name];
+    }
+    return undefined;
+  }
 }
 
 function containsPoint(control, [point, limit]) {

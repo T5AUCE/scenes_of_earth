@@ -8,6 +8,8 @@ import {
   type ContourLadder,
   type WarmTile,
 } from "../contour-ladder";
+import { addressSearch } from "../gesture-quality";
+import { demPoolHas } from "../gpu/dem-pool";
 import {
   basemapDescriptor,
   clipViewportToBbox,
@@ -96,14 +98,35 @@ export function demPreloadSource(options: DemPreloadOptions): PreloadSource {
     lanes: DEM_PRELOAD_LANES,
     tasks: (fittedZoom) => {
       return demPlanTiles(options.bbox, options.maxzoom, fittedZoom)
+        .filter((tile) => !isPooledTile(options.template, tile))
         .map((tile) => demTask(options, tile));
     },
     dwell: (viewport, fittedZoom, currentZoom) => {
       return dwellTilesForBbox(viewport, options.bbox, fittedZoom, currentZoom)
         .filter((tile) => tile.z <= options.maxzoom)
+        .filter((tile) => !isPooledTile(options.template, tile))
         .map((tile) => demTask(options, tile));
     },
   };
+}
+
+/** Whether the GPU pool holds a DEM tile or fetches it, so the warmer skips the URL. */
+function isPooledTile(template: string, tile: WarmTile): boolean {
+  if (!isGpuTerrain()) return false;
+  try {
+    return demPoolHas(template, tile);
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the address selects the GPU terrain path, so the warmer uses plain fetches. */
+function isGpuTerrain(): boolean {
+  try {
+    return new URLSearchParams(addressSearch()).get("terrain") === "gpu";
+  } catch {
+    return false;
+  }
 }
 
 /** Contour traces for the same pyramid, run once the elevation tiles they read are in. */
@@ -169,10 +192,12 @@ function demPyramid(bbox: Bbox, maxzoom: number, fittedZoom: number): WarmTile[]
  * The DEM tiles a scene preloads: the pyramid plus the deduplicated contour-parent ring,
  * kept to whole levels inside the tile bound. Parents of in-scene contour tiles overlap the
  * scene, so the ring usually adds nothing, but the union keeps worker tracing inside the
- * advertised bound when levels alone would leave edge parents out.
+ * advertised bound when levels alone would leave edge parents out. The GPU pool decodes on
+ * demand, so its path warms the pyramid only.
  */
 function demPlanTiles(bbox: Bbox, maxzoom: number, fittedZoom: number): WarmTile[] {
   const pyramid = demPyramid(bbox, maxzoom, fittedZoom);
+  if (isGpuTerrain()) return keepWholeLevels(pyramid, DEM_PRELOAD_TILES);
   const known = new Set(pyramid.map(tileKey));
   const ring = demParentsForTiles(contourPlanTiles(bbox, maxzoom, fittedZoom), CONTOUR_OVERZOOM);
   for (const parent of ring) {
@@ -242,8 +267,22 @@ function demTask(options: DemPreloadOptions, tile: WarmTile): PreloadTask {
   return {
     key: url,
     zoom: tile.z,
-    run: (abort) => fetchDemBlob(options.fetcher, tile, url, abort, "low"),
+    run: (abort) => fetchDemTask(options, tile, url, abort),
   };
+}
+
+/** Fetch one DEM task, skipping pool tiles and bypassing the contour worker under the flag. */
+function fetchDemTask(
+  options: DemPreloadOptions,
+  tile: WarmTile,
+  url: string,
+  abort: AbortController,
+): Promise<Blob | undefined> {
+  if (isPooledTile(options.template, tile)) return Promise.resolve(undefined);
+  if (isGpuTerrain()) {
+    return fetchDemResponse(url, abort.signal, "low").then((response) => response.data);
+  }
+  return fetchDemBlob(options.fetcher, tile, url, abort, "low");
 }
 
 function contourTasks(options: ContourPreloadOptions, fittedZoom: number): PreloadTask[] {

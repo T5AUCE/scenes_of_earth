@@ -1,9 +1,9 @@
 /** Plain HTTP-cache warmer that fetches tile URLs ahead of the camera. */
 import {
   beginWarmer,
-  noteWarmerRequest,
+  noteDwellWarmerRequest,
   setWarmerEnabled,
-  setWarmerProgress,
+  setWarmerEntryProgress,
 } from "../dev-stats";
 import { DWELL_REQUEST_CAP, type DwellViewport } from "../render/tile-viewport";
 import type { PreloadMap, PreloadSource, PreloadTask } from "./tile-prefetch";
@@ -12,6 +12,9 @@ import type { PreloadMap, PreloadSource, PreloadTask } from "./tile-prefetch";
 export const WARMER_LANES = 3;
 /** Warmed and missing keys remembered, so ocean tiles are not refetched every dwell. */
 export const MAX_WARMER_KEYS = 2000;
+
+/** Dwell fallback delay, long enough for the visible tiles to claim the network first. */
+export const DWELL_IDLE_FALLBACK_MS = 400;
 
 /** The map surface the warmer listens to and reads the resting viewport from. */
 export type WarmerMap = PreloadMap & {
@@ -30,6 +33,8 @@ interface WarmerSourceState {
   dwellQueue: PreloadTask[];
   total: number;
   done: number;
+  entryTotal: number;
+  entryDone: number;
 }
 
 interface WarmerActive {
@@ -70,8 +75,11 @@ class WarmerKeySet {
  * memo keeps ocean tiles from refetching every dwell. Basemap and direct DEM
  * downloads run at low priority so visible requests stay first. DEM tiles through
  * the worker manager reuse its own queue. Entry warms the scene pyramid once.
- * Each moveend after landing replaces the previous dwell with the resting viewport
- * inside a shared cap. The cap and the launches are shared round-robin across sources
+ * Each moveend after landing arms one dwell that runs on the first idle or after
+ * a short fallback delay, so playback without idle still warms. Re-arming replaces
+ * the pending trigger, and a new gesture or destroy cancels it. Each dwell replaces
+ * the previous dwell with the resting viewport inside a shared cap. The cap and
+ * the launches are shared round-robin across sources
  * so every source warms on the first dwell. Each source keeps ancestors first, then
  * nearest the viewport centre first within a level. Entry never waits on it.
  */
@@ -85,13 +93,23 @@ export class TileWarmer {
   private fittedZoom: number | null = null;
   private isLanded = false;
   private destroyed = false;
+  private dwellArmed = false;
+  private dwellTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly onDwellIdle = () => this.fireDwell();
+  private readonly onDwellMoveEnd = () => this.armDwell();
+  private readonly onDwellMoveStart = () => this.cancelDwell();
 
   constructor(private readonly map: WarmerMap) {
     setWarmerEnabled(true);
     beginWarmer();
-    const onDwell = () => this.warmDwell();
-    map.on("moveend", onDwell);
-    this.stopListening = () => map.off("moveend", onDwell);
+    map.on("idle", this.onDwellIdle);
+    map.on("moveend", this.onDwellMoveEnd);
+    map.on("movestart", this.onDwellMoveStart);
+    this.stopListening = () => {
+      map.off("idle", this.onDwellIdle);
+      map.off("moveend", this.onDwellMoveEnd);
+      map.off("movestart", this.onDwellMoveStart);
+    };
   }
 
   /** Register a source, replacing and aborting an earlier one with the same id. */
@@ -104,6 +122,8 @@ export class TileWarmer {
       dwellQueue: [],
       total: 0,
       done: 0,
+      entryTotal: 0,
+      entryDone: 0,
     };
     this.sources.set(source.id, state);
     if (this.fittedZoom === null) return;
@@ -134,12 +154,13 @@ export class TileWarmer {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.cancelDwell();
     for (const [key, job] of [...this.active]) this.cancelJob(key, job);
     this.sources.clear();
     this.warmed.clear();
     this.missing.clear();
     this.stopListening();
-    setWarmerProgress(0, 0);
+    setWarmerEntryProgress(0, 0);
     setWarmerEnabled(false);
     this.wake();
   }
@@ -173,6 +194,44 @@ export class TileWarmer {
   /** Mark the camera landing, so dwells start warming the resting viewport. */
   noteLanded(): void {
     this.isLanded = true;
+    this.armDwell();
+  }
+
+  /** Arm one dwell run on the first idle or the fallback delay after landing. */
+  private armDwell(): void {
+    if (this.destroyed || !this.isLanded) return;
+    this.cancelDwell();
+    this.dwellArmed = true;
+    this.dwellTimer = setTimeout(() => this.fireDwell(), DWELL_IDLE_FALLBACK_MS);
+  }
+
+  /** Run the armed dwell once, so a late idle cannot launch it twice. */
+  private fireDwell(): void {
+    if (!this.dwellArmed) return;
+    this.cancelDwell();
+    this.warmDwell();
+  }
+
+  /** Drop the pending dwell trigger and its queued work when a gesture supersedes it. */
+  private cancelDwell(): void {
+    this.dwellArmed = false;
+    if (this.dwellTimer !== null) {
+      clearTimeout(this.dwellTimer);
+      this.dwellTimer = null;
+    }
+    this.clearQueuedDwell();
+  }
+
+  /** Drop the queued dwell work that a new gesture superseded, keeping entry work. */
+  private clearQueuedDwell(): void {
+    let dropped = false;
+    for (const state of this.sources.values()) {
+      if (state.dwellQueue.length === 0) continue;
+      state.total -= state.dwellQueue.length;
+      state.dwellQueue = [];
+      dropped = true;
+    }
+    if (dropped) this.report();
   }
 
   /** Wait for the next progress report instead of polling on a timer. */
@@ -197,6 +256,8 @@ export class TileWarmer {
     state.dwellQueue = [];
     state.total = tasks.length;
     state.done = tasks.length - state.queue.length;
+    state.entryTotal = tasks.length;
+    state.entryDone = tasks.length - state.queue.length;
     this.report();
   }
 
@@ -260,11 +321,13 @@ export class TileWarmer {
       if (this.isSkipped(task.key)) {
         queue.shift();
         state.done += 1;
+        if (!dwell) state.entryDone += 1;
         continue;
       }
       if (task.needs !== undefined && !this.areParentsReady(task.needs)) {
         queue.shift();
         state.total -= 1;
+        if (!dwell) state.entryTotal -= 1;
         continue;
       }
       return task;
@@ -301,7 +364,7 @@ export class TileWarmer {
       dwell,
     };
     this.active.set(task.key, job);
-    noteWarmerRequest(state.source.layer);
+    if (dwell) noteDwellWarmerRequest();
     Promise.resolve()
       .then(() => task.run(abort))
       .then(
@@ -323,6 +386,7 @@ export class TileWarmer {
     if (this.destroyed) return;
     if (this.sources.get(state.source.id) !== state) return;
     state.done += 1;
+    if (!job.dwell) state.entryDone += 1;
     if (failure === null) {
       this.warmed.add(key);
     } else if (isMissingResponse(failure.error)) this.missing.add(key);
@@ -437,8 +501,13 @@ export class TileWarmer {
   }
 
   private report(): void {
-    const { done, total } = this.progress();
-    setWarmerProgress(done, total);
+    let done = 0;
+    let total = 0;
+    for (const state of this.sources.values()) {
+      done += state.entryDone;
+      total += state.entryTotal;
+    }
+    setWarmerEntryProgress(done, total);
     this.wake();
   }
 

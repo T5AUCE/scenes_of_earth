@@ -1,4 +1,5 @@
 /** Shades DEM tiles into transparent raster tiles away from the main thread. */
+import { extractBitmapRgba } from "./dem-decode";
 import { decodeHeights, shadeTile, type ShadeTileId } from "./shade-tile";
 import { DemCache, MAX_CONCURRENT_SHADE_JOBS, ShadeQueue } from "./shade-queue";
 
@@ -85,10 +86,9 @@ async function fetchHeights(url: string, signal: AbortSignal): Promise<Float32Ar
     premultiplyAlpha: "none",
     colorSpaceConversion: "none",
   });
-  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-  const context = canvas.getContext("2d", { willReadFrequently: true })!;
-  context.drawImage(bitmap, 0, 0);
-  bitmap.close();
-  const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
-  return decodeHeights(data);
+  try {
+    return decodeHeights(await extractBitmapRgba(bitmap));
+  } finally {
+    bitmap.close();
+  }
 }

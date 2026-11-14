@@ -12,6 +12,10 @@ const WARNING = "Terrain shading or contour tiles could not be loaded";
 const rootUrl = new URL("./", import.meta.url).href;
 const mockModules = {
   "maplibre-gl": `export const addProtocol = () => {};`,
+  "../gpu/relief-layer": `export const addReliefLayer = () => globalThis.gpuHandles.relief;`,
+  "../gpu/contour-line-layer": `
+    export const addContourLineLayer = () => globalThis.gpuHandles.lines;
+  `,
   "./contour-overlay": `
     export const sharedDemSource = () => ({
       sharedDemProtocolUrl: "dem://{z}/{x}/{y}",
@@ -53,6 +57,7 @@ const hooks = registerHooks({
 const {
   createTerrainView,
   MAX_MISSING_TILES,
+  pinGpuTerrainBase,
   setTerrainBaseZoom,
   watchTerrainTiles,
 } = await import("./terrain.ts");
@@ -598,4 +603,171 @@ function createTestTerrainView(map: ReturnType<typeof terrainMap>["map"]) {
     beforeId: undefined,
     report: () => () => {},
   } as unknown as Parameters<typeof createTerrainView>[0]);
+}
+
+const GPU_ENTRY_CAP_MS = 3 * 1000;
+
+test("a raster terrain view has no entry preparation of its own", () => {
+  const { map } = terrainMap();
+  const view = createTestTerrainView(map);
+
+  assert.equal(view.prepareEntry, undefined);
+
+  view.destroy();
+});
+
+test("pinning the GPU base before the flight leaves raster bases alone", (t) => {
+  const seen: number[] = [];
+  t.mock.method(ShadeRaster.prototype, "setBaseZoom", (zoom: number) => {
+    seen.push(zoom);
+  });
+  const raster = terrainMap();
+  const rasterView = createTestTerrainView(raster.map);
+  t.after(() => rasterView.destroy());
+  const gpu = gpuTerrain(t, { relief: () => true, lines: () => true });
+
+  pinGpuTerrainBase(gpu.map as unknown as MapLibreMap, 6);
+  pinGpuTerrainBase(raster.map as unknown as MapLibreMap, 7);
+
+  assert.deepEqual(gpu.zooms, [6, 6]);
+  assert.deepEqual(seen, []);
+});
+
+test("entry steps both GPU layers on every render until neither has a tile left", async (t) => {
+  let calls = 0;
+  const gpu = gpuTerrain(t, { relief: () => ++calls >= 3, lines: () => true });
+  let isDone = false;
+
+  const done = gpu.view.prepareEntry!(null).then(() => {
+    isDone = true;
+  });
+  assert.equal(calls, 1);
+  gpu.emit("render", {});
+  await Promise.resolve();
+  assert.equal(isDone, false);
+  gpu.emit("render", {});
+  await done;
+
+  assert.equal(calls, 3);
+  gpu.emit("render", {});
+  assert.equal(calls, 3);
+});
+
+test("entry steps the contour layer even while relief still has tiles to load", async (t) => {
+  let lineSteps = 0;
+  const gpu = gpuTerrain(t, {
+    relief: () => false,
+    lines: () => {
+      lineSteps++;
+      return true;
+    },
+  });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+
+  const done = gpu.view.prepareEntry!(null);
+  t.mock.timers.tick(GPU_ENTRY_CAP_MS);
+  await done;
+
+  assert.equal(lineSteps, 1);
+});
+
+test("entry proceeds without error when the cap passes with tiles still loading", async (t) => {
+  const gpu = gpuTerrain(t, { relief: () => false, lines: () => false });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let isDone = false;
+
+  const done = gpu.view.prepareEntry!(null).then(() => {
+    isDone = true;
+  });
+  t.mock.timers.tick(GPU_ENTRY_CAP_MS - 1);
+  await Promise.resolve();
+  assert.equal(isDone, false);
+  t.mock.timers.tick(1);
+  await done;
+
+  assert.equal(isDone, true);
+});
+
+test("an aborted entry stops waiting and stops stepping", async (t) => {
+  let calls = 0;
+  const gpu = gpuTerrain(t, { relief: () => (calls++, false), lines: () => true });
+  const abort = new AbortController();
+
+  const done = gpu.view.prepareEntry!(null, abort.signal);
+  abort.abort();
+  await done;
+  gpu.emit("render", {});
+
+  assert.equal(calls, 1);
+});
+
+test("an already aborted entry does not wait", async (t) => {
+  const gpu = gpuTerrain(t, { relief: () => false, lines: () => false });
+  const abort = new AbortController();
+  abort.abort();
+
+  await gpu.view.prepareEntry!(null, abort.signal);
+});
+
+test("a failing step ends the wait with a warning instead of failing entry", async (t) => {
+  t.mock.method(console, "warn", () => {});
+  const gpu = gpuTerrain(t, {
+    relief: () => {
+      throw new Error("GL error");
+    },
+    lines: () => true,
+  });
+
+  await gpu.view.prepareEntry!(null);
+
+  const calls = (console.warn as unknown as { mock: { callCount(): number } }).mock.callCount();
+  assert.equal(calls, 1);
+});
+
+type GpuHandles = {
+  relief: {
+    setStrength(): void;
+    setBaseZoom(zoom: number): void;
+    prepare(): boolean;
+    destroy(): void;
+  };
+  lines: {
+    setBaseZoom(zoom: number): void;
+    prepare(): boolean;
+    destroy(): void;
+  };
+};
+
+/** A GPU terrain view over fake layers whose steps are scripted, on a map that emits events. */
+function gpuTerrain(
+  t: TestContext,
+  steps: { relief: () => boolean; lines: () => boolean },
+) {
+  const zooms: number[] = [];
+  const handles: GpuHandles = {
+    relief: {
+      setStrength() {},
+      setBaseZoom: (zoom) => zooms.push(zoom),
+      prepare: steps.relief,
+      destroy() {},
+    },
+    lines: {
+      setBaseZoom: (zoom) => zooms.push(zoom),
+      prepare: steps.lines,
+      destroy() {},
+    },
+  };
+  const globals = globalThis as { gpuHandles?: GpuHandles; location?: unknown };
+  const previousLocation = globals.location;
+  globals.gpuHandles = handles;
+  globals.location = { search: "?terrain=gpu" };
+  const { map, ...rest } = terrainMap();
+  const { map: events, emit } = fakeMap();
+  Object.assign(map, { on: events.on, off: events.off, getZoom: () => 8 });
+  const view = createTestTerrainView(map);
+  t.after(() => {
+    view.destroy();
+    globals.location = previousLocation;
+  });
+  return { ...rest, map, view, zooms, emit };
 }

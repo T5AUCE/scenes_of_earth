@@ -2581,6 +2581,21 @@ test("a direct-link entry refits the relief base to the fitted zoom after landin
   await exitActiveHarness();
 });
 
+test("entry pins the GPU relief base at the flight zoom before preparation starts", async () => {
+  const harness = phasedHarness();
+  harness.map.getZoom = () => 1;
+  harness.enter();
+  await settle();
+
+  assert.deepEqual(harness.pinsAtPreparation, [1]);
+  assert.equal(harness.terrainPins.length, 1);
+  assert.equal(harness.terrainPins[0][0], harness.map);
+  assert.equal(harness.terrainPins[0][1], 5);
+  assert.deepEqual(harness.events, []);
+
+  await exitActiveHarness();
+});
+
 test("a refit after landing moves the relief base with the flight", async () => {
   const harness = phasedHarness();
   harness.enter();

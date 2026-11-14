@@ -227,7 +227,15 @@ export function contourLegend(text) {
 
 /** Compares view samples to detect changes between idle events. */
 export function sameSample(first, second) {
-  return Boolean(first) && JSON.stringify(first) === JSON.stringify(second);
+  if (!first) return false;
+  return JSON.stringify(withoutPool(first)) === JSON.stringify(withoutPool(second));
+}
+
+/** Drops the pool counts before the settle comparison, so loading textures never block it. */
+function withoutPool(sample) {
+  if (!sample || typeof sample !== "object") return sample;
+  const { pool, ...rest } = sample;
+  return rest;
 }
 
 /** Rejects idle samples until both the mask and requested layer data have initialised. */
@@ -239,6 +247,7 @@ export function isSettled(previous, sample, idle) {
 export function viewRecord({ spot, scene, zoom, sample, failures, messages, timedOut }) {
   const count = (kind) => failures.filter((failure) => failure.kind === kind).length;
   const unique = [...new Set(messages)];
+  const pool = sample?.pool ?? null;
 
   return {
     spot,
@@ -263,6 +272,14 @@ export function viewRecord({ spot, scene, zoom, sample, failures, messages, time
     gl_errors: sample?.glErrors ?? [],
     context_restored: sample?.contextRestored ?? null,
     display_checks: sample?.displayChecks ?? null,
+    pool_textures: pool?.textures ?? null,
+    pool_texture_mb: pool ? Number(pool.textureMB.toFixed(1)) : null,
+    pool_inflight: pool?.inflight ?? null,
+    pool_queued: pool?.queued ?? null,
+    pool_requests: pool?.requests ?? null,
+    pool_decode_ms: pool?.decodeMs ?? null,
+    pool_relief_ms: pool?.reliefMs ?? null,
+    pool_contour_ms: pool?.contourMs ?? null,
     timed_out: timedOut,
   };
 }

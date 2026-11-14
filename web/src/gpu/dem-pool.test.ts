@@ -6,6 +6,8 @@ import type { DemWorkerRequest, DemWorkerResponse } from "../workers/dem-worker.
 import {
   acquireDemPool,
   createGlTextureStore,
+  demPoolHas,
+  demPoolStats,
   DemPool,
   releaseDemPool,
   TEXTURE_BYTES,
@@ -13,8 +15,8 @@ import {
   type DemTexture,
   type DemTextureStore,
   type DemWorkerPort,
-  type WantedTile,
 } from "./dem-pool.ts";
+import type { WantedTile } from "./dem-plan.ts";
 
 const SIZE_PX = DEM_TILE_SIZE_PX;
 const URL_TEMPLATE = "https://dem/{z}/{x}/{y}.png";
@@ -278,6 +280,62 @@ test("uploads run only inside uploadPending and at most two per frame", () => {
   assert.equal(harness.store!.created.length, 3);
   assert.equal(harness.pool.stats().awaitingUpload, 0);
   assert.ok(harness.pool.texture(tile(2)));
+});
+
+test("layers sharing a map frame upload at most two tiles between them", () => {
+  const harness = setup();
+  const wanted = [tile(0), tile(1), tile(2), tile(3)];
+  harness.pool.update(wanted);
+  for (const entry of wanted) land(harness, entry);
+
+  harness.pool.syncFrame(wanted);
+  harness.pool.syncFrame(wanted);
+
+  assert.equal(harness.store!.created.length, 2);
+  assert.equal(harness.pool.needsRepaint(), true);
+  harness.pool.endMapFrame();
+  harness.pool.syncFrame(wanted);
+  assert.equal(harness.store!.created.length, 4);
+});
+
+test("the map finishing a frame lets the shared pool work on the next one", () => {
+  const { map, options, workers } = poolFixture();
+  const pool = acquireDemPool(options);
+
+  pool.syncFrame([tile(1)]);
+  pool.syncFrame([tile(2)]);
+  assert.equal(workers.flatMap((worker) => worker.requests).length, 1);
+  map.fireRender();
+  pool.syncFrame([tile(2)]);
+
+  assert.equal(workers.flatMap((worker) => worker.requests).length, 3);
+  releaseDemPool(map, URL_TEMPLATE);
+});
+
+test("a tile reports how long it has been able to draw", () => {
+  const harness = setup();
+  const centre = tile(5, 5);
+  harness.pool.update([centre]);
+  land(harness, centre);
+  harness.pool.uploadPending();
+
+  harness.advance(40);
+
+  assert.equal(harness.pool.drawableForMs(centre), 40);
+  assert.equal(harness.pool.drawableForMs(tile(9, 9)), null);
+});
+
+test("a tile waiting on neighbours is drawable for no time until the cap passes", () => {
+  const harness = setup();
+  const centre = tile(5, 5);
+  harness.pool.update([centre, tile(6, 5)]);
+  land(harness, centre);
+  harness.pool.uploadPending();
+  assert.equal(harness.pool.drawableForMs(centre), null);
+
+  harness.advance(350);
+
+  assert.equal(harness.pool.drawableForMs(centre), 50);
 });
 
 test("needsRepaint asks for the frame that uploads capped tiles", () => {
@@ -653,12 +711,73 @@ test("stats report counts, bytes, queue depth and decode time", () => {
     awaitingUpload: 0,
     strips: 2,
     failures: 0,
+    requests: 8,
     loaded: 2,
     uploaded: 2,
     cancelled: 0,
     lastDecodeMs: 4,
     meanDecodeMs: 4,
   });
+});
+
+test("request starts count every load including missing, failed and cancelled", () => {
+  const harness = setup();
+  const successful = tile(1);
+  const missing = tile(2);
+  const failed = tile(3);
+  const cancelled = tile(4);
+  harness.pool.update([successful, missing, failed, cancelled]);
+
+  assert.equal(harness.pool.stats().requests, 4);
+  assert.equal(harness.pool.stats().loaded, 0);
+  land(harness, successful);
+  failWith(harness, missing, "missing");
+  failWith(harness, failed, "error");
+
+  assert.equal(harness.pool.stats().requests, 4);
+  assert.equal(harness.pool.stats().loaded, 1);
+  harness.pool.update([]);
+
+  assert.equal(harness.pool.stats().requests, 4);
+  assert.equal(harness.pool.stats().loaded, 1);
+  assert.equal(harness.pool.stats().cancelled, 1);
+  assert.equal(harness.pool.stats().failures, 2);
+});
+
+test("has reports held, pending and in-flight tiles so the warmer skips them", () => {
+  const harness = setup();
+  const wanted = tile(1);
+
+  assert.equal(harness.pool.has(wanted), false);
+  harness.pool.update([wanted]);
+
+  assert.equal(harness.pool.has(wanted), true);
+  land(harness, wanted);
+
+  assert.equal(harness.pool.has(wanted), true);
+  harness.pool.uploadPending();
+
+  assert.equal(harness.pool.has(wanted), true);
+  assert.equal(harness.pool.has(tile(2)), false);
+});
+
+test("demPoolHas and demPoolStats read the shared pool by url", () => {
+  const { map, options } = poolFixture();
+  const pool = acquireDemPool(options);
+  try {
+    assert.equal(demPoolHas(URL_TEMPLATE, tile(1)), false);
+    assert.equal(demPoolStats(URL_TEMPLATE)?.textures, 0);
+    pool.update([tile(1)]);
+
+    assert.equal(demPoolHas(URL_TEMPLATE, tile(1)), true);
+    assert.equal(demPoolHas(URL_TEMPLATE, tile(2)), false);
+    assert.equal(demPoolStats()?.inflight, 1);
+    assert.equal(demPoolStats("https://other/{z}/{x}/{y}.png"), null);
+  } finally {
+    releaseDemPool(map, URL_TEMPLATE);
+  }
+
+  assert.equal(demPoolHas(URL_TEMPLATE, tile(1)), false);
 });
 
 test("a pool is shared per map and url and stopped by the last release", () => {
@@ -677,9 +796,18 @@ test("a pool is shared per map and url and stopped by the last release", () => {
   releaseDemPool(map, "https://other/{z}/{x}/{y}.png");
 });
 
+function renderEvents() {
+  const listeners = new Set<() => void>();
+  return {
+    on: (_type: "render", listener: () => void) => listeners.add(listener),
+    off: (_type: "render", listener: () => void) => listeners.delete(listener),
+    fireRender: () => listeners.forEach((listener) => listener()),
+  };
+}
+
 function poolFixture() {
   const canvas = new EventTarget();
-  const map = { getCanvas: () => canvas, triggerRepaint: () => {} };
+  const map = { getCanvas: () => canvas, triggerRepaint: () => {}, ...renderEvents() };
   const workers: FakeWorker[] = [];
   const options = {
     map,
@@ -716,7 +844,7 @@ test("a context loss keeps the pool for the layers that come back", () => {
 test("a release before the lost event still waits for the layers", () => {
   mock.timers.enable({ apis: ["setTimeout"] });
   const canvas = new EventTarget();
-  const map = { getCanvas: () => canvas, triggerRepaint: () => {} };
+  const map = { getCanvas: () => canvas, triggerRepaint: () => {}, ...renderEvents() };
   const workers: FakeWorker[] = [];
   const options = {
     map,

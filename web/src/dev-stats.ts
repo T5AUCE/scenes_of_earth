@@ -16,6 +16,8 @@ const LONGTASK_ENTRY = "longtask";
 
 const RELIEF_SUFFIX = "-relief";
 const CONTOUR_SUFFIX = "-contours";
+const CONTOUR_LINES_SUFFIX = "-contour-lines";
+const GPU_TERRAIN_VALUE = "gpu";
 
 /** The map surface the dev badge reads. Tile listeners stay optional for tests. */
 export type DevStatsMap = Pick<MapLibreMap, "getZoom">
@@ -323,24 +325,21 @@ export function isPreloadDisabled(): boolean {
   return preloadDisabled;
 }
 
-/** Warmed HTTP-cache requests per layer, counted while a scene preload runs. */
-export type WarmerCounts = Record<TileLayerKey, number>;
-
-/** How many warmer tasks have finished out of those planned. */
-export interface WarmerProgress {
+/** Entry tasks settled out of those planned for the open scene. */
+export interface WarmerEntry {
   done: number;
   total: number;
 }
 
-/** The warmer numbers the badge shows. */
+/** The badge shows entry progress separately from cumulative dwell launches. */
 export interface WarmerSnapshot {
-  progress: WarmerProgress;
-  counts: WarmerCounts;
+  entry: WarmerEntry;
+  dwell: number;
 }
 
 let warmerOnFlag = false;
-let warmerProgress: WarmerProgress = { done: 0, total: 0 };
-const warmerCounts: WarmerCounts = { terrain: 0, basemap: 0, contours: 0 };
+let warmerEntry: WarmerEntry = { done: 0, total: 0 };
+let warmerDwell = 0;
 
 /** Remember whether a scene preload runs, so the badge shows its counts. */
 export function setWarmerEnabled(enabled: boolean): void {
@@ -354,23 +353,23 @@ export function isWarmerEnabled(): boolean {
 
 /** Clear the warmer numbers when a scene opens, so the badge shows this scene only. */
 export function beginWarmer(): void {
-  warmerProgress = { done: 0, total: 0 };
-  for (const key of ["terrain", "basemap", "contours"] as const) warmerCounts[key] = 0;
+  warmerEntry = { done: 0, total: 0 };
+  warmerDwell = 0;
 }
 
-/** Count one warmer fetch for its layer. */
-export function noteWarmerRequest(source: TileLayerKey): void {
-  warmerCounts[source] += 1;
+/** Count one dwell launch, so resting work stays apart from the entry plan. */
+export function noteDwellWarmerRequest(): void {
+  warmerDwell += 1;
 }
 
-/** Record how many warmer tasks have finished out of those planned. */
-export function setWarmerProgress(done: number, total: number): void {
-  warmerProgress = { done, total };
+/** Record entry tasks settled out of those planned, excluding every dwell. */
+export function setWarmerEntryProgress(done: number, total: number): void {
+  warmerEntry = { done, total };
 }
 
 /** Copy the warmer numbers so the badge never mutates tracker state. */
 export function warmerSnapshot(): WarmerSnapshot {
-  return { progress: { ...warmerProgress }, counts: { ...warmerCounts } };
+  return { entry: { ...warmerEntry }, dwell: warmerDwell };
 }
 
 function sourceIdOf(event: unknown): string | undefined {
@@ -468,6 +467,7 @@ function snapshot(
     longtasks,
     entry: entryStats.waitMs === null ? undefined : { ...entryStats },
     warmer: isWarmerEnabled() ? warmerSnapshot() : undefined,
+    pool: readPoolSnapshot(gpu.msByLayer),
   };
 }
 
@@ -516,8 +516,22 @@ export interface DevStatsSnapshot {
   tiles?: TileSettleSnapshot;
   /** Warmer progress and request counts, present only while a scene preload runs. */
   warmer?: WarmerSnapshot;
+  /** Pool counts under `?terrain=gpu`, absent on the default path or without a pool. */
+  pool?: GpuPoolSnapshot;
   /** Pre-flight wait and landing-to-fade gap of the last entry, absent outside an entry. */
   entry?: EntryStats;
+}
+
+/** The pool counts the badge shows under `?terrain=gpu`, with GPU ms when timed. */
+export interface GpuPoolSnapshot {
+  textures: number;
+  textureMB: number;
+  inflight: number;
+  queued: number;
+  requests: number;
+  decodeMs: number;
+  reliefMs?: number;
+  contourMs?: number;
 }
 
 /** How long the last entry waited before its flight and between landing and fade start. */
@@ -548,6 +562,7 @@ export function formatDevStats(snapshot: DevStatsSnapshot): string {
     + formatTileSuffix(snapshot.tiles)
     + formatPreloadSuffix()
     + formatWarmerSuffix(snapshot.warmer)
+    + formatPoolSuffix(snapshot.pool)
     + ` · ${snapshot.longtasks} long`;
 
   return `${frame}\n${loading.slice(" · ".length)}`;
@@ -603,17 +618,37 @@ function formatPreloadSuffix(): string {
   return "";
 }
 
-/** Build the badge's warmer part from its progress and per-layer request counts. */
+/** Build the badge's warmer part from its entry progress and dwell launches. */
 export function formatWarmerPart(warmer: WarmerSnapshot): string {
-  const { done, total } = warmer.progress;
-  const { terrain, basemap, contours } = warmer.counts;
-  return `warmer ${done}/${total} tiles terrain ${terrain} basemap ${basemap} contours ${contours}`;
+  const { done, total } = warmer.entry;
+  return `warmer entry ${done}/${total} dwell ${warmer.dwell}`;
 }
 
 /** The warmer suffix for the badge line. It stays empty unless a scene preload runs. */
 function formatWarmerSuffix(warmer?: WarmerSnapshot): string {
   if (!warmer) return "";
   return ` · ${formatWarmerPart(warmer)}`;
+}
+
+/** Build the badge's pool part from its counts, with GPU ms when the timer kept them. */
+export function formatPoolPart(pool: GpuPoolSnapshot): string {
+  const base = `pool ${pool.textures} tex ${pool.textureMB.toFixed(1)} MB`
+    + ` inflight ${pool.inflight} queued ${pool.queued}`
+    + ` req ${pool.requests} decode ${pool.decodeMs.toFixed(1)} ms`;
+  return base + formatPoolGpuSuffix(pool);
+}
+
+/** The pool suffix for the badge line. It stays empty off the GPU terrain path. */
+function formatPoolSuffix(pool?: GpuPoolSnapshot): string {
+  if (!pool) return "";
+  return ` · ${formatPoolPart(pool)}`;
+}
+
+/** The relief and contour GPU ms for the pool line, empty when the timer kept neither. */
+function formatPoolGpuSuffix(pool: GpuPoolSnapshot): string {
+  const relief = pool.reliefMs === undefined ? "" : ` relief ${pool.reliefMs.toFixed(1)} ms`;
+  const contour = pool.contourMs === undefined ? "" : ` contour ${pool.contourMs.toFixed(1)} ms`;
+  return `${relief}${contour}`;
 }
 
 function formatTileLayer(name: string, stats: TileStepStats): string {
@@ -633,6 +668,63 @@ function readGpuSnapshot(): { msByLayer: Record<string, number>; unavailable: bo
   } catch {
     return { msByLayer: {}, unavailable: false };
   }
+}
+
+/** Read the pool counts under `?terrain=gpu` without creating work elsewhere. */
+function readPoolSnapshot(msByLayer: Record<string, number>): GpuPoolSnapshot | undefined {
+  if (!isGpuTerrainEnabled()) return undefined;
+  const stats = readHookPoolStats();
+  if (!stats) return undefined;
+  return {
+    textures: stats.textures,
+    textureMB: stats.textureBytes / BYTES_PER_MB,
+    inflight: stats.inflight,
+    queued: stats.queueDepth,
+    requests: stats.requests,
+    decodeMs: stats.meanDecodeMs,
+    reliefMs: gpuMsFor(msByLayer, RELIEF_SUFFIX),
+    contourMs: gpuMsFor(msByLayer, CONTOUR_LINES_SUFFIX),
+  };
+}
+
+/** Whether the address selects the GPU terrain path, so the badge shows pool counts. */
+function isGpuTerrainEnabled(): boolean {
+  try {
+    return new URLSearchParams(location.search).get("terrain") === GPU_TERRAIN_VALUE;
+  } catch {
+    return false;
+  }
+}
+
+/** The pool stats the window hook reports, without importing the pool module. */
+interface PoolHookStats {
+  textures: number;
+  textureBytes: number;
+  inflight: number;
+  queueDepth: number;
+  requests: number;
+  meanDecodeMs: number;
+}
+
+/** Read the pool stats through the window hook the pool module publishes. */
+function readHookPoolStats(): PoolHookStats | null {
+  try {
+    const scope = globalThis as unknown as {
+      __getDemPoolStats?: (tileUrl?: string) => PoolHookStats | null;
+    };
+    if (typeof scope.__getDemPoolStats !== "function") return null;
+    return scope.__getDemPoolStats() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** The GPU ms of the first layer whose id ends with the suffix, if the timer kept any. */
+function gpuMsFor(msByLayer: Record<string, number>, suffix: string): number | undefined {
+  for (const [name, ms] of Object.entries(msByLayer)) {
+    if (name.endsWith(suffix)) return ms;
+  }
+  return undefined;
 }
 
 /** Read the band-bake costs without creating work when the bake never ran. */

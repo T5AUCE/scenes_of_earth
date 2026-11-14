@@ -10,9 +10,7 @@ import {
   type StripSide,
 } from "../workers/dem-decode";
 import type { DemWorkerRequest, DemWorkerResponse } from "../workers/dem-worker";
-
-/** One tile the layer wants, with the x wrapped; array order is the loading priority. */
-export interface WantedTile { z: number; x: number; y: number; tier: 'pinned' | 'view' | 'partner' | 'parent' | 'ring' }
+import type { WantedTile } from "./dem-plan";
 
 /** A texture handle the pool hands to the layer; only the store knows what it is. */
 export type DemTexture = object;
@@ -63,6 +61,7 @@ export interface DemPoolStats {
   awaitingUpload: number;
   strips: number;
   failures: number;
+  requests: number;
   loaded: number;
   uploaded: number;
   cancelled: number;
@@ -177,7 +176,8 @@ interface TextureEntry {
   lastUsedFrame: number;
   pinned: boolean;
   uploadedAt: number;
-  drawable: boolean;
+  /** When the tile first had every neighbour it waits for, or null while it still waits. */
+  drawableAt: number | null;
 }
 
 interface Job {
@@ -191,8 +191,8 @@ type HaloPatch =
   | { target: number; source: number; corner: number };
 
 /**
- * The textures of one tile url. The layer calls `update` and `uploadPending` once per frame
- * and repaints again while `needsRepaint` holds, so capped uploads and the drawable wait end.
+ * The textures of one tile url. Layers call `syncFrame` once per map frame and repaint again
+ * while `needsRepaint` holds, so capped uploads and the drawable wait end.
  */
 export class DemPool {
   private readonly tileUrl: string;
@@ -202,6 +202,7 @@ export class DemPool {
   private readonly workerLoads: number[];
   private store: DemTextureStore | null;
   private frame = 0;
+  private isMapFrameOpen = false;
   private wantedList: readonly WantedTile[] = [];
   private readonly wanted = new Map<number, WantedTile>();
   private readonly textures = new Map<number, TextureEntry>();
@@ -213,6 +214,7 @@ export class DemPool {
   private readonly jobs = new Map<number, Job>();
   private readonly patches: HaloPatch[] = [];
   private readonly scratch = new Float32Array(TEXTURE_SIZE_PX ** 2);
+  private requests = 0;
   private loaded = 0;
   private uploaded = 0;
   private cancelled = 0;
@@ -230,6 +232,23 @@ export class DemPool {
       worker.onResponse((response) => this.handleResponse(response));
       return worker;
     });
+  }
+
+  /**
+   * Update and upload for a map frame. Every layer that draws or prepares from this pool calls
+   * it, but only the first call of a frame works, so the cap holds however many layers there are.
+   */
+  syncFrame(wanted: readonly WantedTile[]): void {
+    if (this.isMapFrameOpen) return;
+
+    this.isMapFrameOpen = true;
+    this.update(wanted);
+    this.uploadPending();
+  }
+
+  /** Let the next `syncFrame` work; the map calls this when it finishes drawing a frame. */
+  endMapFrame(): void {
+    this.isMapFrameOpen = false;
   }
 
   /** Take this frame's wanted list: cancel what nobody wants and start the best missing loads. */
@@ -279,7 +298,7 @@ export class DemPool {
       if (this.pending.has(key) && this.hasRoom()) return true;
 
       const entry = this.textures.get(key);
-      if (entry && !entry.drawable && now - entry.uploadedAt < DRAWABLE_CAP_MS) return true;
+      if (entry?.drawableAt === null && now - entry.uploadedAt < DRAWABLE_CAP_MS) return true;
     }
     return false;
   }
@@ -294,10 +313,25 @@ export class DemPool {
    * in the ring has landed or failed, it stays drawable while neighbours change around it.
    */
   isDrawable(tile: Pick<WantedTile, "z" | "x" | "y">): boolean {
-    const entry = this.textures.get(tileKey(tile));
-    if (!entry) return false;
+    return this.drawableForMs(tile) !== null;
+  }
 
-    return entry.drawable || this.now() - entry.uploadedAt >= DRAWABLE_CAP_MS;
+  /** Whether the pool holds a tile or already fetches it, so the warmer skips it. */
+  has(tile: Pick<WantedTile, "z" | "x" | "y">): boolean {
+    const key = tileKey(tile);
+    return this.textures.has(key) || this.pending.has(key) || this.jobs.has(key);
+  }
+
+  /** How long a tile has been able to draw, or null while it cannot or has no texture. */
+  drawableForMs(tile: Pick<WantedTile, "z" | "x" | "y">): number | null {
+    const entry = this.textures.get(tileKey(tile));
+    if (!entry) return null;
+
+    const now = this.now();
+    if (entry.drawableAt !== null) return now - entry.drawableAt;
+
+    const cappedAt = entry.uploadedAt + DRAWABLE_CAP_MS;
+    return now >= cappedAt ? now - cappedAt : null;
   }
 
   /** Forget every texture handle because the GL context is gone; strips and memos stay. */
@@ -331,6 +365,7 @@ export class DemPool {
       awaitingUpload: this.pending.size,
       strips: this.strips.size,
       failures: this.failures.size,
+      requests: this.requests,
       loaded: this.loaded,
       uploaded: this.uploaded,
       cancelled: this.cancelled,
@@ -411,6 +446,7 @@ export class DemPool {
     this.workers[worker].post({ type: "load", id: key, url });
     this.workerLoads[worker]++;
     this.jobs.set(key, { tile, worker });
+    this.requests++;
   }
 
   private handleResponse(response: DemWorkerResponse): void {
@@ -524,7 +560,7 @@ export class DemPool {
       lastUsedFrame: this.frame,
       pinned: tile.tier === "pinned",
       uploadedAt,
-      drawable: this.settledNow(tile, uploadedAt),
+      drawableAt: this.settledNow(tile, uploadedAt) ? uploadedAt : null,
     });
     this.pending.delete(key);
     this.uploaded++;
@@ -575,7 +611,9 @@ export class DemPool {
 
   private latchDrawable(): void {
     for (const entry of this.textures.values()) {
-      if (!entry.drawable && this.settledNow(entry, entry.uploadedAt)) entry.drawable = true;
+      if (entry.drawableAt === null && this.settledNow(entry, entry.uploadedAt)) {
+        entry.drawableAt = this.now();
+      }
     }
   }
 
@@ -608,6 +646,8 @@ interface PoolEntry {
 export interface DemPoolMap {
   getCanvas(): EventTarget;
   triggerRepaint(): void;
+  on(type: "render", listener: () => void): unknown;
+  off(type: "render", listener: () => void): unknown;
 }
 
 export interface AcquireDemPoolOptions {
@@ -616,12 +656,30 @@ export interface AcquireDemPoolOptions {
   tileUrl: string;
   createStore?: (gl: WebGL2RenderingContext) => DemTextureStore;
   createWorker?: () => DemWorkerPort;
+  now?: () => number;
 }
 
 // Layers removed by a context loss come back within moments, so the pool waits this long for them.
 const LOST_CONTEXT_GRACE_MS = 30 * 1000;
 
 const pools = new WeakMap<DemPoolMap, Map<string, PoolEntry>>();
+
+// One pool per tile url, so the warmer and the trial read it without the map.
+const poolsByUrl = new Map<string, DemPool>();
+
+/** Whether the url's pool holds a tile or already fetches it, so the warmer skips it. */
+export function demPoolHas(tileUrl: string, tile: Pick<WantedTile, "z" | "x" | "y">): boolean {
+  return poolsByUrl.get(tileUrl)?.has(tile) ?? false;
+}
+
+/** The stats of the url's pool, or the summed stats when no url is given. */
+export function demPoolStats(tileUrl?: string): DemPoolStats | null {
+  if (tileUrl) return poolsByUrl.get(tileUrl)?.stats() ?? null;
+  const live = [...poolsByUrl.values()];
+  if (live.length === 0) return null;
+  if (live.length === 1) return live[0].stats();
+  return sumPoolStats(live.map((pool) => pool.stats()));
+}
 
 /** Get the map's pool for a tile url, creating it on first use; pair with `releaseDemPool`. */
 export function acquireDemPool(options: AcquireDemPoolOptions): DemPool {
@@ -659,6 +717,7 @@ function createEntry(
     tileUrl,
     store: createStore(gl),
     createWorker: options.createWorker ?? createDemWorker,
+    now: options.now,
     onChange: () => map.triggerRepaint(),
   });
   const onLost = () => {
@@ -669,6 +728,7 @@ function createEntry(
   const onRestored = () => {
     entry.lost = false;
   };
+  const onRender = () => pool.endMapFrame();
   const entry: PoolEntry = {
     pool,
     refs: 0,
@@ -677,13 +737,16 @@ function createEntry(
     dispose: () => {
       canvas.removeEventListener("webglcontextlost", onLost);
       canvas.removeEventListener("webglcontextrestored", onRestored);
+      map.off("render", onRender);
     },
   };
   canvas.addEventListener("webglcontextlost", onLost);
   canvas.addEventListener("webglcontextrestored", onRestored);
+  map.on("render", onRender);
   const mapPools = pools.get(map) ?? new Map<string, PoolEntry>();
   mapPools.set(tileUrl, entry);
   pools.set(map, mapPools);
+  poolsByUrl.set(tileUrl, pool);
   return entry;
 }
 
@@ -697,6 +760,49 @@ function destroyEntry(map: DemPoolMap, tileUrl: string, entry: PoolEntry): void 
   entry.dispose();
   entry.pool.destroy();
   pools.get(map)?.delete(tileUrl);
+  if (poolsByUrl.get(tileUrl) === entry.pool) poolsByUrl.delete(tileUrl);
+}
+
+function sumPoolStats(all: DemPoolStats[]): DemPoolStats {
+  const texturesPerZoom: Record<number, number> = {};
+  let loaded = 0;
+  let totalDecodeMs = 0;
+  for (const stats of all) {
+    for (const [zoom, count] of Object.entries(stats.texturesPerZoom)) {
+      texturesPerZoom[Number(zoom)] = (texturesPerZoom[Number(zoom)] ?? 0) + count;
+    }
+    loaded += stats.loaded;
+    totalDecodeMs += stats.meanDecodeMs * stats.loaded;
+  }
+  const summed = (pick: (stats: DemPoolStats) => number): number => {
+    return all.reduce((total, stats) => total + pick(stats), 0);
+  };
+  return {
+    textures: summed((stats) => stats.textures),
+    pinnedTextures: summed((stats) => stats.pinnedTextures),
+    textureBytes: summed((stats) => stats.textureBytes),
+    texturesPerZoom,
+    inflight: summed((stats) => stats.inflight),
+    queueDepth: summed((stats) => stats.queueDepth),
+    awaitingUpload: summed((stats) => stats.awaitingUpload),
+    strips: summed((stats) => stats.strips),
+    failures: summed((stats) => stats.failures),
+    requests: summed((stats) => stats.requests),
+    loaded,
+    uploaded: summed((stats) => stats.uploaded),
+    cancelled: summed((stats) => stats.cancelled),
+    lastDecodeMs: Math.max(...all.map((stats) => stats.lastDecodeMs)),
+    meanDecodeMs: loaded === 0 ? 0 : totalDecodeMs / loaded,
+  };
+}
+
+try {
+  // The trial reads the pool through the page, so it stays a window hook, not an import.
+  (globalThis as unknown as { __getDemPoolStats?: typeof demPoolStats }).__getDemPoolStats = (
+    tileUrl?: string,
+  ) => demPoolStats(tileUrl);
+} catch {
+  // A missing window must not break the pool it would report on.
 }
 
 /** Start a dem-worker; the bundler picks the file up from this `new URL`. */

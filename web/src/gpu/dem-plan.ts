@@ -1,8 +1,6 @@
+import { MAX_CONTOUR_ZOOM } from "../contour-ladder";
 import { mercatorY, tileInScene } from "../render/tile-viewport";
 import type { Bbox } from "../types";
-
-/** The DEM level stops where the contour lines stop changing, like the contour ladder's cap. */
-const MAX_DEM_ZOOM = 12;
 
 /** The pinned base moves one level coarser when the fit level needs more tiles than this. */
 const PINNED_TILE_LIMIT = 48;
@@ -143,7 +141,7 @@ export function demLevels(
   maxZoom: number,
   blendWindow: number,
 ): DemLevels {
-  const top = Math.min(maxZoom, MAX_DEM_ZOOM);
+  const top = Math.min(maxZoom, MAX_CONTOUR_ZOOM);
   const clampLevel = (level: number) => Math.min(Math.max(level, fitLevel), top);
   const whole = Math.floor(zoom);
   const lower = clampLevel(whole);

@@ -11,23 +11,24 @@ import {
   formatBytes,
   formatDevStats,
   formatGpuPart,
+  formatPoolPart,
   formatTileSettlePart,
   formatWarmerPart,
   framesPerSecond,
   layerForSource,
   entryStats,
   isWarmerEnabled,
+  noteDwellWarmerRequest,
   noteEntryGap,
   noteEntryWait,
   noteSceneOpen,
   noteSceneReady,
-  noteWarmerRequest,
   pruneStamps,
   renderDevStats,
   sceneLoadStats,
   setPreloadDisabled,
   setWarmerEnabled,
-  setWarmerProgress,
+  setWarmerEntryProgress,
   shouldShowDevStats,
   startDevStats,
   TileSettleTracker,
@@ -863,22 +864,21 @@ test("the badge line gains the tile part only while tracking", () => {
   assert.ok(withTiles.includes("tiles terrain 120 ms 3 req"));
 });
 
-test("the warmer badge shows progress and per-layer request counts", () => {
+test("the warmer badge shows entry progress apart from dwell launches", () => {
   setWarmerEnabled(true);
   try {
     beginWarmer();
-    noteWarmerRequest("terrain");
-    noteWarmerRequest("terrain");
-    noteWarmerRequest("basemap");
-    setWarmerProgress(4, 96);
+    setWarmerEntryProgress(4, 96);
+    noteDwellWarmerRequest();
+    noteDwellWarmerRequest();
 
     assert.deepEqual(warmerSnapshot(), {
-      progress: { done: 4, total: 96 },
-      counts: { terrain: 2, basemap: 1, contours: 0 },
+      entry: { done: 4, total: 96 },
+      dwell: 2,
     });
     assert.equal(
       formatWarmerPart(warmerSnapshot()),
-      "warmer 4/96 tiles terrain 2 basemap 1 contours 0",
+      "warmer entry 4/96 dwell 2",
     );
     const stats = {
       fps: 60,
@@ -891,12 +891,102 @@ test("the warmer badge shows progress and per-layer request counts", () => {
       gpuUnavailable: true,
       longtasks: 0,
     };
-    assert.ok(formatDevStats({ ...stats, warmer: warmerSnapshot() }).includes("warmer 4/96"));
+    assert.ok(formatDevStats({ ...stats, warmer: warmerSnapshot() }).includes("warmer entry 4/96"));
     beginWarmer();
 
-    assert.deepEqual(warmerSnapshot().counts, { terrain: 0, basemap: 0, contours: 0 });
+    assert.deepEqual(warmerSnapshot(), { entry: { done: 0, total: 0 }, dwell: 0 });
   } finally {
     setWarmerEnabled(false);
+  }
+});
+
+test("the pool part lists textures, fetches, requests and decode ms", () => {
+  assert.equal(
+    formatPoolPart({
+      textures: 32,
+      textureMB: 34.1,
+      inflight: 2,
+      queued: 4,
+      requests: 120,
+      decodeMs: 3.25,
+    }),
+    "pool 32 tex 34.1 MB inflight 2 queued 4 req 120 decode 3.3 ms",
+  );
+  assert.equal(
+    formatPoolPart({
+      textures: 32,
+      textureMB: 34.1,
+      inflight: 2,
+      queued: 4,
+      requests: 120,
+      decodeMs: 3.25,
+      reliefMs: 1.24,
+      contourMs: 0.84,
+    }),
+    "pool 32 tex 34.1 MB inflight 2 queued 4 req 120 decode 3.3 ms"
+      + " relief 1.2 ms contour 0.8 ms",
+  );
+});
+
+test("the badge line gains the pool part only with pool data", () => {
+  const stats = {
+    fps: 60,
+    worstMs: 33,
+    zoom: 5.25,
+    loadMs: null,
+    requests: 2,
+    bytes: 1536,
+    gpuMs: {},
+    gpuUnavailable: true,
+    longtasks: 0,
+  };
+  const pool = {
+    textures: 32,
+    textureMB: 34.1,
+    inflight: 2,
+    queued: 4,
+    requests: 120,
+    decodeMs: 3.25,
+  };
+  assert.ok(!formatDevStats(stats).includes("pool "));
+  assert.ok(formatDevStats({ ...stats, pool }).includes("pool 32 tex 34.1 MB"));
+});
+
+test("the pool badge counts every request start, not only decoded tiles", () => {
+  const window = new Window({ url: "http://localhost/" });
+  const stubs = installFrameStubs(window);
+  const scope = globalThis as unknown as {
+    location?: unknown;
+    __getDemPoolStats?: unknown;
+    __gpuMs?: unknown;
+  };
+  const previousLocation = scope.location;
+  const previousHook = scope.__getDemPoolStats;
+  scope.location = { search: "?terrain=gpu" };
+  scope.__getDemPoolStats = () => ({
+    textures: 32,
+    textureBytes: 34.1 * 1024 * 1024,
+    inflight: 2,
+    queueDepth: 4,
+    requests: 120,
+    meanDecodeMs: 3.25,
+  });
+  try {
+    const badge = window.document.createElement("div");
+    badge.hidden = true;
+    window.document.body.append(badge);
+    const loop = new DevStatsLoop(badge, { getZoom: () => 5 });
+    loop.start();
+    stubs.scheduled[0](6000);
+
+    assert.ok(badge.textContent?.includes("pool 32 tex 34.1 MB"));
+    assert.ok(badge.textContent?.includes("req 120"));
+    loop.stop();
+  } finally {
+    scope.location = previousLocation;
+    scope.__getDemPoolStats = previousHook;
+    stubs.restore();
+    window.happyDOM.abort();
   }
 });
 

@@ -416,6 +416,71 @@ test("viewRecord counts failures by kind and lists each message once", () => {
   assert.deepEqual(record.legend_classes, []);
 });
 
+test("viewRecord carries the pool counts when the GPU path reports them", () => {
+  const record = viewRecord({
+    spot: "Nairobi",
+    scene: "sample:kenya",
+    zoom: "fitted",
+    sample: {
+      zoom: 8,
+      centre: [640, 400],
+      labelCount: 0,
+      labelLines: [],
+      lineCount: 0,
+      tilesLoaded: true,
+      pool: {
+        textures: 32,
+        textureMB: 34.14,
+        inflight: 2,
+        queued: 4,
+        requests: 120,
+        decodeMs: 3.25,
+        reliefMs: 1.2,
+        contourMs: undefined,
+      },
+    },
+    failures: [],
+    messages: [],
+    timedOut: false,
+  });
+
+  assert.equal(record.pool_textures, 32);
+  assert.equal(record.pool_texture_mb, 34.1);
+  assert.equal(record.pool_inflight, 2);
+  assert.equal(record.pool_queued, 4);
+  assert.equal(record.pool_requests, 120);
+  assert.equal(record.pool_decode_ms, 3.25);
+  assert.equal(record.pool_relief_ms, 1.2);
+  assert.equal(record.pool_contour_ms, null);
+  assert.equal(record.line_features, 0);
+});
+
+test("viewRecord leaves pool fields null without the GPU path", () => {
+  const record = viewRecord({
+    spot: "S",
+    scene: "x",
+    zoom: "fitted",
+    sample: { zoom: 8, centre: [0, 0], labelLines: [], tilesLoaded: true },
+    failures: [],
+    messages: [],
+    timedOut: false,
+  });
+
+  assert.equal(record.pool_textures, null);
+  assert.equal(record.pool_texture_mb, null);
+});
+
+test("sameSample ignores pool counts while settling", () => {
+  assert.equal(
+    sameSample(
+      { ready: true, pool: { textures: 1 } },
+      { ready: true, pool: { textures: 2 } },
+    ),
+    true,
+  );
+  assert.equal(sameSample({ ready: true }, { ready: false }), false);
+});
+
 test("viewRecord reports a view without a sample as not loaded", () => {
   const record = viewRecord({
     spot: "S",

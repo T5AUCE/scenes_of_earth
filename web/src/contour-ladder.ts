@@ -38,7 +38,7 @@ export const FADE_SPAN_ZOOM = 1.5;
 export const LABEL_SPARSE_FALLBACK = true;
 
 const MIN_BOLD_LEVELS = 3;
-const MAX_CONTOUR_ZOOM = 12;
+export const MAX_CONTOUR_ZOOM = 12;
 
 /** A height step with the zoom where it starts to show and the zoom where it is first traced. */
 export interface LadderTier {

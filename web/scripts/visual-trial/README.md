@@ -212,6 +212,14 @@ per-layer GPU timings answer the real-GPU question in a desktop browser instead.
 - `context_restored` checks one `WEBGL_lose_context` loss/restore cycle at the first GPU view of
   each spot. It is true when the renderer stays GPU and the frame readback is unchanged, false
   on a mismatch, `"unsupported"` if the extension is missing, or null when not exercised.
+- `pool_textures`, `pool_texture_mb`, `pool_inflight`, `pool_queued`, `pool_requests` and
+  `pool_decode_ms` record the shared DEM pool under `?terrain=gpu`: texture count and megabytes,
+  in-flight and queued fetches, completed requests and mean decode milliseconds.
+  `pool_relief_ms` and `pool_contour_ms` record the relief and contour GPU milliseconds when the
+  timer query kept them. All eight are null without the flag, so old runs stay comparable.
+
+Set `SOE_TERRAIN_GPU=1` to append `?terrain=gpu` to every trial scene link, so the run warms
+and draws through the GPU relief path while the default run keeps the raster path.
 
 Contour layer ids are matched by the patterns at the top of `measure.mjs`.
 

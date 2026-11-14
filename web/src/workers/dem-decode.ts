@@ -23,7 +23,16 @@ const STRIP_LENGTH = DEM_TILE_SIZE_PX * STRIP_WIDTH_PX;
 const TOP_STRIP_START = 0;
 const BOTTOM_STRIP_START = STRIP_LENGTH;
 const LEFT_STRIP_START = BOTTOM_STRIP_START + STRIP_LENGTH;
-const RIGHT_STRIP_START = LEFT_STRIP_START + STRIP_LENGTH;
+const RIGHT_STRIP_START = LEFT_STRIP_START
+  + STRIP_LENGTH;
+
+const BYTES_PER_PIXEL = 4;
+const ALTERED_CANVAS_WARNING = "DEM canvas readback altered colours, so tiles need VideoFrame "
+  + "bytes and fail where it is unavailable. This usually comes from a browser privacy or "
+  + "anti-fingerprinting setting or an extension.";
+
+let canvasAltersBytes: boolean | null = null;
+let integrityWarningPosted = false;
 
 /** Load a tile, or null when the server has none; throws on any other failure. */
 export async function loadDemTile(url: string, signal: AbortSignal): Promise<DemTileData | null> {
@@ -80,6 +89,139 @@ export function stripOf(strips: Float32Array, side: StripSide): Float32Array {
   return strips.subarray(start, start + STRIP_LENGTH);
 }
 
+/**
+ * Read exact tile bytes from a bitmap, preferring VideoFrame because canvas readback can alter
+ * tile-size pixels while a small probe stays clean. Terrarium decoding stays in `decodeHeights`,
+ * so another encoding can reuse this.
+ */
+export async function extractBitmapRgba(bitmap: ImageBitmap): Promise<Uint8ClampedArray> {
+  if (typeof VideoFrame !== "undefined") {
+    try {
+      return await readBitmapFrame(bitmap);
+    } catch (error) {
+      const reason = (error as Error).message;
+      throw new Error(`DEM tile rejected because VideoFrame decode failed: ${reason}`);
+    }
+  }
+  if (canvasAltersBytes === null) {
+    // An unverifiable canvas is untrusted, so a probe failure fails the tile.
+    canvasAltersBytes = await probeCanvasAltersBytes().catch(() => true);
+  }
+  if (canvasAltersBytes) {
+    warnAlteredCanvasOnce();
+    throw new Error(
+      "DEM tile rejected because canvas readback alters pixel bytes, likely from a browser "
+        + "privacy or anti-fingerprinting setting, and VideoFrame is unavailable in this browser",
+    );
+  }
+  return readBitmapCanvas(bitmap);
+}
+
+async function readBitmapFrame(bitmap: ImageBitmap): Promise<Uint8ClampedArray> {
+  const frame = new VideoFrame(bitmap, { timestamp: 0 });
+  try {
+    const format = frame.format;
+    if (!format) throw new Error("VideoFrame reported no pixel format");
+    const raw = new Uint8Array(frame.allocationSize());
+    const layout = await frame.copyTo(raw);
+    const stride = layout[0]?.stride ?? bitmap.width * BYTES_PER_PIXEL;
+    const offset = layout[0]?.offset ?? 0;
+    return frameBytesToRgba(raw, format, bitmap.width, bitmap.height, stride, offset);
+  } finally {
+    frame.close();
+  }
+}
+
+/**
+ * Pack strided VideoFrame bytes into RGBA, swapping red and blue for BGR layouts. X formats
+ * carry no alpha, so those texels become opaque.
+ */
+export function frameBytesToRgba(
+  raw: Uint8Array,
+  format: string,
+  width: number,
+  height: number,
+  strideBytes: number,
+  offsetBytes: number,
+): Uint8ClampedArray {
+  const redFirst = format === "RGBA" || format === "RGBX";
+  const blueFirst = format === "BGRA" || format === "BGRX";
+  if (!redFirst && !blueFirst) throw new Error(`Unsupported VideoFrame format "${format}"`);
+  const rowBytes = width * BYTES_PER_PIXEL;
+  if (strideBytes < rowBytes) {
+    throw new Error(`VideoFrame stride ${strideBytes} is shorter than its ${rowBytes} byte row`);
+  }
+  if (raw.length < offsetBytes + (height - 1) * strideBytes + rowBytes) {
+    throw new Error("VideoFrame bytes are shorter than their layout claims");
+  }
+  const opaque = format === "RGBX" || format === "BGRX";
+  const rgba = new Uint8ClampedArray(width * height * BYTES_PER_PIXEL);
+  for (let row = 0; row < height; row++) {
+    const rowStart = offsetBytes + row * strideBytes;
+    for (let column = 0; column < width; column++) {
+      const source = rowStart + column * BYTES_PER_PIXEL;
+      const target = (row * width + column) * BYTES_PER_PIXEL;
+      rgba[target] = raw[source + (redFirst ? 0 : 2)];
+      rgba[target + 1] = raw[source + 1];
+      rgba[target + 2] = raw[source + (redFirst ? 2 : 0)];
+      rgba[target + 3] = opaque ? 255 : raw[source + 3];
+    }
+  }
+  return rgba;
+}
+
+async function probeCanvasAltersBytes(): Promise<boolean> {
+  const canvas = new OffscreenCanvas(DEM_TILE_SIZE_PX, DEM_TILE_SIZE_PX);
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  // A missing context cannot be verified, so the worker must not trust canvas bytes.
+  if (!context) return true;
+  const image = context.createImageData(DEM_TILE_SIZE_PX, DEM_TILE_SIZE_PX);
+  fillProbeRgba(image.data);
+  context.putImageData(image, 0, 0);
+  const { data } = context.getImageData(0, 0, DEM_TILE_SIZE_PX, DEM_TILE_SIZE_PX);
+  return canvasReadbackAltered(image.data, data);
+}
+
+function fillProbeRgba(data: Uint8ClampedArray): void {
+  // Neighbouring pixels spread across the byte range, so a size-dependent drift cannot hide.
+  for (let pixel = 0; pixel < data.length / BYTES_PER_PIXEL; pixel++) {
+    const base = pixel * BYTES_PER_PIXEL;
+    data[base] = pixel % 256;
+    data[base + 1] = (pixel * 7 + 13) % 256;
+    data[base + 2] = (pixel * 13 + 71) % 256;
+    // Opaque texels skip premultiplied-alpha rounding, so the round trip must stay exact.
+    data[base + 3] = 255;
+  }
+}
+
+/**
+ * Tell whether canvas readback changed any byte. Privacy noise moves single bytes by one,
+ * so the comparison is exact.
+ */
+export function canvasReadbackAltered(
+  expected: Uint8ClampedArray,
+  actual: Uint8ClampedArray,
+): boolean {
+  if (actual.length !== expected.length) return true;
+  for (let index = 0; index < expected.length; index++) {
+    if (actual[index] !== expected[index]) return true;
+  }
+  return false;
+}
+
+function readBitmapCanvas(bitmap: ImageBitmap): Uint8ClampedArray {
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const context = canvas.getContext("2d", { willReadFrequently: true })!;
+  context.drawImage(bitmap, 0, 0);
+  return context.getImageData(0, 0, canvas.width, canvas.height).data;
+}
+
+function warnAlteredCanvasOnce(): void {
+  if (integrityWarningPosted) return;
+  integrityWarningPosted = true;
+  console.warn(ALTERED_CANVAS_WARNING);
+}
+
 async function fetchHeights(
   url: string,
   signal: AbortSignal,
@@ -93,10 +235,16 @@ async function fetchHeights(
     premultiplyAlpha: "none",
     colorSpaceConversion: "none",
   });
-  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-  const context = canvas.getContext("2d", { willReadFrequently: true })!;
-  context.drawImage(bitmap, 0, 0);
-  bitmap.close();
-  const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
-  return { heights: decodeHeights(data), decodeMs: performance.now() - start };
+  try {
+    const rgba = await extractBitmapRgba(bitmap);
+    return { heights: decodeHeights(rgba), decodeMs: performance.now() - start };
+  } finally {
+    bitmap.close();
+  }
+}
+
+/** Forget the cached canvas verdict, so tests can probe both paths in one worker. */
+export function resetDemIntegrityForTests(): void {
+  canvasAltersBytes = null;
+  integrityWarningPosted = false;
 }

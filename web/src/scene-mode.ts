@@ -37,7 +37,7 @@ import { createMaskLayers } from "./gpu/mask-layer";
 import { keepThroughContextLoss } from "./gpu/tiled-layer";
 import { polygonParts } from "./label-filter";
 import { basemapPreloadSource } from "./layers/scene-preload";
-import { setTerrainBaseZoom } from "./layers/terrain";
+import { pinGpuTerrainBase, setTerrainBaseZoom } from "./layers/terrain";
 import {
   closeScenePreload,
   currentScenePreload,
@@ -434,8 +434,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       await nextEntryFrame();
       if (isStale()) return;
 
-      const fittedZoom = flight.zoom ?? map.getZoom();
-      currentScenePreload()?.start(fittedZoom);
+      currentScenePreload()?.start(fittedZoom());
       try {
         const preparation = await prepareBeforeFlight();
         if (isStale()) return;
@@ -452,6 +451,8 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
     // Everything that could pause the transition finishes here, so nothing waits once it starts.
     async function prepareBeforeFlight(): Promise<EntryPreparation> {
+      // The GPU relief loads the fitted level's tiles during preparation, so it needs the zoom now.
+      pinGpuTerrainBase(map, fittedZoom());
       const [, preparation] = await Promise.all([
         addMasksWhenLoaded(),
         mounted.prepareEntry(() => clock.time, entryRun.signal),
@@ -525,7 +526,11 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
     // The flight already fits the scene bounds with its padding, so its zoom refits the base.
     function refitTerrainBase() {
-      setTerrainBaseZoom(map, flight.zoom ?? map.getZoom());
+      setTerrainBaseZoom(map, fittedZoom());
+    }
+
+    function fittedZoom() {
+      return flight.zoom ?? map.getZoom();
     }
 
     async function coverWhenLanded(preparation: EntryPreparation) {

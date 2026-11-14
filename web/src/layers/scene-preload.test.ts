@@ -13,6 +13,7 @@ import {
 } from "../contour-ladder.ts";
 import { BASEMAP_SOURCE_ID, scenePyramidTiles } from "../render/tile-viewport.ts";
 import type { Bbox, TerrainStats } from "../types.ts";
+import { acquireDemPool, releaseDemPool } from "../gpu/dem-pool.ts";
 import {
   BASEMAP_PRELOAD_MAX_ZOOM,
   BASEMAP_PRELOAD_TILES,
@@ -141,6 +142,82 @@ test("a failed download reports its status so a missing tile can be remembered",
   const [task] = demSource(SMALL_SCENE).tasks(11);
 
   await assert.rejects(task.run(new AbortController()), /Bad response: 404/);
+});
+
+test("a GPU DEM download uses a plain fetch instead of the manager", async (t) => {
+  const requests: { url: string; priority?: string }[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init: { priority?: string }) => {
+    requests.push({ url, priority: init.priority });
+    return new Response("bytes", { status: 200 });
+  }) as typeof fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  let managerCalls = 0;
+  const fetcher: DemFetcher = {
+    fetchTile: async () => {
+      managerCalls += 1;
+      return { data: new Blob(["manager"]) };
+    },
+  };
+  await withTerrainFlag("?terrain=gpu", async () => {
+    const [task] = demSource(SMALL_SCENE, fetcher).tasks(11);
+
+    const blob = await task.run(new AbortController());
+
+    assert.equal(await blob?.text(), "bytes");
+    assert.equal(managerCalls, 0);
+    assert.deepEqual(requests, [{ url: task.key, priority: "low" }]);
+  });
+});
+
+test("a GPU DEM plan skips tiles the pool already holds", async () => {
+  const canvas = new EventTarget();
+  const listeners = new Set<() => void>();
+  const map = {
+    getCanvas: () => canvas,
+    triggerRepaint: () => {},
+    on: (_type: "render", listener: () => void) => void listeners.add(listener),
+    off: (_type: "render", listener: () => void) => void listeners.delete(listener),
+  };
+  const options = {
+    map,
+    gl: {} as WebGL2RenderingContext,
+    tileUrl: TEMPLATE,
+    createStore: () => ({ linear: true, create: () => ({}), patch: () => {}, remove: () => {} }),
+    createWorker: () => ({ post: () => {}, onResponse: () => {}, terminate: () => {} }),
+  };
+  const pool = acquireDemPool(options);
+  try {
+    await withTerrainFlag("?terrain=gpu", async () => {
+      const [first] = demSource(SMALL_SCENE).tasks(9.3);
+      const [z, x, y] = zxy(first.key);
+      pool.update([{ z, x, y, tier: "view" }]);
+
+      const keys = new Set(demSource(SMALL_SCENE).tasks(9.3).map((task) => task.key));
+
+      assert.equal(keys.has(first.key), false);
+      const dwell = demSource(SMALL_SCENE).dwell!(
+        { west: 36, south: -2, east: 38, north: 0 },
+        5,
+        9.3,
+      );
+      assert.ok(dwell.every((task) => task.key !== first.key));
+    });
+  } finally {
+    releaseDemPool(map, TEMPLATE);
+  }
+});
+
+test("a GPU DEM plan warms no tile the default plan skips", async () => {
+  let gpuKeys: Set<string> = new Set();
+  await withTerrainFlag("?terrain=gpu", async () => {
+    gpuKeys = new Set(demSource(SMALL_SCENE).tasks(9.3).map((task) => task.key));
+  });
+  const defaultKeys = new Set(demSource(SMALL_SCENE).tasks(9.3).map((task) => task.key));
+
+  for (const key of gpuKeys) assert.ok(defaultKeys.has(key), `gpu-only tile ${key}`);
 });
 
 test("contour traces use the global ladder keys and stop one level below the DEM", () => {
@@ -527,6 +604,19 @@ function fakeWarmerMap(): WarmerMap {
     off(_type: string, _listener: (event: object) => void): void {},
   };
   return map as unknown as WarmerMap;
+}
+
+/** Run with the address bar holding the search, so flag branches take effect. */
+async function withTerrainFlag(search: string, run: () => Promise<void>): Promise<void> {
+  const scope = globalThis as unknown as { location?: { search: string } };
+  const previous = scope.location;
+  scope.location = { search };
+  try {
+    await run();
+  } finally {
+    if (previous === undefined) delete scope.location;
+    else scope.location = previous;
+  }
 }
 
 /** Let resolved warmer tasks reach the test before it asserts. */

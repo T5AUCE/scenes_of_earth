@@ -74,6 +74,9 @@ const dependencies = {
     export function setTerrainBaseZoom(map, zoom) {
       globalThis.sceneModeTest.terrainBaseZooms.push([map, zoom]);
     }
+    export function pinGpuTerrainBase(map, zoom) {
+      globalThis.sceneModeTest.terrainPins.push([map, zoom]);
+    }
   `,
   "./map": `
     export const MAX_ZOOM = 24;
@@ -335,6 +338,7 @@ const dependencies = {
           const store = harness.mountStore;
           const preparationTime = getTime();
           (harness.preparationTimes ??= []).push(preparationTime);
+          (harness.pinsAtPreparation ??= []).push(harness.terrainPins.length);
           const aborted = new Promise((_, reject) => {
             const cancel = () => {
               const error = new Error("Entry preparation was cancelled");
@@ -444,10 +448,14 @@ export function createHarness() {
     syncNotices: [] as (string | null)[],
     requestedTime: null as string | null,
     preparationTimes: [] as (string | null)[],
+    // How many GPU relief pins had happened when each preparation started.
+    pinsAtPreparation: [] as number[],
     // The order in which the entry phases happened, so tests can assert it.
     events: [] as string[],
     // Every fitted zoom the scene asked the relief base to pin, so tests can assert it.
     terrainBaseZooms: [] as [unknown, number][],
+    // Every fitted zoom the scene pinned for the GPU relief before the flight.
+    terrainPins: [] as [unknown, number][],
     // Every class the body ever received, so tests can prove the scene UI never showed.
     classLog: [] as string[],
     legendsReady: false,

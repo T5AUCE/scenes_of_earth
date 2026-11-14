@@ -18,6 +18,11 @@ import {
   type LadderTier,
 } from "../contour-ladder";
 import {
+  BOLD_LINE_WIDTH_PX,
+  CONTOUR_OPACITY,
+  MINOR_LINE_WIDTH_PX,
+} from "../gpu/contour-shaders";
+import {
   addressSearch,
   contourMaxZoomSetting,
   gestureFlags,
@@ -39,10 +44,6 @@ import { currentScenePreload, type ScenePreloader } from "./tile-prefetch";
 
 export { levelsForZoom } from "../contour-ladder";
 
-const CONTOUR_OPACITY = 0.55;
-const MINOR_LINE_WIDTH_PX = 0.5;
-const BOLD_LINE_WIDTH_PX = 1.1;
-
 const LABEL_SIZE_PX = 10;
 const LABEL_SPACING_PX = 350;
 const LABEL_HALO_WIDTH_PX = 1;
@@ -55,6 +56,8 @@ const CONTOUR_BUFFER_PX = 1;
 const WORKER_ERROR_PREFIX = "Error: ";
 // A zoom step keeps its neighbours cached so sweeping zooms stop evicting them.
 const DEM_CACHE_TILES = 120;
+// Labels trace fewer heights, so this path keeps a smaller DEM cache.
+const LABELS_ONLY_DEM_CACHE_TILES = 60;
 // Ocean tiles stay missing, so the per-source memo caps how many 404 tiles it remembers.
 export const MAX_MISSING_DEM_TILES = 2000;
 const MAX_CONTOUR_ZOOM = 12;
@@ -64,9 +67,12 @@ type DemSource = InstanceType<typeof mlcontour.DemSource>;
 // The plugin has no manager disposal API, so visits reuse page-lifetime workers and caches.
 const demSources = new Map<string, DemSource>();
 
-/** Reuse a DEM cache and its protocols for relief and contours across scene visits. */
-export function sharedDemSource(tiles: TerrainTiles): DemSource {
-  const key = JSON.stringify([tiles.url, tiles.encoding, tiles.maxzoom]);
+/**
+ * Reuse a DEM cache and its protocols for relief and contours across scene visits. A labels-only
+ * overlay gets a smaller cache.
+ */
+export function sharedDemSource(tiles: TerrainTiles, isLabelsOnly = false): DemSource {
+  const key = JSON.stringify([tiles.url, tiles.encoding, tiles.maxzoom, isLabelsOnly]);
   const existing = demSources.get(key);
   if (existing) return existing;
 
@@ -75,7 +81,7 @@ export function sharedDemSource(tiles: TerrainTiles): DemSource {
     encoding: tiles.encoding,
     maxzoom: tiles.maxzoom,
     worker: true,
-    cacheSize: DEM_CACHE_TILES,
+    cacheSize: isLabelsOnly ? LABELS_ONLY_DEM_CACHE_TILES : DEM_CACHE_TILES,
   });
   source.setupMaplibre(maplibregl);
   memoizeMissingDemTiles(source);
@@ -168,12 +174,17 @@ export function cappedDemMaxZoom(nativeMaxzoom: number): number {
   return Math.min(nativeMaxzoom, cap);
 }
 
-/** Own stable, elevation-filtered contour tiers and labels for one scene. */
+/**
+ * Own stable, elevation-filtered contour tiers and labels for one scene. A labels-only overlay
+ * leaves the lines to the GPU contour layer and traces only the heights that carry labels.
+ */
 export class ContourOverlay {
   readonly legend = makeHtmlElement("div");
   readonly part: Part;
-  /** Both contour sources, so terrain watches line and label tiles for failures. */
+  /** The contour sources, so terrain watches line and label tiles for failures. */
   readonly contourSourceIds: readonly string[];
+  /** The contour plan, replaced when the unit changes. */
+  ladder!: ContourLadder;
   private readonly map: MapLibreMap;
   private readonly lineSourceId: string;
   private readonly labelSourceId: string;
@@ -182,7 +193,6 @@ export class ContourOverlay {
   private readonly bbox: LayerContext["layer"]["grid"]["bbox"];
   private readonly beforeId: string | undefined;
   private readonly maxzoom: number;
-  private ladder!: ContourLadder;
   private elevationUnit: string;
   private isOn = true;
   private color: string;
@@ -204,6 +214,7 @@ export class ContourOverlay {
     tiles: TerrainTiles,
     stats: TerrainStats,
     preload: ScenePreloader | null = currentScenePreload(),
+    private readonly isLabelsOnly = false,
   ) {
     const { map, layer, beforeId, display } = context;
     // The interval note shares the isotherm note's style so both legend lines read alike.
@@ -221,7 +232,9 @@ export class ContourOverlay {
     this.lineSourceId = `${layer.id}-contours`;
     // A separate label source keeps gesture invalidation off the cached line buckets.
     this.labelSourceId = `${layer.id}-labels-contours`;
-    this.contourSourceIds = [this.lineSourceId, this.labelSourceId];
+    this.contourSourceIds = isLabelsOnly
+      ? [this.labelSourceId]
+      : [this.lineSourceId, this.labelSourceId];
     this.elevationUnit = displayUnitFor(layer.units, display?.units);
     this.maxzoom = Math.min(MAX_CONTOUR_ZOOM, cappedDemMaxZoom(tiles.maxzoom + CONTOUR_OVERZOOM));
     this.part = {
@@ -258,6 +271,8 @@ export class ContourOverlay {
 
   /** Trace the scene's contour tiles ahead of the camera while the lines are on. */
   private setPreloaded(isPreloaded: boolean) {
+    if (this.isLabelsOnly) return;
+
     if (!isPreloaded) {
       this.preload?.remove(CONTOUR_PRELOAD_ID);
       return;
@@ -282,11 +297,22 @@ export class ContourOverlay {
     });
     this.labelFadeZeroed = false;
     const protocolOptions = {
-      thresholds: this.ladder.thresholds,
+      thresholds: this.isLabelsOnly ? labelThresholds(this.ladder) : this.ladder.thresholds,
       overzoom: CONTOUR_OVERZOOM,
       buffer: CONTOUR_BUFFER_PX,
       ...elevationMultiplier(this.elevationUnit),
     };
+    if (!this.isLabelsOnly) this.addLines(protocolOptions);
+    this.map.addSource(this.labelSourceId, {
+      type: "vector",
+      tiles: [this.dem.contourProtocolUrl({ ...protocolOptions })],
+      maxzoom: this.maxzoom,
+      ...terrainTileBounds(this.bbox),
+    });
+    this.addLabels(this.beforeId);
+  }
+
+  private addLines(protocolOptions: Parameters<DemSource["contourProtocolUrl"]>[0]) {
     this.map.addSource(this.lineSourceId, {
       type: "vector",
       tiles: [this.dem.contourProtocolUrl({ ...protocolOptions })],
@@ -294,22 +320,14 @@ export class ContourOverlay {
       maxzoom: this.maxzoom,
       ...terrainTileBounds(this.bbox),
     });
-    this.map.addSource(this.labelSourceId, {
-      type: "vector",
-      tiles: [this.dem.contourProtocolUrl({ ...protocolOptions })],
-      maxzoom: this.maxzoom,
-      ...terrainTileBounds(this.bbox),
-    });
     for (const [index, tier] of this.ladder.tiers.entries()) {
       this.addLine(tier, this.ladder.tiers[index - 1], this.beforeId);
     }
-    this.addLabels(this.beforeId);
   }
 
   private rebuild() {
     for (const id of this.part.layerIds) this.map.removeLayer(id);
-    this.map.removeSource(this.lineSourceId);
-    this.map.removeSource(this.labelSourceId);
+    this.removeSources();
     this.part.layerIds.length = 0;
     this.labelId = undefined;
     this.build();
@@ -462,7 +480,11 @@ export class ContourOverlay {
     this.preload?.remove(CONTOUR_PRELOAD_ID);
     this.map.off("zoomend", this.updateLegend);
     for (const id of this.part.layerIds) this.map.removeLayer(id);
-    this.map.removeSource(this.lineSourceId);
+    this.removeSources();
+  }
+
+  private removeSources() {
+    if (!this.isLabelsOnly) this.map.removeSource(this.lineSourceId);
     this.map.removeSource(this.labelSourceId);
   }
 }
@@ -485,6 +507,16 @@ function transparentHex(digits: string): string {
   const green = parseInt(expanded.slice(2, 4), 16);
   const blue = parseInt(expanded.slice(4, 6), 16);
   return `rgba(${red}, ${green}, ${blue}, 0)`;
+}
+
+/**
+ * Trace each label height from the tile zoom where its labels start to fade in, because the
+ * finer heights are the expensive traces and the labels hide them until then.
+ */
+function labelThresholds(ladder: ContourLadder): Record<number, number> {
+  return Object.fromEntries(
+    labelledTiers(ladder).map((tier) => [tier.entryZoom, tier.interval]),
+  );
 }
 
 function labelledTiers(ladder: ContourLadder): ContourLadder["labelTiers"] {
@@ -538,10 +570,6 @@ function elevationMultiplier(elevationUnit: string) {
   return { multiplier: convertValue(1, "m", "ft") };
 }
 
-function multipleOf(interval: number): ExpressionSpecification {
-  return ["==", ["%", ["get", "ele"], interval], 0];
-}
-
 function tierFade(entryZoom: number, opacity: number): ExpressionSpecification {
   return ["interpolate", ["linear"], ["zoom"], entryZoom, 0, entryZoom + FADE_SPAN_ZOOM, opacity];
 }
@@ -565,6 +593,10 @@ function tierFades(
     opacity.push(zoom, value);
   }
   return opacity;
+}
+
+function multipleOf(interval: number): ExpressionSpecification {
+  return ["==", ["%", ["get", "ele"], interval], 0];
 }
 
 /** MapLibre source bounds cannot express an unwrapped antimeridian bbox. */
