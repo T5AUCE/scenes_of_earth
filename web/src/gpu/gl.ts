@@ -46,6 +46,9 @@ function compileShader(gl: WebGL2RenderingContext, type: number, source: string)
   throw new Error(`Cannot compile a shader: ${log}`);
 }
 
+/** The WebGL default, which MapLibre also restores after its own texture uploads. */
+const DEFAULT_UNPACK_ALIGNMENT_BYTES = 4;
+
 /** Upload a texture of one channel (or RGBA for colors), throwing when the GPU rejects it. */
 export function uploadTexture(
   gl: WebGL2RenderingContext,
@@ -58,13 +61,6 @@ export function uploadTexture(
   const texture = gl.createTexture();
   if (!texture) throw new Error("Cannot allocate a texture");
 
-  const alignment = gl.getParameter(gl.UNPACK_ALIGNMENT) as number;
-  const flipY = gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL) as boolean;
-  const premultiply = gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL) as boolean;
-  const rowLength = gl.getParameter(gl.UNPACK_ROW_LENGTH) as number;
-  const skipRows = gl.getParameter(gl.UNPACK_SKIP_ROWS) as number;
-  const skipPixels = gl.getParameter(gl.UNPACK_SKIP_PIXELS) as number;
-  const unpackBuffer = gl.getParameter(gl.PIXEL_UNPACK_BUFFER_BINDING) as WebGLBuffer | null;
   gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
   gl.bindTexture(gl.TEXTURE_2D, texture);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -81,13 +77,14 @@ export function uploadTexture(
   gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
   gl.texImage2D(gl.TEXTURE_2D, 0, internal, width, height, 0, layout, type, data);
   const error = gl.getError();
-  gl.pixelStorei(gl.UNPACK_ALIGNMENT, alignment);
-  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, flipY);
-  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, premultiply);
-  gl.pixelStorei(gl.UNPACK_ROW_LENGTH, rowLength);
-  gl.pixelStorei(gl.UNPACK_SKIP_ROWS, skipRows);
-  gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, skipPixels);
-  gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, unpackBuffer);
+  // MapLibre restores the same defaults around its own uploads, so nothing relies on leftovers.
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, DEFAULT_UNPACK_ALIGNMENT_BYTES);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+  gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
+  gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
+  gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
 
   if (error !== gl.NO_ERROR) {
     gl.deleteTexture(texture);

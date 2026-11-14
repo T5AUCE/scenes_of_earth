@@ -989,7 +989,12 @@ function clipBasemapToArea(
     try {
       const previous: FilterSpecification | undefined = map.getFilter(id) ?? undefined;
       baseline.set(id, previous);
-      map.setFilter(id, previous ? ["all", previous, keep] as FilterSpecification : keep);
+      // Both branches combine already valid filters, so MapLibre need not validate them again.
+      map.setFilter(
+        id,
+        previous ? ["all", previous, keep] as FilterSpecification : keep,
+        { validate: false },
+      );
     } catch {
       baseline.delete(id);
     }

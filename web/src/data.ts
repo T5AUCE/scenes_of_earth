@@ -53,7 +53,10 @@ export async function readSteps(store: Store, path: string, first: number, count
 /** Reads the layer's whole inside-the-area mask. */
 export async function readMask(store: Store, layer: LayerDoc) {
   const raw = await readArray(store, layer.mask.path, [null, null]);
-  return Uint8Array.from(raw, (value) => value === 1 ? 1 : 0);
+  const mask = new Uint8Array(raw.length);
+  // A plain loop avoids the per-element callback cost of Uint8Array.from.
+  for (let index = 0; index < raw.length; index++) mask[index] = raw[index] === 1 ? 1 : 0;
+  return mask;
 }
 
 /** The layer's array for a role; throws when the layer has none. */
