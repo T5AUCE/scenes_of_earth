@@ -8,16 +8,17 @@ const FPS_WINDOW_MS = 1000;
 const WORST_WINDOW_MS = 5 * 1000;
 const REFRESH_MS = 500;
 
+// A gesture that never ends still settles, so continuous movement cannot hold the badge open.
+const SETTLE_TIMEOUT_MS = 10 * 1000;
+
 const BYTES_PER_KB = 1024;
 const BYTES_PER_MB = 1024 * 1024;
 
 const DEV_STATS_CLASS = "has-dev-stats";
 const LONGTASK_ENTRY = "longtask";
 
-const RELIEF_SUFFIX = "-relief";
-const CONTOUR_SUFFIX = "-contours";
+const RELIEF_LAYER_SUFFIX = "-relief";
 const CONTOUR_LINES_SUFFIX = "-contour-lines";
-const GPU_TERRAIN_VALUE = "gpu";
 
 /** The map surface the dev badge reads. Tile listeners stay optional for tests. */
 export type DevStatsMap = Pick<MapLibreMap, "getZoom">
@@ -37,6 +38,12 @@ export interface TileSettleSnapshot {
   terrain: TileStepStats;
   basemap: TileStepStats;
   contours: TileStepStats;
+}
+
+/** Pool activity for one gesture, so terrain and contour settle come from the pool. */
+export interface PoolSettleState {
+  requests: number;
+  viewReady: boolean;
 }
 
 /** Opening start and open-to-drawn time for the current scene. */
@@ -180,9 +187,9 @@ export class DevStatsLoop {
 
 /**
  * Track per-layer settle times across one camera gesture for the dev readout. The step
- * opens on movestart and stays open through sourcedata and idle, so zoomend and moveend
- * never discard requests or settle times mid-gesture. The tracker stays idle until
- * started, so production builds without the badge keep no listeners and no cost.
+ * opens on movestart and checks every render for the view tiles, so a drain mid-gesture
+ * settles without waiting for moveend while ring refills never hold it open. The tracker
+ * stays idle until started, so production builds without the badge keep no listeners.
  */
 export class TileSettleTracker {
   private stepStartMs: number | null = null;
@@ -197,10 +204,12 @@ export class TileSettleTracker {
     contours: new Set(),
   };
   private stopListening: () => void = () => {};
+  private poolRequestsAtStart: number | null = null;
 
   constructor(
     private readonly map: DevStatsMap,
     private readonly clock: () => number = () => performance.now(),
+    private readonly poolProbe?: () => PoolSettleState | null,
   ) {}
 
   start(): void {
@@ -214,12 +223,14 @@ export class TileSettleTracker {
     const loading = (event: unknown): void => this.noteRequest(event);
     const loaded = (event: unknown): void => this.noteLoaded(event);
     const drained = (): void => this.settleLoaded(this.clock());
+    const rendered = (): void => this.settlePool(this.clock());
     this.map.on("movestart", gestureStart);
     this.map.on("zoomstart", zoomStart);
     this.map.on("sourcedataloading", loading);
     this.map.on("sourcedata", loaded);
     this.map.on("moveend", drained);
     this.map.on("idle", drained);
+    this.map.on("render", rendered);
     this.stopListening = (): void => {
       this.map.off?.("movestart", gestureStart);
       this.map.off?.("zoomstart", zoomStart);
@@ -227,6 +238,7 @@ export class TileSettleTracker {
       this.map.off?.("sourcedata", loaded);
       this.map.off?.("moveend", drained);
       this.map.off?.("idle", drained);
+      this.map.off?.("render", rendered);
     };
   }
 
@@ -251,6 +263,9 @@ export class TileSettleTracker {
       this.seenSources[key].clear();
     }
     this.seedSeenSources();
+    this.poolRequestsAtStart = poolSettleState(this.poolProbe)?.requests ?? null;
+    // Held tiles settle at once instead of waiting for the next render or moveend.
+    this.settlePool(nowMs);
   }
 
   private seedSeenSources(): void {
@@ -285,14 +300,16 @@ export class TileSettleTracker {
   }
 
   /**
-   * Settle every requested layer whose sources already report loaded. A cached
-   * gesture emits no loads, so its end time is the settle time.
+   * Settle the basemap when its sources already report loaded. A cached gesture emits no
+   * loads, so its end time is the settle time. Terrain and contours have no MapLibre
+   * source, so they settle through the pool view readiness instead.
    */
   private settleLoaded(nowMs: number): void {
     const startMs = this.stepStartMs;
     if (startMs === null) return;
     for (const key of ["terrain", "basemap", "contours"] as const) {
       if (this.layers[key].settleMs !== null) continue;
+      if (key !== "basemap") continue;
       if (this.seenSources[key].size === 0) {
         this.layers[key].settleMs = nowMs - startMs;
         continue;
@@ -301,15 +318,51 @@ export class TileSettleTracker {
         this.layers[key].settleMs = nowMs - startMs;
       }
     }
+    this.settlePool(nowMs);
+  }
+
+  private settlePool(nowMs: number): void {
+    const startMs = this.stepStartMs;
+    if (startMs === null) return;
+    const state = poolSettleState(this.poolProbe);
+    if (!state) return;
+    if (nowMs - startMs >= SETTLE_TIMEOUT_MS) {
+      this.settleGesturePool(nowMs, state.requests);
+      return;
+    }
+    if (!state.viewReady) {
+      this.reopenGesturePool();
+      return;
+    }
+    this.settleGesturePool(nowMs, state.requests);
+  }
+
+  private reopenGesturePool(): void {
+    // A new view wave reopens timing while ring refills keep viewReady true.
+    for (const key of ["terrain", "contours"] as const) {
+      if (this.layers[key].settleMs !== null) this.layers[key].settleMs = null;
+    }
+  }
+
+  private settleGesturePool(nowMs: number, requests: number): void {
+    const startMs = this.stepStartMs;
+    if (startMs === null) return;
+    for (const key of ["terrain", "contours"] as const) {
+      if (this.layers[key].settleMs !== null) continue;
+      this.layers[key].settleMs = nowMs - startMs;
+      if (this.poolRequestsAtStart !== null) {
+        this.layers[key].requests = requests - this.poolRequestsAtStart;
+      }
+    }
   }
 }
 
-/** Map a source id to its dev-readout layer. Scene data and helpers map to null. */
+/** Map a source id to its dev-readout layer. Relief and contour lines are custom GPU
+ * layers with no MapLibre source, so only the basemap still settles through source events
+ * while terrain and contour settle come from the pool view readiness. */
 export function layerForSource(sourceId: string | undefined): TileLayerKey | null {
   if (!sourceId) return null;
   if (sourceId === BASEMAP_SOURCE_ID) return "basemap";
-  if (sourceId.endsWith(RELIEF_SUFFIX)) return "terrain";
-  if (sourceId.endsWith(CONTOUR_SUFFIX)) return "contours";
   return null;
 }
 
@@ -516,13 +569,13 @@ export interface DevStatsSnapshot {
   tiles?: TileSettleSnapshot;
   /** Warmer progress and request counts, present only while a scene preload runs. */
   warmer?: WarmerSnapshot;
-  /** Pool counts under `?terrain=gpu`, absent on the default path or without a pool. */
+  /** Pool counts, absent without a pool. Terrain and contour settle come from these. */
   pool?: GpuPoolSnapshot;
   /** Pre-flight wait and landing-to-fade gap of the last entry, absent outside an entry. */
   entry?: EntryStats;
 }
 
-/** The pool counts the badge shows under `?terrain=gpu`, with GPU ms when timed. */
+/** The pool counts the badge shows, with GPU ms when timed. */
 export interface GpuPoolSnapshot {
   textures: number;
   textureMB: number;
@@ -638,7 +691,7 @@ export function formatPoolPart(pool: GpuPoolSnapshot): string {
   return base + formatPoolGpuSuffix(pool);
 }
 
-/** The pool suffix for the badge line. It stays empty off the GPU terrain path. */
+/** The pool suffix for the badge line. It stays empty without a pool. */
 function formatPoolSuffix(pool?: GpuPoolSnapshot): string {
   if (!pool) return "";
   return ` · ${formatPoolPart(pool)}`;
@@ -670,9 +723,8 @@ function readGpuSnapshot(): { msByLayer: Record<string, number>; unavailable: bo
   }
 }
 
-/** Read the pool counts under `?terrain=gpu` without creating work elsewhere. */
+/** Read the pool counts without creating work elsewhere. */
 function readPoolSnapshot(msByLayer: Record<string, number>): GpuPoolSnapshot | undefined {
-  if (!isGpuTerrainEnabled()) return undefined;
   const stats = readHookPoolStats();
   if (!stats) return undefined;
   return {
@@ -682,18 +734,9 @@ function readPoolSnapshot(msByLayer: Record<string, number>): GpuPoolSnapshot | 
     queued: stats.queueDepth,
     requests: stats.requests,
     decodeMs: stats.meanDecodeMs,
-    reliefMs: gpuMsFor(msByLayer, RELIEF_SUFFIX),
+    reliefMs: gpuMsFor(msByLayer, RELIEF_LAYER_SUFFIX),
     contourMs: gpuMsFor(msByLayer, CONTOUR_LINES_SUFFIX),
   };
-}
-
-/** Whether the address selects the GPU terrain path, so the badge shows pool counts. */
-function isGpuTerrainEnabled(): boolean {
-  try {
-    return new URLSearchParams(location.search).get("terrain") === GPU_TERRAIN_VALUE;
-  } catch {
-    return false;
-  }
 }
 
 /** The pool stats the window hook reports, without importing the pool module. */
@@ -706,6 +749,21 @@ interface PoolHookStats {
   meanDecodeMs: number;
 }
 
+/** Read the pool settle state through an explicit probe or the window hook. */
+function poolSettleState(
+  probe?: () => PoolSettleState | null,
+): PoolSettleState | null {
+  if (probe) return probe();
+  const stats = readHookPoolStats();
+  if (!stats) return null;
+  const viewReady = readHookPoolReady();
+  if (viewReady === null) return null;
+  return {
+    requests: stats.requests,
+    viewReady,
+  };
+}
+
 /** Read the pool stats through the window hook the pool module publishes. */
 function readHookPoolStats(): PoolHookStats | null {
   try {
@@ -714,6 +772,19 @@ function readHookPoolStats(): PoolHookStats | null {
     };
     if (typeof scope.__getDemPoolStats !== "function") return null;
     return scope.__getDemPoolStats() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Read the view readiness through the window hook the pool module publishes. */
+function readHookPoolReady(): boolean | null {
+  try {
+    const scope = globalThis as unknown as {
+      __getDemPoolViewReady?: (tileUrl?: string) => boolean | null;
+    };
+    if (typeof scope.__getDemPoolViewReady !== "function") return null;
+    return scope.__getDemPoolViewReady() ?? null;
   } catch {
     return null;
   }

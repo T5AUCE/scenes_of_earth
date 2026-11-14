@@ -1,7 +1,6 @@
 /**
  * The relief fragment shader and its scalar reference. The reference runs the same arithmetic
- * as the shader, without the 8-bit slope rounding of `workers/shade-tile.ts`, so tests can
- * compare it with the raster path.
+ * as the shader, so tests can check the maths without a GL context.
  */
 import { RELIEF_LIGHTS } from "../layers/relief";
 import { DEM_TILE_SIZE_PX } from "../workers/dem-decode";

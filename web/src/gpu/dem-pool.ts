@@ -316,6 +316,18 @@ export class DemPool {
     return this.drawableForMs(tile) !== null;
   }
 
+  /**
+   * Whether every pinned and view tile of the last wanted list can draw. The ring stays
+   * out because it only looks ahead, so its refills never hold a gesture open.
+   */
+  areViewTilesDrawable(): boolean {
+    for (const tile of this.wantedList) {
+      if (tile.tier !== "view" && tile.tier !== "pinned") continue;
+      if (!this.isDrawable(tile)) return false;
+    }
+    return true;
+  }
+
   /** Whether the pool holds a tile or already fetches it, so the warmer skips it. */
   has(tile: Pick<WantedTile, "z" | "x" | "y">): boolean {
     const key = tileKey(tile);
@@ -681,6 +693,14 @@ export function demPoolStats(tileUrl?: string): DemPoolStats | null {
   return sumPoolStats(live.map((pool) => pool.stats()));
 }
 
+/** Whether the pools hold every pinned and view tile they want, null without a pool. */
+export function demPoolViewReady(tileUrl?: string): boolean | null {
+  if (tileUrl) return poolsByUrl.get(tileUrl)?.areViewTilesDrawable() ?? null;
+  const live = [...poolsByUrl.values()];
+  if (live.length === 0) return null;
+  return live.every((pool) => pool.areViewTilesDrawable());
+}
+
 /** Get the map's pool for a tile url, creating it on first use; pair with `releaseDemPool`. */
 export function acquireDemPool(options: AcquireDemPoolOptions): DemPool {
   const { map, gl, tileUrl } = options;
@@ -801,6 +821,9 @@ try {
   (globalThis as unknown as { __getDemPoolStats?: typeof demPoolStats }).__getDemPoolStats = (
     tileUrl?: string,
   ) => demPoolStats(tileUrl);
+  (
+    globalThis as unknown as { __getDemPoolViewReady?: typeof demPoolViewReady }
+  ).__getDemPoolViewReady = (tileUrl?: string) => demPoolViewReady(tileUrl);
 } catch {
   // A missing window must not break the pool it would report on.
 }

@@ -303,7 +303,6 @@ test("a zoom sweep records band medians with deltas against the baseline", async
           tilesLoaded: true,
           zoom: 5,
           labelCount: 0,
-          lineCount: 0,
           labelLines: [],
           centre: [0, 0],
           cardText: "",

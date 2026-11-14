@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { reliefExaggeration, RELIEF_LIGHTS, RELIEF_STRENGTH } from "../layers/relief.ts";
-import { shadeTile } from "../workers/shade-tile.ts";
+import { RELIEF_LIGHTS } from "../layers/relief.ts";
 import {
   demSlopeScale,
   LIGHT_TERMS,
@@ -10,18 +9,6 @@ import {
   reliefShade,
   type ReliefTaps,
 } from "./relief-shaders.ts";
-
-const TILE = { z: 10, x: 612, y: 513 };
-const SIZE_PX = 16;
-const BYTE = 255;
-// The raster path rounds each slope to a byte; planes on the byte grid take that rounding out.
-const MAX_BYTES = 1;
-const STORED_SLOPE_STEP = 8 / 255;
-
-/** The metres a plane rises per pixel for a stored slope that is a whole number of byte steps. */
-function gradientFor(levels: number, tileZoom: number): number {
-  return levels * STORED_SLOPE_STEP / (8 * demSlopeScale(tileZoom, SIZE_PX));
-}
 
 function planeAt(gradient: { x: number; y: number }) {
   return (column: number, row: number) => 5000 + gradient.x * column + gradient.y * row;
@@ -42,95 +29,6 @@ function tapsOf(height: (column: number, row: number) => number, column: number,
 }
 
 const SECANT_AT_40_DEG = 1 / Math.cos(40 * Math.PI / 180);
-
-function secantOf(fraction: number): number {
-  return Math.cosh(Math.PI * (1 - 2 * fraction));
-}
-
-// The vertex stage interpolates the secant, where the raster path takes it from the exact latitude.
-function rowSecant(tile: typeof TILE, row: number): number {
-  const count = 2 ** tile.z;
-  const north = secantOf(tile.y / count);
-  const south = secantOf((tile.y + 1) / count);
-  return (north - south) * (1 - (row + 0.5) / SIZE_PX) + south;
-}
-
-/** Shade a plane with the raster path and the reference, and compare every sampled pixel. */
-async function assertMatchesRasterPath(
-  tile: typeof TILE,
-  strength: number,
-  levels: { x: number; y: number },
-) {
-  const height = planeAt({
-    x: gradientFor(levels.x, tile.z),
-    y: gradientFor(levels.y, tile.z),
-  });
-  const loadHeights = async (neighbour: typeof TILE) => {
-    const heights = new Float32Array(SIZE_PX * SIZE_PX);
-    for (let index = 0; index < heights.length; index++) {
-      heights[index] = height(
-        (neighbour.x - tile.x) * SIZE_PX + (index % SIZE_PX),
-        (neighbour.y - tile.y) * SIZE_PX + Math.floor(index / SIZE_PX),
-      );
-    }
-    return heights;
-  };
-  const pixels = await shadeTile(tile, strength, loadHeights);
-  const exaggeration = reliefExaggeration(tile.z, strength);
-  const slopeScale = demSlopeScale(tile.z, SIZE_PX);
-  for (let row = 0; row < SIZE_PX; row += 5) {
-    for (let column = 0; column < SIZE_PX; column += 5) {
-      const shade = reliefShade(
-        tapsOf(height, column, row),
-        { slopeScale, exaggeration, latitudeSecant: rowSecant(tile, row) },
-      );
-      const offset = (row * SIZE_PX + column) * 4;
-      const alphaByte = pixels[offset + 3];
-      const whiteByte = pixels[offset] * alphaByte / BYTE;
-      const where = `${column},${row} at levels ${levels.x},${levels.y}`;
-      assert.ok(Math.abs(shade.alpha * BYTE - alphaByte) <= MAX_BYTES, `alpha ${where}`);
-      assert.ok(Math.abs(shade.white * BYTE - whiteByte) <= MAX_BYTES, `white ${where}`);
-    }
-  }
-}
-
-const SLOPE_LEVELS = [
-  { x: 0, y: 0 },
-  { x: 12, y: 0 },
-  { x: 0, y: -9 },
-  { x: -20, y: 7 },
-  { x: 40, y: 33 },
-  { x: -15, y: -60 },
-];
-
-test("the scalar shade matches the raster path at the default strength", async () => {
-  for (const levels of SLOPE_LEVELS) {
-    await assertMatchesRasterPath(TILE, RELIEF_STRENGTH.initial, levels);
-  }
-});
-
-test("the scalar shade matches the raster path at a high strength and zoom", async () => {
-  for (const levels of SLOPE_LEVELS) {
-    await assertMatchesRasterPath({ z: 12, x: 2448, y: 2052 }, 4, levels);
-  }
-});
-
-test("the scalar shade matches the raster path at a weak strength and high latitude", async () => {
-  for (const levels of SLOPE_LEVELS) {
-    await assertMatchesRasterPath({ z: 7, x: 70, y: 20 }, 0.5, levels);
-  }
-});
-
-test("the scalar shade matches the raster path with colour-under easing", async () => {
-  for (const levels of SLOPE_LEVELS) {
-    await assertMatchesRasterPath(TILE, RELIEF_STRENGTH.initial * 0.75, levels);
-  }
-});
-
-test("the scalar shade matches the raster path on slopes beyond the stored range", async () => {
-  await assertMatchesRasterPath(TILE, RELIEF_STRENGTH.initial, { x: 400, y: -300 });
-  await assertMatchesRasterPath(TILE, RELIEF_STRENGTH.initial, { x: -500, y: 250 });
-});
 
 test("flat ground shades to nothing", () => {
   const flat = { a: 5, b: 5, c: 5, d: 5, f: 5, g: 5, h: 5, i: 5 };

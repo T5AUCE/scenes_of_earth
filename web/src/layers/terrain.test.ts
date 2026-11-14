@@ -6,15 +6,26 @@ import type { Map as MapLibreMap } from "maplibre-gl";
 
 import { closeScenePreload, openScenePreload } from "./tile-prefetch.ts";
 
-const TERRAIN_SOURCES = ["terrain-relief", "terrain-contours"];
+const TERRAIN_SOURCES = ["terrain-labels-contours"];
 const WARNING = "Terrain shading or contour tiles could not be loaded";
 
 const rootUrl = new URL("./", import.meta.url).href;
 const mockModules = {
   "maplibre-gl": `export const addProtocol = () => {};`,
-  "../gpu/relief-layer": `export const addReliefLayer = () => globalThis.gpuHandles.relief;`,
+  "../gpu/relief-layer": `export const addReliefLayer = () => globalThis.gpuHandles?.relief ?? {
+    setStrength() {},
+    setBaseZoom() {},
+    prepare() { return true; },
+    destroy() {},
+  };`,
   "../gpu/contour-line-layer": `
-    export const addContourLineLayer = () => globalThis.gpuHandles.lines;
+    export const addContourLineLayer = () => globalThis.gpuHandles?.lines ?? {
+      setColor() {},
+      setLadder() {},
+      setBaseZoom() {},
+      prepare() { return true; },
+      destroy() {},
+    };
   `,
   "./contour-overlay": `
     export const sharedDemSource = () => ({
@@ -30,7 +41,7 @@ const mockModules = {
         }
       }
       part = { id: "contours", label: "Contours", layerIds: [] };
-      contourSourceIds = ["terrain-contours", "terrain-labels-contours"];
+      contourSourceIds = ["terrain-labels-contours"];
       units = "m";
       setColor() {}
       setUnits(unit) {
@@ -61,7 +72,6 @@ const {
   setTerrainBaseZoom,
   watchTerrainTiles,
 } = await import("./terrain.ts");
-const { ShadeRaster } = await import("./shade-raster.ts");
 hooks.deregister();
 
 test("a terrain view warms its elevation tiles with the HTTP-cache warmer", (t) => {
@@ -191,13 +201,12 @@ test("persistent failures without a loaded tile give a warning", (context) => {
   assert.deepEqual(reporter.notes, [WARNING]);
 });
 
-test("a persistent label-source failure warns while the line source stays healthy", (context) => {
-  const sources = ["terrain-relief", "terrain-contours", "terrain-labels-contours"];
+test("a persistent label-source failure warns", (context) => {
+  const sources = ["terrain-labels-contours"];
   const { map, emit } = fakeMap();
   const reporter = makeReporter(context);
   watchTerrainTiles(map as unknown as MapLibreMap, sources, reporter.report);
 
-  emit("sourcedata", { sourceId: "terrain-contours", tile: tile() });
   for (let failureCount = 0; failureCount < 3; failureCount += 1) {
     emit("error", { sourceId: "terrain-labels-contours", tile: tile(), error: failure() });
   }
@@ -221,6 +230,7 @@ test("the terrain view watches its label source for failures", (context) => {
       listeners.get(type)?.delete(listener);
     },
     setPaintProperty() {},
+    getZoom: () => 8,
   };
   const reporter = makeReporter(context);
   const view = createTerrainView({
@@ -271,31 +281,30 @@ test("a successful tile clears the warning", (context) => {
   watchTerrainTiles(map as unknown as MapLibreMap, TERRAIN_SOURCES, reporter.report);
 
   for (let failureCount = 0; failureCount < 3; failureCount += 1) {
-    emit("error", { sourceId: TERRAIN_SOURCES[1], tile: tile(), error: failure() });
+    emit("error", { sourceId: TERRAIN_SOURCES[0], tile: tile(), error: failure() });
   }
   assert.deepEqual(reporter.notes, [WARNING]);
 
-  emit("sourcedata", { sourceId: TERRAIN_SOURCES[1], tile: tile() });
+  emit("sourcedata", { sourceId: TERRAIN_SOURCES[0], tile: tile() });
   assert.deepEqual(reporter.notes, []);
 
-  emit("error", { sourceId: TERRAIN_SOURCES[1], tile: tile(), error: failure() });
+  emit("error", { sourceId: TERRAIN_SOURCES[0], tile: tile(), error: failure() });
   assert.deepEqual(reporter.notes, []);
 });
 
-test("a successful source does not mask another source's failures", (context) => {
+test("six failures still warn once", (context) => {
   const { map, emit } = fakeMap();
   const reporter = makeReporter(context);
   watchTerrainTiles(map as unknown as MapLibreMap, TERRAIN_SOURCES, reporter.report);
 
-  emit("sourcedata", { sourceId: TERRAIN_SOURCES[0], tile: tile() });
-  for (let failureCount = 0; failureCount < 3; failureCount += 1) {
-    emit("error", { sourceId: TERRAIN_SOURCES[1], tile: tile(), error: failure() });
+  for (let failureCount = 0; failureCount < 6; failureCount += 1) {
+    emit("error", { sourceId: TERRAIN_SOURCES[0], tile: tile(), error: failure() });
   }
 
   assert.deepEqual(reporter.notes, [WARNING]);
 });
 
-test("failures from different sources do not add up to a warning", (context) => {
+test("two failures do not warn on their own", (context) => {
   const { map, emit } = fakeMap();
   const reporter = makeReporter(context);
   watchTerrainTiles(map as unknown as MapLibreMap, TERRAIN_SOURCES, reporter.report);
@@ -309,20 +318,17 @@ test("failures from different sources do not add up to a warning", (context) => 
   assert.deepEqual(reporter.notes, []);
 });
 
-test("a source's success clears only its own warning", (context) => {
+test("a source's success clears its warning", (context) => {
   const { map, emit } = fakeMap();
   const reporter = makeReporter(context);
   watchTerrainTiles(map as unknown as MapLibreMap, TERRAIN_SOURCES, reporter.report);
 
   for (let failureCount = 0; failureCount < 3; failureCount += 1) {
-    emit("error", { sourceId: TERRAIN_SOURCES[1], tile: tile(), error: failure() });
+    emit("error", { sourceId: TERRAIN_SOURCES[0], tile: tile(), error: failure() });
   }
   assert.deepEqual(reporter.notes, [WARNING]);
 
   emit("sourcedata", { sourceId: TERRAIN_SOURCES[0], tile: tile() });
-  assert.deepEqual(reporter.notes, [WARNING]);
-
-  emit("sourcedata", { sourceId: TERRAIN_SOURCES[1], tile: tile() });
   assert.deepEqual(reporter.notes, []);
 });
 
@@ -336,35 +342,48 @@ test("the terrain view exposes its relief base refit", () => {
 });
 
 test("entry refits every terrain base on its map", (t) => {
-  const seen: number[] = [];
-  t.mock.method(ShadeRaster.prototype, "setBaseZoom", (zoom: number) => {
-    seen.push(zoom);
-  });
-  const { map } = terrainMap();
-  const { map: otherMap } = terrainMap();
-  const view = createTestTerrainView(map);
-  const other = createTestTerrainView(otherMap);
+  const gpu = gpuTerrain(t, { relief: () => true, lines: () => true });
+  const other = gpuTerrain(t, { relief: () => true, lines: () => true });
 
-  setTerrainBaseZoom(map, 5);
+  setTerrainBaseZoom(gpu.map as unknown as MapLibreMap, 5);
 
-  assert.deepEqual(seen, [5]);
+  assert.deepEqual(gpu.zooms, [5, 5]);
+  assert.deepEqual(other.zooms, []);
 
-  view.setBaseZoom(6);
+  gpu.view.setBaseZoom(6);
 
-  assert.deepEqual(seen, [5, 6]);
+  assert.deepEqual(gpu.zooms, [5, 5, 6, 6]);
 
-  view.destroy();
-  setTerrainBaseZoom(map, 7);
+  gpu.view.destroy();
+  setTerrainBaseZoom(gpu.map as unknown as MapLibreMap, 7);
 
-  assert.deepEqual(seen, [5, 6]);
+  assert.deepEqual(gpu.zooms, [5, 5, 6, 6]);
 
-  other.destroy();
+  other.view.destroy();
 });
 
 test("a failed contour setup rolls back its shading registration", (t) => {
-  const seen: number[] = [];
-  t.mock.method(ShadeRaster.prototype, "setBaseZoom", (zoom: number) => {
-    seen.push(zoom);
+  const zooms: number[] = [];
+  const handles = {
+    relief: {
+      setStrength() {},
+      setBaseZoom: (zoom: number) => zooms.push(zoom),
+      prepare: () => true,
+      destroy() {},
+    },
+    lines: {
+      setColor() {},
+      setLadder() {},
+      setBaseZoom: (zoom: number) => zooms.push(zoom),
+      prepare: () => true,
+      destroy() {},
+    },
+  };
+  const globals = globalThis as { gpuHandles?: unknown };
+  const previous = globals.gpuHandles;
+  globals.gpuHandles = handles;
+  t.after(() => {
+    globals.gpuHandles = previous;
   });
   const { map, removed } = terrainMap();
   const flag = globalThis as { contourOverlayShouldThrow?: boolean };
@@ -375,15 +394,15 @@ test("a failed contour setup rolls back its shading registration", (t) => {
     flag.contourOverlayShouldThrow = false;
   }
 
-  assert.ok(removed.includes("terrain-relief"));
+  assert.ok(removed.includes("terrain-credit"));
   setTerrainBaseZoom(map as unknown as MapLibreMap, 5);
 
-  assert.deepEqual(seen, []);
+  assert.deepEqual(zooms, []);
 
   const view = createTestTerrainView(map);
   setTerrainBaseZoom(map as unknown as MapLibreMap, 5);
 
-  assert.deepEqual(seen, [5]);
+  assert.deepEqual(zooms, [5, 5]);
 
   view.destroy();
 });
@@ -433,61 +452,6 @@ function failure() {
   return { name: "Error", message: "Network request failed" };
 }
 
-test("relief loads worker-shaded raster tiles instead of the contour protocol", () => {
-  const { map, sources } = terrainMap();
-  const tiles = {
-    url: "https://example.test/{z}/{x}/{y}",
-    encoding: "terrarium",
-    tile_size: 512,
-    maxzoom: 11,
-    source: { name: "DEM", licence: "open" },
-  };
-  const view = createTerrainView({
-    map,
-    store: Promise.resolve({}),
-    layer: {
-      id: "terrain",
-      title: "Terrain",
-      units: "m",
-      grid: { bbox: [0, 0, 1, 1], res: 1, nx: 2, ny: 2 },
-      tiles,
-      stats: {
-        min: 0,
-        max: 100,
-        mean: 50,
-        p2: 5,
-        p98: 95,
-        slope_p50_deg: 5,
-        slope_p90_deg: 10,
-        cell_m: 500,
-      },
-    },
-    shift: 0,
-    slots: { fill: "fill", shade: "shade", marks: "marks", lines: "lines" },
-    beforeId: undefined,
-    report: () => () => {},
-  } as unknown as Parameters<typeof createTerrainView>[0]);
-
-  const relief = sources.get("terrain-relief")!;
-  assert.equal(relief.type, "raster");
-  assert.match((relief.tiles as string[])[0], /^soeshade:\/\/\d+\/0\/\{z\}\/\{x\}\/\{y\}$/);
-
-  view.destroy();
-});
-
-test("relief is always a fading raster layer", () => {
-  const { map, layers, removed } = terrainMap();
-
-  const view = createTestTerrainView(map);
-
-  assert.equal(layers[0].type, "raster");
-  assert.equal((layers[0].paint as Record<string, unknown>)["raster-fade-duration"], 250);
-
-  view.destroy();
-
-  assert.ok(removed.includes("terrain-relief"));
-});
-
 test("terrain offers metres and feet and forwards the choice to contours", () => {
   const map = {
     addSource() {},
@@ -499,6 +463,7 @@ test("terrain offers metres and feet and forwards the choice to contours", () =>
     on() {},
     off() {},
     setPaintProperty() {},
+    getZoom: () => 8,
   };
   const view = createTerrainView({
     map,
@@ -567,6 +532,7 @@ function terrainMap() {
     on() {},
     off() {},
     setPaintProperty() {},
+    getZoom: () => 8,
   };
   return { map, sources, layers, removed };
 }
@@ -607,30 +573,12 @@ function createTestTerrainView(map: ReturnType<typeof terrainMap>["map"]) {
 
 const GPU_ENTRY_CAP_MS = 3 * 1000;
 
-test("a raster terrain view has no entry preparation of its own", () => {
-  const { map } = terrainMap();
-  const view = createTestTerrainView(map);
-
-  assert.equal(view.prepareEntry, undefined);
-
-  view.destroy();
-});
-
-test("pinning the GPU base before the flight leaves raster bases alone", (t) => {
-  const seen: number[] = [];
-  t.mock.method(ShadeRaster.prototype, "setBaseZoom", (zoom: number) => {
-    seen.push(zoom);
-  });
-  const raster = terrainMap();
-  const rasterView = createTestTerrainView(raster.map);
-  t.after(() => rasterView.destroy());
+test("pinning the terrain base before the flight refits the GPU layers", (t) => {
   const gpu = gpuTerrain(t, { relief: () => true, lines: () => true });
 
   pinGpuTerrainBase(gpu.map as unknown as MapLibreMap, 6);
-  pinGpuTerrainBase(raster.map as unknown as MapLibreMap, 7);
 
   assert.deepEqual(gpu.zooms, [6, 6]);
-  assert.deepEqual(seen, []);
 });
 
 test("entry steps both GPU layers on every render until neither has a tile left", async (t) => {
@@ -744,7 +692,10 @@ function gpuTerrain(
   steps: { relief: () => boolean; lines: () => boolean },
 ) {
   const zooms: number[] = [];
-  const handles: GpuHandles = {
+  const handles: GpuHandles & {
+    relief: { setStrength(): void };
+    lines: { setColor(): void; setLadder(): void };
+  } = {
     relief: {
       setStrength() {},
       setBaseZoom: (zoom) => zooms.push(zoom),
@@ -752,22 +703,23 @@ function gpuTerrain(
       destroy() {},
     },
     lines: {
+      setColor() {},
+      setLadder() {},
       setBaseZoom: (zoom) => zooms.push(zoom),
       prepare: steps.lines,
       destroy() {},
     },
   };
-  const globals = globalThis as { gpuHandles?: GpuHandles; location?: unknown };
-  const previousLocation = globals.location;
+  const globals = globalThis as { gpuHandles?: unknown };
+  const previousHandles = globals.gpuHandles;
   globals.gpuHandles = handles;
-  globals.location = { search: "?terrain=gpu" };
   const { map, ...rest } = terrainMap();
   const { map: events, emit } = fakeMap();
   Object.assign(map, { on: events.on, off: events.off, getZoom: () => 8 });
   const view = createTestTerrainView(map);
   t.after(() => {
     view.destroy();
-    globals.location = previousLocation;
+    globals.gpuHandles = previousHandles;
   });
   return { ...rest, map, view, zooms, emit };
 }

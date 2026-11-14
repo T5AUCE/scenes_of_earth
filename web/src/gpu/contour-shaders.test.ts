@@ -367,6 +367,54 @@ test("a blend of flat surfaces draws nothing, such as sea or a terrace at any we
   }
 });
 
+test("a lone partial source at weight 0.5 halves the coverage and leaves the line in place", () => {
+  const surface: HeightSurface = {
+    height: LINE_HEIGHT_M,
+    gradientX: STEEP_M_PER_PX,
+    gradientY: 0,
+    minM: 0,
+    maxM: 3,
+  };
+  const blended = blendSurfaces(surface, surface, 0, 0.5);
+  const coverageOf = (height: number) => 0.5 * contourCoverage(
+    height,
+    blended.metresPerPixel,
+    [tier(100)],
+    1,
+    blended.rangeM,
+  );
+  const expectedCoverage = 0.5 * contourCoverage(
+    LINE_HEIGHT_M,
+    STEEP_M_PER_PX,
+    [tier(100)],
+    1,
+    3,
+  );
+
+  assert.equal(blended.height, surface.height);
+  assert.equal(coverageOf(blended.height), expectedCoverage);
+});
+
+test("two sources totalling under 1 put the line where normalised weights do", () => {
+  const surfaceAt = (height: number): HeightSurface => ({
+    height,
+    gradientX: 0.5,
+    gradientY: 0,
+    minM: 0,
+    maxM: 3,
+  });
+  const partial = blendSurfaces(surfaceAt(LINE_HEIGHT_M), surfaceAt(LINE_HEIGHT_M + 2), 0.15, 0.3);
+  const normalised = blendSurfaces(surfaceAt(LINE_HEIGHT_M), surfaceAt(LINE_HEIGHT_M + 2), 1 / 3);
+
+  assert.ok(Math.abs(partial.height - normalised.height) < 1e-9);
+  assert.equal(partial.metresPerPixel, normalised.metresPerPixel);
+});
+
+test("the shader normalises the blend by the weight total and scales the coverage by it", () => {
+  assert.ok(CONTOUR_FRAGMENT_SHADER.includes("float totalWeight = uWeights.x + uWeights.y;"));
+  assert.ok(CONTOUR_FRAGMENT_SHADER.includes("contourCoverage(surface) * totalWeight"));
+});
+
 test("the shader skips the second sampler unless its weight is positive", () => {
   assert.ok(CONTOUR_FRAGMENT_SHADER.includes("if (uWeights.y > 0.0)"));
 });

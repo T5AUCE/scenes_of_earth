@@ -32,8 +32,11 @@ For the frontend (`npm run dev`, port 5173), set the Vite dev server to proxy `/
 
 Frontend (`web/`): `npm install`, then `npm run dev` (port 5173), `npm run build` (typecheck plus bundle) and `npm test`
 (Node's built-in runner, no framework). A built scene opens by id with `http://localhost:5173/?scene=<id>`, which is also
-how to share it. The page draws terrain shading and contour lines from shared elevation tiles (the intervals
-come from the elevation statistics in the bundle) and the rain series from the bundle's Zarr store, each toggleable, with a time slider and a blocky or smooth rain look.
+how to share it. The page draws GPU relief shading and contour lines from one shared DEM
+texture pool built from the elevation tiles (intervals from a fixed global ladder, bold
+heights from the elevation statistics in the bundle) with maplibre-contour labels, and the
+rain series from the bundle's Zarr store, each toggleable, with a time slider and a blocky
+or smooth rain look.
 
 API: `GET /api/health`, `GET /api/layers` (per layer: id, title, kind, units, coverage, time step with the first and last request period,
 `request_step`, and the default set),
@@ -345,10 +348,13 @@ maps now read GMNA, lowest priority, instead of the global base maps.
   scene's finest grid cell (never below 0.0005 degrees), so one layer's mask can reach slightly beyond the outline.
   Masks, statistics, style stops and scene ids all use the full stored outline, which is why the bundle format stays at 0.7: old bundles keep
   their exact outline and every reader treats `area.geojson` as display-only.
-- The terrain layer holds no elevation array. The viewer draws shading and contours from the elevation tiles named by
-  `layers[].tiles` (Terrarium encoding, 512 px, Mapterhorn by default), and the build keeps `stats` (`min`, `max`, `mean`,
-  `p2`, `p98`, `slope_p50_deg`, `slope_p90_deg`, `cell_m`) with `distribution`, both taken on mask 1, which choose the
-  contour intervals. Absent tiles and nodata are excluded, while in-tile sea is still included until a water mask exists.
+- The terrain layer holds no elevation array. The viewer draws GPU relief and contour lines from
+  one shared DEM texture pool built from the elevation tiles named by `layers[].tiles`
+  (Terrarium encoding, 512 px, Mapterhorn by default), with maplibre-contour labels, and the build
+  keeps `stats` (`min`, `max`, `mean`, `p2`, `p98`, `slope_p50_deg`, `slope_p90_deg`, `cell_m`) with
+  `distribution`, both taken on mask 1, which choose the bold contour heights while intervals
+  follow a fixed global ladder. Absent tiles and nodata are excluded, while in-tile sea is
+  still included until a water mask exists.
   Genuine zero-height land is preserved. The tile URL is part of the scene id, so pointing `SOE_TERRAIN_TILES` at another
   copy renames the scenes. With `SOE_SYNTHETIC=1` the statistics are fake while the tiles are still the real hosted ones.
 - Land cover (`esa_worldcover`, not a default layer) is a static `categorical` layer with a uint8
@@ -386,11 +392,12 @@ maps now read GMNA, lowest priority, instead of the global base maps.
 - Format 0.7 keeps the real-data ring and adds `area_series` with `distribution`. Generator 0.9.1 and the bundle format
   both enter the scene id, so new requests cannot reuse older bundles and old terrain caches are not reused. Build a new scene
   rather than replacing an immutable bundle in place. The viewer rejects older formats with a prompt to pick the area again.
-- Contours use `maplibre-contour` (BSD-3-Clause) with a scene-seeded nested 10–2000 m ladder. New tiers fade in over
-  0.75 zoom levels and are traced one zoom early. Geometry stops refining at z12; bold heights never change on zoom.
-  Labels are bold-only until the Kenya/Fiji/flat-area trial establishes whether the sparse-label fallback is needed.
-  The plugin's shared worker and 50-tile caches are reused for each distinct tile source for the life of the page,
-  because version 0.1.1 has no manager-disposal API.
+- Contours use `maplibre-contour` (BSD-3-Clause) for labels only, with a fixed global nested
+  10–2000 m ladder and statistics-selected bold heights. The GPU layer draws the lines from
+  the same DEM textures as the relief. New tiers fade in over 1.5 zoom levels. Geometry stops
+  refining at z12; bold heights never change on zoom. The plugin's shared worker and small DEM
+  cache are reused for each distinct tile source for the life of the page, because version 0.1.1
+  has no manager-disposal API.
 
 ## Environment variables
 

@@ -46,8 +46,9 @@ stays cheap and simple. Each feature is checked for extensibility before users g
    the README) and the checks on Kenya and Fiji. The layer is opt-in until isolines and the
    bivariate display land. The backfill on the VPS at deploy starts at 1981-01, matching CHIRPS, and is followed by
    a monthly refresh.
-4. **M5: relief tiles → contours → land cover.** Relief shading and contours now share Mapterhorn
-   tiles with a stable nested ladder and scene format 0.7. The three-view contour trial remains.
+4. **M5: relief tiles → contours → land cover.** GPU relief and contour lines now share one DEM
+   texture pool built from Mapterhorn tiles, with a stable nested ladder and scene format 0.7;
+   labels stay on maplibre-contour. The three-view contour trial remains.
    ESA WorldCover (10 m) is now a static categorical layer (opt-in, drawn below fields),
    resampled by the most common class in each cell, with a softened default palette, an "ESA
    colours" option and a legend of the classes present.

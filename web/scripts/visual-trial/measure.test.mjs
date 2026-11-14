@@ -192,7 +192,6 @@ test("the first view keeps failures emitted before the outline is ready", async 
     tilesLoaded: true,
     zoom: 8,
     labelCount: 0,
-    lineCount: 0,
     labelLines: [],
     centre: [0, 0],
     cardText: "",
@@ -297,7 +296,6 @@ test("a colour spot sets the pick through the scene link", async () => {
     tilesLoaded: true,
     zoom: 6,
     labelCount: 0,
-    lineCount: 0,
     labelLines: [],
     centre: [0, 0],
     cardText: "",
@@ -390,7 +388,7 @@ test("viewRecord counts failures by kind and lists each message once", () => {
         [700, 450],
       ],
     ],
-    lineCount: 40,
+
     tilesLoaded: true,
     legend: "Contours every 10 m",
   };
@@ -416,7 +414,7 @@ test("viewRecord counts failures by kind and lists each message once", () => {
   assert.deepEqual(record.legend_classes, []);
 });
 
-test("viewRecord carries the pool counts when the GPU path reports them", () => {
+test("viewRecord carries the pool counts when the pool reports them", () => {
   const record = viewRecord({
     spot: "Nairobi",
     scene: "sample:kenya",
@@ -426,7 +424,6 @@ test("viewRecord carries the pool counts when the GPU path reports them", () => 
       centre: [640, 400],
       labelCount: 0,
       labelLines: [],
-      lineCount: 0,
       tilesLoaded: true,
       pool: {
         textures: 32,
@@ -452,10 +449,9 @@ test("viewRecord carries the pool counts when the GPU path reports them", () => 
   assert.equal(record.pool_decode_ms, 3.25);
   assert.equal(record.pool_relief_ms, 1.2);
   assert.equal(record.pool_contour_ms, null);
-  assert.equal(record.line_features, 0);
 });
 
-test("viewRecord leaves pool fields null without the GPU path", () => {
+test("viewRecord leaves pool fields null without a pool", () => {
   const record = viewRecord({
     spot: "S",
     scene: "x",
@@ -508,7 +504,7 @@ test("colour views record the owner and the marks frame time", () => {
       centre: [640, 400],
       labelCount: 0,
       labelLines: [],
-      lineCount: 0,
+
       tilesLoaded: true,
       colourOwner: "era5land_temperature",
       marksFrameDeltas: [6, 8, 10],

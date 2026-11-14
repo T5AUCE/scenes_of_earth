@@ -512,6 +512,38 @@ test("a tile is drawable once its wanted neighbours have landed", () => {
   assert.equal(harness.pool.isDrawable(tile(9, 9)), false);
 });
 
+test("view readiness needs every view tile while the ring stays out", () => {
+  const harness = setup();
+  const centre = tile(5, 5);
+  const east = tile(6, 5);
+  harness.pool.update([centre, east, tile(4, 5, "ring")]);
+  land(harness, centre);
+  harness.pool.uploadPending();
+
+  assert.equal(harness.pool.areViewTilesDrawable(), false);
+
+  land(harness, east);
+  harness.pool.uploadPending();
+
+  assert.equal(harness.pool.areViewTilesDrawable(), true);
+});
+
+test("view readiness waits for pinned tiles", () => {
+  const harness = setup();
+  const pinned = tile(1, 0, "pinned");
+  const centre = tile(5, 5);
+  harness.pool.update([pinned, centre]);
+  land(harness, centre);
+  harness.pool.uploadPending();
+
+  assert.equal(harness.pool.areViewTilesDrawable(), false);
+
+  land(harness, pinned);
+  harness.pool.uploadPending();
+
+  assert.equal(harness.pool.areViewTilesDrawable(), true);
+});
+
 test("neighbours wrap across the antimeridian", () => {
   const harness = setup({ keepData: true });
   const east = tile(63, 5);

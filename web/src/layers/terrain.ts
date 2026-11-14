@@ -2,7 +2,6 @@
 import type { Map as MapLibreMap } from "maplibre-gl";
 
 import { addContourLineLayer, type ContourLineHandle } from "../gpu/contour-line-layer";
-import { addressSearch } from "../gesture-quality";
 import { addReliefLayer, type ReliefHandle } from "../gpu/relief-layer";
 import { CONTOUR_COLORS, contourColor, DEFAULT_CONTOUR_COLOR } from "../render/palettes";
 import { displayUnitFor, isUnitFor, unitOptions } from "../units";
@@ -19,11 +18,9 @@ import {
   cappedDemMaxZoom,
   ContourOverlay,
   sharedDemSource,
-  terrainTileBounds,
 } from "./contour-overlay";
 import { RELIEF_STRENGTH } from "./relief";
-import { DEM_PRELOAD_ID, demFetcherFor, demPreloadSource } from "./scene-preload";
-import { ShadeRaster } from "./shade-raster";
+import { DEM_PRELOAD_ID, demPreloadSource } from "./scene-preload";
 import { currentScenePreload } from "./tile-prefetch";
 
 // Shade over a colour fill is eased so the colour stays readable.
@@ -56,10 +53,13 @@ export interface TerrainView extends LayerView {
   setBaseZoom(zoom: number): void;
 }
 
-/** What a terrain view keeps over its relief, which is raster tiles or the GPU layer. */
-type ReliefShading = Pick<ShadeRaster, "setStrength" | "setBaseZoom" | "destroy"> & {
-  /** Warms up and loads the pinned tiles on the GPU path, then says when none are left. */
-  prepare?: () => boolean;
+/** What a terrain view keeps over its GPU relief and contour layers. */
+type ReliefShading = {
+  setStrength(strength: number): void;
+  setBaseZoom(zoom: number): void;
+  /** Warms up and loads the pinned tiles, then says when none are left. */
+  prepare(): boolean;
+  destroy(): void;
 };
 
 // Entry proceeds without the pinned tiles after this, and relief fades in as they arrive.
@@ -73,38 +73,27 @@ export function createTerrainView(context: LayerContext): TerrainView {
   const { tiles, stats } = layer;
   if (!tiles || !stats) throw new Error("Terrain needs tile metadata and summary statistics");
 
-  const isGpuRelief = new URLSearchParams(addressSearch()).get("terrain") === "gpu";
-  const dem = sharedDemSource(tiles, isGpuRelief);
+  const dem = sharedDemSource(tiles);
   const id = `${layer.id}-relief`;
   let contourLines: ContourLineHandle | undefined;
-  const shading: ReliefShading = isGpuRelief
-    ? gpuShading(
-      addReliefLayer(
-        {
-          map,
-          id,
-          tileUrl: tiles.url,
-          bbox: layer.grid.bbox,
-          shift: context.shift,
-          maxZoom: cappedDemMaxZoom(tiles.maxzoom),
-          fitZoom: map.getZoom(),
-          strength: RELIEF_STRENGTH.initial,
-          onFail: (error) => report(error),
-        },
-        slots.shade,
-      ),
-      () => contourLines,
-      addTerrainCredit(map, `${layer.id}-credit`, tiles.source.attribution, slots.shade),
-    )
-    : new ShadeRaster(map, {
-      id,
-      tiles,
-      maxzoom: cappedDemMaxZoom(tiles.maxzoom),
-      bounds: terrainTileBounds(layer.grid.bbox),
-      bbox: layer.grid.bbox,
-      strength: RELIEF_STRENGTH.initial,
-      beforeId: slots.shade,
-    });
+  const shading: ReliefShading = gpuShading(
+    addReliefLayer(
+      {
+        map,
+        id,
+        tileUrl: tiles.url,
+        bbox: layer.grid.bbox,
+        shift: context.shift,
+        maxZoom: cappedDemMaxZoom(tiles.maxzoom),
+        fitZoom: map.getZoom(),
+        strength: RELIEF_STRENGTH.initial,
+        onFail: (error) => report(error),
+      },
+      slots.shade,
+    ),
+    () => contourLines,
+    addTerrainCredit(map, `${layer.id}-credit`, tiles.source.attribution, slots.shade),
+  );
   const preload = currentScenePreload();
   let contourOverlay: ContourOverlay | undefined;
   let stopWatchingTiles: (() => void) | undefined;
@@ -130,50 +119,41 @@ export function createTerrainView(context: LayerContext): TerrainView {
       },
     };
 
-    // The contour traces wait for the elevation tiles, so the DEM registers first.
+    // The GPU pool decodes the elevation tiles, so the warmer only fills the HTTP cache.
     preload?.add(demPreloadSource({
       template: tiles.url,
       maxzoom: cappedDemMaxZoom(tiles.maxzoom),
       bbox: layer.grid.bbox,
-      fetcher: demFetcherFor(dem),
     }));
     contourOverlay = new ContourOverlay(
       context,
       dem,
       tiles,
       stats as TerrainStats,
-      preload,
-      isGpuRelief,
     );
     const overlay = contourOverlay;
-    stopWatchingTiles = watchTerrainTiles(
-      map,
-      isGpuRelief ? overlay.contourSourceIds : [id, ...overlay.contourSourceIds],
-      report,
-    );
+    stopWatchingTiles = watchTerrainTiles(map, overlay.contourSourceIds, report);
     const stop = stopWatchingTiles;
 
     let palette = context.display?.palette ?? DEFAULT_CONTOUR_COLOR;
     let elevationUnit = displayUnitFor(layer.units, context.display?.units);
     const lineLayerId = `${layer.id}-contour-lines`;
-    if (isGpuRelief) {
-      contourLines = addContourLineLayer(
-        {
-          map,
-          id: lineLayerId,
-          tileUrl: tiles.url,
-          bbox: layer.grid.bbox,
-          shift: context.shift,
-          maxZoom: cappedDemMaxZoom(tiles.maxzoom),
-          fitZoom: map.getZoom(),
-          ladder: overlay.ladder,
-          elevationUnit,
-          color: contourColor(palette)!,
-          onFail: (error) => report(error),
-        },
-        slots.lines,
-      );
-    }
+    contourLines = addContourLineLayer(
+      {
+        map,
+        id: lineLayerId,
+        tileUrl: tiles.url,
+        bbox: layer.grid.bbox,
+        shift: context.shift,
+        maxZoom: cappedDemMaxZoom(tiles.maxzoom),
+        fitZoom: map.getZoom(),
+        ladder: overlay.ladder,
+        elevationUnit,
+        color: contourColor(palette)!,
+        onFail: (error) => report(error),
+      },
+      slots.lines,
+    );
     const lines = contourLines;
     const menuUpdates = new EventTarget();
     const menu: LayerMenu = {
@@ -190,7 +170,7 @@ export function createTerrainView(context: LayerContext): TerrainView {
       setPalette(name) {
         palette = name;
         overlay.setColor(contourColor(name)!);
-        lines?.setColor(contourColor(name)!);
+        lines.setColor(contourColor(name)!);
       },
       units: createUnitsMenu(),
     };
@@ -210,7 +190,7 @@ export function createTerrainView(context: LayerContext): TerrainView {
 
           elevationUnit = unit;
           overlay.setUnits(unit);
-          lines?.setLadder(overlay.ladder, unit);
+          lines.setLadder(overlay.ladder, unit);
           menuUpdates.dispatchEvent(new Event("change"));
         },
       };
@@ -222,7 +202,7 @@ export function createTerrainView(context: LayerContext): TerrainView {
     return {
       parts: [
         { id: layer.id, label: "Relief", layerIds: [id], controls: [strength] },
-        lines ? withLayer(overlay.part, lineLayerId) : overlay.part,
+        withLayer(overlay.part, lineLayerId),
       ],
       options: [],
       menu,
@@ -235,9 +215,7 @@ export function createTerrainView(context: LayerContext): TerrainView {
       setBaseZoom: (zoom) => {
         shading.setBaseZoom(zoom);
       },
-      prepareEntry: prepareGpu
-        ? (_time, signal) => waitForPinnedTiles(map, prepareGpu, signal)
-        : undefined,
+      prepareEntry: (_time, signal) => waitForPinnedTiles(map, prepareGpu, signal),
       legend: () => overlay.legend,
       destroy: () => {
         try {
@@ -290,8 +268,8 @@ function gpuShading(
 }
 
 /**
- * Credit the tile provider the way the raster path does. Custom layers have no source for the
- * map's attribution to read, so an empty layer carries the credit and returns its removal.
+ * Credit the tile provider. Custom layers have no source for the map's attribution to read,
+ * so an empty layer carries the credit and returns its removal.
  */
 function addTerrainCredit(
   map: MapLibreMap,
@@ -332,12 +310,12 @@ export function setTerrainBaseZoom(map: MapLibreMap, zoom: number): void {
 }
 
 /**
- * Pin every live GPU terrain base on one map before the flight, so entry loads the tiles of
- * the fitted level. The raster path keeps refitting at landing only.
+ * Pin every live terrain base on one map before the flight, so entry loads the tiles of
+ * the fitted level.
  */
 export function pinGpuTerrainBase(map: MapLibreMap, zoom: number): void {
   for (const [shading, owner] of liveTerrainBases) {
-    if (owner === map && shading.prepare) shading.setBaseZoom(zoom);
+    if (owner === map) shading.setBaseZoom(zoom);
   }
 }
 

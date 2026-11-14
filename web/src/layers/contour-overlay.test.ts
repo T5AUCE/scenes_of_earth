@@ -16,19 +16,10 @@ import type { LayerContext, TerrainStats, TerrainTiles } from "../types.ts";
 import {
   cappedDemMaxZoom,
   ContourOverlay,
-  levelsForZoom,
   MAX_MISSING_DEM_TILES,
   memoizeMissingDemTiles,
 } from "./contour-overlay.ts";
-import { contourLadder } from "../contour-ladder.ts";
 import { LABEL_FADE_MS } from "../reduced-motion.ts";
-import {
-  CONTOUR_PRELOAD_LANES,
-  CONTOUR_PRELOAD_TILES,
-  demPreloadSource,
-  type DemFetcher,
-} from "./scene-preload.ts";
-import { TileWarmer } from "./tile-warmer.ts";
 
 Object.assign(globalThis, {
   document: { createElement: () => ({}), documentElement: {} },
@@ -53,6 +44,7 @@ const STATS: TerrainStats = {
   cell_m: 500,
 };
 const LABEL_ID = "terrain-contours-labels";
+const LABEL_SOURCE_ID = "terrain-labels-contours";
 
 test("a camera gesture hides the contour labels and restores them on moveend", () => {
   const map = fakeMap();
@@ -117,10 +109,8 @@ test("a measurement cap lowers the contour tiling zoom and nothing else", () => 
     TILES,
     STATS,
   );
-    const source = map.sources.get("terrain-contours") as { maxzoom: number };
     const labelSource = map.sources.get("terrain-labels-contours") as { maxzoom: number };
 
-    assert.equal(source.maxzoom, 9);
     assert.equal(labelSource.maxzoom, 9);
     overlay.destroy();
   });
@@ -136,10 +126,8 @@ test("without a cap the contour tiling keeps its crisp ceiling", () => {
     TILES,
     STATS,
   );
-  const source = map.sources.get("terrain-contours") as { maxzoom: number };
   const labelSource = map.sources.get("terrain-labels-contours") as { maxzoom: number };
 
-  assert.equal(source.maxzoom, 12);
   assert.equal(labelSource.maxzoom, 12);
   overlay.destroy();
 });
@@ -333,7 +321,7 @@ test("a hidden contour toggle stays hidden through the gesture fade", () => {
   overlay.destroy();
 });
 
-test("zooming keeps the contour source so stretched parents cover late children", () => {
+test("zooming keeps the label source so stretched parents cover late children", () => {
   const map = fakeMap();
   const overlay = new ContourOverlay(
     layerContext(map),
@@ -341,130 +329,110 @@ test("zooming keeps the contour source so stretched parents cover late children"
     TILES,
     STATS,
   );
-  const source = map.sources.get("terrain-contours") as { maxzoom?: number; minzoom?: unknown };
+  const source = map.sources.get("terrain-labels-contours") as {
+    maxzoom?: number;
+    minzoom?: unknown;
+  };
   assert.equal(source.maxzoom, 12);
   assert.equal(source.minzoom, undefined);
 
   map.state.zoom = 8.5;
   map.emit("zoom");
   map.emit("zoomend");
-  assert.ok(map.sources.has("terrain-contours"));
   assert.ok(map.sources.has("terrain-labels-contours"));
   assert.ok(overlay.part.layerIds.every((id) => map.layers.has(id)));
   overlay.destroy();
 });
 
-test("warm levels mirror the protocol threshold lookup", () => {
-  assert.deepEqual(levelsForZoom({ 8: 50, 10: 10 }, 7), []);
-  assert.deepEqual(levelsForZoom({ 8: 50, 10: 10 }, 9), [50]);
-  assert.deepEqual(levelsForZoom({ 8: 50, 10: 10 }, 10), [10]);
+test("switching contours off hides the labels and back on shows them again", () => {
+  const map = fakeMap();
+  const overlay = new ContourOverlay(
+    layerContext(map),
+    fakeDem(),
+    TILES,
+    STATS,
+  );
+
+  overlay.part.onToggle?.(false);
+  assert.equal(map.layoutOf(LABEL_ID, "visibility"), "none");
+
+  overlay.part.onToggle?.(true);
+  assert.equal(map.layoutOf(LABEL_ID, "visibility"), "visible");
+  overlay.destroy();
 });
 
-test("the overlay traces the scene's contour tiles with the visible source's options", async () => {
-  const warm = warmingDem();
-  const { preload, overlay } = preloadedOverlay(warm.dem);
-  try {
-    preload.start(5.5);
-    await settleWarming(warm);
-
-    assert.ok(warm.calls.length > 0);
-    assert.ok(warm.peak <= CONTOUR_PRELOAD_LANES);
-    assert.ok(warm.demCalls.length > 0);
-    assert.ok(warm.calls.length <= CONTOUR_PRELOAD_TILES);
-    const thresholds = contourLadder(STATS, { maxZoom: 12 }).thresholds;
-    for (const call of warm.calls) {
-      assert.deepEqual(call.options, {
-        levels: levelsForZoom(thresholds, call.z),
-        overzoom: 1,
-        buffer: 1,
-      });
-    }
-  } finally {
-    overlay.destroy();
-    preload.destroy();
-  }
-});
-
-test("a unit change replans the traces in feet", async () => {
-  const warm = warmingDem();
-  const { preload, overlay } = preloadedOverlay(warm.dem);
-  try {
-    preload.start(5.5);
-    await settleWarming(warm);
-    const metres = warm.calls.length;
-    assert.ok(metres > 0);
-
-    overlay.setUnits("ft");
-    await settleWarming(warm);
-
-    assert.ok(warm.calls.length > metres);
-    assert.ok(warm.calls.slice(metres).every((call) => {
-      return (call.options as { multiplier?: number }).multiplier !== undefined;
-    }));
-  } finally {
-    overlay.destroy();
-    preload.destroy();
-  }
-});
-
-test("switching contours off cancels the traces and back on plans them again", async () => {
-  const warm = warmingDem();
-  const { preload, overlay } = preloadedOverlay(warm.dem);
-  try {
-    preload.start(5.5);
-    await settleDemOnly(warm);
-    assert.ok(warm.pending.size > 0 || warm.demPending.size > 0);
-
-    overlay.part.onToggle?.(false);
-    await settled();
-    assert.equal(warm.pending.size, 0);
-    const traced = warm.calls.length;
-
-    overlay.part.onToggle?.(true);
-    await settleWarming(warm);
-    assert.ok(warm.calls.length > traced);
-  } finally {
-    overlay.destroy();
-    preload.destroy();
-  }
-});
-
-test("destroying the overlay aborts its traces and stops planning them", async () => {
-  const warm = warmingDem();
-  const { preload, overlay } = preloadedOverlay(warm.dem);
-  preload.start(5.5);
-  await settleDemOnly(warm);
-  assert.ok(warm.pending.size > 0 || warm.demPending.size > 0);
+test("destroying the overlay removes its label source and layer", () => {
+  const map = fakeMap();
+  const overlay = new ContourOverlay(
+    layerContext(map),
+    fakeDem(),
+    TILES,
+    STATS,
+  );
 
   overlay.destroy();
-  await settled();
 
-  assert.equal(warm.pending.size, 0);
-  preload.destroy();
-  assert.equal(preload.progress().total, 0);
+  assert.equal(map.sources.size, 0);
+  assert.equal(map.layers.size, 0);
 });
 
-test("the overlay traces the scene's contour tiles through the warmer too", async () => {
-  const warm = warmingDem();
+test("the overlay adds only the label source and layer", () => {
   const map = fakeMap();
-  const warmer = new TileWarmer(map as never);
-  warmer.add(demPreloadSource({
-    template: TILES.url,
-    maxzoom: cappedDemMaxZoom(TILES.maxzoom),
-    bbox: [-5, -5, 5, 5],
-    fetcher: (warm.dem as unknown as { manager: DemFetcher }).manager,
-  }));
-  const overlay = new ContourOverlay(layerContext(map), warm.dem as never, TILES, STATS, warmer);
-  try {
-    warmer.start(5.5);
-    await settleWarming(warm);
+  const requests: { thresholds: Record<number, number> }[] = [];
+  const dem = {
+    contourProtocolUrl: (request: { thresholds: Record<number, number> }) => {
+      requests.push(request);
+      return "dem-contour://terrain/{z}/{x}/{y}";
+    },
+  };
+  const overlay = new ContourOverlay(layerContext(map), dem as never, TILES, STATS);
 
-    assert.ok(warm.calls.length > 0);
-    assert.deepEqual(warmer.progress().bytes, 0);
-  } finally {
-    overlay.destroy();
-    warmer.destroy();
-  }
+  assert.deepEqual([...map.sources.keys()], [LABEL_SOURCE_ID]);
+  assert.deepEqual([...map.layers.keys()], [LABEL_ID]);
+  assert.deepEqual(overlay.contourSourceIds, [LABEL_SOURCE_ID]);
+  assert.deepEqual(overlay.part.layerIds, [LABEL_ID]);
+  overlay.destroy();
+});
+
+test("the overlay traces each label height from the zoom its labels enter", () => {
+  const requests: { thresholds: Record<number, number> }[] = [];
+  const dem = {
+    contourProtocolUrl: (request: { thresholds: Record<number, number> }) => {
+      requests.push(request);
+      return "dem-contour://terrain/{z}/{x}/{y}";
+    },
+  };
+  const overlay = new ContourOverlay(
+    layerContext(fakeMap()),
+    dem as never,
+    TILES,
+    STATS,
+  );
+
+  assert.deepEqual(requests.map((request) => request.thresholds), [
+    { 5: 2000, 6: 1000, 7: 500, 9: 100, 12: 50 },
+  ]);
+  overlay.destroy();
+});
+
+test("a unit change rebuilds the labels and the ladder the GPU lines read", () => {
+  const map = fakeMap();
+  const requests: { thresholds: Record<number, number> }[] = [];
+  const dem = {
+    contourProtocolUrl: (request: { thresholds: Record<number, number> }) => {
+      requests.push(request);
+      return "dem-contour://terrain/{z}/{x}/{y}";
+    },
+  };
+  const overlay = new ContourOverlay(layerContext(map), dem as never, TILES, STATS);
+
+  overlay.setUnits("ft");
+
+  assert.equal(overlay.ladder.tiers[0].interval, 5000);
+  assert.equal(requests.length, 2);
+  assert.deepEqual([...map.sources.keys()], [LABEL_SOURCE_ID]);
+  assert.deepEqual([...map.layers.keys()], [LABEL_ID]);
+  overlay.destroy();
 });
 
 test("toggling contours on mid-gesture keeps the labels frozen until moveend", () => {
@@ -487,42 +455,27 @@ test("toggling contours on mid-gesture keeps the labels frozen until moveend", (
   overlay.destroy();
 });
 
-test("a gesture hides only the labels while the line source and buckets stay put", () => {
+test("a gesture hides only the labels while the source stays put", () => {
   const map = fakeMap();
   const dem = fakeDem();
   const overlay = overlayWithDem(map, dem);
-  const lineSource = map.sources.get("terrain-contours");
   const labelSource = map.sources.get("terrain-labels-contours");
-  const lineIds = overlay.part.layerIds.filter((id) => id !== LABEL_ID);
-  assert.ok(lineIds.length > 0);
-  // Identical protocol URLs decode to one worker cache entry, so the labels add no traces.
-  const lineTiles = (map.sources.get("terrain-contours") as { tiles: unknown }).tiles;
-  const labelTiles = (map.sources.get("terrain-labels-contours") as { tiles: unknown }).tiles;
-  assert.deepEqual(labelTiles, lineTiles);
 
   map.emit("movestart");
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), "none");
-  assert.equal(map.sources.get("terrain-contours"), lineSource);
   assert.equal(map.sources.get("terrain-labels-contours"), labelSource);
-  for (const id of lineIds) {
-    assert.equal(map.layoutOf(id, "visibility"), undefined);
-    assert.ok(map.layers.has(id));
-  }
+  assert.ok(map.layers.has(LABEL_ID));
 
   map.emit("moveend");
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), "visible");
-  assert.equal(map.sources.get("terrain-contours"), lineSource);
-  for (const id of lineIds) {
-    assert.equal(map.layoutOf(id, "visibility"), undefined);
-    assert.ok(map.layers.has(id));
-  }
+  assert.equal(map.sources.get("terrain-labels-contours"), labelSource);
+  assert.ok(map.layers.has(LABEL_ID));
   overlay.destroy();
 });
 
 function fakeDem() {
   return {
-    contourProtocolUrl: (request: unknown) =>
-      `dem-contour://terrain/{z}/{x}/{y}?${encodeContourOptions(request)}`,
+    contourProtocolUrl: () => "dem-contour://terrain/{z}/{x}/{y}",
   };
 }
 
@@ -532,187 +485,6 @@ function overlayWithDem(
   dem: { contourProtocolUrl: (request: unknown) => string; manager?: unknown },
 ): ContourOverlay {
   return new ContourOverlay(layerContext(map), dem as never, TILES, STATS);
-}
-
-/** Build an overlay registered with a scene warmer whose downloads the test controls. */
-function preloadedOverlay(dem: WarmingDem["dem"]) {
-  const map = fakeMap();
-  const preload = new TileWarmer(map as never);
-  preload.add(demPreloadSource({
-    template: TILES.url,
-    maxzoom: cappedDemMaxZoom(TILES.maxzoom),
-    bbox: [-5, -5, 5, 5],
-    fetcher: (dem as unknown as { manager: DemFetcher }).manager,
-  }));
-  const overlay = new ContourOverlay(layerContext(map), dem as never, TILES, STATS, preload);
-  return { map, preload, overlay };
-}
-
-// The worker keys its contour cache by tile plus encoded options, so equal URLs share traces.
-function encodeContourOptions(request: unknown): string {
-  const entries = Object.entries(request as Record<string, unknown>);
-  entries.sort(([first], [second]) => (first < second ? -1 : 1));
-  return entries.map(([key, value]) => `${key}=${JSON.stringify(value)}`).join("&");
-}
-
-/** Let aborted and resolved fakes reach the scheduler before the test asserts. */
-async function settled(): Promise<void> {
-  for (let round = 0; round < 4; round += 1) await Promise.resolve();
-}
-
-/** Resolve DEM and trace work until both queues drain, so the overlay reaches its traces. */
-async function settleWarming(warm: WarmingDem): Promise<void> {
-  for (let round = 0; round < 300; round += 1) {
-    for (const entry of [...warm.demPending.values()]) entry.resolve();
-    await settled();
-    for (const entry of [...warm.pending.values()]) entry.resolve();
-    await settled();
-    if (warm.demPending.size === 0 && warm.pending.size === 0) break;
-  }
-}
-
-/** Resolve DEM work only until the contour traces start, keeping one trace pending. */
-async function settleDemOnly(warm: WarmingDem): Promise<void> {
-  for (let round = 0; round < 300; round += 1) {
-    if (warm.pending.size > 0) break;
-    for (const entry of [...warm.demPending.values()]) entry.resolve();
-    await settled();
-    if (warm.demPending.size === 0 && warm.pending.size === 0) break;
-  }
-}
-
-interface PendingCall {
-  id: number;
-  key: string;
-  resolve: (data?: unknown) => void;
-  reject: (error: unknown) => void;
-}
-
-interface WarmingDem {
-  dem: {
-    contourProtocolUrl: () => string;
-    manager: {
-      fetchTile: (z: number, x: number, y: number, cancel: AbortController) => Promise<unknown>;
-      fetchContourTile: (
-        z: number,
-        x: number,
-        y: number,
-        options: unknown,
-        cancel: AbortController,
-      ) => Promise<unknown>;
-    };
-  };
-  calls: { z: number; x: number; y: number; options: unknown }[];
-  traceIds: number[];
-  pending: Map<number, PendingCall>;
-  aborted: string[];
-  readonly peak: number;
-  demCalls: { z: number; x: number; y: number }[];
-  demIds: number[];
-  demPending: Map<number, PendingCall>;
-  demAborted: string[];
-}
-
-function warmingDem(demBytes = 200, settleOnAbort = true): WarmingDem {
-  const calls: { z: number; x: number; y: number; options: unknown }[] = [];
-  const traceIds: number[] = [];
-  const pending = new Map<number, PendingCall>();
-  const aborted: string[] = [];
-  let peak = 0;
-  const demCalls: { z: number; x: number; y: number }[] = [];
-  const demIds: number[] = [];
-  const demPending = new Map<number, PendingCall>();
-  const demAborted: string[] = [];
-  let nextId = 0;
-  const manager = {
-    fetchTile: (z: number, x: number, y: number, cancel: AbortController) => {
-      const key = `${z}/${x}/${y}`;
-      const id = nextId++;
-      demCalls.push({ z, x, y });
-      demIds.push(id);
-      return new Promise<unknown>((resolve, reject) => {
-        if (cancel.signal.aborted) {
-          demAborted.push(key);
-          reject(new Error("aborted"));
-          return;
-        }
-        const call: PendingCall = {
-          id,
-          key,
-          resolve: (data) => {
-            demPending.delete(id);
-            resolve(data ?? { data: new Blob([new Uint8Array(demBytes)]) });
-          },
-          reject: (error) => {
-            demPending.delete(id);
-            reject(error);
-          },
-        };
-        demPending.set(id, call);
-        cancel.signal.addEventListener("abort", () => {
-          demAborted.push(key);
-          if (!settleOnAbort) return;
-          if (!demPending.has(id)) return;
-          demPending.delete(id);
-          reject(new Error("aborted"));
-        });
-      });
-    },
-    fetchContourTile: (
-      z: number,
-      x: number,
-      y: number,
-      options: unknown,
-      cancel: AbortController,
-    ) => {
-      const key = `${z}/${x}/${y}`;
-      const id = nextId++;
-      calls.push({ z, x, y, options });
-      traceIds.push(id);
-      peak = Math.max(peak, pending.size + 1);
-      return new Promise<unknown>((resolve, reject) => {
-        if (cancel.signal.aborted) {
-          aborted.push(key);
-          reject(new Error("aborted"));
-          return;
-        }
-        const call: PendingCall = {
-          id,
-          key,
-          resolve: (data) => {
-            pending.delete(id);
-            resolve(data ?? { arrayBuffer: new ArrayBuffer(0) });
-          },
-          reject: (error) => {
-            pending.delete(id);
-            reject(error);
-          },
-        };
-        pending.set(id, call);
-        cancel.signal.addEventListener("abort", () => {
-          aborted.push(key);
-          if (!settleOnAbort) return;
-          if (!pending.has(id)) return;
-          pending.delete(id);
-          reject(new Error("aborted"));
-        });
-      });
-    },
-  };
-  return {
-    dem: { contourProtocolUrl: () => "dem-contour://terrain/{z}/{x}/{y}", manager },
-    calls,
-    traceIds,
-    pending,
-    aborted,
-    get peak() {
-      return peak;
-    },
-    demCalls,
-    demIds,
-    demPending,
-    demAborted,
-  };
 }
 
 function withReducedMotion(matches: boolean, run: () => void): void {

@@ -15,13 +15,7 @@ import {
   INTERVAL_CHAIN_FT,
   INTERVAL_CHAIN_M,
   type ContourLadder,
-  type LadderTier,
 } from "../contour-ladder";
-import {
-  BOLD_LINE_WIDTH_PX,
-  CONTOUR_OPACITY,
-  MINOR_LINE_WIDTH_PX,
-} from "../gpu/contour-shaders";
 import {
   addressSearch,
   contourMaxZoomSetting,
@@ -35,14 +29,6 @@ import { labelFadeDurationMs } from "../reduced-motion";
 import { contourColor, DEFAULT_CONTOUR_COLOR } from "../render/palettes";
 import { convertValue, displayUnitFor, isUnitFor } from "../units";
 import type { LayerContext, Part, TerrainStats, TerrainTiles } from "../types";
-import {
-  CONTOUR_PRELOAD_ID,
-  contourPreloadSource,
-  demFetcherFor,
-} from "./scene-preload";
-import { currentScenePreload, type ScenePreloader } from "./tile-prefetch";
-
-export { levelsForZoom } from "../contour-ladder";
 
 const LABEL_SIZE_PX = 10;
 const LABEL_SPACING_PX = 350;
@@ -54,10 +40,8 @@ const PAGE_BACKGROUND_PROPERTY = "--page-background";
 const CONTOUR_BUFFER_PX = 1;
 // Workers rebuild maplibre-contour errors from strings, so messages keep an "Error: " prefix.
 const WORKER_ERROR_PREFIX = "Error: ";
-// A zoom step keeps its neighbours cached so sweeping zooms stop evicting them.
-const DEM_CACHE_TILES = 120;
-// Labels trace fewer heights, so this path keeps a smaller DEM cache.
-const LABELS_ONLY_DEM_CACHE_TILES = 60;
+// Labels trace fewer heights, so the shared DEM cache stays small.
+const DEM_CACHE_TILES = 60;
 // Ocean tiles stay missing, so the per-source memo caps how many 404 tiles it remembers.
 export const MAX_MISSING_DEM_TILES = 2000;
 const MAX_CONTOUR_ZOOM = 12;
@@ -71,8 +55,8 @@ const demSources = new Map<string, DemSource>();
  * Reuse a DEM cache and its protocols for relief and contours across scene visits. A labels-only
  * overlay gets a smaller cache.
  */
-export function sharedDemSource(tiles: TerrainTiles, isLabelsOnly = false): DemSource {
-  const key = JSON.stringify([tiles.url, tiles.encoding, tiles.maxzoom, isLabelsOnly]);
+export function sharedDemSource(tiles: TerrainTiles): DemSource {
+  const key = JSON.stringify([tiles.url, tiles.encoding, tiles.maxzoom]);
   const existing = demSources.get(key);
   if (existing) return existing;
 
@@ -81,7 +65,7 @@ export function sharedDemSource(tiles: TerrainTiles, isLabelsOnly = false): DemS
     encoding: tiles.encoding,
     maxzoom: tiles.maxzoom,
     worker: true,
-    cacheSize: isLabelsOnly ? LABELS_ONLY_DEM_CACHE_TILES : DEM_CACHE_TILES,
+    cacheSize: DEM_CACHE_TILES,
   });
   source.setupMaplibre(maplibregl);
   memoizeMissingDemTiles(source);
@@ -175,19 +159,19 @@ export function cappedDemMaxZoom(nativeMaxzoom: number): number {
 }
 
 /**
- * Own stable, elevation-filtered contour tiers and labels for one scene. A labels-only overlay
- * leaves the lines to the GPU contour layer and traces only the heights that carry labels.
+ * Own stable, elevation-filtered contour labels for one scene. The GPU contour layer draws
+ * the lines, so the overlay traces only the heights that carry labels.
  */
 export class ContourOverlay {
   readonly legend = makeHtmlElement("div");
   readonly part: Part;
-  /** The contour sources, so terrain watches line and label tiles for failures. */
+  /** The contour source, so terrain watches label tiles for failures. */
   readonly contourSourceIds: readonly string[];
   /** The contour plan, replaced when the unit changes. */
   ladder!: ContourLadder;
   private readonly map: MapLibreMap;
-  private readonly lineSourceId: string;
   private readonly labelSourceId: string;
+  private readonly labelBaseId: string;
   private readonly dem: DemSource;
   private readonly stats: TerrainStats;
   private readonly bbox: LayerContext["layer"]["grid"]["bbox"];
@@ -200,10 +184,6 @@ export class ContourOverlay {
   private labelId?: string;
   private labelsFrozen = false;
   private labelFadeZeroed = false;
-  private readonly preload: ScenePreloader | null;
-  private readonly demMaxzoom: number;
-  private readonly demTemplate: string;
-  private readonly fetcher: ReturnType<typeof demFetcherFor>;
   // Captured here because scene entry replaces the address and drops trial flags.
   private readonly freezeAllowed = gestureFlags(addressSearch()).freezeLabels;
   private readonly stopGesture: () => void;
@@ -213,8 +193,6 @@ export class ContourOverlay {
     dem: DemSource,
     tiles: TerrainTiles,
     stats: TerrainStats,
-    preload: ScenePreloader | null = currentScenePreload(),
-    private readonly isLabelsOnly = false,
   ) {
     const { map, layer, beforeId, display } = context;
     // The interval note shares the isotherm note's style so both legend lines read alike.
@@ -222,19 +200,12 @@ export class ContourOverlay {
     this.map = map;
     this.dem = dem;
     this.stats = stats;
-    this.preload = preload;
-    this.demMaxzoom = cappedDemMaxZoom(tiles.maxzoom);
-    this.demTemplate = tiles.url;
-    this.fetcher = demFetcherFor(dem);
     this.bbox = layer.grid.bbox;
     this.beforeId = beforeId;
     this.color = contourColor(display?.palette ?? DEFAULT_CONTOUR_COLOR)!;
-    this.lineSourceId = `${layer.id}-contours`;
-    // A separate label source keeps gesture invalidation off the cached line buckets.
     this.labelSourceId = `${layer.id}-labels-contours`;
-    this.contourSourceIds = isLabelsOnly
-      ? [this.labelSourceId]
-      : [this.lineSourceId, this.labelSourceId];
+    this.labelBaseId = `${layer.id}-contours`;
+    this.contourSourceIds = [this.labelSourceId];
     this.elevationUnit = displayUnitFor(layer.units, display?.units);
     this.maxzoom = Math.min(MAX_CONTOUR_ZOOM, cappedDemMaxZoom(tiles.maxzoom + CONTOUR_OVERZOOM));
     this.part = {
@@ -243,7 +214,6 @@ export class ContourOverlay {
       layerIds: [],
       onToggle: (visible) => {
         this.isOn = visible;
-        this.setPreloaded(visible);
         // drawView shows every part layer first, so the freeze state decides the labels.
         if (this.freezeAllowed) this.updateLabelVisibility();
         this.updateLegend();
@@ -252,7 +222,6 @@ export class ContourOverlay {
     this.build();
     map.on("zoomend", this.updateLegend);
     this.updateLegend();
-    this.setPreloaded(true);
     // Hidden labels skip placement and collision, so a gesture freezes them until moveend.
     this.stopGesture = subscribeGesture(map, {
       onStart: () => this.setLabelsFrozen(true),
@@ -269,27 +238,6 @@ export class ContourOverlay {
     this.rebuild();
   }
 
-  /** Trace the scene's contour tiles ahead of the camera while the lines are on. */
-  private setPreloaded(isPreloaded: boolean) {
-    if (this.isLabelsOnly) return;
-
-    if (!isPreloaded) {
-      this.preload?.remove(CONTOUR_PRELOAD_ID);
-      return;
-    }
-    this.preload?.add(contourPreloadSource({
-      plan: () => ({
-        ladder: this.ladder,
-        maxzoom: this.maxzoom,
-        elevationUnit: this.elevationUnit,
-      }),
-      bbox: this.bbox,
-      demMaxzoom: this.demMaxzoom,
-      demTemplate: this.demTemplate,
-      fetcher: this.fetcher,
-    }));
-  }
-
   private build() {
     this.ladder = contourLadder(this.stats, {
       maxZoom: this.maxzoom,
@@ -297,12 +245,11 @@ export class ContourOverlay {
     });
     this.labelFadeZeroed = false;
     const protocolOptions = {
-      thresholds: this.isLabelsOnly ? labelThresholds(this.ladder) : this.ladder.thresholds,
+      thresholds: labelThresholds(this.ladder),
       overzoom: CONTOUR_OVERZOOM,
       buffer: CONTOUR_BUFFER_PX,
       ...elevationMultiplier(this.elevationUnit),
     };
-    if (!this.isLabelsOnly) this.addLines(protocolOptions);
     this.map.addSource(this.labelSourceId, {
       type: "vector",
       tiles: [this.dem.contourProtocolUrl({ ...protocolOptions })],
@@ -312,26 +259,12 @@ export class ContourOverlay {
     this.addLabels(this.beforeId);
   }
 
-  private addLines(protocolOptions: Parameters<DemSource["contourProtocolUrl"]>[0]) {
-    this.map.addSource(this.lineSourceId, {
-      type: "vector",
-      tiles: [this.dem.contourProtocolUrl({ ...protocolOptions })],
-      // Vector tiles stay at the fixed 512 grid, matching the 512 DEM tiles they trace.
-      maxzoom: this.maxzoom,
-      ...terrainTileBounds(this.bbox),
-    });
-    for (const [index, tier] of this.ladder.tiers.entries()) {
-      this.addLine(tier, this.ladder.tiers[index - 1], this.beforeId);
-    }
-  }
-
   private rebuild() {
     for (const id of this.part.layerIds) this.map.removeLayer(id);
     this.removeSources();
     this.part.layerIds.length = 0;
     this.labelId = undefined;
     this.build();
-    this.setPreloaded(this.isOn);
     if (!this.isOn) {
       for (const id of this.part.layerIds) {
         this.map.setLayoutProperty(id, "visibility", "none");
@@ -342,37 +275,11 @@ export class ContourOverlay {
     this.updateLegend();
   }
 
-  private addLine(tier: LadderTier, coarser: LadderTier | undefined, beforeId?: string) {
-    const id = `${this.lineSourceId}-${tier.interval}`;
-    const filter: FilterSpecification = coarser
-      ? ["all", multipleOf(tier.interval), ["!", multipleOf(coarser.interval)]]
-      : multipleOf(tier.interval);
-    this.map.addLayer(
-      {
-        id,
-        type: "line",
-        source: this.lineSourceId,
-        "source-layer": "contours",
-        minzoom: tier.entryZoom,
-        filter,
-        paint: {
-          "line-color": this.color,
-          "line-width": tier.interval >= this.ladder.boldInterval
-            ? BOLD_LINE_WIDTH_PX
-            : MINOR_LINE_WIDTH_PX,
-          "line-opacity": tierFade(tier.entryZoom, CONTOUR_OPACITY),
-        },
-      },
-      beforeId,
-    );
-    this.part.layerIds.push(id);
-  }
-
   private addLabels(beforeId?: string) {
     const tiers = labelledTiers(this.ladder);
     if (tiers.length === 0) return;
 
-    const id = `${this.lineSourceId}-labels`;
+    const id = `${this.labelBaseId}-labels`;
     this.labelId = id;
     this.halo = getComputedStyle(document.documentElement)
       .getPropertyValue(PAGE_BACKGROUND_PROPERTY).trim();
@@ -413,12 +320,11 @@ export class ContourOverlay {
     this.part.layerIds.push(id);
   }
 
-  /** Recolour the lines and their labels. */
+  /** Recolour the contour labels. */
   setColor(color: string) {
     this.color = color;
     for (const id of this.part.layerIds) {
-      const property = id === this.labelId ? "text-color" : "line-color";
-      this.map.setPaintProperty(id, property, color);
+      this.map.setPaintProperty(id, "text-color", color);
     }
     if (this.labelId !== undefined) {
       // A recolour during the restore would otherwise inherit its remaining fade duration.
@@ -477,14 +383,12 @@ export class ContourOverlay {
 
   destroy() {
     this.stopGesture();
-    this.preload?.remove(CONTOUR_PRELOAD_ID);
     this.map.off("zoomend", this.updateLegend);
     for (const id of this.part.layerIds) this.map.removeLayer(id);
     this.removeSources();
   }
 
   private removeSources() {
-    if (!this.isLabelsOnly) this.map.removeSource(this.lineSourceId);
     this.map.removeSource(this.labelSourceId);
   }
 }
@@ -568,10 +472,6 @@ function elevationMultiplier(elevationUnit: string) {
 
   // The DEM holds metres, so feet contours scale elevations before tracing them.
   return { multiplier: convertValue(1, "m", "ft") };
-}
-
-function tierFade(entryZoom: number, opacity: number): ExpressionSpecification {
-  return ["interpolate", ["linear"], ["zoom"], entryZoom, 0, entryZoom + FADE_SPAN_ZOOM, opacity];
 }
 
 function tierFades(

@@ -13,8 +13,7 @@ export const ZOOM_BAND_COUNT = 6;
 // Frames over a 30 fps budget count as dropped zoom frames.
 export const OVER_BUDGET_MS = 1000 / 30;
 
-/** Matches contour overlay layer ids so unrelated map features are not counted. */
-export const CONTOUR_LINE_PATTERN = /-contours-\d+$/;
+/** Matches contour label layer ids so unrelated map features are not counted. */
 export const CONTOUR_LABEL_PATTERN = /-contours-labels$/;
 
 /** Summarise positive rAF deltas in milliseconds using nearest-rank percentiles. */
@@ -256,7 +255,6 @@ export function viewRecord({ spot, scene, zoom, sample, failures, messages, time
     zoom_actual: sample ? Number(sample.zoom.toFixed(2)) : null,
     label_features: sample?.labelCount ?? null,
     nearest_label_px: sample ? nearestPx(sample.labelLines, sample.centre) : null,
-    line_features: sample?.lineCount ?? null,
     tiles_loaded: sample?.tilesLoaded ?? false,
     failed_requests: count("other"),
     dem_404: count("dem"),

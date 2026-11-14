@@ -421,9 +421,10 @@ function rangeSource(): { store: AsyncReadable; requests: RangeRequest[] } {
 }
 
 test("tile sources map to their readout layers", () => {
-  assert.equal(layerForSource("terrain-relief"), "terrain");
-  assert.equal(layerForSource("my-scene-relief"), "terrain");
-  assert.equal(layerForSource("terrain-contours"), "contours");
+  assert.equal(layerForSource("terrain-relief"), null);
+  assert.equal(layerForSource("my-scene-relief"), null);
+  assert.equal(layerForSource("terrain-contours"), null);
+  assert.equal(layerForSource("terrain-labels-contours"), null);
   assert.equal(layerForSource("openmaptiles"), "basemap");
   assert.equal(layerForSource("rain"), null);
   assert.equal(layerForSource(undefined), null);
@@ -441,7 +442,7 @@ test("the tile readout stays empty without a gesture", () => {
   tracker.stop();
 });
 
-test("a zoom gesture counts requests and times each layer until loaded", () => {
+test("a zoom gesture counts basemap requests and times them until loaded", () => {
   let now = 1000;
   const map = tileMap(() => 8);
   const tracker = new TileSettleTracker(map, () => now);
@@ -449,24 +450,22 @@ test("a zoom gesture counts requests and times each layer until loaded", () => {
 
   map.emit("movestart", {});
   map.emit("sourcedataloading", { sourceId: "terrain-relief" });
-  map.emit("sourcedataloading", { sourceId: "terrain-relief" });
+  map.emit("sourcedataloading", { sourceId: "terrain-labels-contours" });
   map.emit("sourcedataloading", { sourceId: "openmaptiles" });
   map.emit("zoom", {});
   now += 120;
-  map.emit("sourcedata", { sourceId: "terrain-relief", isSourceLoaded: true });
+  map.emit("sourcedata", { sourceId: "openmaptiles", isSourceLoaded: true });
   map.emit("zoomend", {});
   map.emit("moveend", {});
 
   const settled = tracker.snapshot();
-  assert.equal(settled.terrain.requests, 2);
-  assert.equal(settled.terrain.settleMs, 120);
+  assert.equal(settled.terrain.requests, 0);
+  assert.equal(settled.terrain.settleMs, null);
+  assert.equal(settled.contours.requests, 0);
+  assert.equal(settled.contours.settleMs, null);
   assert.equal(settled.basemap.requests, 1);
-  assert.equal(settled.basemap.settleMs, null);
+  assert.equal(settled.basemap.settleMs, 120);
 
-  map.loaded.add("openmaptiles");
-  now += 60;
-  map.emit("idle", {});
-  assert.equal(tracker.snapshot().basemap.settleMs, 180);
   tracker.stop();
 });
 
@@ -487,39 +486,39 @@ test("a loading-loaded-end sequence keeps its requests and settle time", () => {
   tracker.stop();
 });
 
-test("moveend settles already-loaded sources with no further events", () => {
+test("moveend settles an already-loaded basemap with no further events", () => {
   let now = 1000;
   const map = tileMap(() => 8);
-  map.loaded.add("terrain-contours");
+  map.loaded.add("openmaptiles");
   const tracker = new TileSettleTracker(map, () => now);
   tracker.start();
 
   map.emit("movestart", {});
-  map.emit("sourcedataloading", { sourceId: "terrain-contours" });
+  map.emit("sourcedataloading", { sourceId: "openmaptiles" });
   now += 40;
   map.emit("moveend", {});
 
-  assert.deepEqual(tracker.snapshot().contours, { settleMs: 40, requests: 1 });
+  assert.deepEqual(tracker.snapshot().basemap, { settleMs: 40, requests: 1 });
   tracker.stop();
 });
 
-test("idle settles loaded sources after an unresolved moveend", () => {
+test("idle settles a loaded basemap after an unresolved moveend", () => {
   let now = 1000;
   const map = tileMap(() => 8);
   const tracker = new TileSettleTracker(map, () => now);
   tracker.start();
 
   map.emit("movestart", {});
-  map.emit("sourcedataloading", { sourceId: "terrain-relief" });
+  map.emit("sourcedataloading", { sourceId: "openmaptiles" });
   map.emit("moveend", {});
 
-  assert.equal(tracker.snapshot().terrain.settleMs, null);
+  assert.equal(tracker.snapshot().basemap.settleMs, null);
 
-  map.loaded.add("terrain-relief");
+  map.loaded.add("openmaptiles");
   now += 80;
   map.emit("idle", {});
 
-  assert.equal(tracker.snapshot().terrain.settleMs, 80);
+  assert.equal(tracker.snapshot().basemap.settleMs, 80);
   tracker.stop();
 });
 
@@ -529,11 +528,11 @@ test("a new gesture resets the previous counts", () => {
   tracker.start();
 
   map.emit("movestart", {});
-  map.emit("sourcedataloading", { sourceId: "terrain-contours" });
+  map.emit("sourcedataloading", { sourceId: "openmaptiles" });
   map.emit("moveend", {});
   map.emit("movestart", {});
 
-  assert.deepEqual(tracker.snapshot().contours, { settleMs: null, requests: 0 });
+  assert.deepEqual(tracker.snapshot().basemap, { settleMs: null, requests: 0 });
   tracker.stop();
 });
 
@@ -543,10 +542,10 @@ test("a zoomstart outside a gesture opens a step without resetting mid-gesture",
   tracker.start();
 
   map.emit("zoomstart", {});
-  map.emit("sourcedataloading", { sourceId: "terrain-relief" });
+  map.emit("sourcedataloading", { sourceId: "openmaptiles" });
   map.emit("zoomstart", {});
 
-  assert.equal(tracker.snapshot().terrain.requests, 1);
+  assert.equal(tracker.snapshot().basemap.requests, 1);
   tracker.stop();
 });
 
@@ -565,27 +564,25 @@ test("the bubbled dataloading event counts nothing on its own", () => {
 test("the tracker falls back to isSourceLoaded and ignores unknown sources", () => {
   let now = 1000;
   const map = tileMap(() => 8);
-  map.loaded.add("terrain-contours");
+  map.loaded.add("openmaptiles");
   const tracker = new TileSettleTracker(map, () => now);
   tracker.start();
 
   map.emit("movestart", {});
   map.emit("sourcedataloading", { sourceId: "rain" });
   now += 40;
-  map.emit("sourcedata", { sourceId: "terrain-contours" });
+  map.emit("sourcedata", { sourceId: "openmaptiles" });
 
   const settled = tracker.snapshot();
-  assert.equal(settled.contours.settleMs, 40);
+  assert.equal(settled.basemap.settleMs, 40);
   assert.equal(settled.terrain.requests, 0);
   tracker.stop();
 });
 
-test("a gesture with no source events settles cached style sources", () => {
+test("a gesture with no source events settles the cached basemap source", () => {
   let now = 1000;
   const map = tileMap(() => 8);
-  map.loaded.add("terrain-relief");
   map.loaded.add("openmaptiles");
-  map.loaded.add("terrain-contours");
   (map as unknown as { getStyle: () => { sources: Record<string, object> } }).getStyle = () => ({
     sources: {
       "terrain-relief": {},
@@ -601,148 +598,273 @@ test("a gesture with no source events settles cached style sources", () => {
   map.emit("moveend", {});
 
   const settled = tracker.snapshot();
-  assert.equal(settled.terrain.settleMs, 50);
+  assert.equal(settled.terrain.settleMs, null);
   assert.equal(settled.basemap.settleMs, 50);
-  assert.equal(settled.contours.settleMs, 50);
-  assert.equal(settled.terrain.requests, 0);
+  assert.equal(settled.contours.settleMs, null);
+  assert.equal(settled.basemap.requests, 0);
 
   map.loaded.clear();
   map.emit("movestart", {});
   now += 30;
   map.emit("moveend", {});
 
-  assert.equal(tracker.snapshot().terrain.settleMs, null);
+  assert.equal(tracker.snapshot().basemap.settleMs, null);
   tracker.stop();
 });
 
-test("a second load wave in one gesture reopens until all sources load", () => {
+test("a cached pool settles terrain and contours on moveend", () => {
+  let now = 1000;
+  const map = tileMap(() => 8);
+  const pool = { requests: 7, viewReady: true };
+  const tracker = new TileSettleTracker(map, () => now, () => ({ ...pool }));
+  tracker.start();
+
+  map.emit("movestart", {});
+  now += 50;
+  map.emit("moveend", {});
+
+  const settled = tracker.snapshot();
+  assert.equal(settled.terrain.settleMs, 0);
+  assert.equal(settled.contours.settleMs, 0);
+  assert.equal(settled.terrain.requests, 0);
+  assert.equal(settled.contours.requests, 0);
+  tracker.stop();
+});
+
+test("a loading pool settles terrain and contours once it drains", () => {
+  let now = 1000;
+  const map = tileMap(() => 8);
+  const pool = { requests: 10, viewReady: false };
+  const tracker = new TileSettleTracker(map, () => now, () => ({ ...pool }));
+  tracker.start();
+
+  map.emit("movestart", {});
+  now += 40;
+  map.emit("moveend", {});
+
+  assert.equal(tracker.snapshot().terrain.settleMs, null);
+  assert.equal(tracker.snapshot().contours.settleMs, null);
+
+  pool.viewReady = true;
+  pool.requests = 13;
+  now += 40;
+  map.emit("idle", {});
+
+  const settled = tracker.snapshot();
+  assert.equal(settled.terrain.settleMs, 80);
+  assert.equal(settled.contours.settleMs, 80);
+  assert.equal(settled.terrain.requests, 3);
+  assert.equal(settled.contours.requests, 3);
+  tracker.stop();
+});
+
+test("held tiles settle immediately", () => {
+  let now = 1000;
+  const map = tileMap(() => 8);
+  const pool = { requests: 7, viewReady: true };
+  const tracker = new TileSettleTracker(map, () => now, () => ({ ...pool }));
+  tracker.start();
+
+  map.emit("movestart", {});
+
+  const settled = tracker.snapshot();
+  assert.equal(settled.terrain.settleMs, 0);
+  assert.equal(settled.contours.settleMs, 0);
+  assert.equal(settled.terrain.requests, 0);
+  assert.equal(settled.contours.requests, 0);
+  tracker.stop();
+});
+
+test("ring refills don't hold a settled gesture open", () => {
+  let now = 1000;
+  const map = tileMap(() => 8);
+  const pool = { requests: 7, viewReady: true };
+  const tracker = new TileSettleTracker(map, () => now, () => ({ ...pool }));
+  tracker.start();
+
+  map.emit("movestart", {});
+
+  assert.equal(tracker.snapshot().terrain.settleMs, 0);
+
+  pool.requests = 10;
+  now += 100;
+  map.emit("render", {});
+
+  const settled = tracker.snapshot();
+  assert.equal(settled.terrain.settleMs, 0);
+  assert.equal(settled.contours.settleMs, 0);
+  assert.equal(settled.terrain.requests, 0);
+  assert.equal(settled.contours.requests, 0);
+  tracker.stop();
+});
+
+test("a drain during movement is recorded at the frame it happens", () => {
+  let now = 1000;
+  const map = tileMap(() => 8);
+  const pool = { requests: 10, viewReady: false };
+  const tracker = new TileSettleTracker(map, () => now, () => ({ ...pool }));
+  tracker.start();
+
+  map.emit("movestart", {});
+  now += 20;
+  map.emit("render", {});
+
+  assert.equal(tracker.snapshot().terrain.settleMs, null);
+
+  pool.viewReady = true;
+  pool.requests = 13;
+  now += 20;
+  map.emit("render", {});
+
+  const settled = tracker.snapshot();
+  assert.equal(settled.terrain.settleMs, 40);
+  assert.equal(settled.contours.settleMs, 40);
+  assert.equal(settled.terrain.requests, 3);
+  assert.equal(settled.contours.requests, 3);
+  tracker.stop();
+});
+
+test("continuous movement can't keep the badge open forever", () => {
+  let now = 1000;
+  const map = tileMap(() => 8);
+  const pool = { requests: 10, viewReady: false };
+  const tracker = new TileSettleTracker(map, () => now, () => ({ ...pool }));
+  tracker.start();
+
+  map.emit("movestart", {});
+  now += 10 * 1000;
+  pool.requests = 25;
+  map.emit("render", {});
+
+  const settled = tracker.snapshot();
+  assert.equal(settled.terrain.settleMs, 10 * 1000);
+  assert.equal(settled.contours.settleMs, 10 * 1000);
+  assert.equal(settled.terrain.requests, 15);
+  assert.equal(settled.contours.requests, 15);
+  tracker.stop();
+});
+
+test("a second load wave in one gesture reopens until the basemap loads", () => {
   let now = 1000;
   const map = tileMap(() => 8);
   const tracker = new TileSettleTracker(map, () => now);
   tracker.start();
 
   map.emit("movestart", {});
-  map.emit("sourcedataloading", { sourceId: "terrain-relief" });
-  map.emit("sourcedataloading", { sourceId: "my-scene-relief" });
+  map.emit("sourcedataloading", { sourceId: "openmaptiles" });
+  map.emit("sourcedataloading", { sourceId: "openmaptiles" });
   now += 40;
-  map.emit("sourcedata", { sourceId: "terrain-relief", isSourceLoaded: true });
+  map.emit("sourcedata", { sourceId: "openmaptiles", isSourceLoaded: true });
 
-  assert.equal(tracker.snapshot().terrain.settleMs, null);
+  assert.equal(tracker.snapshot().basemap.settleMs, 40);
 
-  map.loaded.add("terrain-relief");
-  map.loaded.add("my-scene-relief");
-  now += 40;
-  map.emit("sourcedata", { sourceId: "my-scene-relief", isSourceLoaded: true });
+  map.emit("sourcedataloading", { sourceId: "openmaptiles" });
 
-  assert.equal(tracker.snapshot().terrain.settleMs, 80);
+  assert.equal(tracker.snapshot().basemap.settleMs, null);
 
-  map.emit("sourcedataloading", { sourceId: "terrain-relief" });
-
-  assert.equal(tracker.snapshot().terrain.settleMs, null);
-
-  map.loaded.delete("terrain-relief");
+  map.loaded.delete("openmaptiles");
   map.emit("moveend", {});
 
-  assert.equal(tracker.snapshot().terrain.settleMs, null);
+  assert.equal(tracker.snapshot().basemap.settleMs, null);
 
-  map.loaded.add("terrain-relief");
+  map.loaded.add("openmaptiles");
   now += 100;
-  map.emit("sourcedata", { sourceId: "terrain-relief", isSourceLoaded: true });
+  map.emit("sourcedata", { sourceId: "openmaptiles", isSourceLoaded: true });
 
-  assert.deepEqual(tracker.snapshot().terrain, { settleMs: 180, requests: 3 });
+  assert.deepEqual(tracker.snapshot().basemap, { settleMs: 140, requests: 3 });
   tracker.stop();
 });
 
 test("a removed source never queries its manager after delete-before-metadata", () => {
   let now = 1000;
   const map = removalTileMap(() => 8);
-  map.live.add("terrain-contours");
+  map.live.add("openmaptiles");
   const tracker = new TileSettleTracker(map, () => now);
   tracker.start();
 
   map.emit("movestart", {});
-  map.emit("sourcedataloading", { sourceId: "terrain-contours" });
-  map.live.delete("terrain-contours");
+  map.emit("sourcedataloading", { sourceId: "openmaptiles" });
+  map.live.delete("openmaptiles");
   now += 40;
-  map.emit("sourcedata", { sourceId: "terrain-contours", isSourceLoaded: false });
+  map.emit("sourcedata", { sourceId: "openmaptiles", isSourceLoaded: false });
 
   assert.deepEqual(map.errors, []);
-  assert.equal(tracker.snapshot().contours.settleMs, 40);
-  assert.equal(tracker.snapshot().contours.requests, 1);
+  assert.equal(tracker.snapshot().basemap.settleMs, 40);
+  assert.equal(tracker.snapshot().basemap.requests, 1);
   tracker.stop();
 });
 
 test("a pending source removed on exit settles without a manager error", () => {
   let now = 1000;
   const map = removalTileMap(() => 8);
-  map.live.add("terrain-contours");
+  map.live.add("openmaptiles");
   const tracker = new TileSettleTracker(map, () => now);
   tracker.start();
 
   map.emit("movestart", {});
-  map.emit("sourcedataloading", { sourceId: "terrain-contours" });
-  map.live.delete("terrain-contours");
+  map.emit("sourcedataloading", { sourceId: "openmaptiles" });
+  map.live.delete("openmaptiles");
   now += 50;
   map.emit("moveend", {});
 
   assert.deepEqual(map.errors, []);
-  assert.equal(tracker.snapshot().contours.settleMs, 50);
+  assert.equal(tracker.snapshot().basemap.settleMs, 50);
   tracker.stop();
 });
 
 test("a units rebuild keeps waiting for the recreated source without errors", () => {
   let now = 1000;
   const map = removalTileMap(() => 8);
-  map.live.add("terrain-relief");
+  map.live.add("openmaptiles");
   const tracker = new TileSettleTracker(map, () => now);
   tracker.start();
 
   map.emit("movestart", {});
-  map.emit("sourcedataloading", { sourceId: "terrain-relief" });
-  map.live.delete("terrain-relief");
-  map.emit("sourcedata", { sourceId: "terrain-relief", isSourceLoaded: false });
+  map.emit("sourcedataloading", { sourceId: "openmaptiles" });
+  map.live.delete("openmaptiles");
+  map.emit("sourcedata", { sourceId: "openmaptiles", isSourceLoaded: false });
 
   assert.deepEqual(map.errors, []);
 
-  map.live.add("terrain-relief");
-  map.emit("sourcedataloading", { sourceId: "terrain-relief" });
-  map.emit("sourcedata", { sourceId: "terrain-relief", isSourceLoaded: false });
+  map.live.add("openmaptiles");
+  map.emit("sourcedataloading", { sourceId: "openmaptiles" });
+  map.emit("sourcedata", { sourceId: "openmaptiles", isSourceLoaded: false });
 
-  assert.equal(tracker.snapshot().terrain.settleMs, null);
+  assert.equal(tracker.snapshot().basemap.settleMs, null);
   assert.deepEqual(map.errors, []);
 
-  map.loaded.add("terrain-relief");
+  map.loaded.add("openmaptiles");
   now += 40;
-  map.emit("sourcedata", { sourceId: "terrain-relief", isSourceLoaded: true });
+  map.emit("sourcedata", { sourceId: "openmaptiles", isSourceLoaded: true });
 
-  assert.equal(tracker.snapshot().terrain.settleMs, 40);
+  assert.equal(tracker.snapshot().basemap.settleMs, 40);
   assert.deepEqual(map.errors, []);
   tracker.stop();
 });
 
-test("a loaded sibling waits for its pending sibling without errors", () => {
+test("an unknown source never blocks the basemap settle", () => {
   let now = 1000;
   const map = removalTileMap(() => 8);
-  map.live.add("terrain-contours");
-  map.live.add("terrain-labels-contours");
-  map.loaded.add("terrain-contours");
+  map.live.add("openmaptiles");
+  map.live.add("rain");
+  map.loaded.add("openmaptiles");
   const tracker = new TileSettleTracker(map, () => now);
   tracker.start();
 
   map.emit("movestart", {});
-  map.emit("sourcedataloading", { sourceId: "terrain-contours" });
-  map.emit("sourcedataloading", { sourceId: "terrain-labels-contours" });
+  map.emit("sourcedataloading", { sourceId: "openmaptiles" });
+  map.emit("sourcedataloading", { sourceId: "rain" });
   now += 40;
-  map.emit("sourcedata", { sourceId: "terrain-contours", isSourceLoaded: true });
+  map.emit("sourcedata", { sourceId: "openmaptiles", isSourceLoaded: true });
 
-  assert.equal(tracker.snapshot().contours.settleMs, null);
+  assert.equal(tracker.snapshot().basemap.settleMs, 40);
   assert.deepEqual(map.errors, []);
 
-  map.loaded.add("terrain-labels-contours");
+  map.loaded.add("rain");
   now += 40;
-  map.emit("sourcedata", { sourceId: "terrain-labels-contours", isSourceLoaded: true });
+  map.emit("sourcedata", { sourceId: "rain", isSourceLoaded: true });
 
-  assert.equal(tracker.snapshot().contours.settleMs, 80);
+  assert.equal(tracker.snapshot().basemap.settleMs, 40);
   assert.deepEqual(map.errors, []);
   tracker.stop();
 });
@@ -750,8 +872,8 @@ test("a loaded sibling waits for its pending sibling without errors", () => {
 test("a late removal event after settle leaves the settle time alone", () => {
   let now = 1000;
   const map = removalTileMap(() => 8);
-  map.live.add("terrain-contours");
-  map.loaded.add("terrain-contours");
+  map.live.add("openmaptiles");
+  map.loaded.add("openmaptiles");
   const tracker = new TileSettleTracker(map, () => now);
   tracker.start();
 
@@ -759,43 +881,42 @@ test("a late removal event after settle leaves the settle time alone", () => {
   now += 30;
   map.emit("moveend", {});
 
-  assert.equal(tracker.snapshot().contours.settleMs, 30);
+  assert.equal(tracker.snapshot().basemap.settleMs, 30);
 
-  map.live.delete("terrain-contours");
-  map.emit("sourcedata", { sourceId: "terrain-contours", isSourceLoaded: false });
+  map.live.delete("openmaptiles");
+  map.emit("sourcedata", { sourceId: "openmaptiles", isSourceLoaded: false });
 
   assert.deepEqual(map.errors, []);
-  assert.equal(tracker.snapshot().contours.settleMs, 30);
+  assert.equal(tracker.snapshot().basemap.settleMs, 30);
   tracker.stop();
 });
 
 test("a repeat entry after removal starts from live sources only", () => {
   let now = 1000;
   const map = removalTileMap(() => 8);
-  map.live.add("terrain-contours");
+  map.live.add("openmaptiles");
   const tracker = new TileSettleTracker(map, () => now);
   tracker.start();
 
   map.emit("movestart", {});
-  map.emit("sourcedataloading", { sourceId: "terrain-contours" });
-  map.live.delete("terrain-contours");
+  map.emit("sourcedataloading", { sourceId: "openmaptiles" });
+  map.live.delete("openmaptiles");
   now += 20;
   map.emit("moveend", {});
 
   assert.deepEqual(map.errors, []);
-  assert.equal(tracker.snapshot().contours.settleMs, 20);
+  assert.equal(tracker.snapshot().basemap.settleMs, 20);
 
   map.live.add("openmaptiles");
   map.loaded.add("openmaptiles");
   map.emit("movestart", {});
 
-  assert.deepEqual(tracker.snapshot().contours, { settleMs: null, requests: 0 });
+  assert.deepEqual(tracker.snapshot().basemap, { settleMs: null, requests: 0 });
 
   now += 30;
   map.emit("moveend", {});
 
   assert.deepEqual(map.errors, []);
-  assert.equal(tracker.snapshot().contours.settleMs, 30);
   assert.equal(tracker.snapshot().basemap.settleMs, 30);
   tracker.stop();
 });
@@ -956,13 +1077,10 @@ test("the pool badge counts every request start, not only decoded tiles", () => 
   const window = new Window({ url: "http://localhost/" });
   const stubs = installFrameStubs(window);
   const scope = globalThis as unknown as {
-    location?: unknown;
     __getDemPoolStats?: unknown;
     __gpuMs?: unknown;
   };
-  const previousLocation = scope.location;
   const previousHook = scope.__getDemPoolStats;
-  scope.location = { search: "?terrain=gpu" };
   scope.__getDemPoolStats = () => ({
     textures: 32,
     textureBytes: 34.1 * 1024 * 1024,
@@ -983,7 +1101,6 @@ test("the pool badge counts every request start, not only decoded tiles", () => 
     assert.ok(badge.textContent?.includes("req 120"));
     loop.stop();
   } finally {
-    scope.location = previousLocation;
     scope.__getDemPoolStats = previousHook;
     stubs.restore();
     window.happyDOM.abort();

@@ -12,7 +12,6 @@ import {
   resetDemIntegrityForTests,
   stripOf,
 } from "./dem-decode.ts";
-import { MAX_CONCURRENT_SHADE_JOBS, SHADE_POOL_LANES } from "./shade-queue.ts";
 
 const SIZE_PX = DEM_TILE_SIZE_PX;
 const realFetch = globalThis.fetch;
@@ -256,11 +255,6 @@ test("a canvas-only clean tile-size probe still decodes through canvas", async (
   assert.equal(tileReads, 2);
   assert.equal(frameBuilds, 0);
   assert.equal(warnings.length, 0);
-});
-
-test("shade throughput keeps two lanes of four jobs", () => {
-  assert.equal(SHADE_POOL_LANES, 2);
-  assert.equal(MAX_CONCURRENT_SHADE_JOBS, 4);
 });
 
 test("videoframe decode stays close to canvas cost on small tiles", async () => {

@@ -115,14 +115,18 @@ export function smoothSurfaceOf(
 
 /**
  * Mix two height fields into one, so a blend of two levels draws a single line that glides
- * instead of two partial ones. Returns the arguments of `contourCoverage`.
+ * instead of two partial ones. The weights are normalised by their total, which is below 1 while
+ * a source has no ready ancestor; the caller scales the coverage by that total. Returns the
+ * arguments of `contourCoverage`.
  */
 export function blendSurfaces(
   first: HeightSurface,
   second: HeightSurface,
   secondWeight: number,
+  firstWeight = 1 - secondWeight,
 ): { height: number; metresPerPixel: number; rangeM: number } {
-  const mix = (from: number, to: number) => from * (1 - secondWeight) + to * secondWeight;
+  const totalWeight = firstWeight + secondWeight;
+  const mix = (from: number, to: number) => (from * firstWeight + to * secondWeight) / totalWeight;
   return {
     height: mix(first.height, second.height),
     metresPerPixel: Math.hypot(
@@ -271,15 +275,17 @@ float contourCoverage(HeightSample surface) {
 // Two levels mix their height fields, because mixing their lines would show both traces.
 void main() {
   HeightSample surface = smoothHeightAt(uHeightsA, vUvA);
+  float totalWeight = uWeights.x + uWeights.y;
   if (uWeights.y > 0.0) {
     HeightSample second = smoothHeightAt(uHeightsB, vUvB);
     float offset = second.origin - surface.origin;
-    surface.relative = uWeights.x * surface.relative + uWeights.y * (second.relative + offset);
-    surface.gradient = uWeights.x * surface.gradient + uWeights.y * second.gradient;
+    surface.relative = (uWeights.x * surface.relative + uWeights.y * (second.relative + offset))
+      / totalWeight;
+    surface.gradient = (uWeights.x * surface.gradient + uWeights.y * second.gradient) / totalWeight;
     surface.lowest = min(surface.lowest, second.lowest + offset);
     surface.highest = max(surface.highest, second.highest + offset);
   }
-  float coverage = contourCoverage(surface);
+  float coverage = contourCoverage(surface) * totalWeight;
   outColour = vec4(uColour * coverage, coverage);
 }`);
 

@@ -158,7 +158,7 @@ Label freezing defaults on while the shader fast paths and the band bake default
 so `freeze-off` disables label freezing through `&freezeLabels=0` and `fast-class-on`,
 `fast-hatch-on` and `bake-on` enable the class-field fast path, hatch hiding and the band
 bake one at a time through `&fastClass=1`, `&fastHatch=1` and `&bake=1`. `max-pixel-ratio-1` caps the ratio
-with `&maxPixelRatio=1` and `contour-max-11` overzooms contour and hillshade tiles past
+with `&maxPixelRatio=1` and `contour-max-11` caps the shared GPU DEM levels with
 `&contourMaxZoom=11`. The sweep steps with `jumpTo`, whose gestures fire
 synchronously, so it holds one outer `movestart`/`moveend` pair to keep the shared
 hub active while stepping and the gesture
@@ -178,7 +178,6 @@ per-layer GPU timings answer the real-GPU question in a desktop browser instead.
 - `label_features` counts the contour label features MapLibre renders.
 - `nearest_label_px` measures the distance from the map centre to the nearest labelled contour line.
   The label sits somewhere on that line, so this is a lower bound.
-- `line_features` counts the rendered contour line features.
 - `tiles_loaded` reports whether MapLibre loaded every tile. `timed_out` reports whether the view
   failed to settle within 60 s.
 - `failed_requests` counts failed requests other than DEM and glyph errors, including
@@ -213,15 +212,12 @@ per-layer GPU timings answer the real-GPU question in a desktop browser instead.
   each spot. It is true when the renderer stays GPU and the frame readback is unchanged, false
   on a mismatch, `"unsupported"` if the extension is missing, or null when not exercised.
 - `pool_textures`, `pool_texture_mb`, `pool_inflight`, `pool_queued`, `pool_requests` and
-  `pool_decode_ms` record the shared DEM pool under `?terrain=gpu`: texture count and megabytes,
+  `pool_decode_ms` record the shared DEM pool: texture count and megabytes,
   in-flight and queued fetches, completed requests and mean decode milliseconds.
   `pool_relief_ms` and `pool_contour_ms` record the relief and contour GPU milliseconds when the
-  timer query kept them. All eight are null without the flag, so old runs stay comparable.
+  timer query kept them. All eight are null without a pool, so old runs stay comparable.
 
-Set `SOE_TERRAIN_GPU=1` to append `?terrain=gpu` to every trial scene link, so the run warms
-and draws through the GPU relief path while the default run keeps the raster path.
-
-Contour layer ids are matched by the patterns at the top of `measure.mjs`.
+Contour label ids are matched by the pattern at the top of `measure.mjs`.
 
 ## Caching and pitfalls
 

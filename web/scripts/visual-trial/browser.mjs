@@ -29,7 +29,6 @@ import {
 } from "./layout.mjs";
 import {
   CONTOUR_LABEL_PATTERN,
-  CONTOUR_LINE_PATTERN,
   classifyFailure,
   contourLegend,
   deltaZoomBands,
@@ -1739,19 +1738,13 @@ async function openScene(page, appUrl, sceneId, spot) {
 // A layer id owns the map's colour through as, while the blend also switches its halves off.
 function allocationQuery(spot) {
   const colour = effectiveColour(spot);
-  const terrain = terrainQuery();
-  if (colour === null) return terrain;
-  if (colour !== BLEND_UNIT) return `&as=${colour}:colour${terrain}`;
+  if (colour === null) return "";
+  if (colour !== BLEND_UNIT) return `&as=${colour}:colour`;
 
   const halves = BLEND_HALVES.filter((half) => (spot.layers ?? []).includes(half));
-  if (halves.length === 0) return `&as=${BLEND_UNIT}:colour${terrain}`;
+  if (halves.length === 0) return `&as=${BLEND_UNIT}:colour`;
 
-  return `&as=${BLEND_UNIT}:colour&off=${halves.join(",")}${terrain}`;
-}
-
-// The GPU terrain path is opt-in, so the default trial keeps measuring the raster path.
-function terrainQuery() {
-  return process.env.SOE_TERRAIN_GPU === "1" ? "&terrain=gpu" : "";
+  return `&as=${BLEND_UNIT}:colour&off=${halves.join(",")}`;
 }
 
 // Land-cover spots leave Temperature owning colour by default, so they request esa_worldcover.
@@ -2007,7 +2000,7 @@ async function settledSample(page) {
   let previous = null;
   while (Date.now() < deadline) {
     const idle = await page.evaluate(waitForIdle, deadline - Date.now());
-    const patterns = [CONTOUR_LINE_PATTERN.source, CONTOUR_LABEL_PATTERN.source];
+    const patterns = [CONTOUR_LABEL_PATTERN.source];
     const sample = await page.evaluate(takeSample, patterns);
     if (isSettled(previous, sample, idle)) {
       return { sample, timedOut: false };
@@ -2198,7 +2191,7 @@ function waitForIdle(timeoutMs) {
   });
 }
 
-function takeSample([linePattern, labelPattern]) {
+function takeSample([labelPattern]) {
   const map = window.__map;
   const layers = map.getStyle().layers;
   const idsOf = (type, pattern) => {
@@ -2255,7 +2248,6 @@ function takeSample([linePattern, labelPattern]) {
     centre: [canvas.clientWidth / 2, canvas.clientHeight / 2],
     labelCount: labels.length,
     labelLines: labels.flatMap(toPixels),
-    lineCount: rendered(idsOf("line", linePattern)).length,
     tilesLoaded: map.areTilesLoaded(),
     sceneReady: window.__trialMaskReady === true && window.__trialLayersReady === true,
     cardText: cards.map((card) => card.innerText).join("\n"),

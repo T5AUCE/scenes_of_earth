@@ -8,17 +8,12 @@ import type { Map as MapLibreMap } from "maplibre-gl";
 
 import {
   contourLadder,
-  contourOptionsVersion,
-  demParentsForTiles,
-  demParentsForTile,
   ENTRY_ZOOM_FT,
   ENTRY_ZOOM_M,
-  FADE_SPAN_ZOOM,
   finestIntervalAt,
   INTERVAL_CHAIN_FT,
   INTERVAL_CHAIN_M,
   labelIntervalsAt,
-  levelsForZoom,
   warmTilesForZoom,
 } from "./contour-ladder.ts";
 import { RELIEF_STRENGTH } from "./layers/relief.ts";
@@ -86,16 +81,6 @@ test("zoom-in only adds contour heights and every chain step divides the next", 
   }
 });
 
-test("every tier is traced two whole zooms before it enters except at the z0 floor", () => {
-  for (const sample of [FIJI, KENYA, FLAT, makeStats(0, 0, 0, 0)]) {
-    const ladder = contourLadder(sample);
-    for (const tier of ladder.tiers) {
-      assert.equal(tier.traceZoom, Math.max(0, tier.entryZoom - 2));
-      assert.ok(thresholdAt(ladder.thresholds, tier.traceZoom) <= tier.interval);
-    }
-  }
-});
-
 test("the feet ladder stays round and nested like the metre ladder", () => {
   for (const [index, interval] of INTERVAL_CHAIN_FT.entries()) {
     if (index > 0) assert.equal(interval % INTERVAL_CHAIN_FT[index - 1], 0);
@@ -120,7 +105,6 @@ test("the ladder shows nothing before z5 and freezes at z12 or the DEM overzoom 
   assert.equal(finestIntervalAt(global, 5), 2000);
   assert.equal(finestIntervalAt(global, 12), 10);
   assert.equal(finestIntervalAt(global, 20), 10);
-  assert.ok(Object.keys(global.thresholds).every((zoom) => Number(zoom) <= 12));
   assert.deepEqual(contourLadder(FIJI, { maxZoom: 20 }), contourLadder(FIJI));
   const capped = contourLadder(FIJI, { maxZoom: 9 });
   assert.ok(capped.tiers.every((tier) => tier.entryZoom <= 9));
@@ -190,38 +174,6 @@ test("the ladder is deterministic and does not mutate its statistics", () => {
   assert.deepEqual(contourLadder(sample), contourLadder(sample));
 });
 
-test("warm levels mirror the protocol threshold lookup", () => {
-  assert.deepEqual(levelsForZoom({ 8: 50, 10: 10 }, 7), []);
-  assert.deepEqual(levelsForZoom({ 8: 50, 10: 10 }, 9), [50]);
-  assert.deepEqual(levelsForZoom({ 8: 50, 10: 10 }, 10), [10]);
-});
-
-test("contour cache versions separate units but never scenes", () => {
-  const metres = contourOptionsVersion("m", 1, 1);
-  const feet = contourOptionsVersion("ft", 1, 1);
-
-  assert.notEqual(metres, feet);
-  assert.ok(!metres.includes("Kenya") && !feet.includes("Fiji"));
-});
-
-test("DEM parents cover the trace neighbourhood in at most four tiles", () => {
-  const parents = demParentsForTile({ z: 9, x: 100, y: 100 }, 1);
-
-  assert.ok(parents.length > 0 && parents.length <= 4);
-  assert.ok(parents.every((parent) => parent.z === 8));
-  assert.deepEqual(demParentsForTiles([], 1), []);
-  const shared = demParentsForTiles(
-    [{ z: 9, x: 100, y: 100 }, { z: 9, x: 101, y: 100 }],
-    1,
-  );
-
-  assert.ok(shared.length <= 8);
-  assert.equal(
-    new Set(shared.map((parent) => `${parent.z}/${parent.x}/${parent.y}`)).size,
-    shared.length,
-  );
-});
-
 function makeStats(
   low: number,
   high: number,
@@ -238,11 +190,6 @@ function makeStats(
     slope_p90_deg: steepSlope,
     cell_m: 500,
   };
-}
-
-function thresholdAt(thresholds: Record<number, number>, zoom: number) {
-  const entries = Object.entries(thresholds).filter(([entry]) => Number(entry) <= zoom);
-  return entries.at(-1)?.[1] ?? Infinity;
 }
 
 function tileKeys(tiles: { x: number; y: number }[]): string[] {
@@ -328,7 +275,7 @@ test("both terrain displays reuse one worker cache and register protocols once p
     encoding: "terrarium",
     maxzoom: 11,
     worker: true,
-    cacheSize: 120,
+    cacheSize: 60,
   });
 });
 
@@ -343,10 +290,8 @@ test("contour styles validate in MapLibre and cap refinement at z12", (context) 
   const map = new TestMap();
   const dem = sharedDemSource(TILES);
   const overlay = new ContourOverlay(layerContext(map), dem, TILES, FIJI);
-  const source = map.sources.get("terrain-contours")!;
   const labelSource = map.sources.get("terrain-labels-contours")!;
-  assert.equal(map.sources.size, 2);
-  assert.equal(source.maxzoom, 12);
+  assert.equal(map.sources.size, 1);
   assert.equal(labelSource.maxzoom, 12);
   assert.equal((dem as unknown as TestDemSource).contourOptions["overzoom"], 1);
   const errors = validateStyleMin({
@@ -359,14 +304,6 @@ test("contour styles validate in MapLibre and cap refinement at z12", (context) 
     layers: [...map.layers.values()],
   });
   assert.deepEqual(errors.map((error) => error.message), []);
-  const tierLines = map.layers.values().filter((layer) => layer.type === "line");
-  for (const layer of tierLines) {
-    assert.ok(!JSON.stringify(layer).includes('"level"'));
-    const opacity = layer.paint["line-opacity"];
-    assert.equal(opacity[3], layer.minzoom);
-    assert.equal(opacity[5], layer.minzoom + FADE_SPAN_ZOOM);
-    assert.equal(opacity[4], 0);
-  }
   const labels = map.layers.get("terrain-contours-labels")!;
   assert.deepEqual(labels.layout["text-font"], ["Noto Sans Regular"]);
   assert.equal(labels.layout["symbol-spacing"], 350);
@@ -406,23 +343,6 @@ test("feet contours use scaled elevations with round feet labels", (context) => 
   assert.ok(!field.includes('" m"'));
 
   const feetLadder = contourLadder(FIJI, { elevationUnit: "ft" });
-  const multipleOf = (interval: number) => ["==", ["%", ["get", "ele"], interval], 0];
-  const soleMultiple = (interval: number, coarser: number) => [
-    "all",
-    multipleOf(interval),
-    ["!", multipleOf(coarser)],
-  ];
-  assert.deepEqual(
-    [...map.layers.values()]
-      .filter((layer) => layer.type === "line")
-      .map((layer) => layer.filter),
-    feetLadder.tiers.map((tier, index) => {
-      const coarser = feetLadder.tiers[index - 1];
-      if (!coarser) return multipleOf(tier.interval);
-
-      return soleMultiple(tier.interval, coarser.interval);
-    }),
-  );
 
   map.zoom = 12;
   map.emit("zoomend");
@@ -499,30 +419,6 @@ test("the configured contour buffer stays inside the plugin's materialized paddi
   overlay.destroy();
 });
 
-test("relief stays single-layered through zoom and source loading events", (context) => {
-  mockPage(context);
-  const map = new TestMap();
-  const view = createTerrainView(layerContext(map));
-  const reliefId = "terrain-relief";
-  const rasters = [...map.layers.values()].filter((layer) => layer.type === "raster");
-
-  assert.deepEqual(view.parts[0].layerIds, [reliefId]);
-  assert.ok(!map.sources.has(`${reliefId}-backdrop`));
-  assert.deepEqual(rasters.map((layer) => layer.id), [reliefId]);
-  map.zooming = true;
-  map.emit("zoomstart");
-  map.emit("dataloading", { sourceId: reliefId });
-  map.emit("sourcedata", { sourceId: reliefId });
-  map.zooming = false;
-  map.emit("zoomend");
-
-  assert.deepEqual(map.layers.get(reliefId).paint, { "raster-fade-duration": 250 });
-  assert.ok(map.paints.every(([id]) => id !== reliefId && id !== `${reliefId}-backdrop`));
-  view.destroy();
-  assert.equal(map.sources.size, 0);
-  assert.ok([...map.listeners.values()].every((listeners) => listeners.size === 0));
-});
-
 test("relief strength offers the configured range on the raster layer", (context) => {
   mockPage(context);
   const map = new TestMap();
@@ -540,11 +436,6 @@ test("shared relief and contour layers hide until the reveal shows them", (conte
   mockPage(context);
   const map = new TestMap();
   const view = createTerrainView(layerContext(map));
-  const relief = map.sources.get("terrain-relief")!;
-  assert.equal(relief.type, "raster");
-  assert.match(relief.tiles[0], /^soeshade:\/\/\d+\/0\/\{z\}\/\{x\}\/\{y\}$/);
-  assert.equal(relief.tileSize, 512);
-  assert.equal(relief.maxzoom, 11);
   const ids = view.parts.flatMap((part) => part.layerIds);
   const native = ids.map((id) => ({
     id,
@@ -566,18 +457,24 @@ test("shared relief and contour layers hide until the reveal shows them", (conte
   assert.equal(map.sources.size, 0);
 });
 
-test("switching units refreshes the reveal gate and drops removed tiers", (context) => {
+test("switching units refreshes the reveal gate and rebuilds only the labels", (context) => {
   mockPage(context);
   const map = new TestMap();
   const view = createTerrainView(layerContext(map, KENYA));
   const ids = view.parts.flatMap((part) => part.layerIds);
+  assert.deepEqual([...ids].sort(), [
+    "terrain-contour-lines",
+    "terrain-contours-labels",
+    "terrain-relief",
+  ]);
   const gate = new SceneDataLayers(map as unknown as MapLibreMap, ids);
   gate.show();
 
   const layersBeforeFeet = new Map(ids.map((id) => [id, map.layers.get(id)]));
   view.menu?.units?.set("ft");
   const feetIds = view.parts.flatMap((part) => part.layerIds);
-  // Persisting layers keep their objects, so only rebuilt tiers carry fresh ranges.
+  assert.deepEqual([...feetIds].sort(), [...ids].sort());
+  // The GPU lines keep their layer while the labels rebuild, so only labels carry fresh ranges.
   const feetNative = feetIds
     .filter((id) => map.layers.get(id) !== layersBeforeFeet.get(id))
     .map((id) => ({
@@ -585,8 +482,7 @@ test("switching units refreshes the reveal gate and drops removed tiers", (conte
       min: map.layers.get(id)?.minzoom ?? 0,
       max: map.layers.get(id)?.maxzoom ?? 24,
     }));
-  assert.ok(!feetIds.includes("terrain-contours-10"));
-  assert.ok(feetNative.length > 0);
+  assert.deepEqual(feetNative.map((entry) => entry.id), ["terrain-contours-labels"]);
   gate.sync(feetIds);
   for (const { id, min, max } of feetNative) {
     assert.equal(map.layers.get(id)?.minzoom, min);
@@ -596,7 +492,8 @@ test("switching units refreshes the reveal gate and drops removed tiers", (conte
   const layersBeforeMetres = new Map(feetIds.map((id) => [id, map.layers.get(id)]));
   view.menu?.units?.set("m");
   const metreIds = view.parts.flatMap((part) => part.layerIds);
-  // Persisting layers keep their objects, so only rebuilt tiers carry fresh ranges.
+  assert.deepEqual([...metreIds].sort(), [...ids].sort());
+  // The GPU lines keep their layer while the labels rebuild, so only labels carry fresh ranges.
   const metreNative = metreIds
     .filter((id) => map.layers.get(id) !== layersBeforeMetres.get(id))
     .map((id) => ({
@@ -604,8 +501,7 @@ test("switching units refreshes the reveal gate and drops removed tiers", (conte
       min: map.layers.get(id)?.minzoom ?? 0,
       max: map.layers.get(id)?.maxzoom ?? 24,
     }));
-  assert.ok(metreIds.includes("terrain-contours-10"));
-  assert.ok(metreNative.length > 0);
+  assert.deepEqual(metreNative.map((entry) => entry.id), ["terrain-contours-labels"]);
   gate.sync(metreIds);
   for (const { id, min, max } of metreNative) {
     assert.equal(map.layers.get(id)?.minzoom, min);
