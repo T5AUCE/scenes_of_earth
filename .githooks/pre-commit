@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Blocks a commit when a staged file is unformatted; it checks a snapshot of the staged content
+# and never touches the working tree or the index.
+set -u
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+
+snapshot="$(mktemp -d)"
+trap 'rm -rf "$snapshot"' EXIT
+
+web_files=()
+python_files=()
+while IFS= read -r -d '' file; do
+    case "$file" in
+        web/dist/* | web/public/* | web/package-lock.json) continue ;;
+        web/*.ts | web/*.tsx | web/*.mjs | web/*.js | web/*.css | web/*.json | web/*.html)
+            web_files+=("${file#web/}") ;;
+        *.py) python_files+=("$file") ;;
+        *) continue ;;
+    esac
+    mkdir -p "$snapshot/$(dirname "$file")"
+    git show ":$file" > "$snapshot/$file"
+done < <(git diff --cached --name-only -z --diff-filter=ACMR)
+
+if [ ${#web_files[@]} -eq 0 ] && [ ${#python_files[@]} -eq 0 ]; then
+    exit 0
+fi
+
+status=0
+if [ ${#web_files[@]} -gt 0 ]; then
+    cp web/.oxfmtrc.json "$snapshot/web/"
+    ln -s "$root/web/node_modules" "$snapshot/web/node_modules"
+    (cd "$snapshot/web" && npx --no-install oxfmt --check "${web_files[@]}") || status=1
+fi
+if [ ${#python_files[@]} -gt 0 ]; then
+    cp pyproject.toml "$snapshot/"
+    (
+        cd "$snapshot"
+        ruff format --check "${python_files[@]}" && ruff check --select I "${python_files[@]}"
+    ) || status=1
+fi
+
+if [ "$status" -ne 0 ]; then
+    echo "Commit blocked: run 'cd web && npm run format' and 'ruff check --select I --fix . && ruff format .', then stage the changes." >&2
+fi
+exit "$status"

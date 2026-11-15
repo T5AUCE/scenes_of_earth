@@ -1,5 +1,16 @@
 {
 	"python.defaultInterpreterPath": "/usr/local/bin/python",
+	"editor.formatOnSave": true,
+	"[typescript]": { "editor.defaultFormatter": "oxc.oxc-vscode" },
+	"[typescriptreact]": { "editor.defaultFormatter": "oxc.oxc-vscode" },
+	"[javascript]": { "editor.defaultFormatter": "oxc.oxc-vscode" },
+	"[json]": { "editor.defaultFormatter": "oxc.oxc-vscode" },
+	"[css]": { "editor.defaultFormatter": "oxc.oxc-vscode" },
+	"[python]": {
+		"editor.defaultFormatter": "charliermarsh.ruff",
+		"editor.codeActionsOnSave": { "source.organizeImports.ruff": "explicit" }
+	},
+	"ruff.importStrategy": "fromEnvironment",
 	"files.watcherExclude": {
 		"**/.git/objects/**": true,
 		"**/node_modules/**": true,

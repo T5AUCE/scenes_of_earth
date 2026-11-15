@@ -17,7 +17,7 @@
 	},
 	"otherPortsAttributes": { "onAutoForward": "ignore" },
 
-	"postCreateCommand": "sudo chown vscode:vscode ~/.local ~/.local/share web/node_modules data web/.trial-cache && sudo chown -R vscode:vscode ~/.local/share/opencode ~/.config/opencode && pip install -e '.[import,dev]' && npm config set prefix ~/.npm-global && npm install -g @anthropic-ai/claude-code opencode-ai@1.19.3 && { [ ! -f .secrets/cdsapirc ] || ln -sfn \"$PWD/.secrets/cdsapirc\" ~/.cdsapirc; } && (cd web && npm ci && bash scripts/visual-trial/setup.sh)",
+	"postCreateCommand": "sudo chown vscode:vscode ~/.local ~/.local/share web/node_modules data web/.trial-cache && sudo chown -R vscode:vscode ~/.local/share/opencode ~/.config/opencode && pip install -e '.[import,dev]' && npm config set prefix ~/.npm-global && npm install -g @anthropic-ai/claude-code opencode-ai@1.19.3 && { [ ! -f .secrets/cdsapirc ] || ln -sfn \"$PWD/.secrets/cdsapirc\" ~/.cdsapirc; } && git config core.hooksPath .githooks && (cd web && npm ci && bash scripts/visual-trial/setup.sh)",
 
 	// Unconfined seccomp/AppArmor lets opencode-agent.sh use bwrap's read-only sandbox.
 	"runArgs": ["--security-opt", "seccomp=unconfined", "--security-opt", "apparmor=unconfined"],
@@ -36,6 +36,7 @@
 
 	"customizations": {
 	"vscode": {
+		"extensions": ["oxc.oxc-vscode", "charliermarsh.ruff"],
 		"settings": { "terminal.integrated.defaultProfile.linux": "pwsh" }
 	}
 }

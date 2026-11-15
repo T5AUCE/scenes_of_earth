@@ -1,0 +1,11 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 100,
+  "objectWrap": "collapse",
+  "experimentalOperatorPosition": "start",
+  "sortImports": {
+    "groups": ["builtin", "external", ["internal", "parent", "sibling", "index"], "unknown"]
+  },
+  "sortPackageJson": false,
+  "ignorePatterns": ["dist/", "public/", ".trial-cache/", "package-lock.json"]
+}

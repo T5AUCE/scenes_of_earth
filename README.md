@@ -32,7 +32,9 @@ For the frontend (`npm run dev`, port 5173), set the Vite dev server to proxy `/
 
 Frontend (`web/`): `npm install`, then `npm run dev` (port 5173), `npm run build` (typecheck plus bundle) and `npm test`
 (Node's built-in runner, no framework). A built scene opens by id with `http://localhost:5173/?scene=<id>`, which is also
-how to share it. The page draws GPU relief shading and contour lines from one shared DEM
+how to share it. `npm run format` formats and `npm run check` runs the format check, oxlint and the typecheck; for Python,
+`ruff check --select I --fix . && ruff format .` formats and `ruff check` lints. A tracked pre-commit hook in `.githooks`
+checks staged files (the devcontainer enables it; elsewhere run `git config core.hooksPath .githooks`). The page draws GPU relief shading and contour lines from one shared DEM
 texture pool built from the elevation tiles (intervals from a fixed global ladder, bold
 heights from the elevation statistics in the bundle) with maplibre-contour labels, and the
 rain series from the bundle's Zarr store, each toggleable, with a time slider and a blocky

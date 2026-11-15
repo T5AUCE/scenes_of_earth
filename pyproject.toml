@@ -18,7 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 import = ["geopandas", "cdsapi>=0.7.4"]
-dev = ["pytest", "pytest-xdist", "httpx"]
+dev = ["pytest", "pytest-xdist", "httpx", "ruff==0.17.5"]
 
 [project.scripts]
 soe = "soe.cli:main"
@@ -43,3 +43,29 @@ markers = ["slow: cube ingestion tests, skipped by default; run them with `pytes
 [tool.pyright]
 include = ["soe", "tests", "main.py"]
 exclude = ["**/node_modules", "**/__pycache__", "**/.*", "data", "build", "web", "reports"]
+# Test files index loosely typed JSON results, which the checker flags but which are correct.
+ignore = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E4", "E7", "E9", "E501", "F", "W291", "W292", "W293", "W605",
+    "B", "UP", "I", "SIM", "C4", "RUF", "N", "PIE", "PT", "LOG", "G", "BLE", "ERA",
+    "FAST", "ASYNC", "S608", "PLE", "PLW", "ANN", "D100", "D103", "RET505", "RET506", "RET507",
+    "RET508",
+]
+ignore = ["N818", "RUF001", "PT018", "G004", "PLW2901"]
+unfixable = ["F401", "B905", "ERA001"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "D100", "D103", "S608"]
+"main.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["soe"]
+split-on-trailing-comma = false
+
+[tool.ruff.format]
+skip-magic-trailing-comma = true
