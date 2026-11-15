@@ -246,6 +246,7 @@ export class DemDraw {
   private readonly options: DemDrawOptions;
   private readonly heading = new HeadingTracker();
   private fitLevel: number;
+  private pinnedLevel: number;
   private base: PinnedBase;
   private gpu: DrawGpu | null = null;
   private isWarm = false;
@@ -253,7 +254,8 @@ export class DemDraw {
   constructor(options: DemDrawOptions) {
     this.options = options;
     this.fitLevel = this.levelOf(options.fitZoom);
-    this.base = pinnedBase(options.bbox, this.fitLevel);
+    this.pinnedLevel = this.pinnedLevelOf(options.fitZoom);
+    this.base = pinnedBase(options.bbox, this.pinnedLevel);
   }
 
   /** Take the shared pool and make the quad geometry for a linked program. */
@@ -310,11 +312,13 @@ export class DemDraw {
 
   /** Refit the pinned base after the camera lands on the scene. */
   setFitZoom(zoom: number): void {
-    const level = this.levelOf(zoom);
-    if (level === this.fitLevel) return;
+    const fit = this.levelOf(zoom);
+    const pinned = this.pinnedLevelOf(zoom);
+    if (fit === this.fitLevel && pinned === this.pinnedLevel) return;
 
-    this.fitLevel = level;
-    this.base = pinnedBase(this.options.bbox, level);
+    this.fitLevel = fit;
+    this.pinnedLevel = pinned;
+    this.base = pinnedBase(this.options.bbox, pinned);
   }
 
   /**
@@ -356,7 +360,8 @@ export class DemDraw {
       gpu.pool.syncFrame(this.base.tiles);
     });
     const { inflight, queueDepth, awaitingUpload } = gpu.pool.stats();
-    // Uploads stop at a few per frame and nothing else asks for the frame that finishes them.
+    // Uploads stop at the per-frame budget and a hidden layer gets no other frame,
+    // so ask for the one that finishes them.
     if (awaitingUpload > 0) this.options.map.triggerRepaint();
     return inflight + queueDepth + awaitingUpload === 0;
   }
@@ -409,7 +414,13 @@ export class DemDraw {
   }
 
   private levelOf(zoom: number): number {
+    // Floor keeps the planner clamp, so lower zooms still draw the floor level.
     return Math.min(Math.max(Math.floor(zoom), 0), this.options.maxZoom);
+  }
+
+  private pinnedLevelOf(zoom: number): number {
+    // Round loads the level drawn at entry, which is the sharp level there.
+    return Math.min(Math.max(Math.round(zoom), 0), this.options.maxZoom);
   }
 
   private bindQuad(

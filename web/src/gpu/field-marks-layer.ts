@@ -486,6 +486,7 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
         gpu.nextTiles.push(nextTile);
         nextTile.companion = this.uploadWindow(gl, grid, tile.window, parentCells);
       }
+      this.throwIfUploadFailed(gl);
     } catch (error) {
       deleteResources(gl, { textures: this.extraTextures(gpu) });
       gpu.nextTiles = [];

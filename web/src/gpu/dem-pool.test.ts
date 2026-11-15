@@ -266,36 +266,79 @@ test("the memo of missing tiles stays bounded", () => {
   assert.equal(harness.pool.stats().failures, 512);
 });
 
-test("uploads run only inside uploadPending and at most two per frame", () => {
+test("uploads run only inside uploadPending and at most eight per frame", () => {
   const harness = setup();
-  const wanted = [tile(0), tile(1), tile(2)];
+  const wanted = Array.from({ length: 10 }, (_, index) => tile(index));
   harness.pool.update(wanted);
   for (const entry of wanted) land(harness, entry);
   assert.equal(harness.store!.created.length, 0);
 
-  assert.equal(harness.pool.uploadPending(), 2);
+  assert.equal(harness.pool.uploadPending(), 8);
   harness.pool.update(wanted);
-  assert.equal(harness.pool.uploadPending(), 1);
+  assert.equal(harness.pool.uploadPending(), 2);
 
-  assert.equal(harness.store!.created.length, 3);
+  assert.equal(harness.store!.created.length, 10);
   assert.equal(harness.pool.stats().awaitingUpload, 0);
-  assert.ok(harness.pool.texture(tile(2)));
+  assert.ok(harness.pool.texture(tile(9)));
 });
 
-test("layers sharing a map frame upload at most two tiles between them", () => {
+test("uploads stop at the millisecond budget and continue on the next frame", () => {
   const harness = setup();
+  const store = harness.store!;
+  const created = store.create.bind(store);
+  store.create = (data) => {
+    harness.advance(2);
+    return created(data);
+  };
   const wanted = [tile(0), tile(1), tile(2), tile(3)];
+  harness.pool.update(wanted);
+  for (const entry of wanted) land(harness, entry);
+
+  assert.equal(harness.pool.uploadPending(), 2);
+  harness.pool.update(wanted);
+  assert.equal(harness.pool.uploadPending(), 2);
+  assert.equal(harness.store!.created.length, 4);
+});
+
+test("view and pinned tiles upload before lower tiers whatever the list order", () => {
+  const harness = setup({ keepData: true });
+  const store = harness.store!;
+  const created = store.create.bind(store);
+  store.create = (data) => {
+    harness.advance(10);
+    return created(data);
+  };
+  const ring = tile(0, 0, "ring");
+  const view = tile(1);
+  const pinned = tile(2, 0, "pinned");
+  harness.pool.update([ring, view, pinned]);
+  const heights = (value: number) => new Float32Array(SIZE_PX * SIZE_PX).fill(value);
+  land(harness, ring, heights(1), edgeStrips(heights(1)));
+  land(harness, view, heights(2), edgeStrips(heights(2)));
+  land(harness, pinned, heights(3), edgeStrips(heights(3)));
+
+  assert.equal(harness.pool.uploadPending(), 1);
+  const centre = 2 * TEXTURE_SIZE_PX + 2;
+  assert.equal(store.created[0].data[centre], 2);
+  harness.pool.update([ring, view, pinned]);
+  assert.equal(harness.pool.uploadPending(), 1);
+  assert.equal(store.created[1].data[centre], 3);
+});
+
+test("layers sharing a map frame upload at most eight tiles between them", () => {
+  const harness = setup();
+  const wanted = Array.from({ length: 10 }, (_, index) => tile(index));
   harness.pool.update(wanted);
   for (const entry of wanted) land(harness, entry);
 
   harness.pool.syncFrame(wanted);
   harness.pool.syncFrame(wanted);
 
-  assert.equal(harness.store!.created.length, 2);
+  assert.equal(harness.store!.created.length, 8);
   assert.equal(harness.pool.needsRepaint(), true);
   harness.pool.endMapFrame();
   harness.pool.syncFrame(wanted);
-  assert.equal(harness.store!.created.length, 4);
+  assert.equal(harness.store!.created.length, 10);
 });
 
 test("the map finishing a frame lets the shared pool work on the next one", () => {
@@ -338,9 +381,9 @@ test("a tile waiting on neighbours is drawable for no time until the cap passes"
   assert.equal(harness.pool.drawableForMs(centre), 50);
 });
 
-test("needsRepaint asks for the frame that uploads capped tiles", () => {
+test("needsRepaint asks for the frames that finish the budgeted uploads", () => {
   const harness = setup();
-  const wanted = [tile(0), tile(1), tile(2)];
+  const wanted = Array.from({ length: 10 }, (_, index) => tile(index));
   harness.pool.update(wanted);
   for (const entry of wanted) land(harness, entry);
 

@@ -41,17 +41,20 @@ class UploadingLayer extends TiledGpuLayer {
   protected draw() {}
 }
 
-test("a failed companion upload frees the primary texture uploaded just before it", () => {
+test("a failed companion allocation frees the primary texture uploaded just before it", () => {
   const harness = createHarness();
   const gl = harness.gl;
-  gl.getError = () => (harness.uploads.length >= 2 ? 1285 : 0);
+  let creations = 0;
+  const createTexture = gl.createTexture.bind(gl);
+  gl.createTexture = (() => (++creations === 2 ? null : createTexture())) as
+    WebGL2RenderingContext["createTexture"];
   const gpu = { tiles: [] } as unknown as TiledGpu;
   const cells = new Uint8Array(12);
 
-  assert.throws(() => new UploadingLayer().upload(gl, gpu, cells, cells), /GL error 1285/);
+  assert.throws(() => new UploadingLayer().upload(gl, gpu, cells, cells), /Cannot allocate/);
 
-  assert.equal(harness.uploads.length, 2);
-  assert.equal(harness.deleted.textures.length, 2);
+  assert.equal(harness.uploads.length, 1);
+  assert.equal(harness.deleted.textures.length, 1);
   assert.equal(gpu.tiles.length, 0);
 });
 

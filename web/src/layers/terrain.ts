@@ -311,7 +311,7 @@ export function setTerrainBaseZoom(map: MapLibreMap, zoom: number): void {
 
 /**
  * Pin every live terrain base on one map before the flight, so entry loads the tiles of
- * the fitted level.
+ * the level drawn at the fitted zoom.
  */
 export function pinGpuTerrainBase(map: MapLibreMap, zoom: number): void {
   for (const [shading, owner] of liveTerrainBases) {

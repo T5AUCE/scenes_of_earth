@@ -163,7 +163,7 @@ test("relief and contours share one pool and its workers", async () => {
   assert.ok(harness.workers.every((worker) => worker.terminated));
 });
 
-test("relief and contours together upload at most two textures per map frame", async () => {
+test("relief and contours together upload within the per-frame budget", async () => {
   const harness = createHarness();
   const relief = addRelief(harness);
   const lines = addLines(harness);
@@ -176,7 +176,7 @@ test("relief and contours together upload at most two textures per map frame", a
   for (let frame = 0; frame < 12; frame++) {
     for (const layer of layers) layer.render(harness.gl, harness.input);
     harness.endFrame();
-    assert.ok(harness.created().length - created <= 2, `frame ${frame}`);
+    assert.ok(harness.created().length - created <= 8, `frame ${frame}`);
     created = harness.created().length;
     await harness.landLoads();
   }
@@ -236,7 +236,7 @@ test("relief and contours prepare on one pool and request each pinned tile once"
   lines.destroy();
 });
 
-test("paired prepares upload at most two textures per map frame", async () => {
+test("paired prepares share one per-frame budget across both layers", async () => {
   const harness = createHarness();
   const relief = addRelief(harness);
   const lines = addLines(harness);
@@ -250,12 +250,9 @@ test("paired prepares upload at most two textures per map frame", async () => {
   relief.prepare();
   lines.prepare();
 
-  assert.equal(harness.created().length - before, 2);
-  harness.endFrame();
-  relief.prepare();
-  lines.prepare();
-
-  assert.equal(harness.created().length - before, 4);
+  const uploaded = harness.created().length - before;
+  assert.ok(uploaded > 2);
+  assert.ok(uploaded <= 8);
   harness.endFrame();
 
   assert.equal(relief.prepare() && lines.prepare(), true);

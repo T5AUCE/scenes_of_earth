@@ -188,18 +188,28 @@ test("link failures report fallback with the driver log and free both shaders", 
   assert.equal(harness.deleted.shaders.length, 2);
 });
 
-test("a failed texture upload reports fallback and frees the failed texture", async () => {
-  const harness = createHarness({ uploadError: 1285 });
+test("a failed rows allocation reports fallback and frees the program", async () => {
+  const harness = createHarness({ failCreateAt: 1 });
+  harness.field.setIds(new Uint8Array(12).fill(1));
+  harness.field.layer.onAdd!(harness.map, harness.gl);
+  harness.field.layer.render(harness.gl, harness.input);
+  await Promise.resolve();
+
+  assert.match(harness.failures[0].message, /Cannot allocate a texture/);
+  assert.equal(harness.deleted.programs.length, 1);
+  assert.equal(harness.deleted.textures.length, 0);
+  assert.equal(harness.deleted.buffers.length, 1);
+  assert.equal(harness.deleted.arrays.length, 1);
+});
+
+test("an OOM at the end of an upload batch reaches the fallback", async () => {
+  const harness = createHarness({ failUploadAt: 2 });
   harness.field.setIds(new Uint8Array(12).fill(1));
   harness.field.layer.onAdd!(harness.map, harness.gl);
   harness.field.layer.render(harness.gl, harness.input);
   await Promise.resolve();
 
   assert.match(harness.failures[0].message, /GL error 1285/);
-  assert.equal(harness.deleted.programs.length, 1);
-  assert.equal(harness.deleted.textures.length, 1);
-  assert.equal(harness.deleted.buffers.length, 1);
-  assert.equal(harness.deleted.arrays.length, 1);
 });
 
 test("globe drawing requests fallback instead of drawing Mercator quads", async () => {
@@ -544,9 +554,9 @@ test("an odd window origin skips its band and keeps the full gather", async () =
   });
 });
 
-test("a failed second band upload frees its tile textures", async () => {
+test("a failed second band allocation frees its tile textures", async () => {
   await withSearchAsync("?bake=1", async () => {
-    const harness = createHarness({ failUploadAt: 5 });
+    const harness = createHarness({ failCreateAt: 5 });
     harness.field.setIds(Uint8Array.from({ length: 12 }, (_, cell) => 10 + (cell % 2) * 10));
     harness.field.setEdges(smoothingEdges());
     await harness.field.prepareFlags();
@@ -555,15 +565,15 @@ test("a failed second band upload frees its tile textures", async () => {
     harness.field.layer.render(harness.gl, harness.input);
     await Promise.resolve();
 
-    assert.match(harness.failures[0].message, /GL error 1285/);
+    assert.match(harness.failures[0].message, /Cannot allocate a texture/);
     harness.field.layer.onRemove!(harness.map, harness.gl);
     assert.equal(harness.deleted.textures.length, harness.uploads.length);
   });
 });
 
-test("a failed third band upload frees its tile textures", async () => {
+test("a failed third band allocation frees its tile textures", async () => {
   await withSearchAsync("?bake=1", async () => {
-    const harness = createHarness({ failUploadAt: 6 });
+    const harness = createHarness({ failCreateAt: 6 });
     harness.field.setIds(Uint8Array.from({ length: 12 }, (_, cell) => 10 + (cell % 2) * 10));
     harness.field.setEdges(smoothingEdges());
     await harness.field.prepareFlags();
@@ -572,7 +582,7 @@ test("a failed third band upload frees its tile textures", async () => {
     harness.field.layer.render(harness.gl, harness.input);
     await Promise.resolve();
 
-    assert.match(harness.failures[0].message, /GL error 1285/);
+    assert.match(harness.failures[0].message, /Cannot allocate a texture/);
     harness.field.layer.onRemove!(harness.map, harness.gl);
     assert.equal(harness.deleted.textures.length, harness.uploads.length);
   });

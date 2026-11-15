@@ -49,7 +49,7 @@ function compileShader(gl: WebGL2RenderingContext, type: number, source: string)
 /** The WebGL default, which MapLibre also restores after its own texture uploads. */
 const DEFAULT_UNPACK_ALIGNMENT_BYTES = 4;
 
-/** Upload a texture of one channel (or RGBA for colors), throwing when the GPU rejects it. */
+/** Upload a texture of one channel (or RGBA for colors), throwing when allocation fails. */
 export function uploadTexture(
   gl: WebGL2RenderingContext,
   format: TextureFormat,
@@ -76,7 +76,7 @@ export function uploadTexture(
   gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
   gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
   gl.texImage2D(gl.TEXTURE_2D, 0, internal, width, height, 0, layout, type, data);
-  const error = gl.getError();
+  // Batches check getError once because checking each upload stalls the frame.
   // MapLibre restores the same defaults around its own uploads, so nothing relies on leftovers.
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, DEFAULT_UNPACK_ALIGNMENT_BYTES);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
@@ -86,10 +86,6 @@ export function uploadTexture(
   gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
   gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
 
-  if (error !== gl.NO_ERROR) {
-    gl.deleteTexture(texture);
-    throw new Error(`Cannot upload a ${width} x ${height} texture (GL error ${error})`);
-  }
   return texture;
 }
 

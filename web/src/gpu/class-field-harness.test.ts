@@ -26,6 +26,7 @@ export function createHarness(
     link?: boolean;
     uploadError?: number;
     failUploadAt?: number;
+    failCreateAt?: number;
     globe?: boolean;
     nx?: number;
     maxTextureSize?: number;
@@ -46,6 +47,7 @@ export function createHarness(
   const uniforms = new Map<string, unknown>();
   let vertexArray: unknown = null;
   let repaints = 0;
+  let creations = 0;
   const gl = {
     MAX_TEXTURE_SIZE: 1,
     COMPILE_STATUS: 2,
@@ -76,7 +78,11 @@ export function createHarness(
     vertexAttribPointer: () => {},
     deleteBuffer: (value: object) => deleted.buffers.push(value),
     deleteVertexArray: (value: object) => deleted.arrays.push(value),
-    createTexture: () => ({}),
+    createTexture: () => {
+      creations += 1;
+      if (options.failCreateAt !== undefined && creations === options.failCreateAt) return null;
+      return {};
+    },
     bindTexture: () => {},
     texParameteri: () => {},
     pixelStorei: () => {},

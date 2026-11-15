@@ -172,14 +172,14 @@ async function drawnFrames(harness: ReturnType<typeof createDemHarness>, draw: D
   }
 }
 
-function setup() {
+function setup(fitZoom = 8) {
   const harness = createDemHarness();
   const draw = new DemDraw({
     map: harness.map,
     tileUrl: "https://dem/{z}/{x}/{y}.png",
     bbox: SCENE_BBOX,
     maxZoom: 12,
-    fitZoom: 8,
+    fitZoom,
     poolOptions: harness.poolOptions,
   });
   const program = {} as WebGLProgram;
@@ -267,4 +267,62 @@ test("detach gives back the geometry and stops the pool's workers", () => {
   assert.equal(harness.deleted.arrays.length, 1);
   assert.equal(harness.deleted.buffers.length, 1);
   assert.ok(harness.workers.every((worker) => worker.terminated));
+});
+
+/** The urls the pool has been asked to load, in request order. */
+function loadUrls(harness: ReturnType<typeof createDemHarness>): string[] {
+  return harness.workers.flatMap((worker) => worker.requests)
+    .flatMap((request) => request.type === "load" ? [request.url] : []);
+}
+
+test("the pinned base sits at the rounded fitted zoom the planner draws", () => {
+  const { harness, draw } = setup(5.59);
+  draw.loadBase(harness.gl);
+
+  const urls = loadUrls(harness);
+  assert.ok(urls.length > 0);
+  assert.ok(urls.every((url) => url.includes("/6/")));
+  draw.detach(harness.gl);
+});
+
+test("refitting across the half zoom moves the pinned base to the new round level", () => {
+  const { harness, draw } = setup(5.4);
+  draw.loadBase(harness.gl);
+
+  const before = loadUrls(harness);
+  assert.ok(before.length > 0);
+  assert.ok(before.every((url) => url.includes("/5/")));
+
+  draw.setFitZoom(5.6);
+  harness.endFrame();
+  draw.loadBase(harness.gl);
+
+  const fresh = loadUrls(harness).slice(before.length);
+  assert.ok(fresh.length > 0);
+  assert.ok(fresh.every((url) => url.includes("/6/")));
+  draw.detach(harness.gl);
+});
+
+test("refitting within the same round level loads nothing new", () => {
+  const { harness, draw } = setup(5.4);
+  draw.loadBase(harness.gl);
+
+  const before = loadUrls(harness).length;
+  draw.setFitZoom(5.1);
+  harness.endFrame();
+  draw.loadBase(harness.gl);
+
+  assert.equal(loadUrls(harness).length, before);
+  draw.detach(harness.gl);
+});
+
+test("a tenth below the fit still draws the floor level", () => {
+  const { harness, draw } = setup(5.6);
+  harness.setZoom(5.5);
+  drawFrame(harness, draw);
+
+  const urls = loadUrls(harness);
+  assert.ok(urls.some((url) => url.includes("/5/")));
+  assert.ok(urls.some((url) => url.includes("/6/")));
+  draw.detach(harness.gl);
 });

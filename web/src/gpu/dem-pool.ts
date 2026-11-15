@@ -76,7 +76,9 @@ export const TEXTURE_BYTES = TEXTURE_SIZE_PX ** 2 * Float32Array.BYTES_PER_ELEME
 
 const WORKER_COUNT = 2;
 const MAX_FETCHES = 6;
-const MAX_UPLOADS_PER_FRAME = 2;
+// Uploads stop after this much main-thread time or this many tiles, whichever comes first.
+const UPLOAD_BUDGET_MS = 4;
+const MAX_UPLOADS_PER_FRAME = 8;
 const UNPINNED_TEXTURE_LIMIT = 96;
 const TEXTURE_BYTES_LIMIT = 150 * 1024 * 1024;
 
@@ -236,7 +238,8 @@ export class DemPool {
 
   /**
    * Update and upload for a map frame. Every layer that draws or prepares from this pool calls
-   * it, but only the first call of a frame works, so the cap holds however many layers there are.
+   * it, but only the first call of a frame works, so the budget holds however many layers
+   * there are.
    */
   syncFrame(wanted: readonly WantedTile[]): void {
     if (this.isMapFrameOpen) return;
@@ -273,21 +276,36 @@ export class DemPool {
     if (!store) return 0;
 
     this.applyHaloPatches(store);
-    let uploads = 0;
-    for (const tile of this.wantedList) {
-      if (uploads >= MAX_UPLOADS_PER_FRAME || this.pending.size === 0) break;
-
-      const key = tileKey(tile);
-      const heights = this.pending.get(key);
-      if (heights && this.uploadTile(store, tile, key, heights)) uploads++;
-    }
+    const start = this.now();
+    let uploads = this.uploadTier(store, start, true, 0);
+    uploads = this.uploadTier(store, start, false, uploads);
     this.latchDrawable();
     return uploads;
   }
 
+  private uploadTier(
+    store: DemTextureStore,
+    start: number,
+    isFirstTier: boolean,
+    uploads: number,
+  ): number {
+    for (const tile of this.wantedList) {
+      if (uploads >= MAX_UPLOADS_PER_FRAME || this.pending.size === 0) break;
+      if (uploads > 0 && this.now() - start >= UPLOAD_BUDGET_MS) break;
+
+      const isFirst = tile.tier === "pinned" || tile.tier === "view";
+      if (isFirst !== isFirstTier) continue;
+      const key = tileKey(tile);
+      const heights = this.pending.get(key);
+      if (heights && this.uploadTile(store, tile, key, heights)) uploads++;
+    }
+    return uploads;
+  }
+
   /**
-   * Whether the layer should repaint again after this frame. Uploads stop at two per frame
-   * and drawable waits on the 300 ms cap, so the pool asks for the frame that finishes them.
+   * Whether the layer should repaint again after this frame. Uploads stop at the per-frame
+   * time and count budget while drawable waits on the 300 ms cap, so the pool asks for the
+   * frames that finish them.
    */
   needsRepaint(): boolean {
     if (!this.store) return false;

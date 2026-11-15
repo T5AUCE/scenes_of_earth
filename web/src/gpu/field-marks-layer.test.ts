@@ -44,6 +44,15 @@ test("a fade uploads the entering step once and drives the ease by the mix unifo
   assert.equal(harness.uploads.length, uploads);
 });
 
+test("an OOM at the end of the next batch reaches the fallback", async () => {
+  const { marks, harness, render } = mountMarks(3, 1, { failUploadAt: 4 });
+  marks.setFade(STEPS.leaving, STEPS.entering, 0);
+  render();
+  await Promise.resolve();
+
+  assert.match(harness.failures[0].message, /GL error 1285/);
+});
+
 test("dot area eases between the radii as the shader text defines it", () => {
   const areaMix = areaMixFromShader();
 
@@ -431,8 +440,12 @@ function hatchCoverageBody() {
   return /float hatchCoverage\(\) \{\s*([^}]*)\}/.exec(FIELD_MARKS_FRAGMENT)![1];
 }
 
-function mountMarks(zoom = 3, pixelRatio = 1) {
-  const harness = createHarness();
+function mountMarks(
+  zoom = 3,
+  pixelRatio = 1,
+  harnessOptions: Parameters<typeof createHarness>[0] = {},
+) {
+  const harness = createHarness(harnessOptions);
   Object.assign(harness.gl, { uniform2f: () => {}, uniform3f: () => {} });
   Object.assign(harness.map, { getZoom: () => zoom, getPixelRatio: () => pixelRatio });
   const marks = createFieldMarksLayer({

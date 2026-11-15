@@ -328,6 +328,7 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
     deleteResources(gl, { textures: [gpu.rows] });
     gpu.rows = null;
     gpu.rows = uploadTexture(gl, "floats", gpu.rowCount, 1, rowTable(grid, gpu.rowCount));
+    this.throwIfUploadFailed(gl);
   }
 
   /**
@@ -356,6 +357,13 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
         quad: quadExtent(grid, tile.core, this.options.shift),
       });
     }
+    this.throwIfUploadFailed(gl);
+  }
+
+  protected throwIfUploadFailed(gl: WebGL2RenderingContext): void {
+    const error = gl.getError();
+    if (error === gl.NO_ERROR) return;
+    throw new Error(`Cannot upload tiled textures (GL error ${error})`);
   }
 
   private uploadCompanion(
