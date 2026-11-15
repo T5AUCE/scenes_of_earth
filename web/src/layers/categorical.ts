@@ -83,7 +83,6 @@ class CategoricalView implements LayerView {
   private smooth = true;
   private edges: EdgeSettings;
   private smoothing: number;
-  private readonly protectedWaterId?: number;
   private alive = true;
   private readonly context: LayerContext;
   private restorePosition: LayerPosition | null = null;
@@ -104,19 +103,13 @@ class CategoricalView implements LayerView {
     this.colors = classColors(layer.id, this.classes, this.palette);
     this.edges = loadStoredEdges(layer.id);
     this.smoothing = loadStoredSmoothing(layer.id);
-    this.protectedWaterId = protectedWaterIdFor(layer.id, this.classValues);
 
     this.gpu = createClassFieldLayer({
       id: this.id,
       grid: layer.grid,
       shift: context.shift,
       opacity: CATEGORICAL_OPACITY,
-      edges: {
-        smooth: this.smooth,
-        ...this.edges,
-        smoothRadiusCells: this.smoothing,
-        protectedWaterId: this.protectedWaterId,
-      },
+      edges: { smooth: this.smooth, ...this.edges, smoothRadiusCells: this.smoothing },
       onFail: () => this.useImage(),
     });
 
@@ -131,14 +124,7 @@ class CategoricalView implements LayerView {
         set: (on: boolean) => {
           this.smooth = on;
           if (this.image) this.repaint();
-          else {
-            this.gpu.setEdges({
-              smooth: on,
-              ...this.edges,
-              smoothRadiusCells: this.smoothing,
-              protectedWaterId: this.protectedWaterId,
-            });
-          }
+          else this.gpu.setEdges({ smooth: on, ...this.edges, smoothRadiusCells: this.smoothing });
         },
       },
     ];
@@ -218,23 +204,13 @@ class CategoricalView implements LayerView {
   private setEdges(edges: EdgeSettings) {
     this.edges = edges;
     storeEdges(this.context.layer.id, edges);
-    this.gpu.setEdges({
-      smooth: this.smooth,
-      ...edges,
-      smoothRadiusCells: this.smoothing,
-      protectedWaterId: this.protectedWaterId,
-    });
+    this.gpu.setEdges({ smooth: this.smooth, ...edges, smoothRadiusCells: this.smoothing });
   }
 
   private setSmoothing(smoothRadiusCells: number) {
     this.smoothing = smoothRadiusCells;
     storeSmoothing(this.context.layer.id, smoothRadiusCells);
-    this.gpu.setEdges({
-      smooth: this.smooth,
-      ...this.edges,
-      smoothRadiusCells,
-      protectedWaterId: this.protectedWaterId,
-    });
+    this.gpu.setEdges({ smooth: this.smooth, ...this.edges, smoothRadiusCells });
   }
 
   private createMenu(): LayerMenu {
@@ -345,7 +321,6 @@ class CategoricalView implements LayerView {
         shift,
         beforeId: position.beforeId,
         opacity: CATEGORICAL_OPACITY,
-        protectedWaterId: this.protectedWaterId,
       });
       this.applyPosition(position);
       document.body.dataset.landcoverRenderer = "image";
@@ -377,12 +352,7 @@ class CategoricalView implements LayerView {
       if (this.ids) this.image.paint(unhatchIds(this.ids), colors, this.smooth);
     } else {
       this.gpu.setColors(colors);
-      this.gpu.setEdges({
-        smooth: this.smooth,
-        ...this.edges,
-        smoothRadiusCells: this.smoothing,
-        protectedWaterId: this.protectedWaterId,
-      });
+      this.gpu.setEdges({ smooth: this.smooth, ...this.edges, smoothRadiusCells: this.smoothing });
     }
 
     const legend = classLegend(this.classes, this.present, this.colors, this.expandedGroups);
@@ -539,21 +509,6 @@ function gpuDisabled() {
 /** The Edge smoothing radius a layer starts with. Only geology layers smooth widely. */
 function defaultSmoothing(layerId: string): number {
   return isGeologyLayer(layerId) ? GEOLOGY_SMOOTH_RADIUS_CELLS : 0;
-}
-
-// ESA WorldCover marks permanent water bodies with this source value.
-const WORLDCOVER_WATER_VALUE = 80;
-
-/**
- * The one-based id of the water class kept out of smoothing, or undefined when the layer keeps
- * none. Only the WorldCover land cover layer protects water, so other layers smooth exactly as
- * before. The id is one-based because the renderer numbers classes from 1 and keeps 0 for outside.
- */
-export function protectedWaterIdFor(layerId: string, classValues: number[]): number | undefined {
-  if (layerId !== "esa_worldcover") return undefined;
-
-  const index = classValues.indexOf(WORLDCOVER_WATER_VALUE);
-  return index < 0 ? undefined : index + 1;
 }
 
 /**

@@ -34,8 +34,6 @@ export interface ClassEdges {
   softnessCells: number;
   /** Wider class-presence scale in grid cells with support twice the radius. */
   smoothRadiusCells?: number;
-  /** One-based water class kept out of the blend, with undefined meaning no class is kept. */
-  protectedWaterId?: number;
   /** Draw a faint ink line between two classes. */
   outline: boolean;
 }
@@ -93,7 +91,6 @@ const UNIFORM_NAMES = [
   "uIdsSize",
   "uWindowRow",
   "uSmooth",
-  "uProtectedWaterId",
   "uRounding",
   "uSoftnessCells",
   "uSmoothRadiusCells",
@@ -674,7 +671,6 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     gl.uniform1i(uniform("uHomogeneous"), this.needsFlags() ? 2 : 0);
     gl.uniform1i(uniform("uPalette"), 3);
     gl.uniform1i(uniform("uSmooth"), this.edges.smooth && !this.isGestureFast ? 1 : 0);
-    gl.uniform1i(uniform("uProtectedWaterId"), this.edges.protectedWaterId ?? 0);
     gl.uniform1f(uniform("uRounding"), rounding);
     gl.uniform1f(uniform("uSoftnessCells"), softnessCells);
     gl.uniform1f(uniform("uSmoothRadiusCells"), this.edges.smoothRadiusCells ?? 0);

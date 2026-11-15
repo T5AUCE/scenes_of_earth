@@ -10,8 +10,7 @@
  * and `uIdsSize` its size. `uRows` holds `uRowCount` fractional grid rows at even Mercator
  * heights while `uWindowRow` is the grid row of the texture's first row. `uPalette` is a
  * 256 x 1 colour table by class id. `uSmooth` blends competing classes from the kernel instead
- * of painting the nearest cell. `uProtectedWaterId` keeps one water class out of that blend
- * by painting its own cells directly, with 0 meaning no class is protected. `uRounding` blends bilinear weights towards a cubic B-spline.
+ * of painting the nearest cell. `uRounding` blends bilinear weights towards a cubic B-spline.
  * `uSoftnessCells` is the width of the colour blend between competing classes in grid cells.
  * `uSmoothRadiusCells` scales a cubic B-spline kernel with support twice the radius
  * in grid cells to round staircases, while 0 keeps the legacy kernel. Radii above 2 sample
@@ -75,7 +74,6 @@ uniform ivec2 uIdsSize;
 uniform int uRowCount;
 uniform float uWindowRow;
 uniform bool uSmooth;
-uniform int uProtectedWaterId;
 uniform float uRounding;
 uniform float uSoftnessCells;
 uniform float uSmoothRadiusCells;
@@ -599,11 +597,6 @@ void main() {
     fragColor = vec4(INK * hatchAlpha, hatchAlpha);
     return;
   }
-  // Water cells keep their own colour so smoothing never spills land into them.
-  if (uProtectedWaterId != 0 && nearest == uint(uProtectedWaterId)) {
-    fragColor = vec4(classColor(nearest) * uOpacity, uOpacity);
-    return;
-  }
   if (!uSmooth) {
     fragColor = vec4(classColor(nearest) * uOpacity, uOpacity);
     return;
@@ -850,8 +843,6 @@ export interface EdgeOptions {
   softnessCells: number;
   /** Wider class-presence scale in grid cells with support twice the radius. */
   smoothRadiusCells?: number;
-  /** One-based water class kept out of the blend, with undefined meaning no class is kept. */
-  protectedWaterId?: number;
 }
 
 /** The class mix and outline ink that the fragment shader makes for one fragment. */
@@ -894,8 +885,8 @@ export function classFieldAlpha(
 
 /**
  * Apply the fragment shader's class decision to a neighbourhood so behaviour can be checked in
- * Node. The nearest cell gates outside, hatch, protected water and Smooth off before any kernel
- * work, as in the shader.
+ * Node. The nearest cell gates outside, hatch and Smooth off before any kernel work, as in
+ * the shader.
  */
 export function sampleClassField(
   fragment: ClassFieldFragment,
@@ -908,9 +899,6 @@ export function sampleClassField(
   if (nearest === 0) return { discarded: true, nearest, weights: [], outline: 0 };
   if (nearest === CLASS_HATCH_ID) {
     return { discarded: false, nearest, weights: [], outline: 0 };
-  }
-  if (options.protectedWaterId !== undefined && nearest === options.protectedWaterId) {
-    return { discarded: false, nearest, weights: [{ id: nearest, weight: 1 }], outline: 0 };
   }
 
   if (!options.smooth) {

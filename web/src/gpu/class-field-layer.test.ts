@@ -92,27 +92,6 @@ test("the geology smoothing radius reaches the fragment shader", () => {
   assert.equal(harness.uniforms.get("uSmoothRadiusCells"), 1.5);
 });
 
-test("the protected water id reaches the fragment shader and defaults to none", () => {
-  const harness = createHarness();
-  harness.field.setIds(new Uint8Array(12).fill(1));
-  harness.field.layer.onAdd!(harness.map, harness.gl);
-  harness.field.layer.render(harness.gl, harness.input);
-
-  assert.equal(harness.uniforms.get("uProtectedWaterId"), 0);
-
-  harness.field.setEdges({
-    smooth: true,
-    rounding: 0.25,
-    softnessCells: 0,
-    smoothRadiusCells: 0,
-    protectedWaterId: 8,
-    outline: false,
-  });
-  harness.field.layer.render(harness.gl, harness.input);
-
-  assert.equal(harness.uniforms.get("uProtectedWaterId"), 8);
-});
-
 test("class field geometry uses the normalised Mercator projection, not world pixels", () => {
   const harness = createHarness();
   harness.field.setIds(new Uint8Array(12).fill(1));

@@ -15,8 +15,6 @@ export interface ImagePainterOptions {
   shift: number;
   beforeId: string | undefined;
   opacity: number;
-  /** One-based water class kept out of smoothing, with undefined meaning no class is kept. */
-  protectedWaterId?: number;
 }
 
 /**
@@ -30,7 +28,6 @@ export function createImagePainter({
   shift,
   beforeId,
   opacity,
-  protectedWaterId,
 }: ImagePainterOptions) {
   addImageLayer(map, id, grid.bbox, shift, beforeId, {
     "raster-opacity": opacity,
@@ -45,7 +42,7 @@ export function createImagePainter({
   // The smoothed raster is built once because only the colours change between repaints.
   const smoothedRaster = (ids: Uint8Array) => {
     if (smoothedIds !== ids) {
-      smoothRaster = smoothClassIds(ids, grid, table, textureSize, protectedWaterId);
+      smoothRaster = smoothClassIds(ids, grid, table, textureSize);
       smoothedIds = ids;
     }
 

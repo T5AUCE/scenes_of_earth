@@ -94,8 +94,7 @@ function cancelError(): Error {
 /**
  * Round class borders without mixing colours. Bilinearly sample each class's presence and select
  * the class with the highest weight. Cells without a class never compete, so the painted area
- * keeps its nearest-cell outline. A protected water class keeps its own cells directly so
- * smoothing never spills another colour into them, while other cells behave exactly as before.
+ * keeps its nearest-cell outline.
  * Ties go to the class of the nearest cell. Rows are even in Web Mercator y, as in sampleTable.
  * Large areas get fewer pixels per cell so that the paint stays quick.
  */
@@ -104,7 +103,6 @@ export function smoothClassIds(
   grid: Grid,
   baseSize: { width: number; height: number },
   maxTextureSize: number,
-  protectedWaterId?: number,
 ): ClassRaster {
   const affordableScale = Math.sqrt(MAX_SMOOTH_PIXELS_PX / (baseSize.width * baseSize.height));
   const scale = Math.min(MAX_SMOOTH_SCALE, affordableScale);
@@ -152,10 +150,6 @@ export function smoothClassIds(
       weight[3] = columnWeight * rowWeight;
 
       const nearest = (rowWeight < 0.5 ? 0 : 2) + (columnWeight < 0.5 ? 0 : 1);
-      if (protectedWaterId !== undefined && corner[nearest] === protectedWaterId) {
-        ids[row * width + column] = protectedWaterId;
-        continue;
-      }
       ids[row * width + column] = strongestClass(corner, weight, nearest);
     }
   }
@@ -167,7 +161,6 @@ export function smoothClassIds(
  * Find the displayed GPU class at a point in cell units from the grid's north-west corner.
  * Cell i spans i to i + 1. Bilinear weights blend towards a cubic B-spline by `rounding`
  * over the surrounding 4 x 4 cells, matching the fragment shader. Outside samples repeat edge cells.
- * A protected water class keeps its own cells directly, while other cells behave exactly as before.
  */
 export function classAt(
   cellIds: Uint8Array,
@@ -176,7 +169,6 @@ export function classAt(
   column: number,
   row: number,
   rounding: number,
-  protectedWaterId?: number,
 ) {
   const [cellColumn, cellRow] = [column - 0.5, row - 0.5];
   const [baseColumn, baseRow] = [Math.floor(cellColumn), Math.floor(cellRow)];
@@ -193,7 +185,6 @@ export function classAt(
     baseRow + (rowFraction >= 0.5 ? 1 : 0),
   );
   if (nearest === 0) return 0;
-  if (protectedWaterId !== undefined && nearest === protectedWaterId) return nearest;
 
   const columnWeights = kernelWeights(columnFraction, rounding);
   const rowWeights = kernelWeights(rowFraction, rounding);
