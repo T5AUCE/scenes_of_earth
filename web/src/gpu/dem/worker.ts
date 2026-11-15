@@ -1,5 +1,5 @@
 /** Fetches and decodes DEM tiles away from the main thread for the DEM pool. */
-import { loadDemTile } from "./dem-decode";
+import { loadDemTile } from "./decode";
 
 /** Asks the worker to load one tile by url or to end an earlier request. */
 export type DemWorkerRequest =

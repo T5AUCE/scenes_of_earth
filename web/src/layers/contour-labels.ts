@@ -1,3 +1,4 @@
+/** Place elevation labels using a shared DEM source while GPU layers draw the contour lines. */
 import mlcontour from "maplibre-contour";
 import * as maplibregl from "maplibre-gl";
 import type {
@@ -14,6 +15,7 @@ import {
   finestIntervalAt,
   INTERVAL_CHAIN_FT,
   INTERVAL_CHAIN_M,
+  MAX_CONTOUR_ZOOM,
   type ContourLadder,
 } from "../contour-ladder";
 import {
@@ -36,7 +38,7 @@ const LABEL_HALO_WIDTH_PX = 1;
 const LABEL_MAX_ANGLE_DEG = 45;
 const PAGE_BACKGROUND_PROPERTY = "--page-background";
 
-// Version 0.1.1 materializes only one pixel of padding before tracing contours.
+// Version 0.1.1 materialises only one pixel of padding before tracing contours.
 const CONTOUR_BUFFER_PX = 1;
 // Workers rebuild maplibre-contour errors from strings, so messages keep an "Error: " prefix.
 const WORKER_ERROR_PREFIX = "Error: ";
@@ -44,7 +46,6 @@ const WORKER_ERROR_PREFIX = "Error: ";
 const DEM_CACHE_TILES = 60;
 // Ocean tiles stay missing, so the per-source memo caps how many 404 tiles it remembers.
 export const MAX_MISSING_DEM_TILES = 2000;
-const MAX_CONTOUR_ZOOM = 12;
 
 type DemSource = InstanceType<typeof mlcontour.DemSource>;
 
@@ -52,8 +53,7 @@ type DemSource = InstanceType<typeof mlcontour.DemSource>;
 const demSources = new Map<string, DemSource>();
 
 /**
- * Reuse a DEM cache and its protocols for relief and contours across scene visits. A labels-only
- * overlay gets a smaller cache.
+ * Reuse the DEM cache and protocols for contour labels across scene visits.
  */
 export function sharedDemSource(tiles: TerrainTiles): DemSource {
   const key = JSON.stringify([tiles.url, tiles.encoding, tiles.maxzoom]);
@@ -75,10 +75,9 @@ export function sharedDemSource(tiles: TerrainTiles): DemSource {
 }
 
 /**
- * Remember 404 DEM and contour tiles so coastal scenes stop re-requesting ocean tiles on
- * every zoom. The memo is per source and bounded, and its keys hold only tile coordinates
- * because a missing DEM stays missing for every contour threshold set. Only 404s are
- * memoized because they stay missing, while other failures keep retrying. Exported for tests.
+ * Remember missing DEM and contour tiles so coastal scenes stop requesting ocean tiles on
+ * every zoom. The bounded memo uses tile coordinates because a missing DEM stays missing
+ * for every contour threshold set. Other failures keep retrying.
  */
 export function memoizeMissingDemTiles(dem: DemSource): void {
   const manager = (dem as unknown as { manager?: DemManager }).manager;
@@ -87,36 +86,26 @@ export function memoizeMissingDemTiles(dem: DemSource): void {
   const missingTiles = new Map<string, true>();
 
   if (typeof manager.fetchTile === "function") {
-    const fetchTile = manager.fetchTile.bind(manager);
-    manager.fetchTile = (z: number, x: number, y: number, ...rest: unknown[]) => {
-      const key = `dem:${z}/${x}/${y}`;
-      if (missingTiles.has(key)) return Promise.reject(missingTileError(key));
-
-      return fetchTile(z, x, y, ...rest).catch((error: unknown) => {
-        if (isDem404(error)) rememberMissingTile(missingTiles, key);
-        throw error;
-      });
-    };
+    manager.fetchTile = withMissingMemo("dem", manager.fetchTile.bind(manager));
   }
 
   if (typeof manager.fetchContourTile === "function") {
-    const fetchContourTile = manager.fetchContourTile.bind(manager);
-    const fetchWithMemo = (
-      z: number,
-      x: number,
-      y: number,
-      options: unknown,
-      ...rest: unknown[]
-    ) => {
-      const key = `contours:${z}/${x}/${y}`;
+    manager.fetchContourTile = withMissingMemo("contours", manager.fetchContourTile.bind(manager));
+  }
+
+  function withMissingMemo<Rest extends unknown[]>(
+    prefix: string,
+    fetch: (z: number, x: number, y: number, ...rest: Rest) => Promise<unknown>,
+  ) {
+    return (z: number, x: number, y: number, ...rest: Rest) => {
+      const key = `${prefix}:${z}/${x}/${y}`;
       if (missingTiles.has(key)) return Promise.reject(missingTileError(key));
 
-      return fetchContourTile(z, x, y, options, ...rest).catch((error: unknown) => {
+      return fetch(z, x, y, ...rest).catch((error: unknown) => {
         if (isDem404(error)) rememberMissingTile(missingTiles, key);
         throw error;
       });
     };
-    manager.fetchContourTile = fetchWithMemo;
   }
 }
 
@@ -143,13 +132,17 @@ interface DemManager {
   ): Promise<unknown>;
 }
 
-function isDem404(error: unknown): boolean {
-  const message = (error as Error)?.message ?? "";
-  const withoutPrefix = message.startsWith(WORKER_ERROR_PREFIX)
-    ? message.slice(WORKER_ERROR_PREFIX.length)
-    : message;
+/** Recognise missing DEM tiles from either direct or worker-rebuilt error messages. */
+export function isDem404(error: unknown): boolean {
+  return (
+    stripWorkerErrorPrefix((error as Error)?.message)?.startsWith("Bad response: 404") === true
+  );
+}
 
-  return withoutPrefix.startsWith("Bad response: 404");
+/** Remove the prefix added when the contour worker rebuilds an error from its string. */
+export function stripWorkerErrorPrefix(message: string | undefined): string | undefined {
+  if (!message?.startsWith(WORKER_ERROR_PREFIX)) return message;
+  return message.slice(WORKER_ERROR_PREFIX.length);
 }
 
 function missingTileError(key: string): Error {
@@ -157,9 +150,8 @@ function missingTileError(key: string): Error {
 }
 
 /**
- * Cap native tiling zooms at the crisp contour ceiling, with the measurement-only
- * contourMaxZoom flag lowering it further. Deeper zooms overzoom the last tiles instead
- * of re-tiling, so the lines stay identical while tile churn stops past the cap.
+ * Cap native tiling zooms at the contour ceiling, with the measurement-only contourMaxZoom
+ * flag lowering it further. Deeper zooms reuse the last tiles to avoid new requests.
  */
 export function cappedDemMaxZoom(nativeMaxzoom: number): number {
   const cap = contourMaxZoomSetting(addressSearch()) ?? MAX_CONTOUR_ZOOM;
@@ -168,17 +160,16 @@ export function cappedDemMaxZoom(nativeMaxzoom: number): number {
 
 /**
  * Own stable, elevation-filtered contour labels for one scene. The GPU contour layer draws
- * the lines, so the overlay traces only the heights that carry labels.
+ * the lines, so this class traces only the heights that carry labels.
  */
-export class ContourOverlay {
+export class ContourLabels {
   readonly legend = makeHtmlElement("div");
   readonly part: Part;
   /** The contour source, so terrain watches label tiles for failures. */
-  readonly contourSourceIds: readonly string[];
+  readonly labelSourceId: string;
   /** The contour plan, replaced when the unit changes. */
   ladder!: ContourLadder;
   private readonly map: MapLibreMap;
-  private readonly labelSourceId: string;
   private readonly labelBaseId: string;
   private readonly dem: DemSource;
   private readonly stats: TerrainStats;
@@ -210,7 +201,6 @@ export class ContourOverlay {
 
     this.labelSourceId = `${layer.id}-labels-contours`;
     this.labelBaseId = `${layer.id}-contours`;
-    this.contourSourceIds = [this.labelSourceId];
     this.elevationUnit = displayUnitFor(layer.units, display?.units);
     this.maxzoom = Math.min(MAX_CONTOUR_ZOOM, cappedDemMaxZoom(tiles.maxzoom + CONTOUR_OVERZOOM));
 
@@ -271,7 +261,7 @@ export class ContourOverlay {
   private rebuild() {
     for (const id of this.part.layerIds) this.map.removeLayer(id);
 
-    this.removeSources();
+    this.map.removeSource(this.labelSourceId);
     this.part.layerIds.length = 0;
     this.labelId = undefined;
     this.build();
@@ -341,11 +331,8 @@ export class ContourOverlay {
   setColor(color: string) {
     this.color = color;
 
-    for (const id of this.part.layerIds) {
-      this.map.setPaintProperty(id, "text-color", color);
-    }
-
     if (this.labelId !== undefined) {
+      this.map.setPaintProperty(this.labelId, "text-color", color);
       // A recolour during the restore would otherwise inherit its remaining fade duration.
       const instant = { duration: 0 };
       this.map.setPaintProperty(this.labelId, "text-color-transition", instant);
@@ -410,10 +397,6 @@ export class ContourOverlay {
 
     for (const id of this.part.layerIds) this.map.removeLayer(id);
 
-    this.removeSources();
-  }
-
-  private removeSources() {
     this.map.removeSource(this.labelSourceId);
   }
 }

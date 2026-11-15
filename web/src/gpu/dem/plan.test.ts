@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { Bbox } from "../types.ts";
+import type { Bbox } from "../../types.ts";
 import {
   DEFAULT_BLEND_WINDOW,
   demLevels,
@@ -9,7 +9,7 @@ import {
   pinnedBase,
   planDemTiles,
   type DemPlanRequest,
-} from "./dem-plan.ts";
+} from "./plan.ts";
 
 const WINDOW = 0.1;
 const KENYA_LIKE: Bbox = [34, -4.7, 41.9, 5.1];

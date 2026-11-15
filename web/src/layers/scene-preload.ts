@@ -1,6 +1,6 @@
-/** Preload sources for one scene: the DEM pyramid and the basemap. */
+/** Preload the DEM pyramid and basemap sources for one scene. */
 import { CONTOUR_OVERZOOM, type WarmTile } from "../contour-ladder";
-import { demPoolHas } from "../gpu/dem-pool";
+import { demPoolHas } from "../gpu/dem/pool-registry";
 import {
   basemapDescriptor,
   clipViewportToBbox,
@@ -35,7 +35,7 @@ export interface DemPreloadOptions {
   bbox: Bbox;
 }
 
-/** Elevation tiles for relief from one level above the fitted zoom down. */
+/** Preload elevation tiles for the GPU layers and contour labels around the fitted zoom. */
 export function demPreloadSource(options: DemPreloadOptions): PreloadSource {
   return {
     id: DEM_PRELOAD_ID,
@@ -57,11 +57,7 @@ export function demPreloadSource(options: DemPreloadOptions): PreloadSource {
 
 /** Whether the GPU pool holds a DEM tile or fetches it, so the warmer skips the URL. */
 function isPooledTile(template: string, tile: WarmTile): boolean {
-  try {
-    return demPoolHas(template, tile);
-  } catch {
-    return false;
-  }
+  return demPoolHas(template, tile);
 }
 
 /** Vector basemap tiles from the fitted zoom to about z12. */
@@ -98,20 +94,12 @@ export function tileUrl(template: string, tile: WarmTile): string {
     .replace("{y}", String(tile.y));
 }
 
-// The contour tiles read their parents one zoom up, so that level is planned too.
-function demPyramid(bbox: Bbox, maxzoom: number, fittedZoom: number): WarmTile[] {
-  const firstZoom = Math.min(Math.floor(fittedZoom) - CONTOUR_OVERZOOM, maxzoom);
-  return scenePyramidTiles(bbox, firstZoom, maxzoom, DEM_PRELOAD_TILES);
-}
-
-/**
- * The DEM tiles a scene preloads: the pyramid kept to whole levels inside the tile bound.
- * A level that would overflow is left out entirely, because a partial deeper level would
- * only help the middle of the scene. The GPU pool decodes on demand, so plain fetches here
- * only warm the HTTP cache.
- */
+/** Plan whole DEM levels to warm the HTTP cache before GPU decoding needs them. */
 function demPlanTiles(bbox: Bbox, maxzoom: number, fittedZoom: number): WarmTile[] {
-  return keepWholeLevels(demPyramid(bbox, maxzoom, fittedZoom), DEM_PRELOAD_TILES);
+  // Contour labels trace tiles one zoom coarser, so preload includes that level.
+  const firstZoom = Math.min(Math.floor(fittedZoom) - CONTOUR_OVERZOOM, maxzoom);
+  const tiles = scenePyramidTiles(bbox, firstZoom, maxzoom, DEM_PRELOAD_TILES);
+  return keepWholeLevels(tiles, DEM_PRELOAD_TILES);
 }
 
 /**
@@ -164,33 +152,12 @@ function demTask(options: DemPreloadOptions, tile: WarmTile): PreloadTask {
   return {
     key: url,
     zoom: tile.z,
-    run: (abort) => fetchDemTask(options.template, tile, url, abort),
+    run: (abort) => {
+      return isPooledTile(options.template, tile)
+        ? Promise.resolve(undefined)
+        : downloadBlob(url, abort.signal);
+    },
   };
-}
-
-/** Fetch one DEM task, skipping pool tiles so background work warms the HTTP cache. */
-function fetchDemTask(
-  template: string,
-  tile: WarmTile,
-  url: string,
-  abort: AbortController,
-): Promise<Blob | undefined> {
-  if (isPooledTile(template, tile)) return Promise.resolve(undefined);
-  return fetchDemResponse(url, abort.signal, "low").then((response) => response.data);
-}
-
-type DemPriority = "low" | undefined;
-
-/** Fetch one DEM response so background work stays behind visible requests. */
-async function fetchDemResponse(
-  url: string,
-  signal: AbortSignal,
-  priority: DemPriority,
-): Promise<{ data: Blob }> {
-  const response = await fetch(url, priority === undefined ? { signal } : { signal, priority });
-  if (!response.ok) throw new Error(`Bad response: ${response.status} for ${url}`);
-
-  return { data: await response.blob() };
 }
 
 function downloadTask(url: string, zoom: number): PreloadTask {

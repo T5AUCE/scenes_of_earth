@@ -6,8 +6,8 @@ import {
   FADE_SPAN_ZOOM,
   INTERVAL_CHAIN_FT,
   INTERVAL_CHAIN_M,
-} from "../contour-ladder.ts";
-import type { TerrainStats } from "../types.ts";
+} from "../../contour-ladder.ts";
+import type { TerrainStats } from "../../types.ts";
 import {
   BOLD_LINE_WIDTH_PX,
   CONTOUR_FRAGMENT_SHADER,
@@ -233,7 +233,7 @@ test("the shader carries the fade constants of the reference", () => {
 
 test("the shader carries the tie bias and floors the slope in CSS pixels", () => {
   assert.ok(CONTOUR_FRAGMENT_SHADER.includes("nearM - 0.001"));
-  assert.ok(CONTOUR_FRAGMENT_SHADER.includes("0.0005 / uPixelRatio"));
+  assert.ok(CONTOUR_FRAGMENT_SHADER.includes("0.000500000000 / uPixelRatio"));
   assert.ok(CONTOUR_FRAGMENT_SHADER.includes("levelRelM < surface.lowest"));
   assert.ok(CONTOUR_FRAGMENT_SHADER.includes("levelRelM >= surface.highest"));
   assert.ok(!CONTOUR_FRAGMENT_SHADER.includes("surface.highest - surface.lowest <="));

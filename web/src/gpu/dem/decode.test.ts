@@ -11,7 +11,7 @@ import {
   loadDemTile,
   resetDemIntegrityForTests,
   stripOf,
-} from "./dem-decode.ts";
+} from "./decode.ts";
 
 const SIZE_PX = DEM_TILE_SIZE_PX;
 const realFetch = globalThis.fetch;

@@ -2,9 +2,10 @@
  * The contour fragment shader and its scalar reference. The reference runs the same arithmetic
  * as the shader, so tests can check the line rules without a GPU.
  */
-import { FADE_SPAN_ZOOM, INTERVAL_CHAIN_M, type ContourLadder } from "../contour-ladder";
-import { convertValue } from "../units";
-import { demFragmentShader } from "./dem-draw";
+import { FADE_SPAN_ZOOM, INTERVAL_CHAIN_M, type ContourLadder } from "../../contour-ladder";
+import { convertValue } from "../../units";
+import { glslFloat } from "../gl";
+import { demFragmentShader } from "./draw";
 
 /** The opacity of a fully shown tier. */
 export const CONTOUR_OPACITY = 0.55;
@@ -329,8 +330,4 @@ function clamp(value: number): number {
 function smoothstep(from: number, to: number, value: number): number {
   const position = clamp((value - from) / (to - from));
   return position * position * (3 - 2 * position);
-}
-
-function glslFloat(value: number): string {
-  return Number.isInteger(value) ? value.toFixed(1) : String(value);
 }

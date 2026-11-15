@@ -12,13 +12,13 @@ const WARNING = "Terrain shading or contour tiles could not be loaded";
 const rootUrl = new URL("./", import.meta.url).href;
 const mockModules = {
   "maplibre-gl": `export const addProtocol = () => {};`,
-  "../gpu/relief-layer": `export const addReliefLayer = () => globalThis.gpuHandles?.relief ?? {
+  "../gpu/dem/relief-layer": `export const addReliefLayer = () => globalThis.gpuHandles?.relief ?? {
     setStrength() {},
     setBaseZoom() {},
     prepare() { return true; },
     destroy() {},
   };`,
-  "../gpu/contour-line-layer": `
+  "../gpu/dem/contour-layer": `
     export const addContourLineLayer = () => globalThis.gpuHandles?.lines ?? {
       setColor() {},
       setLadder() {},
@@ -27,21 +27,25 @@ const mockModules = {
       destroy() {},
     };
   `,
-  "./contour-overlay": `
+  "./contour-labels": `
+    export const stripWorkerErrorPrefix = (message) => message?.startsWith("Error: ")
+      ? message.slice("Error: ".length) : message;
+    export const isDem404 = (error) =>
+      stripWorkerErrorPrefix(error?.message)?.startsWith("Bad response: 404") === true;
     export const sharedDemSource = () => ({
       sharedDemProtocolUrl: "dem://{z}/{x}/{y}",
       contourProtocolUrl: () => "contour://{z}/{x}/{y}",
     });
     export const terrainTileBounds = () => ({});
     export const cappedDemMaxZoom = (maxzoom) => maxzoom;
-    export class ContourOverlay {
+    export class ContourLabels {
       constructor() {
         if (globalThis.contourOverlayShouldThrow) {
           throw new Error("Contour setup failed");
         }
       }
       part = { id: "contours", label: "Contours", layerIds: [] };
-      contourSourceIds = ["terrain-labels-contours"];
+      labelSourceId = "terrain-labels-contours";
       units = "m";
       setColor() {}
       setUnits(unit) {

@@ -206,11 +206,7 @@ export class TileSettleTracker {
     basemap: { settleMs: null, requests: 0 },
     contours: { settleMs: null, requests: 0 },
   };
-  private readonly seenSources: Record<TileLayerKey, Set<string>> = {
-    terrain: new Set(),
-    basemap: new Set(),
-    contours: new Set(),
-  };
+  private readonly seenBasemapSources = new Set<string>();
   private stopListening: () => void = () => {};
   private poolRequestsAtStart: number | null = null;
 
@@ -274,9 +270,9 @@ export class TileSettleTracker {
 
     for (const key of ["terrain", "basemap", "contours"] as const) {
       this.layers[key] = { settleMs: null, requests: 0 };
-      this.seenSources[key].clear();
     }
 
+    this.seenBasemapSources.clear();
     this.seedSeenSources();
     this.poolRequestsAtStart = poolSettleState(this.poolProbe)?.requests ?? null;
     // Held tiles settle at once instead of waiting for the next render or moveend.
@@ -287,7 +283,7 @@ export class TileSettleTracker {
     // Cached tiles emit no loads, so the gesture starts from the style sources.
     for (const sourceId of styleSourceIds(this.map)) {
       const layer = layerForSource(sourceId);
-      if (layer) this.seenSources[layer].add(sourceId);
+      if (layer) this.seenBasemapSources.add(sourceId);
     }
   }
 
@@ -299,7 +295,7 @@ export class TileSettleTracker {
     if (!layer || !sourceId) return;
 
     this.layers[layer].requests += 1;
-    this.seenSources[layer].add(sourceId);
+    this.seenBasemapSources.add(sourceId);
 
     // A later load reopens the layer so the second wave times its own settle.
     if (this.layers[layer].settleMs !== null) this.layers[layer].settleMs = null;
@@ -315,7 +311,7 @@ export class TileSettleTracker {
     const eventSourceId = eventLoaded(event) ? sourceId : undefined;
     if (eventSourceId === undefined && !sourceLoaded(this.map, sourceId)) return;
     // One sibling may settle while another still loads, so wait for every tracked source.
-    if (!allSourcesLoaded(this.map, this.seenSources[layer], eventSourceId)) return;
+    if (!allSourcesLoaded(this.map, this.seenBasemapSources, eventSourceId)) return;
 
     this.layers[layer].settleMs = this.clock() - this.stepStartMs;
   }
@@ -329,16 +325,12 @@ export class TileSettleTracker {
     const startMs = this.stepStartMs;
     if (startMs === null) return;
 
-    for (const key of ["terrain", "basemap", "contours"] as const) {
-      if (this.layers[key].settleMs !== null) continue;
-      if (key !== "basemap") continue;
-      if (this.seenSources[key].size === 0) {
-        this.layers[key].settleMs = nowMs - startMs;
-        continue;
-      }
-      if (allSourcesLoaded(this.map, this.seenSources[key])) {
-        this.layers[key].settleMs = nowMs - startMs;
-      }
+    const basemap = this.layers.basemap;
+    if (
+      basemap.settleMs === null
+      && (this.seenBasemapSources.size === 0 || allSourcesLoaded(this.map, this.seenBasemapSources))
+    ) {
+      basemap.settleMs = nowMs - startMs;
     }
 
     this.settlePool(nowMs);
@@ -383,13 +375,12 @@ export class TileSettleTracker {
   }
 }
 
-/** Map a source id to its dev-readout layer. Relief and contour lines are custom GPU
- * layers with no MapLibre source, so only the basemap still settles through source events
- * while terrain and contour settle come from the pool view readiness. */
+/**
+ * Map a source ID to its dev-readout layer. Only the basemap uses source events because
+ * terrain and contours report readiness through the GPU pool.
+ */
 export function layerForSource(sourceId: string | undefined): TileLayerKey | null {
-  if (!sourceId) return null;
-  if (sourceId === BASEMAP_SOURCE_ID) return "basemap";
-  return null;
+  return sourceId === BASEMAP_SOURCE_ID ? "basemap" : null;
 }
 
 let preloadDisabled = false;
@@ -638,24 +629,27 @@ export function formatDevStats(snapshot: DevStatsSnapshot): string {
     + ` · z ${snapshot.zoom.toFixed(1)} · load ${load}`
     + ` · ${snapshot.requests} req ${formatBytes(snapshot.bytes)}`
     + ` · ${formatGpuPart(snapshot.gpuMs, snapshot.gpuUnavailable)}`;
-  const loading =
-    formatEntrySuffix(snapshot.entry)
-    + formatBakeSuffix(snapshot.bake)
-    + formatTileSuffix(snapshot.tiles)
-    + formatPreloadSuffix()
-    + formatWarmerSuffix(snapshot.warmer)
-    + formatPoolSuffix(snapshot.pool)
-    + ` · ${snapshot.longtasks} long`;
+  const loading = [
+    formatEntryPart(snapshot.entry),
+    snapshot.bake && Object.keys(snapshot.bake).length > 0 ? formatBakePart(snapshot.bake) : "",
+    snapshot.tiles ? formatTileSettlePart(snapshot.tiles) : "",
+    isPreloadDisabled() ? "preload off" : "",
+    snapshot.warmer ? formatWarmerPart(snapshot.warmer) : "",
+    snapshot.pool ? formatPoolPart(snapshot.pool) : "",
+    `${snapshot.longtasks} long`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
-  return `${frame}\n${loading.slice(" · ".length)}`;
+  return `${frame}\n${loading}`;
 }
 
-/** The entry suffix for the badge line, empty until an entry has waited. */
-function formatEntrySuffix(entry?: EntryStats): string {
+/** The entry part of the badge line, empty until an entry has waited. */
+function formatEntryPart(entry?: EntryStats): string {
   if (!entry || entry.waitMs === null) return "";
   const gap = entry.gapMs === null ? "—" : `${Math.round(entry.gapMs)} ms`;
 
-  return ` · entry wait ${Math.round(entry.waitMs)} ms gap ${gap}`;
+  return `entry wait ${Math.round(entry.waitMs)} ms gap ${gap}`;
 }
 
 /** Build the badge's GPU part from the last per-layer timings. */
@@ -678,12 +672,6 @@ export function formatBakePart(bake?: Record<string, BakeStats>): string {
     .join(" ")}`;
 }
 
-/** The bake suffix for the badge line, empty when no layer baked a band. */
-function formatBakeSuffix(bake?: Record<string, BakeStats>): string {
-  if (!bake || Object.keys(bake).length === 0) return "";
-  return ` · ${formatBakePart(bake)}`;
-}
-
 /** Build the badge's tile-settle part from the last zoom step. */
 export function formatTileSettlePart(tiles: TileSettleSnapshot): string {
   return (
@@ -693,28 +681,10 @@ export function formatTileSettlePart(tiles: TileSettleSnapshot): string {
   );
 }
 
-/** The tile suffix for the badge line. It stays empty until the first zoom step settles. */
-function formatTileSuffix(tiles?: TileSettleSnapshot): string {
-  if (!tiles) return "";
-  return ` · ${formatTileSettlePart(tiles)}`;
-}
-
-/** The preload suffix for the badge line, shown only when preload is disabled. */
-function formatPreloadSuffix(): string {
-  if (isPreloadDisabled()) return " · preload off";
-  return "";
-}
-
 /** Build the badge's warmer part from its entry progress and dwell launches. */
 export function formatWarmerPart(warmer: WarmerSnapshot): string {
   const { done, total } = warmer.entry;
   return `warmer entry ${done}/${total} dwell ${warmer.dwell}`;
-}
-
-/** The warmer suffix for the badge line. It stays empty unless a scene preload runs. */
-function formatWarmerSuffix(warmer?: WarmerSnapshot): string {
-  if (!warmer) return "";
-  return ` · ${formatWarmerPart(warmer)}`;
 }
 
 /** Build the badge's pool part from its counts, with GPU ms when the timer kept them. */
@@ -724,12 +694,6 @@ export function formatPoolPart(pool: GpuPoolSnapshot): string {
     + ` inflight ${pool.inflight} queued ${pool.queued}`
     + ` req ${pool.requests} decode ${pool.decodeMs.toFixed(1)} ms`;
   return base + formatPoolGpuSuffix(pool);
-}
-
-/** The pool suffix for the badge line. It stays empty without a pool. */
-function formatPoolSuffix(pool?: GpuPoolSnapshot): string {
-  if (!pool) return "";
-  return ` · ${formatPoolPart(pool)}`;
 }
 
 /** The relief and contour GPU ms for the pool line, empty when the timer kept neither. */

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 
-import { reliefExaggeration, RELIEF_STRENGTH } from "../layers/relief.ts";
-import { createDemHarness, SCENE_BBOX } from "./dem-draw-harness.test.ts";
-import { ARRIVAL_FADE_MS } from "./dem-draw.ts";
+import { RELIEF_STRENGTH } from "../../layers/terrain.ts";
+import { createDemHarness, SCENE_BBOX } from "../../testing/dem-harness.ts";
+import { ARRIVAL_FADE_MS } from "./draw.ts";
 import { addReliefLayer, type ReliefHandle } from "./relief-layer.ts";
+import { reliefExaggeration } from "./relief-shaders.ts";
 
 const ZOOM = 8;
 

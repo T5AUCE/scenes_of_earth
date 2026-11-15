@@ -16,7 +16,6 @@ import {
   labelIntervalsAt,
   warmTilesForZoom,
 } from "./contour-ladder.ts";
-import { RELIEF_STRENGTH } from "./layers/relief.ts";
 import type { LayerContext, TerrainStats, TerrainTiles } from "./types.ts";
 
 const FIJI = makeStats(1, 820, 6, 14);
@@ -305,9 +304,9 @@ const hooks = registerHooks({
     return next(specifier, context);
   },
 });
-const { ContourOverlay, sharedDemSource, terrainTileBounds } =
-  await import("./layers/contour-overlay.ts");
-const { createTerrainView } = await import("./layers/terrain.ts");
+const { ContourLabels, sharedDemSource, terrainTileBounds } =
+  await import("./layers/contour-labels.ts");
+const { createTerrainView, RELIEF_STRENGTH } = await import("./layers/terrain.ts");
 const { SceneDataLayers } = await import("./scene-mode.ts");
 const { contourLegendText } = await import("./legend.ts");
 hooks.deregister();
@@ -341,7 +340,7 @@ test("contour styles validate in MapLibre and cap refinement at z12", (context) 
 
   const map = new TestMap();
   const dem = sharedDemSource(TILES);
-  const overlay = new ContourOverlay(layerContext(map), dem, TILES, FIJI);
+  const overlay = new ContourLabels(layerContext(map), dem, TILES, FIJI);
   const labelSource = map.sources.get("terrain-labels-contours")!;
 
   assert.equal(map.sources.size, 1);
@@ -393,7 +392,7 @@ test("feet contours use scaled elevations with round feet labels", (context) => 
 
   const map = new TestMap();
   const dem = sharedDemSource(TILES);
-  const overlay = new ContourOverlay(
+  const overlay = new ContourLabels(
     { ...layerContext(map), display: { units: "ft" } },
     dem,
     TILES,
@@ -484,7 +483,7 @@ test("the configured contour buffer stays inside the plugin's materialized paddi
 
   const map = new TestMap();
   const dem = sharedDemSource(TILES);
-  const overlay = new ContourOverlay(layerContext(map), dem, TILES, FIJI);
+  const overlay = new ContourLabels(layerContext(map), dem, TILES, FIJI);
   const { buffer } = (dem as unknown as TestDemSource).contourOptions as { buffer: number };
 
   const extent = 4096;
@@ -636,7 +635,7 @@ test("flat and capped contour styles validate when several tiers enter together"
   for (const sample of [FLAT, makeStats(0, 0, 0, 0), makeStats(0, 1000, 89.9, 89.9)]) {
     const map = new TestMap();
     const dem = sharedDemSource(TILES);
-    const overlay = new ContourOverlay(layerContext(map), dem, TILES, sample);
+    const overlay = new ContourLabels(layerContext(map), dem, TILES, sample);
     const errors = validateStyleMin({
       version: 8,
       glyphs: "https://example.test/{fontstack}/{range}.pbf",

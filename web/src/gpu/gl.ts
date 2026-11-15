@@ -1,3 +1,8 @@
+/** Format a number as a GLSL float literal with enough precision for the DEM shaders. */
+export function glslFloat(value: number): string {
+  return Number.isInteger(value) ? value.toFixed(1) : value.toPrecision(9);
+}
+
 /** The texture layouts the GPU layers use; all are read without filtering. */
 export type TextureFormat = "ids" | "floats" | "colors" | "bandIds" | "bandMask";
 

@@ -1,6 +1,7 @@
-import { MAX_CONTOUR_ZOOM } from "../contour-ladder";
-import { mercatorY, tileInScene } from "../render/tile-viewport";
-import type { Bbox } from "../types";
+/** Plan the DEM tiles and their blend weights for one map view. */
+import { MAX_CONTOUR_ZOOM } from "../../contour-ladder";
+import { mercatorY, tileInScene } from "../../render/tile-viewport";
+import type { Bbox } from "../../types";
 
 /** The pinned base moves one level coarser when the fit level needs more tiles than this. */
 const PINNED_TILE_LIMIT = 48;

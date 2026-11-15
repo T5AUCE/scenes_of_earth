@@ -1,3 +1,4 @@
+/** Choose contour heights and label spacing from the global zoom tables. */
 import type { TerrainStats } from "./types";
 import { convertValue } from "./units";
 
@@ -8,9 +9,8 @@ export const INTERVAL_CHAIN_M = [10, 50, 100, 500, 1000, 2000];
 export const INTERVAL_CHAIN_FT = [20, 100, 500, 1000, 5000];
 
 /**
- * The entry zoom of every contour height, the same at each zoom everywhere because the user
- * forbids terrain or latitude adaptation. Values sit close to the previous mid-relief Kenya
- * ladder, and both finest steps (20 ft and 10 m) start at the z12 cap.
+ * The entry zoom of every contour height stays the same worldwide so zoom alone controls
+ * line density. Both finest steps (20 ft and 10 m) start at the z12 cap.
  */
 export const ENTRY_ZOOM_M: Record<number, number> = {
   2000: 5,
@@ -31,7 +31,7 @@ export const FADE_SPAN_ZOOM = 1;
 /** Share of the fade before the legend names a height, so the name matches the lines. */
 export const LEGEND_FADE_SHARE = 0.5;
 
-/** Add the next finer labelled height where bold lines sit far apart; the M5 trial asked for it. */
+/** Add the next finer labelled height where bold lines are too far apart to locate elevations. */
 export const LABEL_SPARSE_FALLBACK = true;
 
 const MIN_BOLD_LEVELS = 3;

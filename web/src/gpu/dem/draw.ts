@@ -1,14 +1,15 @@
 /**
- * The per-tile drawing that the relief and contour layers share: the plan and pool frame loop,
- * the readiness-to-weights resolver, arrival fades, quad placement and sampler binding. A layer
- * supplies its own program and fragment shader and sets its own uniforms for each quad.
+ * Draw the DEM quads shared by relief and contours using the planned tiles and ready textures.
+ * Each layer supplies its own shader program and uniforms while this module manages tile blends.
  */
 import type { Map as MapLibreMap } from "maplibre-gl";
 
-import { prefersReducedMotion } from "../reduced-motion";
-import { inverseMercatorY, mercatorY, WEB_MERCATOR_MAX_LAT_DEG } from "../render/tile-viewport";
-import type { Bbox } from "../types";
-import { DEM_TILE_SIZE_PX, STRIP_WIDTH_PX } from "../workers/dem-decode";
+import { prefersReducedMotion } from "../../reduced-motion";
+import { inverseMercatorY, mercatorY, WEB_MERCATOR_MAX_LAT_DEG } from "../../render/tile-viewport";
+import type { Bbox } from "../../types";
+import { localMatrix, type QuadExtent } from "../grid-geometry";
+import { DEM_TILE_SIZE_PX, STRIP_WIDTH_PX } from "./decode";
+import { TEXTURE_SIZE_PX } from "./halo";
 import {
   pinnedBase,
   planDemTiles,
@@ -18,21 +19,15 @@ import {
   type PlacedTile,
   type TileId,
   type ViewBounds,
-} from "./dem-plan";
-import {
-  acquireDemPool,
-  releaseDemPool,
-  TEXTURE_SIZE_PX,
-  type AcquireDemPoolOptions,
-  type DemPool,
-} from "./dem-pool";
-import { localMatrix, type QuadExtent } from "./grid-geometry";
+} from "./plan";
+import type { DemPool } from "./pool";
+import { acquireDemPool, releaseDemPool, type AcquireDemPoolOptions } from "./pool-registry";
 
 /** How long a tile takes to fade in over the nearest ready ancestor. */
 export const ARRIVAL_FADE_MS = 250;
 
 /** Names of the uniforms that `DEM_VERTEX_SHADER` and the fragment header declare. */
-export const DEM_UNIFORM_NAMES = [
+const DEM_UNIFORM_NAMES = [
   "uMatrix",
   "uLatitudes",
   "uSourceA",
@@ -90,165 +85,6 @@ float demHeightAt(sampler2D heights, vec2 uv) {
 }
 `;
 
-/** Put the shared header in front of a layer's own fragment code. */
-export function demFragmentShader(body: string): string {
-  return `#version 300 es\n${DEM_FRAGMENT_HEADER}\n${body}`;
-}
-
-/** One DEM texture that a quad samples and its share of the result. */
-export interface DrawSource {
-  /** The wrapped tile of the texture, which is the quad's tile or one of its ancestors. */
-  tile: TileId;
-  weight: number;
-}
-
-/** How far a tile has faded in, from 0 to 1, or null while it cannot draw. */
-export type FadeOf = (tile: TileId) => number | null;
-
-/**
- * Turn what is ready into at most two sources for one quad. The quad's own weight and its
- * parent's weight each fade in over the nearest ready ancestors, equal tiles merge, and the two
- * heaviest sources are scaled up to keep the weight all of them held. The weights sum to 1
- * once every chain ends in a ready tile, and stay lower where nothing is ready to fade over.
- */
-export function resolveSources(quad: PlacedTile, fadeOf: FadeOf): DrawSource[] {
-  const chain: TileId[] = [{ z: quad.z, x: quad.wrappedX, y: quad.y }, ...quad.ancestors];
-  const sources: DrawSource[] = [];
-  addChainWeight(sources, chain, 0, quad.selfWeight, fadeOf);
-  addChainWeight(sources, chain, 1, quad.parentWeight, fadeOf);
-
-  const heaviest = sources
-    .filter((source) => source.weight > 0)
-    .sort((left, right) => right.weight - left.weight)
-    .slice(0, 2);
-  const total = sources.reduce((sum, source) => sum + source.weight, 0);
-  const kept = heaviest.reduce((sum, source) => sum + source.weight, 0);
-
-  return heaviest.map((source) => ({ ...source, weight: (source.weight * total) / kept }));
-}
-
-function addChainWeight(
-  sources: DrawSource[],
-  chain: TileId[],
-  start: number,
-  weight: number,
-  fadeOf: FadeOf,
-): void {
-  let remaining = weight;
-
-  for (let index = start; index < chain.length && remaining > 0; index++) {
-    const fade = fadeOf(chain[index]);
-    if (fade === null) continue;
-
-    addWeight(sources, chain[index], remaining * fade);
-    remaining *= 1 - fade;
-  }
-}
-
-function addWeight(sources: DrawSource[], tile: TileId, weight: number): void {
-  const same = sources.find(
-    ({ tile: other }) => other.z === tile.z && other.x === tile.x && other.y === tile.y,
-  );
-  if (same) same.weight += weight;
-  else sources.push({ tile, weight });
-}
-
-/** The uv offset and scale that map a quad onto the part of a source texture it covers. */
-export function sourceUv(
-  quad: Pick<PlacedTile, "z" | "wrappedX" | "y">,
-  source: TileId,
-): [number, number, number] {
-  const span = 2 ** (quad.z - source.z);
-  return [(quad.wrappedX % span) / span, (quad.y % span) / span, 1 / span];
-}
-
-/**
- * Fades each drawable texture in from the moment the pool says it could draw. A texture the pool
- * replaces counts as a new arrival, and one that was ready long before a quad needs it as a
- * fallback gives full weight at once.
- */
-export class ArrivalFades {
-  private readonly fadeMs = prefersReducedMotion() ? 0 : ARRIVAL_FADE_MS;
-  isFading = false;
-
-  constructor(private readonly pool: Pick<DemPool, "drawableForMs">) {}
-
-  startFrame(): void {
-    this.isFading = false;
-  }
-
-  readonly fadeOf: FadeOf = (tile) => {
-    const drawableMs = this.pool.drawableForMs(tile);
-    if (drawableMs === null) return null;
-
-    const fade = this.fadeMs === 0 ? 1 : Math.min(drawableMs / this.fadeMs, 1);
-
-    if (fade < 1) this.isFading = true;
-
-    return fade;
-  };
-}
-
-const HEADING_SMOOTHING = 0.8;
-const SPEED_SMOOTHING_MS = 80;
-const HEADING_RESET_GAP_MS = 100;
-
-/** Smooths the pan direction in world units and its speed in CSS px/s, which order the ring and size the look-ahead. */
-export class HeadingTracker {
-  private previous: { x: number; y: number } | null = null;
-  private previousMs = 0;
-  private previousZoom: number | null = null;
-  private readonly heading: PanHeading = { x: 0, y: 0, speedPxPerSec: 0 };
-
-  /** Fold one frame's view into the smoothed heading and speed. */
-  update(view: ViewBounds, widthPx: number, nowMs: number, zoom?: number): PanHeading {
-    const centre = { x: (view.west + view.east) / 2, y: (view.north + view.south) / 2 };
-    const elapsedMs = this.previous === null ? 0 : nowMs - this.previousMs;
-    const zoomChanged =
-      zoom !== undefined && this.previousZoom !== null && zoom !== this.previousZoom;
-
-    if (this.previous === null || zoomChanged || elapsedMs > HEADING_RESET_GAP_MS) {
-      // A stale heading points at the wrong place after a jump, so each gesture starts from rest.
-      this.heading.x = 0;
-      this.heading.y = 0;
-      this.heading.speedPxPerSec = 0;
-      this.previous = centre;
-      this.previousMs = nowMs;
-
-      if (zoom !== undefined) this.previousZoom = zoom;
-
-      return this.heading;
-    }
-
-    const deltaX = centre.x - this.previous.x;
-    const deltaY = centre.y - this.previous.y;
-    this.heading.x = this.heading.x * HEADING_SMOOTHING + deltaX * (1 - HEADING_SMOOTHING);
-    this.heading.y = this.heading.y * HEADING_SMOOTHING + deltaY * (1 - HEADING_SMOOTHING);
-
-    const viewWidth = view.east - view.west;
-
-    if (widthPx > 0 && viewWidth > 0 && elapsedMs > 0) {
-      const instantPxPerSec =
-        ((Math.hypot(deltaX, deltaY) / viewWidth) * widthPx) / (elapsedMs / 1000);
-      const weight = 1 - Math.exp(-elapsedMs / SPEED_SMOOTHING_MS);
-      const keptPxPerSec = (this.heading.speedPxPerSec ?? 0) * (1 - weight);
-      this.heading.speedPxPerSec = keptPxPerSec + instantPxPerSec * weight;
-    }
-
-    this.previous = centre;
-    this.previousMs = nowMs;
-
-    if (zoom !== undefined) this.previousZoom = zoom;
-
-    return this.heading;
-  }
-}
-
-/** Whether the context filters R32F linearly, which the shaders rely on. */
-export function hasLinearHeights(gl: WebGL2RenderingContext): boolean {
-  return gl.getExtension("OES_texture_float_linear") !== null;
-}
-
 /** The map and scene a draw needs. */
 export interface DemDrawOptions {
   map: MapLibreMap;
@@ -277,8 +113,8 @@ interface DrawGpu {
 }
 
 /**
- * One frame of DEM quads for a layer: plans the tiles, feeds the pool, binds the textures a
- * quad mixes and draws it. The layer owns the program and attaches it after it links.
+ * Draw one frame of DEM quads using the planned tiles and pooled textures.
+ * The layer owns the program and attaches it after it links.
  */
 export class DemDraw {
   private readonly options: DemDrawOptions;
@@ -522,6 +358,164 @@ export class DemDraw {
   private uniform(name: string): WebGLUniformLocation | null {
     return this.gpu!.uniforms.get(name) ?? null;
   }
+}
+
+/** One DEM texture that a quad samples and its share of the result. */
+export interface DrawSource {
+  /** The wrapped tile of the texture, which is the quad's tile or one of its ancestors. */
+  tile: TileId;
+  weight: number;
+}
+
+/** How far a tile has faded in, from 0 to 1, or null while it cannot draw. */
+export type FadeOf = (tile: TileId) => number | null;
+
+/**
+ * Turn what is ready into at most two sources for one quad. The quad's own weight and its
+ * parent's weight each fade in over the nearest ready ancestors. Equal tiles merge before the
+ * two heaviest sources are scaled up to keep the total weight. The weights sum to 1 once every
+ * chain ends in a ready tile. They stay lower where nothing is ready to fade over.
+ */
+export function resolveSources(quad: PlacedTile, fadeOf: FadeOf): DrawSource[] {
+  const chain: TileId[] = [{ z: quad.z, x: quad.wrappedX, y: quad.y }, ...quad.ancestors];
+  const sources: DrawSource[] = [];
+  addChainWeight(sources, chain, 0, quad.selfWeight, fadeOf);
+  addChainWeight(sources, chain, 1, quad.parentWeight, fadeOf);
+
+  const heaviest = sources
+    .filter((source) => source.weight > 0)
+    .sort((left, right) => right.weight - left.weight)
+    .slice(0, 2);
+  const total = sources.reduce((sum, source) => sum + source.weight, 0);
+  const kept = heaviest.reduce((sum, source) => sum + source.weight, 0);
+
+  return heaviest.map((source) => ({ ...source, weight: (source.weight * total) / kept }));
+}
+
+function addChainWeight(
+  sources: DrawSource[],
+  chain: TileId[],
+  start: number,
+  weight: number,
+  fadeOf: FadeOf,
+): void {
+  let remaining = weight;
+
+  for (let index = start; index < chain.length && remaining > 0; index++) {
+    const fade = fadeOf(chain[index]);
+    if (fade === null) continue;
+
+    addWeight(sources, chain[index], remaining * fade);
+    remaining *= 1 - fade;
+  }
+}
+
+function addWeight(sources: DrawSource[], tile: TileId, weight: number): void {
+  const same = sources.find(
+    ({ tile: other }) => other.z === tile.z && other.x === tile.x && other.y === tile.y,
+  );
+  if (same) same.weight += weight;
+  else sources.push({ tile, weight });
+}
+
+/**
+ * Fade each drawable texture in from the moment the pool says it could draw.
+ * A replacement texture starts a new fade. A long-ready fallback has full weight at once.
+ */
+export class ArrivalFades {
+  private readonly fadeMs = prefersReducedMotion() ? 0 : ARRIVAL_FADE_MS;
+  isFading = false;
+
+  constructor(private readonly pool: Pick<DemPool, "drawableForMs">) {}
+
+  startFrame(): void {
+    this.isFading = false;
+  }
+
+  readonly fadeOf: FadeOf = (tile) => {
+    const drawableMs = this.pool.drawableForMs(tile);
+    if (drawableMs === null) return null;
+
+    const fade = this.fadeMs === 0 ? 1 : Math.min(drawableMs / this.fadeMs, 1);
+
+    if (fade < 1) this.isFading = true;
+
+    return fade;
+  };
+}
+
+const HEADING_SMOOTHING = 0.8;
+const SPEED_SMOOTHING_MS = 80;
+const HEADING_RESET_GAP_MS = 100;
+
+/** Smooth the pan direction and speed to order nearby tiles and size the area loaded ahead. */
+export class HeadingTracker {
+  private previous: { x: number; y: number } | null = null;
+  private previousMs = 0;
+  private previousZoom: number | null = null;
+  private readonly heading: PanHeading = { x: 0, y: 0, speedPxPerSec: 0 };
+
+  /** Fold one frame's view into the smoothed heading and speed. */
+  update(view: ViewBounds, widthPx: number, nowMs: number, zoom?: number): PanHeading {
+    const centre = { x: (view.west + view.east) / 2, y: (view.north + view.south) / 2 };
+    const elapsedMs = this.previous === null ? 0 : nowMs - this.previousMs;
+    const zoomChanged =
+      zoom !== undefined && this.previousZoom !== null && zoom !== this.previousZoom;
+
+    if (this.previous === null || zoomChanged || elapsedMs > HEADING_RESET_GAP_MS) {
+      // A stale heading points at the wrong place after a jump, so each gesture starts from rest.
+      this.heading.x = 0;
+      this.heading.y = 0;
+      this.heading.speedPxPerSec = 0;
+      this.previous = centre;
+      this.previousMs = nowMs;
+
+      if (zoom !== undefined) this.previousZoom = zoom;
+
+      return this.heading;
+    }
+
+    const deltaX = centre.x - this.previous.x;
+    const deltaY = centre.y - this.previous.y;
+    this.heading.x = this.heading.x * HEADING_SMOOTHING + deltaX * (1 - HEADING_SMOOTHING);
+    this.heading.y = this.heading.y * HEADING_SMOOTHING + deltaY * (1 - HEADING_SMOOTHING);
+
+    const viewWidth = view.east - view.west;
+
+    if (widthPx > 0 && viewWidth > 0 && elapsedMs > 0) {
+      const instantPxPerSec =
+        ((Math.hypot(deltaX, deltaY) / viewWidth) * widthPx) / (elapsedMs / 1000);
+      const weight = 1 - Math.exp(-elapsedMs / SPEED_SMOOTHING_MS);
+      const keptPxPerSec = (this.heading.speedPxPerSec ?? 0) * (1 - weight);
+      this.heading.speedPxPerSec = keptPxPerSec + instantPxPerSec * weight;
+    }
+
+    this.previous = centre;
+    this.previousMs = nowMs;
+
+    if (zoom !== undefined) this.previousZoom = zoom;
+
+    return this.heading;
+  }
+}
+
+/** Whether the context filters R32F linearly, which the shaders rely on. */
+export function hasLinearHeights(gl: WebGL2RenderingContext): boolean {
+  return gl.getExtension("OES_texture_float_linear") !== null;
+}
+
+/** The uv offset and scale that map a quad onto the part of a source texture it covers. */
+export function sourceUv(
+  quad: Pick<PlacedTile, "z" | "wrappedX" | "y">,
+  source: TileId,
+): [number, number, number] {
+  const span = 2 ** (quad.z - source.z);
+  return [(quad.wrappedX % span) / span, (quad.y % span) / span, 1 / span];
+}
+
+/** Put the shared header in front of a layer's own fragment code. */
+export function demFragmentShader(body: string): string {
+  return `#version 300 es\n${DEM_FRAGMENT_HEADER}\n${body}`;
 }
 
 /** The bindings and switches that work between map frames may change. */

@@ -2,9 +2,27 @@
  * The relief fragment shader and its scalar reference. The reference runs the same arithmetic
  * as the shader, so tests can check the maths without a GL context.
  */
-import { RELIEF_LIGHTS } from "../layers/relief";
-import { DEM_TILE_SIZE_PX } from "../workers/dem-decode";
-import { demFragmentShader } from "./dem-draw";
+import { glslFloat } from "../gl";
+import { DEM_TILE_SIZE_PX } from "./decode";
+import { demFragmentShader } from "./draw";
+
+// The shader scales slopes linearly, so larger values still steepen the shading.
+const MAX_EXAGGERATION = 3.5;
+const LOW_DETAIL_ZOOM = 4;
+const HIGH_DETAIL_ZOOM = 12;
+// Low zoom needs gentler shading because slopes read steeper there.
+const LOW_DETAIL_EXAGGERATION = 0.4;
+const HIGH_DETAIL_EXAGGERATION = 0.7;
+
+/**
+ * The three lights of the relief shading, shared by the GPU shader and its scalar reference.
+ * The shader stays transparent on flat ground only at sin(altitude) = 0.5.
+ */
+export const RELIEF_LIGHTS = [
+  { azimuthDeg: 315, altitudeDeg: 30, shadowAlpha: 0.55, highlightAlpha: 0.35 },
+  { azimuthDeg: 255, altitudeDeg: 30, shadowAlpha: 0.22, highlightAlpha: 0.08 },
+  { azimuthDeg: 15, altitudeDeg: 30, shadowAlpha: 0.22, highlightAlpha: 0.08 },
+];
 
 // The prepare pass of MapLibre's hillshade divides slopes by the metres of one pixel.
 const PIXEL_SIZE_OFFSET = 28.2562;
@@ -63,7 +81,7 @@ export const LIGHT_TERMS: readonly LightTerms[] = RELIEF_LIGHTS.map((light) => {
   };
 });
 
-/** The slope scale of a DEM tile at a zoom: its pixels per the metres one pixel spans. */
+/** The slope scale is the tile size divided by the metres one pixel spans at this zoom. */
 export function demSlopeScale(zoom: number, tileSizePx = DEM_TILE_SIZE_PX): number {
   return tileSizePx / 2 ** (prepareExaggeration(zoom) + PIXEL_SIZE_OFFSET - zoom);
 }
@@ -107,8 +125,20 @@ function clampSlope(slope: number): number {
   return Math.min(Math.max(slope, MIN_STORED_SLOPE), MAX_STORED_SLOPE);
 }
 
-function glslFloat(value: number): string {
-  return Number.isInteger(value) ? value.toFixed(1) : value.toPrecision(9);
+/**
+ * Return the exaggeration the relief shader uses at a zoom, ramping between the low and high
+ * detail ends. Zooms outside the ramp keep its end values.
+ */
+export function reliefExaggeration(zoom: number, strength: number): number {
+  const low = exaggeration(LOW_DETAIL_EXAGGERATION, strength);
+  const high = exaggeration(HIGH_DETAIL_EXAGGERATION, strength);
+  const along = (zoom - LOW_DETAIL_ZOOM) / (HIGH_DETAIL_ZOOM - LOW_DETAIL_ZOOM);
+
+  return low + (high - low) * Math.min(Math.max(along, 0), 1);
+}
+
+function exaggeration(base: number, strength: number): number {
+  return Math.min(Math.max(base * strength, 0), MAX_EXAGGERATION);
 }
 
 function lightArray(name: string, pick: (light: LightTerms) => number): string {

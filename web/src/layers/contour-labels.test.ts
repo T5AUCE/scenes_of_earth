@@ -14,10 +14,10 @@ import { LABEL_FADE_MS } from "../reduced-motion.ts";
 import type { LayerContext, TerrainStats, TerrainTiles } from "../types.ts";
 import {
   cappedDemMaxZoom,
-  ContourOverlay,
+  ContourLabels,
   MAX_MISSING_DEM_TILES,
   memoizeMissingDemTiles,
-} from "./contour-overlay.ts";
+} from "./contour-labels.ts";
 
 Object.assign(globalThis, {
   document: { createElement: () => ({}), documentElement: {} },
@@ -46,7 +46,7 @@ const LABEL_SOURCE_ID = "terrain-labels-contours";
 
 test("a camera gesture hides the contour labels and restores them on moveend", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourLabels(layerContext(map), fakeDem(), TILES, STATS);
 
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), undefined);
 
@@ -64,7 +64,7 @@ test("a camera gesture hides the contour labels and restores them on moveend", (
 test("a disabled freeze flag leaves the contour labels alone", () => {
   withSearch("?freezeLabels=0", () => {
     const map = fakeMap();
-    const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+    const overlay = new ContourLabels(layerContext(map), fakeDem(), TILES, STATS);
 
     map.emit("movestart");
 
@@ -80,7 +80,7 @@ test("a disabled freeze flag leaves the contour labels alone", () => {
 
 test("leaving mid-gesture restores the contour labels", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourLabels(layerContext(map), fakeDem(), TILES, STATS);
 
   map.emit("movestart");
 
@@ -96,7 +96,7 @@ test("a measurement cap lowers the contour tiling zoom and nothing else", () => 
     assert.equal(cappedDemMaxZoom(12), 9);
 
     const map = fakeMap();
-    const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+    const overlay = new ContourLabels(layerContext(map), fakeDem(), TILES, STATS);
     const labelSource = map.sources.get("terrain-labels-contours") as { maxzoom: number };
 
     assert.equal(labelSource.maxzoom, 9);
@@ -110,7 +110,7 @@ test("without a cap the contour tiling keeps its crisp ceiling", () => {
   assert.equal(cappedDemMaxZoom(14), 12);
 
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourLabels(layerContext(map), fakeDem(), TILES, STATS);
   const labelSource = map.sources.get("terrain-labels-contours") as { maxzoom: number };
 
   assert.equal(labelSource.maxzoom, 12);
@@ -203,7 +203,7 @@ test("the 404 memo drops its oldest tile past its cap", async () => {
 
 test("the contour labels fade back after a gesture instead of popping", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourLabels(layerContext(map), fakeDem(), TILES, STATS);
 
   map.emit("movestart");
 
@@ -228,7 +228,7 @@ test("the contour labels fade back after a gesture instead of popping", () => {
 
 test("the label fade passes through a translucent midpoint", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourLabels(layerContext(map), fakeDem(), TILES, STATS);
 
   map.emit("movestart");
 
@@ -261,7 +261,7 @@ test("a data-driven opacity snaps instead of fading, so the fade runs on colour"
 
 test("low-zoom contour labels keep the resting 350 px spacing", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourLabels(layerContext(map), fakeDem(), TILES, STATS);
 
   assert.equal(map.layoutProp(LABEL_ID, "symbol-spacing"), 350);
 
@@ -271,7 +271,7 @@ test("low-zoom contour labels keep the resting 350 px spacing", () => {
 test("reduced motion restores the contour labels instantly", () => {
   withReducedMotion(true, () => {
     const map = fakeMap();
-    const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+    const overlay = new ContourLabels(layerContext(map), fakeDem(), TILES, STATS);
 
     map.emit("movestart");
     map.emit("moveend");
@@ -286,7 +286,7 @@ test("reduced motion restores the contour labels instantly", () => {
 
 test("a hidden contour toggle stays hidden through the gesture fade", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourLabels(layerContext(map), fakeDem(), TILES, STATS);
 
   map.emit("movestart");
   overlay.part.onToggle?.(false);
@@ -299,7 +299,7 @@ test("a hidden contour toggle stays hidden through the gesture fade", () => {
 
 test("zooming keeps the label source so stretched parents cover late children", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourLabels(layerContext(map), fakeDem(), TILES, STATS);
   const source = map.sources.get("terrain-labels-contours") as {
     maxzoom?: number;
     minzoom?: unknown;
@@ -320,7 +320,7 @@ test("zooming keeps the label source so stretched parents cover late children", 
 
 test("switching contours off hides the labels and back on shows them again", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourLabels(layerContext(map), fakeDem(), TILES, STATS);
 
   overlay.part.onToggle?.(false);
 
@@ -335,7 +335,7 @@ test("switching contours off hides the labels and back on shows them again", () 
 
 test("destroying the overlay removes its label source and layer", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourLabels(layerContext(map), fakeDem(), TILES, STATS);
 
   overlay.destroy();
 
@@ -352,11 +352,11 @@ test("the overlay adds only the label source and layer", () => {
       return "dem-contour://terrain/{z}/{x}/{y}";
     },
   };
-  const overlay = new ContourOverlay(layerContext(map), dem as never, TILES, STATS);
+  const overlay = new ContourLabels(layerContext(map), dem as never, TILES, STATS);
 
   assert.deepEqual([...map.sources.keys()], [LABEL_SOURCE_ID]);
   assert.deepEqual([...map.layers.keys()], [LABEL_ID]);
-  assert.deepEqual(overlay.contourSourceIds, [LABEL_SOURCE_ID]);
+  assert.equal(overlay.labelSourceId, LABEL_SOURCE_ID);
   assert.deepEqual(overlay.part.layerIds, [LABEL_ID]);
 
   overlay.destroy();
@@ -370,7 +370,7 @@ test("the overlay traces each label height from the zoom its labels enter", () =
       return "dem-contour://terrain/{z}/{x}/{y}";
     },
   };
-  const overlay = new ContourOverlay(layerContext(fakeMap()), dem as never, TILES, STATS);
+  const overlay = new ContourLabels(layerContext(fakeMap()), dem as never, TILES, STATS);
 
   assert.deepEqual(
     requests.map((request) => request.thresholds),
@@ -389,7 +389,7 @@ test("a unit change rebuilds the labels and the ladder the GPU lines read", () =
       return "dem-contour://terrain/{z}/{x}/{y}";
     },
   };
-  const overlay = new ContourOverlay(layerContext(map), dem as never, TILES, STATS);
+  const overlay = new ContourLabels(layerContext(map), dem as never, TILES, STATS);
 
   overlay.setUnits("ft");
 
@@ -403,7 +403,7 @@ test("a unit change rebuilds the labels and the ladder the GPU lines read", () =
 
 test("toggling contours on mid-gesture keeps the labels frozen until moveend", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+  const overlay = new ContourLabels(layerContext(map), fakeDem(), TILES, STATS);
 
   map.emit("movestart");
   // drawView shows every part layer before it notifies the toggle.
@@ -448,8 +448,8 @@ function fakeDem() {
 function overlayWithDem(
   map: FakeMap,
   dem: { contourProtocolUrl: (request: unknown) => string; manager?: unknown },
-): ContourOverlay {
-  return new ContourOverlay(layerContext(map), dem as never, TILES, STATS);
+): ContourLabels {
+  return new ContourLabels(layerContext(map), dem as never, TILES, STATS);
 }
 
 function withReducedMotion(matches: boolean, run: () => void): void {

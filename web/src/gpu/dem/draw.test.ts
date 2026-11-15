@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { createDemHarness, SCENE_BBOX } from "./dem-draw-harness.test.ts";
+import { createDemHarness, SCENE_BBOX } from "../../testing/dem-harness.ts";
 import {
   ARRIVAL_FADE_MS,
   ArrivalFades,
@@ -10,9 +10,9 @@ import {
   resolveSources,
   sourceUv,
   type FadeOf,
-} from "./dem-draw.ts";
-import { LOOKAHEAD_PAN_SPEED_PX_PER_SEC } from "./dem-plan.ts";
-import type { PanHeading, PlacedTile, TileId } from "./dem-plan.ts";
+} from "./draw.ts";
+import { LOOKAHEAD_PAN_SPEED_PX_PER_SEC } from "./plan.ts";
+import type { PanHeading, PlacedTile, TileId } from "./plan.ts";
 
 const FINE_ZOOM = 7;
 

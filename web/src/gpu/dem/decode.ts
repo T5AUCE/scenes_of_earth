@@ -1,4 +1,4 @@
-/** Fetch and decode one terrarium DEM tile into heights and the edge strips neighbours need. */
+/** Fetch and decode a Terrarium DEM tile into heights and the edge strips neighbours need. */
 
 /** The side length of every DEM tile in pixels. */
 export const DEM_TILE_SIZE_PX = 512;
@@ -19,13 +19,10 @@ const MISSING_TILE_STATUS = 404;
 const STRIP_SIDES: StripSide[] = ["top", "bottom", "left", "right"];
 const STRIP_LENGTH = DEM_TILE_SIZE_PX * STRIP_WIDTH_PX;
 
-// These offsets index a strips buffer, which holds one side per STRIP_SIDES entry in order.
-const TOP_STRIP_START = 0;
-const BOTTOM_STRIP_START = STRIP_LENGTH;
-const LEFT_STRIP_START = BOTTOM_STRIP_START + STRIP_LENGTH;
-const RIGHT_STRIP_START = LEFT_STRIP_START + STRIP_LENGTH;
-
 const BYTES_PER_PIXEL = 4;
+const TERRARIUM_RADIX = 256;
+const TERRARIUM_OFFSET_M = 32768;
+
 const ALTERED_CANVAS_WARNING =
   "DEM canvas readback altered colours, so tiles need VideoFrame "
   + "bytes and fail where it is unavailable. This usually comes from a browser privacy or "
@@ -47,51 +44,26 @@ export async function loadDemTile(url: string, signal: AbortSignal): Promise<Dem
   return { heights, strips: edgeStrips(heights), decodeMs };
 }
 
-/** Decode terrarium RGBA pixels to metres. */
-export function decodeHeights(rgba: Uint8ClampedArray): Float32Array {
-  const heights = new Float32Array(rgba.length / 4);
+async function fetchHeights(
+  url: string,
+  signal: AbortSignal,
+): Promise<{ heights: Float32Array; decodeMs: number } | null> {
+  const response = await fetch(url, { signal });
+  if (response.status === MISSING_TILE_STATUS) return null;
+  if (!response.ok) throw new Error(`Bad response: ${response.status} for ${url}`);
 
-  for (let index = 0; index < heights.length; index++) {
-    const red = rgba[index * 4];
-    const green = rgba[index * 4 + 1];
-    const blue = rgba[index * 4 + 2];
-    heights[index] = red * 256 + green + blue / 256 - 32768;
+  const start = performance.now();
+  const bitmap = await createImageBitmap(await response.blob(), {
+    premultiplyAlpha: "none",
+    colorSpaceConversion: "none",
+  });
+
+  try {
+    const rgba = await extractBitmapRgba(bitmap);
+    return { heights: decodeHeights(rgba), decodeMs: performance.now() - start };
+  } finally {
+    bitmap.close();
   }
-
-  return heights;
-}
-
-/**
- * Copy the outermost two rows and columns of a tile into one buffer. Top and bottom hold two
- * full rows, left and right hold one pair of pixels per row, which is the shape of the neighbour
- * halo they fill.
- */
-export function edgeStrips(heights: Float32Array): Float32Array {
-  const size = DEM_TILE_SIZE_PX;
-  const strips = new Float32Array(STRIP_SIDES.length * STRIP_LENGTH);
-  strips.set(heights.subarray(0, STRIP_LENGTH), TOP_STRIP_START);
-  strips.set(heights.subarray(size * (size - STRIP_WIDTH_PX)), BOTTOM_STRIP_START);
-
-  for (let row = 0; row < size; row++) {
-    const rowStart = row * size;
-    const stripStart = row * STRIP_WIDTH_PX;
-    strips.set(
-      heights.subarray(rowStart, rowStart + STRIP_WIDTH_PX),
-      LEFT_STRIP_START + stripStart,
-    );
-    strips.set(
-      heights.subarray(rowStart + size - STRIP_WIDTH_PX, rowStart + size),
-      RIGHT_STRIP_START + stripStart,
-    );
-  }
-
-  return strips;
-}
-
-/** A view of one side inside a buffer made by `edgeStrips`. */
-export function stripOf(strips: Float32Array, side: StripSide): Float32Array {
-  const start = STRIP_SIDES.indexOf(side) * STRIP_LENGTH;
-  return strips.subarray(start, start + STRIP_LENGTH);
 }
 
 /**
@@ -249,26 +221,46 @@ function warnAlteredCanvasOnce(): void {
   console.warn(ALTERED_CANVAS_WARNING);
 }
 
-async function fetchHeights(
-  url: string,
-  signal: AbortSignal,
-): Promise<{ heights: Float32Array; decodeMs: number } | null> {
-  const response = await fetch(url, { signal });
-  if (response.status === MISSING_TILE_STATUS) return null;
-  if (!response.ok) throw new Error(`Bad response: ${response.status} for ${url}`);
+/** Decode Terrarium RGBA pixels to metres. */
+export function decodeHeights(rgba: Uint8ClampedArray): Float32Array {
+  const heights = new Float32Array(rgba.length / BYTES_PER_PIXEL);
 
-  const start = performance.now();
-  const bitmap = await createImageBitmap(await response.blob(), {
-    premultiplyAlpha: "none",
-    colorSpaceConversion: "none",
-  });
-
-  try {
-    const rgba = await extractBitmapRgba(bitmap);
-    return { heights: decodeHeights(rgba), decodeMs: performance.now() - start };
-  } finally {
-    bitmap.close();
+  for (let index = 0; index < heights.length; index++) {
+    const red = rgba[index * BYTES_PER_PIXEL];
+    const green = rgba[index * BYTES_PER_PIXEL + 1];
+    const blue = rgba[index * BYTES_PER_PIXEL + 2];
+    heights[index] = red * TERRARIUM_RADIX + green + blue / TERRARIUM_RADIX - TERRARIUM_OFFSET_M;
   }
+
+  return heights;
+}
+
+/**
+ * Copy the outermost two rows and columns of a tile into one buffer. Top and bottom hold two
+ * full rows. Left and right hold one pair of pixels per row to match the neighbour halo.
+ */
+export function edgeStrips(heights: Float32Array): Float32Array {
+  const size = DEM_TILE_SIZE_PX;
+  const strips = new Float32Array(STRIP_SIDES.length * STRIP_LENGTH);
+  stripOf(strips, "top").set(heights.subarray(0, STRIP_LENGTH));
+  stripOf(strips, "bottom").set(heights.subarray(size * (size - STRIP_WIDTH_PX)));
+  const left = stripOf(strips, "left");
+  const right = stripOf(strips, "right");
+
+  for (let row = 0; row < size; row++) {
+    const rowStart = row * size;
+    const stripStart = row * STRIP_WIDTH_PX;
+    left.set(heights.subarray(rowStart, rowStart + STRIP_WIDTH_PX), stripStart);
+    right.set(heights.subarray(rowStart + size - STRIP_WIDTH_PX, rowStart + size), stripStart);
+  }
+
+  return strips;
+}
+
+/** A view of one side inside a buffer made by `edgeStrips`. */
+export function stripOf(strips: Float32Array, side: StripSide): Float32Array {
+  const start = STRIP_SIDES.indexOf(side) * STRIP_LENGTH;
+  return strips.subarray(start, start + STRIP_LENGTH);
 }
 
 /** Forget the cached canvas verdict, so tests can probe both paths in one worker. */

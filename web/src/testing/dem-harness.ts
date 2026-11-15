@@ -4,9 +4,9 @@ import type {
   Map as MapLibreMap,
 } from "maplibre-gl";
 
-import { DEM_TILE_SIZE_PX, edgeStrips } from "../workers/dem-decode.ts";
-import type { DemWorkerRequest, DemWorkerResponse } from "../workers/dem-worker.ts";
-import type { DemTexture, DemTextureStore, DemWorkerPort } from "./dem-pool.ts";
+import { DEM_TILE_SIZE_PX, edgeStrips } from "../gpu/dem/decode";
+import type { DemTexture, DemTextureStore, DemWorkerPort } from "../gpu/dem/pool";
+import type { DemWorkerRequest, DemWorkerResponse } from "../gpu/dem/worker";
 
 /** The first of the sampler units; the fake context adds a unit to it like the real one. */
 const TEXTURE0 = 100;

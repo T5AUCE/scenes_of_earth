@@ -1,8 +1,8 @@
 /** Combine terrain shading with contours and adapt relief strength to colour fills. */
 import type { Map as MapLibreMap } from "maplibre-gl";
 
-import { addContourLineLayer, type ContourLineHandle } from "../gpu/contour-line-layer";
-import { addReliefLayer, type ReliefHandle } from "../gpu/relief-layer";
+import { addContourLineLayer, type ContourLineHandle } from "../gpu/dem/contour-layer";
+import { addReliefLayer, type ReliefHandle } from "../gpu/dem/relief-layer";
 import { CONTOUR_COLORS, contourColor, DEFAULT_CONTOUR_COLOR } from "../render/palettes";
 import type {
   LayerContext,
@@ -14,18 +14,23 @@ import type {
   UnitsMenu,
 } from "../types";
 import { displayUnitFor, isUnitFor, unitOptions } from "../units";
-import { cappedDemMaxZoom, ContourOverlay, sharedDemSource } from "./contour-overlay";
-import { RELIEF_STRENGTH } from "./relief";
+import {
+  cappedDemMaxZoom,
+  ContourLabels,
+  isDem404,
+  sharedDemSource,
+  stripWorkerErrorPrefix,
+} from "./contour-labels";
 import { DEM_PRELOAD_ID, demPreloadSource } from "./scene-preload";
 import { currentScenePreload } from "./tile-prefetch";
+
+/** The visit-only relief strength range, with 2 as the default and 0 as no shading. */
+export const RELIEF_STRENGTH = { min: 0, max: 5, step: 0.1, initial: 2 };
 
 // Shade over a colour fill is eased so the colour stays readable.
 const COLOUR_UNDER_FACTOR = 0.75;
 // One transient or missing tile must not warn while the rest of the terrain can still draw.
 const TILE_FAILURES_BEFORE_WARNING = 3;
-const MISSING_TILE_MESSAGE_PREFIX = "Bad response: 404";
-// Workers rebuild maplibre-contour errors from strings, so messages keep an "Error: " prefix.
-const WORKER_ERROR_PREFIX = "Error: ";
 
 type TileCoordinates = { z: number; x: number; y: number };
 
@@ -89,7 +94,7 @@ export function createTerrainView(context: LayerContext): TerrainView {
   );
 
   const preload = currentScenePreload();
-  let contourOverlay: ContourOverlay | undefined;
+  let contourLabels: ContourLabels | undefined;
   let stopWatchingTiles: (() => void) | undefined;
 
   try {
@@ -122,10 +127,10 @@ export function createTerrainView(context: LayerContext): TerrainView {
         bbox: layer.grid.bbox,
       }),
     );
-    contourOverlay = new ContourOverlay(context, dem, tiles, stats as TerrainStats);
+    contourLabels = new ContourLabels(context, dem, tiles, stats as TerrainStats);
 
-    const overlay = contourOverlay;
-    stopWatchingTiles = watchTerrainTiles(map, overlay.contourSourceIds, report);
+    const overlay = contourLabels;
+    stopWatchingTiles = watchTerrainTiles(map, [overlay.labelSourceId], report);
 
     const stop = stopWatchingTiles;
 
@@ -228,7 +233,7 @@ export function createTerrainView(context: LayerContext): TerrainView {
     // A failed mount leaves no view to destroy, so the shading rolls back here.
     try {
       stopWatchingTiles?.();
-      contourOverlay?.destroy();
+      contourLabels?.destroy();
       preload?.remove(DEM_PRELOAD_ID);
     } finally {
       liveTerrainBases.delete(shading);
@@ -313,9 +318,7 @@ export function setTerrainBaseZoom(map: MapLibreMap, zoom: number): void {
  * the level drawn at the fitted zoom.
  */
 export function pinGpuTerrainBase(map: MapLibreMap, zoom: number): void {
-  for (const [shading, owner] of liveTerrainBases) {
-    if (owner === map) shading.setBaseZoom(zoom);
-  }
+  setTerrainBaseZoom(map, zoom);
 }
 
 /**
@@ -423,7 +426,7 @@ function isBenignTileError(error: NonNullable<TerrainTileEvent["error"]>): boole
   if (error.name === "AbortError" || error.status === 404) return true;
 
   const message = stripWorkerErrorPrefix(error.message);
-  return message === "aborted" || message?.startsWith(MISSING_TILE_MESSAGE_PREFIX) === true;
+  return message === "aborted" || isDem404(error);
 }
 
 /** Warn once per missing tile key; aborts are routine while panning and stay silent. */
@@ -451,15 +454,7 @@ function warnOnceForMissingTile(
 }
 
 function isMissingTile(error: NonNullable<TerrainTileEvent["error"]>): boolean {
-  if (error.status === 404) return true;
-
-  const message = stripWorkerErrorPrefix(error.message);
-  return message?.startsWith(MISSING_TILE_MESSAGE_PREFIX) === true;
-}
-
-function stripWorkerErrorPrefix(message: string | undefined): string | undefined {
-  if (!message?.startsWith(WORKER_ERROR_PREFIX)) return message;
-  return message.slice(WORKER_ERROR_PREFIX.length);
+  return error.status === 404 || isDem404(error);
 }
 
 function hasUnhealthySource(sources: ReadonlyMap<string, TerrainSourceState>): boolean {

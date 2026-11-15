@@ -1,28 +1,24 @@
-/** Contour lines drawn on the GPU from the shared DEM textures instead of vector tiles. */
+/** Terrain shading drawn on the GPU from the shared DEM textures instead of raster tiles. */
 import type {
   CustomLayerInterface,
   CustomRenderMethodInput,
   Map as MapLibreMap,
 } from "maplibre-gl";
 
-import type { ContourLadder } from "../contour-ladder";
-import { hexToRgb } from "../render/palettes";
-import type { Bbox } from "../types";
+import type { Bbox } from "../../types";
+import { deleteResources, linkProgram } from "../gl";
+import { keepThroughContextLoss, timedGpuDraw } from "../tiled-layer";
 import {
-  CONTOUR_FRAGMENT_SHADER,
-  fillTierAlphas,
-  MAX_TIERS,
-  tierUniformsOf,
-  type TierUniforms,
-} from "./contour-shaders";
-import { DEM_VERTEX_SHADER, DemDraw, hasLinearHeights, type DemDrawOptions } from "./dem-draw";
-import { deleteResources, linkProgram } from "./gl";
-import { keepThroughContextLoss, timedGpuDraw } from "./tiled-layer";
+  DEM_VERTEX_SHADER,
+  DemDraw,
+  hasLinearHeights,
+  type DemDrawOptions,
+  type DrawSource,
+} from "./draw";
+import { demSlopeScale, reliefExaggeration, RELIEF_FRAGMENT_SHADER } from "./relief-shaders";
 
-const COLOUR_CHANNEL_MAX = 255;
-
-/** What the contour layer needs to find its tiles, place them and draw the ladder. */
-export interface ContourLineLayerOptions {
+/** What the relief layer needs to find its tiles and place them. */
+export interface ReliefLayerOptions {
   map: MapLibreMap;
   id: string;
   /** A url template with `{z}`, `{x}` and `{y}`. */
@@ -34,39 +30,33 @@ export interface ContourLineLayerOptions {
   maxZoom: number;
   /** The zoom the scene fits at; the scene refits it through `setBaseZoom` after entry. */
   fitZoom: number;
-  ladder: ContourLadder;
-  elevationUnit: string;
-  /** A #rrggbb colour. */
-  color: string;
+  strength: number;
   /** Called once, outside any draw, when the layer can no longer draw. */
   onFail(error: Error): void;
   poolOptions?: DemDrawOptions["poolOptions"];
 }
 
-const CONTOUR_UNIFORM_NAMES = ["uIntervals", "uTierAlpha", "uTierWidth", "uPixelRatio", "uColour"];
+const RELIEF_UNIFORM_NAMES = ["uSlopeScale", "uExaggeration"];
 
-/** A custom layer that draws the contour ladder from the DEM pool at the zoom's sharp level. */
-export class ContourLineLayer implements CustomLayerInterface {
+/** A custom layer that shades relief from the DEM pool at the zoom's sharp level. */
+export class ReliefLayer implements CustomLayerInterface {
   readonly id: string;
   readonly type = "custom";
   readonly renderingMode = "2d";
 
-  private readonly options: ContourLineLayerOptions;
+  private readonly options: ReliefLayerOptions;
   private readonly draw: DemDraw;
-  private readonly alphas = new Float32Array(MAX_TIERS);
   private map: MapLibreMap | null = null;
   private gl: WebGL2RenderingContext | null = null;
   private program: WebGLProgram | null = null;
   private uniforms = new Map<string, WebGLUniformLocation | null>();
-  private tiers: TierUniforms;
-  private colour: [number, number, number];
+  private strength: number;
   private isFailed = false;
 
-  constructor(options: ContourLineLayerOptions) {
+  constructor(options: ReliefLayerOptions) {
     this.options = options;
     this.id = options.id;
-    this.tiers = tierUniformsOf(options.ladder, options.elevationUnit);
-    this.colour = colourChannels(options.color);
+    this.strength = options.strength;
     this.draw = new DemDraw({
       map: options.map,
       tileUrl: options.tileUrl,
@@ -82,13 +72,11 @@ export class ContourLineLayer implements CustomLayerInterface {
     this.gl = gl;
 
     try {
-      if (!hasLinearHeights(gl)) {
-        throw new Error("Contours need linear filtering of float textures");
-      }
+      if (!hasLinearHeights(gl)) throw new Error("Relief needs linear filtering of float textures");
 
-      this.program = linkProgram(gl, DEM_VERTEX_SHADER, CONTOUR_FRAGMENT_SHADER);
+      this.program = linkProgram(gl, DEM_VERTEX_SHADER, RELIEF_FRAGMENT_SHADER);
       this.uniforms = new Map(
-        CONTOUR_UNIFORM_NAMES.map((name) => [name, gl.getUniformLocation(this.program!, name)]),
+        RELIEF_UNIFORM_NAMES.map((name) => [name, gl.getUniformLocation(this.program!, name)]),
       );
       this.draw.attach(gl, this.program);
     } catch (error) {
@@ -103,14 +91,9 @@ export class ContourLineLayer implements CustomLayerInterface {
     this.gl = null;
   }
 
-  /** Switch to another ladder or unit without touching a tile, because both are uniforms. */
-  setLadder(ladder: ContourLadder, elevationUnit: string): void {
-    this.tiers = tierUniformsOf(ladder, elevationUnit);
-    this.map?.triggerRepaint();
-  }
-
-  setColor(color: string): void {
-    this.colour = colourChannels(color);
+  /** Change the strength without touching a tile, because it is only a uniform. */
+  setStrength(strength: number): void {
+    this.strength = strength;
     this.map?.triggerRepaint();
   }
 
@@ -128,7 +111,7 @@ export class ContourLineLayer implements CustomLayerInterface {
     const { gl, map, program } = this;
     if (!gl || !map || !program || this.isFailed) return true;
 
-    this.draw.warmDraw(gl, () => this.setState(gl, program, map.getPixelRatio()));
+    this.draw.warmDraw(gl, () => this.setState(gl, program, map.getZoom()));
 
     return this.draw.loadBase(gl);
   }
@@ -136,14 +119,15 @@ export class ContourLineLayer implements CustomLayerInterface {
   render(gl: WebGL2RenderingContext, input: CustomRenderMethodInput): void {
     const { map, program } = this;
     if (!map || !program || this.isFailed) return;
-    if (!fillTierAlphas(this.alphas, this.tiers.entryZooms, map.getZoom())) return;
 
     try {
-      this.setState(gl, program, map.getPixelRatio());
+      this.setState(gl, program, map.getZoom());
 
       let needsRepaint = false;
       timedGpuDraw(gl, this.id, () => {
-        needsRepaint = this.draw.draw(gl, input.defaultProjectionData.mainMatrix);
+        needsRepaint = this.draw.draw(gl, input.defaultProjectionData.mainMatrix, (sources) =>
+          this.setSlopeScales(gl, sources),
+        );
       });
 
       if (needsRepaint) map.triggerRepaint();
@@ -154,23 +138,24 @@ export class ContourLineLayer implements CustomLayerInterface {
     }
   }
 
-  private setState(gl: WebGL2RenderingContext, program: WebGLProgram, pixelRatio: number): void {
+  private setState(gl: WebGL2RenderingContext, program: WebGLProgram, zoom: number): void {
     gl.useProgram(program);
     gl.disable(gl.DEPTH_TEST);
     gl.disable(gl.STENCIL_TEST);
     gl.enable(gl.BLEND);
-    // The shader writes premultiplied colour, so the relief and basemap show through the gaps.
+    // The shader writes premultiplied colour, so the basemap shows through what it leaves.
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
-    gl.uniform1fv(this.uniform("uIntervals"), this.tiers.intervalsM);
-    gl.uniform1fv(this.uniform("uTierAlpha"), this.alphas);
-    gl.uniform1fv(this.uniform("uTierWidth"), this.tiers.widthsPx);
-    gl.uniform1f(this.uniform("uPixelRatio"), pixelRatio);
-    gl.uniform3f(this.uniform("uColour"), ...this.colour);
+    const exaggeration = reliefExaggeration(zoom, this.strength);
+    gl.uniform1f(this.uniforms.get("uExaggeration") ?? null, exaggeration);
   }
 
-  private uniform(name: string): WebGLUniformLocation | null {
-    return this.uniforms.get(name) ?? null;
+  private setSlopeScales(gl: WebGL2RenderingContext, [first, second]: DrawSource[]): void {
+    gl.uniform2f(
+      this.uniforms.get("uSlopeScale") ?? null,
+      demSlopeScale(first.tile.z),
+      second ? demSlopeScale(second.tile.z) : 0,
+    );
   }
 
   private release(): void {
@@ -191,30 +176,28 @@ export class ContourLineLayer implements CustomLayerInterface {
   }
 }
 
-/** The control a terrain view keeps over its contour layer. */
-export interface ContourLineHandle {
-  setLadder(ladder: ContourLadder, elevationUnit: string): void;
-  setColor(color: string): void;
+/** The control a terrain view keeps over its relief layer. */
+export interface ReliefHandle {
+  setStrength(strength: number): void;
   setBaseZoom(zoom: number): void;
   prepare(): boolean;
   destroy(): void;
 }
 
-/** Add a contour layer before an anchor and keep it through a WebGL context loss. */
-export function addContourLineLayer(
-  options: ContourLineLayerOptions,
+/** Add a relief layer before an anchor and keep it through a WebGL context loss. */
+export function addReliefLayer(
+  options: ReliefLayerOptions,
   beforeId: string | undefined,
-): ContourLineHandle {
+): ReliefHandle {
   const { map } = options;
-  const layer = new ContourLineLayer(options);
+  const layer = new ReliefLayer(options);
   map.addLayer(layer, beforeId);
 
   // The keeper removes the layer on capture, before the pool hears of the loss.
   const stopKeeping = keepThroughContextLoss(map, layer, beforeId);
 
   return {
-    setLadder: (ladder, elevationUnit) => layer.setLadder(ladder, elevationUnit),
-    setColor: (color) => layer.setColor(color),
+    setStrength: (strength) => layer.setStrength(strength),
     setBaseZoom: (zoom) => layer.setBaseZoom(zoom),
     prepare: () => layer.prepare(),
     destroy: () => {
@@ -226,9 +209,4 @@ export function addContourLineLayer(
 
 function shiftedBbox(bbox: Bbox, shift: number): Bbox {
   return [bbox[0] + shift, bbox[1], bbox[2] + shift, bbox[3]];
-}
-
-function colourChannels(hex: string): [number, number, number] {
-  const [red, green, blue] = hexToRgb(hex);
-  return [red / COLOUR_CHANNEL_MAX, green / COLOUR_CHANNEL_MAX, blue / COLOUR_CHANNEL_MAX];
 }

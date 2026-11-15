@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { acquireDemPool, releaseDemPool } from "../gpu/dem-pool.ts";
+import { acquireDemPool, releaseDemPool } from "../gpu/dem/pool-registry.ts";
 import { BASEMAP_SOURCE_ID, scenePyramidTiles } from "../render/tile-viewport.ts";
 import type { Bbox } from "../types.ts";
 import {

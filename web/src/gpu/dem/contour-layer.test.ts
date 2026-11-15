@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { contourLadder, FADE_SPAN_ZOOM } from "../contour-ladder.ts";
-import { RELIEF_STRENGTH } from "../layers/relief.ts";
-import { CONTOUR_COLORS } from "../render/palettes.ts";
-import type { TerrainStats } from "../types.ts";
-import { addContourLineLayer, type ContourLineHandle } from "./contour-line-layer.ts";
+import { contourLadder, FADE_SPAN_ZOOM } from "../../contour-ladder.ts";
+import { RELIEF_STRENGTH } from "../../layers/terrain.ts";
+import { CONTOUR_COLORS } from "../../render/palettes.ts";
+import { createDemHarness, SCENE_BBOX } from "../../testing/dem-harness.ts";
+import type { TerrainStats } from "../../types.ts";
+import { addContourLineLayer, type ContourLineHandle } from "./contour-layer.ts";
 import { CONTOUR_OPACITY } from "./contour-shaders.ts";
-import { createDemHarness, SCENE_BBOX } from "./dem-draw-harness.test.ts";
-import { ARRIVAL_FADE_MS } from "./dem-draw.ts";
+import { ARRIVAL_FADE_MS } from "./draw.ts";
 import { addReliefLayer } from "./relief-layer.ts";
 
 const ZOOM = 8;

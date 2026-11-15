@@ -1,23 +1,24 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 
-import { DEM_TILE_SIZE_PX, edgeStrips } from "../workers/dem-decode.ts";
-import type { DemWorkerRequest, DemWorkerResponse } from "../workers/dem-worker.ts";
-import type { WantedTile } from "./dem-plan.ts";
+import { DEM_TILE_SIZE_PX, edgeStrips } from "./decode.ts";
+import { TEXTURE_BYTES, TEXTURE_SIZE_PX } from "./halo.ts";
+import type { WantedTile } from "./plan.ts";
 import {
   acquireDemPool,
   createGlTextureStore,
   demPoolHas,
   demPoolStats,
+  releaseDemPool,
+} from "./pool-registry.ts";
+import {
   DemPool,
   MAX_FETCHES,
-  releaseDemPool,
-  TEXTURE_BYTES,
-  TEXTURE_SIZE_PX,
   type DemTexture,
   type DemTextureStore,
   type DemWorkerPort,
-} from "./dem-pool.ts";
+} from "./pool.ts";
+import type { DemWorkerRequest, DemWorkerResponse } from "./worker.ts";
 
 const SIZE_PX = DEM_TILE_SIZE_PX;
 const URL_TEMPLATE = "https://dem/{z}/{x}/{y}.png";
