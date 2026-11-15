@@ -34,13 +34,16 @@ export function subscribeDrawing(
     if (display === previousDisplay && allocation === previousAllocation && on === previousOn) {
       return;
     }
+
     previousDisplay = display;
     previousAllocation = allocation;
     previousOn = on;
     mounted.forEach(({ view }) => drawView(map, view, on, allocation.draws, shown));
+
     if (blend) drawBlend(blend, allocation.draws, shown);
 
     const ranges = rangeKey(display.layers, pair);
+
     if (blend && ranges !== previousRanges) {
       blend.restyle();
       previousRanges = ranges;
@@ -54,6 +57,7 @@ export function subscribeDrawing(
   };
 
   apply();
+
   return store.subscribe(apply);
 }
 
@@ -66,11 +70,13 @@ function drawView(
 ) {
   const [main, ...rest] = view.parts;
   const parts = view.show ? rest : view.parts;
+
   if (view.show) {
     const draw = drawOf(draws.get(main.id));
     if (shown.get(view) !== draw) view.show(draw);
     shown.set(view, draw);
   }
+
   for (const part of parts) {
     const isVisible = on.has(part.id) && drawOf(draws.get(part.id)) !== null;
     setVisible(map, part.layerIds, isVisible);
@@ -80,10 +86,13 @@ function drawView(
 
 function drawBlend(blend: BlendView, draws: Draws, shown: Map<LayerView, Draw | null>) {
   const draw = drawOf(draws.get(BLEND));
+
   if (shown.get(blend) !== draw) blend.show(draw);
+
   shown.set(blend, draw);
 
   const legend = blend.legend();
+
   if (legend) legend.hidden = draw === null;
 }
 
@@ -91,10 +100,7 @@ function drawOf(draw: Draw | Hidden | undefined) {
   return typeof draw === "string" ? draw : null;
 }
 
-function rangeKey(
-  layers: Record<string, LayerDisplay>,
-  pair: BlendPair | null,
-): string {
+function rangeKey(layers: Record<string, LayerDisplay>, pair: BlendPair | null): string {
   if (!pair) return "";
 
   return pair

@@ -15,9 +15,9 @@ import {
   rangeDecimals,
   storeDensity,
 } from "../display-state";
-import { makeHtmlElement } from "../html";
 import { createFieldMarksLayer } from "../gpu/field-marks-layer";
 import { keepThroughContextLoss } from "../gpu/tiled-layer";
+import { makeHtmlElement } from "../html";
 import {
   createDotLegend,
   createZoomWatch,
@@ -36,8 +36,6 @@ import {
   warmHiddenRaster,
 } from "../map";
 import { prefersReducedMotion } from "../reduced-motion";
-import { createStepReader, type StepReader } from "../step-reader";
-import { displayStops, displayUnitFor, isUnitFor, unitOptions } from "../units";
 import { lut, paintColormapInSlices, stopsForRange } from "../render/colormap";
 import {
   DEFAULT_DENSITY_RATIO,
@@ -54,6 +52,7 @@ import {
   rgbCss,
   type GradientStop,
 } from "../render/palettes";
+import { createStepReader, type StepReader } from "../step-reader";
 import { latestOnly, stepAt } from "../timeline";
 import type {
   InkMenu,
@@ -65,6 +64,7 @@ import type {
   TimeDoc,
   UnitsMenu,
 } from "../types";
+import { displayStops, displayUnitFor, isUnitFor, unitOptions } from "../units";
 import { type Draw, layerDraws } from "./allocate";
 import { ImageCrossfade } from "./crossfade";
 import { MarksFade, type MarksState } from "./field-marks-fade";
@@ -123,9 +123,8 @@ class FieldView implements LayerView {
   private marksStep: number | null = null;
   private readonly marksFade = new MarksFade({
     read: (step) => Promise.all([this.readStep.read(step, false), this.mask]),
-    toMarks: (values, mask) => (
-      this.alive && this.draw === "dots" ? this.marksOf(values, mask) : null
-    ),
+    toMarks: (values, mask) =>
+      this.alive && this.draw === "dots" ? this.marksOf(values, mask) : null,
     isUploaded: (positions) => this.marks!.isReady(positions),
   });
   private readonly isolineInflight = new Set<number>();
@@ -134,6 +133,7 @@ class FieldView implements LayerView {
 
   constructor(context: LayerContext) {
     this.context = context;
+
     const { map, store, layer, shift, slots, display } = context;
     const { palette: defaultPalette, stops: fittedStops } = layer.style;
     if (!defaultPalette || !fittedStops || !layer.time) {
@@ -151,6 +151,7 @@ class FieldView implements LayerView {
       (step) => this.marksFade.delete(step),
     );
     this.marksId = `${layer.id}-dots`;
+
     this.time = layer.time;
     this.fittedStops = fittedStops;
     this.palette = display?.palette ?? defaultPalette;
@@ -158,6 +159,7 @@ class FieldView implements LayerView {
     this.density = display?.density ?? DEFAULT_DENSITY_RATIO;
     this.range = display?.range ?? null;
     this.units = displayUnitFor(layer.units, display?.units);
+
     this.colors = lut(gradientOf(this.palette));
     this.stops = stopsForRange(this.fittedStops, this.range);
 
@@ -174,9 +176,8 @@ class FieldView implements LayerView {
     this.mask = this.marks
       ? store.then((opened) => readMask(opened, layer)).catch(() => null)
       : null;
-    this.isolines = fallback === "isolines"
-      ? createIsolineOverlay(context, inkPaint(this.ink))
-      : null;
+    this.isolines =
+      fallback === "isolines" ? createIsolineOverlay(context, inkPaint(this.ink)) : null;
     this.isolines?.setVisible(false);
 
     this.table = sampleTable(layer.grid, maxTextureSize(map), { preserveCoverage: true });
@@ -207,6 +208,7 @@ class FieldView implements LayerView {
           for (const id of this.fadeIds) {
             map.setPaintProperty(id, "raster-resampling", on ? "linear" : "nearest");
           }
+
           this.isolines?.setSmooth(on);
           if (this.draw === "isolines" && this.shownStep >= 0) {
             this.drawLatestStep(this.shownStep);
@@ -228,17 +230,23 @@ class FieldView implements LayerView {
     marks.setHalo(true);
     marks.setDensity(this.density);
     map.addLayer(marks.layer, slots.marks);
+
     return marks;
   }
 
   private showLegend() {
     const key = this.legendKey();
+
     if (key !== this.lastLegendKey) {
       this.lastLegendKey = key;
+
       const element = this.legendOf();
+
       if (this.hasHatched) element.append(hatchLegend());
+
       this.legendBox.replaceChildren(element);
     }
+
     this.repaintDotSwatches();
   }
 
@@ -246,8 +254,10 @@ class FieldView implements LayerView {
   // The zoom and densities only repaint those canvases and stay out of the key.
   private legendKey(): string {
     const { layer } = this.context;
+
     if (this.draw === "dots") {
       const stops = displayStops(this.stops, layer.units, this.units, rangeDecimals(layer));
+
       return `dots:${dotLegendKey(
         stops,
         this.units,
@@ -256,16 +266,20 @@ class FieldView implements LayerView {
         this.hasHatched,
       )}`;
     }
+
     if (this.draw === "isolines") {
       return `isolines:${this.isolines!.interval}:${this.units}:${this.ink}`;
     }
+
     const rangeNote = this.range !== null ? "fitted" : "custom";
+
     return `colour:${this.palette}:${this.stops}:${this.units}:${rangeNote}:${this.hasHatched}`;
   }
 
   private legendOf() {
     const { layer, map } = this.context;
     const stops = displayStops(this.stops, layer.units, this.units, rangeDecimals(layer));
+
     if (this.draw === "dots") {
       const handle = createDotLegend(
         stops,
@@ -277,9 +291,12 @@ class FieldView implements LayerView {
         map.getPixelRatio(),
       );
       this.dotSwatches = handle;
+
       return handle.element;
     }
+
     this.dotSwatches = null;
+
     if (this.draw === "isolines") {
       return isothermLegend(this.isolines!.interval, inkPaint(this.ink), this.units);
     }
@@ -304,7 +321,10 @@ class FieldView implements LayerView {
     const view = this;
 
     return {
-      ...densityControl(() => view.density, (density) => this.setDensity(density)),
+      ...densityControl(
+        () => view.density,
+        (density) => this.setDensity(density),
+      ),
       get isShown() {
         return view.draw === "dots";
       },
@@ -316,6 +336,7 @@ class FieldView implements LayerView {
     this.density = quantiseDensity(density);
     this.marks?.setDensity(this.density);
     this.showLegend();
+
     const stored = this.density === DEFAULT_DENSITY_RATIO ? null : this.density;
     storeDensity(this.context.layer.id, stored);
     this.context.changeDisplay({ density: stored ?? undefined });
@@ -357,22 +378,24 @@ class FieldView implements LayerView {
         this.palette = name;
         this.restyle();
       },
-      range: stats ? {
-        fitted: [this.fittedStops[0], this.fittedStops[this.fittedStops.length - 1]],
-        bounds: [stats.min, stats.max],
-        decimals: rangeDecimals(layer),
-        units: layer.units,
-        get displayUnit() {
-          return view.units;
-        },
-        get value() {
-          return view.range;
-        },
-        set: (next) => {
-          this.range = next;
-          this.restyle();
-        },
-      } : undefined,
+      range: stats
+        ? {
+            fitted: [this.fittedStops[0], this.fittedStops[this.fittedStops.length - 1]],
+            bounds: [stats.min, stats.max],
+            decimals: rangeDecimals(layer),
+            units: layer.units,
+            get displayUnit() {
+              return view.units;
+            },
+            get value() {
+              return view.range;
+            },
+            set: (next) => {
+              this.range = next;
+              this.restyle();
+            },
+          }
+        : undefined,
     };
   }
 
@@ -390,10 +413,12 @@ class FieldView implements LayerView {
       },
       set: (unit) => {
         if (!isUnitFor(layer.units, unit) || unit === view.units) return;
+
         this.units = unit;
         this.isolines?.setUnits(unit);
         this.showLegend();
         this.menuUpdates.dispatchEvent(new Event("change"));
+
         if (view.draw === "isolines" && this.shownStep >= 0) {
           this.drawLatestStep(this.shownStep);
         }
@@ -403,6 +428,7 @@ class FieldView implements LayerView {
 
   private createInkMenu(): InkMenu | undefined {
     const view = this;
+
     if (!this.marks && !this.isolines) return undefined;
 
     return {
@@ -427,18 +453,22 @@ class FieldView implements LayerView {
   private restyle() {
     this.colors = lut(gradientOf(this.palette));
     this.stops = stopsForRange(this.fittedStops, this.range);
+
     this.activePaint?.abort();
     this.activePaint = null;
     this.fade.invalidate();
     this.marksFade.clear();
     this.marksStep = null;
+
     this.isolines?.setRange(this.range);
     this.showLegend();
+
     if (this.shownStep >= 0) this.drawLatestStep(this.shownStep);
   }
 
   setTime(time: string) {
     this.shownStep = stepAt(this.time.values, this.time.end, time);
+
     if (this.shownStep < 0) {
       this.hideStep();
       return;
@@ -452,12 +482,14 @@ class FieldView implements LayerView {
     } else if (this.draw === "dots" && this.marksFade.has(this.shownStep)) {
       this.showMarks(this.marksFade.get(this.shownStep)!);
     }
+
     this.drawLatestStep(this.shownStep);
   }
 
   setFrame(time: string, next: string, mix: number) {
     const step = stepAt(this.time.values, this.time.end, time);
     const nextStep = stepAt(this.time.values, this.time.end, next);
+
     if (this.draw === "isolines") {
       if (step !== this.shownStep) {
         this.setTime(time);
@@ -468,14 +500,18 @@ class FieldView implements LayerView {
       if (step === nextStep) return;
 
       if (step < 0 && nextStep >= 0) this.isolines!.setVisible(true);
+
       this.isolines!.frame(step, nextStep, mix);
       this.refillIsolines(next, nextStep);
+
       return;
     }
+
     if (this.draw === "dots") {
       this.frameDots(time, step, nextStep, prefersReducedMotion() ? 0 : mix);
       return;
     }
+
     if (this.draw !== "colour") {
       this.cutTo(mix < 0.5 ? time : next);
       return;
@@ -488,6 +524,7 @@ class FieldView implements LayerView {
 
     this.fade.frame(keyOf(step), keyOf(nextStep), mix);
     this.followDominant(mix < 0.5 ? step : nextStep);
+
     if (nextStep >= 0) this.fade.prepare(nextStep, () => this.loadNext(nextStep));
   }
 
@@ -513,6 +550,7 @@ class FieldView implements LayerView {
 
     this.marksFade.keepOnly(step, nextStep);
     this.marksFade.arm(nextStep);
+
     const from = this.marksFade.get(step) ?? null;
     const to = this.marksFade.get(nextStep) ?? null;
     const isMissing = (step >= 0 && !from) || (nextStep >= 0 && !to);
@@ -550,12 +588,14 @@ class FieldView implements LayerView {
 
       this.showMarks(state);
     }
+
     this.marksStep = step;
   }
 
   isFrameReady(time: string, next: string) {
     const step = stepAt(this.time.values, this.time.end, time);
     const nextStep = stepAt(this.time.values, this.time.end, next);
+
     if (this.draw === "isolines") return this.isolines!.isReady(step, nextStep);
     if (this.draw === "dots") return this.marksFade.isReady(nextStep);
     if (this.draw !== "colour") return true;
@@ -590,6 +630,7 @@ class FieldView implements LayerView {
    */
   async prepareEntry(time: string | null, signal?: AbortSignal): Promise<void> {
     if (time === null || signal?.aborted) return;
+
     const step = stepAt(this.time.values, this.time.end, time);
     if (step < 0 || !this.alive || !this.draw || signal?.aborted) return;
 
@@ -597,6 +638,7 @@ class FieldView implements LayerView {
     const colors = this.colors;
     const stops = this.stops;
     const values = await this.readStep.read(step, false);
+
     if (!this.alive || signal?.aborted || this.draw !== draw) return;
     if (this.colors !== colors || this.stops !== stops || step !== this.shownStep) return;
 
@@ -607,6 +649,7 @@ class FieldView implements LayerView {
     } else if (draw === "isolines") {
       await this.warmIsolines(values, step, signal, draw);
     }
+
     if (!this.alive || signal?.aborted) return;
 
     await nextEntryFrame(signal);
@@ -628,18 +671,23 @@ class FieldView implements LayerView {
 
     this.activePaint?.abort();
     this.activePaint = null;
+
     const image = await this.paintStepImage(values, signal);
+
     if (!this.alive || signal?.aborted || this.draw !== draw) return;
     if (this.colors !== colors || this.stops !== stops || step !== this.shownStep) return;
 
     this.fade.show(step, () => image);
+
     // The hidden sources prepare under the zoom gate, so the first visible render skips them.
     for (const id of this.fadeIds) await warmHiddenRaster(this.context.map, id, signal);
+
     if (!this.alive || signal?.aborted || this.draw !== draw) return;
     if (this.colors !== colors || this.stops !== stops || step !== this.shownStep) return;
 
     if (this.marks) {
       const [, mask] = await Promise.all([Promise.resolve(), this.mask]);
+
       if (!this.alive || signal?.aborted || this.draw !== draw) return;
 
       const state = this.marksFade.get(step) ?? this.marksOf(values, mask);
@@ -655,15 +703,18 @@ class FieldView implements LayerView {
     draw: Draw | null,
   ) {
     const [, mask] = await Promise.all([Promise.resolve(), this.mask]);
+
     if (!this.alive || signal?.aborted || this.draw !== draw) return;
 
     const state = this.marksFade.get(step) ?? this.marksOf(values, mask);
+
     if (!this.alive || signal?.aborted || this.draw !== draw) return;
     if (step !== this.shownStep) return;
 
     this.marksFade.cache(step, state);
     this.showMarks(state);
     this.marksStep = step;
+
     if (!this.marks) return;
 
     try {
@@ -685,6 +736,7 @@ class FieldView implements LayerView {
 
     // Tracing stays synchronous because its helper lives outside the entry scope.
     this.isolines.prepareStep(step, values);
+
     if (!this.alive || signal?.aborted || this.draw !== draw) return;
     if (step !== this.shownStep) return;
 
@@ -710,10 +762,12 @@ class FieldView implements LayerView {
     this.draw = next;
     this.activePaint?.abort();
     this.activePaint = null;
+
     this.dotsZoomWatch.setActive(next === "dots");
     this.hideStep();
     this.showLegend();
     this.menuUpdates.dispatchEvent(new Event("change"));
+
     if (this.draw && this.shownStep >= 0) this.drawLatestStep(this.shownStep);
   }
 
@@ -736,6 +790,7 @@ class FieldView implements LayerView {
   private async drawStep(step: number) {
     try {
       const [values, mask] = await Promise.all([this.readStep.read(step), this.mask]);
+
       if (!this.alive || step !== this.shownStep) return;
 
       await this.drawValues(values, step, mask);
@@ -752,31 +807,33 @@ class FieldView implements LayerView {
     }
   }
 
-  private async drawValues(
-    values: Float32Array,
-    step: number,
-    mask: ArrayLike<number> | null,
-  ) {
+  private async drawValues(values: Float32Array, step: number, mask: ArrayLike<number> | null) {
     if (this.marks) {
       const isCached = this.draw === "colour" || this.draw === "dots";
       const state = this.marksFade.get(step) ?? this.marksOf(values, mask);
       this.showMarks(state);
+
       if (isCached) this.marksFade.cache(step, state);
       if (this.draw === "colour") this.marksStep = step;
     }
+
     if (this.draw === "colour") {
       const draw = this.draw;
       const colors = this.colors;
       const stops = this.stops;
       this.activePaint?.abort();
+
       const controller = new AbortController();
       this.activePaint = controller;
+
       let image: ImageData;
+
       try {
         image = await this.paintStepImage(values, controller.signal);
       } finally {
         if (this.activePaint === controller) this.activePaint = null;
       }
+
       if (controller.signal.aborted) return;
       if (!this.alive || step !== this.shownStep || this.draw !== draw) return;
       if (this.colors !== colors || this.stops !== stops) return;
@@ -810,6 +867,7 @@ class FieldView implements LayerView {
   private showFade(from: MarksState | null, to: MarksState | null, mix: number) {
     const { positions, mask } = (from ?? to)!;
     this.solidMask ??= new Uint8Array(positions.length).fill(1);
+
     this.marks!.setMask(mask ?? this.solidMask);
     this.marks!.setFade(from?.positions ?? null, to?.positions ?? null, mix);
     this.marks!.setDots(this.draw === "dots");
@@ -828,7 +886,9 @@ class FieldView implements LayerView {
     this.dotsZoomWatch.setActive(false);
     this.stopKeepingMarks?.();
     this.fade.invalidate();
+
     for (const id of this.fadeIds) removeLayerAndSource(this.context.map, id);
+
     removeLayerAndSource(this.context.map, this.marksId);
     this.isolines?.destroy();
   }
@@ -838,6 +898,7 @@ class FieldView implements LayerView {
 export function fieldReader(layer: LayerDoc, store: Promise<Store>): StepReader {
   const byLayer = readers.get(store) ?? new Map<string, StepReader>();
   readers.set(store, byLayer);
+
   const existing = byLayer.get(layer.id);
   if (existing) return existing;
 
@@ -851,19 +912,23 @@ export function fieldReader(layer: LayerDoc, store: Promise<Store>): StepReader 
     async (first, count) => {
       const steps = await readSteps(await store, valueArray.path, first, count);
       const decoded: Float32Array[] = [];
+
       for (const raw of steps) {
         decoded.push(await decodeInSlices(raw, valueArray));
       }
+
       return decoded;
     },
   );
   byLayer.set(layer.id, reader);
+
   return reader;
 }
 
 /** Wait a frame so the preparing note paints before heavy work continues. */
 function nextEntryFrame(signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(cancelError());
+
   return new Promise((done, fail) => {
     const onFrame = () => {
       signal?.removeEventListener("abort", onAbort);
@@ -871,10 +936,12 @@ function nextEntryFrame(signal?: AbortSignal): Promise<void> {
     };
     const onAbort = () => fail(cancelError());
     signal?.addEventListener("abort", onAbort, { once: true });
+
     if (typeof requestAnimationFrame === "function") {
       requestAnimationFrame(onFrame);
       return;
     }
+
     setTimeout(onFrame, 0);
   });
 }
@@ -882,6 +949,7 @@ function nextEntryFrame(signal?: AbortSignal): Promise<void> {
 function cancelError(): Error {
   const error = new Error("Entry preparation was cancelled");
   error.name = "AbortError";
+
   return error;
 }
 
@@ -893,27 +961,34 @@ function waitForIsolines(
 ): Promise<void> {
   if (signal?.aborted) return Promise.reject(cancelError());
   if (isolines.isReady(step, step)) return Promise.resolve();
+
   return new Promise((done, fail) => {
     let isSettled = false;
     let frame: number | ReturnType<typeof setTimeout> | undefined;
+
     // Stalled frames must not fail the entry, so the lines may paint a moment late instead.
     const timer = setTimeout(() => {
       if (isSettled) return;
+
       isSettled = true;
       cancelFrame(frame);
       signal?.removeEventListener("abort", onAbort);
       done();
     }, 2000);
+
     const check = () => {
       if (isSettled) return;
+
       if (signal?.aborted) {
         isSettled = true;
         cancelFrame(frame);
         clearTimeout(timer);
         signal?.removeEventListener("abort", onAbort);
         fail(cancelError());
+
         return;
       }
+
       try {
         if (isolines.isReady(step, step)) {
           isSettled = true;
@@ -921,6 +996,7 @@ function waitForIsolines(
           clearTimeout(timer);
           signal?.removeEventListener("abort", onAbort);
           done();
+
           return;
         }
       } catch (error) {
@@ -929,18 +1005,23 @@ function waitForIsolines(
         clearTimeout(timer);
         signal?.removeEventListener("abort", onAbort);
         fail(error);
+
         return;
       }
+
       frame = nextFrame(check);
     };
+
     const onAbort = () => {
       if (isSettled) return;
+
       isSettled = true;
       cancelFrame(frame);
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
       fail(cancelError());
     };
+
     signal?.addEventListener("abort", onAbort, { once: true });
     check();
   });
@@ -954,11 +1035,13 @@ function nextFrame(task: () => void): number | ReturnType<typeof setTimeout> {
   } catch {
     // A missing frame scheduler falls through to the timer below.
   }
+
   return setTimeout(task, 16);
 }
 
 function cancelFrame(frame: number | ReturnType<typeof setTimeout> | undefined): void {
   if (frame === undefined) return;
+
   try {
     if (typeof cancelAnimationFrame === "function" && typeof frame === "number") {
       cancelAnimationFrame(frame);
@@ -967,6 +1050,7 @@ function cancelFrame(frame: number | ReturnType<typeof setTimeout> | undefined):
   } catch {
     // A missing canceller falls through to clearing the timer.
   }
+
   clearTimeout(frame as ReturnType<typeof setTimeout>);
 }
 

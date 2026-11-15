@@ -1,6 +1,6 @@
+import { ChartPreview } from "../charts/chart-preview";
 /** Render the docked main-chart preview only when Charts is selected. */
 import { chartTypeLabel, resolveMainId } from "../charts/definitions";
-import { ChartPreview } from "../charts/chart-preview";
 import type { SceneStore } from "../scene-store";
 import type { Scene } from "../types";
 import { useSceneStore } from "./use-scene-store";
@@ -20,16 +20,19 @@ export function ChartChip({
   const mainId = resolveMainId(charts.definitions, charts.mainChartId, layers);
   const definition = charts.definitions.find((entry) => entry.id === mainId) ?? null;
   if (!definition) return <span>{"No charts for this scene."}</span>;
+
   const layer = layers.find((entry) => entry.id === definition.source.layerId) ?? null;
   if (!layer) return <span>{definition.title}</span>;
+
   const viewerUnit = display.layers[layer.id]?.units ?? null;
   const effectivePalette = display.layers[layer.id]?.palette ?? layer.style.palette ?? null;
   const effectiveInk = display.layers[layer.id]?.ink ?? null;
-  const shapeLabel = definition.source.shape === "distribution"
-    ? "Hypsometry"
-    : definition.source.shape === "seasonal_cycle"
-      ? "By month"
-      : "Over time";
+  const shapeLabel =
+    definition.source.shape === "distribution"
+      ? "Hypsometry"
+      : definition.source.shape === "seasonal_cycle"
+        ? "By month"
+        : "Over time";
 
   return (
     <span className="chart-chip">

@@ -21,9 +21,14 @@ export interface ImagePainterOptions {
  * Draw a CPU image when GPU class fields are unavailable.
  * The fallback retains bilinear class selection at a fixed image resolution.
  */
-export function createImagePainter(
-  { map, id, grid, shift, beforeId, opacity }: ImagePainterOptions,
-) {
+export function createImagePainter({
+  map,
+  id,
+  grid,
+  shift,
+  beforeId,
+  opacity,
+}: ImagePainterOptions) {
   addImageLayer(map, id, grid.bbox, shift, beforeId, {
     "raster-opacity": opacity,
     "raster-resampling": "nearest",
@@ -40,6 +45,7 @@ export function createImagePainter(
       smoothRaster = smoothClassIds(ids, grid, table, textureSize);
       smoothedIds = ids;
     }
+
     return smoothRaster!;
   };
 

@@ -1,4 +1,5 @@
 """Sample-area tests: the bundled geometries and how seeding treats real boundaries."""
+
 import json
 
 from shapely.geometry import shape

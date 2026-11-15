@@ -31,6 +31,7 @@ export function downloadCsv(filename: string, content: string): void {
   const blob = new Blob([content], { type: CSV_MIME });
   const url = URL.createObjectURL(blob);
   let anchor: HTMLAnchorElement | null = null;
+
   try {
     anchor = document.createElement("a");
     anchor.href = url;
@@ -74,8 +75,11 @@ export function buildByMonthCsv(scene: Scene, layer: LayerDoc): CsvDocument {
     `${layer.id}_mean [${layer.units}]`,
     `${layer.id}_valid_fraction`,
   ];
+
   if (includeFallback) header.push(`${layer.id}_fallback_fraction`);
+
   header.push("sample_count", "year_start", "year_end");
+
   const rows = table.rows.map((row) => {
     const cells = [
       String(row.x),
@@ -83,7 +87,9 @@ export function buildByMonthCsv(scene: Scene, layer: LayerDoc): CsvDocument {
       formatCsvValue(row.value),
       formatCsvValue(row.validFraction),
     ];
+
     if (includeFallback) cells.push(formatCsvValue(row.fallbackFraction));
+
     cells.push(
       String(row.sampleCount),
       row.yearRange ? String(row.yearRange[0]) : "",
@@ -126,10 +132,13 @@ export function areaMeansFilename(scene: Scene, layers?: readonly LayerDoc[]): s
   const slug = titleSlug(scene.title ?? "scene");
   const intervals = unionIntervals(layers ?? scene.layers ?? []);
   if (intervals.length === 0) return `${slug}_area-means.csv`;
+
   let latestEnd = intervals[0].end;
+
   for (const interval of intervals) {
     if (interval.end > latestEnd) latestEnd = interval.end;
   }
+
   const start = datePart(intervals[0].start);
   const end = datePart(latestEnd);
 
@@ -190,7 +199,9 @@ function areaMeansFor(scene: Scene, layers: LayerDoc[]): CsvDocument {
   const intervals = unionIntervals(layers);
   const tables = new Map(layers.map((layer) => [layer.id, buildTimeSeries(layer)]));
   const header = ["period_start", "period_end"];
+
   for (const layer of layers) header.push(...areaColumnsFor(layer));
+
   const rows = intervals.map((interval) => {
     const cells = [interval.start, interval.end];
     for (const layer of layers) cells.push(...areaCellsFor(layer, tables, interval));
@@ -226,12 +237,14 @@ function areaCellsFor(
   interval: { start: string; end: string },
 ): string[] {
   const table = tables.get(layer.id);
-  const row = table?.rows.find(
-    (entry) => entry.interval.start === interval.start
-      && entry.interval.end === interval.end,
-  ) ?? null;
+  const row =
+    table?.rows.find(
+      (entry) => entry.interval.start === interval.start && entry.interval.end === interval.end,
+    ) ?? null;
   if (!row) return areaColumnsFor(layer).map(() => "");
+
   const cells = [formatCsvValue(row.value), formatCsvValue(row.validFraction)];
+
   if (layer.area_series?.fallback_fraction !== undefined) {
     cells.push(formatCsvValue(row.fallbackFraction));
   }
@@ -284,7 +297,7 @@ function baseMetadata(scene: Scene): string[] {
   return [
     `Scene: ${scene.title ?? "Untitled scene"} (${scene.id ?? "unknown id"}).`,
     periodLine(scene),
-    ...((scene.layers ?? []).map(layerLine)),
+    ...(scene.layers ?? []).map(layerLine),
     "Weights: area means weight each valid cell by its area inside the outline adjusted "
       + "for latitude (cell_area_inside_outline).",
     "Valid and fallback shares are weighted shares of the outlined area while the one-cell "
@@ -292,8 +305,8 @@ function baseMetadata(scene: Scene): string[] {
     "Analysis grid: statistics describe the build analysis grid at its stored resolution and "
       + "cannot recover variation within one coarse cell.",
     ...sourceLines(scene),
-    ...((scene.credits?.lines ?? []).map((line) => `Credit: ${line}`)),
-    ...((scene.credits?.disclaimers ?? []).map((line) => `Disclaimer: ${line}`)),
+    ...(scene.credits?.lines ?? []).map((line) => `Credit: ${line}`),
+    ...(scene.credits?.disclaimers ?? []).map((line) => `Disclaimer: ${line}`),
     ...(scene.credits?.endorsement ? [`Endorsement: ${scene.credits.endorsement}`] : []),
     ...(scene.credits?.terms_passthrough ? [`Terms: ${scene.credits.terms_passthrough}`] : []),
   ];
@@ -309,6 +322,7 @@ function periodLine(scene: Scene): string {
 
 function layerLine(layer: LayerDoc): string {
   const identity = `Layer ${layer.id} (${layer.title}): ${layer.units}`;
+
   if (layer.time) {
     const starts = layer.time.values ?? [];
     const range = starts.length > 0 ? ` from ${starts[0]} to ${layer.time.end}` : "";
@@ -357,8 +371,8 @@ function datePart(value: string): string {
  */
 function csvDocument(metadata: string[], header: string[], rows: string[][]): string {
   // Credits may use CRLF or bare CR so split on every newline form.
-  const comments = metadata.flatMap(
-    (line) => line.split(/\r\n|\r|\n/).map((physical) => `# ${physical}`),
+  const comments = metadata.flatMap((line) =>
+    line.split(/\r\n|\r|\n/).map((physical) => `# ${physical}`),
   );
   const records = [header, ...rows].map((row) => row.map(escapeCsvCell).join(","));
 

@@ -31,14 +31,24 @@ export function targetViewportBounds(
   options?: ViewportOptions,
 ): { west: number; south: number; east: number; north: number } | null {
   if (typeof map.getCenter !== "function" || typeof map.getCanvas !== "function") return null;
+
   const canvas = map.getCanvas();
   if (!canvas || !canvas.clientWidth || !canvas.clientHeight) return null;
+
   const current = viewportBounds(map);
   if (!current) return null;
+
   const centre = map.getCenter();
 
-  return viewportBoundsForCenter(current, centre.lng, centre.lat, map.getZoom(), targetZoom,
-    switchOffset, options?.clampLatitude === true);
+  return viewportBoundsForCenter(
+    current,
+    centre.lng,
+    centre.lat,
+    map.getZoom(),
+    targetZoom,
+    switchOffset,
+    options?.clampLatitude === true,
+  );
 }
 
 /**
@@ -56,15 +66,16 @@ export function viewportBoundsForCenter(
 ): { west: number; south: number; east: number; north: number } {
   // The next zoom shows the same screen smaller, so its span shrinks by one doubling per level.
   const scale = 2 ** (currentZoom - (targetZoom - switchOffset));
-  const span = current.east >= current.west
-    ? current.east - current.west
-    : current.east - current.west + 360;
-  const halfSpan = span / 2 * scale;
+  const span =
+    current.east >= current.west ? current.east - current.west : current.east - current.west + 360;
+  const halfSpan = (span / 2) * scale;
+
   // The vertical midpoint follows the predicted centre, so north/south pans warm ahead too.
   const centreY = mercatorY(clampLatitude ? clampLatitudeValue(centreLat) : centreLat);
   const southY = mercatorY(clampLatitude ? clampLatitudeValue(current.south) : current.south);
   const northY = mercatorY(clampLatitude ? clampLatitudeValue(current.north) : current.north);
-  const halfHeight = (southY - northY) / 2 * scale;
+  const halfHeight = ((southY - northY) / 2) * scale;
+
   return {
     west: centreLng - halfSpan,
     south: inverseMercatorY(centreY + halfHeight),
@@ -87,12 +98,10 @@ export interface BasemapDescriptor {
  * with resolved tiles, falling back to inline style tiles. Serialized style options keep
  * only the TileJSON url, so the style alone can never resolve the template in production.
  */
-export function basemapDescriptor(
-  map: {
-    getSource?: (id: string) => unknown;
-    getStyle?: () => { sources?: unknown } | undefined;
-  },
-): BasemapDescriptor | null {
+export function basemapDescriptor(map: {
+  getSource?: (id: string) => unknown;
+  getStyle?: () => { sources?: unknown } | undefined;
+}): BasemapDescriptor | null {
   try {
     const live = map.getSource?.(BASEMAP_SOURCE_ID) as
       | { tiles?: unknown; maxzoom?: unknown }
@@ -103,6 +112,7 @@ export function basemapDescriptor(
         maxzoom: typeof live.maxzoom === "number" ? live.maxzoom : BASEMAP_MAXZOOM,
       };
     }
+
     const sources = map.getStyle?.()?.sources as
       | Record<string, { tiles?: unknown; maxzoom?: unknown }>
       | undefined;
@@ -113,6 +123,7 @@ export function basemapDescriptor(
         maxzoom: typeof styled.maxzoom === "number" ? styled.maxzoom : BASEMAP_MAXZOOM,
       };
     }
+
     return null;
   } catch {
     return null;
@@ -123,7 +134,7 @@ export function basemapDescriptor(
 export function tileInScene(tile: WarmTile, bbox: Bbox): boolean {
   const count = 2 ** tile.z;
   const width = 360 / count;
-  const west = tile.x / count * 360 - 180;
+  const west = (tile.x / count) * 360 - 180;
   const north = inverseMercatorY(tile.y / count);
   const south = inverseMercatorY((tile.y + 1) / count);
   if (south > bbox[3] || north < bbox[1]) return false;
@@ -146,14 +157,18 @@ export function scenePyramidTiles(
   maxTiles: number,
 ): WarmTile[] {
   const tiles: WarmTile[] = [];
+
   for (let zoom = Math.max(0, firstZoom); zoom <= lastZoom; zoom += 1) {
     const remaining = maxTiles - tiles.length;
     // One tile past the remaining budget is enough to tell that the level does not fit.
-    const level = warmTilesForZoom(bbox[0], bbox[1], bbox[2], bbox[3], zoom, remaining + 1)
-      .filter((tile) => tileInScene(tile, bbox));
+    const level = warmTilesForZoom(bbox[0], bbox[1], bbox[2], bbox[3], zoom, remaining + 1).filter(
+      (tile) => tileInScene(tile, bbox),
+    );
     if (level.length > remaining) break;
+
     tiles.push(...level);
   }
+
   return tiles;
 }
 
@@ -178,40 +193,38 @@ export interface DwellViewport {
  * Intersect a dwell viewport with a scene bbox, or null when they do not overlap.
  * Longitudes wrap past the antimeridian so crossing scenes still clip.
  */
-export function clipViewportToBbox(
-  viewport: DwellViewport,
-  bbox: Bbox,
-): DwellViewport | null {
+export function clipViewportToBbox(viewport: DwellViewport, bbox: Bbox): DwellViewport | null {
   const south = Math.max(viewport.south, bbox[1]);
   const north = Math.min(viewport.north, bbox[3]);
   if (south > north) return null;
+
   const viewportWest = toLongitude360(viewport.west);
-  const viewportWidth = viewport.east >= viewport.west
-    ? viewport.east - viewport.west
-    : viewport.east - viewport.west + 360;
+  const viewportWidth =
+    viewport.east >= viewport.west
+      ? viewport.east - viewport.west
+      : viewport.east - viewport.west + 360;
   const boxWest = toLongitude360(bbox[0]);
   const boxWidth = bbox[2] - bbox[0];
   const shiftedWest = viewportWest + Math.round((boxWest - viewportWest) / 360) * 360;
+
   const overlapWest = Math.max(shiftedWest, boxWest);
   const overlapEast = Math.min(shiftedWest + viewportWidth, boxWest + boxWidth);
   if (overlapWest > overlapEast) return null;
+
   let west = overlapWest;
   let east = overlapEast;
+
   while (west > 180) {
     west -= 360;
     east -= 360;
   }
+
   while (west <= -180) {
     west += 360;
     east += 360;
   }
 
-  return {
-    west,
-    south,
-    east,
-    north,
-  };
+  return { west, south, east, north };
 }
 
 /**
@@ -229,43 +242,47 @@ export function dwellWarmTiles(
   const first = Math.max(0, Math.floor(fittedZoom));
   const warmed: WarmTile[] = [];
   const collect = (zoom: number, limit: number): void => {
-    warmed.push(...warmTilesForZoom(
-      viewport.west,
-      viewport.south,
-      viewport.east,
-      viewport.north,
-      zoom,
-      limit,
-    ));
+    warmed.push(
+      ...warmTilesForZoom(
+        viewport.west,
+        viewport.south,
+        viewport.east,
+        viewport.north,
+        zoom,
+        limit,
+      ),
+    );
   };
+
   for (let zoom = first; zoom < current; zoom += 1) {
     collect(zoom, DWELL_ANCESTOR_TILES_PER_LEVEL);
   }
+
   collect(current + 1, DWELL_CHILD_TILES);
   collect(current + 2, DWELL_GRANDCHILD_TILES);
+
   return warmed.slice(0, DWELL_REQUEST_CAP);
 }
 
 /** Web Mercator y of a latitude in degrees. */
 export function mercatorY(latitude: number): number {
-  const radians = latitude * Math.PI / 180;
+  const radians = (latitude * Math.PI) / 180;
   return (1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2;
 }
 
 /** Latitude in degrees of a Web Mercator y. */
 export function inverseMercatorY(fraction: number): number {
-  return Math.atan(Math.sinh(Math.PI * (1 - 2 * fraction))) * 180 / Math.PI;
+  return (Math.atan(Math.sinh(Math.PI * (1 - 2 * fraction))) * 180) / Math.PI;
 }
 
 /** The current visible edges, or null when the map hides its bounds. */
-function viewportBounds(map: ViewportMap): {
-  west: number;
-  south: number;
-  east: number;
-  north: number;
-} | null {
+function viewportBounds(
+  map: ViewportMap,
+): { west: number; south: number; east: number; north: number } | null {
   if (typeof map.getBounds !== "function") return null;
+
   const bounds = map.getBounds();
+
   return {
     west: bounds.getWest(),
     south: bounds.getSouth(),
@@ -275,10 +292,7 @@ function viewportBounds(map: ViewportMap): {
 }
 
 function clampLatitudeValue(latitude: number): number {
-  return Math.min(
-    Math.max(latitude, -WEB_MERCATOR_MAX_LAT_DEG),
-    WEB_MERCATOR_MAX_LAT_DEG,
-  );
+  return Math.min(Math.max(latitude, -WEB_MERCATOR_MAX_LAT_DEG), WEB_MERCATOR_MAX_LAT_DEG);
 }
 
 function toLongitude360(longitude: number): number {

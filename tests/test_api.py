@@ -1,4 +1,5 @@
 """API tests with FastAPI's TestClient and the synthetic source (no network)."""
+
 import json
 import threading
 import time
@@ -55,11 +56,7 @@ def env(tmp_path):
             geometry=json.dumps(mapping(geometry)),
         )
         washington = boundary_row("cgaz:ADM2:WA", "county", "Washington County", "Maine", "USA")
-        db.add_boundaries(
-            str(tmp_path / "soe.db"),
-            "geoBoundaries CGAZ",
-            [nairobi, washington],
-        )
+        db.add_boundaries(str(tmp_path / "soe.db"), "geoBoundaries CGAZ", [nairobi, washington])
         yield client, source, tmp_path
 
 
@@ -140,14 +137,17 @@ def test_post_poll_and_serve(env):
     scene = client.get(done["bundle_url"]).json()
     assert scene["credits"]["lines"] and scene["id"] == scene_id
     assert [layer["id"] for layer in scene["layers"]] == ["terrain", "chirps_monthly"]
+
     terrain = scene["layers"][0]
     assert scene["version"] == "0.7" and terrain["arrays"] == {} and terrain["stats"]["p98"] > 0
     assert terrain["tiles"]["source"]["attribution"] in scene["credits"]["lines"]
     assert scene["credits"]["terms_passthrough"]
     assert scene["generator"]["version"] == "0.9.1"
+
     rain = scene["layers"][1]
     assert rain["area_series"]["statistic"] == "mean"
     assert len(rain["area_series"]["values"]) == rain["time"]["count"]
+
     assert terrain["distribution"]["statistic"] == "quantiles"
     assert len(terrain["distribution"]["values"]) == 101
     assert validate(scene) == []
@@ -172,9 +172,7 @@ def test_post_poll_and_serve(env):
     reordered = body()
     reordered["area"]["geometry"] = {
         "type": "Polygon",
-        "coordinates": [
-            [[37.5, -0.5], [37.5, -1.5], [36.5, -1.5], [36.5, -0.5], [37.5, -0.5]],
-        ],
+        "coordinates": [[[37.5, -0.5], [37.5, -1.5], [36.5, -1.5], [36.5, -0.5], [37.5, -0.5]]],
     }
 
     assert client.post("/api/scenes", json=reordered).json()["id"] == scene_id
@@ -200,6 +198,7 @@ def wait_for(client: TestClient, scene_id: str, wanted_status: str = "done") -> 
         scene = client.get(f"/api/scenes/{scene_id}").json()
         if scene["status"] in (wanted_status, "failed"):
             return scene
+
         time.sleep(POLL_INTERVAL_SECS)
     raise AssertionError("timeout")
 
@@ -214,6 +213,7 @@ def build_rain_scene(tmp_path: Path, source: SyntheticSource) -> tuple[str, Json
         assert done["status"] == "done"
         repeat = client.post("/api/scenes", json=body(layers=["chirps_monthly"]))
         assert repeat.json()["id"] == scene_id
+
         return scene_id, client.get(done["bundle_url"]).json()["layers"][0]
 
 
@@ -224,8 +224,7 @@ def test_scene_built_from_the_cube_matches_one_built_over_http_within_quantisati
 
     assert cube_id != http_id
     assert cube_rain["area_series"]["values"] == pytest.approx(
-        http_rain["area_series"]["values"],
-        abs=0.05,
+        http_rain["area_series"]["values"], abs=0.05
     )
 
 
@@ -236,6 +235,7 @@ class OverRangeRain(SyntheticSource):
         rain = super().read_rain(month, window)
         rain[:, ::2] = 7676
         chirps.mask_unusable_rain(rain)
+
         return rain
 
 
@@ -253,6 +253,7 @@ def test_rain_above_the_cube_maximum_is_filled_from_era5_with_provenance_and_not
     inside = group["chirps_monthly/mask"][:] == 1
     layer = scene["layers"][0]
     filled = int((np.isin(codes, [2, 3]) & inside).sum())
+
     assert (codes[:, ::2][inside[:, ::2]] == 2).all()
     assert (codes[:, 1::2] == 1).any()
     assert layer["area_series"]["valid_fraction"] == [1.0]
@@ -306,8 +307,7 @@ def test_scene_request_gets_503_while_the_chirps_cube_is_updating_before_any_rea
 
     with TestClient(app) as client:
         response = client.post(
-            "/api/scenes",
-            json=body(layers=["chirps_monthly"], start="2016-01", end="2016-01"),
+            "/api/scenes", json=body(layers=["chirps_monthly"], start="2016-01", end="2016-01")
         )
 
     assert response.status_code == 503
@@ -341,14 +341,12 @@ def test_ring_growth_exceeding_the_source_budget_is_refused_before_any_read(env,
 
 
 def test_coverage_without_room_for_whole_aggregation_blocks_is_refused_before_read(
-    tmp_path,
-    monkeypatch,
+    tmp_path, monkeypatch
 ):
     source = SyntheticSource()
     registry = make_registry(source)
     registry["era5land_temperature"] = replace(
-        registry["era5land_temperature"],
-        coverage=(-180, -1, 180, 1),
+        registry["era5land_temperature"], coverage=(-180, -1, 180, 1)
     )
     monkeypatch.setattr("soe.plan.MAX_OUTPUT_BYTES", 1200)
     app = create_app(tmp_path / "soe.db", tmp_path / "scenes", registry)
@@ -445,7 +443,7 @@ def test_malformed_requests_are_4xx_not_500(env):
     huge_int = body()
     huge_int["area"]["geometry"] = {
         "type": "Polygon",
-        "coordinates": [[[0, 0], [10 ** 400, 0], [1, 1], [0, 0]]],
+        "coordinates": [[[0, 0], [10**400, 0], [1, 1], [0, 0]]],
     }
 
     response = client.post("/api/scenes", content=json.dumps(huge_int))
@@ -455,10 +453,7 @@ def test_malformed_requests_are_4xx_not_500(env):
         assert client.post("/api/scenes", content=deep).status_code == 422
 
     nested = body()
-    nested["area"]["geometry"] = {
-        "type": "Polygon",
-        "coordinates": json.loads("[" * 50 + "]" * 50),
-    }
+    nested["area"]["geometry"] = {"type": "Polygon", "coordinates": json.loads("[" * 50 + "]" * 50)}
 
     assert client.post("/api/scenes", json=nested).status_code == 422
 
@@ -500,9 +495,7 @@ def test_queue_full_gives_503_and_unreachable_source_gives_503(tmp_path):
 
 
 def test_built_scene_is_served_again_when_the_source_goes_down(
-    tmp_path,
-    monkeypatch,
-    revision_source,
+    tmp_path, monkeypatch, revision_source
 ):
     app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(revision_source))
     with TestClient(app) as client:
@@ -526,12 +519,7 @@ def test_job_queued_before_a_cube_update_fails_with_a_request_again_message(tmp_
             return super().read_rain(month, window)
 
     source = Slow()
-    app = create_app(
-        tmp_path / "soe.db",
-        tmp_path / "scenes",
-        make_registry(source),
-        max_builds=1,
-    )
+    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(source), max_builds=1)
     with TestClient(app) as client:
         client.post("/api/scenes", json=body())
         queued_id = client.post("/api/scenes", json=body(end="2015-07")).json()["id"]
@@ -621,9 +609,7 @@ def test_layers_list_omits_rain_without_its_fallback_cube(tmp_path):
     ],
 )
 def test_layers_list_leaves_out_a_layer_while_one_of_its_cubes_is_updating(
-    tmp_path,
-    cube_name,
-    left_out,
+    tmp_path, cube_name, left_out
 ):
     cubes = tmp_path / "cubes"
     for name in ("era5land_temperature", "era5_temperature", "era5_precipitation"):
@@ -784,6 +770,7 @@ def test_reimported_identical_boundary_hits_preview_cache(env):
     before = db.get_boundary(path, "cgaz:ADM1:NBO")
     with db.connect(path) as connection:
         connection.execute(db.INSERT_BOUNDARY, _nairobi_values(before))
+
     after = db.get_boundary(path, "cgaz:ADM1:NBO")
 
     assert after["geom_digest"] == before["geom_digest"]
@@ -871,7 +858,7 @@ def test_area_detail_without_a_preview_computes_and_stores_it(env, monkeypatch):
                 iso3="FRE",
                 bbox=(0, 0, 1, 1),
                 geometry=json.dumps(mapping(box(0, 0, 1, 1))),
-            ),
+            )
         ],
     )
     assert db.get_boundary(path, "cgaz:ADM0:FRESH")["preview_geojson"] is None
@@ -944,18 +931,12 @@ def test_large_area_preview_is_gzipped(env):
                 iso3="BIG",
                 bbox=island.bounds,
                 geometry=json.dumps(mapping(island)),
-            ),
+            )
         ],
     )
 
-    plain = client.get(
-        "/api/areas/cgaz:ADM0:BIG",
-        headers={"Accept-Encoding": "identity"},
-    )
-    gzipped = client.get(
-        "/api/areas/cgaz:ADM0:BIG",
-        headers={"Accept-Encoding": "gzip"},
-    )
+    plain = client.get("/api/areas/cgaz:ADM0:BIG", headers={"Accept-Encoding": "identity"})
+    gzipped = client.get("/api/areas/cgaz:ADM0:BIG", headers={"Accept-Encoding": "gzip"})
 
     assert "content-encoding" not in plain.headers
     assert gzipped.headers["content-encoding"] == "gzip"
@@ -965,10 +946,7 @@ def test_large_area_preview_is_gzipped(env):
 def test_small_area_preview_skips_gzip(env):
     client, _, _ = env
 
-    response = client.get(
-        "/api/areas/cgaz:ADM1:NBO",
-        headers={"Accept-Encoding": "gzip"},
-    )
+    response = client.get("/api/areas/cgaz:ADM1:NBO", headers={"Accept-Encoding": "gzip"})
 
     assert "content-encoding" not in response.headers
 
@@ -1034,7 +1012,7 @@ def test_equal_length_reimport_gets_a_new_etag_and_fresh_outline(env):
                 bbox=(0, 0, 2, 2),
                 geometry=old_geometry,
                 source="test-src",
-            ),
+            )
         ],
     )
     first = client.get("/api/areas/test:EQUAL")
@@ -1052,7 +1030,7 @@ def test_equal_length_reimport_gets_a_new_etag_and_fresh_outline(env):
                 bbox=(0, 0, 2, 2),
                 geometry=new_geometry,
                 source="test-src",
-            ),
+            )
         ],
     )
     second = client.get("/api/areas/test:EQUAL")
@@ -1068,8 +1046,7 @@ def test_scene_files_keep_byte_ranges_without_gzip(env):
     (tmp_path / "scenes" / "probe.txt").write_bytes(payload)
 
     partial = client.get(
-        "/scenes/probe.txt",
-        headers={"Range": "bytes=0-99", "Accept-Encoding": "gzip"},
+        "/scenes/probe.txt", headers={"Range": "bytes=0-99", "Accept-Encoding": "gzip"}
     )
 
     assert partial.status_code == 206
@@ -1088,9 +1065,7 @@ def test_sample_areas_seed_only_in_synthetic_mode_and_when_empty(tmp_path, monke
 
     def app_in(name: str) -> FastAPI:
         return create_app(
-            tmp_path / name / "soe.db",
-            tmp_path / name / "scenes",
-            make_registry(SyntheticSource()),
+            tmp_path / name / "soe.db", tmp_path / name / "scenes", make_registry(SyntheticSource())
         )
 
     def sample_ids(client: TestClient) -> set[str]:
@@ -1102,6 +1077,7 @@ def test_sample_areas_seed_only_in_synthetic_mode_and_when_empty(tmp_path, monke
         assert sample_ids(client) == set()
 
     monkeypatch.setenv("SOE_SYNTHETIC", "1")
+
     with TestClient(app_in("synthetic")) as client:
         assert sample_ids(client) == {
             "sample:kenya",
@@ -1115,8 +1091,7 @@ def test_sample_areas_seed_only_in_synthetic_mode_and_when_empty(tmp_path, monke
 
         nairobi = {"type": "boundary", "id": "sample:nairobi"}
         posted = client.post(
-            "/api/scenes",
-            json={"area": nairobi, "start": "2015-01", "end": "2015-02"},
+            "/api/scenes", json={"area": nairobi, "start": "2015-01", "end": "2015-02"}
         )
         scene_id = posted.json()["id"]
 
@@ -1146,10 +1121,7 @@ def test_terrain_only_ignores_months(env):
     client, _, _ = env
     periods = (("2015-01", "2015-02"), ("2020-05", "2020-09"))
     ids = {
-        client.post(
-            "/api/scenes",
-            json=body(layers=["terrain"], start=start, end=end),
-        ).json()["id"]
+        client.post("/api/scenes", json=body(layers=["terrain"], start=start, end=end)).json()["id"]
         for start, end in periods
     }
 

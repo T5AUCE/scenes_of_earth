@@ -101,6 +101,7 @@ export class LoadMeter {
   finish(atMs: number) {
     this.accrue(atMs);
     this.outstanding = Math.max(this.outstanding - 1, 0);
+
     const idleMs = this.lastArrivalMs === null ? 0 : atMs - this.lastArrivalMs;
     const memory = PACE_MEMORY * 0.5 ** (Math.max(idleMs, 0) / PACE_HALF_LIFE_MS);
     this.totalBusyMs = this.totalBusyMs * memory + this.busyMs;

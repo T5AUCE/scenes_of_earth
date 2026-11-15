@@ -1,5 +1,5 @@
-import { formatLength, METERS_PER_KILOMETER } from "./units";
 import type { CreditDoc, Scene } from "./types";
+import { formatLength, METERS_PER_KILOMETER } from "./units";
 
 const METERS_PER_DEGREE = 111_320;
 const DEGREES_PER_RADIAN = 180 / Math.PI;
@@ -11,8 +11,8 @@ export interface CreditEntry extends CreditDoc {
 
 /** Approximate: cells inside the finest layer's mask, at the latitude of the bbox centre. */
 export function areaKm2(scene: Scene) {
-  const finest = scene.layers.reduce(
-    (best, layer) => (layer.grid.res < best.grid.res ? layer : best),
+  const finest = scene.layers.reduce((best, layer) =>
+    layer.grid.res < best.grid.res ? layer : best,
   );
   const [, south, , north] = scene.area.bbox;
   const centreLatitude = (south + north) / 2;

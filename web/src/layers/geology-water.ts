@@ -39,6 +39,7 @@ export function addGeologyWater(map: MapLibreMap, beforeId: string | undefined):
     } as Parameters<MapLibreMap["addLayer"]>[0],
     beforeId,
   );
+
   return true;
 }
 
@@ -48,14 +49,14 @@ export function addGeologyWater(map: MapLibreMap, beforeId: string | undefined):
  */
 function basemapWaterSpec(map: MapLibreMap) {
   let layers: WaterLayer[] | undefined;
+
   try {
     layers = (map.getStyle() as unknown as { layers?: WaterLayer[] }).layers;
   } catch {
     return null;
   }
-  const water = layers?.find(
-    (layer) => layer.type === "fill" && layer["source-layer"] === "water",
-  );
+
+  const water = layers?.find((layer) => layer.type === "fill" && layer["source-layer"] === "water");
   if (!water?.source || !water["source-layer"] || !water.paint) return null;
 
   return water;

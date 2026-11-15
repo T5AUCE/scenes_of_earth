@@ -61,8 +61,10 @@ export function autoDomain(
   visibleReferences: readonly { id: string; value: number }[] = [],
 ): [number, number] | null {
   const values = [...finiteValues(table)];
+
   if (table.shape === "distribution") {
     values.push(table.min, table.max, table.mean, table.median);
+
     for (const reference of visibleReferences) values.push(reference.value);
     if (table.referenceValues.some((reference) => reference.id === "sea_level")) {
       values.push(0);
@@ -77,6 +79,7 @@ export function autoDomain(
   let low = Math.min(...finite);
   let high = Math.max(...finite);
   const baseline = baselineFor(chartType, low);
+
   if (baseline !== null) {
     low = Math.min(low, baseline);
     high = Math.max(high, baseline);
@@ -108,14 +111,17 @@ export function validateYRange(
   if (typeof low !== "number" || typeof high !== "number") {
     return "The y-range needs a low and high value.";
   }
+
   if (!Number.isFinite(low) || !Number.isFinite(high) || low >= high) {
     return "The y-range needs finite numbers with the low end below the high end.";
   }
 
   const observed = [...finiteValues(table)];
+
   if (table.shape === "distribution") {
     observed.push(table.min, table.max, table.mean, table.median);
   }
+
   const finiteObserved = observed.filter((value) => Number.isFinite(value));
   const baseline = baselineFor(
     chartType,
@@ -124,11 +130,13 @@ export function validateYRange(
   if (baseline !== null && !domainIncludes([low, high], baseline)) {
     return "The y-range must include its baseline at zero.";
   }
+
   for (const value of finiteObserved) {
     if (!domainIncludes([low, high], value)) {
       return "The y-range must include every observed value.";
     }
   }
+
   for (const reference of visibleReferences) {
     if (!domainIncludes([low, high], reference.value)) {
       return "The y-range must include its visible references.";
@@ -144,8 +152,9 @@ export function ticksForDomain(domain: readonly [number, number], count: number)
   const [low, high] = domain;
   if (!(high > low)) return [low];
 
-  return Array.from({ length: safeCount }, (_, index) =>
-    low + ((high - low) * index) / (safeCount - 1),
+  return Array.from(
+    { length: safeCount },
+    (_, index) => low + ((high - low) * index) / (safeCount - 1),
   );
 }
 
@@ -156,6 +165,7 @@ export function ticksForDomain(domain: readonly [number, number], count: number)
 export function formatPresentationValue(value: number): string {
   if (!Number.isFinite(value)) return String(value);
   if (value === 0) return "0";
+
   const fixed = value.toFixed(PRESENTATION_MAX_DECIMALS);
   const trimmed = fixed.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
   if (Number(trimmed) !== 0) return trimmed === "-0" ? "0" : trimmed;

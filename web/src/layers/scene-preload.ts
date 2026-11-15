@@ -73,11 +73,9 @@ export function basemapPreloadSource(map: BasemapMap, bbox: Bbox): PreloadSource
     tasks(fittedZoom) {
       const basemap = basemapDescriptor(map);
       if (!basemap) return [];
-      const firstZoom = Math.min(
-        Math.floor(fittedZoom),
-        basemap.maxzoom,
-        BASEMAP_PRELOAD_MAX_ZOOM,
-      );
+
+      const firstZoom = Math.min(Math.floor(fittedZoom), basemap.maxzoom, BASEMAP_PRELOAD_MAX_ZOOM);
+
       return toBasemapTasks(
         basemap,
         scenePyramidTiles(bbox, firstZoom, BASEMAP_PRELOAD_MAX_ZOOM, BASEMAP_PRELOAD_TILES),
@@ -86,17 +84,17 @@ export function basemapPreloadSource(map: BasemapMap, bbox: Bbox): PreloadSource
     dwell(viewport, fittedZoom, currentZoom) {
       const basemap = basemapDescriptor(map);
       if (!basemap) return [];
-      return toBasemapTasks(
-        basemap,
-        dwellTilesForBbox(viewport, bbox, fittedZoom, currentZoom),
-      );
+
+      return toBasemapTasks(basemap, dwellTilesForBbox(viewport, bbox, fittedZoom, currentZoom));
     },
   };
 }
 
 /** Fill a tile template with slippy-map coordinates, keyed by URL rather than scene. */
 export function tileUrl(template: string, tile: WarmTile): string {
-  return template.replace("{z}", String(tile.z)).replace("{x}", String(tile.x))
+  return template
+    .replace("{z}", String(tile.z))
+    .replace("{x}", String(tile.x))
     .replace("{y}", String(tile.y));
 }
 
@@ -123,17 +121,22 @@ function demPlanTiles(bbox: Bbox, maxzoom: number, fittedZoom: number): WarmTile
  */
 function keepWholeLevels(tiles: WarmTile[], maxTiles: number): WarmTile[] {
   const levels = new Map<number, WarmTile[]>();
+
   for (const tile of tiles) {
     const level = levels.get(tile.z) ?? [];
     level.push(tile);
     levels.set(tile.z, level);
   }
+
   const kept: WarmTile[] = [];
+
   for (const zoom of [...levels.keys()].sort((first, second) => first - second)) {
     const level = levels.get(zoom)!;
     if (kept.length + level.length > maxTiles) break;
+
     kept.push(...level);
   }
+
   return kept;
 }
 
@@ -145,8 +148,8 @@ function dwellTilesForBbox(
 ): WarmTile[] {
   const clipped = clipViewportToBbox(viewport, bbox);
   if (clipped === null) return [];
-  return dwellWarmTiles(clipped, fittedZoom, currentZoom)
-    .filter((tile) => tileInScene(tile, bbox));
+
+  return dwellWarmTiles(clipped, fittedZoom, currentZoom).filter((tile) => tileInScene(tile, bbox));
 }
 
 function toBasemapTasks(basemap: BasemapDescriptor, tiles: WarmTile[]): PreloadTask[] {
@@ -184,11 +187,9 @@ async function fetchDemResponse(
   signal: AbortSignal,
   priority: DemPriority,
 ): Promise<{ data: Blob }> {
-  const response = await fetch(
-    url,
-    priority === undefined ? { signal } : { signal, priority },
-  );
+  const response = await fetch(url, priority === undefined ? { signal } : { signal, priority });
   if (!response.ok) throw new Error(`Bad response: ${response.status} for ${url}`);
+
   return { data: await response.blob() };
 }
 
@@ -200,5 +201,6 @@ function downloadTask(url: string, zoom: number): PreloadTask {
 async function downloadBlob(url: string, signal: AbortSignal): Promise<Blob> {
   const response = await fetch(url, { signal, priority: "low" });
   if (!response.ok) throw new Error(`Bad response: ${response.status} for ${url}`);
+
   return response.blob();
 }

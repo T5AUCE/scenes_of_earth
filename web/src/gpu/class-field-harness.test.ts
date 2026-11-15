@@ -11,13 +11,13 @@ const hooks = registerHooks({
     ) {
       return next(new URL(`${specifier}.ts`, context.parentURL).href, context);
     }
+
     return next(specifier, context);
   },
 });
 const { createClassFieldLayer } = await import("./class-field-layer.ts");
 /** The tiled layer base class, loaded through the same import hooks. */
-export const { TiledGpuLayer } = await import("./tiled-layer.ts")
-  .finally(() => hooks.deregister());
+export const { TiledGpuLayer } = await import("./tiled-layer.ts").finally(() => hooks.deregister());
 
 /** A fake WebGL context and map around a class-field layer, recording uploads, draws and deletes. */
 export function createHarness(
@@ -48,6 +48,7 @@ export function createHarness(
   let vertexArray: unknown = null;
   let repaints = 0;
   let creations = 0;
+
   const gl = {
     MAX_TEXTURE_SIZE: 1,
     COMPILE_STATUS: 2,
@@ -81,6 +82,7 @@ export function createHarness(
     createTexture: () => {
       creations += 1;
       if (options.failCreateAt !== undefined && creations === options.failCreateAt) return null;
+
       return {};
     },
     bindTexture: () => {},
@@ -91,10 +93,11 @@ export function createHarness(
       if (options.failUploadAt !== undefined && uploads.length === options.failUploadAt + 1) {
         return 1285;
       }
+
       return options.uploadError ?? 0;
     },
     deleteTexture: (value: object) => deleted.textures.push(value),
-    getParameter: (name: number) => name === 1 ? options.maxTextureSize ?? 4096 : 0,
+    getParameter: (name: number) => (name === 1 ? (options.maxTextureSize ?? 4096) : 0),
     getUniformLocation: (_program: unknown, name: string) => name,
     uniform1i: (name: string, value: unknown) => uniforms.set(name, value),
     uniform1f: (name: string, value: unknown) => uniforms.set(name, value),
@@ -107,6 +110,7 @@ export function createHarness(
     useProgram: () => {},
     drawArrays: (...args: unknown[]) => draws.push(args),
   } as unknown as WebGL2RenderingContext;
+
   const map = {
     triggerRepaint: () => {
       repaints++;
@@ -127,6 +131,7 @@ export function createHarness(
       removeEventListener: (name: string) => listeners.delete(name),
     }),
   } as unknown as MapLibreMap;
+
   const field = createClassFieldLayer({
     id: "classes",
     grid: { bbox: [36, -2, 37, -1], nx: options.nx ?? 4, ny: 3 },
@@ -137,10 +142,9 @@ export function createHarness(
   });
   const input = {
     modelViewProjectionMatrix: new Float64Array(16),
-    defaultProjectionData: {
-      mainMatrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
-    },
+    defaultProjectionData: { mainMatrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] },
   } as unknown as CustomRenderMethodInput;
+
   return {
     field,
     gl,
@@ -160,4 +164,3 @@ export function createHarness(
     mapListenerCount: (type: string) => mapListeners.get(type)?.size ?? 0,
   };
 }
-

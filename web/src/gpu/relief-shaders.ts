@@ -51,8 +51,9 @@ interface LightTerms {
 
 /** The constants of each light, which the shader receives as arrays. */
 export const LIGHT_TERMS: readonly LightTerms[] = RELIEF_LIGHTS.map((light) => {
-  const altitude = light.altitudeDeg * Math.PI / 180;
-  const azimuth = light.azimuthDeg * Math.PI / 180;
+  const altitude = (light.altitudeDeg * Math.PI) / 180;
+  const azimuth = (light.azimuthDeg * Math.PI) / 180;
+
   return {
     sinAltitude: Math.sin(altitude),
     slopeXTerm: -Math.sin(azimuth) * Math.cos(altitude),
@@ -81,12 +82,15 @@ export function reliefShade(taps: ReliefTaps, input: ReliefInput): ReliefShade {
   const slopeX = clampSlope((c + f + f + i - (a + d + d + g)) * input.slopeScale) * slopeFactor;
   const slopeY = clampSlope((g + h + h + i - (a + b + b + c)) * input.slopeScale) * slopeFactor;
   const steepness = Math.sqrt(1 + slopeX * slopeX + slopeY * slopeY);
+
   let alpha = 0;
   let white = 0;
+
   for (const light of LIGHT_TERMS) {
-    const angle = (light.sinAltitude - slopeY * light.slopeYTerm + slopeX * light.slopeXTerm)
-      / steepness;
+    const angle =
+      (light.sinAltitude - slopeY * light.slopeYTerm + slopeX * light.slopeXTerm) / steepness;
     const shade = Math.min(Math.max(angle, 0), 1);
+
     if (shade > 0.5) {
       const highlight = light.highlightAlpha * (2 * shade - 1);
       alpha += highlight;
@@ -95,6 +99,7 @@ export function reliefShade(taps: ReliefTaps, input: ReliefInput): ReliefShade {
       alpha += light.shadowAlpha * (1 - 2 * shade);
     }
   }
+
   return { white, alpha };
 }
 

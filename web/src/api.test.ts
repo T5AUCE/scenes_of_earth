@@ -46,6 +46,7 @@ test("loadScene accepts format 0.7 and rejects format 0.6", async (context) => {
       Reflect.deleteProperty(globalThis, "location");
     }
   });
+
   const distributionValues = Array.from({ length: 101 }, (_, index) => index);
   const seriesWithFallback = {
     statistic: "mean",
@@ -90,21 +91,13 @@ test("loadScene accepts format 0.7 and rejects format 0.6", async (context) => {
     },
     layers: [
       {
-        time: {
-          values: ["2015-01-01", "2015-02-01", "2015-03-01", "2015-04-01"],
-        },
+        time: { values: ["2015-01-01", "2015-02-01", "2015-03-01", "2015-04-01"] },
         area_series: seriesWithFallback,
         fallback_sources: fallbackSources,
         tiles: { url: "../../terrain/v1/{z}/{x}/{y}.webp" },
       },
-      {
-        distribution,
-        tiles: { url: "https://tiles.mapterhorn.com/{z}/{x}/{y}.webp" },
-      },
-      {
-        time: { values: ["2015-01-01", "2015-02-01"] },
-        area_series: seriesWithoutFallback,
-      },
+      { distribution, tiles: { url: "https://tiles.mapterhorn.com/{z}/{x}/{y}.webp" } },
+      { time: { values: ["2015-01-01", "2015-02-01"] }, area_series: seriesWithoutFallback },
       {
         time: null,
         style: {
@@ -118,6 +111,7 @@ test("loadScene accepts format 0.7 and rejects format 0.6", async (context) => {
   context.mock.method(globalThis, "fetch", async () => Response.json(scene));
 
   const loaded = await loadScene("/scenes/example/scene.json");
+
   assert.equal(loaded.version, "0.7");
   assert.equal(loaded.area.geometry_href, "https://example.test/scenes/example/area.geojson");
   assert.equal(loaded.data.href, "https://example.test/scenes/example/data.zarr");
@@ -128,6 +122,7 @@ test("loadScene accepts format 0.7 and rejects format 0.6", async (context) => {
   assert.deepEqual(loaded.credits.lines, ["contains modified Copernicus information"]);
   assert.deepEqual(loaded.layers[1].distribution, distribution);
   assert.deepEqual(loaded.layers[2].area_series, seriesWithoutFallback);
+
   assert.ok(!("fallback_fraction" in (loaded.layers[2].area_series ?? {})));
   assert.ok(!("fallback_sources" in loaded.layers[2]));
   assert.ok(!("area_series" in loaded.layers[1]));
@@ -137,5 +132,6 @@ test("loadScene accepts format 0.7 and rejects format 0.6", async (context) => {
   assert.equal(loaded.credits.terms_passthrough, "Reuse is subject to each source licence.");
 
   scene.version = "0.6";
+
   await assert.rejects(loadScene("/scenes/example/scene.json"), /format 0\.6/);
 });

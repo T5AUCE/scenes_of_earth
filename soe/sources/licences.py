@@ -293,8 +293,7 @@ SOURCES = {
         "licence": "GeoNutzV (Datenlizenz Deutschland – Namensnennung)",
         "licence_url": "https://www.gesetze-im-internet.de/geonutzv/",
         "attribution": (
-            "Rock type and age (Europe): BGR IGME5000 1:5,000,000 "
-            "(GeoNutzV, source: BGR, Hannover)"
+            "Rock type and age (Europe): BGR IGME5000 1:5,000,000 (GeoNutzV, source: BGR, Hannover)"
         ),
         "citation": (
             "Asch, K. (2003) The 1:5 Million International Geological Map of Europe and "
@@ -375,10 +374,8 @@ SOURCES["era5land_rain_84n"] = {
         "preliminary (ERA5-Land-T) months flagged"
     ),
 }
-SOURCES["era5_84n"] = {
-    **_ERA5,
-    "modified": _ERA5["modified"].replace("60°S-60°N", "60°S-84°N"),
-}
+SOURCES["era5_84n"] = {**_ERA5, "modified": _ERA5["modified"].replace("60°S-60°N", "60°S-84°N")}
+
 
 # The rebaked geology maps reach 84N, so a scene beyond 60N or S takes these entries with their own
 # versions and extent, while a scene inside 60N keeps the entries above and its scene id.

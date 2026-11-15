@@ -2,11 +2,11 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { NOTICES_HEADING_ID, renderAbout, renderCredits } from "../about";
-import { displayUnitsFrom, elevationUnitFrom } from "../display-state";
 import { ChartDetail } from "../charts/chart-detail";
-import { DownloadSection } from "../charts/download-section";
-import { ChartGallery } from "../charts/chart-gallery";
 import { draftForEdit, draftForNew, ChartEditor, type ChartDraft } from "../charts/chart-editor";
+import { ChartGallery } from "../charts/chart-gallery";
+import { DownloadSection } from "../charts/download-section";
+import { displayUnitsFrom, elevationUnitFrom } from "../display-state";
 import type { SceneStore } from "../scene-store";
 import type { Scene } from "../types";
 import { DomNode } from "./dom-node";
@@ -17,12 +17,12 @@ type ChartView =
   | { kind: "gallery" }
   | { kind: "detail"; id: string; origin: string | null; focusNotes?: boolean }
   | {
-    kind: "editor";
-    draft: ChartDraft;
-    isNew: boolean;
-    returnTo: string | null;
-    origin: string | null;
-  };
+      kind: "editor";
+      draft: ChartDraft;
+      isNew: boolean;
+      returnTo: string | null;
+      origin: string | null;
+    };
 
 type GalleryReturnFocus = { id: string | null; target: "title" | "notes" };
 
@@ -57,9 +57,11 @@ export function FullPanel({
   const confirmSaveRef = useRef<HTMLButtonElement | null>(null);
   const editorActions = useRef<{ save: () => void; discard: () => void } | null>(null);
   const galleryReturnFocus = useRef<GalleryReturnFocus | null>(null);
+
   useEffect(() => {
     onDirtyFlag(editorDirty);
   }, [editorDirty, onDirtyFlag]);
+
   useEffect(() => {
     onRegisterConfirm(() => {
       invokingRef.current = document.activeElement as HTMLElement | null;
@@ -69,32 +71,39 @@ export function FullPanel({
 
     return () => onRegisterConfirm(null);
   }, [onRegisterConfirm]);
+
   useEffect(() => {
     if (request.seq === 0 || !dialog.open) return;
 
     buttons.current.get(request.tab)?.focus();
+
     if (content.current) content.current.scrollTop = 0;
     if (request.scrollToNotices) {
       const notices = dialog.querySelector(`#${NOTICES_HEADING_ID}`);
       notices?.scrollIntoView();
     }
   }, [request, dialog]);
+
   useEffect(() => {
     if (current !== "charts") return;
 
     galleryReturnFocus.current = null;
   }, [current]);
+
   useEffect(() => {
     if (current !== "charts" || chartView.kind !== "gallery") return;
     if (!galleryReturnFocus.current) return;
+
     const focus = galleryReturnFocus.current;
     galleryReturnFocus.current = null;
     focusGalleryCard(dialog, focus.id, focus.target);
   }, [chartView, current, dialog]);
+
   // The outer confirmation is a new decision group, so focus enters it on open.
   useEffect(() => {
     if (closeConfirm) confirmSaveRef.current?.focus();
   }, [closeConfirm]);
+
   useEffect(() => {
     if (current !== "charts") return;
     if (chartView.kind === "detail") {
@@ -112,10 +121,7 @@ export function FullPanel({
   }, [chartView, current, dialog]);
 
   const elevationUnit = elevationUnitFrom(display, scene.layers);
-  const displayUnits = useMemo(
-    () => displayUnitsFrom(display, scene.layers),
-    [display, scene],
-  );
+  const displayUnits = useMemo(() => displayUnitsFrom(display, scene.layers), [display, scene]);
   const node = useMemo(
     () => renderTabNode(scene, current, elevationUnit, displayUnits),
     [scene, current, elevationUnit, displayUnits],
@@ -126,6 +132,7 @@ export function FullPanel({
     galleryReturnFocus.current = { id, target: focusNotes ? "notes" : "title" };
     setChartView({ kind: "detail", id, origin: id, focusNotes });
   };
+
   const openEditor = (
     draft: ChartDraft,
     isNew: boolean,
@@ -136,6 +143,7 @@ export function FullPanel({
     setChartView({ kind: "editor", draft, isNew, returnTo, origin });
     setEditorDirty(false);
   };
+
   const backToGallery = (focusId: string | null) => {
     const target = galleryReturnFocus.current?.target ?? "title";
     galleryReturnFocus.current = { id: focusId, target };
@@ -154,17 +162,20 @@ export function FullPanel({
   const handleEditorSave = (id: string) => {
     setEditorDirty(false);
     editorActions.current = null;
+
     if (pendingClose) {
       completePendingClose();
 
       return;
     }
+
     openDetail(id);
   };
 
   const handleEditorCancel = (returnTo: string | null, origin: string | null) => {
     setEditorDirty(false);
     editorActions.current = null;
+
     if (pendingClose) {
       completePendingClose();
 
@@ -182,6 +193,7 @@ export function FullPanel({
 
       return;
     }
+
     hooks.requestClose();
   };
 
@@ -247,8 +259,8 @@ export function FullPanel({
             {syncNotice}
           </p>
         )}
-        {current === "charts"
-          ? chartViewFor({
+        {current === "charts" ? (
+          chartViewFor({
             scene,
             store,
             view: chartView,
@@ -262,7 +274,9 @@ export function FullPanel({
             onSave: handleEditorSave,
             onCancel: handleEditorCancel,
           })
-          : <DomNode node={node} />}
+        ) : (
+          <DomNode node={node} />
+        )}
         {closeConfirm && (
           <div className="chart-confirm" role="alertdialog" aria-label="Unsaved chart changes">
             <p>{"This chart draft has unsaved changes."}</p>
@@ -362,6 +376,7 @@ function chartViewFor(args: {
       />
     );
   }
+
   if (view.kind === "editor") {
     return (
       <ChartEditor
@@ -424,6 +439,7 @@ function focusGalleryCard(
           return;
         }
       }
+
       const button = match.querySelector("button");
       if (button instanceof HTMLElement) {
         button.focus();
@@ -432,6 +448,7 @@ function focusGalleryCard(
       }
     }
   }
+
   const scope = dialog.querySelector(".chart-gallery") ?? dialog;
   const creation = [...scope.querySelectorAll("button")].find(
     (button) => button.textContent === "+ New chart",
@@ -451,12 +468,9 @@ function renderTabNode(
   return null;
 }
 
-function handleTabKeyInner(
-  event: React.KeyboardEvent,
-  select: (tab: PanelTab) => void,
-): void {
+function handleTabKeyInner(event: React.KeyboardEvent, select: (tab: PanelTab) => void): void {
   const target = event.target as HTMLElement;
-  const buttons = [...target.parentElement?.querySelectorAll('[role="tab"]') ?? []];
+  const buttons = [...(target.parentElement?.querySelectorAll('[role="tab"]') ?? [])];
   const index = buttons.indexOf(target);
   const next = tabIndexForKey(event.key, index, buttons.length);
   if (next === null) return;

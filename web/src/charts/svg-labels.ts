@@ -32,20 +32,21 @@ export function tickLabelsFor(domain: readonly [number, number], ticks: number[]
   if (distinctLabels(fixed) && fitsGutter(fixed)) {
     return { labels: fixed, decimals, offset: null, scale: null, exponentialDigits: null };
   }
+
   const base = offsetBaseFor(domain, unique);
   const scale = scaleFor(domain);
+
   if (base !== null && scale !== null) {
     const scaled = scaledPlanFor(unique, base, scale);
     if (scaled !== null) return scaled;
   }
+
   for (
     let digits = MIN_EXPONENT_MANTISSA_DIGITS;
     digits <= MAX_EXPONENT_MANTISSA_DIGITS;
     digits += 1
   ) {
-    const exponential = unique.map((tick) => (
-      tick === 0 ? "0" : shortExponential(tick, digits)
-    ));
+    const exponential = unique.map((tick) => (tick === 0 ? "0" : shortExponential(tick, digits)));
     if (distinctLabels(exponential) && fitsGutter(exponential)) {
       return {
         labels: exponential,
@@ -56,20 +57,22 @@ export function tickLabelsFor(domain: readonly [number, number], ticks: number[]
       };
     }
   }
+
   if (base !== null) {
     for (
       let digits = MIN_EXPONENT_MANTISSA_DIGITS;
       digits <= MAX_EXPONENT_MANTISSA_DIGITS;
       digits += 1
     ) {
-      const deltas = unique.map((tick) => (
-        tick === base ? "0" : shortExponential(tick - base, digits)
-      ));
+      const deltas = unique.map((tick) =>
+        tick === base ? "0" : shortExponential(tick - base, digits),
+      );
       if (distinctLabels(deltas) && fitsGutter(deltas)) {
         return { labels: deltas, decimals, offset: base, scale: null, exponentialDigits: digits };
       }
     }
   }
+
   const fallbackBase = base ?? domain[0];
   const fallbackScale = scale ?? 1;
   const fallback = scaledPlanFor(unique, fallbackBase, fallbackScale, MAX_FIXED_DECIMALS);
@@ -77,21 +80,18 @@ export function tickLabelsFor(domain: readonly [number, number], ticks: number[]
 
   // Indexed labels keep the last resort bounded and distinct because ticks are deduped.
   const indexed = unique.map((_, index) => String(index));
-  return {
-    labels: indexed,
-    decimals,
-    offset: null,
-    scale: null,
-    exponentialDigits: null,
-  };
+
+  return { labels: indexed, decimals, offset: null, scale: null, exponentialDigits: null };
 }
 
 /** Remove exact duplicates so adjacent representable values never repeat SVG keys. */
 export function dedupeNumericTicks(ticks: number[]) {
   const seen = new Set<number>();
   const unique: number[] = [];
+
   for (const tick of ticks) {
     if (seen.has(tick)) continue;
+
     seen.add(tick);
     unique.push(tick);
   }
@@ -103,11 +103,14 @@ export function dedupeNumericTicks(ticks: number[]) {
 function offsetBaseFor(domain: readonly [number, number], ticks: number[]) {
   const span = domain[1] - domain[0];
   const magnitude = maxAbsOf(ticks);
+
   if (!(span > 0) || !Number.isFinite(span)) return null;
   if (!Number.isFinite(magnitude) || !(magnitude > 0)) return null;
   if (span / magnitude >= OFFSET_RELATIVE_SPAN_THRESHOLD) return null;
+
   const base = domain[0];
   if (!Number.isFinite(base)) return null;
+
   return base;
 }
 
@@ -115,11 +118,14 @@ function offsetBaseFor(domain: readonly [number, number], ticks: number[]) {
 function scaleFor(domain: readonly [number, number]) {
   const span = domain[1] - domain[0];
   if (!(span > 0) || !Number.isFinite(span)) return null;
+
   const exponent = Math.floor(Math.log10(span));
   if (!Number.isFinite(exponent)) return null;
+
   const bounded = Math.min(Math.max(exponent, MIN_SCALE_EXPONENT), MAX_SCALE_EXPONENT);
   const scale = Math.pow(10, bounded);
   if (!(scale > 0) || !Number.isFinite(scale)) return null;
+
   return scale;
 }
 
@@ -132,12 +138,14 @@ function scaledPlanFor(
 ) {
   if (!(scale > 0) || !Number.isFinite(scale)) return null;
   if (!Number.isFinite(base)) return null;
+
   for (let decimals = 0; decimals <= maxDecimals; decimals += 1) {
     const labels = ticks.map((tick) => formatFixedValue((tick - base) / scale, decimals));
     if (distinctLabels(labels) && fitsGutter(labels)) {
       return { labels, decimals, offset: base, scale, exponentialDigits: null };
     }
   }
+
   return null;
 }
 
@@ -164,10 +172,12 @@ function maxAbsOf(ticks: number[]) {
 /** Format references with the tick plan so their deltas and exponents match the axis. */
 export function formatPlanValue(value: number, plan: TickPlan) {
   if (!Number.isFinite(value)) return "";
+
   if (plan.offset !== null) {
     const scale = plan.scale ?? 1;
     const delta = (value - plan.offset) / scale;
     if (!Number.isFinite(delta)) return "";
+
     if (plan.exponentialDigits !== null) {
       if (delta === 0) return "0";
 
@@ -176,6 +186,7 @@ export function formatPlanValue(value: number, plan: TickPlan) {
 
     return formatFixedValue(delta, plan.decimals);
   }
+
   if (plan.exponentialDigits !== null) {
     if (value === 0) return "0";
 
@@ -188,6 +199,7 @@ export function formatPlanValue(value: number, plan: TickPlan) {
 // Bounded precision keeps tiny spans inside the toFixed API limit.
 function formatFixedValue(value: number, decimals: number) {
   if (!Number.isFinite(value)) return "";
+
   const bounded = Math.min(Math.max(Math.floor(decimals), 0), MAX_FIXED_DECIMALS);
   if (bounded <= 0) return cleanInteger(value);
 
@@ -197,6 +209,7 @@ function formatFixedValue(value: number, decimals: number) {
 function tickSpacingFor(domain: readonly [number, number], count: number) {
   const span = domain[1] - domain[0];
   if (!(span > 0) || !Number.isFinite(span)) return Number.NaN;
+
   const safeCount = Math.max(2, Math.floor(count));
 
   return span / (safeCount - 1);
@@ -206,6 +219,7 @@ function tickSpacingFor(domain: readonly [number, number], count: number) {
 function presentationDecimals(spacing: number) {
   if (!Number.isFinite(spacing) || !(spacing > 0)) return FALLBACK_TICK_DECIMALS;
   if (spacing >= WHOLE_STEP_THRESHOLD) return 0;
+
   const decimals = Math.max(0, -Math.floor(Math.log10(spacing))) + DECIMAL_GUARD_DIGITS;
 
   return Math.min(decimals, PRESENTATION_TICK_MAX_DECIMALS);

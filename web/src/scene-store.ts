@@ -89,9 +89,10 @@ export function createSceneStore(
     snapshot: SceneStoreSnapshot,
     action: DisplayUpdate | ShowAsAction,
   ): SceneStoreSnapshot {
-    const next = action.kind === "display"
-      ? updateDisplay(snapshot, action)
-      : showAsDisplay(layers, snapshot, action);
+    const next =
+      action.kind === "display"
+        ? updateDisplay(snapshot, action)
+        : showAsDisplay(layers, snapshot, action);
     const on = new Set(layers.flatMap(layerUnits).filter((unit) => !next.off.has(unit)));
     const allocation = allocate(layers, on, next.showAs);
 
@@ -111,13 +112,14 @@ export function createSceneStore(
     action: ShowAsAction,
   ): SceneDisplay {
     const state = { showAs: snapshot.display.showAs, off: snapshot.display.off };
-    const next = action.kind === "choose"
-      ? choose(state, action.unit, action.draw, layers)
-      : action.kind === "clear"
-        ? clear(state, action.unit)
-        : action.kind === "toggle"
-          ? toggle(state, action.unit, action.on, layers)
-          : toggleMany(state, action.units, action.on, layers);
+    const next =
+      action.kind === "choose"
+        ? choose(state, action.unit, action.draw, layers)
+        : action.kind === "clear"
+          ? clear(state, action.unit)
+          : action.kind === "toggle"
+            ? toggle(state, action.unit, action.on, layers)
+            : toggleMany(state, action.units, action.on, layers);
 
     return { ...copyDisplay(snapshot.display), showAs: next.showAs, off: new Set(next.off) };
   }
@@ -133,18 +135,21 @@ function initialSnapshot(
 ): SceneStoreSnapshot {
   const copied = copyDisplay(display);
   const on = new Set(layers.flatMap(layerUnits).filter((unit) => !copied.off.has(unit)));
-  const charts = initialCharts && isValidSlice(initialCharts, validationLayers)
-    ? copySlice(initialCharts)
-    : defaultSlice(validationLayers);
+  const charts =
+    initialCharts && isValidSlice(initialCharts, validationLayers)
+      ? copySlice(initialCharts)
+      : defaultSlice(validationLayers);
 
   return { display: copied, allocation: allocate(layers, on, copied.showAs), on, charts };
 }
 
 function isChartAction(action: SceneStoreAction): action is ChartStoreAction {
-  return action.kind === "saveChart"
+  return (
+    action.kind === "saveChart"
     || action.kind === "deleteChart"
     || action.kind === "setMain"
-    || action.kind === "resetCharts";
+    || action.kind === "resetCharts"
+  );
 }
 
 function applyChartAction(
@@ -180,14 +185,16 @@ function saveChart(
 
   const copied = copyDefinition(definition);
   const existing = charts.definitions.findIndex((entry) => entry.id === copied.id);
-  const definitions = existing >= 0
-    ? charts.definitions.map((entry, index) => (index === existing ? copied : entry))
-    : [...charts.definitions, copied];
+  const definitions =
+    existing >= 0
+      ? charts.definitions.map((entry, index) => (index === existing ? copied : entry))
+      : [...charts.definitions, copied];
   if (definitions.length > MAX_DEFINITIONS) throw new Error("Too many charts.");
 
-  const mainChartId = makeMain || charts.mainChartId === null
-    ? definition.id
-    : resolveMainId(definitions, charts.mainChartId, layers);
+  const mainChartId =
+    makeMain || charts.mainChartId === null
+      ? definition.id
+      : resolveMainId(definitions, charts.mainChartId, layers);
 
   return { version: CHARTS_VERSION, definitions, mainChartId };
 }
@@ -234,11 +241,7 @@ function copySlice(slice: ChartSlice): ChartSlice {
 function copyDefinition(definition: ChartDefinition): ChartDefinition {
   const yRange = definition.options.yRange;
   if (!Array.isArray(yRange)) {
-    return {
-      ...definition,
-      source: { ...definition.source },
-      options: { ...definition.options },
-    };
+    return { ...definition, source: { ...definition.source }, options: { ...definition.options } };
   }
 
   return {

@@ -51,9 +51,12 @@ function installBrowser() {
 
 function removeBrowser() {
   const globals = globalThis as Record<string, unknown>;
+
   if (previousGlobals.window === undefined) Reflect.deleteProperty(globals, "window");
   else globals.window = previousGlobals.window;
+
   globals.document = previousGlobals.document;
+
   if (previousGlobals.navigator === undefined) Reflect.deleteProperty(globals, "navigator");
   else globals.navigator = previousGlobals.navigator;
   if (previousGlobals.storage === undefined) Reflect.deleteProperty(globals, "localStorage");
@@ -70,8 +73,10 @@ function freshState(): ViewTestState {
       const state = globalThis.viewTest as ViewTestState;
       const record: ViewRecord = { layerId: context.layer.id, prepareCalls: [], showCalls: [] };
       state.records.push(record);
+
       const loadEntry = (stepTime: string | null, signal?: AbortSignal) => {
         record.prepareCalls.push(stepTime);
+
         return new Promise<void>((resolve, reject) => {
           const key = `${context.layer.id}:${stepTime}`;
           state.pendingReads.set(key, { resolve, reject });
@@ -80,6 +85,7 @@ function freshState(): ViewTestState {
             () => {
               if (state.pendingReads.get(key)) {
                 state.pendingReads.delete(key);
+
                 const error = new Error("Entry preparation was cancelled");
                 error.name = "AbortError";
                 reject(error);
@@ -89,11 +95,13 @@ function freshState(): ViewTestState {
           );
         });
       };
+
       const loader = {
         load(stepTime: string | null, signal?: AbortSignal) {
           return loadEntry(stepTime, signal);
         },
       };
+
       return {
         parts: [{ id: context.layer.id, label: context.layer.id, layerIds: [] as string[] }],
         options: [],
@@ -137,27 +145,30 @@ const hooks = registerHooks({
       return { url: `data:text/javascript,${stub}`, shortCircuit: true };
     }
     if (specifier === "./map") {
-      const stub = "export const firstSymbolId = () => undefined;"
+      const stub =
+        "export const firstSymbolId = () => undefined;"
         + "export const removeLayerAndSource = (map, id) => {"
         + " map.removeLayer(id); map.removeSource(id); };"
         + "export const showScaleBar = () => () => {};";
       return { url: `data:text/javascript,${stub}`, shortCircuit: true };
     }
     if (specifier === "./layers/registry") {
-      const stub = "export const LAYER_KINDS = new Map(["
+      const stub =
+        "export const LAYER_KINDS = new Map(["
         + "['alpha', { stack: 0, create: (context) => globalThis.viewTest.createView(context) }],"
         + "['beta', { stack: 1, create: (context) => globalThis.viewTest.createView(context) }]]);";
       return { url: `data:text/javascript,${stub}`, shortCircuit: true };
     }
     if (specifier === "./layers/blend") {
-      const stub = "export const BLEND_TITLE = 'Blend';"
-        + "export const createBlendView = () => null;";
+      const stub =
+        "export const BLEND_TITLE = 'Blend';" + "export const createBlendView = () => null;";
       return { url: `data:text/javascript,${stub}`, shortCircuit: true };
     }
     if (specifier === "./ui/scene-column") {
       const stub = "export const mountSceneColumn = () => ({ unmount() {} });";
       return { url: `data:text/javascript,${stub}`, shortCircuit: true };
     }
+
     return next(specifier, context);
   },
 });
@@ -183,6 +194,7 @@ test("preparation keeps its receiver and blocks the wait until its read settles"
   const { waiting, cancel } = firstDataOf(mounted);
   const isWaitingSettled = track(waiting);
   await settle();
+
   const record = recordFor("a");
 
   assert.deepEqual(record.prepareCalls, ["2020-01-01"]);
@@ -192,6 +204,7 @@ test("preparation keeps its receiver and blocks the wait until its read settles"
   await waiting;
 
   assert.equal(isWaitingSettled(), true);
+
   cancel();
   mounted.unmount();
 });
@@ -199,9 +212,11 @@ test("preparation keeps its receiver and blocks the wait until its read settles"
 test("a selected later month keeps the wait after the first month settles", async () => {
   const { mounted } = mountTwoLayers();
   (globalThis.viewTest as ViewTestState).currentTime = "2020-02-01";
+
   const { waiting, cancel } = firstDataOf(mounted);
   const isWaitingSettled = track(waiting);
   await settle();
+
   const state = globalThis.viewTest as ViewTestState;
   const record = recordFor("a");
 
@@ -213,6 +228,7 @@ test("a selected later month keeps the wait after the first month settles", asyn
   await waiting;
 
   assert.equal(isWaitingSettled(), true);
+
   cancel();
   mounted.unmount();
 });
@@ -220,58 +236,79 @@ test("a selected later month keeps the wait after the first month settles", asyn
 test("a colour switch during preparation is caught by comparing the result", async () => {
   const { mounted } = mountTwoLayers();
   const { waiting, cancel } = firstDataOf(mounted);
-  const staleOutcome = waiting.then(() => "ready", (error: Error) => error.name);
+  const staleOutcome = waiting.then(
+    () => "ready",
+    (error: Error) => error.name,
+  );
   const first = globalThis.viewTest as ViewTestState;
   await settle();
+
   assert.deepEqual(recordFor("a").prepareCalls, ["2020-01-01"]);
   assert.deepEqual(recordFor("b").prepareCalls, []);
+
   const before = mounted.store.getSnapshot();
 
   mounted.store.dispatch({ kind: "choose", unit: "b", draw: "colour" });
   await settle();
+
   assert.notEqual(mounted.store.getSnapshot().allocation, before.allocation);
   assert.equal(first.pendingReads.has("a:2020-01-01"), true);
+
   cancel();
+
   assert.equal(await staleOutcome, "AbortError");
 
   const second = mounted.prepareEntry(() => first.currentTime, new AbortController().signal);
   const isSecondSettled = track(second);
   await settle();
+
   assert.deepEqual(recordFor("b").prepareCalls, ["2020-01-01"]);
   assert.equal(isSecondSettled(), false);
 
   readFor("b:2020-01-01").resolve();
+
   const preparation = await second;
 
   assert.equal(preparation.allocation, mounted.store.getSnapshot().allocation);
   assert.notEqual(preparation.allocation, before.allocation);
+
   mounted.unmount();
 });
 
 test("aborting a preparation rejects it and stops its reads", async () => {
   const { mounted } = mountTwoLayers();
   const { waiting, cancel } = firstDataOf(mounted);
-  const outcome = waiting.then(() => "ready", (error: Error) => error.name);
+  const outcome = waiting.then(
+    () => "ready",
+    (error: Error) => error.name,
+  );
   await settle();
+
   assert.ok((globalThis.viewTest as ViewTestState).pendingReads.has("a:2020-01-01"));
 
   cancel();
 
   assert.equal(await outcome, "AbortError");
   assert.equal((globalThis.viewTest as ViewTestState).pendingReads.size, 0);
+
   mounted.unmount();
 });
 
 test("one failing layer rejects the preparation and aborts the other reads", async () => {
   const { mounted } = mountTwoLayers();
   mounted.store.dispatch({ kind: "choose", unit: "b", draw: "colour" });
+
   const { waiting, cancel } = firstDataOf(mounted);
-  const outcome = waiting.then(() => "ready", (error: Error) => error.message);
+  const outcome = waiting.then(
+    () => "ready",
+    (error: Error) => error.message,
+  );
   await settle();
 
   readFor("b:2020-01-01").reject(new Error("read failed"));
 
   assert.equal(await outcome, "read failed");
+
   cancel();
   mounted.unmount();
 });
@@ -281,11 +318,13 @@ test("a static-only deferred ready blocks the wait until it settles", async () =
   const { waiting, cancel } = firstDataOf(mounted);
   const isWaitingSettled = track(waiting);
   await settle();
+
   assert.deepEqual(recordFor("a").prepareCalls, []);
   assert.equal(isWaitingSettled(), false);
 
   readyFor("a").resolve();
   await settle();
+
   assert.deepEqual(recordFor("a").prepareCalls, [null]);
   assert.equal(isWaitingSettled(), false);
 
@@ -293,6 +332,7 @@ test("a static-only deferred ready blocks the wait until it settles", async () =
   await waiting;
 
   assert.equal(isWaitingSettled(), true);
+
   cancel();
   mounted.unmount();
 });
@@ -303,6 +343,7 @@ test("the outline layer paints the linked colour and width and hides when linked
   assert.ok(map.layouts.includes("soe-area-outline:visibility:none"));
   assert.ok(map.paints.includes("soe-area-outline:line-color:#1a3658"));
   assert.ok(map.paints.includes("soe-area-outline:line-width:2"));
+
   mounted.unmount();
 });
 
@@ -323,14 +364,19 @@ test("an outline display change repaints the map and remembers the choice", () =
     window.localStorage.getItem("soe.outline.v1"),
     JSON.stringify({ shown: true, color: "white", widthPx: 3 }),
   );
+
   mounted.unmount();
 });
 
 function mountTwoLayers(withTime = true, readyLayers: string[] = [], outline = "") {
   installBrowser();
+
   const state = freshState();
+
   for (const layerId of readyLayers) state.readyGates.set(layerId, deferredUnit());
+
   (globalThis as Record<string, unknown>).viewTest = state;
+
   const map = fakeMap();
   const mounted = mountScene(map as never, makeScene(withTime), {
     cards: document.createElement("div"),
@@ -356,6 +402,7 @@ function mountTwoLayers(withTime = true, readyLayers: string[] = [], outline = "
 function recordFor(layerId: string): ViewRecord {
   const state = globalThis.viewTest as ViewTestState;
   const record = state.records.find((entry) => entry.layerId === layerId);
+
   assert.ok(record);
 
   return record;
@@ -364,6 +411,7 @@ function recordFor(layerId: string): ViewRecord {
 function readFor(key: string): PendingRead {
   const state = globalThis.viewTest as ViewTestState;
   const read = state.pendingReads.get(key);
+
   assert.ok(read);
 
   return read;
@@ -372,6 +420,7 @@ function readFor(key: string): PendingRead {
 function readyFor(layerId: string): ReadyGate {
   const state = globalThis.viewTest as ViewTestState;
   const gate = state.readyGates.get(layerId);
+
   assert.ok(gate);
 
   return gate;
@@ -405,6 +454,7 @@ function fakeMap() {
   const sources = new Map<string, object>();
   const layouts: string[] = [];
   const paints: string[] = [];
+
   return {
     layouts,
     paints,

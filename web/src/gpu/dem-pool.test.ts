@@ -3,6 +3,7 @@ import { mock, test } from "node:test";
 
 import { DEM_TILE_SIZE_PX, edgeStrips, stripOf } from "../workers/dem-decode.ts";
 import type { DemWorkerRequest, DemWorkerResponse } from "../workers/dem-worker.ts";
+import type { WantedTile } from "./dem-plan.ts";
 import {
   acquireDemPool,
   createGlTextureStore,
@@ -16,7 +17,6 @@ import {
   type DemTextureStore,
   type DemWorkerPort,
 } from "./dem-pool.ts";
-import type { WantedTile } from "./dem-plan.ts";
 
 const SIZE_PX = DEM_TILE_SIZE_PX;
 const URL_TEMPLATE = "https://dem/{z}/{x}/{y}.png";
@@ -67,6 +67,7 @@ class FakeStore implements DemTextureStore {
   create(data: Float32Array) {
     const texture = {};
     this.created.push({ texture, data: this.keepData ? data.slice() : data });
+
     return texture;
   }
 
@@ -92,17 +93,20 @@ function setup(options: { keepData?: boolean; store?: FakeStore | null } = {}) {
   const store = options.store === undefined ? new FakeStore(options.keepData) : options.store;
   let time = 0;
   let changes = 0;
+
   const pool = new DemPool({
     tileUrl: URL_TEMPLATE,
     store,
     createWorker: () => {
       const worker = new FakeWorker(log);
       workers.push(worker);
+
       return worker;
     },
     onChange: () => changes++,
     now: () => time,
   });
+
   return {
     pool,
     store,
@@ -134,14 +138,15 @@ function land(
   heights = flatTile,
   strips = flatStrips,
 ) {
-  const url = URL_TEMPLATE
-    .replace("{z}", String(wanted.z))
+  const url = URL_TEMPLATE.replace("{z}", String(wanted.z))
     .replace("{x}", String(wanted.x))
     .replace("{y}", String(wanted.y));
   const worker = harness.workers.find((candidate) =>
     candidate.requests.some((request) => request.type === "load" && request.url === url),
   );
+
   assert.ok(worker, `no load posted for ${url}`);
+
   const sent = worker.requests.find((request) => request.type === "load" && request.url === url)!;
   worker.reply({ kind: "tile", id: sent.id, heights, strips, decodeMs: 4 });
 }
@@ -151,8 +156,12 @@ function failWith(
   wanted: WantedTile,
   kind: "missing" | "error",
 ) {
-  const load = harness.loads().find((request) => request.type === "load"
-    && request.url.endsWith(`/${wanted.z}/${wanted.x}/${wanted.y}.png`))!;
+  const load = harness
+    .loads()
+    .find(
+      (request) =>
+        request.type === "load" && request.url.endsWith(`/${wanted.z}/${wanted.x}/${wanted.y}.png`),
+    )!;
   const worker = harness.workers.find((candidate) => candidate.requests.includes(load))!;
   worker.reply(kind === "missing" ? { kind, id: load.id } : { kind, id: load.id, message: "down" });
 }
@@ -164,7 +173,9 @@ test("a tile asked for on every frame loads once", () => {
   harness.pool.update([tile(1)]);
 
   assert.equal(harness.loads().length, 1);
+
   const [request] = harness.loads();
+
   assert.equal(request.type === "load" && request.url, "https://dem/6/1/0.png");
 });
 
@@ -175,8 +186,15 @@ test("at most six fetches run and the best-ranked tiles go first", () => {
   harness.pool.update(wanted);
 
   const urls = harness.loads().map((request) => request.type === "load" && request.url);
-  assert.deepEqual(urls, wanted.slice(0, 6).map((entry) => `https://dem/6/${entry.x}/0.png`));
-  assert.deepEqual(harness.workers.map((worker) => worker.requests.length), [3, 3]);
+
+  assert.deepEqual(
+    urls,
+    wanted.slice(0, 6).map((entry) => `https://dem/6/${entry.x}/0.png`),
+  );
+  assert.deepEqual(
+    harness.workers.map((worker) => worker.requests.length),
+    [3, 3],
+  );
   assert.equal(harness.pool.stats().queueDepth, 4);
 });
 
@@ -197,7 +215,10 @@ test("loads nobody wants any more are cancelled", () => {
 
   harness.pool.update([tile(2)]);
 
-  assert.deepEqual(harness.cancels().map((request) => request.id), [keyOf(tile(1))]);
+  assert.deepEqual(
+    harness.cancels().map((request) => request.id),
+    [keyOf(tile(1))],
+  );
   assert.equal(harness.pool.stats().inflight, 1);
   assert.equal(harness.pool.stats().cancelled, 1);
 });
@@ -248,7 +269,9 @@ test("a failed fetch is retried only after the retry delay", () => {
   failWith(harness, tile(1), "error");
 
   harness.pool.update([tile(1)]);
+
   assert.equal(harness.loads().length, 1);
+
   harness.advance(5000);
   harness.pool.update([tile(1)]);
 
@@ -257,6 +280,7 @@ test("a failed fetch is retried only after the retry delay", () => {
 
 test("the memo of missing tiles stays bounded", () => {
   const harness = setup();
+
   for (let index = 0; index < 600; index++) {
     const entry = tile(index % 64, Math.floor(index / 64));
     harness.pool.update([entry]);
@@ -270,11 +294,15 @@ test("uploads run only inside uploadPending and at most eight per frame", () => 
   const harness = setup();
   const wanted = Array.from({ length: 10 }, (_, index) => tile(index));
   harness.pool.update(wanted);
+
   for (const entry of wanted) land(harness, entry);
+
   assert.equal(harness.store!.created.length, 0);
 
   assert.equal(harness.pool.uploadPending(), 8);
+
   harness.pool.update(wanted);
+
   assert.equal(harness.pool.uploadPending(), 2);
 
   assert.equal(harness.store!.created.length, 10);
@@ -290,12 +318,16 @@ test("uploads stop at the millisecond budget and continue on the next frame", ()
     harness.advance(2);
     return created(data);
   };
+
   const wanted = [tile(0), tile(1), tile(2), tile(3)];
   harness.pool.update(wanted);
+
   for (const entry of wanted) land(harness, entry);
 
   assert.equal(harness.pool.uploadPending(), 2);
+
   harness.pool.update(wanted);
+
   assert.equal(harness.pool.uploadPending(), 2);
   assert.equal(harness.store!.created.length, 4);
 });
@@ -308,19 +340,25 @@ test("view and pinned tiles upload before lower tiers whatever the list order", 
     harness.advance(10);
     return created(data);
   };
+
   const ring = tile(0, 0, "ring");
   const view = tile(1);
   const pinned = tile(2, 0, "pinned");
   harness.pool.update([ring, view, pinned]);
+
   const heights = (value: number) => new Float32Array(SIZE_PX * SIZE_PX).fill(value);
   land(harness, ring, heights(1), edgeStrips(heights(1)));
   land(harness, view, heights(2), edgeStrips(heights(2)));
   land(harness, pinned, heights(3), edgeStrips(heights(3)));
 
   assert.equal(harness.pool.uploadPending(), 1);
+
   const centre = 2 * TEXTURE_SIZE_PX + 2;
+
   assert.equal(store.created[0].data[centre], 2);
+
   harness.pool.update([ring, view, pinned]);
+
   assert.equal(harness.pool.uploadPending(), 1);
   assert.equal(store.created[1].data[centre], 3);
 });
@@ -329,6 +367,7 @@ test("layers sharing a map frame upload at most eight tiles between them", () =>
   const harness = setup();
   const wanted = Array.from({ length: 10 }, (_, index) => tile(index));
   harness.pool.update(wanted);
+
   for (const entry of wanted) land(harness, entry);
 
   harness.pool.syncFrame(wanted);
@@ -336,8 +375,10 @@ test("layers sharing a map frame upload at most eight tiles between them", () =>
 
   assert.equal(harness.store!.created.length, 8);
   assert.equal(harness.pool.needsRepaint(), true);
+
   harness.pool.endMapFrame();
   harness.pool.syncFrame(wanted);
+
   assert.equal(harness.store!.created.length, 10);
 });
 
@@ -347,11 +388,14 @@ test("the map finishing a frame lets the shared pool work on the next one", () =
 
   pool.syncFrame([tile(1)]);
   pool.syncFrame([tile(2)]);
+
   assert.equal(workers.flatMap((worker) => worker.requests).length, 1);
+
   map.fireRender();
   pool.syncFrame([tile(2)]);
 
   assert.equal(workers.flatMap((worker) => worker.requests).length, 3);
+
   releaseDemPool(map, URL_TEMPLATE);
 });
 
@@ -374,6 +418,7 @@ test("a tile waiting on neighbours is drawable for no time until the cap passes"
   harness.pool.update([centre, tile(6, 5)]);
   land(harness, centre);
   harness.pool.uploadPending();
+
   assert.equal(harness.pool.drawableForMs(centre), null);
 
   harness.advance(350);
@@ -385,6 +430,7 @@ test("needsRepaint asks for the frames that finish the budgeted uploads", () => 
   const harness = setup();
   const wanted = Array.from({ length: 10 }, (_, index) => tile(index));
   harness.pool.update(wanted);
+
   for (const entry of wanted) land(harness, entry);
 
   harness.pool.uploadPending();
@@ -401,6 +447,7 @@ test("needsRepaint asks for frames while a tile waits out the drawable cap", () 
   const harness = setup();
   const centre = tile(5, 5);
   const wanted = [centre, tile(6, 5)];
+
   harness.pool.update(wanted);
   land(harness, centre);
   harness.pool.uploadPending();
@@ -439,15 +486,18 @@ test("a texture is the tile plus a two pixel halo of its neighbours' edges", () 
   const centre = tile(5, 5);
   const northHeights = new Float32Array(SIZE_PX * SIZE_PX).fill(100);
   const westHeights = Float32Array.from({ length: SIZE_PX * SIZE_PX }, (_, index) => index);
+
   const wanted = [centre, tile(5, 4), tile(4, 5)];
   harness.pool.update(wanted);
+
   land(harness, tile(5, 4), northHeights, edgeStrips(northHeights));
   land(harness, tile(4, 5), westHeights, edgeStrips(westHeights));
   land(harness, centre, new Float32Array(SIZE_PX * SIZE_PX).fill(7));
   harness.pool.uploadPending();
 
-  const centreData = harness.store!.created
-    .find((entry) => entry.data[TEXTURE_SIZE_PX * 2 + 2] === 7)!.data;
+  const centreData = harness.store!.created.find(
+    (entry) => entry.data[TEXTURE_SIZE_PX * 2 + 2] === 7,
+  )!.data;
 
   assert.equal(centreData.length, TEXTURE_SIZE_PX ** 2);
   assert.equal(centreData[2 * TEXTURE_SIZE_PX + 2], 7);
@@ -467,6 +517,7 @@ test("a neighbour landing later patches the halo of an uploaded texture", () => 
   harness.pool.update([centre, tile(5, 6, "view"), tile(4, 5, "view")]);
   land(harness, centre);
   harness.pool.uploadPending();
+
   const southHeights = Float32Array.from({ length: SIZE_PX * SIZE_PX }, (_, index) => index);
   const westHeights = new Float32Array(SIZE_PX * SIZE_PX).fill(3);
 
@@ -477,10 +528,15 @@ test("a neighbour landing later patches the halo of an uploaded texture", () => 
 
   const centreTexture = harness.pool.texture(centre);
   const patches = harness.store!.patches.filter((patch) => patch.texture === centreTexture);
-  const rects = patches
-    .map(({ x, y, width, height, data }) => (
-      { x, y, width, height, first: data[0], length: data.length }
-    ));
+  const rects = patches.map(({ x, y, width, height, data }) => ({
+    x,
+    y,
+    width,
+    height,
+    first: data[0],
+    length: data.length,
+  }));
+
   assert.deepEqual(rects, [
     { x: 2, y: 514, width: SIZE_PX, height: 2, first: 0, length: 2 * SIZE_PX },
     { x: 0, y: 2, width: 2, height: SIZE_PX, first: 3, length: 2 * SIZE_PX },
@@ -498,6 +554,7 @@ test("a tile waits for on-screen neighbours and ignores ring tiles", () => {
   harness.pool.update([centre, tile(6, 5), tile(4, 5, "ring"), tile(5, 6, "ring")]);
   land(harness, centre);
   harness.pool.uploadPending();
+
   assert.equal(harness.pool.isDrawable(centre), false);
 
   failWith(harness, tile(6, 5), "missing");
@@ -512,6 +569,7 @@ test("a tile stays drawable when a ring neighbour becomes a view tile", () => {
   harness.pool.update([centre, tile(6, 5, "ring")]);
   land(harness, centre);
   harness.pool.uploadPending();
+
   assert.equal(harness.pool.isDrawable(centre), true);
 
   harness.pool.update([centre, tile(6, 5, "view")]);
@@ -527,7 +585,9 @@ test("a tile gives up waiting for a neighbour after 300 ms", () => {
   harness.pool.uploadPending();
 
   harness.advance(299);
+
   assert.equal(harness.pool.isDrawable(centre), false);
+
   harness.advance(1);
 
   assert.equal(harness.pool.isDrawable(centre), true);
@@ -546,6 +606,7 @@ test("a tile is drawable once its wanted neighbours have landed", () => {
   const harness = setup();
   const centre = tile(5, 5);
   const east = tile(6, 5);
+
   harness.pool.update([centre, east]);
   land(harness, centre);
   land(harness, east);
@@ -559,6 +620,7 @@ test("view readiness needs every view tile while the ring stays out", () => {
   const harness = setup();
   const centre = tile(5, 5);
   const east = tile(6, 5);
+
   harness.pool.update([centre, east, tile(4, 5, "ring")]);
   land(harness, centre);
   harness.pool.uploadPending();
@@ -575,6 +637,7 @@ test("view readiness waits for pinned tiles", () => {
   const harness = setup();
   const pinned = tile(1, 0, "pinned");
   const centre = tile(5, 5);
+
   harness.pool.update([pinned, centre]);
   land(harness, centre);
   harness.pool.uploadPending();
@@ -592,6 +655,7 @@ test("neighbours wrap across the antimeridian", () => {
   const east = tile(63, 5);
   const west = tile(0, 5);
   harness.pool.update([east, west]);
+
   const westHeights = new Float32Array(SIZE_PX * SIZE_PX).fill(8);
   land(harness, east);
   land(harness, west, westHeights, edgeStrips(westHeights));
@@ -599,8 +663,11 @@ test("neighbours wrap across the antimeridian", () => {
 
   assert.equal(harness.pool.isDrawable(east), true);
   assert.equal(harness.pool.stats().textures, 2);
-  const eastData = harness.store!.created
-    .find((entry) => entry.data[TEXTURE_SIZE_PX * 2 + 2] === 0)!.data;
+
+  const eastData = harness.store!.created.find(
+    (entry) => entry.data[TEXTURE_SIZE_PX * 2 + 2] === 0,
+  )!.data;
+
   assert.equal(
     eastData[2 * TEXTURE_SIZE_PX + TEXTURE_SIZE_PX - 2],
     8,
@@ -611,10 +678,13 @@ test("neighbours wrap across the antimeridian", () => {
 test("the least recently used unpinned texture goes first once 96 are held", () => {
   const harness = setup();
   const all = Array.from({ length: 98 }, (_, index) => tile(index % 64, Math.floor(index / 64)));
+
   for (let index = 0; index < all.length; index += 2) {
     const pair = all.slice(index, index + 2);
     harness.pool.update(pair);
+
     for (const entry of pair) land(harness, entry);
+
     harness.pool.uploadPending();
   }
 
@@ -631,13 +701,17 @@ test("pinned textures are never evicted and the byte cap still holds", () => {
   const harness = setup();
   const pinned = Array.from({ length: 60 }, (_, index) => tile(index, 0, "pinned"));
   const view = Array.from({ length: 100 }, (_, index) => tile(index, 1));
+
   for (let index = 0; index < pinned.length; index += 2) {
     harness.pool.update(pinned.slice(index, index + 2));
+
     for (const entry of pinned.slice(index, index + 2)) land(harness, entry);
     harness.pool.uploadPending();
   }
+
   for (let index = 0; index < view.length; index += 2) {
     harness.pool.update([...pinned, ...view.slice(index, index + 2)]);
+
     for (const entry of view.slice(index, index + 2)) land(harness, entry);
     harness.pool.uploadPending();
   }
@@ -654,22 +728,27 @@ test("a tile re-landed after eviction does not queue halo patches again", () => 
   const harness = setup();
   const centre = tile(5, 5);
   const east = tile(6, 5, "pinned");
+
   harness.pool.update([centre, east]);
   land(harness, centre);
   land(harness, east);
   harness.pool.uploadPending();
+
   const eastTexture = harness.pool.texture(east);
 
-  const fillers = Array.from(
-    { length: 96 },
-    (_, index) => tile(index % 64, Math.floor(index / 64)),
+  const fillers = Array.from({ length: 96 }, (_, index) =>
+    tile(index % 64, Math.floor(index / 64)),
   );
+
   for (let index = 0; index < fillers.length; index += 2) {
     const pair = fillers.slice(index, index + 2);
     harness.pool.update([east, ...pair]);
+
     for (const entry of pair) land(harness, entry);
+
     harness.pool.uploadPending();
   }
+
   assert.equal(harness.pool.texture(centre), null);
 
   harness.pool.update([centre, east]);
@@ -685,16 +764,19 @@ test("a tile re-landed after eviction does not queue halo patches again", () => 
 
 test("uploadPending keeps a tile pending when no texture can be evicted", () => {
   const harness = setup();
-  const pinned = Array.from(
-    { length: 147 },
-    (_, index) => tile(index % 64, Math.floor(index / 64), "pinned"),
+  const pinned = Array.from({ length: 147 }, (_, index) =>
+    tile(index % 64, Math.floor(index / 64), "pinned"),
   );
+
   for (let index = 0; index < pinned.length; index += 2) {
     const pair = pinned.slice(index, index + 2);
     harness.pool.update(pinned);
+
     for (const entry of pair) land(harness, entry);
+
     harness.pool.uploadPending();
   }
+
   assert.equal(harness.pool.stats().textures, 147);
 
   const extra = tile(0, 3);
@@ -709,8 +791,10 @@ test("uploadPending keeps a tile pending when no texture can be evicted", () => 
 test("a texture wanted this frame is not evicted to make room", () => {
   const harness = setup();
   const wanted = Array.from({ length: 98 }, (_, index) => tile(index % 64, Math.floor(index / 64)));
+
   for (let index = 0; index < 96; index += 2) {
     harness.pool.update(wanted.slice(index, index + 2));
+
     for (const entry of wanted.slice(index, index + 2)) land(harness, entry);
     harness.pool.uploadPending();
   }
@@ -727,14 +811,18 @@ test("losing the context drops handles, keeps strips and reloads pinned tiles fi
   const harness = setup();
   const wanted = [tile(1, 0, "pinned"), tile(2, 0, "pinned"), tile(3, 0, "view")];
   harness.pool.update(wanted);
+
   for (const entry of wanted) land(harness, entry);
+
   harness.pool.uploadPending();
   harness.pool.update(wanted);
   harness.pool.uploadPending();
+
   const before = harness.loads().length;
 
   harness.pool.loseContext();
   harness.pool.update(wanted);
+
   assert.equal(harness.loads().length, before, "nothing loads without a context");
   assert.equal(harness.pool.texture(wanted[0]), null);
   assert.equal(harness.store!.removed.length, 0, "the old handles are not deleted");
@@ -742,12 +830,16 @@ test("losing the context drops handles, keeps strips and reloads pinned tiles fi
   const fresh = new FakeStore();
   harness.pool.useStore(fresh);
 
-  const reloaded = harness.loads().slice(before)
+  const reloaded = harness
+    .loads()
+    .slice(before)
     .map((request) => request.type === "load" && request.url);
-  assert.deepEqual(
-    reloaded,
-    ["https://dem/6/1/0.png", "https://dem/6/2/0.png", "https://dem/6/3/0.png"],
-  );
+
+  assert.deepEqual(reloaded, [
+    "https://dem/6/1/0.png",
+    "https://dem/6/2/0.png",
+    "https://dem/6/3/0.png",
+  ]);
   assert.equal(harness.pool.stats().strips, 3);
 });
 
@@ -757,7 +849,9 @@ test("decoded tiles wait through a context loss and upload to the new store", ()
   land(harness, tile(1));
 
   harness.pool.loseContext();
+
   assert.equal(harness.pool.uploadPending(), 0);
+
   const fresh = new FakeStore();
   harness.pool.useStore(fresh);
 
@@ -767,10 +861,10 @@ test("decoded tiles wait through a context loss and upload to the new store", ()
 
 test("stats report counts, bytes, queue depth and decode time", () => {
   const harness = setup();
-  const wanted = Array.from(
-    { length: 8 },
-    (_, index) => tile(index, 0, index === 0 ? "pinned" : "view"),
+  const wanted = Array.from({ length: 8 }, (_, index) =>
+    tile(index, 0, index === 0 ? "pinned" : "view"),
   );
+
   harness.pool.update(wanted);
   land(harness, wanted[0]);
   land(harness, wanted[1]);
@@ -801,16 +895,19 @@ test("request starts count every load including missing, failed and cancelled", 
   const missing = tile(2);
   const failed = tile(3);
   const cancelled = tile(4);
+
   harness.pool.update([successful, missing, failed, cancelled]);
 
   assert.equal(harness.pool.stats().requests, 4);
   assert.equal(harness.pool.stats().loaded, 0);
+
   land(harness, successful);
   failWith(harness, missing, "missing");
   failWith(harness, failed, "error");
 
   assert.equal(harness.pool.stats().requests, 4);
   assert.equal(harness.pool.stats().loaded, 1);
+
   harness.pool.update([]);
 
   assert.equal(harness.pool.stats().requests, 4);
@@ -824,12 +921,15 @@ test("has reports held, pending and in-flight tiles so the warmer skips them", (
   const wanted = tile(1);
 
   assert.equal(harness.pool.has(wanted), false);
+
   harness.pool.update([wanted]);
 
   assert.equal(harness.pool.has(wanted), true);
+
   land(harness, wanted);
 
   assert.equal(harness.pool.has(wanted), true);
+
   harness.pool.uploadPending();
 
   assert.equal(harness.pool.has(wanted), true);
@@ -839,9 +939,11 @@ test("has reports held, pending and in-flight tiles so the warmer skips them", (
 test("demPoolHas and demPoolStats read the shared pool by url", () => {
   const { map, options } = poolFixture();
   const pool = acquireDemPool(options);
+
   try {
     assert.equal(demPoolHas(URL_TEMPLATE, tile(1)), false);
     assert.equal(demPoolStats(URL_TEMPLATE)?.textures, 0);
+
     pool.update([tile(1)]);
 
     assert.equal(demPoolHas(URL_TEMPLATE, tile(1)), true);
@@ -864,10 +966,21 @@ test("a pool is shared per map and url and stopped by the last release", () => {
 
   assert.equal(first, second);
   assert.notEqual(first, other);
+
   releaseDemPool(map, URL_TEMPLATE);
-  assert.equal(workers.some((worker) => worker.terminated), false);
+
+  assert.equal(
+    workers.some((worker) => worker.terminated),
+    false,
+  );
+
   releaseDemPool(map, URL_TEMPLATE);
-  assert.equal(workers.slice(0, 2).every((worker) => worker.terminated), true);
+
+  assert.equal(
+    workers.slice(0, 2).every((worker) => worker.terminated),
+    true,
+  );
+
   releaseDemPool(map, "https://other/{z}/{x}/{y}.png");
 });
 
@@ -892,14 +1005,17 @@ function poolFixture() {
     createWorker: () => {
       const worker = new FakeWorker([]);
       workers.push(worker);
+
       return worker;
     },
   };
+
   return { map, canvas, options, workers };
 }
 
 test("a context loss keeps the pool for the layers that come back", () => {
   mock.timers.enable({ apis: ["setTimeout"] });
+
   const { map, canvas, options, workers } = poolFixture();
   const pool = acquireDemPool(options);
   pool.update([tile(1)]);
@@ -907,17 +1023,23 @@ test("a context loss keeps the pool for the layers that come back", () => {
   canvas.dispatchEvent(new Event("webglcontextlost"));
   releaseDemPool(map, URL_TEMPLATE);
   canvas.dispatchEvent(new Event("webglcontextrestored"));
+
   const again = acquireDemPool({ ...options, gl: {} as WebGL2RenderingContext });
   mock.timers.tick(30 * 1000);
 
   assert.equal(again, pool);
-  assert.equal(workers.some((worker) => worker.terminated), false);
+  assert.equal(
+    workers.some((worker) => worker.terminated),
+    false,
+  );
+
   releaseDemPool(map, URL_TEMPLATE);
   mock.timers.reset();
 });
 
 test("a release before the lost event still waits for the layers", () => {
   mock.timers.enable({ apis: ["setTimeout"] });
+
   const canvas = new EventTarget();
   const map = { getCanvas: () => canvas, triggerRepaint: () => {}, ...renderEvents() };
   const workers: FakeWorker[] = [];
@@ -929,36 +1051,60 @@ test("a release before the lost event still waits for the layers", () => {
     createWorker: () => {
       const worker = new FakeWorker([]);
       workers.push(worker);
+
       return worker;
     },
   };
   acquireDemPool(options);
 
   releaseDemPool(map, URL_TEMPLATE);
-  assert.equal(workers.some((worker) => worker.terminated), false);
+
+  assert.equal(
+    workers.some((worker) => worker.terminated),
+    false,
+  );
+
   mock.timers.tick(30 * 1000);
 
-  assert.equal(workers.every((worker) => worker.terminated), true);
+  assert.equal(
+    workers.every((worker) => worker.terminated),
+    true,
+  );
+
   mock.timers.reset();
 });
 
 test("a pool nobody comes back for is stopped after a context loss", () => {
   mock.timers.enable({ apis: ["setTimeout"] });
+
   const { map, canvas, options, workers } = poolFixture();
   acquireDemPool(options);
 
   canvas.dispatchEvent(new Event("webglcontextlost"));
   releaseDemPool(map, URL_TEMPLATE);
-  assert.equal(workers.some((worker) => worker.terminated), false);
+
+  assert.equal(
+    workers.some((worker) => worker.terminated),
+    false,
+  );
+
   mock.timers.tick(30 * 1000);
 
-  assert.equal(workers.every((worker) => worker.terminated), true);
+  assert.equal(
+    workers.every((worker) => worker.terminated),
+    true,
+  );
+
   mock.timers.reset();
 });
 
 test("the GL store uploads R32F with plain unpack settings and patches sub-rectangles", () => {
   const calls: unknown[][] = [];
-  const parameters = new Map<number, unknown>([[1, true], [2, true], [3, 8]]);
+  const parameters = new Map<number, unknown>([
+    [1, true],
+    [2, true],
+    [3, 8],
+  ]);
   const gl = {
     TEXTURE_2D: 10,
     R32F: 11,
@@ -980,9 +1126,8 @@ test("the GL store uploads R32F with plain unpack settings and patches sub-recta
     getExtension: () => ({}),
     getParameter: (name: number) => parameters.get(name),
     pixelStorei: (name: number, value: unknown) => calls.push(["unpack", name, value]),
-    texImage2D: (...args: unknown[]) => calls.push(
-      ["image", ...args.map((arg) => typeof arg === "object" ? "data" : arg)],
-    ),
+    texImage2D: (...args: unknown[]) =>
+      calls.push(["image", ...args.map((arg) => (typeof arg === "object" ? "data" : arg))]),
     texSubImage2D: (...args: unknown[]) => calls.push(["sub", ...args.slice(0, 8)]),
     deleteTexture: (texture: unknown) => calls.push(["delete", texture]),
   } as unknown as WebGL2RenderingContext;
@@ -993,25 +1138,29 @@ test("the GL store uploads R32F with plain unpack settings and patches sub-recta
   store.remove(texture);
 
   assert.equal(store.linear, true);
-  assert.deepEqual(calls.filter((call) => call[0] === "param"), [
-    ["param", 10, 20, 30],
-    ["param", 10, 21, 30],
-    ["param", 10, 22, 32],
-    ["param", 10, 23, 32],
-  ]);
-  const nearest = createGlTextureStore(
-    { getExtension: () => null } as unknown as WebGL2RenderingContext,
+  assert.deepEqual(
+    calls.filter((call) => call[0] === "param"),
+    [
+      ["param", 10, 20, 30],
+      ["param", 10, 21, 30],
+      ["param", 10, 22, 32],
+      ["param", 10, 23, 32],
+    ],
   );
-  assert.equal(
-    nearest.linear,
-    false,
-    "contexts without the float-linear extension sample nearest",
+
+  const nearest = createGlTextureStore({
+    getExtension: () => null,
+  } as unknown as WebGL2RenderingContext);
+
+  assert.equal(nearest.linear, false, "contexts without the float-linear extension sample nearest");
+  assert.deepEqual(
+    calls.filter((call) => call[0] !== "unpack" && call[0] !== "param"),
+    [
+      ["image", 10, 0, 11, 516, 516, 0, 12, 13, "data"],
+      ["sub", 10, 0, 2, 514, 512, 2, 12, 13],
+      ["delete", "texture"],
+    ],
   );
-  assert.deepEqual(calls.filter((call) => call[0] !== "unpack" && call[0] !== "param"), [
-    ["image", 10, 0, 11, 516, 516, 0, 12, 13, "data"],
-    ["sub", 10, 0, 2, 514, 512, 2, 12, 13],
-    ["delete", "texture"],
-  ]);
   assert.deepEqual(calls.filter((call) => call[0] === "unpack").slice(0, 3), [
     ["unpack", 1, false],
     ["unpack", 2, false],

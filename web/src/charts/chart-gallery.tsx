@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { SceneStore } from "../scene-store";
 import type { LayerDoc, Scene } from "../types";
 import { useSceneStore } from "../ui/use-scene-store";
+import { ChartPreview } from "./chart-preview";
 import {
   canonicalTableFor,
   creationAvailability,
@@ -11,7 +12,6 @@ import {
   unavailableTemplates,
   type ChartDefinition,
 } from "./definitions";
-import { ChartPreview } from "./chart-preview";
 import { chartNotesFor } from "./notes";
 import { unionDomainFor } from "./series";
 
@@ -163,9 +163,7 @@ function GalleryCard({
   const [confirmation, setConfirmation] = useState<string | null>(null);
   const setMain = () => {
     store.dispatch({ kind: "setMain", id: definition.id });
-    setConfirmation(
-      `${definition.title} is now the main chart in the scene panel's Charts tab.`,
-    );
+    setConfirmation(`${definition.title} is now the main chart in the scene panel's Charts tab.`);
   };
   const notes = notesFor(layer ?? null, definition);
 

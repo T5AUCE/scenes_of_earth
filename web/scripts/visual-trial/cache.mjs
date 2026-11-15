@@ -19,6 +19,7 @@ const MS_PER_SEC = 1000;
 /** Revalidates mutable entries across runs and atomically stores successful public responses. */
 export async function installCache(context, dir) {
   fs.mkdirSync(dir, { recursive: true });
+
   const runStartedMs = Date.now();
   await context.route(CACHED_HOSTS, async (route) => {
     const request = route.request();
@@ -32,6 +33,7 @@ export async function installCache(context, dir) {
     }
 
     const entry = await revalidate(route, request, stored);
+
     if (canStore(entry)) writeEntry(file, entry);
 
     return route.fulfill(makeFulfillment(entry));
@@ -42,6 +44,7 @@ export async function installCache(context, dir) {
 async function revalidate(route, request, stored) {
   const headers = { ...request.headers(), ...makeValidatorHeaders(stored) };
   let response;
+
   try {
     response = await route.fetch({ headers });
   } catch (error) {
@@ -69,6 +72,7 @@ function makeValidatorHeaders(entry) {
   if (entry?.headers["last-modified"]) {
     return { "if-modified-since": entry.headers["last-modified"] };
   }
+
   return {};
 }
 
@@ -87,9 +91,10 @@ export function isFresh(entry, nowMs, runStartedMs) {
   const dateMs = Date.parse(entry.headers.date);
   const maxAgeSecs = /\bmax-age\s*=\s*"?(\d+)/i.exec(control)?.[1];
   const expiresMs = Date.parse(entry.headers.expires);
-  const lifetimeMs = maxAgeSecs === undefined
-    ? expiresMs - (Number.isFinite(dateMs) ? dateMs : entry.storedAtMs)
-    : Number(maxAgeSecs) * MS_PER_SEC;
+  const lifetimeMs =
+    maxAgeSecs === undefined
+      ? expiresMs - (Number.isFinite(dateMs) ? dateMs : entry.storedAtMs)
+      : Number(maxAgeSecs) * MS_PER_SEC;
   const apparentAgeMs = Number.isFinite(dateMs) ? Math.max(0, entry.storedAtMs - dateMs) : 0;
   const ageMs = Math.max(apparentAgeMs, Number(entry.headers.age ?? 0) * MS_PER_SEC);
 
@@ -99,9 +104,12 @@ export function isFresh(entry, nowMs, runStartedMs) {
 function canStore(entry) {
   const control = entry.headers["cache-control"] ?? "";
   const vary = entry.headers.vary?.toLowerCase();
-  return entry.status === 200
+
+  return (
+    entry.status === 200
     && !/\b(no-store|private)\b/i.test(control)
-    && (!vary || vary === "accept-encoding");
+    && (!vary || vary === "accept-encoding")
+  );
 }
 
 /** Treats unusable cache entries as misses rather than aborting a trial. */
@@ -112,6 +120,7 @@ export function readEntry(file) {
     if (!entry.headers || typeof entry.headers !== "object" || Array.isArray(entry.headers)) {
       return null;
     }
+
     if (!Object.values(entry.headers).every((value) => typeof value === "string")) return null;
     if (typeof entry.body !== "string") return null;
 
@@ -128,6 +137,7 @@ export function readEntry(file) {
 /** Publishes one complete entry so concurrent readers never mix metadata and response bodies. */
 export function writeEntry(file, entry) {
   const temporary = `${file}.${crypto.randomUUID()}.tmp`;
+
   try {
     const serialized = {
       ...entry,

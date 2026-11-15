@@ -1,4 +1,5 @@
 """Test offline dataset steps, tiles, terrain resolution, block means and cube reads."""
+
 import functools
 import http.server
 import threading
@@ -40,17 +41,17 @@ from soe.sources import (
     SyntheticSource,
     make_registry,
     read_wrapped,
+    remote,
     terrain,
     terrain_tiles,
+    worldcover,
 )
-from soe.sources import remote, worldcover
 from soe.sources.era5land_precipitation import HighLatitudeRainDataset
 from soe.sources.fallback import read_bilinear
 from soe.sources.grid import CELL_DEG, WORLD_GRID, block_mean
 from soe.sources.periods import add_duration
 from soe.sources.terrain import (
     LATITUDE_DEGREE_M,
-    PlacedTile as TerrainTile,
     TERRAIN_PRODUCTS,
     TerrainProduct,
     _tile_index,
@@ -64,6 +65,7 @@ from soe.sources.terrain import (
     terrain_product,
     terrain_res,
 )
+from soe.sources.terrain import PlacedTile as TerrainTile
 from soe.sources.worldcover import (
     PlacedTile,
     _read_tile,
@@ -71,13 +73,7 @@ from soe.sources.worldcover import (
     overview_factor,
     worldcover_tiles,
 )
-from tests.helpers import (
-    LAND_COVER,
-    NAIROBI,
-    RAIN,
-    TERRAIN,
-    write_cube,
-)
+from tests.helpers import LAND_COVER, NAIROBI, RAIN, TERRAIN, write_cube
 
 TILE_PX = 60  # the fake terrain tiles are small, 1 / 60 degree per pixel
 NARROW_TILE_PX = 40  # tiles from 50 degrees poleward have 2/3 of the pixels in x
@@ -146,7 +142,7 @@ def test_world_grid_cells_coincide_with_the_chirps_cells():
     assert (world_c0, world_c1) == (chirps_c0, chirps_c1)
     assert (world_r0 - row_offset, world_r1 - row_offset) == (chirps_r0, chirps_r1)
     assert WORLD_GRID.bbox((world_c0, world_c1, world_r0, world_r1)) == CHIRPS_GRID.bbox(
-        (chirps_c0, chirps_c1, chirps_r0, chirps_r1),
+        (chirps_c0, chirps_c1, chirps_r0, chirps_r1)
     )
     assert WORLD_GRID.bbox((0, WORLD_GRID.columns, 0, WORLD_GRID.rows)) == [-180, -60, 180, 84]
 
@@ -191,14 +187,13 @@ class FakeCubes:
 
 
 def temperature_over(
-    land: dict[str, str],
-    era5: dict[str, str] | None = None,
+    land: dict[str, str], era5: dict[str, str] | None = None
 ) -> Era5LandTemperatureDataset:
-    """Return a temperature dataset using the supplied cube markers; default ERA5 markers to final.
-    """
+    """Return a temperature dataset using the supplied cube markers; default ERA5 markers to final."""
     era5 = era5 or {month: "0001:era5" for month in land}
     cubes = FakeCubes({"era5land_temperature": land, "era5_temperature": era5})
     synthetic = make_registry(SyntheticSource())["era5land_temperature"]
+
     return replace(synthetic, backend=cubes)
 
 
@@ -217,12 +212,7 @@ def test_temperature_revision_changes_only_for_requested_months_that_turn_final(
 
 def test_preliminary_steps_get_one_notice_per_run():
     temperature = temperature_over(
-        {
-            "2026-01": "0005:a",
-            "2026-02": "0005:a",
-            "2026-03": "0001:a",
-            "2026-04": "0005:a",
-        },
+        {"2026-01": "0005:a", "2026-02": "0005:a", "2026-03": "0001:a", "2026-04": "0005:a"}
     )
     steps = ["2026-01-01", "2026-02-01", "2026-03-01", "2026-04-01"]
 
@@ -259,8 +249,7 @@ def test_temperature_months_are_those_both_cubes_hold():
 
 def test_era5_preliminary_month_gets_the_preliminary_notice():
     temperature = temperature_over(
-        {"2026-01": "0001:a", "2026-02": "0001:a"},
-        {"2026-01": "0001:b", "2026-02": "0005:b"},
+        {"2026-01": "0001:a", "2026-02": "0001:a"}, {"2026-01": "0001:b", "2026-02": "0005:b"}
     )
 
     notices = temperature.notices([0, 0, 1, 1], ["2026-01-01", "2026-02-01"])
@@ -281,17 +270,12 @@ def cell_ids(window: tuple[int, int, int, int]) -> np.ndarray:
     """Return coarse-cell identifiers computed as row * 10000 + column."""
     col, row, width, height = window
     rows, columns = np.meshgrid(
-        np.arange(row, row + height),
-        np.arange(col, col + width),
-        indexing="ij",
+        np.arange(row, row + height), np.arange(col, col + width), indexing="ij"
     )
     return (rows * 10000 + columns).astype("float32")
 
 
-@pytest.mark.parametrize(
-    "bbox",
-    [[179.65, 0.05, 179.95, 0.35], [-180.35, 0.05, -180.05, 0.35]],
-)
+@pytest.mark.parametrize("bbox", [[179.65, 0.05, 179.95, 0.35], [-180.35, 0.05, -180.05, 0.35]])
 def test_temperature_fill_is_seamless_across_180_degrees(tmp_path, bbox):
     no_land_value = np.full(CUBE_SHAPE, np.nan, "float32")
     columns = np.arange(ERA5_GRID.columns, dtype="float32") / 100
@@ -316,10 +300,7 @@ def test_bilinear_sample_matches_a_hand_computed_point_and_lies_between_its_neig
 @pytest.mark.parametrize("first_column", [3598, -2])
 def test_bilinear_sampling_wraps_across_180_and_across_minus_180(first_column):
     sampled = read_bilinear(
-        ERA5_LAND_TEMPERATURE_GRID,
-        ERA5_GRID,
-        (first_column, 0, 4, 1),
-        cell_ids,
+        ERA5_LAND_TEMPERATURE_GRID, ERA5_GRID, (first_column, 0, 4, 1), cell_ids
     )
 
     assert sampled[0] == pytest.approx([1151.2, 575.6, 0, 0.4])
@@ -359,8 +340,9 @@ class GappySource(SyntheticSource):
 
     def read_rain(self, month: str, window: tuple[int, int, int, int]) -> np.ndarray:
         raster = np.full((window[3], window[2]), 10, "float32")
-        raster[:self.gap, :self.gap] = np.nan
+        raster[: self.gap, : self.gap] = np.nan
         raster[0, self.gap] = np.nan
+
         return raster
 
 
@@ -406,6 +388,7 @@ def real_registry(cubes_dir: Path, values: dict[str, float], month: str = "2016-
     """Write each named cube filled with its value and return the registry that reads them."""
     for name, value in values.items():
         write_cube(cubes_dir, name, value, month)
+
     source = RealSource(latest=month, cubes_dir=cubes_dir)
     source.read_rain = row_ramp
     return make_registry(source)
@@ -470,8 +453,7 @@ def test_a_scene_inside_60n_keeps_the_layer_that_reads_the_cubes_made_before_84n
 
 @pytest.mark.parametrize("bbox", [INSIDE_60N, TOUCHING_60N, TOUCHING_60S])
 def test_a_scene_inside_60n_reads_the_old_cubes_even_when_its_window_touches_the_edge(
-    tmp_path,
-    bbox,
+    tmp_path, bbox
 ):
     temperature = real_registry(tmp_path, {**TEMPERATURE_CUBES, **TEMPERATURE_84N_CUBES})[
         "era5land_temperature"
@@ -524,9 +506,12 @@ def no_land_over_84n_land(
 
 def test_months_of_a_scene_beyond_60n_follow_the_84n_cubes_when_the_old_cubes_get_ahead(tmp_path):
     source = RealSource(latest="2016-02", cubes_dir=tmp_path)
+
     for name, value in {**TEMPERATURE_CUBES, **TEMPERATURE_84N_CUBES}.items():
         write_cube(tmp_path, name, value)
+
     temperature = make_registry(source)["era5land_temperature"]
+
     for name, value in TEMPERATURE_CUBES.items():
         write_cube(tmp_path, name, value, "2016-02")
 
@@ -534,14 +519,17 @@ def test_months_of_a_scene_beyond_60n_follow_the_84n_cubes_when_the_old_cubes_ge
 
     assert old.latest() == "2016-02-01" and beyond.latest() == "2016-01-01"
     assert beyond.steps("2016-01-01", "2016-03-01") == ["2016-01-01"]
+
     with pytest.raises(SourceUnavailable, match="2016-02"):
         beyond.local_revision(["2016-02-01"])
 
 
 def test_rain_months_of_a_scene_beyond_60n_follow_the_84n_cubes(tmp_path):
     source = RealSource(latest="2016-02", cubes_dir=tmp_path)
+
     for name, value in {**RAIN_CUBES, **RAIN_84N_CUBES}.items():
         write_cube(tmp_path, name, value)
+
     rain = make_registry(source)["chirps_monthly"]
     write_cube(tmp_path, "era5_precipitation", 3, "2016-02")
     write_cube(tmp_path, "era5land_precipitation_84n", 30, "2016-02")
@@ -549,6 +537,7 @@ def test_rain_months_of_a_scene_beyond_60n_follow_the_84n_cubes(tmp_path):
     old, beyond = rain.for_scene(False), rain.for_scene(True)
 
     assert old.latest() == "2016-02-01" and beyond.latest() == "2016-01-01"
+
     with pytest.raises(SourceUnavailable, match="2016-02"):
         beyond.local_revision(["2016-02-01"])
 
@@ -556,8 +545,10 @@ def test_rain_months_of_a_scene_beyond_60n_follow_the_84n_cubes(tmp_path):
 def test_temperature_notices_follow_the_cubes_the_scene_reads(tmp_path):
     for name, value in TEMPERATURE_CUBES.items():
         write_cube(tmp_path, name, value)
+
     for name, value in TEMPERATURE_84N_CUBES.items():
         write_cube(tmp_path, name, value, expver="0005")
+
     temperature = real_registry(tmp_path, {})["era5land_temperature"]
 
     assert temperature.for_scene(False).notices(INSIDE_60N, ["2016-01-01"]) == []
@@ -566,12 +557,12 @@ def test_temperature_notices_follow_the_cubes_the_scene_reads(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "preliminary_cube",
-    ["era5land_precipitation_84n", "era5_precipitation_84n"],
+    "preliminary_cube", ["era5land_precipitation_84n", "era5_precipitation_84n"]
 )
 def test_rain_notices_follow_the_cubes_the_scene_reads(tmp_path, preliminary_cube):
     for name, value in {**RAIN_CUBES, **RAIN_84N_CUBES}.items():
         write_cube(tmp_path, name, value, expver="0005" if name == preliminary_cube else "0001")
+
     rain = real_registry(tmp_path, {})["chirps_monthly"]
 
     assert rain.for_scene(False).fallback_notices(["2016-01-01"], [True]) == []
@@ -624,6 +615,7 @@ def test_rain_of_a_scene_beyond_60s_lists_no_era5_land_without_cells_north_of_ch
 def test_rain_south_of_60s_keeps_the_legacy_era5_notices(tmp_path):
     for name, value in {**RAIN_CUBES, **RAIN_84N_CUBES}.items():
         write_cube(tmp_path, name, value, expver="0005")
+
     rain = real_registry(tmp_path, {})["chirps_monthly"]
     scene = rain.for_scene(True)
 
@@ -672,6 +664,7 @@ def test_missing_cube_is_unavailable_and_not_listed(tmp_path):
     cube = land_cube(tmp_path)
 
     assert not cube.has_months()
+
     with pytest.raises(SourceUnavailable, match="not ingested"):
         cube.months()
 
@@ -709,9 +702,7 @@ def test_cube_read_past_60_south_is_padded_to_whole_blocks(tmp_path, factor):
     two_rows_past_the_last = (1800, 1808, 1190, 1202)
 
     values = temperature.read_step(
-        "2016-01-01",
-        ERA5_LAND_TEMPERATURE_GRID.bbox(two_rows_past_the_last),
-        factor,
+        "2016-01-01", ERA5_LAND_TEMPERATURE_GRID.bbox(two_rows_past_the_last), factor
     )
 
     assert values.shape == (12 // factor, 8 // factor)
@@ -724,6 +715,7 @@ def test_empty_or_unreadable_cube_is_unavailable(tmp_path):
     cube = land_cube(tmp_path)
 
     assert not cube.has_months()
+
     with pytest.raises(SourceUnavailable, match="not ingested"):
         cube.months()
 
@@ -748,13 +740,7 @@ def test_terrain_res_budget():
     assert terrain_res((-70, -30, -30, 10)) == pytest.approx(0.025)
     assert terrain_res((19, 41, 191, 60)) == pytest.approx(0.05)
 
-    boxes = (
-        (33, -4, 42, 6),
-        (-70, -30, -30, 10),
-        (19, 41, 191, 60),
-        (0, 0, 2, 2),
-        (0, 0, 0.5, 40),
-    )
+    boxes = ((33, -4, 42, 6), (-70, -30, -30, 10), (19, 41, 191, 60), (0, 0, 2, 2), (0, 0, 0.5, 40))
 
     for bounds in boxes:
         res = terrain_res(bounds)
@@ -768,10 +754,10 @@ def test_tile_index():
     assert _tile_index("glo90").sum() == 26475
     assert _tile_index("glo30").sum() == 26450
     assert terrain_tiles((6, 0, 7, 1), "glo30") == [
-        ("glo30", "Copernicus_DSM_COG_10_N00_00_E006_00_DEM"),
+        ("glo30", "Copernicus_DSM_COG_10_N00_00_E006_00_DEM")
     ]
     assert terrain_tiles((6, 0, 7, 1), "glo90") == [
-        ("glo90", "Copernicus_DSM_COG_30_N00_00_E006_00_DEM"),
+        ("glo90", "Copernicus_DSM_COG_30_N00_00_E006_00_DEM")
     ]
     assert terrain_tiles((-130, -10, -120, 0), "glo30") == []  # mid-Pacific
     assert TERRAIN.tile_count([-130, -10, -120, 0]) == 0
@@ -789,7 +775,7 @@ def test_terrain_product_is_glo30_only_for_cells_finer_than_90_m():
 
 def test_glo30_gap_in_the_caucasus_falls_back_to_glo90():
     assert terrain_tiles((44, 40, 45, 41), "glo30") == [
-        ("glo90", "Copernicus_DSM_COG_30_N40_00_E044_00_DEM"),
+        ("glo90", "Copernicus_DSM_COG_30_N40_00_E044_00_DEM")
     ]
 
 
@@ -813,9 +799,7 @@ def test_terrain_blocks_equal_one_read():
         res = terrain_res(bounds)
         whole, _ = synthetic.terrain(bounds, res)
         blocks, transform = terrain_by_blocks(
-            bounds,
-            res,
-            lambda block, block_res: synthetic.terrain(block, block_res)[0],
+            bounds, res, lambda block, block_res: synthetic.terrain(block, block_res)[0]
         )
 
         assert whole.dtype == np.float64 and blocks.dtype == np.float64
@@ -895,12 +879,7 @@ def test_terrain_elevation_statistics_exclude_values_outside_the_mask():
     weights = (mask == 1).astype("float64")
     geometry = box(36.5, -1.5, 37.5, -0.5)
 
-    result = TERRAIN.summary(
-        {"elevation": elevation},
-        weights,
-        from_origin(0, 5, 1, 1),
-        geometry,
-    )
+    result = TERRAIN.summary({"elevation": elevation}, weights, from_origin(0, 5, 1, 1), geometry)
     stats = result["stats"]
     distribution = result["distribution"]
 
@@ -909,6 +888,7 @@ def test_terrain_elevation_statistics_exclude_values_outside_the_mask():
     assert stats["p2"] == 6 and stats["p98"] == 18
     assert stats["p2"] == distribution["values"][2]
     assert stats["p98"] == distribution["values"][98]
+
     assert distribution["min"] == 6 and distribution["max"] == 18
     assert distribution["mean"] == 12
     assert len(distribution["values"]) == 101
@@ -921,18 +901,15 @@ def test_terrain_summary_keeps_zero_and_excludes_nan_and_ring():
     elevation[2, 2] = 0.0
     elevation[1, 1] = np.nan
     elevation[0, 0] = 5_000.0
+
     mask = np.zeros((5, 5), dtype="uint8")
     mask[1:-1, 1:-1] = 1
     mask[0, 0] = 2
+
     weights = (mask == 1).astype("float64")
     geometry = box(36.5, -1.5, 37.5, -0.5)
 
-    result = TERRAIN.summary(
-        {"elevation": elevation},
-        weights,
-        from_origin(0, 5, 1, 1),
-        geometry,
-    )
+    result = TERRAIN.summary({"elevation": elevation}, weights, from_origin(0, 5, 1, 1), geometry)
     stats = result["stats"]
     distribution = result["distribution"]
 
@@ -948,12 +925,7 @@ def test_terrain_summary_mean_keeps_full_precision():
     weights = np.ones((3, 3), dtype="float64")
     geometry = box(36.5, -1.5, 37.5, -0.5)
 
-    result = TERRAIN.summary(
-        {"elevation": elevation},
-        weights,
-        from_origin(0, 3, 1, 1),
-        geometry,
-    )
+    result = TERRAIN.summary({"elevation": elevation}, weights, from_origin(0, 3, 1, 1), geometry)
 
     assert result["stats"]["mean"] == pytest.approx(10.123456789, abs=1e-9)
     assert result["distribution"]["mean"] == pytest.approx(10.123456789, abs=1e-9)
@@ -968,10 +940,7 @@ def test_terrain_summary_without_a_complete_stencil_falls_back_to_zero_hints():
     geometry = box(36.5, -1.5, 37.5, -0.5)
 
     result = TERRAIN.summary(
-        {"elevation": elevation},
-        weights,
-        from_origin(0, 5, 0.01, 0.01),
-        geometry,
+        {"elevation": elevation}, weights, from_origin(0, 5, 0.01, 0.01), geometry
     )
 
     assert result["stats"]["slope_p50_deg"] == 0.0
@@ -988,10 +957,7 @@ def test_terrain_summary_slope_hints_measure_a_complete_stencil():
     geometry = box(36.5, -1.5, 37.5, -0.5)
 
     result = TERRAIN.summary(
-        {"elevation": elevation},
-        weights,
-        from_origin(0, 8, res_deg, res_deg),
-        geometry,
+        {"elevation": elevation}, weights, from_origin(0, 8, res_deg, res_deg), geometry
     )
 
     assert result["stats"]["slope_p50_deg"] == pytest.approx(5.71, abs=0.05)
@@ -1004,14 +970,12 @@ def test_terrain_summary_slope_hints_exclude_missing_centres():
     elevation = np.full((5, 5), np.nan)
     for row in range(3):
         elevation[row, :3] = 100.0 + row * rise_per_row_m
+
     weights = np.ones((5, 5), dtype="float64")
     geometry = box(36.5, -1.5, 37.5, -0.5)
 
     valid_result = TERRAIN.summary(
-        {"elevation": elevation},
-        weights,
-        from_origin(0, 5, res_deg, res_deg),
-        geometry,
+        {"elevation": elevation}, weights, from_origin(0, 5, res_deg, res_deg), geometry
     )
 
     assert valid_result["stats"]["slope_p50_deg"] > 0.0
@@ -1019,10 +983,7 @@ def test_terrain_summary_slope_hints_exclude_missing_centres():
 
     elevation[1, 1] = np.nan
     missing_result = TERRAIN.summary(
-        {"elevation": elevation},
-        weights,
-        from_origin(0, 5, res_deg, res_deg),
-        geometry,
+        {"elevation": elevation}, weights, from_origin(0, 5, res_deg, res_deg), geometry
     )
 
     assert missing_result["stats"]["slope_p50_deg"] == 0.0
@@ -1035,12 +996,7 @@ def test_terrain_summary_without_valid_heights_is_refused():
     geometry = box(36.5, -1.5, 37.5, -0.5)
 
     with pytest.raises(AreaError, match="no valid values"):
-        TERRAIN.summary(
-            {"elevation": elevation},
-            weights,
-            from_origin(0, 3, 1, 1),
-            geometry,
-        )
+        TERRAIN.summary({"elevation": elevation}, weights, from_origin(0, 3, 1, 1), geometry)
 
 
 def test_terrain_distribution_matches_hand_computed_weighted_mean():
@@ -1048,12 +1004,7 @@ def test_terrain_distribution_matches_hand_computed_weighted_mean():
     weights = np.array([[1.0, 2.0, 3.0]])
     geometry = box(36.5, -1.5, 37.5, -0.5)
 
-    result = TERRAIN.summary(
-        {"elevation": elevation},
-        weights,
-        from_origin(0, 1, 1, 1),
-        geometry,
-    )
+    result = TERRAIN.summary({"elevation": elevation}, weights, from_origin(0, 1, 1, 1), geometry)
     distribution = result["distribution"]
     stats = result["stats"]
 
@@ -1071,6 +1022,7 @@ def test_terrain_distribution_matches_hand_computed_weighted_mean():
         later >= earlier
         for earlier, later in zip(distribution["values"], distribution["values"][1:])
     )
+
     assert stats["min"] == distribution["min"]
     assert stats["max"] == distribution["max"]
     assert stats["mean"] == distribution["mean"]
@@ -1084,12 +1036,7 @@ def test_terrain_tied_values_combine_weights_and_stay_ordered():
     weights = np.ones((1, 4), dtype="float64")
     geometry = box(36.5, -1.5, 37.5, -0.5)
 
-    result = TERRAIN.summary(
-        {"elevation": elevation},
-        weights,
-        from_origin(0, 1, 1, 1),
-        geometry,
-    )
+    result = TERRAIN.summary({"elevation": elevation}, weights, from_origin(0, 1, 1, 1), geometry)
     values = result["distribution"]["values"]
 
     assert values[50] == 1.0
@@ -1103,12 +1050,7 @@ def test_terrain_constant_grid_gives_flat_quantiles():
     weights = np.array([[1.0, 2.0], [3.0, 4.0]])
     geometry = box(36.5, -1.5, 37.5, -0.5)
 
-    result = TERRAIN.summary(
-        {"elevation": elevation},
-        weights,
-        from_origin(0, 2, 1, 1),
-        geometry,
-    )
+    result = TERRAIN.summary({"elevation": elevation}, weights, from_origin(0, 2, 1, 1), geometry)
     distribution = result["distribution"]
 
     assert distribution["min"] == 7.5
@@ -1124,12 +1066,7 @@ def test_terrain_distribution_ignores_zero_weight_ring_extremes():
     weights = np.array([[1.0, 3.0, 0.0, 0.0]])
     geometry = box(36.5, -1.5, 37.5, -0.5)
 
-    result = TERRAIN.summary(
-        {"elevation": elevation},
-        weights,
-        from_origin(0, 1, 1, 1),
-        geometry,
-    )
+    result = TERRAIN.summary({"elevation": elevation}, weights, from_origin(0, 1, 1, 1), geometry)
     distribution = result["distribution"]
 
     assert distribution["min"] == -2.5
@@ -1144,12 +1081,7 @@ def test_terrain_negative_heights_stay_valid_without_rounding():
     weights = np.ones((1, 3), dtype="float64")
     geometry = box(36.5, -1.5, 37.5, -0.5)
 
-    result = TERRAIN.summary(
-        {"elevation": elevation},
-        weights,
-        from_origin(0, 1, 1, 1),
-        geometry,
-    )
+    result = TERRAIN.summary({"elevation": elevation}, weights, from_origin(0, 1, 1, 1), geometry)
 
     assert result["stats"]["min"] == pytest.approx(-123.456)
     assert result["stats"]["max"] == -0.5
@@ -1161,12 +1093,7 @@ def test_terrain_sea_level_when_valid_heights_span_zero():
     weights = np.ones((1, 2), dtype="float64")
     geometry = box(36.5, -1.5, 37.5, -0.5)
 
-    result = TERRAIN.summary(
-        {"elevation": elevation},
-        weights,
-        from_origin(0, 1, 1, 1),
-        geometry,
-    )
+    result = TERRAIN.summary({"elevation": elevation}, weights, from_origin(0, 1, 1, 1), geometry)
 
     assert result["distribution"]["reference_values"] == [{"id": "sea_level", "value": 0}]
 
@@ -1177,10 +1104,7 @@ def test_terrain_sea_level_when_outline_meets_missing_ocean_squares():
     geometry = box(-130, -10, -129, -9)
 
     result = TERRAIN.summary(
-        {"elevation": elevation},
-        weights,
-        from_origin(-130, -9, 1, 1),
-        geometry,
+        {"elevation": elevation}, weights, from_origin(-130, -9, 1, 1), geometry
     )
 
     assert result["distribution"]["reference_values"] == [{"id": "sea_level", "value": 0}]
@@ -1192,23 +1116,14 @@ def test_terrain_no_sea_level_for_land_without_zero_crossing():
     weights = np.ones((2, 2), dtype="float64")
     geometry = box(36.5, -1.5, 37.5, -0.5)
 
-    result = TERRAIN.summary(
-        {"elevation": elevation},
-        weights,
-        from_origin(0, 2, 1, 1),
-        geometry,
-    )
+    result = TERRAIN.summary({"elevation": elevation}, weights, from_origin(0, 2, 1, 1), geometry)
 
     assert result["distribution"]["reference_values"] == []
     assert result["distribution"]["valid_fraction"] == pytest.approx(3 / 4)
 
 
 def test_terrain_sea_level_needs_absence_from_both_indexes(monkeypatch):
-    _install_tile_indexes(
-        monkeypatch,
-        {(0, 10), (0, 12)},
-        {(0, 10), (0, 11)},
-    )
+    _install_tile_indexes(monkeypatch, {(0, 10), (0, 12)}, {(0, 10), (0, 11)})
     sea_level = [{"id": "sea_level", "value": 0}]
 
     assert _references_for_geometry(box(10.2, 0.2, 10.8, 0.8)) == sea_level
@@ -1221,8 +1136,7 @@ def test_terrain_sea_level_geometry_edge_cases(monkeypatch):
     _install_tile_indexes(monkeypatch, {(0, 10)}, {(0, 10)})
     sea_level = [{"id": "sea_level", "value": 0}]
     holed_outline = Polygon(
-        [(9, -1), (12, -1), (12, 2), (9, 2)],
-        [[(10, 0), (11, 0), (11, 1), (10, 1)]],
+        [(9, -1), (12, -1), (12, 2), (9, 2)], [[(10, 0), (11, 0), (11, 1), (10, 1)]]
     )
     split_outline = MultiPolygon([box(9, 0, 9.5, 1), box(11.5, 0, 12, 1)])
 
@@ -1250,16 +1164,16 @@ def test_terrain_summary_slope_hints_use_nonuniform_weights():
     weights[1, 1] = 99.0
     weights[3, 3] = 1.0
     geometry = box(36.5, -1.5, 37.5, -0.5)
+
     result = TERRAIN.summary(
-        {"elevation": elevation},
-        weights,
-        from_origin(0, 5, res_deg, res_deg),
-        geometry,
+        {"elevation": elevation}, weights, from_origin(0, 5, res_deg, res_deg), geometry
     )
+
     slopes = slope_degrees(elevation, res_deg, lat_top)
     valid = np.isfinite(slopes) & np.isfinite(elevation) & (weights > 0)
     retained_slopes = slopes[valid]
     retained_weights = weights[valid]
+
     order = np.argsort(retained_slopes, kind="stable")
     ordered = retained_slopes[order]
     cumulative = np.cumsum(retained_weights[order], dtype="float64")
@@ -1290,16 +1204,10 @@ def test_static_summary_contract_for_terrain_and_land_cover():
     geometry = box(36.5, -1.5, 37.5, -0.5)
 
     terrain_result = TERRAIN.summary(
-        {"elevation": elevation},
-        weights,
-        from_origin(0, 1, 1, 1),
-        geometry,
+        {"elevation": elevation}, weights, from_origin(0, 1, 1, 1), geometry
     )
     cover_result = LAND_COVER.summary(
-        {"value": np.ones((1, 2), "uint8")},
-        weights,
-        from_origin(0, 1, 1, 1),
-        geometry,
+        {"value": np.ones((1, 2), "uint8")}, weights, from_origin(0, 1, 1, 1), geometry
     )
 
     assert set(terrain_result) == {"stats", "distribution"}
@@ -1361,6 +1269,7 @@ def fake_terrain(tmp_path, monkeypatch):
     handler = functools.partial(QuietHandler, directory=str(tmp_path))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
+
     product = TerrainProduct(
         f"http://127.0.0.1:{server.server_port}/{{n}}.tif",
         Path("unused"),
@@ -1369,16 +1278,15 @@ def fake_terrain(tmp_path, monkeypatch):
         TILE_PX,
     )
     monkeypatch.setitem(terrain.TERRAIN_PRODUCTS, "glo90", product)
+
     index = np.zeros(terrain.TILE_GRID_SHAPE, bool)
     monkeypatch.setattr(terrain, "_tile_index", lambda product_name: index)
+
     tiles = {}
     random = np.random.default_rng(1)
 
     def add_tile(
-        lon: int,
-        lat: int,
-        values: np.ndarray | None = None,
-        nodata: float = float("nan"),
+        lon: int, lat: int, values: np.ndarray | None = None, nodata: float = float("nan")
     ) -> None:
         if values is None:
             width = next(px for from_deg, px in TILE_WIDTHS_PX if abs(lat + 0.5) >= from_deg)
@@ -1389,6 +1297,7 @@ def fake_terrain(tmp_path, monkeypatch):
                 values = ramp.astype("float32")
         else:
             width = values.shape[1]
+
         wrapped_lon = (lon + 180) % 360 - 180
         profile = {
             "driver": "GTiff",
@@ -1400,17 +1309,13 @@ def fake_terrain(tmp_path, monkeypatch):
             "crs": "EPSG:4326",
             # Copernicus tiles have pixel centres on whole degrees, so the edge is half a pixel out.
             "transform": Affine(
-                1 / width,
-                0,
-                wrapped_lon - 0.5 / width,
-                0,
-                -1 / TILE_PX,
-                lat + 1 + 0.5 / TILE_PX,
+                1 / width, 0, wrapped_lon - 0.5 / width, 0, -1 / TILE_PX, lat + 1 + 0.5 / TILE_PX
             ),
         }
         path = tmp_path / f"{_tile_name('glo90', lat, wrapped_lon)}.tif"
         with rasterio.open(path, "w", **profile) as tile:
             tile.write(values, 1)
+
         index[lat + 90, wrapped_lon + 180] = True
         tiles[(lon, lat)] = values
 
@@ -1419,8 +1324,7 @@ def fake_terrain(tmp_path, monkeypatch):
 
 
 def area_mean(
-    tiles: dict[tuple[int, int], np.ndarray],
-    bounds: tuple[float, float, float, float],
+    tiles: dict[tuple[int, int], np.ndarray], bounds: tuple[float, float, float, float]
 ) -> np.ndarray:
     """Exact area-weighted mean of the tile pixels in each cell, NaN where uncovered."""
     west, south, east, north = bounds
@@ -1434,12 +1338,15 @@ def area_mean(
         y_in = lat + 1 + 0.5 / height - np.arange(height + 1) / height
         weights_x = overlap_lengths(x_out, x_in)
         weights_y = overlap_lengths(-y_out, -y_in)
+
         finite = np.isfinite(values)
         total += weights_y @ np.where(finite, values, 0.0) @ weights_x.T
         valid += weights_y @ finite.astype("float64") @ weights_x.T
+
     mean = np.full(total.shape, np.nan)
     covered = valid > 0
     mean[covered] = total[covered] / valid[covered]
+
     return mean
 
 
@@ -1454,6 +1361,7 @@ def test_terrain_across_180_with_a_missing_tile_equals_the_area_mean(fake_terrai
     add_tile, tiles = fake_terrain
     for lon, lat in ((179, -18), (180, -18), (180, -19)):  # (179, -19) is missing
         add_tile(lon, lat)
+
     bounds = (179.0, -19.0, 181.0, -17.0)
 
     elevation, transform = RealSource().terrain(bounds, CELL_DEG)
@@ -1470,6 +1378,7 @@ def test_terrain_across_minus_180_with_a_missing_tile_stays_nan(fake_terrain):
     add_tile, tiles = fake_terrain
     for lon, lat in ((-181, -18), (-180, -18), (-180, -19)):  # (-181, -19) is missing
         add_tile(lon, lat)
+
     bounds = (-181.0, -19.0, -179.0, -17.0)
 
     elevation, transform = RealSource().terrain(bounds, CELL_DEG)
@@ -1486,6 +1395,7 @@ def test_two_blocks_equal_one_block_exactly(fake_terrain):
     add_tile, _ = fake_terrain
     for lon, lat in ((179, -18), (180, -18), (179, -19), (180, -19)):
         add_tile(lon, lat)
+
     bounds = (179.0, -19.0, 181.0, -17.0)  # BLOCK_DEG = 2 splits it at 180
 
     two_blocks, _ = RealSource().terrain(bounds, CELL_DEG)
@@ -1504,15 +1414,12 @@ def test_two_blocks_equal_one_block_exactly(fake_terrain):
     ids=["north", "south"],
 )
 def test_narrow_tiles_at_50_degrees_equal_the_area_mean(
-    fake_terrain,
-    south,
-    tile_locations,
-    missing_rows,
-    narrow_latitude,
+    fake_terrain, south, tile_locations, missing_rows, narrow_latitude
 ):
     add_tile, tiles = fake_terrain
     for lon, lat in tile_locations:
         add_tile(lon, lat)
+
     bounds = (10.0, south, 12.0, south + 2)
 
     elevation, _ = RealSource().terrain(bounds, CELL_DEG)
@@ -1542,6 +1449,7 @@ def test_high_latitude_tiles_equal_the_area_mean(fake_terrain, south, latitudes,
     for lat in latitudes:
         for lon in (10, 11):
             add_tile(lon, lat)
+
     bounds = (10.0, south, 12.0, south + 2)
 
     elevation, _ = RealSource().terrain(bounds, CELL_DEG)
@@ -1618,6 +1526,7 @@ def test_masked_finite_pixel_is_excluded_from_the_mean(fake_terrain, tmp_path):
         mask = np.full((TILE_PX, TILE_PX), 255, "uint8")
         mask[:30, :] = 0
         tile.write_mask(mask)
+
     bounds = (10.0, 0.0, 11.0, 1.0)
 
     elevation, _ = RealSource().terrain(bounds, CELL_DEG)
@@ -1775,6 +1684,7 @@ def test_land_cover_ignores_no_data_samples(tmp_path, monkeypatch):
     classes[3, 3] = 30
     _write_class_tile(tmp_path / "S03E036.tif", classes)
     monkeypatch.setattr(worldcover, "WORLDCOVER_URL", str(tmp_path / "{n}.tif"))
+
     res = 4 * worldcover.WORLDCOVER_RES_DEG
     part = (36.0, -3.0 + 116 * worldcover.WORLDCOVER_RES_DEG, 36.0 + res, -3.0 + 0.01)
 
@@ -1809,6 +1719,7 @@ def _majority_pattern(cells: int, cell_px: int) -> np.ndarray:
             rows = slice(row * cell_px, (row + 1) * cell_px)
             columns = slice(column * cell_px, (column + 1) * cell_px)
             classes[rows, columns] = np.where(cell, major, minor)
+
     return classes
 
 
@@ -1843,16 +1754,17 @@ def _install_tile_indexes(
     """Point both product indexes at controlled grids with the given missing squares."""
     glo30 = np.ones((180, 360), dtype=bool)
     glo90 = np.ones((180, 360), dtype=bool)
+
     for lat, lon in glo30_missing:
         wrapped = (lon + 180) % 360 - 180
         glo30[lat + 90, wrapped + 180] = False
+
     for lat, lon in glo90_missing:
         wrapped = (lon + 180) % 360 - 180
         glo90[lat + 90, wrapped + 180] = False
+
     monkeypatch.setattr(
-        terrain,
-        "_tile_index",
-        lambda product: glo30 if product == "glo30" else glo90,
+        terrain, "_tile_index", lambda product: glo30 if product == "glo30" else glo90
     )
 
 
@@ -1860,21 +1772,12 @@ def _references_for_geometry(geometry: BaseGeometry) -> list[dict]:
     """Return the sea-level references for strictly positive heights at the geometry."""
     elevation = np.full((2, 2), 100.0)
     weights = np.ones((2, 2), dtype="float64")
-    result = TERRAIN.summary(
-        {"elevation": elevation},
-        weights,
-        from_origin(0, 2, 1, 1),
-        geometry,
-    )
+    result = TERRAIN.summary({"elevation": elevation}, weights, from_origin(0, 2, 1, 1), geometry)
+
     return result["distribution"]["reference_values"]
 
 
-TWO_ISLANDS = MultiPolygon(
-    [
-        box(36.5, -1.5, 37.5, -0.5),
-        box(42.6, 10.8, 43.8, 11.9),
-    ],
-)
+TWO_ISLANDS = MultiPolygon([box(36.5, -1.5, 37.5, -0.5), box(42.6, 10.8, 43.8, 11.9)])
 TWO_ISLANDS_BOUNDS = (36.0, -2.0, 45.0, 12.0)
 
 
@@ -1926,6 +1829,7 @@ def test_warp_block_with_geometry_leaves_untouched_tiles_as_no_data(fake_terrain
     add_tile, _ = fake_terrain
     for lon in (10, 11, 12):
         add_tile(lon, 0)
+
     bounds = (10.0, 0.0, 13.0, 1.0)
     outline = box(10.2, 0.2, 10.8, 0.8).union(box(12.2, 0.2, 12.8, 0.8))
 
@@ -1945,6 +1849,7 @@ def test_warp_block_across_a_pixel_width_boundary_matches_the_full_read(fake_ter
     for lon in (10, 11, 12):
         for lat in (49, 50):
             add_tile(lon, lat)
+
     bounds = (10.0, 49.0, 13.0, 50.0)
     outline = box(10.2, 49.2, 10.8, 49.8).union(box(12.2, 49.2, 12.8, 49.8))
 
@@ -1956,10 +1861,7 @@ def test_warp_block_across_a_pixel_width_boundary_matches_the_full_read(fake_ter
     assert whole is not None and filtered is not None
     # Cells beside a skipped tile also hold the half pixel that it reaches back.
     inside = geometry_mask(
-        [outline],
-        whole.shape,
-        from_origin(bounds[0], bounds[3], CELL_DEG, CELL_DEG),
-        invert=True,
+        [outline], whole.shape, from_origin(bounds[0], bounds[3], CELL_DEG, CELL_DEG), invert=True
     )
     assert inside.any()
     assert np.isfinite(filtered[inside]).all()
@@ -2007,13 +1909,11 @@ def test_land_cover_by_tiles_with_geometry_reads_only_touched_tiles():
         west, south, east, north = part
         height = round((north - south) / tile_res)
         width = round((east - west) / tile_res)
+
         return np.full((height, width), tile.lon % 100, "uint8")
 
     classes, transform = land_cover_by_tiles(
-        TWO_ISLANDS_BOUNDS,
-        CELL_DEG,
-        read_tile,
-        geometry=TWO_ISLANDS,
+        TWO_ISLANDS_BOUNDS, CELL_DEG, read_tile, geometry=TWO_ISLANDS
     )
 
     assert sorted(seen) == ["N09E042", "S03E036"]
@@ -2031,7 +1931,9 @@ def test_credits_of_the_84n_cubes_state_their_extent_and_keep_the_terms():
     assert "60°S-84°N" in SOURCES["era5land_84n"]["modified"]
     assert "60°S-84°N" in SOURCES["era5_84n"]["modified"]
     assert "Rainfall" in SOURCES["era5land_rain_84n"]["attribution"]
+
     for key in ("era5land_84n", "era5land_rain_84n"):
         assert SOURCES[key]["licence"] == SOURCES["era5land"]["licence"]
         assert SOURCES[key]["disclaimer"] == SOURCES["era5land"]["disclaimer"]
+
     assert SOURCES["era5_84n"]["citation"] == SOURCES["era5"]["citation"]

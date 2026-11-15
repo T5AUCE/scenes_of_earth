@@ -11,12 +11,12 @@ export const CHARTS_PARAM = "charts";
 export type Route =
   | { kind: "world" }
   | {
-    kind: "scene";
-    id: string;
-    time: string | null;
-    panel: string | null;
-    display: DisplayTokens;
-  };
+      kind: "scene";
+      id: string;
+      time: string | null;
+      panel: string | null;
+      display: DisplayTokens;
+    };
 
 /**
  * Build a scene link using formatTime's label to keep the finest step's precision. The display
@@ -48,6 +48,7 @@ export function routeFor(search: string, state: { panel?: string } | null): Rout
 // Repeated parameters join into one list, so the last entry for a layer wins.
 function displayTokens(parameters: URLSearchParams): DisplayTokens {
   const joined = (key: string) => parameters.getAll(key).join(",");
+
   return {
     pal: joined("pal"),
     range: joined("range"),
@@ -74,6 +75,7 @@ export function chartsTokenFor(search: string) {
  */
 export function withChartsToken(search: string, token: string | null) {
   const parameters = new URLSearchParams(search);
+
   if (token === null) parameters.delete(CHARTS_PARAM);
   else parameters.set(CHARTS_PARAM, token);
 

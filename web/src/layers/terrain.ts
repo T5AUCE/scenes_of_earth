@@ -4,7 +4,6 @@ import type { Map as MapLibreMap } from "maplibre-gl";
 import { addContourLineLayer, type ContourLineHandle } from "../gpu/contour-line-layer";
 import { addReliefLayer, type ReliefHandle } from "../gpu/relief-layer";
 import { CONTOUR_COLORS, contourColor, DEFAULT_CONTOUR_COLOR } from "../render/palettes";
-import { displayUnitFor, isUnitFor, unitOptions } from "../units";
 import type {
   LayerContext,
   LayerControl,
@@ -14,11 +13,8 @@ import type {
   TerrainStats,
   UnitsMenu,
 } from "../types";
-import {
-  cappedDemMaxZoom,
-  ContourOverlay,
-  sharedDemSource,
-} from "./contour-overlay";
+import { displayUnitFor, isUnitFor, unitOptions } from "../units";
+import { cappedDemMaxZoom, ContourOverlay, sharedDemSource } from "./contour-overlay";
 import { RELIEF_STRENGTH } from "./relief";
 import { DEM_PRELOAD_ID, demPreloadSource } from "./scene-preload";
 import { currentScenePreload } from "./tile-prefetch";
@@ -39,10 +35,7 @@ type TerrainTileEvent = {
   error?: { name?: string; message?: string; status?: number };
 };
 
-type TerrainSourceState = {
-  failures: number;
-  hasLoadedTile: boolean;
-};
+type TerrainSourceState = { failures: number; hasLoadedTile: boolean };
 
 /**
  * A terrain view with its relief base refit. The scene refits the pinned base once entry
@@ -94,9 +87,11 @@ export function createTerrainView(context: LayerContext): TerrainView {
     () => contourLines,
     addTerrainCredit(map, `${layer.id}-credit`, tiles.source.attribution, slots.shade),
   );
+
   const preload = currentScenePreload();
   let contourOverlay: ContourOverlay | undefined;
   let stopWatchingTiles: (() => void) | undefined;
+
   try {
     let strengthValue = RELIEF_STRENGTH.initial;
     let isUnderColour = false;
@@ -120,19 +115,18 @@ export function createTerrainView(context: LayerContext): TerrainView {
     };
 
     // The GPU pool decodes the elevation tiles, so the warmer only fills the HTTP cache.
-    preload?.add(demPreloadSource({
-      template: tiles.url,
-      maxzoom: cappedDemMaxZoom(tiles.maxzoom),
-      bbox: layer.grid.bbox,
-    }));
-    contourOverlay = new ContourOverlay(
-      context,
-      dem,
-      tiles,
-      stats as TerrainStats,
+    preload?.add(
+      demPreloadSource({
+        template: tiles.url,
+        maxzoom: cappedDemMaxZoom(tiles.maxzoom),
+        bbox: layer.grid.bbox,
+      }),
     );
+    contourOverlay = new ContourOverlay(context, dem, tiles, stats as TerrainStats);
+
     const overlay = contourOverlay;
     stopWatchingTiles = watchTerrainTiles(map, overlay.contourSourceIds, report);
+
     const stop = stopWatchingTiles;
 
     let palette = context.display?.palette ?? DEFAULT_CONTOUR_COLOR;
@@ -154,6 +148,7 @@ export function createTerrainView(context: LayerContext): TerrainView {
       },
       slots.lines,
     );
+
     const lines = contourLines;
     const menuUpdates = new EventTarget();
     const menu: LayerMenu = {
@@ -199,6 +194,7 @@ export function createTerrainView(context: LayerContext): TerrainView {
     const prepareGpu = shading.prepare;
     // The registry fills only after the terrain mounts, so a failed setup never forwards zooms.
     liveTerrainBases.set(shading, map);
+
     return {
       parts: [
         { id: layer.id, label: "Relief", layerIds: [id], controls: [strength] },
@@ -238,6 +234,7 @@ export function createTerrainView(context: LayerContext): TerrainView {
       liveTerrainBases.delete(shading);
       shading.destroy();
     }
+
     throw error;
   }
 }
@@ -257,6 +254,7 @@ function gpuShading(
     prepare: () => {
       const isReliefSettled = relief.prepare();
       const isLinesSettled = contourLines()?.prepare() ?? true;
+
       return isReliefSettled && isLinesSettled;
     },
     destroy: () => {
@@ -283,6 +281,7 @@ function addTerrainCredit(
     attribution,
   });
   map.addLayer({ id, type: "line", source: id }, beforeId);
+
   return () => {
     if (map.getLayer(id)) map.removeLayer(id);
     if (map.getSource(id)) map.removeSource(id);
@@ -346,6 +345,7 @@ function waitForPinnedTiles(
     const timer = setTimeout(finish, GPU_ENTRY_CAP_MS);
     signal?.addEventListener("abort", finish, { once: true });
     map.on("render", advance);
+
     if (signal?.aborted) finish();
     else advance();
   });
@@ -362,9 +362,11 @@ export function watchTerrainTiles(
   report: LayerContext["report"],
 ): () => void {
   const sources = new Map<string, TerrainSourceState>();
+
   for (const sourceId of sourceIds) {
     sources.set(sourceId, { failures: 0, hasLoadedTile: false });
   }
+
   let withdrawWarning: (() => void) | null = null;
 
   const sourceState = (sourceId: string | undefined): TerrainSourceState | undefined => {
@@ -376,6 +378,7 @@ export function watchTerrainTiles(
     const { sourceId, tile, error = {} } = event as TerrainTileEvent;
     const source = sourceState(sourceId);
     if (!source) return;
+
     if (isBenignTileError(error)) {
       warnOnceForMissingTile(sourceId, tile, error);
       return;
@@ -387,6 +390,7 @@ export function watchTerrainTiles(
       message: error.message,
     });
     source.failures += 1;
+
     if (withdrawWarning || !hasUnhealthySource(sources)) return;
 
     withdrawWarning = report(new Error("Terrain shading or contour tiles could not be loaded"));
@@ -398,6 +402,7 @@ export function watchTerrainTiles(
     if (!source || !tile) return;
 
     source.hasLoadedTile = true;
+
     if (!withdrawWarning || hasUnhealthySource(sources)) return;
 
     withdrawWarning();
@@ -428,12 +433,15 @@ function warnOnceForMissingTile(
   error: NonNullable<TerrainTileEvent["error"]>,
 ): void {
   if (!isMissingTile(error)) return;
+
   const key = `${sourceId}:${tileLabel(tile)}`;
   if (missingTiles.has(key)) return;
+
   if (missingTiles.size >= MAX_MISSING_TILES) {
     const oldest = missingTiles.keys().next().value;
     if (oldest !== undefined) missingTiles.delete(oldest);
   }
+
   missingTiles.set(key, true);
   console.warn("Terrain tile failed", {
     source: sourceId,

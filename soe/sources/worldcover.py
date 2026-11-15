@@ -1,4 +1,5 @@
 """Read ESA WorldCover land cover as the most common class in each output cell."""
+
 import math
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -15,13 +16,7 @@ from shapely.geometry.base import BaseGeometry
 
 from ..areas import WORLD_WIDTH_DEG
 from .datasets import StaticDataset, expanded_tile, touch_target
-from .grid import (
-    MAX_STATIC_DIVISIONS,
-    MAX_STATIC_SIDE_PX,
-    STATIC_BUDGET_PX,
-    Bbox,
-    budget_res,
-)
+from .grid import MAX_STATIC_DIVISIONS, MAX_STATIC_SIDE_PX, STATIC_BUDGET_PX, Bbox, budget_res
 from .remote import GDAL_OPTS, read_with_retries
 from .terrain import LONGITUDE_DEGREE_AT_EQUATOR_M
 
@@ -66,9 +61,7 @@ class PlacedTile(NamedTuple):
 
 
 def worldcover_tiles(
-    bounds: Bbox,
-    geometry: BaseGeometry | None = None,
-    res: float | None = None,
+    bounds: Bbox, geometry: BaseGeometry | None = None, res: float | None = None
 ) -> list[PlacedTile]:
     """The existing 3 degree tiles covering bounds (W, S, E, N).
 
@@ -80,8 +73,10 @@ def worldcover_tiles(
     last_lat = min(math.ceil(north - TILE_EDGE_TOLERANCE_DEG), 90)
     first_lon = _tile_edge(west + TILE_EDGE_TOLERANCE_DEG)
     last_lon = math.ceil(east - TILE_EDGE_TOLERANCE_DEG)
+
     target = touch_target(geometry)
     margin = _buffer_res(bounds, res) if target is not None else 0
+
     tiles = []
     for lat in range(first_lat, last_lat, TILE_DEG):
         for lon in range(first_lon, last_lon, TILE_DEG):
@@ -89,9 +84,10 @@ def worldcover_tiles(
             if _tile_index()[index_cell(lat, file_lon)]:
                 tile = PlacedTile(_tile_name(lat, file_lon), lon, lat, file_lon)
                 if target is None or target.intersects(
-                    expanded_tile(tile.lon, tile.lat, TILE_DEG, margin),
+                    expanded_tile(tile.lon, tile.lat, TILE_DEG, margin)
                 ):
                     tiles.append(tile)
+
     return tiles
 
 
@@ -162,8 +158,9 @@ def land_cover_by_tiles(
             part_west, _, _, part_north = parts[future]
             row, column = round((north - part_north) / res), round((part_west - west) / res)
             block = future.result()
-            classes[row:row + block.shape[0], column:column + block.shape[1]] = block
+            classes[row : row + block.shape[0], column : column + block.shape[1]] = block
             on_block()
+
     return classes, from_origin(west, north, res, res)
 
 
@@ -223,11 +220,7 @@ def overview_level(factor: int) -> int | None:
 
 
 def warp_modes(
-    source: rasterio.DatasetReader,
-    classes: np.ndarray,
-    west: float,
-    north: float,
-    res: float,
+    source: rasterio.DatasetReader, classes: np.ndarray, west: float, north: float, res: float
 ) -> None:
     """Fill classes with the most common source class in each cell, ignoring no data.
 
@@ -282,25 +275,15 @@ class LandCoverDataset(StaticDataset):
             return self._read_without_geometry(bbox, res, on_block)
 
         classes, transform = self.backend.land_cover(
-            tuple(bbox),
-            res,
-            on_block or (lambda: None),
-            geometry,
+            tuple(bbox), res, on_block or (lambda: None), geometry
         )
         return {"value": classes}, transform
 
     def _read_without_geometry(
-        self,
-        bbox: Bbox,
-        res: float,
-        on_block: Callable[[], None] | None,
+        self, bbox: Bbox, res: float, on_block: Callable[[], None] | None
     ) -> tuple[dict[str, np.ndarray], Affine]:
         """Return uint8 classes over bbox, reading every tile the bounds cover."""
-        classes, transform = self.backend.land_cover(
-            tuple(bbox),
-            res,
-            on_block or (lambda: None),
-        )
+        classes, transform = self.backend.land_cover(tuple(bbox), res, on_block or (lambda: None))
         return {"value": classes}, transform
 
     def notices(self, bbox: Bbox, steps: list[str]) -> list[str]:
@@ -312,9 +295,9 @@ class LandCoverDataset(StaticDataset):
             * LONGITUDE_DEGREE_AT_EQUATOR_M
             * math.cos(math.radians(centre_latitude))
         )
+
         return [
-            f"Land cover shows the most common class in each {cell_m:,.0f} m cell "
-            "(source 10 m).",
+            f"Land cover shows the most common class in each {cell_m:,.0f} m cell (source 10 m)."
         ]
 
 

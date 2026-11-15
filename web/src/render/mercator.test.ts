@@ -24,6 +24,7 @@ test("rows map to source rows in order, never going back up", () => {
   const table = sampleTable(grid);
 
   let previousRow = 0;
+
   for (let pixelRow = 0; pixelRow < table.height; pixelRow++) {
     const row = Math.floor(table.src[pixelRow * width] / width);
     assert.ok(row >= previousRow);
@@ -122,9 +123,23 @@ test("the outline shifts by the same amount as the image corners", () => {
 });
 
 test("shifting longitudes keeps latitudes and nesting", () => {
-  const polygon = [[[179, 1], [181, 1], [181, 2], [179, 1]]];
+  const polygon = [
+    [
+      [179, 1],
+      [181, 1],
+      [181, 2],
+      [179, 1],
+    ],
+  ];
 
-  assert.deepEqual(shiftLongitudes(polygon, -360), [[[-181, 1], [-179, 1], [-179, 2], [-181, 1]]]);
+  assert.deepEqual(shiftLongitudes(polygon, -360), [
+    [
+      [-181, 1],
+      [-179, 1],
+      [-179, 2],
+      [-181, 1],
+    ],
+  ]);
 });
 
 test("a cross table maps fine pixels to the coarse cells under them", () => {

@@ -25,6 +25,7 @@ export async function submitAndPoll(
   while (current.status === "queued" || current.status === "running") {
     showProgress(current, showStatus);
     await wait(POLL_INTERVAL_MS);
+
     if (!isCurrent()) return null;
 
     try {
@@ -68,10 +69,9 @@ function showProgress(sceneStatus: SceneStatus, showStatus: (text: string) => vo
   }
 
   const percent = Math.round(sceneStatus.progress * 100);
-  showStatus(sceneStatus.stage
-    ? `Building… ${percent}% (${sceneStatus.stage})`
-    : `Building… ${percent}%`);
+  showStatus(
+    sceneStatus.stage ? `Building… ${percent}% (${sceneStatus.stage})` : `Building… ${percent}%`,
+  );
 }
 
-const wait = (milliseconds: number) =>
-  new Promise((resolve) => setTimeout(resolve, milliseconds));
+const wait = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));

@@ -1,4 +1,5 @@
 """Queue validated scene requests, build their bundles in a small pool and record each status."""
+
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
@@ -42,14 +43,11 @@ class SceneJobs:
         prepared = prepare_scene(self._db_path, self._registry, body)
         bundle_exists = (self._scenes_dir / prepared.scene_id / "scene.json").exists()
         row, start_build = db.submit(
-            self._db_path,
-            prepared.scene_id,
-            prepared.request_json,
-            bundle_exists,
-            self._max_queue,
+            self._db_path, prepared.scene_id, prepared.request_json, bundle_exists, self._max_queue
         )
         if start_build:
             self._executor.submit(self._run, prepared.scene_id)
+
         return row
 
     def shutdown(self) -> None:
@@ -101,12 +99,7 @@ class _ProgressRecorder:
     def __call__(self, progress: float, stage: str | None) -> None:
         if progress - self._last_written >= PROGRESS_STEP or progress >= 1:
             self._last_written = progress
-            db.update_scene(
-                self._db_path,
-                self._scene_id,
-                progress=round(progress, 3),
-                stage=stage,
-            )
+            db.update_scene(self._db_path, self._scene_id, progress=round(progress, 3), stage=stage)
 
 
 def _record_failure(db_path: Path | str, scene_id: str, error: Exception) -> None:

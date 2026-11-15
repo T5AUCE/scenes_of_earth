@@ -1,4 +1,5 @@
 """Test scene request validation, the revision cache and scene ids without network."""
+
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -42,6 +43,7 @@ def db_path_of(tmp_path: Path, name: str) -> str:
     path = tmp_path / f"{name}.db"
     if not path.exists():
         db.init(str(path))
+
     return str(path)
 
 
@@ -54,7 +56,7 @@ def request_body(**overrides: object) -> str:
             "end": "2015-06",
             "layers": ["terrain", "chirps_monthly"],
             **overrides,
-        },
+        }
     )
 
 
@@ -81,9 +83,7 @@ def test_unknown_layer_is_an_area_error(db_path):
 
 
 def test_stored_revision_serves_a_built_scene_when_the_source_goes_down(
-    db_path,
-    monkeypatch,
-    revision_source,
+    db_path, monkeypatch, revision_source
 ):
     registry = make_registry(revision_source)
     first = prepare_scene(db_path, registry, request_body())
@@ -120,9 +120,7 @@ def test_synthetic_backend_does_not_touch_the_revision_table(db_path):
 
 
 def test_changed_revision_after_recovery_gives_a_new_scene_id(
-    db_path,
-    monkeypatch,
-    revision_source,
+    db_path, monkeypatch, revision_source
 ):
     registry = make_registry(revision_source)
     first = prepare_scene(db_path, registry, request_body())
@@ -209,13 +207,7 @@ def test_synthetic_and_real_terrain_scenes_get_different_ids():
     terrain = ["terrain"]
 
     def scene_id(registry: Registry) -> str:
-        return compute_scene_id(
-            "g",
-            terrain,
-            None,
-            [registry["terrain"]],
-            revisions={},
-        )
+        return compute_scene_id("g", terrain, None, [registry["terrain"]], revisions={})
 
     synthetic = make_registry(SyntheticSource())
     real = make_registry(RealSource())
@@ -285,9 +277,7 @@ def test_local_source_revision_is_not_cached(db_path):
 
     cube = MovingCube()
     temperature = replace(
-        make_registry(SyntheticSource())["era5land_temperature"],
-        backend=cube,
-        synthetic=False,
+        make_registry(SyntheticSource())["era5land_temperature"], backend=cube, synthetic=False
     )
     registry = {"era5land_temperature": temperature}
     body = request_body(layers=["era5land_temperature"], start="2016-01", end="2016-02")
@@ -310,9 +300,7 @@ def test_scene_id_changes_when_only_the_fallback_cube_is_revised(db_path):
 
     cubes = Cubes()
     temperature = replace(
-        make_registry(SyntheticSource())["era5land_temperature"],
-        backend=cubes,
-        synthetic=False,
+        make_registry(SyntheticSource())["era5land_temperature"], backend=cubes, synthetic=False
     )
     registry = {"era5land_temperature": temperature}
     body = request_body(layers=["era5land_temperature"], start="2016-01", end="2016-02")
@@ -335,9 +323,7 @@ def test_request_without_layers_gets_the_default_layers(db_path):
 
 
 def revised_cube_months(
-    source: RevisionSource,
-    monkeypatch: pytest.MonkeyPatch,
-    month: str,
+    source: RevisionSource, monkeypatch: pytest.MonkeyPatch, month: str
 ) -> None:
     """Make the fallback cube of `month` hold new data, as an ingest would."""
     months = source.data.cube_months
@@ -349,9 +335,7 @@ def revised_cube_months(
 
 
 def test_rain_scene_id_follows_the_fallback_cube_while_the_chirps_revision_is_cached(
-    db_path,
-    monkeypatch,
-    revision_source,
+    db_path, monkeypatch, revision_source
 ):
     registry = make_registry(revision_source)
     first = prepare_scene(db_path, registry, request_body())
@@ -364,9 +348,7 @@ def test_rain_scene_id_follows_the_fallback_cube_while_the_chirps_revision_is_ca
 
 
 def test_rain_scene_id_follows_the_fallback_cube_while_chirps_is_down(
-    db_path,
-    monkeypatch,
-    revision_source,
+    db_path, monkeypatch, revision_source
 ):
     registry = make_registry(revision_source)
     first = prepare_scene(db_path, registry, request_body())
@@ -382,9 +364,7 @@ def test_rain_scene_id_follows_the_fallback_cube_while_chirps_is_down(
 
 
 def test_cube_scene_id_ignores_the_remote_revision_cache_of_an_earlier_http_scene(
-    tmp_path,
-    monkeypatch,
-    revision_source,
+    tmp_path, monkeypatch, revision_source
 ):
     prepare_scene(db_path_of(tmp_path, "http"), make_registry(revision_source), request_body())
     revision_source.data = SyntheticSource(chirps_cube=True)
@@ -402,8 +382,7 @@ def test_cube_scene_id_ignores_the_remote_revision_cache_of_an_earlier_http_scen
 
 
 def test_mixed_scene_does_not_reuse_a_revision_stored_for_other_http_months(
-    tmp_path,
-    revision_source,
+    tmp_path, revision_source
 ):
     path = db_path_of(tmp_path, "mixed")
     prepare_scene(path, make_registry(revision_source), request_body())
@@ -411,9 +390,7 @@ def test_mixed_scene_does_not_reuse_a_revision_stored_for_other_http_months(
     registry = make_registry(revision_source)
     cube_months = revision_source.data.optional_cube_months
     revision_source.optional_cube_months = lambda spec: {
-        month: marker
-        for month, marker in cube_months(spec).items()
-        if month != "2015-06"
+        month: marker for month, marker in cube_months(spec).items() if month != "2015-06"
     }
 
     prepare_scene(path, registry, request_body())
@@ -421,10 +398,7 @@ def test_mixed_scene_does_not_reuse_a_revision_stored_for_other_http_months(
     assert revision_source.revision_calls == 2
 
 
-def test_a_revision_stored_before_the_local_part_existed_is_not_reused(
-    db_path,
-    revision_source,
-):
+def test_a_revision_stored_before_the_local_part_existed_is_not_reused(db_path, revision_source):
     db.set_revision(db_path, "chirps_monthly", "2015-01-01/2015-06-01", "old combined digest")
 
     registry = make_registry(revision_source)
@@ -460,6 +434,7 @@ def test_request_keeps_the_local_revisions_its_id_was_made_from(db_path):
 
     rain = registry["chirps_monthly"]
     steps = rain.steps("2015-01-01", "2015-07-01")
+
     assert json.loads(prepared.request_json)["local_revisions"] == {
-        "chirps_monthly": rain.local_revision(steps),
+        "chirps_monthly": rain.local_revision(steps)
     }

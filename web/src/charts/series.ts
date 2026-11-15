@@ -1,11 +1,6 @@
 /** Build time, calendar-month and distribution tables from stored statistics. */
 import type { LayerDoc } from "../types";
-import type {
-  DistributionTable,
-  SeasonalCycleTable,
-  SeasonalRow,
-  TimeSeriesTable,
-} from "./table";
+import type { DistributionTable, SeasonalCycleTable, SeasonalRow, TimeSeriesTable } from "./table";
 
 /** Monthly layers need two full years before By month stops looking like a normal. */
 export const SEASONAL_MIN_STEPS = 24;
@@ -52,14 +47,17 @@ export function isDistributionLayer(layer: LayerDoc) {
  * per calendar month, so shorter or non-monthly series stay time-only.
  */
 export function isSeasonalEligible(layer: LayerDoc) {
-  return isTimeSeriesLayer(layer)
+  return (
+    isTimeSeriesLayer(layer)
     && layer.time!.step === MONTHLY_STEP
-    && layer.time!.values.length >= SEASONAL_MIN_STEPS;
+    && layer.time!.values.length >= SEASONAL_MIN_STEPS
+  );
 }
 
 /** The shapes a layer can offer, from its stored blocks rather than its renderer kind. */
 export function shapesForLayer(layer: LayerDoc) {
   const shapes: ("time_series" | "seasonal_cycle" | "distribution")[] = [];
+
   if (isTimeSeriesLayer(layer)) shapes.push("time_series");
   if (isSeasonalEligible(layer)) shapes.push("seasonal_cycle");
   if (isDistributionLayer(layer)) shapes.push("distribution");
@@ -109,6 +107,7 @@ export function buildSeasonalCycle(layer: LayerDoc): SeasonalCycleTable {
   if (!isTimeSeriesLayer(layer)) {
     throw new Error(`${layer.title} has no area means over time.`);
   }
+
   if (layer.time!.step !== MONTHLY_STEP) {
     throw new Error(`${layer.title} is not monthly, so it has no calendar-month cycle.`);
   }
@@ -120,6 +119,7 @@ export function buildSeasonalCycle(layer: LayerDoc): SeasonalCycleTable {
     const month = position + JANUARY_INDEX;
     const contributing = starts.flatMap((start, index) => {
       if (monthOf(start) !== month) return [];
+
       const value = series.values[index];
 
       return typeof value === "number" && Number.isFinite(value)
@@ -189,9 +189,8 @@ export function buildDistributionTable(layer: LayerDoc): DistributionTable {
   }
 
   const distribution = layer.distribution!;
-  const median = typeof distribution.values[50] === "number"
-    ? distribution.values[50]
-    : distribution.mean;
+  const median =
+    typeof distribution.values[50] === "number" ? distribution.values[50] : distribution.mean;
 
   return {
     shape: "distribution",
@@ -219,6 +218,7 @@ export function buildDistributionTable(layer: LayerDoc): DistributionTable {
 export function unionDomainFor(layers: readonly LayerDoc[]): [number, number] | null {
   const intervals = unionIntervals(layers);
   if (intervals.length === 0) return null;
+
   const first = Date.parse(intervals[0].start);
   const last = Date.parse(intervals[intervals.length - 1].start);
   if (!Number.isFinite(first) || !Number.isFinite(last)) return null;
@@ -229,6 +229,7 @@ export function unionDomainFor(layers: readonly LayerDoc[]): [number, number] | 
 /** The distinct period intervals of time-varying layers, sorted without inventing a common one. */
 export function unionIntervals(layers: readonly LayerDoc[]) {
   const seen = new Map<string, { start: string; end: string }>();
+
   for (const layer of layers) {
     if (!isTimeSeriesLayer(layer)) continue;
 

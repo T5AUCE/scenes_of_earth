@@ -50,6 +50,7 @@ export function maxPixelRatioSetting(search: string): number | undefined {
   const value = Number(new URLSearchParams(search).get("maxPixelRatio"));
   const inRange = value >= MIN_GESTURE_PIXEL_RATIO && value <= MAX_GESTURE_PIXEL_RATIO;
   if (!Number.isFinite(value) || !inRange) return undefined;
+
   return value;
 }
 
@@ -60,8 +61,10 @@ export function maxPixelRatioSetting(search: string): number | undefined {
 export function contourMaxZoomSetting(search: string): number | undefined {
   const raw = new URLSearchParams(search).get("contourMaxZoom");
   if (raw === null || raw.trim() === "") return undefined;
+
   const value = Number(raw);
   if (!Number.isFinite(value) || value < 0 || value > MAX_GESTURE_ZOOM) return undefined;
+
   return Math.floor(value);
 }
 
@@ -108,7 +111,9 @@ const hubs = new WeakMap<object, GestureHub>();
  */
 export function subscribeGesture(map: GestureMap, handler: GestureHandler): () => void {
   if (typeof map.on !== "function" || typeof map.off !== "function") return () => {};
+
   let hub = hubs.get(map);
+
   if (!hub) {
     hub = {
       handlers: new Map(),
@@ -117,6 +122,7 @@ export function subscribeGesture(map: GestureMap, handler: GestureHandler): () =
       onMoveStart: () => {},
       onMoveEnd: () => {},
     };
+
     const started = hub;
     hub.onMoveStart = () => startGesture(started);
     hub.onMoveEnd = () => endGesture(started);
@@ -126,12 +132,15 @@ export function subscribeGesture(map: GestureMap, handler: GestureHandler): () =
   }
 
   hub.handlers.set(handler, hub.active);
+
   if (hub.active) handler.onStart();
 
   return () => {
     if (!hub!.handlers.has(handler)) return;
+
     const wasStarted = hub!.handlers.get(handler)!;
     hub!.handlers.delete(handler);
+
     if (wasStarted) handler.onEnd();
     if (hub!.handlers.size === 0) {
       map.off("movestart", hub!.onMoveStart);
@@ -148,8 +157,11 @@ export function isGestureActive(map: GestureMap): boolean {
 
 function startGesture(hub: GestureHub) {
   hub.depth += 1;
+
   if (hub.active) return;
+
   hub.active = true;
+
   for (const handler of [...hub.handlers.keys()]) {
     hub.handlers.set(handler, true);
     handler.onStart();
@@ -158,8 +170,11 @@ function startGesture(hub: GestureHub) {
 
 function endGesture(hub: GestureHub) {
   hub.depth = Math.max(0, hub.depth - 1);
+
   if (hub.depth > 0 || !hub.active) return;
+
   hub.active = false;
+
   for (const handler of [...hub.handlers.keys()]) {
     hub.handlers.set(handler, false);
     handler.onEnd();

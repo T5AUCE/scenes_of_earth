@@ -33,15 +33,18 @@ test("play holds the share link until pause writes it once", () => {
       back() {},
     },
   });
+
   harness.enter();
   replaced.length = 0;
 
   harness.onPlayingChange!(true);
   harness.onTime!("2020-01-01", "2020-01");
   harness.onTime!("2020-02-01", "2020-02");
+
   assert.equal(replaced.length, 0);
 
   harness.onPlayingChange!(false);
+
   assert.equal(replaced.length, 1);
   assert.match(replaced[0], /t=2020-02/);
 });
@@ -59,15 +62,19 @@ test("docking observes the attribution and time bar and publishes their extent",
 
   docking.setFooterHeight(100);
   docking.trigger();
+
   assert.equal(docking.values["--scene-dock-bottom"], "108px");
 
   docking.setFooterHeight(40);
   docking.setBarHeight(100);
   docking.fireResize();
+
   assert.equal(docking.values["--scene-dock-bottom"], "136px");
 
   assert.equal(docking.addedResize.length, 1);
+
   harness.mode.exit();
+
   assert.equal(docking.disconnects, 1);
   assert.equal(docking.removedResize.length, 1);
   assert.equal(docking.removedResize[0], docking.addedResize[0]);
@@ -78,19 +85,23 @@ test("docking disconnects on exit and re-observes on re-entry", (context) => {
   const docking = installDockingStubs(context, { footerHeight: 32, barHeight: 24 });
   harness.roots.timeBar = docking.timeBar;
   harness.enter();
+
   assert.equal(docking.observed.length, 2);
   assert.equal(docking.values["--scene-dock-bottom"], "60px");
   assert.equal(docking.addedResize.length, 1);
 
   docking.setBarHeight(50);
   docking.fireResize();
+
   assert.equal(docking.values["--scene-dock-bottom"], "86px");
 
   docking.setBarHeight(24);
   docking.fireResize();
+
   assert.equal(docking.values["--scene-dock-bottom"], "60px");
 
   harness.mode.exit();
+
   assert.equal(docking.disconnects, 1);
   assert.equal(docking.removedResize.length, 1);
   assert.equal(docking.removedResize[0], docking.addedResize[0]);
@@ -115,14 +126,17 @@ test("docking disconnects on exit and re-observes on re-entry", (context) => {
     layout: { visibility: "visible" },
   });
   harness.enter();
+
   assert.equal(docking.observed.length, 4);
   assert.equal(docking.values["--scene-dock-bottom"], "60px");
   assert.equal(docking.addedResize.length, 2);
 
   docking.fireResize();
+
   assert.equal(docking.values["--scene-dock-bottom"], "60px");
 
   harness.mode.exit();
+
   assert.equal(docking.disconnects, 2);
   assert.equal(docking.removedResize.length, 2);
   assert.equal(docking.removedResize[1], docking.addedResize[1]);
@@ -141,6 +155,7 @@ test("docking stays at the gap when nothing overlaps the column", (context) => {
   assert.equal(docking.values["--scene-dock-bottom"], "8px");
 
   harness.mode.exit();
+
   assert.equal(docking.disconnects, 1);
 });
 
@@ -155,6 +170,7 @@ test("docking lifts above a footer overlapping the column", (context) => {
   assert.equal(docking.values["--scene-dock-bottom"], "48px");
 
   harness.mode.exit();
+
   assert.equal(docking.disconnects, 1);
 });
 
@@ -169,6 +185,7 @@ test("docking lifts above a time bar overlapping the column", (context) => {
   assert.equal(docking.values["--scene-dock-bottom"], "86px");
 
   harness.mode.exit();
+
   assert.equal(docking.disconnects, 1);
 });
 

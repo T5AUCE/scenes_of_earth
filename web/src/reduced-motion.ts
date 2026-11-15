@@ -28,6 +28,7 @@ export function watchReducedMotion(onChange: (reduced: boolean) => void): () => 
     const media = matchMedia(REDUCED_MOTION_QUERY);
     const listener = () => onChange(media.matches);
     media.addEventListener("change", listener);
+
     return () => media.removeEventListener("change", listener);
   } catch {
     // Without a browser the playhead keeps its first reading.

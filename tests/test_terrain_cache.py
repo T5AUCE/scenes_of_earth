@@ -1,4 +1,5 @@
 """Test offline that the terrain cache returns what a read would and its key tracks each input."""
+
 from collections.abc import Callable
 from dataclasses import replace
 
@@ -56,10 +57,7 @@ def test_floating_nans_round_trip_through_the_cache(tmp_path):
             geometry: BaseGeometry | None = None,
         ) -> tuple[np.ndarray, object]:
             elevation, transform = super().terrain(
-                bounds,
-                res,
-                on_block or (lambda: None),
-                geometry,
+                bounds, res, on_block or (lambda: None), geometry
             )
             elevation[:2, :2] = np.nan
             return elevation, transform

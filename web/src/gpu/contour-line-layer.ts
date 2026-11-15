@@ -15,12 +15,7 @@ import {
   tierUniformsOf,
   type TierUniforms,
 } from "./contour-shaders";
-import {
-  DEM_VERTEX_SHADER,
-  DemDraw,
-  hasLinearHeights,
-  type DemDrawOptions,
-} from "./dem-draw";
+import { DEM_VERTEX_SHADER, DemDraw, hasLinearHeights, type DemDrawOptions } from "./dem-draw";
 import { deleteResources, linkProgram } from "./gl";
 import { keepThroughContextLoss, timedGpuDraw } from "./tiled-layer";
 
@@ -48,13 +43,7 @@ export interface ContourLineLayerOptions {
   poolOptions?: DemDrawOptions["poolOptions"];
 }
 
-const CONTOUR_UNIFORM_NAMES = [
-  "uIntervals",
-  "uTierAlpha",
-  "uTierWidth",
-  "uPixelRatio",
-  "uColour",
-];
+const CONTOUR_UNIFORM_NAMES = ["uIntervals", "uTierAlpha", "uTierWidth", "uPixelRatio", "uColour"];
 
 /** A custom layer that draws the contour ladder from the DEM pool at the zoom's sharp level. */
 export class ContourLineLayer implements CustomLayerInterface {
@@ -91,6 +80,7 @@ export class ContourLineLayer implements CustomLayerInterface {
   onAdd(map: MapLibreMap, gl: WebGL2RenderingContext): void {
     this.map = map;
     this.gl = gl;
+
     try {
       if (!hasLinearHeights(gl)) {
         throw new Error("Contours need linear filtering of float textures");
@@ -139,6 +129,7 @@ export class ContourLineLayer implements CustomLayerInterface {
     if (!gl || !map || !program || this.isFailed) return true;
 
     this.draw.warmDraw(gl, () => this.setState(gl, program, map.getPixelRatio()));
+
     return this.draw.loadBase(gl);
   }
 
@@ -149,10 +140,12 @@ export class ContourLineLayer implements CustomLayerInterface {
 
     try {
       this.setState(gl, program, map.getPixelRatio());
+
       let needsRepaint = false;
       timedGpuDraw(gl, this.id, () => {
         needsRepaint = this.draw.draw(gl, input.defaultProjectionData.mainMatrix);
       });
+
       if (needsRepaint) map.triggerRepaint();
     } catch (error) {
       this.fail(error as Error);
@@ -168,6 +161,7 @@ export class ContourLineLayer implements CustomLayerInterface {
     gl.enable(gl.BLEND);
     // The shader writes premultiplied colour, so the relief and basemap show through the gaps.
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+
     gl.uniform1fv(this.uniform("uIntervals"), this.tiers.intervalsM);
     gl.uniform1fv(this.uniform("uTierAlpha"), this.alphas);
     gl.uniform1fv(this.uniform("uTierWidth"), this.tiers.widthsPx);
@@ -182,6 +176,7 @@ export class ContourLineLayer implements CustomLayerInterface {
   private release(): void {
     const { gl, program } = this;
     this.program = null;
+
     if (!gl) return;
 
     this.draw.detach(gl);
@@ -213,8 +208,10 @@ export function addContourLineLayer(
   const { map } = options;
   const layer = new ContourLineLayer(options);
   map.addLayer(layer, beforeId);
+
   // The keeper removes the layer on capture, before the pool hears of the loss.
   const stopKeeping = keepThroughContextLoss(map, layer, beforeId);
+
   return {
     setLadder: (ladder, elevationUnit) => layer.setLadder(ladder, elevationUnit),
     setColor: (color) => layer.setColor(color),

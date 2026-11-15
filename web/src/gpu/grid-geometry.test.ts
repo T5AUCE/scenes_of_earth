@@ -30,6 +30,7 @@ function mainMatrix(zoom: number, centre: [number, number], viewPx = 1000) {
   matrix[12] = -centre[0] * scale;
   matrix[13] = centre[1] * scale;
   matrix[15] = 1;
+
   return matrix;
 }
 
@@ -67,6 +68,7 @@ test("row table is monotonic and spans grid", () => {
 
   assert.equal(table[0], 0);
   assert.equal(table[63], KENYA_LIKE.ny);
+
   for (let sample = 1; sample < table.length; sample++) {
     assert.ok(table[sample] > table[sample - 1]);
   }
@@ -78,9 +80,15 @@ test("local matrix maps corners like absolute matrix", () => {
   const main = mainMatrix(6, [quad.origin[0] + quad.extent[0] / 2, quad.origin[1]]);
   const local = localMatrix(main, quad, 0);
 
-  for (const [u, v] of [[0, 0], [1, 0], [1, 1], [0.3, 0.7]] as [number, number][]) {
+  for (const [u, v] of [
+    [0, 0],
+    [1, 0],
+    [1, 1],
+    [0.3, 0.7],
+  ] as [number, number][]) {
     const expected = project(main, cornerOf(quad, u, v));
     const actual = project(local, [u, v]);
+
     assert.ok(Math.abs(actual[0] - expected[0]) < 1e-5);
     assert.ok(Math.abs(actual[1] - expected[1]) < 1e-5);
   }
@@ -101,6 +109,7 @@ test("local matrix keeps subpixel precision at z18", () => {
   const grid = gridOf([36.8, -1.3, 36.85, -1.25], 50, 50);
   const quad = quadExtent(grid, { column: 0, row: 0, width: 50, height: 50 }, 0);
   const centre = cornerOf(quad, 0.5, 0.5);
+
   const main = mainMatrix(18, centre, viewPx);
   const local = localMatrix(main, quad, 0);
   const toPx = viewPx / 2;
@@ -142,12 +151,14 @@ test("split tiles cover every cell once with two cell halo", () => {
     assert.ok(window.width <= maxSize && window.height <= maxSize);
     assert.ok(core.column - window.column === Math.min(HALO_CELLS, core.column));
     assert.ok(core.row - window.row === Math.min(HALO_CELLS, core.row));
+
     for (let row = core.row; row < core.row + core.height; row++) {
       for (let column = core.column; column < core.column + core.width; column++) {
         covered[row * nx + column] += 1;
       }
     }
   }
+
   assert.ok(covered.every((count) => count === 1));
 });
 
@@ -169,17 +180,20 @@ test("split tiles cover every cell once with eight cell halo", () => {
   const covered = new Uint8Array(nx * ny);
 
   assert.ok(tiles.length > 1);
+
   for (const { core, window } of tiles) {
     assert.ok(window.width <= maxSize && window.height <= maxSize);
     assert.ok(core.column - window.column === Math.min(WIDE_HALO_CELLS, core.column));
     assert.ok(core.row - window.row === Math.min(WIDE_HALO_CELLS, core.row));
     assert.equal(window.column % 2, 0);
     assert.equal(window.row % 2, 0);
+
     for (let row = core.row; row < core.row + core.height; row++) {
       for (let column = core.column; column < core.column + core.width; column++) {
         covered[row * nx + column] += 1;
       }
     }
   }
+
   assert.ok(covered.every((count) => count === 1));
 });

@@ -1,4 +1,5 @@
 """Shared test shapes, synthetic datasets, boundary rows and plan and build shortcuts."""
+
 import json
 import math
 from dataclasses import replace
@@ -32,10 +33,7 @@ SYNTHETIC_REGISTRY = make_registry(SyntheticSource())
 RAIN, TERRAIN = SYNTHETIC_REGISTRY["chirps_monthly"], SYNTHETIC_REGISTRY["terrain"]
 LAND_COVER = SYNTHETIC_REGISTRY["esa_worldcover"]
 COARSE = replace(
-    RAIN,
-    id="coarse_monthly",
-    resolution_deg=0.1,
-    grid=Grid(-180, 60, 0.1, 3600, 1200),
+    RAIN, id="coarse_monthly", resolution_deg=0.1, grid=Grid(-180, 60, 0.1, 3600, 1200)
 )
 
 BOUNDARY = {
@@ -82,21 +80,15 @@ def plan_months(area: Area, datasets: list[Dataset], months: int = 12) -> Plan:
 
 
 def build_nairobi(
-    tmp_path: Path,
-    months: tuple[str, str] = ("2015-01", "2016-02"),
+    tmp_path: Path, months: tuple[str, str] = ("2015-01", "2016-02")
 ) -> tuple[JsonObject, zarr.Group]:
     """Build a Nairobi terrain and rain scene; return its scene.json and opened Zarr store."""
     build_scene(
-        HASH_A,
-        Area(NAIROBI, BOUNDARY),
-        months[0],
-        months[1],
-        [TERRAIN, RAIN],
-        "Test",
-        tmp_path,
+        HASH_A, Area(NAIROBI, BOUNDARY), months[0], months[1], [TERRAIN, RAIN], "Test", tmp_path
     )
     scene_dir = tmp_path / HASH_A
     document = json.loads((scene_dir / "scene.json").read_text(encoding="utf-8"))
+
     return document, zarr.open_group(scene_dir / "data.zarr", mode="r")
 
 
@@ -136,6 +128,7 @@ class ReingestedSource(SyntheticSource):
 
     def read_cube(self, spec: CubeSpec, month: str, window: CellWindow) -> np.ndarray:
         values = super().read_cube(spec, month, window)
+
         if self.reads_before_reingest is not None and self.reads >= self.reads_before_reingest:
             self.reingest()
 
@@ -143,10 +136,7 @@ class ReingestedSource(SyntheticSource):
 
 
 def harmonic_island(
-    vertex_count: int,
-    west: float = 35.4,
-    south: float = -2.1,
-    radius: float = 1.0,
+    vertex_count: int, west: float = 35.4, south: float = -2.1, radius: float = 1.0
 ) -> Polygon:
     """Return an island with harmonic wiggles that stands in for a detailed country outline."""
     points = []
@@ -162,6 +152,7 @@ def harmonic_island(
             (
                 west + radius + radius * wave * math.cos(angle),
                 south + radius + radius * wave * math.sin(angle),
-            ),
+            )
         )
+
     return Polygon(points)

@@ -23,6 +23,7 @@ test("area weighting describes outline shares without equal-cell claims", (conte
   const window = new Window();
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const root = renderAbout(makeScene(), "m", {});
 
   assert.match(root.textContent ?? "", /area inside the outline/);
@@ -35,6 +36,7 @@ test("terrain summaries face live relief and contours", (context) => {
   const window = new Window();
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const root = renderAbout(makeScene(), "ft", { rain: "in/month" });
 
   assert.match(root.textContent ?? "", /weighted reductions/);
@@ -51,6 +53,7 @@ test("geology scenes explain the rock-type scale and seams of their source map",
   const window = new Window();
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const plain = renderAbout(makeScene(), "m", {});
   const glim = renderAbout(makeGeologyScene("GLiM Global Lithological Map v1.0"), "m", {});
   const openLandMap = renderAbout(makeGeologyScene("OpenLandMap lithology 250 m"), "m", {});
@@ -61,7 +64,9 @@ test("geology scenes explain the rock-type scale and seams of their source map",
   assert.match(glim.textContent ?? "", /approximate at local scale/);
   assert.match(glim.textContent ?? "", /92 source maps/);
   assert.doesNotMatch(glim.textContent ?? "", /180° longitude/);
+
   const openLandMapText = openLandMap.textContent ?? "";
+
   assert.match(openLandMapText, /Rock type layer comes from a global map at about 1:3\.75 million/);
   assert.match(openLandMap.textContent ?? "", /OpenLandMap, from GLiM/);
   assert.match(openLandMap.textContent ?? "", /seams can show/);
@@ -72,6 +77,7 @@ test("geology age scenes explain the scale, era-only share and ICS generalisatio
   const window = new Window();
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const age = renderAbout(
     makeGeologyScene("Generalized geology of the world (GSC Open File 5529)", "geology_age"),
     "m",
@@ -92,8 +98,10 @@ test("a scene with partial layer coverage keeps the whole area and says layers c
   const window = new Window();
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const scene = makeScene();
   scene.area.clipped_to_coverage = true;
+
   const root = renderAbout(scene, "m", {});
 
   assert.match(root.textContent ?? "", /Some layers cover only part of the area/);
@@ -104,7 +112,8 @@ test("smoothing explains geology Smoothing in plain sentences", (context) => {
   const window = new Window();
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
-  const text = (renderAbout(makeScene(), "m", {}).textContent ?? "");
+
+  const text = renderAbout(makeScene(), "m", {}).textContent ?? "";
 
   assert.match(text, /Smoothing is measured in grid cells/);
   assert.match(text, /staircases become smooth curves/);
@@ -114,6 +123,7 @@ test("geology scenes draw under water with a short coastal fill for display only
   const window = new Window();
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const plain = renderAbout(makeScene(), "m", {});
   const rock = renderAbout(makeGeologyScene("GLiM Global Lithological Map v1.0"), "m", {});
   const age = renderAbout(
@@ -123,8 +133,10 @@ test("geology scenes draw under water with a short coastal fill for display only
   );
 
   assert.doesNotMatch(plain.textContent ?? "", /drawn under the map's water/);
+
   for (const scene of [rock, age]) {
     const text = scene.textContent ?? "";
+
     assert.match(text, /drawn under the map's water/);
     assert.match(text, /about 2 km/);
     assert.match(text, /one scene cell where cells are larger/);
@@ -219,12 +231,15 @@ function makeGeologyScene(sourceName: string, id = "geology"): Scene {
     arrays: {},
   } as unknown as Scene["layers"][number];
   scene.layers = [...scene.layers, geology];
+
   return scene;
 }
 
 function installBrowser(window: Window): void {
   const names = ["Node", "Element", "HTMLElement", "DocumentFragment", "Event"] as const;
+
   for (const name of names) defineGlobal(name, window[name]);
+
   defineGlobal("document", window.document);
   defineGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 }

@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import {
-  addGeologyWater,
-  GEOLOGY_WATER_ID,
-  removeGeologyWater,
-} from "./geology-water.ts";
+import { addGeologyWater, GEOLOGY_WATER_ID, removeGeologyWater } from "./geology-water.ts";
 
 const WATER_PAINT = { "fill-color": "rgb(158,189,255)" };
 const WATER_FILTER = ["!=", ["get", "brunnel"], "tunnel"];
@@ -13,6 +9,7 @@ const WATER_FILTER = ["!=", ["get", "brunnel"], "tunnel"];
 function makeMap(layers: string[] = ["background", "water", "fill-anchor"]) {
   const order = [...layers];
   const specs = new Map<string, Record<string, unknown>>();
+
   return {
     getLayersOrder: () => [...order],
     getLayer: (id: string) => (order.includes(id) ? { id } : undefined),
@@ -46,9 +43,11 @@ function makeMap(layers: string[] = ["background", "water", "fill-anchor"]) {
 
 test("the water copy sits between geology and the rest with the basemap paint", () => {
   const map = makeMap(["geology-classes", "fill-anchor", "outline"]);
+
   assert.equal(addGeologyWater(map as never, "fill-anchor"), true);
 
   map.addLayer({ id: "cover-classes" } as never, "fill-anchor");
+
   assert.deepEqual(map.getLayersOrder(), [
     "geology-classes",
     GEOLOGY_WATER_ID,
@@ -58,6 +57,7 @@ test("the water copy sits between geology and the rest with the basemap paint", 
   ]);
 
   const spec = map.specs.get(GEOLOGY_WATER_ID)!;
+
   assert.equal(spec.source, "openmaptiles");
   assert.equal(spec["source-layer"], "water");
   assert.deepEqual(spec.paint, WATER_PAINT);
@@ -72,6 +72,7 @@ test("removing the water copy leaves the basemap source alone", () => {
 
   assert.equal(map.getLayer(GEOLOGY_WATER_ID), undefined);
   assert.ok(map.getSource("openmaptiles"));
+
   removeGeologyWater(map as never);
 });
 

@@ -23,11 +23,11 @@ const STRIP_LENGTH = DEM_TILE_SIZE_PX * STRIP_WIDTH_PX;
 const TOP_STRIP_START = 0;
 const BOTTOM_STRIP_START = STRIP_LENGTH;
 const LEFT_STRIP_START = BOTTOM_STRIP_START + STRIP_LENGTH;
-const RIGHT_STRIP_START = LEFT_STRIP_START
-  + STRIP_LENGTH;
+const RIGHT_STRIP_START = LEFT_STRIP_START + STRIP_LENGTH;
 
 const BYTES_PER_PIXEL = 4;
-const ALTERED_CANVAS_WARNING = "DEM canvas readback altered colours, so tiles need VideoFrame "
+const ALTERED_CANVAS_WARNING =
+  "DEM canvas readback altered colours, so tiles need VideoFrame "
   + "bytes and fail where it is unavailable. This usually comes from a browser privacy or "
   + "anti-fingerprinting setting or an extension.";
 
@@ -43,18 +43,21 @@ export async function loadDemTile(url: string, signal: AbortSignal): Promise<Dem
   if (heights.length !== DEM_TILE_SIZE_PX ** 2) {
     throw new Error(`Unexpected tile size ${Math.sqrt(heights.length)} px for ${url}`);
   }
+
   return { heights, strips: edgeStrips(heights), decodeMs };
 }
 
 /** Decode terrarium RGBA pixels to metres. */
 export function decodeHeights(rgba: Uint8ClampedArray): Float32Array {
   const heights = new Float32Array(rgba.length / 4);
+
   for (let index = 0; index < heights.length; index++) {
     const red = rgba[index * 4];
     const green = rgba[index * 4 + 1];
     const blue = rgba[index * 4 + 2];
     heights[index] = red * 256 + green + blue / 256 - 32768;
   }
+
   return heights;
 }
 
@@ -68,6 +71,7 @@ export function edgeStrips(heights: Float32Array): Float32Array {
   const strips = new Float32Array(STRIP_SIDES.length * STRIP_LENGTH);
   strips.set(heights.subarray(0, STRIP_LENGTH), TOP_STRIP_START);
   strips.set(heights.subarray(size * (size - STRIP_WIDTH_PX)), BOTTOM_STRIP_START);
+
   for (let row = 0; row < size; row++) {
     const rowStart = row * size;
     const stripStart = row * STRIP_WIDTH_PX;
@@ -80,6 +84,7 @@ export function edgeStrips(heights: Float32Array): Float32Array {
       RIGHT_STRIP_START + stripStart,
     );
   }
+
   return strips;
 }
 
@@ -103,10 +108,12 @@ export async function extractBitmapRgba(bitmap: ImageBitmap): Promise<Uint8Clamp
       throw new Error(`DEM tile rejected because VideoFrame decode failed: ${reason}`);
     }
   }
+
   if (canvasAltersBytes === null) {
     // An unverifiable canvas is untrusted, so a probe failure fails the tile.
     canvasAltersBytes = await probeCanvasAltersBytes().catch(() => true);
   }
+
   if (canvasAltersBytes) {
     warnAlteredCanvasOnce();
     throw new Error(
@@ -114,18 +121,22 @@ export async function extractBitmapRgba(bitmap: ImageBitmap): Promise<Uint8Clamp
         + "privacy or anti-fingerprinting setting, and VideoFrame is unavailable in this browser",
     );
   }
+
   return readBitmapCanvas(bitmap);
 }
 
 async function readBitmapFrame(bitmap: ImageBitmap): Promise<Uint8ClampedArray> {
   const frame = new VideoFrame(bitmap, { timestamp: 0 });
+
   try {
     const format = frame.format;
     if (!format) throw new Error("VideoFrame reported no pixel format");
+
     const raw = new Uint8Array(frame.allocationSize());
     const layout = await frame.copyTo(raw);
     const stride = layout[0]?.stride ?? bitmap.width * BYTES_PER_PIXEL;
     const offset = layout[0]?.offset ?? 0;
+
     return frameBytesToRgba(raw, format, bitmap.width, bitmap.height, stride, offset);
   } finally {
     frame.close();
@@ -147,17 +158,22 @@ export function frameBytesToRgba(
   const redFirst = format === "RGBA" || format === "RGBX";
   const blueFirst = format === "BGRA" || format === "BGRX";
   if (!redFirst && !blueFirst) throw new Error(`Unsupported VideoFrame format "${format}"`);
+
   const rowBytes = width * BYTES_PER_PIXEL;
   if (strideBytes < rowBytes) {
     throw new Error(`VideoFrame stride ${strideBytes} is shorter than its ${rowBytes} byte row`);
   }
+
   if (raw.length < offsetBytes + (height - 1) * strideBytes + rowBytes) {
     throw new Error("VideoFrame bytes are shorter than their layout claims");
   }
+
   const opaque = format === "RGBX" || format === "BGRX";
   const rgba = new Uint8ClampedArray(width * height * BYTES_PER_PIXEL);
+
   for (let row = 0; row < height; row++) {
     const rowStart = offsetBytes + row * strideBytes;
+
     for (let column = 0; column < width; column++) {
       const source = rowStart + column * BYTES_PER_PIXEL;
       const target = (row * width + column) * BYTES_PER_PIXEL;
@@ -167,18 +183,23 @@ export function frameBytesToRgba(
       rgba[target + 3] = opaque ? 255 : raw[source + 3];
     }
   }
+
   return rgba;
 }
 
 async function probeCanvasAltersBytes(): Promise<boolean> {
   const canvas = new OffscreenCanvas(DEM_TILE_SIZE_PX, DEM_TILE_SIZE_PX);
   const context = canvas.getContext("2d", { willReadFrequently: true });
+
   // A missing context cannot be verified, so the worker must not trust canvas bytes.
   if (!context) return true;
+
   const image = context.createImageData(DEM_TILE_SIZE_PX, DEM_TILE_SIZE_PX);
   fillProbeRgba(image.data);
   context.putImageData(image, 0, 0);
+
   const { data } = context.getImageData(0, 0, DEM_TILE_SIZE_PX, DEM_TILE_SIZE_PX);
+
   return canvasReadbackAltered(image.data, data);
 }
 
@@ -203,9 +224,11 @@ export function canvasReadbackAltered(
   actual: Uint8ClampedArray,
 ): boolean {
   if (actual.length !== expected.length) return true;
+
   for (let index = 0; index < expected.length; index++) {
     if (actual[index] !== expected[index]) return true;
   }
+
   return false;
 }
 
@@ -213,11 +236,13 @@ function readBitmapCanvas(bitmap: ImageBitmap): Uint8ClampedArray {
   const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
   const context = canvas.getContext("2d", { willReadFrequently: true })!;
   context.drawImage(bitmap, 0, 0);
+
   return context.getImageData(0, 0, canvas.width, canvas.height).data;
 }
 
 function warnAlteredCanvasOnce(): void {
   if (integrityWarningPosted) return;
+
   integrityWarningPosted = true;
   console.warn(ALTERED_CANVAS_WARNING);
 }
@@ -235,6 +260,7 @@ async function fetchHeights(
     premultiplyAlpha: "none",
     colorSpaceConversion: "none",
   });
+
   try {
     const rgba = await extractBitmapRgba(bitmap);
     return { heights: decodeHeights(rgba), decodeMs: performance.now() - start };

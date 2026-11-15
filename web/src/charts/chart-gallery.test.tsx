@@ -115,10 +115,7 @@ test("the gallery keeps labelled unavailable tiles and disables creation", async
   assert.ok(host.textContent?.includes("No temperature series"));
   assert.ok(host.textContent?.includes("No elevation distribution"));
   assert.equal(host.querySelectorAll(".chart-unavailable").length, 2);
-  assert.equal(
-    (host.querySelector("button") as HTMLButtonElement).disabled,
-    false,
-  );
+  assert.equal((host.querySelector("button") as HTMLButtonElement).disabled, false);
   await act(async () => {
     root.unmount();
   });
@@ -308,9 +305,12 @@ test("temperature keeps readable paint across all chart types", async (context) 
     await act(async () => {
       store.dispatch({ kind: "saveChart", definition: { ...definition, chartType } });
     });
-    const selector = chartType === "line"
-      ? '.chart-lines polyline:not([aria-hidden="true"])'
-      : chartType === "bar" ? ".chart-bars rect" : ".chart-areas polygon";
+    const selector =
+      chartType === "line"
+        ? '.chart-lines polyline:not([aria-hidden="true"])'
+        : chartType === "bar"
+          ? ".chart-bars rect"
+          : ".chart-areas polygon";
     const attribute = chartType === "line" ? "stroke" : "fill";
     for (const palette of ["climate", "blue-red"]) {
       await act(async () => {
@@ -397,11 +397,7 @@ function display() {
 }
 
 function makeScene(layers: LayerDoc[]): Scene {
-  return {
-    id: "test",
-    title: "Test scene",
-    layers,
-  } as unknown as Scene;
+  return { id: "test", title: "Test scene", layers } as unknown as Scene;
 }
 
 function rainLayer(): LayerDoc {

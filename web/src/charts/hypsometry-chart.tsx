@@ -42,10 +42,7 @@ export function HypsometryChart({
   const canonical = buildDistributionTable(layer);
   const displayUnit = displayUnitFor(layer.units, options.displayUnit ?? viewerUnit);
   const converted = toDisplayTable(canonical, displayUnit, options.yTitle);
-  const display = {
-    ...converted,
-    xTitle: options.xTitle ?? "Share of valid area at or above (%)",
-  };
+  const display = { ...converted, xTitle: options.xTitle ?? "Share of valid area at or above (%)" };
   const notes = chartNotesFor(layer, canonical, chartType);
   const mean = formatPresentationValue(convertValue(canonical.mean, layer.units, displayUnit));
   const baseline = convertedBaseline(canonical, chartType, layer.units, displayUnit);
@@ -81,8 +78,14 @@ export function HypsometryChart({
 function notesFor(notes: string[]): React.ReactElement {
   return (
     <div className="chart-notes">
-      <h4 data-chart-notes-heading={true} tabIndex={-1}>{"Notes"}</h4>
-      {notes.map((note, index) => <p key={index} className="chart-note">{note}</p>)}
+      <h4 data-chart-notes-heading={true} tabIndex={-1}>
+        {"Notes"}
+      </h4>
+      {notes.map((note, index) => (
+        <p key={index} className="chart-note">
+          {note}
+        </p>
+      ))}
     </div>
   );
 }

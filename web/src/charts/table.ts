@@ -5,11 +5,7 @@ import { convertValue } from "../units";
 export type ChartType = "line" | "bar" | "area";
 
 /** The reducers a chart can use; categorical shares stay reserved without builders. */
-export type ChartShape =
-  | "time_series"
-  | "seasonal_cycle"
-  | "distribution"
-  | "categorical_shares";
+export type ChartShape = "time_series" | "seasonal_cycle" | "distribution" | "categorical_shares";
 
 /** One monthly or interval mean, with its coverage shares in outlined area. */
 export interface TimeSeriesRow {
@@ -138,7 +134,9 @@ export function toDisplayTable(
 
     return { ...copyTable(table), yTitle: explicitYTitle };
   }
+
   const yTitle = explicitYTitle ?? displayTitleFor(table.yTitle, table.units, displayUnit);
+
   if (table.shape === "time_series") {
     return {
       ...table,
@@ -151,6 +149,7 @@ export function toDisplayTable(
       })),
     };
   }
+
   if (table.shape === "seasonal_cycle") {
     return {
       ...table,
@@ -159,10 +158,11 @@ export function toDisplayTable(
       rows: table.rows.map((row) => ({
         ...row,
         value: row.value === null ? null : convertValue(row.value, table.units, displayUnit),
-        yearRange: row.yearRange ? [...row.yearRange] as [number, number] : null,
+        yearRange: row.yearRange ? ([...row.yearRange] as [number, number]) : null,
       })),
     };
   }
+
   if (table.shape === "distribution") {
     const convert = (value: number) => convertValue(value, table.units, displayUnit);
 
@@ -182,12 +182,7 @@ export function toDisplayTable(
     };
   }
 
-  return {
-    ...table,
-    units: displayUnit,
-    yTitle,
-    rows: table.rows.map((row) => ({ ...row })),
-  };
+  return { ...table, units: displayUnit, yTitle, rows: table.rows.map((row) => ({ ...row })) };
 }
 
 function displayTitleFor(title: string, fromUnit: string, toUnit: string) {
@@ -206,7 +201,7 @@ function copyTable(table: ChartTable): ChartTable {
       ...table,
       rows: table.rows.map((row) => ({
         ...row,
-        yearRange: row.yearRange ? [...row.yearRange] as [number, number] : null,
+        yearRange: row.yearRange ? ([...row.yearRange] as [number, number]) : null,
       })),
     };
   }

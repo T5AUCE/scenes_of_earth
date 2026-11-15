@@ -8,9 +8,5 @@ export default defineConfig({
   optimizeDeps: { exclude: ["maplibre-gl"] },
 
   // Node resolves "localhost" to ::1, which the devcontainer port forward and uvicorn don't use.
-  server: {
-    host: "127.0.0.1",
-    port: 5173,
-    proxy: { "/api": backend, "/scenes": backend },
-  },
+  server: { host: "127.0.0.1", port: 5173, proxy: { "/api": backend, "/scenes": backend } },
 });

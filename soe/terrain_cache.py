@@ -1,4 +1,5 @@
 """Disk cache for static dataset reads, so a full-resolution terrain read costs once per area."""
+
 import hashlib
 import json
 import os
@@ -41,6 +42,7 @@ def read_cached(
         arrays, transform = dataset.read(bbox, res, on_block)
     else:
         arrays, transform = dataset.read(bbox, res, on_block, geometry)
+
     _store(path, arrays, transform)
     return arrays, transform
 
@@ -57,20 +59,13 @@ def is_cached(
 
 
 def _cache_path(
-    dataset: StaticDataset,
-    bbox: Bbox,
-    res: float,
-    cache_dir: Path,
-    geometry: BaseGeometry | None,
+    dataset: StaticDataset, bbox: Bbox, res: float, cache_dir: Path, geometry: BaseGeometry | None
 ) -> Path:
     return cache_dir / f"{_cache_key(dataset, bbox, res, geometry)}.npz"
 
 
 def _cache_key(
-    dataset: StaticDataset,
-    bbox: Bbox,
-    res: float,
-    geometry: BaseGeometry | None = None,
+    dataset: StaticDataset, bbox: Bbox, res: float, geometry: BaseGeometry | None = None
 ) -> str:
     """Hash of everything that determines the raster.
 
@@ -90,6 +85,7 @@ def _cache_key(
     if geometry is not None:
         request["outline"] = hashlib.sha256(geometry.wkb).hexdigest()
         request["outline_version"] = OUTLINE_KEY_VERSION
+
     encoded = json.dumps(request, sort_keys=True).encode()
     return hashlib.sha256(encoded).hexdigest()[:KEY_HEX_CHARS]
 

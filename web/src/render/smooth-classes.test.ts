@@ -82,7 +82,10 @@ test("smoothing respects the texture limit along both axes", () => {
 });
 
 test("paintClassIds colours each index and leaves 0 transparent", () => {
-  const rgba = paintClassIds(Uint8Array.of(2, 0, 1), [[1, 2, 3], [4, 5, 6]]);
+  const rgba = paintClassIds(Uint8Array.of(2, 0, 1), [
+    [1, 2, 3],
+    [4, 5, 6],
+  ]);
 
   assert.deepEqual([...rgba], [4, 5, 6, 255, 0, 0, 0, 0, 1, 2, 3, 255]);
 });
@@ -118,6 +121,7 @@ test("classAt at zero rounding matches smoothClassIds", () => {
         ((column + 0.5) * nx) / raster.width,
         ((row + 0.5) * ny) / raster.height,
       );
+
       assert.equal(actual, expected, `pixel ${column},${row}`);
     }
   }

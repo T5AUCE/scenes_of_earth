@@ -44,12 +44,17 @@ class FakeContext {
   ): { data: Uint8ClampedArray } {
     if (this.stored) {
       probeReads += 1;
+
       const data = this.stored.slice();
+
       // Mirror the reported privacy drift of one red byte by one.
       if (alterProbeBytes) data[0] = (data[0] + 1) % 256;
+
       return { data };
     }
+
     tileReads += 1;
+
     return { data: tileBytes.slice() };
   }
 }
@@ -79,7 +84,9 @@ class FakeFrame {
   stride: number;
   constructor() {
     frameBuilds += 1;
+
     if (!framePayload) throw new Error("test must set framePayload when VideoFrame exists");
+
     this.format = framePayload.format;
     this.payload = framePayload.raw;
     this.stride = framePayload.stride;
@@ -96,10 +103,13 @@ class FakeFrame {
 
 afterEach(() => {
   globalThis.fetch = realFetch;
+
   if (realOffscreenCanvas === undefined) delete (globalThis as any).OffscreenCanvas;
   else (globalThis as any).OffscreenCanvas = realOffscreenCanvas;
+
   if (realVideoFrame === undefined) delete (globalThis as any).VideoFrame;
   else (globalThis as any).VideoFrame = realVideoFrame;
+
   console.warn = realWarn;
   resetDemIntegrityForTests();
   alterProbeBytes = false;
@@ -184,7 +194,9 @@ test("videoframe is preferred when available and ignores altered canvas tiles", 
   console.warn = (message: string) => {
     warnings.push(message);
   };
+
   resetDemIntegrityForTests();
+
   const bitmap = new FakeBitmap(1, 1) as unknown as ImageBitmap;
 
   const first = await extractBitmapRgba(bitmap);
@@ -204,6 +216,7 @@ test("a videoframe failure fails closed without canvas fallback", async () => {
   (globalThis as any).OffscreenCanvas = FakeCanvas;
   (globalThis as any).VideoFrame = FakeFrame;
   resetDemIntegrityForTests();
+
   const bitmap = new FakeBitmap(1, 1) as unknown as ImageBitmap;
 
   await assert.rejects(extractBitmapRgba(bitmap), /VideoFrame decode failed.*Unsupported/);
@@ -219,7 +232,9 @@ test("a canvas-only altered tile-size probe fails the tile with a clear error", 
   console.warn = (message: string) => {
     warnings.push(message);
   };
+
   resetDemIntegrityForTests();
+
   const bitmap = new FakeBitmap(2, 1) as unknown as ImageBitmap;
 
   await assert.rejects(
@@ -243,7 +258,9 @@ test("a canvas-only clean tile-size probe still decodes through canvas", async (
   console.warn = (message: string) => {
     warnings.push(message);
   };
+
   resetDemIntegrityForTests();
+
   const bitmap = new FakeBitmap(2, 1) as unknown as ImageBitmap;
 
   const first = await extractBitmapRgba(bitmap);
@@ -262,26 +279,28 @@ test("videoframe decode stays close to canvas cost on small tiles", async () => 
   (globalThis as any).OffscreenCanvas = FakeCanvas;
 
   tileBytes = new Uint8ClampedArray([134, 201, 0, 255, 1, 2, 3, 255]);
-  framePayload = {
-    raw: new Uint8Array([0, 201, 134, 7, 3, 2, 1, 7]),
-    format: "BGRX",
-    stride: 8,
-  };
+  framePayload = { raw: new Uint8Array([0, 201, 134, 7, 3, 2, 1, 7]), format: "BGRX", stride: 8 };
   (globalThis as any).VideoFrame = FakeFrame;
   resetDemIntegrityForTests();
+
   const bitmap = new FakeBitmap(2, 1) as unknown as ImageBitmap;
   const frameStart = performance.now();
+
   for (let round = 0; round < repeats; round++) {
     await extractBitmapRgba(bitmap);
   }
+
   const frameMs = (performance.now() - frameStart) / repeats;
 
   delete (globalThis as any).VideoFrame;
   resetDemIntegrityForTests();
+
   const canvasStart = performance.now();
+
   for (let round = 0; round < repeats; round++) {
     await extractBitmapRgba(bitmap);
   }
+
   const canvasMs = (performance.now() - canvasStart) / repeats;
 
   assert.ok(frameMs < canvasMs * 10 + 10, `frame ${frameMs} ms vs canvas ${canvasMs} ms`);

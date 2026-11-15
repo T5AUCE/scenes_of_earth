@@ -14,7 +14,15 @@ export const FEATURE = {
   properties: {},
   geometry: {
     type: "Polygon",
-    coordinates: [[[33, -5], [42, -5], [42, 5], [33, 5], [33, -5]]],
+    coordinates: [
+      [
+        [33, -5],
+        [42, -5],
+        [42, 5],
+        [33, 5],
+        [33, -5],
+      ],
+    ],
   },
 };
 export const SCENE = {
@@ -409,6 +417,7 @@ export async function exitActiveHarness(): Promise<void> {
   await act(async () => {
     live.mode.exit();
   });
+
   await act(async () => {});
   active = undefined;
 }
@@ -419,6 +428,7 @@ export function createHarness() {
   const roots = { column: element(), timeBar: element(), dialog: element() };
   const bodyClasses = new Set<string>();
   const bodyListeners = new Map<string, Set<(event: object) => void>>();
+
   const harness = {
     map,
     roots,
@@ -435,7 +445,8 @@ export function createHarness() {
     panelStore: null as unknown,
     mountStore: null as unknown,
     panelHooks: null as unknown,
-    onUnits: null as ((elevation: string, units: Record<string, string>, ids: string[]) => void)
+    onUnits: null as
+      | ((elevation: string, units: Record<string, string>, ids: string[]) => void)
       | null,
     onTime: null as ((time: string, label: string) => void) | null,
     onPlayingChange: null as ((playing: boolean) => void) | null,
@@ -524,11 +535,13 @@ export function createHarness() {
       this.mode.enter(SCENE, { time, entry: "replace", buildPanel: this.buildPanel });
     },
   };
+
   const originalEnter = harness.mode.enter.bind(harness.mode);
   harness.mode.enter = ((...args: Parameters<typeof originalEnter>) => {
     harness.requestedTime = (args[1] as { time?: string | null }).time ?? null;
     return originalEnter(...args);
   }) as typeof harness.mode.enter;
+
   Object.assign(globalThis, {
     sceneModeTest: harness,
     document: {
@@ -577,11 +590,7 @@ export function createHarness() {
 
 /** Create a minimal stub element for harness roots. */
 export function element() {
-  return {
-    append() {},
-    replaceChildren() {},
-    hidden: false,
-  };
+  return { append() {}, replaceChildren() {}, hidden: false };
 }
 
 /** Create a manually settled geometry promise for the harness. */
@@ -622,15 +631,7 @@ interface TestLayer {
 export class TestMap {
   readonly layers = new Map<string, TestLayer>([
     ["relief", { id: "relief", layout: { visibility: "visible" } }],
-    [
-      "contours",
-      {
-        id: "contours",
-        minzoom: 6,
-        maxzoom: 12,
-        layout: { visibility: "visible" },
-      },
-    ],
+    ["contours", { id: "contours", minzoom: 6, maxzoom: 12, layout: { visibility: "visible" } }],
     ["rain", { id: "rain", minzoom: 0, maxzoom: 24, layout: { visibility: "visible" } }],
     ["overview", { id: "overview", minzoom: 1, maxzoom: 4, layout: { visibility: "visible" } }],
   ]);
@@ -651,25 +652,44 @@ export class TestMap {
   rangeWrites = 0;
   failMaskLayer = false;
 
-  getContainer() { return this.container; }
-  getCanvas() { return this.canvas as unknown as HTMLCanvasElement; }
+  getContainer() {
+    return this.container;
+  }
+  getCanvas() {
+    return this.canvas as unknown as HTMLCanvasElement;
+  }
   loseContext() {
     for (const listener of [...(this.canvasListeners.get("webglcontextlost") ?? [])]) {
       listener({});
     }
   }
-  getStyle() { return { layers: [...this.layers.values()] }; }
-  getCenter() { return { lng: 37, lat: 0 }; }
-  getZoom() { return 5; }
+  getStyle() {
+    return { layers: [...this.layers.values()] };
+  }
+  getCenter() {
+    return { lng: 37, lat: 0 };
+  }
+  getZoom() {
+    return 5;
+  }
   stop() {}
-  getLayer(id: string) { return this.layers.get(id); }
-  getSource(id: string) { return this.sources.get(id); }
-  removeLayer(id: string) { this.layers.delete(id); }
-  removeSource(id: string) { this.sources.delete(id); }
+  getLayer(id: string) {
+    return this.layers.get(id);
+  }
+  getSource(id: string) {
+    return this.sources.get(id);
+  }
+  removeLayer(id: string) {
+    this.layers.delete(id);
+  }
+  removeSource(id: string) {
+    this.sources.delete(id);
+  }
   moveLayer() {}
   setPaintProperty(id: string, name: string, value: unknown) {
     const layer = this.layers.get(id);
     if (!layer) return;
+
     layer.paint ??= {};
     layer.paint[name] = value;
   }
@@ -680,12 +700,15 @@ export class TestMap {
   setLayoutProperty(id: string, name: string, value: unknown) {
     const layer = this.layers.get(id);
     if (!layer) return;
+
     if (name === "visibility") {
       layer.layout ??= { visibility: "visible" };
       layer.layout.visibility = value as string;
     }
   }
-  getFilter(id: string) { return this.filters.get(id); }
+  getFilter(id: string) {
+    return this.filters.get(id);
+  }
   setFilter(id: string, filter: unknown) {
     if (filter === null || filter === undefined) this.filters.delete(id);
     else this.filters.set(id, filter);

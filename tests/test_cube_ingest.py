@@ -2,6 +2,7 @@
 
 Check GRIB decoding and grid placement. Verify update recovery and CDS request scheduling.
 """
+
 import hashlib
 import json
 from collections.abc import Iterator
@@ -62,7 +63,7 @@ def grib1_message(
     """
     section1 = bytearray(GRIB_SECTION1_BYTES)
     section1[:3] = section1_length.to_bytes(3, "big")
-    section1[EXPVER_IN_SECTION1_BYTES:EXPVER_IN_SECTION1_BYTES + 4] = expver.encode()
+    section1[EXPVER_IN_SECTION1_BYTES : EXPVER_IN_SECTION1_BYTES + 4] = expver.encode()
     plain_total = 8 + GRIB_SECTION1_BYTES + 3 + len(payload) + 4
     if large:
         units = (plain_total - 4 + 119) // 120
@@ -128,6 +129,7 @@ def write_gdal_grib(path: Path, celsius: float) -> None:
             GRIB_PDS_PDTN="0",
             GRIB_PDS_TEMPLATE_NUMBERS="0 0 2 0 0 0 0 0 1 0 0 0 0 103 0 0 0 0 2 255 0 0 0 0 0",
         )
+
     rasterio.shutil.copy(source, path, driver="GRIB")
 
 
@@ -150,10 +152,7 @@ def land_cube(cubes_dir: Path) -> MonthlyCube:
     ids=["plain", "large-code", "plain-over-8-mib", "large-over-8-mib"],
 )
 def test_expvers_follow_message_lengths_even_with_grib_bytes_in_the_data(
-    tmp_path,
-    payload_bytes,
-    large,
-    first_expver,
+    tmp_path, payload_bytes, large, first_expver
 ):
     path = tmp_path / "months.grib"
     payload = b"xxGRIB\x02yy"
@@ -182,7 +181,7 @@ def test_data_section_length_that_disagrees_with_the_message_is_refused(tmp_path
     path = tmp_path / "months.grib"
     message = bytearray(grib1_message("0001"))
     data_section_at = 8 + GRIB_SECTION1_BYTES
-    message[data_section_at:data_section_at + 3] = (500).to_bytes(3, "big")
+    message[data_section_at : data_section_at + 3] = (500).to_bytes(3, "big")
 
     path.write_bytes(bytes(message))
 
@@ -206,10 +205,12 @@ def test_truncated_or_trailing_bytes_are_refused(tmp_path):
     message = grib1_message("0001")
 
     path.write_bytes(message[:-6])
+
     with pytest.raises(ValueError, match="truncated"):
         grib_expvers(path)
 
     path.write_bytes(message + b"junk")
+
     with pytest.raises(ValueError, match="expected a GRIB message"):
         grib_expvers(path)
 
@@ -267,14 +268,12 @@ def test_kelvin_becomes_celsius_and_ocean_becomes_fill(tmp_path):
 
     with rasterio.open(path) as dataset:
         write_months(
-            tmp_path / "cubes",
-            LAND.cube,
-            LAND.complete,
-            read_months(dataset, ["0001"], LAND),
+            tmp_path / "cubes", LAND.cube, LAND.complete, read_months(dataset, ["0001"], LAND)
         )
 
     stored = zarr.open_group(tmp_path / "cubes" / CUBE_NAME, mode="r")[CUBE_ARRAY]
     january_2016 = 66 * 12
+
     assert stored[january_2016, 1, 1] == 2700
     assert stored[january_2016, 0, 0] == -32768
 
@@ -355,10 +354,7 @@ def test_sparse_revision_within_one_year_keeps_the_month_between(tmp_path):
         tmp_path,
         LAND.cube,
         LAND.complete,
-        [
-            ("2016-01", celsius_field(30), "0001"),
-            ("2016-03", celsius_field(32), "0001"),
-        ],
+        [("2016-01", celsius_field(30), "0001"), ("2016-03", celsius_field(32), "0001")],
     )
 
     cube = land_cube(tmp_path)
@@ -418,25 +414,23 @@ def two_months() -> list[MonthField]:
 
 
 def test_failure_while_storing_data_leaves_the_cube_unavailable_until_rewritten(
-    tmp_path,
-    monkeypatch,
+    tmp_path, monkeypatch
 ):
     write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(20), "0005")])
     store_run = cubes._store_run
 
-    def store_then_fail(
-        array: zarr.Array,
-        staged: list[tuple[str, np.ndarray, str]],
-    ) -> None:
+    def store_then_fail(array: zarr.Array, staged: list[tuple[str, np.ndarray, str]]) -> None:
         store_run(array, staged)
         raise OSError("disk full")
 
     monkeypatch.setattr(cubes, "_store_run", store_then_fail)
+
     with pytest.raises(OSError, match="disk full"):
         write_months(tmp_path, LAND.cube, LAND.complete, two_months())
 
     cube = land_cube(tmp_path)
     assert not cube.has_months()
+
     with pytest.raises(SourceUnavailable, match="being updated"):
         cube.read("2016-01", (0, 0, 1, 1))
 
@@ -449,8 +443,7 @@ def test_failure_while_storing_data_leaves_the_cube_unavailable_until_rewritten(
 
 
 def test_failure_while_publishing_markers_leaves_the_cube_unavailable_until_rewritten(
-    tmp_path,
-    monkeypatch,
+    tmp_path, monkeypatch
 ):
     write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(20), "0005")])
 
@@ -463,6 +456,7 @@ def test_failure_while_publishing_markers_leaves_the_cube_unavailable_until_rewr
         raise OSError("metadata not written")
 
     monkeypatch.setattr(cubes, "_publish", fail_to_publish)
+
     with pytest.raises(OSError, match="metadata"):
         write_months(tmp_path, LAND.cube, LAND.complete, two_months())
 
@@ -474,6 +468,7 @@ def test_failure_while_publishing_markers_leaves_the_cube_unavailable_until_rewr
 
     write_months(tmp_path, LAND.cube, LAND.complete, two_months())
     recovered = land_cube(tmp_path)
+
     assert recovered.months()["2016-01"].startswith("0001:")
     assert recovered.read("2016-02", (0, 0, 1, 1))[0, 0] == pytest.approx(22)
 
@@ -486,6 +481,7 @@ def test_failure_before_the_update_starts_changes_nothing(tmp_path, monkeypatch)
         raise OSError("metadata not written")
 
     monkeypatch.setattr(cubes, "_begin_update", fail_to_begin)
+
     with pytest.raises(OSError):
         write_months(tmp_path, LAND.cube, LAND.complete, two_months())
 
@@ -504,6 +500,7 @@ def test_read_that_overlaps_an_update_is_refused(tmp_path, monkeypatch):
         monkeypatch.undo()
         group = open_group(*args, **kwargs)
         write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(21), "0001")])
+
         return group
 
     monkeypatch.setattr(zarr, "open_group", open_then_update)
@@ -513,9 +510,7 @@ def test_read_that_overlaps_an_update_is_refused(tmp_path, monkeypatch):
 
 
 def update_between_stamp_and_validation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    publish: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, publish: bool
 ) -> MonthlyCube:
     """A primed cube whose reader is updated right after it samples the cube's change stamp."""
     write_months(tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(20), "0005")])
@@ -525,14 +520,13 @@ def update_between_stamp_and_validation(
 
     def update_then_validate(self: MonthlyCube, stamp: int) -> dict[str, str]:
         monkeypatch.undo()
+
         if not publish:
             monkeypatch.setattr(cubes, "_publish", raise_os_error)
+
         try:
             write_months(
-                tmp_path,
-                LAND.cube,
-                LAND.complete,
-                [("2016-01", celsius_field(21), "0001")],
+                tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(21), "0001")]
             )
         except OSError:
             pass
@@ -564,9 +558,7 @@ def test_read_is_refused_when_a_whole_update_happens_after_the_stamp(tmp_path, m
         cube.read("2016-01", (0, 0, 1, 1))
 
     monkeypatch.undo()
-    assert land_cube(tmp_path).read("2016-01", (0, 0, 1, 1))[0, 0] == (
-        pytest.approx(21)
-    )
+    assert land_cube(tmp_path).read("2016-01", (0, 0, 1, 1))[0, 0] == (pytest.approx(21))
 
 
 def test_ingest_refetches_months_left_pending_by_a_failed_update(tmp_path, fake_grib):
@@ -643,12 +635,7 @@ def test_ingest_requests_one_year_per_call_and_refetches_preliminary_months(tmp_
     months = [(request["year"], request["month"]) for _, request in client.requests]
     assert first_run == 3
     assert months == [(["2017"], ["01"]), (["2017"], ["02"])]
-    assert list(land_cube(tmp_path).months()) == [
-        "2016-11",
-        "2016-12",
-        "2017-01",
-        "2017-02",
-    ]
+    assert list(land_cube(tmp_path).months()) == ["2016-11", "2016-12", "2017-01", "2017-02"]
     assert not list((tmp_path / ".downloads").iterdir())
 
 
@@ -672,9 +659,7 @@ def test_refused_request_for_an_older_month_fails(tmp_path, fake_grib):
     [PermissionError("invalid CDS credentials"), Exception("401 Client Error: Unauthorized")],
 )
 def test_other_failures_of_the_newest_month_are_not_taken_for_unpublished(
-    tmp_path,
-    fake_grib,
-    error,
+    tmp_path, fake_grib, error
 ):
     client = FakeClient(refuse_month="2017-02", error=error)
 
@@ -694,8 +679,7 @@ def test_invalid_download_of_the_newest_month_fails_and_leaves_no_cube(tmp_path,
 
 @pytest.mark.parametrize("width", [1440, 1441])
 def test_era5_raster_lands_on_the_quarter_degree_grid_with_or_without_the_repeated_edge(
-    tmp_path,
-    width,
+    tmp_path, width
 ):
     path = tmp_path / "field.tif"
     centres = -180 + np.arange(width) * 0.25
@@ -723,10 +707,7 @@ def test_era5_month_with_a_missing_cell_is_refused_and_leaves_no_cube(tmp_path):
 
     with pytest.raises(ValueError, match="no value in some cells"):
         write_months(
-            tmp_path,
-            ERA5_TEMPERATURE.cube,
-            ERA5_TEMPERATURE.complete,
-            [("2016-01", field, "0001")],
+            tmp_path, ERA5_TEMPERATURE.cube, ERA5_TEMPERATURE.complete, [("2016-01", field, "0001")]
         )
 
     assert not (tmp_path / "era5_temperature.zarr").exists()
@@ -753,9 +734,7 @@ def test_precipitation_in_metres_per_day_becomes_mm_for_the_whole_month(tmp_path
 
 
 def write_precipitation_raster(
-    path: Path,
-    values: np.ndarray,
-    valid_seconds: list[int] | None = None,
+    path: Path, values: np.ndarray, valid_seconds: list[int] | None = None
 ) -> None:
     """Write GRIB-like precipitation bands on the ERA5 grid in metres per day."""
     write_raster(
@@ -780,14 +759,12 @@ def write_precipitation_raster(
     ],
 )
 def test_precipitation_stamped_before_month_uses_next_month_and_its_day_count(
-    tmp_path,
-    valid_time,
-    month,
-    days,
+    tmp_path, valid_time, month, days
 ):
     path = tmp_path / "field.tif"
     valid_seconds = int(datetime.fromisoformat(valid_time).timestamp())
     write_precipitation_raster(path, np.full(ERA5_SHAPE, 0.002), [valid_seconds])
+
     with rasterio.open(path) as dataset:
         write_months(
             tmp_path,
@@ -795,6 +772,7 @@ def test_precipitation_stamped_before_month_uses_next_month_and_its_day_count(
             ERA5_PRECIPITATION.complete,
             read_months(dataset, ["0001"], ERA5_PRECIPITATION),
         )
+
     cube = MonthlyCube(ERA5_PRECIPITATION.cube, tmp_path)
 
     assert list(cube.months()) == [month]
@@ -815,10 +793,7 @@ def test_precipitation_cube_stores_tenths_of_a_millimetre(tmp_path):
     field = np.full(ERA5_SHAPE, 58.04, "float32")
 
     write_months(
-        tmp_path,
-        ERA5_PRECIPITATION.cube,
-        ERA5_PRECIPITATION.complete,
-        [("2016-01", field, "0001")],
+        tmp_path, ERA5_PRECIPITATION.cube, ERA5_PRECIPITATION.complete, [("2016-01", field, "0001")]
     )
 
     stored = zarr.open_group(tmp_path / "era5_precipitation.zarr", mode="r")["tp"]
@@ -860,11 +835,7 @@ def test_precipitation_file_in_kelvin_is_refused(tmp_path):
     ],
 )
 def test_ingest_asks_the_cds_for_the_dataset_and_variable_of_the_cube(
-    tmp_path,
-    monkeypatch,
-    name,
-    dataset,
-    variable,
+    tmp_path, monkeypatch, name, dataset, variable
 ):
     monkeypatch.setattr(era5, "read_grib_months", lambda path, spec: iter(()))
     monkeypatch.setattr(era5, "newest_month", lambda: "2016-02")
@@ -1041,9 +1012,7 @@ def test_year_files_never_replace_a_stored_month(tmp_path, fake_grib, monkeypatc
 
 
 def test_year_files_before_the_first_stored_month_are_stored_newest_year_first(
-    tmp_path,
-    fake_grib,
-    monkeypatch,
+    tmp_path, fake_grib, monkeypatch
 ):
     monkeypatch.setattr(era5, "newest_month", lambda: "2016-12")
     cubes = tmp_path / "cubes"
@@ -1051,8 +1020,10 @@ def test_year_files_before_the_first_stored_month_are_stored_newest_year_first(
     write_months(cubes, LAND.cube, LAND.complete, stored)
     files = tmp_path / "files"
     files.mkdir()
+
     for year in (2014, 2015):
         write_year_file(files, year, year_months(year))
+
     client = FakeClient()
 
     ingest(cubes, LAND, "2014-01", client, files_dir=files)
@@ -1071,23 +1042,20 @@ def test_year_files_start_at_the_requested_month(tmp_path, fake_grib, monkeypatc
 
     ingest(tmp_path / "cubes", LAND, "2016-11", client, files_dir=files)
 
-    assert list(MonthlyCube(LAND.cube, tmp_path / "cubes").months()) == [
-        "2016-11",
-        "2016-12",
-    ]
+    assert list(MonthlyCube(LAND.cube, tmp_path / "cubes").months()) == ["2016-11", "2016-12"]
     assert not client.requests
 
 
 def test_a_missing_middle_year_is_requested_and_the_year_files_around_it_are_stored(
-    tmp_path,
-    fake_grib,
-    monkeypatch,
+    tmp_path, fake_grib, monkeypatch
 ):
     monkeypatch.setattr(era5, "newest_month", lambda: "2017-12")
     files = tmp_path / "files"
     files.mkdir()
+
     for year in (2015, 2017):
         write_year_file(files, year, year_months(year))
+
     client = FakeClient()
 
     ingest(tmp_path / "cubes", LAND, "2015-01", client, files_dir=files)
@@ -1098,17 +1066,17 @@ def test_a_missing_middle_year_is_requested_and_the_year_files_around_it_are_sto
 
 
 def test_a_missing_year_before_the_stored_months_is_requested_before_an_earlier_year_file(
-    tmp_path,
-    fake_grib,
-    monkeypatch,
+    tmp_path, fake_grib, monkeypatch
 ):
     monkeypatch.setattr(era5, "newest_month", lambda: "2017-12")
     cubes = tmp_path / "cubes"
     stored = [(month, celsius_field(5), "0001") for month in year_months(2017)]
     write_months(cubes, LAND.cube, LAND.complete, stored)
+
     files = tmp_path / "files"
     files.mkdir()
     write_year_file(files, 2015, year_months(2015))
+
     client = FakeClient()
 
     ingest(cubes, LAND, "2015-01", client, files_dir=files)
@@ -1119,9 +1087,7 @@ def test_a_missing_year_before_the_stored_months_is_requested_before_an_earlier_
 
 
 def test_a_year_file_that_lacks_the_month_next_to_the_stored_ones_is_requested_instead(
-    tmp_path,
-    fake_grib,
-    monkeypatch,
+    tmp_path, fake_grib, monkeypatch
 ):
     monkeypatch.setattr(era5, "newest_month", lambda: "2016-12")
     files = tmp_path / "files"

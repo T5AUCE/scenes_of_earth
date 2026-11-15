@@ -1,4 +1,5 @@
 """Test offline terrain statistics, build progress and synthetic end-to-end builds."""
+
 import hashlib
 import json
 import shutil
@@ -13,12 +14,12 @@ from rasterio.transform import Affine
 from shapely.geometry import MultiPolygon, Polygon, box, mapping, shape
 from shapely.geometry.base import BaseGeometry
 
-from soe import build as build_module, db
+from soe import build as build_module
+from soe import db
 from soe.areas import Area, AreaError
 from soe.build import SourceChanged, build_scene
-from soe.layer_writer import _fill_outside
-from soe.zarr_encoding import COMPRESSION, DeterministicGzipCodec, encode_values
 from soe.bundle import JsonObject, validate
+from soe.layer_writer import _fill_outside
 from soe.plan import plan, scene_datasets
 from soe.scene_request import prepare_scene, resolve_area
 from soe.sources import (
@@ -37,9 +38,11 @@ from soe.sources import (
 from soe.sources import terrain as terrain_module
 from soe.sources.licences import SOURCES
 from soe.sources.synthetic import _synthetic_classes
-from soe.sources.terrain import CopernicusDemReader, PlacedTile as TerrainTile
+from soe.sources.terrain import CopernicusDemReader
+from soe.sources.terrain import PlacedTile as TerrainTile
 from soe.sources.worldcover import PlacedTile, land_cover_by_tiles
 from soe.terrain_cache import is_cached, read_cached
+from soe.zarr_encoding import COMPRESSION, DeterministicGzipCodec, encode_values
 from tests.helpers import (
     BOUNDARY,
     COARSE,
@@ -96,10 +99,7 @@ def test_terrain_cache_hit_builds_identical_arrays(tmp_path):
         reads = 0
 
         def terrain(
-            self,
-            bounds: tuple,
-            res: float,
-            on_block: Callable[[], None] = lambda: None,
+            self, bounds: tuple, res: float, on_block: Callable[[], None] = lambda: None
         ) -> tuple[np.ndarray, object]:
             self.reads += 1
             return super().terrain(bounds, res, on_block)
@@ -143,6 +143,7 @@ def test_rebuilding_a_scene_writes_byte_identical_bundles(tmp_path):
     second = bundle_files(tmp_path / "second" / HASH_A)
 
     assert sorted(first) == sorted(second)
+
     for name, content in first.items():
         assert second[name] == content, name
 
@@ -246,6 +247,7 @@ def test_synthetic_build_across_180(tmp_path):
         mask = root[name]["mask"][:]
 
         assert np.all(np.diff(longitude) > 0) and longitude[-1] > 180
+
         for side in (longitude < 180, longitude > 180):
             assert (mask[:, side] == 1).any()
             assert (mask[:, side] == 2).any()
@@ -308,9 +310,8 @@ def test_synthetic_build_validates_and_opens(tmp_path):
 
     latitude = root["chirps_monthly/lat"][...]
 
-    assert (
-        latitude[0] > latitude[-1]
-        and doc["area"]["bbox"][3] == pytest.approx(latitude[0] + 0.025)
+    assert latitude[0] > latitude[-1] and doc["area"]["bbox"][3] == pytest.approx(
+        latitude[0] + 0.025
     )
 
 
@@ -369,6 +370,7 @@ def test_series_at_different_factors_keep_grid_and_array_shapes_consistent(tmp_p
     layers = {layer["id"]: layer for layer in doc["layers"]}
     assert layers["chirps_monthly"]["grid"]["aggregation"] == 2
     assert layers["coarse_monthly"]["grid"]["aggregation"] == 1
+
     for layer_id, layer in layers.items():
         grid = layer["grid"]
         for block in layer["arrays"].values():
@@ -422,8 +424,7 @@ def test_area_beyond_60_north_builds_rain_and_temperature_from_the_84n_cubes(tmp
     arctic = Area(box(10.0, 70.0, 10.5, 71.0))
     registry = make_registry(SyntheticSource(north_cubes=True))
     datasets = scene_datasets(
-        arctic,
-        [registry["chirps_monthly"], registry["era5land_temperature"], registry["terrain"]],
+        arctic, [registry["chirps_monthly"], registry["era5land_temperature"], registry["terrain"]]
     )
 
     build_scene(HASH_A, arctic, "2015-01", "2015-02", datasets, "T", tmp_path)
@@ -456,10 +457,7 @@ def test_geology_beyond_60_north_reads_the_84n_base_edition_and_inside_60_keeps_
     assert validate(document) == []
 
 
-IN_RANGE_AREAS = {
-    "nairobi": (36.5, -1.5, 37.5, -0.5),
-    "below_60_north": (36, 59, 37, 59.9999),
-}
+IN_RANGE_AREAS = {"nairobi": (36.5, -1.5, 37.5, -0.5), "below_60_north": (36, 59, 37, 59.9999)}
 IN_RANGE_LAYERS = ["terrain", "chirps_monthly", "esa_worldcover"]
 # Made by bundle_manifest over bundles of the `git archive HEAD` sources of 2026-11-07.
 IN_RANGE_MANIFEST_PATH = Path(__file__).parent / "data" / "in_range_bundle_manifest.json"
@@ -478,12 +476,15 @@ def build_prepared_polygon(tmp_path: Path, bounds: tuple[float, float, float, fl
     db_path = str(tmp_path / "soe.db")
     db.init(db_path)
     registry = make_registry(SyntheticSource())
+
     area = {"type": "polygon", "geometry": mapping(box(*bounds))}
     body = json.dumps(
-        {"area": area, "start": "2015-01", "end": "2015-02", "layers": IN_RANGE_LAYERS},
+        {"area": area, "start": "2015-01", "end": "2015-02", "layers": IN_RANGE_LAYERS}
     )
+
     prepared = prepare_scene(db_path, registry, body)
     request = json.loads(prepared.request_json)
+
     build_scene(
         prepared.scene_id,
         resolve_area(db_path, area),
@@ -493,6 +494,7 @@ def build_prepared_polygon(tmp_path: Path, bounds: tuple[float, float, float, fl
         request["title"],
         tmp_path / "scenes",
     )
+
     return tmp_path / "scenes" / prepared.scene_id
 
 
@@ -508,6 +510,7 @@ def bundle_manifest(scene_dir: Path) -> dict[str, str]:
     for path in sorted(scene_dir.rglob("*")):
         if path.is_file():
             manifest[path.relative_to(scene_dir).as_posix()] = _file_digest(path)
+
     return manifest
 
 
@@ -520,6 +523,7 @@ def _file_digest(path: Path) -> str:
         content = text.replace("60\\u00b0S-84\\u00b0N", "60\\u00b0S-60\\u00b0N").encode()
     else:
         content = _without_gzip_time_stamps(content)
+
     return hashlib.sha256(content).hexdigest()
 
 
@@ -530,6 +534,7 @@ def _without_gzip_time_stamps(content: bytes) -> bytes:
     while start != -1:
         stamped[start + 4 : start + 8] = bytes(4)
         start = stamped.find(GZIP_HEADER, start + len(GZIP_HEADER))
+
     return bytes(stamped)
 
 
@@ -659,15 +664,13 @@ def land_cover_dataset(classes: Role) -> StaticDataset:
 
     class LandCover(StaticDataset):
         def read(
-            self,
-            bbox: Bbox,
-            res: float,
-            on_block: Callable[[], None] | None = None,
+            self, bbox: Bbox, res: float, on_block: Callable[[], None] | None = None
         ) -> tuple[dict[str, np.ndarray], Affine]:
             height = round((bbox[3] - bbox[1]) / res)
             width = round((bbox[2] - bbox[0]) / res)
             arrays = {"classes": np.full((height, width), 40, "uint8")}
             transform = Affine(res, 0, bbox[0], 0, -res, bbox[3])
+
             return arrays, transform
 
     return LandCover(
@@ -682,7 +685,7 @@ def land_cover_dataset(classes: Role) -> StaticDataset:
                 "classes": [{"value": 40, "label": "Test class", "color": "#006400"}],
             },
             "tiles": None,
-        },
+        }
     )
 
 
@@ -706,16 +709,11 @@ def test_static_role_without_a_fill_value_fails_the_build_without_a_bundle(tmp_p
 def build_triangle(tmp_path: Path) -> tuple[dict, zarr.Group]:
     """Build a terrain and rain scene over a triangle, so a third of the grid is outside."""
     build_scene(
-        HASH_A,
-        Area(TRIANGLE, BOUNDARY),
-        "2015-01",
-        "2015-03",
-        [TERRAIN, RAIN],
-        "Test",
-        tmp_path,
+        HASH_A, Area(TRIANGLE, BOUNDARY), "2015-01", "2015-03", [TERRAIN, RAIN], "Test", tmp_path
     )
     out = tmp_path / HASH_A
     doc = json.loads((out / "scene.json").read_text(encoding="utf-8"))
+
     return doc, zarr.open_group(out / "data.zarr", mode="r")
 
 
@@ -745,12 +743,14 @@ def test_finite_touched_cell_survives_masking_while_source_no_data_stays_missing
     marked = _rain_with_marked_boundary(missing_cell=True)
     off_grid = box(36.54, -1.46, 37.46, -0.54)
     build_scene(HASH_A, Area(off_grid, BOUNDARY), "2015-01", "2015-01", [marked], "Test", tmp_path)
+
     doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
     root = zarr.open_group(tmp_path / HASH_A / "data.zarr", mode="r")
     layer = doc["layers"][0]
     mask = root["chirps_monthly/mask"][...]
     precip = root["chirps_monthly/precip"][0]
     fill = layer["arrays"]["value"]["fill"]
+
     area_height = precip.shape[0] - 2
     valid_cells = int((mask == 1).sum()) - 1
     ordinary_cells = valid_cells - area_height
@@ -771,12 +771,7 @@ def _rain_with_marked_boundary(missing_cell: bool = False) -> SeriesDataset:
     """Return rain with distinct western area and ring values plus an optional interior gap."""
 
     class MarkedRain(type(RAIN)):
-        def read_step(
-            self,
-            step: str,
-            bbox: Bbox,
-            factor: int = 1,
-        ) -> np.ndarray:
+        def read_step(self, step: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
             """Return a known field for checking touched-cell masking and statistics."""
             res = self.grid.res * factor
             height = round((bbox[3] - bbox[1]) / res)
@@ -786,6 +781,7 @@ def _rain_with_marked_boundary(missing_cell: bool = False) -> SeriesDataset:
             raster[:, 1] = 50
             if missing_cell:
                 raster[5, 5] = np.nan
+
             return raster
 
     return MarkedRain(**{**vars(RAIN), "backend": EmptyFallbackSource()})
@@ -808,6 +804,7 @@ def test_real_ring_values_do_not_change_area_statistics_stops_or_counts(tmp_path
     raw = root["chirps_monthly/precip"][...]
     decoded = raw * layer["arrays"]["value"]["scale_factor"]
     bbox = layer["grid"]["bbox"]
+
     source = marked.read_step("2015-01-01", bbox)
     values = decoded[:, mask == 1]
     expected_stats = {"min": 10.0, "max": 50.0, "mean": 12.0, "p98": 50.0}
@@ -833,6 +830,7 @@ def test_ring_inside_a_hole_keeps_real_values_but_does_not_enter_statistics(tmp_
     raw = root["chirps_monthly/precip"][0]
     longitude = root["chirps_monthly/lon"][...]
     latitude = root["chirps_monthly/lat"][...]
+
     hole_cells = (
         (longitude[None, :] > 36.55)
         & (longitude[None, :] < 37.45)
@@ -864,6 +862,7 @@ def _rain_with_extreme_hole() -> SeriesDataset:
                 & (latitude[:, None] > -1.45)
                 & (latitude[:, None] < -0.55)
             )
+
             return np.where(in_hole, 500, 10).astype("float32")
 
     return HoleRain(**vars(RAIN))
@@ -901,12 +900,7 @@ def test_terrain_statistics_cover_only_the_cells_inside_the_area(tmp_path):
 
     assert not inside.all()
     assert terrain["stats"]["max"] == arrays["elevation"][inside].max()
-    expected = TERRAIN.summary(
-        arrays,
-        layer_plan.area_weights,
-        transform,
-        layer_plan.geometry,
-    )
+    expected = TERRAIN.summary(arrays, layer_plan.area_weights, transform, layer_plan.geometry)
 
     assert terrain["stats"] == expected["stats"]
     assert terrain["distribution"] == expected["distribution"]
@@ -927,6 +921,7 @@ def test_terrain_distribution_mirrors_stats_with_101_quantiles(nairobi_bundle):
     assert distribution["min"] == values[0]
     assert distribution["max"] == values[-1]
     assert distribution["min"] <= distribution["mean"] <= distribution["max"]
+
     assert stats["min"] == distribution["min"]
     assert stats["max"] == distribution["max"]
     assert stats["mean"] == distribution["mean"]
@@ -979,10 +974,7 @@ def test_empty_terrain_fails_before_any_bundle_writer_and_reads_once(tmp_path, m
             self.terrain_reads = 0
 
         def terrain(
-            self,
-            bounds: Bbox,
-            res: float,
-            on_block: Callable[[], None] = lambda: None,
+            self, bounds: Bbox, res: float, on_block: Callable[[], None] = lambda: None
         ) -> tuple[np.ndarray, Affine]:
             """Return all-NaN elevation to trigger the empty-terrain guard."""
             self.terrain_reads += 1
@@ -990,6 +982,7 @@ def test_empty_terrain_fails_before_any_bundle_writer_and_reads_once(tmp_path, m
             height = round((north - south) / res)
             width = round((east - west) / res)
             transform = Affine(res, 0, west, 0, -res, north)
+
             return np.full((height, width), np.nan, "float64"), transform
 
     source = AllMissingTerrain()
@@ -1027,10 +1020,7 @@ def test_terrain_build_reads_each_static_once(tmp_path):
             self.terrain_reads = 0
 
         def terrain(
-            self,
-            bounds: Bbox,
-            res: float,
-            on_block: Callable[[], None] = lambda: None,
+            self, bounds: Bbox, res: float, on_block: Callable[[], None] = lambda: None
         ) -> tuple[np.ndarray, Affine]:
             """Count terrain reads and return synthetic elevation."""
             self.terrain_reads += 1
@@ -1116,8 +1106,7 @@ def test_scene_with_preliminary_months_carries_the_notice(tmp_path):
 
 
 def rain_with_gaps(
-    gaps_in: Callable[[str], list[tuple[int, int]]],
-    backend: SyntheticSource | None = None,
+    gaps_in: Callable[[str], list[tuple[int, int]]], backend: SyntheticSource | None = None
 ) -> SeriesDataset:
     """Return 10 mm rainfall except at the row-column pairs listed by `gaps_in(step)`."""
 
@@ -1125,26 +1114,24 @@ def rain_with_gaps(
         def read_step(self, step: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
             res = self.grid.res * factor
             raster = np.full(
-                (round((bbox[3] - bbox[1]) / res), round((bbox[2] - bbox[0]) / res)),
-                10,
-                "float32",
+                (round((bbox[3] - bbox[1]) / res), round((bbox[2] - bbox[0]) / res)), 10, "float32"
             )
             for row, column in gaps_in(step):
                 raster[row, column] = np.nan
+
             return raster
 
     return GappyRain(**{**vars(RAIN), "backend": backend or SyntheticSource()})
 
 
 def build_rain(
-    tmp_path: Path,
-    rain: SeriesDataset,
-    area: Area | None = None,
+    tmp_path: Path, rain: SeriesDataset, area: Area | None = None
 ) -> tuple[JsonObject, zarr.Group]:
     """Build two months of `rain` over Nairobi; return scene.json and the opened Zarr store."""
     area = area or Area(NAIROBI, BOUNDARY)
     build_scene(HASH_A, area, "2015-01", "2015-02", [rain], "Test", tmp_path)
     document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
+
     return document, zarr.open_group(tmp_path / HASH_A / "data.zarr", mode="r")
 
 
@@ -1218,6 +1205,7 @@ def test_scene_without_gaps_carries_no_trace_of_the_fallback(tmp_path):
 def test_ring_only_fallback_is_stored_and_credited_without_area_counts_or_notices(tmp_path):
     rain = rain_with_gaps(lambda step: [(0, 1)])
     build_scene(HASH_A, Area(NAIROBI, BOUNDARY), "2026-07", "2026-08", [rain], "T", tmp_path)
+
     document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
     root = zarr.open_group(tmp_path / HASH_A / "data.zarr", mode="r")
     layer = document["layers"][0]
@@ -1254,7 +1242,7 @@ def test_cell_with_no_value_from_either_source_stays_empty_and_is_counted(tmp_pa
 
     assert root["chirps_monthly/precip"][0][3, 4] == 65535
     assert document["notices"]["limits"] == [
-        "Rainfall has no value from either source in 1 of 400 cells in some months.",
+        "Rainfall has no value from either source in 1 of 400 cells in some months."
     ]
     assert "source" not in root["chirps_monthly"]
 
@@ -1388,7 +1376,7 @@ def test_preliminary_rain_gaps_the_fallback_cannot_fill_carry_only_the_missing_n
     doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
 
     assert doc["notices"]["limits"] == [
-        "Rainfall has no value from either source in 1 of 400 cells in some months.",
+        "Rainfall has no value from either source in 1 of 400 cells in some months."
     ]
     assert "source" not in doc["layers"][0]["arrays"]
     assert "fallback_sources" not in doc["layers"][0]
@@ -1396,11 +1384,10 @@ def test_preliminary_rain_gaps_the_fallback_cannot_fill_carry_only_the_missing_n
 
 @pytest.mark.parametrize("preliminary_gaps", [[], [(0, 19)]])
 def test_final_rain_fills_do_not_trigger_a_notice_for_unfilled_preliminary_months(
-    tmp_path,
-    preliminary_gaps,
+    tmp_path, preliminary_gaps
 ):
     rain = rain_with_gaps(
-        lambda step: [(10, 3)] if step.startswith("2026-06") else preliminary_gaps,
+        lambda step: [(10, 3)] if step.startswith("2026-06") else preliminary_gaps
     )
     build_scene(HASH_A, Area(TRIANGLE, BOUNDARY), "2026-06", "2026-08", [rain], "T", tmp_path)
     doc = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
@@ -1418,7 +1405,7 @@ def test_preliminary_rain_fill_in_a_later_batch_keeps_its_month_in_the_notice(tm
 
     assert preliminary == [
         "The ERA5 rain that fills gaps in Rainfall 2026-07 is preliminary; final data "
-        "replaces it about two months later, and the scene then gets a new id.",
+        "replaces it about two months later, and the scene then gets a new id."
     ]
 
 
@@ -1480,6 +1467,7 @@ def test_area_series_matches_hand_computed_weighted_means(tmp_path):
             raster = (10 + rows * 0.2 + columns * 0.05).astype("float32")
             for row, column in [filled_cells[step], *missing_cells]:
                 raster[row, column] = np.nan
+
             return raster
 
         def _read_fallback(self, step: str, bbox: Bbox, factor: int = 1) -> np.ndarray:
@@ -1490,17 +1478,21 @@ def test_area_series_matches_hand_computed_weighted_means(tmp_path):
             fallback = np.full((height, width), 60, "float32")
             for row, column in missing_cells:
                 fallback[row, column] = np.nan
+
             return fallback
 
     rain = FractionalRain(**{**vars(RAIN), "backend": SyntheticSource()})
     build_scene(HASH_A, area, "2015-01", "2015-02", [rain], "Test", tmp_path)
+
     document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
     layer = document["layers"][0]
     block = layer["area_series"]
+
     scene_plan = plan(area, [rain], "2015-01", "2015-02")
     layer_plan = scene_plan.layers["chirps_monthly"]
     weights = layer_plan.area_weights
     total = float(weights.sum())
+
     expected_values = []
     expected_valid = []
     expected_fallback = []
@@ -1508,8 +1500,10 @@ def test_area_series_matches_hand_computed_weighted_means(tmp_path):
         filled_step = rain.read_step_filled(step, layer_plan.bbox, layer_plan.factor)
         grid = np.asarray(filled_step.values, dtype="float64")
         filled = np.asarray(filled_step.filled, dtype=bool)
+
         valid = np.isfinite(grid) & (weights > 0)
         valid_weight = float(weights[valid].sum())
+
         expected_values.append(float((grid[valid] * weights[valid]).sum()) / valid_weight)
         expected_valid.append(valid_weight / total)
         expected_fallback.append(float(weights[valid & filled].sum()) / total)
@@ -1552,19 +1546,11 @@ def test_area_series_leaves_packed_arrays_unchanged(tmp_path):
 def test_area_series_is_omitted_without_a_fallback_and_on_static_layers(tmp_path):
     rain = _scripted_series(
         lambda step, height, width: np.full(
-            (height, width),
-            10.0 if step == "2015-01-01" else 10.04,
-            "float32",
-        ),
+            (height, width), 10.0 if step == "2015-01-01" else 10.04, "float32"
+        )
     )
     build_scene(
-        HASH_A,
-        Area(NAIROBI, BOUNDARY),
-        "2015-01",
-        "2015-02",
-        [TERRAIN, rain],
-        "Test",
-        tmp_path,
+        HASH_A, Area(NAIROBI, BOUNDARY), "2015-01", "2015-02", [TERRAIN, rain], "Test", tmp_path
     )
 
     document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
@@ -1585,8 +1571,7 @@ def test_all_missing_step_yields_null_and_zero_shares(tmp_path):
     rows, columns = np.where(inside)
     missing = list(zip(rows.tolist(), columns.tolist()))
     rain = rain_with_gaps(
-        lambda step: missing if step == "2015-01-01" else [(3, 4)],
-        EmptyFallbackSource(),
+        lambda step: missing if step == "2015-01-01" else [(3, 4)], EmptyFallbackSource()
     )
 
     document, _ = build_rain(tmp_path, rain)
@@ -1618,10 +1603,8 @@ def test_ring_only_fallback_has_zero_share_but_is_credited(tmp_path):
 def test_sub_packing_differences_survive_serialization(tmp_path):
     rain = _scripted_series(
         lambda step, height, width: np.full(
-            (height, width),
-            10.0 if step == "2015-01-01" else 10.04,
-            "float32",
-        ),
+            (height, width), 10.0 if step == "2015-01-01" else 10.04, "float32"
+        )
     )
     build_scene(HASH_A, Area(NAIROBI, BOUNDARY), "2015-01", "2015-02", [rain], "T", tmp_path)
 
@@ -1673,6 +1656,7 @@ def test_legacy_stats_keep_full_precision_without_becoming_area_means(tmp_path):
         raster = np.full((height, width), 1.0, "float32")
         if step == "2015-01-01":
             raster[5, 5] = np.float32(1.001)
+
         return raster
 
     rain = _scripted_series(values_for)
@@ -1711,7 +1695,7 @@ def test_display_simplification_tolerance_follows_the_finest_grid_cell():
 
 def test_area_geojson_is_simplified_while_masks_use_the_full_outline(tmp_path):
     wiggly = Polygon(
-        [(36.5, -1.5), (37.5, -1.5), (37.5, -0.5), (37.0, -0.49), (36.5, -0.5), (36.5, -1.5)],
+        [(36.5, -1.5), (37.5, -1.5), (37.5, -0.5), (37.0, -0.49), (36.5, -0.5), (36.5, -1.5)]
     )
     scene_plan = plan_months(Area(wiggly), [RAIN])
     plain_plan = plan_months(Area(box(36.5, -1.5, 37.5, -0.5)), [RAIN])
@@ -1763,6 +1747,7 @@ def _scripted_series(values_for: Callable[[str, int, int], np.ndarray]) -> Serie
             res = self.grid.res * factor
             height = round((bbox[3] - bbox[1]) / res)
             width = round((bbox[2] - bbox[0]) / res)
+
             return values_for(step, height, width)
 
     return ScriptedSeries(
@@ -1781,12 +1766,7 @@ def _scripted_series(values_for: Callable[[str, int, int], np.ndarray]) -> Serie
 
 
 def test_multi_part_area_spanning_an_empty_bbox_builds_from_touched_tiles_only(tmp_path):
-    outline = MultiPolygon(
-        [
-            box(36.5, -1.5, 37.5, -0.5),
-            box(42.6, 10.8, 43.8, 11.9),
-        ],
-    )
+    outline = MultiPolygon([box(36.5, -1.5, 37.5, -0.5), box(42.6, 10.8, 43.8, 11.9)])
     terrain = replace(TERRAIN, max_tiles=10)
     cover = replace(LAND_COVER, max_tiles=3)
     build_scene(HASH_A, Area(outline, BOUNDARY), None, None, [terrain, cover], "Test", tmp_path)
@@ -1836,18 +1816,12 @@ class RecordingTiles(CopernicusDemReader, SyntheticSource):
     ids=["l-shape", "two-islands"],
 )
 def test_build_reading_only_touched_tiles_matches_a_full_bbox_read(
-    tmp_path,
-    monkeypatch,
-    outline,
-    spares_cover_tiles,
+    tmp_path, monkeypatch, outline, spares_cover_tiles
 ):
     terrain_blocks = []
 
     def note_mosaic(
-        tiles: list[TerrainTile],
-        bounds: Bbox,
-        product: str,
-        canvas_tiles: list[TerrainTile],
+        tiles: list[TerrainTile], bounds: Bbox, product: str, canvas_tiles: list[TerrainTile]
     ) -> str:
         terrain_blocks.append([tile.name for tile in tiles])
         return ""
@@ -1865,10 +1839,12 @@ def test_build_reading_only_touched_tiles_matches_a_full_bbox_read(
         terrain_blocks.clear()
         backend = RecordingTiles()
         registry = make_registry(backend)
+
         datasets = [
             replace(registry["terrain"], max_tiles=max_tiles),
             replace(registry["esa_worldcover"], max_tiles=max_tiles),
         ]
+
         progress = []
         build_scene(
             HASH_A,
@@ -1880,6 +1856,7 @@ def test_build_reading_only_touched_tiles_matches_a_full_bbox_read(
             tmp_path / mode,
             lambda fraction, stage: progress.append((fraction, stage)),
         )
+
         terrain_tiles = {name for block in terrain_blocks for name in block}
         reads[mode] = (terrain_tiles, set(backend.cover_tiles))
         block_counts[mode] = len(terrain_blocks)
@@ -1888,13 +1865,12 @@ def test_build_reading_only_touched_tiles_matches_a_full_bbox_read(
         assert max(fraction for fraction, _ in progress) <= 1
 
     layer_plan = plan(Area(outline), [TERRAIN, LAND_COVER], None, None).layers
+
     assert len(reads["touched"][0]) == TERRAIN.tile_count(
-        layer_plan["terrain"].bbox,
-        layer_plan["terrain"].geometry,
+        layer_plan["terrain"].bbox, layer_plan["terrain"].geometry
     )
     assert len(reads["touched"][1]) == LAND_COVER.tile_count(
-        layer_plan["esa_worldcover"].bbox,
-        layer_plan["esa_worldcover"].geometry,
+        layer_plan["esa_worldcover"].bbox, layer_plan["esa_worldcover"].geometry
     )
     assert reads["touched"][0] < reads["full"][0]
     assert (reads["touched"][1] < reads["full"][1]) == spares_cover_tiles
@@ -1906,27 +1882,20 @@ def test_build_reading_only_touched_tiles_matches_a_full_bbox_read(
 
 
 def test_real_warp_bundle_across_50_north_is_identical_with_filtered_tiles(
-    tmp_path,
-    monkeypatch,
-    fake_terrain,
+    tmp_path, monkeypatch, fake_terrain
 ):
     add_tile, _ = fake_terrain
     for lon in (10, 11, 12):
         for lat in (49, 50):
             add_tile(lon, lat)
+
     monkeypatch.setattr(terrain_module, "terrain_product", lambda res: "glo90")
     outline = MultiPolygon([box(10.2, 49.2, 10.8, 49.8), box(12.2, 50.2, 12.8, 50.8)])
     manifests = {}
     for mode, max_tiles in (("full", None), ("filtered", 2500)):
         terrain_dataset = replace(make_registry(RecordingTiles())["terrain"], max_tiles=max_tiles)
         build_scene(
-            HASH_A,
-            Area(outline, BOUNDARY),
-            None,
-            None,
-            [terrain_dataset],
-            "Test",
-            tmp_path / mode,
+            HASH_A, Area(outline, BOUNDARY), None, None, [terrain_dataset], "Test", tmp_path / mode
         )
         manifests[mode] = bundle_manifest(tmp_path / mode / HASH_A)
 

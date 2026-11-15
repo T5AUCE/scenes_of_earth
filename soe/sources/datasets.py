@@ -1,4 +1,5 @@
 """Define the dataset contract that readers implement, with its roles and the registry type."""
+
 import hashlib
 import math
 from abc import ABC, abstractmethod
@@ -154,6 +155,7 @@ class Dataset(ABC):
         blended = [low, *((evenly_spaced[1:] + np.array(quantiles[1:])) / 2)]
         decimals = STOP_DIGITS - 1 - math.floor(math.log10(high - low))
         increasing = _strictly_increasing([round(float(stop), decimals) for stop in blended])
+
         return increasing if len(increasing) >= 2 else [low, high]
 
     def stops_floor(self, stats: dict[str, float]) -> float:
@@ -245,7 +247,9 @@ class SeriesDataset(Dataset):
             following = self.period_end(step)
             if following > start:
                 steps.append(step)
+
             step = following
+
         return steps
 
     @abstractmethod
@@ -326,4 +330,5 @@ def _strictly_increasing(values: list[float]) -> list[float]:
     for value in values:
         if not kept or value > kept[-1]:
             kept.append(value)
+
     return kept

@@ -1,4 +1,5 @@
 """Cell grids: the Grid of a dataset, and the bbox, window and span types on it."""
+
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -68,6 +69,7 @@ class Grid:
         row = round((self.north_deg - north) / self.res)
         width = round((east - west) / self.res)
         height = round((north - south) / self.res)
+
         return col, row, width, height
 
 
@@ -75,12 +77,7 @@ class Grid:
 WORLD_GRID = Grid(-180, 84, CELL_DEG, 7200, 2880)
 
 
-def budget_res(
-    bounds: Bbox,
-    budget_px: int,
-    max_side_px: int,
-    max_divisions: int,
-) -> float:
+def budget_res(bounds: Bbox, budget_px: int, max_side_px: int, max_divisions: int) -> float:
     """Cell size 0.05 / k degrees of a static layer, so whole degrees are a whole number of cells.
 
     It stays within budget_px pixels and max_side_px on the long side, and never gets finer
@@ -92,13 +89,12 @@ def budget_res(
         math.isqrt(int(budget_px / (CELLS_PER_DEG2_AT_CHIRPS_RES * width * height))),
         int(max_side_px * CELL_DEG / max(width, height)),
     )
+
     return CELL_DEG / min(max(divisions, 1), max_divisions)
 
 
 def read_wrapped(
-    grid: Grid,
-    bbox: Bbox,
-    read_window: Callable[[CellWindow], np.ndarray],
+    grid: Grid, bbox: Bbox, read_window: Callable[[CellWindow], np.ndarray]
 ) -> np.ndarray:
     """Cells of a grid-aligned bbox, joining the west edge on when it runs past 180 degrees.
 

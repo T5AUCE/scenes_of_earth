@@ -94,6 +94,7 @@ class StepLoader {
 
       const arrays = await this.loadSteps!(step, stepCount);
       joined.forEach((read, index) => read.resolve(arrays[index + 1]));
+
       return arrays[0];
     } catch (error) {
       joined.forEach((read) => read.reject(error));
@@ -124,11 +125,7 @@ class ReadQueue {
    * Runs the task when a slot is free. A batchable read waits one microtask first, so reads queued
    * in the same pass are all waiting when the first one starts and can join it.
    */
-  run<T>(
-    key: number,
-    task: (isBatchable: boolean) => Promise<T>,
-    isBatchable = false,
-  ): Promise<T> {
+  run<T>(key: number, task: (isBatchable: boolean) => Promise<T>, isBatchable = false): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const read: WaitingRead = {
         key,
@@ -145,6 +142,7 @@ class ReadQueue {
             });
         },
       };
+
       if (isBatchable) {
         this.waiting.push(read);
         queueMicrotask(() => this.startWaiting());
@@ -179,6 +177,7 @@ class ReadQueue {
   /** Takes the batchable reads waiting for the steps right after `key`; the caller settles them. */
   takeFollowers(key: number, limit: number): WaitingRead[] {
     const taken: WaitingRead[] = [];
+
     while (taken.length < limit) {
       const next = key + taken.length + 1;
       const index = this.waiting.findIndex((read) => read.key === next && read.isBatchable);
@@ -186,6 +185,7 @@ class ReadQueue {
 
       taken.push(...this.waiting.splice(index, 1));
     }
+
     return taken;
   }
 }
@@ -218,7 +218,9 @@ export function cacheByIndex<T>(
 
   const evict = (inserted: number) => {
     const maxHeld = Math.max(limit - NORMAL_READ_STEPS, 0);
+
     while (held.size > maxHeld) held.delete(held.values().next().value!);
+
     while (entries.size > limit) {
       const candidates = [...entries.keys()].filter((index) => index !== inserted);
       const victim = candidates.find((index) => !held.has(index)) ?? candidates[0];
@@ -230,6 +232,7 @@ export function cacheByIndex<T>(
   return {
     read(index: number, isHeld = false) {
       let entry = entries.get(index);
+
       if (entry) {
         entries.delete(index);
       } else {
@@ -242,7 +245,9 @@ export function cacheByIndex<T>(
 
       entries.set(index, entry);
       held.delete(index);
+
       if (isHeld) held.add(index);
+
       evict(index);
 
       return entry;

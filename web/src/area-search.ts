@@ -79,10 +79,12 @@ export function bindAreaSearch(
     const thisSearch = ++searchCount;
     const query = search.value.trim();
     closeResults();
+
     if (!query) return;
 
     try {
       const hits = await searchAreas(query, level.value);
+
       // A newer search has started, so these hits are stale.
       if (thisSearch !== searchCount) return;
 
@@ -117,6 +119,7 @@ export function bindAreaSearch(
       event.preventDefault();
       pick(hit);
     };
+
     return item;
   }
 
@@ -136,21 +139,27 @@ export function bindAreaSearch(
     const thisPick = ++pickCount;
     let geometry: AreaFeature["geometry"];
     let pendingNotice: string | null = null;
+
     try {
       geometry = (await getArea(hit.id)).geometry;
     } catch {
       if (thisPick !== pickCount) return;
+
       geometry = bboxGeometry(hit.bbox);
       chosen.textContent = `${AREA_PREFIX}${hit.name} (approximate outline)`;
       pendingNotice = `Outline unavailable for ${hit.name}; showing an approximate outline.`;
+
       if (!isOutlineHidden) onOutlineNotice?.(pendingNotice);
     }
+
     if (thisPick !== pickCount) return;
 
     const shifted = shiftLongitudes(geometry.coordinates, worldShift(hit.bbox));
     lastOutline = { ...geometry, coordinates: shifted } as GeoJSON.Geometry;
     outlineNotice = isOutlineHidden ? pendingNotice : null;
+
     if (isOutlineHidden) return;
+
     showPickedOutline(map, lastOutline);
   }
 
@@ -219,9 +228,13 @@ export function bindAreaSearch(
 
   function showOutline() {
     isOutlineHidden = false;
+
     if (!lastOutline) return;
+
     showPickedOutline(map, lastOutline);
+
     if (outlineNotice) onOutlineNotice?.(outlineNotice);
+
     outlineNotice = null;
   }
 }
@@ -241,6 +254,7 @@ export function createSearchControls(root: HTMLElement) {
   search.autocomplete = "off";
 
   const level = makeHtmlElement("select", "", root);
+
   for (const { value, label } of AREA_LEVELS) level.append(new Option(label, value));
 
   const results = makeHtmlElement("ul", "", searchBox);
@@ -260,5 +274,6 @@ function bboxGeometry([west, south, east, north]: Bbox): AreaFeature["geometry"]
     [west, north],
     [west, south],
   ];
+
   return { type: "Polygon", coordinates: [ring] };
 }

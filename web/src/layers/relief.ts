@@ -29,6 +29,7 @@ export function reliefExaggeration(zoom: number, strength: number): number {
   const low = exaggeration(LOW_DETAIL_EXAGGERATION, strength);
   const high = exaggeration(HIGH_DETAIL_EXAGGERATION, strength);
   const along = (zoom - LOW_DETAIL_ZOOM) / (HIGH_DETAIL_ZOOM - LOW_DETAIL_ZOOM);
+
   return low + (high - low) * Math.min(Math.max(along, 0), 1);
 }
 

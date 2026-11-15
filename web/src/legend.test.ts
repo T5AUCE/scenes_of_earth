@@ -3,12 +3,7 @@ import { registerHooks } from "node:module";
 import { afterEach, beforeEach, test } from "node:test";
 
 import { LUT2D_SIZE, lut, lut2d } from "./render/colormap.ts";
-import {
-  RAIN_TEMPERATURE_GRID,
-  classColors,
-  fieldGradient,
-  inkPaint,
-} from "./render/palettes.ts";
+import { RAIN_TEMPERATURE_GRID, classColors, fieldGradient, inkPaint } from "./render/palettes.ts";
 import type { GridDoc } from "./types.ts";
 
 const resolvedParents = ["./legend.ts", "./render/lattice.ts"].map(
@@ -65,12 +60,7 @@ const {
 } = latticeModule;
 
 const KENYA_RAINFALL_STOPS = [0, 10, 30, 40, 60, 80, 100, 130, 200];
-const KENYA_RAINFALL_GRID: GridDoc = {
-  bbox: [34, -5, 42, 6],
-  res: 0.05,
-  nx: 160,
-  ny: 220,
-};
+const KENYA_RAINFALL_GRID: GridDoc = { bbox: [34, -5, 42, 6], res: 0.05, nx: 160, ny: 220 };
 const HIGH_LATITUDE_GRID: GridDoc = { bbox: [0, 58, 8, 62], res: 0.05, nx: 160, ny: 80 };
 const BOX_PX = 48;
 const SHARE_CASES = [
@@ -117,14 +107,12 @@ test("the isotherm legend shows the dashed ink over its dashed casing", () => {
   assert.equal(sample.className, "legend-isotherm");
   assert.equal(
     sample.style.background,
-    "repeating-linear-gradient(to right, rgb(246, 239, 227) 0 6px, "
-      + "transparent 6px 10px)",
+    "repeating-linear-gradient(to right, rgb(246, 239, 227) 0 6px, " + "transparent 6px 10px)",
   );
   assert.equal(sample.style.height, "3.2px");
   assert.equal(
     line.style.background,
-    "repeating-linear-gradient(to right, rgb(49, 63, 77) 0 6px, "
-      + "transparent 6px 10px)",
+    "repeating-linear-gradient(to right, rgb(49, 63, 77) 0 6px, " + "transparent 6px 10px)",
   );
   assert.equal(line.style.height, "2px");
   assert.ok(Math.abs(Number.parseFloat(line.style.top) - 0.6) < 1e-9);
@@ -166,10 +154,22 @@ test("the bivariate legend puts its ticks at the fitted stops", () => {
   assert.equal(temperatureTitle.className, "legend-bivariate-title-y");
   assert.equal(rainTitle.textContent, "Rainfall (mm/month)");
   assert.equal(rainTitle.className, "legend-bivariate-title-x");
-  assert.deepEqual(rows.children.map((label) => label.textContent), ["5", "17", "≥ 29"]);
-  assert.deepEqual(rows.children.map((label) => label.style.top), ["100%", "50%", "0%"]);
-  assert.deepEqual(columns.children.map((label) => label.textContent), ["0", "60", "≥ 200"]);
-  assert.deepEqual(columns.children.map((label) => label.style.left), ["0%", "50%", "100%"]);
+  assert.deepEqual(
+    rows.children.map((label) => label.textContent),
+    ["5", "17", "≥ 29"],
+  );
+  assert.deepEqual(
+    rows.children.map((label) => label.style.top),
+    ["100%", "50%", "0%"],
+  );
+  assert.deepEqual(
+    columns.children.map((label) => label.textContent),
+    ["0", "60", "≥ 200"],
+  );
+  assert.deepEqual(
+    columns.children.map((label) => label.style.left),
+    ["0%", "50%", "100%"],
+  );
 });
 
 test("the bivariate swatch puts rain across and temperature up", () => {
@@ -202,12 +202,7 @@ test("the bivariate swatch puts rain across and temperature up", () => {
 
 test("the bivariate legend names both axes, their ends and its scale for assistive tools", () => {
   const rain = { title: "Rainfall", units: "mm/month", stops: [0, 100, 200], isBottomOpen: false };
-  const temperature = {
-    title: "Temperature",
-    units: "°C",
-    stops: [8, 20, 31],
-    isBottomOpen: true,
-  };
+  const temperature = { title: "Temperature", units: "°C", stops: [8, 20, 31], isBottomOpen: true };
 
   const legend = bivariateLegend(
     lut2d(RAIN_TEMPERATURE_GRID),
@@ -241,9 +236,7 @@ test("the dot legend labels four stops over a swatch for each", () => {
   );
   assert.equal(boxes.children.length, 4);
   assert.ok(boxes.children.every((swatch) => swatch.tagName === "canvas"));
-  assert.ok(
-    boxes.children.every((swatch) => swatch.width === 48 && swatch.height === 48),
-  );
+  assert.ok(boxes.children.every((swatch) => swatch.width === 48 && swatch.height === 48));
   assert.ok(boxes.children.every((swatch) => swatch.style.width === "48px"));
   assert.equal(boxes.style.gridTemplateColumns, "repeat(4, 50px)");
   assert.equal(labels.style.gridTemplateColumns, "repeat(4, 50px)");
@@ -282,7 +275,13 @@ test("the dot legend key keeps its structure across zooms and moves with style",
   );
   assert.notEqual(
     key,
-    dotLegendKey(KENYA_RAINFALL_STOPS, "mm/month", KENYA_RAINFALL_GRID, inkPaint("charcoal"), false),
+    dotLegendKey(
+      KENYA_RAINFALL_STOPS,
+      "mm/month",
+      KENYA_RAINFALL_GRID,
+      inkPaint("charcoal"),
+      false,
+    ),
   );
   assert.notEqual(
     key,
@@ -321,18 +320,25 @@ test("the dot legend repaints its retained canvases without rebuilding", () => {
 });
 
 test("every swatch holds a clean grid of whole dots centred in their sites", () => {
-  for (const [dotsPerSide, position] of [[2, 1], [3, 0.5]]) {
+  for (const [dotsPerSide, position] of [
+    [2, 1],
+    [3, 0.5],
+  ]) {
     const lattice = dotSwatchLattice(KENYA_RAINFALL_GRID, 11, 1, 1);
     const dots = dotSwatchDots(position, lattice, dotsPerSide);
     const spacingPx = BOX_PX / dotsPerSide;
 
     assert.equal(dots.length, dotsPerSide ** 2);
-    assert.ok(dots.every((dot, index) => {
-      const column = index % dotsPerSide;
-      const row = Math.floor(index / dotsPerSide);
-      return Math.abs(dot.x - (column + 0.5) * spacingPx) <= POSITION_JITTER_RATIO * spacingPx
-        && Math.abs(dot.y - (row + 0.5) * spacingPx) <= POSITION_JITTER_RATIO * spacingPx;
-    }));
+    assert.ok(
+      dots.every((dot, index) => {
+        const column = index % dotsPerSide;
+        const row = Math.floor(index / dotsPerSide);
+        return (
+          Math.abs(dot.x - (column + 0.5) * spacingPx) <= POSITION_JITTER_RATIO * spacingPx
+          && Math.abs(dot.y - (row + 0.5) * spacingPx) <= POSITION_JITTER_RATIO * spacingPx
+        );
+      }),
+    );
   }
 });
 
@@ -346,6 +352,7 @@ test("a swatch keeps a bounded count set by the map spacing and radius", () => {
     );
 
     assert.ok(count >= 1 && count <= 6, `zoom ${zoom} density ${density}`);
+
     const legend = renderDotLegend({ zoom, density });
     const arcs = legend.children[1].children[0].arcs.length;
 
@@ -356,8 +363,11 @@ test("a swatch keeps a bounded count set by the map spacing and radius", () => {
 test("a swatch draws the representative radius with the value exponent", () => {
   for (const { grid, zoom, density } of SHARE_CASES) {
     const lattice = dotSwatchLattice(grid, zoom, 1, density);
+
     assert.ok(lattice.level >= 0, `zoom ${zoom}`);
+
     const fullPx = representativeRadiusPx(lattice);
+
     for (const position of [0.3, 1]) {
       const dots = dotSwatchDots(position, lattice, 2);
       const scaledPx = fullPx * position ** VALUE_RADIUS_EXPONENT;
@@ -380,13 +390,18 @@ test("close zoom bounds every reported radius while ordinary zoom stays put", ()
   for (const zoom of [5, 10, 13]) {
     const lattice = dotSwatchLattice(KENYA_RAINFALL_GRID, zoom, 1, 1);
     const dots = dotSwatchDots(1, lattice, 2);
+
     assert.ok(Math.abs(dots[0].radiusPx - representativeRadiusPx(lattice)) < 1e-9, `zoom ${zoom}`);
     assert.ok(Math.abs(dots[0].opacity - lattice.opacity) < 1e-9, `zoom ${zoom}`);
   }
+
   for (const zoom of [15, 16, 17]) {
     const lattice = dotSwatchLattice(KENYA_RAINFALL_GRID, zoom, 1, 1);
+
     assert.ok(representativeRadiusPx(lattice) <= CLOSE_RADIUS_CAP_PX + 1e-9, `zoom ${zoom}`);
+
     const dots = dotSwatchDots(1, lattice, 2);
+
     assert.ok(dots[0].radiusPx <= CLOSE_RADIUS_CAP_PX + 1e-9, `zoom ${zoom}`);
   }
 });
@@ -395,10 +410,13 @@ test("close zoom shrinks the reported dots through the size fade", () => {
   const lattice = dotSwatchLattice(KENYA_RAINFALL_GRID, 17.75, 1, 1);
   const sizeScale = highZoomDotSizeScale(17.75, 1);
   const q = highZoomDotOpacity(17.75, 1);
+
   assert.ok(Math.abs(sizeScale - 0.594604) < 1e-5);
   assert.ok(Math.abs(q - 0.5) < 1e-9);
+
   const dots = dotSwatchDots(1, lattice, 2);
   const fullPx = representativeRadiusPx(lattice) * sizeScale;
+
   assert.ok(fullPx >= MIN_DOT_RADIUS_PX);
   assert.ok(Math.abs(dots[0].radiusPx - fullPx) < 1e-9);
   assert.ok(Math.abs(dots[0].opacity - q) < 1e-9);
@@ -408,6 +426,7 @@ test("close zoom shrinks the reported dots through the size fade", () => {
   const faintQ = highZoomDotOpacity(17.9, 1);
   const faint = dotSwatchDots(0.15, faintLattice, 2);
   const faintPx = representativeRadiusPx(faintLattice) * 0.15 ** VALUE_RADIUS_EXPONENT * faintScale;
+
   assert.ok(faintPx < MIN_DOT_RADIUS_PX);
   assert.equal(faint[0].radiusPx, MIN_DOT_RADIUS_PX);
   assert.ok(Math.abs(faint[0].opacity - (faintPx / MIN_DOT_RADIUS_PX) ** 2 * faintQ) < 1e-9);
@@ -417,6 +436,7 @@ test("the swatch fades its composed dots once instead of per circle", () => {
   const legend = renderDotLegend({ zoom: 17.75 });
   const q = highZoomDotOpacity(17.75, 1);
   const swatch = legend.children[1].children.at(-1);
+
   assert.ok(swatch.fills.length > 0);
   // Circles paint at their ordinary tiny-dot and halo alphas, undimmed by the fade.
   assert.ok(swatch.fills.some((fill) => Math.abs(fill.alpha - 1) < 1e-9));
@@ -424,7 +444,9 @@ test("the swatch fades its composed dots once instead of per circle", () => {
   assert.ok(swatch.fills.every((fill) => fill.composite === "source-over"));
   // One full-canvas destination-in fill attenuates the composed swatch by the fade.
   assert.equal(swatch.rectFills.length, 1);
+
   const attenuation = swatch.rectFills[0];
+
   assert.equal(attenuation.composite, "destination-in");
   assert.ok(Math.abs(attenuation.alpha - q) < 1e-9);
   assert.equal(attenuation.width, BOX_PX);
@@ -442,7 +464,9 @@ test("the faded swatch resets its compositing for the next repaint", () => {
     1,
   );
   handle.repaint(5, 1, 1);
+
   const boxes = (handle.element as unknown as TestElement).children[1];
+
   for (const swatch of boxes.children) {
     assert.ok(swatch.fills.every((fill) => fill.composite === "source-over"));
     assert.ok(swatch.rectFills.length > 0);
@@ -464,6 +488,7 @@ test("an identical repaint paints no new dots or attenuation", () => {
   const swatch = boxes.children[0];
   const arcs = swatch.arcs.length;
   const attenuations = swatch.rectFills.length;
+
   assert.ok(arcs > 0 && attenuations > 0);
 
   handle.repaint(17.75, 1, 1);
@@ -504,13 +529,17 @@ test("the swatch grid follows the selected count while its ink share stays put",
     const legend = renderDotLegend({ zoom, density });
     return legend.children[1].children[0].arcs.length / 2;
   };
+
   const countAt = (density: number, zoom: number) => {
     const lattice = dotSwatchLattice(KENYA_RAINFALL_GRID, zoom, 1, density);
-    return previewDotsPerSide(
-      representativeSpacingPx(lattice),
-      representativeRadiusPx(lattice),
-      HALO_WIDTH_PX,
-    ) ** 2;
+
+    return (
+      previewDotsPerSide(
+        representativeSpacingPx(lattice),
+        representativeRadiusPx(lattice),
+        HALO_WIDTH_PX,
+      ) ** 2
+    );
   };
 
   for (const zoom of [5, 10]) {
@@ -527,8 +556,8 @@ test("the swatch grid follows the selected count while its ink share stays put",
 
 test("a saturated dot lattice inks the same share at every density", () => {
   for (const zoom of [16, 17]) {
-    const shares = [0.5, 0.75, 1, 1.5, 2].map((density) =>
-      dotSwatchLattice(KENYA_RAINFALL_GRID, zoom, 1, density).inkShare
+    const shares = [0.5, 0.75, 1, 1.5, 2].map(
+      (density) => dotSwatchLattice(KENYA_RAINFALL_GRID, zoom, 1, density).inkShare,
     );
 
     for (const share of shares) assert.ok(Math.abs(share / shares[0] - 1) < 1e-9);
@@ -540,12 +569,17 @@ test("a density sweep keeps the ink share through level fades", () => {
     { length: 17 },
     (_, index) => 2 ** (MIN_DENSITY_LOG2 + index * DENSITY_STEP_LOG2),
   );
+
   for (const zoom of [5, 10.6]) {
     const lattices = densities.map((density) =>
-      dotSwatchLattice(KENYA_RAINFALL_GRID, zoom, 1, density)
+      dotSwatchLattice(KENYA_RAINFALL_GRID, zoom, 1, density),
     );
     const [first] = lattices;
-    assert.ok(lattices.some(({ fade }) => fade > 0), `zoom ${zoom}`);
+
+    assert.ok(
+      lattices.some(({ fade }) => fade > 0),
+      `zoom ${zoom}`,
+    );
 
     for (const lattice of lattices) {
       assert.ok(
@@ -558,13 +592,16 @@ test("a density sweep keeps the ink share through level fades", () => {
 
 test("high-latitude containment keeps constant ink including latitude 55 at zoom 5.3", () => {
   const lowZooms = Array.from({ length: 11 }, (_, index) => 5 + index / 10);
+
   for (const latitude of [45, 50, 55, 60]) {
     const grid = {
       ...HIGH_LATITUDE_GRID,
       bbox: [0, latitude - 2, 8, latitude + 2] as GridDoc["bbox"],
     };
+
     for (const zoom of lowZooms.concat([8, 10, 12])) {
-      const expected = Math.PI * (DOT_RADIUS_RATIO * MIN_SPACING_PX / aimedSpacingPx(zoom)) ** 2;
+      const expected = Math.PI * ((DOT_RADIUS_RATIO * MIN_SPACING_PX) / aimedSpacingPx(zoom)) ** 2;
+
       for (const pixelRatio of [1, 2]) {
         for (let step = 0; step <= 16; step++) {
           const density = 2 ** (MIN_DENSITY_LOG2 + step * DENSITY_STEP_LOG2);
@@ -591,6 +628,7 @@ test("a higher value inks more of the dot swatch by the radius exponent", () => 
 
 test("no selected swatch dot or halo crosses the box edge at any zoom or density", () => {
   const grids = [KENYA_RAINFALL_GRID, HIGH_LATITUDE_GRID];
+
   for (const grid of grids) {
     for (let zoom = 2; zoom < 18; zoom += 0.25) {
       for (const density of [0.5, 1, 2]) {
@@ -600,17 +638,23 @@ test("no selected swatch dot or halo crosses the box edge at any zoom or density
           representativeRadiusPx(lattice),
           HALO_WIDTH_PX,
         );
+
         for (const position of [0.15, 0.6, 1]) {
           const dots = dotSwatchDots(position, lattice, dotsPerSide);
           const message = `zoom ${zoom} density ${density} position ${position}`;
 
-          assert.ok(dots.every((dot) => {
-            const reachPx = dot.radiusPx + HALO_WIDTH_PX;
-            return dot.x - reachPx >= 0
-              && dot.x + reachPx <= BOX_PX
-              && dot.y - reachPx >= 0
-              && dot.y + reachPx <= BOX_PX;
-          }), message);
+          assert.ok(
+            dots.every((dot) => {
+              const reachPx = dot.radiusPx + HALO_WIDTH_PX;
+              return (
+                dot.x - reachPx >= 0
+                && dot.x + reachPx <= BOX_PX
+                && dot.y - reachPx >= 0
+                && dot.y + reachPx <= BOX_PX
+              );
+            }),
+            message,
+          );
         }
       }
     }
@@ -641,6 +685,7 @@ test("the dot swatches draw the current ink over its halo", () => {
 test("the dot swatch halo is the shader's device-px width at every pixel ratio", () => {
   const swatchAt = (ratio: number) => {
     Object.assign(globalThis, { window: { devicePixelRatio: ratio } });
+
     const legend = dotLegend(
       KENYA_RAINFALL_STOPS,
       "mm/month",
@@ -649,16 +694,19 @@ test("the dot swatch halo is the shader's device-px width at every pixel ratio",
       1,
       inkPaint("navy"),
     ) as unknown as TestElement;
+
     return legend.children[1].children[0];
   };
 
   try {
     const normal = swatchAt(1);
     const normalGap = normal.arcs[0] - normal.arcs[1];
+
     assert.ok(Math.abs(normalGap - HALO_WIDTH_PX) < 1e-9);
 
     const retina = swatchAt(2);
     const retinaGap = retina.arcs[0] - retina.arcs[1];
+
     assert.ok(Math.abs(retinaGap - HALO_WIDTH_PX / 2) < 1e-9);
     assert.equal(retina.width, 96);
     assert.equal(retina.height, 96);
@@ -671,6 +719,7 @@ test("the dot swatch halo is the shader's device-px width at every pixel ratio",
 
 test("a fractional backing store survives zoom and density repaints", () => {
   Object.assign(globalThis, { window: { devicePixelRatio: 1.2 } });
+
   try {
     const handle = createDotLegend(
       KENYA_RAINFALL_STOPS,
@@ -682,6 +731,7 @@ test("a fractional backing store survives zoom and density repaints", () => {
       1.2,
     );
     const boxes = (handle.element as unknown as TestElement).children[1];
+
     for (const swatch of boxes.children) swatch.sizeWrites = 0;
 
     handle.repaint(6, 1, 1.2);
@@ -776,8 +826,14 @@ test("a constant two-stop field keeps both endpoints without units in either tic
   assert.equal(caption.textContent, units);
   assert.equal(caption.style.position, undefined);
   assert.equal(legend.textContent.split(units).length - 1, 1);
-  assert.deepEqual(labels.children.map((label) => label.textContent), ["3", "≥ 3"]);
-  assert.deepEqual(labels.children.map((label) => label.style.left), ["0%", "100%"]);
+  assert.deepEqual(
+    labels.children.map((label) => label.textContent),
+    ["3", "≥ 3"],
+  );
+  assert.deepEqual(
+    labels.children.map((label) => label.style.left),
+    ["0%", "100%"],
+  );
   assert.deepEqual(
     labels.children.map((label) => label.style.transform),
     ["translateX(0%)", "translateX(-100%)"],
@@ -787,8 +843,9 @@ test("a constant two-stop field keeps both endpoints without units in either tic
 test("a custom range labels both open ends", () => {
   const stops = [5, 8, 11, 14, 17, 20, 23, 26, 29];
   const labelsOf = (isBottomOpen: boolean) =>
-    renderLegend(stops, "°C", "climate", isBottomOpen).children[2].children
-      .map((label) => label.textContent);
+    renderLegend(stops, "°C", "climate", isBottomOpen).children[2].children.map(
+      (label) => label.textContent,
+    );
 
   assert.deepEqual(labelsOf(true), ["≤ 5", "11", "17", "23", "≥ 29"]);
   assert.deepEqual(labelsOf(false), ["5", "11", "17", "23", "≥ 29"]);
@@ -861,8 +918,14 @@ test("the class legend gives each group of the listed classes one collapsed head
   assert.equal(toggle.type, "button");
   assert.equal(toggle.attributes["aria-expanded"], "false");
   assert.equal(list.hidden, true);
-  assert.deepEqual(list.children.map((row) => row.textContent), ["Sand", "Clay"]);
-  assert.deepEqual(plutonic.children[1].children.map((row) => row.textContent), ["Granite"]);
+  assert.deepEqual(
+    list.children.map((row) => row.textContent),
+    ["Sand", "Clay"],
+  );
+  assert.deepEqual(
+    plutonic.children[1].children.map((row) => row.textContent),
+    ["Granite"],
+  );
 });
 
 const AGE_CLASSES = [
@@ -915,6 +978,7 @@ test("pressing a group heading expands and collapses its classes", () => {
 test("a redrawn class legend keeps the groups the viewer expanded", () => {
   const expanded = new Set<string>();
   groupedLegend(expanded).children[0].children[0].click();
+
   const [toggle, list] = groupedLegend(expanded).children[0].children;
 
   assert.equal(toggle.attributes["aria-expanded"], "true");
@@ -944,12 +1008,7 @@ test("the no-data legend row names its hatched swatch", () => {
   assert.equal(swatch.className, "legend-swatch legend-hatch");
 });
 
-function renderLegend(
-  stops: number[],
-  units: string,
-  palette = "ink-blue",
-  isBottomOpen = false,
-) {
+function renderLegend(stops: number[], units: string, palette = "ink-blue", isBottomOpen = false) {
   const colors = lut(fieldGradient(palette)!);
   return gradientLegend(colors, stops, units, isBottomOpen) as unknown as TestElement;
 }
@@ -1064,6 +1123,7 @@ class TestElement {
         });
       },
     };
+
     return context;
   }
 }

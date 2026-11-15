@@ -65,8 +65,10 @@ export function sampleTable(
       src[pixelRow * width + pixelColumn] = gridRow * nx + gridColumn;
     }
   }
+
   const table: SampleTable = { width, height, src };
   if (preserveCoverage) table.footprint = pixelFootprints(grid.bbox, grid, width, height);
+
   return table;
 }
 
@@ -98,7 +100,9 @@ export function crossSampleTable(
       src[pixelRow * table.width + pixelColumn] = isInside ? row * otherGrid.nx + column : -1;
     }
   }
+
   const footprint = pixelFootprints(tableGrid.bbox, otherGrid, table.width, table.height);
+
   return { width: table.width, height: table.height, src, footprint };
 }
 
@@ -116,6 +120,7 @@ function pixelFootprints(imageBbox: Bbox, grid: Grid, width: number, height: num
   const columns = edgesAndCenters(width, grid.nx, (column) => {
     return (west + (column / width) * (east - west) - gridWest) / columnDegrees;
   });
+
   return {
     sourceWidth: grid.nx,
     rowEdges: rows.edges,
@@ -136,6 +141,7 @@ function edgesAndCenters(count: number, limit: number, position: (index: number)
     edges[index] = Math.min(limit, Math.max(0, snapped));
     if (index < count) centers[index] = position(index + 0.5);
   }
+
   return { edges, centers };
 }
 
@@ -150,6 +156,7 @@ function finestRowHeight({ bbox, ny }: Grid) {
     const rowBottom = mercY(north - (row + 1) * rowDegrees);
     finest = Math.min(finest, rowTop - rowBottom);
   }
+
   return finest;
 }
 

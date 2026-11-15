@@ -33,8 +33,10 @@ const hooks = registerHooks({
           globalThis.cameraTestUnlocks.push(1);
         };
       };`;
+
       return { url: `data:text/javascript,${encodeURIComponent(source)}`, shortCircuit: true };
     }
+
     return next(specifier, context);
   },
 });
@@ -44,6 +46,7 @@ hooks.deregister();
 test("the flight holds its fitted zoom until it starts and pads by layout offsets", () => {
   seen.length = 0;
   flights.length = 0;
+
   const flight = flyIn(fakeMap() as never, SCENE as never, fakeRoots(300) as never);
 
   assert.equal(flight.zoom, 5);
@@ -62,6 +65,7 @@ test("a refit before the start moves the flight to the new layout", () => {
   flights.length = 0;
   minZooms.length = 0;
   setFitted(8);
+
   const roots = fakeRoots(300);
   const flight = flyIn(fakeMap() as never, SCENE as never, roots as never);
 
@@ -77,11 +81,13 @@ test("a refit before the start moves the flight to the new layout", () => {
   assert.equal(flights.length, 1);
   assert.deepEqual((flights[0].options as { padding: unknown }).padding, seen[1].padding);
   assert.deepEqual(minZooms, []);
+
   setFitted(5);
 });
 
 test("the flight lasts longer for more zoom levels up to a cap", () => {
   const durations: number[] = [];
+
   for (const zoom of [5, 4.5, 3, 0]) {
     flights.length = 0;
     void flyIn(fakeMap({ zoom }) as never, SCENE as never, fakeRoots(300) as never).start();
@@ -103,14 +109,17 @@ test("reduced motion shortens the flight to zero while the padding stays measure
   (globalThis as Record<string, unknown>).matchMedia = (query: string) => ({
     matches: query.includes("reduce"),
   });
+
   try {
     assert.equal(flightDuration(), 0);
+
     seen.length = 0;
     flights.length = 0;
 
     void flyIn(fakeMap({ zoom: 2 }) as never, SCENE as never, fakeRoots(300) as never).start();
 
     const options = flights[0].options as { duration: number; padding: unknown };
+
     assert.equal(options.duration, 0);
     assert.deepEqual(options.padding, seen[0].padding);
     assert.equal(
@@ -125,6 +134,7 @@ test("reduced motion shortens the flight to zero while the padding stays measure
 test("a moving flight lands through its own moveend with no per-tick camera drive", async () => {
   flights.length = 0;
   minZooms.length = 0;
+
   const jumps: unknown[] = [];
   const map = fakeMap({ isMoving: true, zoom: 4, jumps });
   const flight = flyIn(map as never, SCENE as never, fakeRoots(300) as never);
@@ -133,7 +143,9 @@ test("a moving flight lands through its own moveend with no per-tick camera driv
   const landing = flight.start().then(() => {
     landed = true;
   });
+
   await tick();
+
   assert.equal(landed, false);
 
   map.state.zoom = 5;
@@ -177,6 +189,7 @@ test("a flight that finishes at once lands without waiting for another event", a
 
 test("a refit during the flight makes the landing ease to the new fit", async () => {
   setFitted(5);
+
   const map = fakeMap({ isMoving: true, zoom: 4 });
   const flight = flyIn(map as never, SCENE as never, fakeRoots(300) as never);
   const landing = flight.start();
@@ -188,6 +201,7 @@ test("a refit during the flight makes the landing ease to the new fit", async ()
   map.emit("moveend");
 
   assert.equal((map.eases[0] as { zoom: number }).zoom, 6);
+
   map.state.zoom = 6;
   map.emit("moveend");
   await landing;
@@ -197,16 +211,20 @@ test("a refit during the flight makes the landing ease to the new fit", async ()
 test("the view limits start only when the hold is installed and end with stop", () => {
   minZooms.length = 0;
   unlocks.length = 0;
+
   const map = fakeMap({ zoom: 5 });
   const flight = flyIn(map as never, SCENE as never, fakeRoots(300) as never);
 
   void flight.start();
+
   assert.deepEqual(minZooms, []);
 
   flight.hold();
+
   assert.deepEqual(minZooms, [5 - 0.15]);
 
   flight.stop();
+
   assert.equal(unlocks.length, 1);
   assert.deepEqual(minZooms.at(-1), null);
 });
@@ -231,6 +249,7 @@ test("stopping the flight drops the pending landing", async () => {
 test("a resize after landing eases to the latest fit before the hold", async () => {
   setFitted(5);
   minZooms.length = 0;
+
   const map = fakeMap({ isMoving: true, zoom: 5 });
   const flight = flyIn(map as never, SCENE as never, fakeRoots(300) as never);
   const landing = flight.start();
@@ -239,17 +258,21 @@ test("a resize after landing eases to the latest fit before the hold", async () 
   map.state.center = { lng: 37, lat: 0 };
   map.emit("moveend");
   await landing;
+
   assert.deepEqual(minZooms, []);
 
   setFitted(6);
   flight.refit();
 
   assert.equal((map.eases[0] as { zoom: number }).zoom, 6);
+
   let settled = false;
   const waiting = flight.settled().then(() => {
     settled = true;
   });
+
   await tick();
+
   assert.equal(settled, false);
 
   map.state.zoom = 6;
@@ -257,7 +280,9 @@ test("a resize after landing eases to the latest fit before the hold", async () 
   await waiting;
 
   assert.equal(settled, true);
+
   flight.hold();
+
   assert.deepEqual(minZooms, [6 - 0.15]);
 
   flight.stop();
@@ -267,6 +292,7 @@ test("a resize after landing eases to the latest fit before the hold", async () 
 test("a second refit while awaiting the first keeps one settlement", async () => {
   setFitted(5);
   minZooms.length = 0;
+
   const map = fakeMap({ isMoving: true, zoom: 5 });
   const flight = flyIn(map as never, SCENE as never, fakeRoots(300) as never);
   const landing = flight.start();
@@ -278,6 +304,7 @@ test("a second refit while awaiting the first keeps one settlement", async () =>
 
   setFitted(6);
   flight.refit();
+
   const first = flight.settled();
   let settled = false;
   void first.then(() => {
@@ -289,12 +316,15 @@ test("a second refit while awaiting the first keeps one settlement", async () =>
 
   assert.equal(flight.settled(), first);
   assert.equal((map.eases[1] as { zoom: number }).zoom, 7);
+
   await tick();
+
   assert.equal(settled, false);
 
   map.state.zoom = 6;
   map.emit("moveend");
   await tick();
+
   assert.equal(settled, false);
 
   map.state.zoom = 7;
@@ -302,7 +332,9 @@ test("a second refit while awaiting the first keeps one settlement", async () =>
   await first;
 
   assert.equal(settled, true);
+
   flight.hold();
+
   assert.deepEqual(minZooms, [7 - 0.15]);
 
   flight.stop();
@@ -318,16 +350,19 @@ test("the resize watch settles once and its cleanup drops the pending callback",
   (globalThis as { window: ReturnType<typeof fakeWindow> }).window.emit("resize");
   (globalThis as { window: ReturnType<typeof fakeWindow> }).window.emit("resize");
   await new Promise((resolve) => setTimeout(resolve, 300));
+
   assert.equal(settled, 1);
 
   (globalThis as { window: ReturnType<typeof fakeWindow> }).window.emit("resize");
   stop();
   await new Promise((resolve) => setTimeout(resolve, 300));
+
   assert.equal(settled, 1);
 });
 
 function fakeWindow() {
   const listeners = new Map<string, Set<(...args: never[]) => void>>();
+
   return {
     innerWidth: 1280,
     innerHeight: 800,
@@ -349,6 +384,7 @@ function fakeMap(options: { isMoving?: boolean; zoom?: number; jumps?: unknown[]
   const canvasListeners = new Map<string, Set<(...args: never[]) => void>>();
   const state = { zoom: options.zoom ?? 5, center: { lng: 37, lat: 0 } };
   const eases: unknown[] = [];
+
   return {
     state,
     eases,
@@ -359,8 +395,9 @@ function fakeMap(options: { isMoving?: boolean; zoom?: number; jumps?: unknown[]
       eases.push(ease);
     },
     setMinZoom: (zoom: number | null) => {
-      (globalThis as Record<string, unknown> & { cameraTestMinZooms: (number | null)[] })
-        .cameraTestMinZooms.push(zoom);
+      (
+        globalThis as Record<string, unknown> & { cameraTestMinZooms: (number | null)[] }
+      ).cameraTestMinZooms.push(zoom);
     },
     on: (type: string, listener: (...args: never[]) => void) => {
       if (!listeners.has(type)) listeners.set(type, new Set());
@@ -397,10 +434,7 @@ function fakeRoots(columnLeft: number) {
 }
 
 function setFitted(zoom: number) {
-  (globalThis as Record<string, unknown>).cameraTestFitted = {
-    center: { lng: 37, lat: 0 },
-    zoom,
-  };
+  (globalThis as Record<string, unknown>).cameraTestFitted = { center: { lng: 37, lat: 0 }, zoom };
 }
 
 const SCENE = { area: { bbox: [33, -5, 42, 5] } };

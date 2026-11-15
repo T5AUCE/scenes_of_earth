@@ -200,10 +200,7 @@ test("an elevation download writes exact stats under a dateless name", async (co
   });
   assert.equal(downloads.blobs.length, 1);
   const content = await downloads.blobs[0].text();
-  assert.equal(
-    downloads.anchors.at(-1)?.download,
-    "test-scene_elevation-distribution.csv",
-  );
+  assert.equal(downloads.anchors.at(-1)?.download, "test-scene_elevation-distribution.csv");
   assert.ok(content.includes("share_of_valid_area_below_pct,elevation [m]"));
   assert.ok(content.includes("# Mean elevation: 500 m."));
   assert.ok(content.includes("# Reference sea_level: 0 m."));

@@ -579,8 +579,8 @@ test("complete save stores options preview and invalid stays with focus", async 
   await act(async () => {
     setFieldValue(window, automatics[1], "Custom Y");
   });
-  const rangeFieldset = [...host.querySelectorAll("fieldset")].find(
-    (fieldset) => (fieldset.querySelector("legend")?.textContent ?? "").includes("Y range"),
+  const rangeFieldset = [...host.querySelectorAll("fieldset")].find((fieldset) =>
+    (fieldset.querySelector("legend")?.textContent ?? "").includes("Y range"),
   )!;
   const autoBox = rangeFieldset?.querySelector('input[type="checkbox"]') as HTMLInputElement;
   await act(async () => {
@@ -737,11 +737,7 @@ function display() {
 }
 
 function makeScene(layers: LayerDoc[]): Scene {
-  return {
-    id: "test",
-    title: "Test scene",
-    layers,
-  } as unknown as Scene;
+  return { id: "test", title: "Test scene", layers } as unknown as Scene;
 }
 
 function rainLayer(): LayerDoc {
@@ -820,8 +816,8 @@ function monthlyValues(count: number) {
 }
 
 function selectFor(host: ParentNode, labelText: string): HTMLSelectElement {
-  const label = [...host.querySelectorAll("label")].find(
-    (entry) => (entry.textContent ?? "").includes(labelText),
+  const label = [...host.querySelectorAll("label")].find((entry) =>
+    (entry.textContent ?? "").includes(labelText),
   );
 
   return label?.querySelector("select") as HTMLSelectElement;
@@ -863,7 +859,10 @@ test("checkbox rows align while types show capitals with lowercase values", asyn
   }
   const typeSelect = selectFor(host, "Type");
   const options = [...typeSelect.querySelectorAll("option")];
-  assert.deepEqual(options.map((option) => option.value), ["line", "bar", "area"]);
+  assert.deepEqual(
+    options.map((option) => option.value),
+    ["line", "bar", "area"],
+  );
   assert.deepEqual(
     options.map((option) => option.textContent),
     ["Line", "Bar", "Area"],
@@ -945,8 +944,8 @@ test("preview notes follow the draft with exact ranges and no duplicate hints", 
 });
 
 function checkboxFor(host: ParentNode, labelText: string): HTMLInputElement {
-  const label = [...host.querySelectorAll("label")].find(
-    (entry) => (entry.textContent ?? "").includes(labelText),
+  const label = [...host.querySelectorAll("label")].find((entry) =>
+    (entry.textContent ?? "").includes(labelText),
   );
 
   return label?.querySelector('input[type="checkbox"]') as HTMLInputElement;
@@ -960,9 +959,7 @@ function setFieldValue(window: Window, input: HTMLInputElement, value: string): 
 }
 
 function saveButton(host: ParentNode): HTMLButtonElement {
-  const button = [...host.querySelectorAll("button")].find(
-    (entry) => entry.textContent === "Save",
-  );
+  const button = [...host.querySelectorAll("button")].find((entry) => entry.textContent === "Save");
   return button as HTMLButtonElement;
 }
 

@@ -34,20 +34,14 @@ from .era5land_temperature import (
     ERA5_LAND_TEMPERATURE_GRID,
     Era5LandTemperatureDataset,
 )
-from .grid import CELL_DEG, WORLD_GRID
 from .geology import PROVENANCE_ROLE, GeologyDataset
+from .grid import CELL_DEG, WORLD_GRID
 from .licences import SOURCES
 from .lithology import LithologyReader
 from .remote import SourceUnavailable
 from .synthetic import SyntheticSource
 from .terrain import GLO30_RES_DEG, CopernicusDemReader, TerrainDataset, terrain_tiles_block
-from .worldcover import (
-    WORLDCOVER_CLASSES,
-    WORLDCOVER_RES_DEG,
-    LandCoverDataset,
-    WorldCoverReader,
-)
-
+from .worldcover import WORLDCOVER_CLASSES, WORLDCOVER_RES_DEG, LandCoverDataset, WorldCoverReader
 
 CUBE_SPECS = (
     ERA5_LAND_TEMPERATURE_CUBE,
@@ -72,12 +66,11 @@ class RealSource(ChirpsReader, CopernicusDemReader, WorldCoverReader, LithologyR
 
     The lithology map is read from its COG in the cubes folder.
     """
+
     synthetic = False
 
     def __init__(
-        self,
-        latest: str | None = None,
-        cubes_dir: Path | str = DEFAULT_CUBES_DIR,
+        self, latest: str | None = None, cubes_dir: Path | str = DEFAULT_CUBES_DIR
     ) -> None:
         ChirpsReader.__init__(self, latest)
         CubeStore.__init__(self, CUBE_SPECS, cubes_dir)
@@ -97,14 +90,19 @@ def make_registry(backend: RealSource | SyntheticSource) -> Registry:
     registry = {}
     if backend.has_cube(ERA5_PRECIPITATION_CUBE):
         registry["chirps_monthly"] = _chirps_monthly(backend)
+
     registry["terrain"] = _terrain(backend)
     registry["esa_worldcover"] = _land_cover(backend)
+
     if backend.has_lithology():
         registry["geology"] = _geology(backend)
+
     if backend.has_lithology(GEOLOGY_AGE_FILE):
         registry["geology_age"] = _geology_age(backend)
+
     if backend.has_cube(ERA5_LAND_TEMPERATURE_CUBE) and backend.has_cube(ERA5_TEMPERATURE_CUBE):
         registry["era5land_temperature"] = _era5land_temperature(backend)
+
     return registry
 
 
@@ -121,7 +119,7 @@ def _chirps_monthly(backend: RealSource | SyntheticSource) -> RainDataset:
             "coverage": CUBE_COVERAGE_84N_DEG,
             "north_cube": ERA5_LAND_PRECIPITATION_84N_CUBE,
             "north_fallback": ERA5_PRECIPITATION_84N_FALLBACK,
-        },
+        }
     )
 
 
@@ -140,7 +138,7 @@ def _chirps_to_60n(backend: RealSource | SyntheticSource) -> RainDataset:
                 fill=65535,
                 units="mm/month",
                 long_name="Monthly precipitation",
-            ),
+            )
         },
         style={
             "kind": "field",
@@ -165,11 +163,7 @@ def _terrain(backend: RealSource | SyntheticSource) -> TerrainDataset:
         resolution_deg=GLO30_RES_DEG,
         source=SOURCES["glo30"],
         roles={},
-        style={
-            "kind": "terrain",
-            "encodings": ["shade"],
-            "parts": ["contours"],
-        },
+        style={"kind": "terrain", "encodings": ["shade"], "parts": ["contours"]},
         backend=backend,
         grid=WORLD_GRID,
         max_tiles=2500,
@@ -185,14 +179,7 @@ def _land_cover(backend: RealSource | SyntheticSource) -> LandCoverDataset:
         units="",
         resolution_deg=WORLDCOVER_RES_DEG,
         source=SOURCES["worldcover"],
-        roles={
-            "value": Role(
-                "class",
-                "uint8",
-                fill=0,
-                long_name="ESA WorldCover 2021 class",
-            ),
-        },
+        roles={"value": Role("class", "uint8", fill=0, long_name="ESA WorldCover 2021 class")},
         style={
             "kind": "categorical",
             "encodings": ["fill"],
@@ -222,12 +209,7 @@ def _geology(backend: RealSource | SyntheticSource) -> GeologyDataset:
         resolution_deg=LITHOLOGY_RES_DEG,
         source=source,
         roles={
-            "value": Role(
-                "class",
-                "uint8",
-                fill=0,
-                long_name="Lithology class",
-            ),
+            "value": Role("class", "uint8", fill=0, long_name="Lithology class"),
             "provenance": PROVENANCE_ROLE,
         },
         style={
@@ -245,8 +227,7 @@ def _geology(backend: RealSource | SyntheticSource) -> GeologyDataset:
 
 
 def _geology_coverage(
-    backend: RealSource | SyntheticSource,
-    file: str,
+    backend: RealSource | SyntheticSource, file: str
 ) -> tuple[float, float, float, float]:
     """Return the 84N coverage when the COG behind `file` reaches 84N, else the 60N one.
 
@@ -280,19 +261,10 @@ def _geology_age(backend: RealSource | SyntheticSource) -> GeologyDataset:
         resolution_deg=GEOLOGY_AGE_RES_DEG,
         source=SOURCES["gsc_world"],
         roles={
-            "value": Role(
-                "class",
-                "uint8",
-                fill=0,
-                long_name="Rock age class",
-            ),
+            "value": Role("class", "uint8", fill=0, long_name="Rock age class"),
             "provenance": PROVENANCE_ROLE,
         },
-        style={
-            "kind": "categorical",
-            "encodings": ["fill"],
-            "classes": AGE_CLASSES,
-        },
+        style={"kind": "categorical", "encodings": ["fill"], "classes": AGE_CLASSES},
         backend=backend,
         grid=WORLD_GRID,
         coverage=_geology_coverage(backend, GEOLOGY_AGE_FILE),
@@ -335,13 +307,9 @@ def _era5land_temperature_to_60n(
                 fill=-32768,
                 units="degC",
                 long_name="Monthly mean 2 m air temperature",
-            ),
+            )
         },
-        style={
-            "kind": "field",
-            "encodings": ["ramp", "isolines", "warmth"],
-            "palette": "climate",
-        },
+        style={"kind": "field", "encodings": ["ramp", "isolines", "warmth"], "palette": "climate"},
         backend=backend,
         grid=ERA5_LAND_TEMPERATURE_GRID,
         coverage=CUBE_COVERAGE_DEG,
@@ -354,9 +322,7 @@ def _era5land_temperature_to_60n(
 
 
 def _reaches_84n(
-    backend: RealSource | SyntheticSource,
-    reference: CubeSpec,
-    *north_cubes: CubeSpec,
+    backend: RealSource | SyntheticSource, reference: CubeSpec, *north_cubes: CubeSpec
 ) -> bool:
     """Return whether each cube that reaches 84N holds all months of the reference cube since 1981.
 
@@ -368,9 +334,7 @@ def _reaches_84n(
             return False
 
         wanted = {
-            month
-            for month in backend.cube_months(reference)
-            if month >= HIGH_LATITUDE_FIRST_MONTH
+            month for month in backend.cube_months(reference) if month >= HIGH_LATITUDE_FIRST_MONTH
         }
     except SourceUnavailable:
         return False

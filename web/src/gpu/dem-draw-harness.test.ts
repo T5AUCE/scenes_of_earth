@@ -18,13 +18,18 @@ class FlatWorker implements DemWorkerPort {
   terminated = false;
   private handler: (response: DemWorkerResponse) => void = () => {};
 
-  constructor(private readonly onPost: () => void, private readonly settled: () => void) {}
+  constructor(
+    private readonly onPost: () => void,
+    private readonly settled: () => void,
+  ) {}
 
   post(request: DemWorkerRequest) {
     this.requests.push(request);
+
     if (request.type !== "load") return;
 
     this.onPost();
+
     const heights = new Float32Array(DEM_TILE_SIZE_PX ** 2);
     setTimeout(() => {
       this.handler({
@@ -80,16 +85,19 @@ export function createDemHarness(options: { linear?: boolean } = {}) {
   let time = 0;
   let zoom = 8;
   let isContextLost = false;
+
   const store: DemTextureStore = {
     linear: true,
     create: () => {
       const texture = { id: created.length };
       created.push(texture);
+
       return texture;
     },
     patch: () => {},
     remove: (texture) => removed.push(texture),
   };
+
   const gl = {
     TEXTURE0,
     TRIANGLE_STRIP: 5,
@@ -122,9 +130,8 @@ export function createDemHarness(options: { linear?: boolean } = {}) {
     getProgramParameter: () => true,
     deleteShader: () => {},
     deleteProgram: (program: unknown) => deleted.programs.push(program),
-    getExtension: (name: string) => (
-      name === "OES_texture_float_linear" && options.linear !== false ? {} : null
-    ),
+    getExtension: (name: string) =>
+      name === "OES_texture_float_linear" && options.linear !== false ? {} : null,
     createVertexArray: () => ({ vertexArray: true }),
     createBuffer: () => ({ buffer: true }),
     bindVertexArray: (array: unknown) => {
@@ -169,6 +176,7 @@ export function createDemHarness(options: { linear?: boolean } = {}) {
         13: glState.blend[2],
         14: glState.blend[3],
       };
+
       return parameters[name];
     },
     bindSampler: () => {},
@@ -183,25 +191,29 @@ export function createDemHarness(options: { linear?: boolean } = {}) {
       activeUnit = unit - TEXTURE0;
     },
     bindTexture: (_target: unknown, texture: unknown) => boundTextures.set(activeUnit, texture),
-    drawArrays: () => draws.push({
-      uniforms: new Map(uniforms),
-      textures: new Map(boundTextures),
-      colorMask: glState.colorMask,
-      isScissored: glState.switches.get(4) === true,
-    }),
+    drawArrays: () =>
+      draws.push({
+        uniforms: new Map(uniforms),
+        textures: new Map(boundTextures),
+        colorMask: glState.colorMask,
+        isScissored: glState.switches.get(4) === true,
+      }),
     isContextLost: () => isContextLost,
   } as unknown as WebGL2RenderingContext;
+
   const mapLayers = new Map<string, CustomLayerInterface>();
   const canvas = {
     addEventListener: (name: string, listener: () => void, capture?: boolean) => {
       canvasListeners.push({ name, capture: capture === true, listener });
     },
     removeEventListener: (name: string, listener: () => void) => {
-      const index = canvasListeners.findIndex((entry) =>
-        entry.name === name && entry.listener === listener);
+      const index = canvasListeners.findIndex(
+        (entry) => entry.name === name && entry.listener === listener,
+      );
       if (index >= 0) canvasListeners.splice(index, 1);
     },
   };
+
   const map = {
     getZoom: () => zoom,
     getBounds: () => ({
@@ -234,11 +246,11 @@ export function createDemHarness(options: { linear?: boolean } = {}) {
     getMaxZoom: () => 22,
     isStyleLoaded: () => true,
   } as unknown as MapLibreMap;
+
   const input = {
-    defaultProjectionData: {
-      mainMatrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
-    },
+    defaultProjectionData: { mainMatrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] },
   } as unknown as CustomRenderMethodInput;
+
   return {
     gl,
     map,
@@ -261,8 +273,10 @@ export function createDemHarness(options: { linear?: boolean } = {}) {
     /** Fire a canvas event the way a browser does, listeners for capture first. */
     dispatch: (name: string) => {
       const entries = canvasListeners.filter((entry) => entry.name === name);
-      for (const { listener } of [...entries.filter((entry) => entry.capture),
-        ...entries.filter((entry) => !entry.capture)]) {
+      for (const { listener } of [
+        ...entries.filter((entry) => entry.capture),
+        ...entries.filter((entry) => !entry.capture),
+      ]) {
         listener();
       }
     },
@@ -279,8 +293,12 @@ export function createDemHarness(options: { linear?: boolean } = {}) {
       now: () => time,
       createStore: () => store,
       createWorker: () => {
-        const worker = new FlatWorker(() => pendingReplies++, () => pendingReplies--);
+        const worker = new FlatWorker(
+          () => pendingReplies++,
+          () => pendingReplies--,
+        );
         workers.push(worker);
+
         return worker;
       },
     },

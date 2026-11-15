@@ -21,7 +21,6 @@ import {
   stopsForRange,
 } from "./colormap.ts";
 import { crossSampleTable, mercY, sampleTable, type SampleTable } from "./mercator.ts";
-import { cellClassIds } from "./smooth-classes.ts";
 import {
   CLASS_PALETTES,
   classColors,
@@ -35,6 +34,7 @@ import {
   RAIN_TEMPERATURE_GRID,
   rgbToHex,
 } from "./palettes.ts";
+import { cellClassIds } from "./smooth-classes.ts";
 
 const gradient = (name: string) => fieldGradient(name)!;
 const table = (src: number[]) => ({ width: src.length, height: 1, src: Int32Array.from(src) });
@@ -54,6 +54,7 @@ test("Fiji rainfall covers the point whose nearest sample falls south of its fin
   const pixel = pixelAt(samples, grid.bbox, 179.225, -16.691719876);
   const values = new Float32Array(grid.nx * grid.ny).fill(NaN);
   values[84 * grid.nx + 44] = 384.7;
+
   const colors = lut(gradient("ink-blue"));
   const rgba = paintColormap(values, samples, colors, [0, values[84 * grid.nx + 44]]);
 
@@ -70,6 +71,7 @@ test("Fiji temperature covers the point sampling north of its finite cell", () =
   const pixel = pixelAt(samples, grid.bbox, 179.902406751, -18.5745);
   const values = new Float32Array(grid.nx * grid.ny).fill(NaN);
   values[61 * grid.nx + 29] = 26.8;
+
   const colors = lut(gradient("climate"));
   const rgba = paintColormap(values, samples, colors, [0, values[61 * grid.nx + 29]]);
 
@@ -85,6 +87,7 @@ test("a finite nearest sample keeps its colour even when other cells overlap", (
   const samples = sampleTable(grid, 2, { preserveCoverage: true });
   const values = new Float32Array(36).fill(10);
   values[samples.src[0]] = 0;
+
   const colors = lut(gradient("climate"));
   const rgba = paintColormap(values, samples, colors, [0, 10]);
 
@@ -94,10 +97,12 @@ test("a finite nearest sample keeps its colour even when other cells overlap", (
 test("capped pixels use the nearest finite overlap without interpolating", () => {
   const grid = { bbox: [180, -5, 190, 5] as Bbox, nx: 10, ny: 10 };
   const samples = sampleTable(grid, 2, { preserveCoverage: true });
+
   const values = new Float32Array(grid.nx * grid.ny).fill(NaN);
   values[0] = 0;
   values[4 * grid.nx + 3] = 10;
   values[2 * grid.nx + 3] = Infinity;
+
   const colors = lut(gradient("climate"));
   const rgba = paintColormap(values, samples, colors, [0, 10]);
 
@@ -112,6 +117,7 @@ test("an empty footprint stays transparent beside finite cells touching only its
   const values = new Float32Array(36).fill(NaN);
   values[3] = 10;
   values[3 * grid.nx] = 10;
+
   const rgba = paintColormap(values, samples, lut(gradient("climate")), [0, 10]);
 
   assert.deepEqual(rgba.slice(0, RGBA_CHANNELS), new Uint8ClampedArray(RGBA_CHANNELS));
@@ -124,6 +130,7 @@ test("a field boundary east of 180 keeps its source column when filling a footpr
   const pixel = pixelAt(samples, grid.bbox, 180.725, -17.01);
   const values = new Float32Array(grid.nx * grid.ny).fill(NaN);
   values[91 * grid.nx + 74] = 10;
+
   const rgba = paintColormap(values, samples, lut(gradient("ink-blue")), [0, 10]);
 
   assert.equal(samples.src[pixel], 90 * grid.nx + 74);
@@ -152,15 +159,24 @@ test("values outside the stops take the end colours", () => {
 test("each stop sits on its own colour however uneven the stops are", () => {
   const stops = [0, 1, 50, 100];
 
-  assert.deepEqual(stops.map((stop) => stopPosition(stop, stops)), [0, 1 / 3, 2 / 3, 1]);
+  assert.deepEqual(
+    stops.map((stop) => stopPosition(stop, stops)),
+    [0, 1 / 3, 2 / 3, 1],
+  );
   assert.equal(stopPosition(25.5, stops), 0.5);
 });
 
 test("legend labels sit at their stop's palette position when stops are irregular", () => {
   const ticks = legendTicks([0, 10, 20, 30, 40, 100]);
 
-  assert.deepEqual(ticks.map((tick) => tick.value), [0, 10, 30, 40, 100]);
-  assert.deepEqual(ticks.map((tick) => tick.position), [0, 1 / 5, 3 / 5, 4 / 5, 1]);
+  assert.deepEqual(
+    ticks.map((tick) => tick.value),
+    [0, 10, 30, 40, 100],
+  );
+  assert.deepEqual(
+    ticks.map((tick) => tick.position),
+    [0, 1 / 5, 3 / 5, 4 / 5, 1],
+  );
 });
 
 test("legend labels of two stops are just the two ends", () => {
@@ -173,7 +189,10 @@ test("legend labels of two stops are just the two ends", () => {
 test("legend labels keep the backend's rounded values", () => {
   const stops = [1234, 1237, 1240, 1244, 1247, 1250, 1254, 1257, 1260];
 
-  assert.deepEqual(legendTicks(stops).map((tick) => tick.value), [1234, 1240, 1247, 1254, 1260]);
+  assert.deepEqual(
+    legendTicks(stops).map((tick) => tick.value),
+    [1234, 1240, 1247, 1254, 1260],
+  );
 });
 
 test("uint16 rain decodes with the scale factor and the fill becomes NaN", () => {
@@ -193,7 +212,10 @@ const WORLDCOVER_CLASSES = [10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100].map((va
 test("the painted palette has a colour for every WorldCover class", () => {
   const painted = Object.keys(CLASS_PALETTES.esa_worldcover.colors.painted).map(Number);
 
-  assert.deepEqual(painted, WORLDCOVER_CLASSES.map(({ value }) => value));
+  assert.deepEqual(
+    painted,
+    WORLDCOVER_CLASSES.map(({ value }) => value),
+  );
 });
 
 test("class colours come from the named palette and fall back to the layer's own", () => {
@@ -224,7 +246,10 @@ test("the geology painted palette does not colour another layer's classes", () =
 test("the geology painted palette colours the 14 classes the backend lists", () => {
   const values = Object.keys(CLASS_PALETTES.geology.colors.painted).map(Number);
 
-  assert.deepEqual(values.sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+  assert.deepEqual(
+    values.sort((a, b) => a - b),
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+  );
 });
 
 const ROCK_FAMILY = [
@@ -296,6 +321,7 @@ function hueDistanceDeg(first: number, second: number): number {
 function oklabOf(rgb: number[]): [number, number, number] {
   const { lightness, chroma, hue } = rgbToOklch(rgb);
   const angle = (hue * Math.PI) / 180;
+
   return [lightness, chroma * Math.cos(angle), chroma * Math.sin(angle)];
 }
 
@@ -308,6 +334,7 @@ function huesOfVariants(parent: string, color: string): number[] {
     parent,
     variant,
   }));
+
   return [...classColors("geology", family, "painted").values()].map((rgb) => rgbToOklch(rgb!).hue);
 }
 
@@ -319,6 +346,7 @@ test("geology variants alternate around the family hue within about +-35 degrees
     const offsets = hues.map((hue) => hueOffsetDeg(hue, hues[0]));
 
     assert.equal(offsets.length, EXPECTED_VARIANT_OFFSETS_DEG.length);
+
     offsets.forEach((offset, variant) => {
       assert.ok(
         Math.abs(offset - EXPECTED_VARIANT_OFFSETS_DEG[variant]) <= OFFSET_TOLERANCE_DEG,
@@ -331,12 +359,14 @@ test("geology variants alternate around the family hue within about +-35 degrees
 test("ten sediment variants stay pairwise distinct and inside the sRGB gamut", () => {
   for (const palette of ["painted", "classic"]) {
     const rgbs = [...classColors("geology", SEDIMENT_FAMILY, palette).values()].map((rgb) => rgb!);
+
     for (const rgb of rgbs) {
       assert.equal(rgb.length, COLOR_CHANNELS);
       assert.ok(rgb.every((channel) => channel >= 0 && channel <= 255));
     }
 
     const labs = rgbs.map(oklabOf);
+
     for (let first = 0; first < labs.length; first++) {
       for (let second = first + 1; second < labs.length; second++) {
         const distance = Math.hypot(
@@ -344,6 +374,7 @@ test("ten sediment variants stay pairwise distinct and inside the sRGB gamut", (
           labs[first][1] - labs[second][1],
           labs[first][2] - labs[second][2],
         );
+
         assert.ok(
           distance > MIN_SIBLING_OKLAB_DISTANCE,
           `palette ${palette} pair ${first} ${second}`,
@@ -361,11 +392,13 @@ test("distant geology families keep their hue order across variants", () => {
   for (const hue of volcanic) {
     assert.ok(hueDistanceDeg(hue, volcanic[0]) <= HUE_LIMIT_DEG);
   }
+
   for (const hue of metamorphic) {
     assert.ok(hueDistanceDeg(hue, metamorphic[0]) <= HUE_LIMIT_DEG);
   }
 
   let closestGap = Infinity;
+
   for (const first of volcanic) {
     for (const second of metamorphic) {
       closestGap = Math.min(closestGap, hueDistanceDeg(first, second));
@@ -421,8 +454,13 @@ test("positioned stops interpolate by place and stay flat beyond the ends", () =
   assert.deepEqual(at(20), [0, 0, 0]);
   assert.deepEqual(at(80), [255, 255, 255]);
   assert.deepEqual(at(100), [255, 255, 255]);
+
   const middle = at(50);
-  assert.ok(middle.every((channel) => channel > 100 && channel < 160), String(middle));
+
+  assert.ok(
+    middle.every((channel) => channel > 100 && channel < 160),
+    String(middle),
+  );
 });
 
 test("exact hits on coincident end stops take the last stop", () => {
@@ -530,6 +568,7 @@ test("an out-of-gamut grid request keeps its lightness and hue as chroma falls",
 
   for (const [color] of grid) {
     const measured = rgbToOklch(color);
+
     assert.ok(Math.abs(measured.lightness - lightness) < 0.005);
     assert.ok(Math.abs(measured.hue - hue) < 1);
     assert.ok(measured.chroma > 0.1 && measured.chroma < requestedChroma);
@@ -540,6 +579,7 @@ test("the sRGB gamut check rejects colours with negative or overflowing channels
   assert.ok(inSrgbGamut(0.6, 0.1, 250));
 
   const outside = oklchToRgb(0.7, 0.4, 30);
+
   assert.ok(Math.min(...outside) < 0);
   assert.ok(Math.max(...outside) > 255);
   assert.ok(!inSrgbGamut(0.7, 0.4, 30));
@@ -575,8 +615,10 @@ test("the blend keeps the Fiji coast pixel whose nearest rainfall cell is empty"
   const rainTable = sampleTable(rainGrid, undefined, { preserveCoverage: true });
   const temperatureTable = crossSampleTable(rainTable, rainGrid, temperatureGrid);
   const pixel = pixelAt(rainTable, rainGrid.bbox, 179.225, -16.691719876);
+
   const rainValues = new Float32Array(rainGrid.nx * rainGrid.ny).fill(NaN);
   rainValues[84 * rainGrid.nx + 44] = 384.7;
+
   const temperatureValues = new Float32Array(temperatureGrid.nx * temperatureGrid.ny).fill(26);
 
   const rgba = paintBivariate(
@@ -620,5 +662,6 @@ function pixelAt(samples: SampleTable, bbox: Bbox, longitude: number, latitude: 
   const row = Math.floor(
     ((mercY(north) - mercY(latitude)) / (mercY(north) - mercY(south))) * samples.height,
   );
+
   return row * samples.width + column;
 }

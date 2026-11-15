@@ -18,13 +18,15 @@ export const CONTOUR_LABEL_PATTERN = /-contours-labels$/;
 
 /** Summarise positive rAF deltas in milliseconds using nearest-rank percentiles. */
 export function frameStats(deltas) {
-  const sorted = deltas.filter((delta) => Number.isFinite(delta) && delta > 0)
+  const sorted = deltas
+    .filter((delta) => Number.isFinite(delta) && delta > 0)
     .sort((first, second) => first - second);
   const percentile = (fraction) => {
     if (!sorted.length) return null;
 
     return Number(sorted[Math.ceil(sorted.length * fraction) - 1].toFixed(2));
   };
+
   return { frame_ms_p50: percentile(0.5), frame_ms_p95: percentile(0.95) };
 }
 
@@ -41,6 +43,7 @@ export function marksFrameStats(deltas) {
  */
 export function nearestPx(polylines, [pointX, pointY]) {
   let nearest = null;
+
   for (const line of polylines) {
     const points = line.length === 1 ? [line[0], line[0]] : line;
     for (let index = 1; index < points.length; index += 1) {
@@ -48,6 +51,7 @@ export function nearestPx(polylines, [pointX, pointY]) {
       if (nearest === null || distance < nearest) nearest = distance;
     }
   }
+
   return nearest === null ? null : Math.round(nearest);
 }
 
@@ -81,6 +85,7 @@ export function pickArea(hits, text) {
 export function classifyFailure(url) {
   if (/tiles\.mapterhorn\.com/.test(url)) return "dem";
   if (/\/fonts\/|\.pbf$/.test(new URL(url).pathname)) return "glyph";
+
   return "other";
 }
 
@@ -93,18 +98,22 @@ export function zoomLabel(zoom) {
 export function zoomBand(fittedZoom, zoom) {
   const offset = zoom - fittedZoom;
   if (offset < 0) return "approach";
+
   const band = Math.min(Math.floor(offset / ZOOM_BAND_WIDTH), ZOOM_BAND_COUNT - 1);
+
   return `+${band}-${band + 1}`;
 }
 
 /** Summarises positive values with nearest-rank percentiles, null when empty. */
 export function zoomStats(values) {
-  const sorted = values.filter((value) => Number.isFinite(value) && value > 0)
+  const sorted = values
+    .filter((value) => Number.isFinite(value) && value > 0)
     .sort((first, second) => first - second);
   const percentile = (fraction) => {
     if (!sorted.length) return null;
     return Number(sorted[Math.ceil(sorted.length * fraction) - 1].toFixed(2));
   };
+
   return { p50: percentile(0.5), p95: percentile(0.95) };
 }
 
@@ -115,22 +124,28 @@ export function zoomStats(values) {
  */
 export function summarizeZoomSweep({ frames, longtasks, fittedZoom }) {
   const bands = {};
+
   for (const frame of frames) {
     if (!(frame.deltaMs > 0)) continue;
+
     const band = zoomBand(fittedZoom, frame.zoom);
     const bucket = bands[band] ?? { deltas: [], renders: [], waiting: 0 };
     bands[band] = bucket;
     bucket.deltas.push(frame.deltaMs);
     bucket.renders.push(frame.renderMs);
+
     if (!frame.tilesLoaded) bucket.waiting += 1;
   }
+
   for (const task of longtasks ?? []) {
     const band = zoomBand(fittedZoom, task.zoom);
     const bucket = bands[band] ?? { deltas: [], renders: [], waiting: 0 };
     bands[band] = bucket;
     bucket.taskMs = [...(bucket.taskMs ?? []), task.durationMs];
   }
+
   const records = {};
+
   for (const [band, bucket] of Object.entries(bands)) {
     const deltas = zoomStats(bucket.deltas);
     const renders = zoomStats(bucket.renders);
@@ -147,35 +162,44 @@ export function summarizeZoomSweep({ frames, longtasks, fittedZoom }) {
       longtask_ms_total: Number(taskMs.toFixed(2)),
     };
   }
+
   return records;
 }
 
 /** Takes the median of each band number across repeats, ignoring missing bands. */
 export function medianZoomBands(repeats) {
   const bands = {};
+
   for (const summary of repeats) {
     for (const [band, stats] of Object.entries(summary)) {
       const bucket = bands[band] ?? {};
       bands[band] = bucket;
+
       for (const [key, value] of Object.entries(stats)) {
         if (value !== null) bucket[key] = [...(bucket[key] ?? []), value];
       }
     }
   }
+
   const medians = {};
+
   for (const [band, bucket] of Object.entries(bands)) {
     medians[band] = {};
+
     for (const [key, values] of Object.entries(bucket)) {
       medians[band][key] = median(values);
     }
   }
+
   return medians;
 }
 
 function median(values) {
   const sorted = [...values].sort((first, second) => first - second);
   const middle = Math.floor(sorted.length / 2);
+
   if (sorted.length % 2 === 1) return sorted[middle];
+
   return Number(((sorted[middle - 1] + sorted[middle]) / 2).toFixed(2));
 }
 
@@ -185,17 +209,20 @@ function median(values) {
  */
 export function deltaZoomBands(baseline, variant) {
   const deltas = {};
+
   for (const [band, stats] of Object.entries(variant)) {
     const base = baseline[band];
     if (!base) continue;
+
     deltas[band] = {};
+
     for (const [key, value] of Object.entries(stats)) {
       const other = base[key];
-      deltas[band][`${key}_delta`] = value === null || other === null
-        ? null
-        : Number((value - other).toFixed(2));
+      deltas[band][`${key}_delta`] =
+        value === null || other === null ? null : Number((value - other).toFixed(2));
     }
   }
+
   return deltas;
 }
 
@@ -216,7 +243,10 @@ export function zoomBandRecord({ spot, scene, variant, band, stats, deltas, requ
 
 /** Makes a file-name-safe slug for screenshots. */
 export function slug(text) {
-  return text.toLowerCase().replace(/[^a-z0-9.]+/g, "-").replace(/^-|-$/g, "");
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9.]+/g, "-")
+    .replace(/^-|-$/g, "");
 }
 
 /** Extracts the contour legend line when one is present. */
@@ -233,7 +263,9 @@ export function sameSample(first, second) {
 /** Drops the pool counts before the settle comparison, so loading textures never block it. */
 function withoutPool(sample) {
   if (!sample || typeof sample !== "object") return sample;
+
   const { pool, ...rest } = sample;
+
   return rest;
 }
 

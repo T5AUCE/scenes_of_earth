@@ -189,6 +189,7 @@ function centreOf(points: Point[]): Point {
 function addFan(vertices: number[], origin: Point, points: Point[]): Fan {
   const first = vertices.length / FLOATS_PER_VERTEX;
   vertices.push(0, 0);
+
   for (const [x, y] of points) vertices.push(x - origin[0], y - origin[1]);
 
   return { first, count: vertices.length / FLOATS_PER_VERTEX - first };
@@ -229,6 +230,7 @@ class MaskLayer implements CustomLayerInterface {
 
   prerender(gl: WebGL2RenderingContext, input: CustomRenderMethodInput) {
     this.isMaskDrawn = false;
+
     // A frame can arrive between the real loss and its event, when nothing can be drawn or read.
     if (gl.isContextLost()) return;
 
@@ -248,11 +250,13 @@ class MaskLayer implements CustomLayerInterface {
     gl.disable(gl.SCISSOR_TEST);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+
     gl.useProgram(compositeProgram);
     gl.bindVertexArray(vertexArray);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindSampler(0, null);
     gl.bindTexture(gl.TEXTURE_2D, target.texture);
+
     gl.uniform1i(compositeMask, 0);
     gl.uniform1f(compositeOpacity, this.opacity);
     gl.drawArrays(gl.TRIANGLE_STRIP, this.fill.geometry.quadFirst, QUAD_VERTICES);
@@ -299,10 +303,13 @@ class MaskFill {
 
     const framebuffer = gl.getParameter(gl.FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
     const viewport = gl.getParameter(gl.VIEWPORT) as Int32Array;
+
     try {
       const gpu = (this.gpu ??= this.build(gl));
       this.ensureTarget(gl, gpu);
+
       if (!isVisible) return false;
+
       if (!this.isFilledFor(mainMatrix)) this.fillTarget(gl, gpu, mainMatrix);
 
       return true;
@@ -319,13 +326,16 @@ class MaskFill {
     const programs: WebGLProgram[] = [];
     const vertexArray = gl.createVertexArray();
     const vertices = gl.createBuffer();
+
     try {
       if (!vertexArray || !vertices) throw new Error("Cannot allocate geometry for the mask");
 
       const fillProgram = linkProgram(gl, FILL_VERTEX, FILL_FRAGMENT);
       programs.push(fillProgram);
+
       const compositeProgram = linkProgram(gl, COMPOSITE_VERTEX, COMPOSITE_FRAGMENT);
       programs.push(compositeProgram);
+
       gl.bindVertexArray(vertexArray);
       gl.bindBuffer(gl.ARRAY_BUFFER, vertices);
       gl.bufferData(gl.ARRAY_BUFFER, this.geometry.vertices, gl.STATIC_DRAW);
@@ -375,6 +385,7 @@ class MaskFill {
 
     const { width, height } = this.targetSize(gl, gpu);
     this.releaseTarget(gl, gpu);
+
     try {
       gpu.target = createTarget(gl, width, height);
     } catch (error) {
@@ -390,6 +401,7 @@ class MaskFill {
     const { target } = gpu;
     gpu.target = null;
     this.filledMatrix = null;
+
     if (!target) return;
 
     gl.deleteFramebuffer(target.framebuffer);
@@ -408,6 +420,7 @@ class MaskFill {
     const target = gpu.target!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
     gl.viewport(0, 0, target.width, target.height);
+
     gl.disable(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);
     gl.disable(gl.CULL_FACE);
@@ -415,6 +428,7 @@ class MaskFill {
     gl.enable(gl.STENCIL_TEST);
     gl.colorMask(true, true, true, true);
     gl.stencilMask(ALL_STENCIL_BITS);
+
     gl.clearColor(0, 0, 0, 0);
     // Every pixel starts odd, so only the pixels inside the area's rings end up even.
     gl.clearStencil(ODD_BIT);
@@ -423,12 +437,14 @@ class MaskFill {
     gl.useProgram(gpu.fillProgram);
     gl.bindVertexArray(gpu.vertexArray);
     this.flipStencil(gl, gpu, mainMatrix);
+
     gl.colorMask(true, true, true, true);
     gl.stencilFunc(gl.EQUAL, ODD_BIT, ODD_BIT);
     gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
     gl.uniformMatrix4fv(gpu.fillMatrix, false, IDENTITY);
     gl.uniform3fv(gpu.fillColor, this.color);
     gl.drawArrays(gl.TRIANGLE_STRIP, this.geometry.quadFirst, QUAD_VERTICES);
+
     this.filledMatrix ??= new Float64Array(mainMatrix.length);
     this.filledMatrix.set(mainMatrix);
   }
@@ -439,9 +455,11 @@ class MaskFill {
     gl.stencilFunc(gl.ALWAYS, 0, ODD_BIT);
     gl.stencilOp(gl.KEEP, gl.KEEP, gl.INVERT);
     gl.stencilMask(ODD_BIT);
+
     for (const worldOffset of WORLD_COPIES) {
       const matrix = localMatrix(mainMatrix, { origin, extent: EXTENT }, worldOffset);
       gl.uniformMatrix4fv(gpu.fillMatrix, false, matrix);
+
       for (const { first, count } of outlines) gl.drawArrays(gl.TRIANGLE_FAN, first, count);
     }
   }
@@ -467,6 +485,7 @@ class MaskFill {
   private release(gl: WebGL2RenderingContext) {
     const { gpu } = this;
     this.gpu = null;
+
     if (!gpu) return;
 
     this.releaseTarget(gl, gpu);
@@ -487,6 +506,7 @@ function createTarget(gl: WebGL2RenderingContext, width: number, height: number)
     gl.deleteRenderbuffer(stencil);
     deleteResources(gl, { textures: [texture] });
   };
+
   if (!framebuffer || !texture || !stencil) {
     free();
     throw new Error("Cannot allocate a framebuffer for the mask");
@@ -498,11 +518,14 @@ function createTarget(gl: WebGL2RenderingContext, width: number, height: number)
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+
   gl.bindRenderbuffer(gl.RENDERBUFFER, stencil);
   gl.renderbufferStorage(gl.RENDERBUFFER, gl.STENCIL_INDEX8, width, height);
+
   gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
   gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.STENCIL_ATTACHMENT, gl.RENDERBUFFER, stencil);
+
   // A failed allocation leaves an attachment without storage, which makes the status incomplete.
   if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
     free();

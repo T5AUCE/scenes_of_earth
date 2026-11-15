@@ -41,15 +41,8 @@ import { subscribeDrawing, type MountedLayer } from "./scene-cards";
 import { createSceneStore, type SceneStore } from "./scene-store";
 import { loadStoredShowAs } from "./show-as";
 import { createTimeline, formatTime, scrubberTimes } from "./timeline";
+import type { DisplayTokens, DrawSlots, LayerDisplay, LayerDoc, LayerView, Scene } from "./types";
 import { mountSceneColumn } from "./ui/scene-column";
-import type {
-  DisplayTokens,
-  DrawSlots,
-  LayerDisplay,
-  LayerDoc,
-  LayerView,
-  Scene,
-} from "./types";
 
 type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
 type AddNote = (text: string) => () => void;
@@ -116,6 +109,7 @@ export function mountScene(
 
   const notes = makeHtmlElement("div", "", box);
   const host = makeHtmlElement("div", "", box);
+
   const addNote = (text: string) => {
     const note = makeHtmlElement("div", text, notes);
     note.className = "notice";
@@ -135,9 +129,11 @@ export function mountScene(
     timeline?.destroy();
     views.forEach((view) => view.destroy());
     blend?.destroy();
+
     removeGeologyWater(map);
     Object.values(SLOTS).forEach((id) => removeLayerAndSource(map, id));
     removeLayerAndSource(map, OUTLINE_ID);
+
     timeline?.element.remove();
     box.remove();
   };
@@ -152,10 +148,13 @@ export function mountScene(
     loadStoredUnits(),
     loadStoredOutline(),
   );
+
   if (dropped) addNote(DROPPED_NOTE);
+
   elevationUnit = elevationUnitFrom(display, scene.layers);
   displayUnits = displayUnitsFrom(display, scene.layers);
   removeScaleBar = showScaleBar(map, elevationUnit);
+
   const changeDisplay = (layerId: string, change: LayerDisplay) => {
     const apply = (target: SceneDisplay) => {
       setLayerDisplay(target, layerId, { ...target.layers[layerId], ...change });
@@ -179,10 +178,12 @@ export function mountScene(
     const elevationChanged = nextElevation !== elevationUnit;
     elevationUnit = nextElevation;
     displayUnits = nextUnits;
+
     if (elevationChanged) {
       removeScaleBar();
       removeScaleBar = showScaleBar(map, elevationUnit);
     }
+
     onUnits?.(elevationUnit, displayUnits, currentLayerIds());
   };
 
@@ -190,11 +191,13 @@ export function mountScene(
   const storedLoaded = loadStoredSlice(scene.id, scene.layers);
   const storedForResolve = storedLoaded.stored ? storedLoaded.slice : null;
   const resolved = resolveCharts(scene.layers, linkToken, storedForResolve);
+
   if (linkToken) {
     if (resolved.notice) addNote(resolved.notice);
   } else if (storedLoaded.notice) {
     addNote(storedLoaded.notice);
   }
+
   const chartsSessionOnly = resolved.sessionOnly;
 
   try {
@@ -214,13 +217,11 @@ export function mountScene(
     const drawLayers = mounted.map(({ layer }) => layer);
     const store = createSceneStore(drawLayers, display, resolved.slice, scene.layers);
     sceneStore = store;
+
     const layerDocs = scene.layers;
-    column = mountSceneColumn(host, {
-      mounted,
-      blend,
-      store,
-    });
+    column = mountSceneColumn(host, { mounted, blend, store });
     stopDrawing = subscribeDrawing(map, mounted, blend, store);
+
     let previousDisplay = store.getSnapshot().display;
     let previousOutline = store.getSnapshot().display.outline;
     let previousCharts = store.getSnapshot().charts;
@@ -233,13 +234,18 @@ export function mountScene(
         removeSyncNote();
         removeSyncNote = null;
       }
+
       lastSyncNotice = notice;
+
       if (notice) removeSyncNote = addNote(notice);
+
       onChartSync?.(notice);
     };
+
     const handleCharts = (chartsSlice: ChartSlice) => {
       if (!chartsSessionOnly) {
         const result = storeSlice(scene.id, chartsSlice);
+
         if (!result.saved && result.notice) {
           storageNotice = result.notice;
           reportSync(storageNotice);
@@ -248,14 +254,17 @@ export function mountScene(
           reportSync(storageNotice);
         }
       }
+
       onCharts?.(encodeSlice(chartsSlice));
     };
     stopLinking = store.subscribe(() => {
       const snapshot = store.getSnapshot();
+
       if (snapshot.display !== previousDisplay) {
         previousDisplay = snapshot.display;
         onDisplay(formatDisplayParams(snapshot.display, layerDocs));
         notifyUnits(snapshot.display, layerDocs);
+
         if (outlineChanged(snapshot.display.outline, previousOutline)) {
           previousOutline = { ...snapshot.display.outline };
           applyOutline(map, snapshot.display.outline);
@@ -267,6 +276,7 @@ export function mountScene(
         handleCharts(snapshot.charts);
       }
     });
+
     onDisplay(formatDisplayParams(store.getSnapshot().display, layerDocs));
     onUnits?.(elevationUnit, displayUnits, currentLayerIds());
     onCharts?.(encodeSlice(store.getSnapshot().charts));
@@ -278,6 +288,7 @@ export function mountScene(
       onTime,
       onPlayingChange,
     );
+
     if (timeline) timeBar.append(timeline.element);
   } catch (error) {
     unmount();
@@ -285,26 +296,15 @@ export function mountScene(
   }
 
   const layerIds = views.flatMap((view) => view.parts.flatMap((part) => part.layerIds));
+
   if (blend) layerIds.push(...blend.parts[0].layerIds);
+
   // Entry warms the current allocation and first-render work while the old pixels stay.
-  const prepareEntry = (getTime: () => string | null, signal: AbortSignal) => prepareEntryLayers(
-    sceneStore as SceneStore,
-    views,
-    blend,
-    timeline,
-    getTime(),
-    signal,
-  );
+  const prepareEntry = (getTime: () => string | null, signal: AbortSignal) =>
+    prepareEntryLayers(sceneStore as SceneStore, views, blend, timeline, getTime(), signal);
 
   // The try block assigns the store, so reaching here means it exists.
-  return {
-    unmount,
-    addNote,
-    timeline,
-    layerIds,
-    store: sceneStore as SceneStore,
-    prepareEntry,
-  };
+  return { unmount, addNote, timeline, layerIds, store: sceneStore as SceneStore, prepareEntry };
 }
 
 /** What an entry preparation warmed, so staging can check that nothing changed since. */
@@ -328,6 +328,7 @@ async function prepareEntryLayers(
 ): Promise<EntryPreparation> {
   // The note paints before heavy work begins, so the old pixels stay responsive.
   await nextEntryFrame();
+
   if (signal.aborted) throw cancelError();
 
   const { allocation, display } = store.getSnapshot();
@@ -335,6 +336,7 @@ async function prepareEntryLayers(
   const abort = new AbortController();
   const stop = () => abort.abort();
   signal.addEventListener("abort", stop, { once: true });
+
   try {
     await Promise.all(
       drawnViews(store, views, blend).map((view) => settleEntry(view, layerTime, abort.signal)),
@@ -345,8 +347,10 @@ async function prepareEntryLayers(
   } finally {
     signal.removeEventListener("abort", stop);
   }
+
   // A loaded flag alone never certifies new bytes, so one frame runs before the result counts.
   await nextEntryFrame();
+
   if (signal.aborted) throw cancelError();
 
   return { time, allocation, display };
@@ -389,8 +393,9 @@ function cancelError(): Error {
 function unitsEqual(first: Record<string, string>, second: Record<string, string>) {
   const keys = Object.keys(first);
 
-  return keys.length === Object.keys(second).length
-    && keys.every((key) => first[key] === second[key]);
+  return (
+    keys.length === Object.keys(second).length && keys.every((key) => first[key] === second[key])
+  );
 }
 
 // Rasters past the antimeridian are drawn one world west, so the outline is shifted to match.
@@ -410,8 +415,9 @@ function addOutline(
 
   if (shift === 0) return;
 
-  showShiftedOutline(map, scene.area.geometry_href, shift, isMounted)
-    .catch((error) => addNote(`Area outline: ${error.message}`));
+  showShiftedOutline(map, scene.area.geometry_href, shift, isMounted).catch((error) =>
+    addNote(`Area outline: ${error.message}`),
+  );
 }
 
 /** Paint the area outline's colour, width and visibility without rebuilding. */
@@ -422,9 +428,11 @@ function applyOutline(map: MapLibreMap, outline: OutlineState) {
 }
 
 function outlineChanged(next: OutlineState, previous: OutlineState): boolean {
-  return next.shown !== previous.shown
+  return (
+    next.shown !== previous.shown
     || next.color !== previous.color
-    || next.widthPx !== previous.widthPx;
+    || next.widthPx !== previous.widthPx
+  );
 }
 
 async function showShiftedOutline(
@@ -434,6 +442,7 @@ async function showShiftedOutline(
   isMounted: () => boolean,
 ) {
   const feature = await loadAreaFeature(geometryHref);
+
   if (!isMounted()) return;
 
   const { geometry } = feature;
@@ -472,9 +481,7 @@ function mountLayerViews(
 
   const supported = layersWithKind
     .filter(({ kind }) => kind)
-    .sort(
-      (first, second) => first.kind!.stack - second.kind!.stack,
-    );
+    .sort((first, second) => first.kind!.stack - second.kind!.stack);
 
   const geology = supported.filter(({ layer }) => isGeologyLayer(layer.id));
   const rest = supported.filter(({ layer }) => !isGeologyLayer(layer.id));
@@ -502,9 +509,13 @@ function mountLayerViews(
       report(error);
     }
   };
+
   for (const entry of geology) mountOne(entry);
+
   if (mounted.some(({ layer }) => isGeologyLayer(layer.id))) addGeologyWater(map, SLOTS.fill);
+
   for (const entry of rest) mountOne(entry);
+
   return mounted;
 }
 
@@ -521,21 +532,29 @@ function mountBlend(
   if (!pair) return null;
 
   const [rain, temperature] = pair.map((id) => layerDocs.find((layer) => layer.id === id)!);
+
   const rangeOf = (id: string) => {
     const mountedLayer = mounted.find(({ layer }) => layer.id === id);
     return mountedLayer?.view.menu?.range?.value ?? null;
   };
+
   const unitsOf = (id: string) => {
     const mountedLayer = mounted.find(({ layer }) => layer.id === id);
     return mountedLayer?.view.menu?.units?.value ?? mountedLayer?.layer.units ?? "";
   };
+
   const report = (error: unknown) => addNote(`${BLEND_TITLE}: ${(error as Error).message}`);
 
   try {
-    return createBlendView(
-      [rain, temperature],
-      { map, store, shift, slots: SLOTS, report, rangeOf, unitsOf },
-    );
+    return createBlendView([rain, temperature], {
+      map,
+      store,
+      shift,
+      slots: SLOTS,
+      report,
+      rangeOf,
+      unitsOf,
+    });
   } catch (error) {
     report(error);
     return null;

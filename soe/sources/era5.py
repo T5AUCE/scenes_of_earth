@@ -4,6 +4,7 @@ ERA5 covers land and sea at 0.25 degrees without gaps. Temperature takes it wher
 no land value, and rainfall takes its precipitation where CHIRPS has none. Each cube has a twin
 that reaches 84N, and a layer reads the twin only for a scene that goes beyond 60N.
 """
+
 from dataclasses import dataclass, replace
 
 from .cubes import CubeSpec
@@ -37,14 +38,10 @@ ERA5_PRECIPITATION_CUBE = CubeSpec(
 )
 
 ERA5_TEMPERATURE_84N_CUBE = ERA5_TEMPERATURE_CUBE._replace(
-    name="era5_temperature_84n",
-    title="ERA5 temperature to 84N",
-    grid=ERA5_84N_GRID,
+    name="era5_temperature_84n", title="ERA5 temperature to 84N", grid=ERA5_84N_GRID
 )
 ERA5_PRECIPITATION_84N_CUBE = ERA5_PRECIPITATION_CUBE._replace(
-    name="era5_precipitation_84n",
-    title="ERA5 precipitation to 84N",
-    grid=ERA5_84N_GRID,
+    name="era5_precipitation_84n", title="ERA5 precipitation to 84N", grid=ERA5_84N_GRID
 )
 
 ERA5_TEMPERATURE_FALLBACK = Fallback(
@@ -61,13 +58,11 @@ ERA5_PRECIPITATION_FALLBACK = Fallback(
     "cells where CHIRPS has no value.",
 )
 ERA5_TEMPERATURE_84N_FALLBACK = ERA5_TEMPERATURE_FALLBACK._replace(
-    cube=ERA5_TEMPERATURE_84N_CUBE,
-    source=SOURCES["era5_84n"],
+    cube=ERA5_TEMPERATURE_84N_CUBE, source=SOURCES["era5_84n"]
 )
 # The 84N rain fallback keeps the legacy notice because southern scenes read no ERA5-Land.
 ERA5_PRECIPITATION_84N_FALLBACK = ERA5_PRECIPITATION_FALLBACK._replace(
-    cube=ERA5_PRECIPITATION_84N_CUBE,
-    source=SOURCES["era5_84n"],
+    cube=ERA5_PRECIPITATION_84N_CUBE, source=SOURCES["era5_84n"]
 )
 
 

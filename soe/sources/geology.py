@@ -1,4 +1,5 @@
 """Compose runtime rock-type and rock-age datasets with regional provenance and notices."""
+
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
@@ -82,10 +83,7 @@ class GeologyDataset(StaticDataset):
         return budget_res(bbox, STATIC_BUDGET_PX, MAX_STATIC_SIDE_PX, max_divisions)
 
     def read(
-        self,
-        bbox: Bbox,
-        res: float,
-        on_block: Callable[[], None] | None = None,
+        self, bbox: Bbox, res: float, on_block: Callable[[], None] | None = None
     ) -> tuple[dict[str, np.ndarray], Affine]:
         """Return uint8 classes over bbox at cell size `res` with their source codes.
 
@@ -93,12 +91,7 @@ class GeologyDataset(StaticDataset):
         where no map has a value, 1 for the base and one code per regional source.
         """
         classes, codes, transform = read_composited(
-            self.backend,
-            self.kind,
-            self.file,
-            tuple(bbox),
-            res,
-            on_block or (lambda: None),
+            self.backend, self.kind, self.file, tuple(bbox), res, on_block or (lambda: None)
         )
         return {"value": classes, "provenance": codes}, transform
 
@@ -142,6 +135,7 @@ class GeologyDataset(StaticDataset):
         regional = tuple(source_id for source_id in used if source_id != "global_base")
         entries = {source["id"]: source for source in REGIONAL_SOURCES}
         base = [self.source] if "global_base" in used else []
+
         return {
             "used_sources": [
                 *base,
@@ -159,7 +153,7 @@ class GeologyDataset(StaticDataset):
                 "kilometres. About a third of the mapped area is dated only to an era or wider, "
                 "and ages are generalised to ICS periods, so each colour is the smallest period "
                 "or era that holds the whole age range of its unit. Lakes, rivers and unmapped "
-                "islands have no rock age and are hatched as no data.",
+                "islands have no rock age and are hatched as no data."
             ]
 
         if self.lithology_source == GLIM_SOURCE:
@@ -168,12 +162,12 @@ class GeologyDataset(StaticDataset):
                 "million, so boundaries are approximate at local scale and can jump where "
                 "the 92 source maps it joins meet. Lakes and rivers "
                 "have no rock class, so they stay uncoloured. Some islands and coastal "
-                "strips have no mapped rock type and are hatched as no data.",
+                "strips have no mapped rock type and are hatched as no data."
             ]
 
         return [
             "Rock type comes from a global map at about 1:3.75 million, so boundaries are "
             "approximate at local scale and can jump where national source maps meet and at "
             "180° longitude. Small islands and some coasts have no rock class in the source "
-            "map, so they stay uncoloured.",
+            "map, so they stay uncoloured."
         ]

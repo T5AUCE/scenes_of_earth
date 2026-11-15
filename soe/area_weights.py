@@ -3,6 +3,7 @@
 Each weight pairs the share of a cell covered by the outline with the cosine of its row
 centre latitude, so later statistics describe outlined physical area on that grid.
 """
+
 import numpy as np
 import shapely
 from rasterio.features import geometry_mask, rasterize
@@ -16,10 +17,7 @@ _CLIP_CHUNK_CELLS = 100  # edge cells per clip, so each box meets only nearby ve
 
 
 def area_weights(
-    geometry: BaseGeometry,
-    transform: Affine,
-    shape: tuple[int, int],
-    mask: np.ndarray,
+    geometry: BaseGeometry, transform: Affine, shape: tuple[int, int], mask: np.ndarray
 ) -> np.ndarray:
     """Return float64 weights of shape `shape` for `geometry` on the layer grid.
 
@@ -31,14 +29,12 @@ def area_weights(
     weights = fractions * latitudes
     # Mask wins over geometry, so the rendering ring never gains weight.
     weights[mask != _MASK_INSIDE] = 0.0
+
     return weights
 
 
 def _coverage_fractions(
-    geometry: BaseGeometry,
-    transform: Affine,
-    shape: tuple[int, int],
-    mask: np.ndarray,
+    geometry: BaseGeometry, transform: Affine, shape: tuple[int, int], mask: np.ndarray
 ) -> np.ndarray:
     """Return the covered share of each cell, clipped to [0, 1], as float64."""
     fractions = np.zeros(shape, dtype="float64")
@@ -47,6 +43,7 @@ def _coverage_fractions(
         return fractions
     if geometry.is_empty:
         return fractions
+
     edge_cells = _boundary_cells(geometry, transform, shape)
     centre_inside = _centre_inside(geometry, transform, shape)
     # A cell the boundary never grazes is either fully inside or fully outside.
@@ -54,17 +51,15 @@ def _coverage_fractions(
     rows, columns = np.nonzero(inside & edge_cells)
     if rows.size == 0:
         return fractions
+
     cell_area = abs(transform.a * transform.e - transform.b * transform.d)
     for start in range(0, rows.size, _CLIP_CHUNK_CELLS):
         stop = start + _CLIP_CHUNK_CELLS
         boxes = _cell_boxes(transform, rows[start:stop], columns[start:stop])
         areas = _clipped_areas(geometry, boxes)
         # Clipping absorbs floating point noise at shared edges.
-        fractions[rows[start:stop], columns[start:stop]] = np.clip(
-            areas / cell_area,
-            0.0,
-            1.0,
-        )
+        fractions[rows[start:stop], columns[start:stop]] = np.clip(areas / cell_area, 0.0, 1.0)
+
     return fractions
 
 
@@ -89,15 +84,14 @@ def _clipped_areas(geometry: BaseGeometry, boxes: np.ndarray) -> np.ndarray:
 
 
 def _boundary_cells(
-    geometry: BaseGeometry,
-    transform: Affine,
-    shape: tuple[int, int],
+    geometry: BaseGeometry, transform: Affine, shape: tuple[int, int]
 ) -> np.ndarray:
     """Return True for cells grazed by the outline boundary, including holes."""
     if geometry.geom_type in ("Polygon", "MultiPolygon"):
         boundary = geometry.boundary
         if boundary.is_empty:
             return np.zeros(shape, dtype=bool)
+
         # all_touched catches every grazed cell, so the rest need no exact test.
         burned = rasterize(
             [(mapping(boundary), 1)],
@@ -112,6 +106,7 @@ def _boundary_cells(
     boundaries = _polygonal_boundaries(geometry)
     if not boundaries:
         return np.zeros(shape, dtype=bool)
+
     # all_touched catches every grazed cell, so the rest need no exact test.
     burned = rasterize(
         [(mapping(boundary), 1) for boundary in boundaries],
@@ -131,32 +126,19 @@ def _polygonal_boundaries(geometry: BaseGeometry) -> list[BaseGeometry]:
     ]
 
 
-def _centre_inside(
-    geometry: BaseGeometry,
-    transform: Affine,
-    shape: tuple[int, int],
-) -> np.ndarray:
+def _centre_inside(geometry: BaseGeometry, transform: Affine, shape: tuple[int, int]) -> np.ndarray:
     """Return True for cells whose centre lies inside the polygonal members."""
     if geometry.geom_type in ("Polygon", "MultiPolygon"):
         if geometry.is_empty:
             return np.zeros(shape, dtype=bool)
-        return geometry_mask(
-            [mapping(geometry)],
-            shape,
-            transform,
-            invert=True,
-            all_touched=False,
-        )
+        return geometry_mask([mapping(geometry)], shape, transform, invert=True, all_touched=False)
 
     members = _polygonal_parts(geometry)
     if not members:
         return np.zeros(shape, dtype=bool)
+
     return geometry_mask(
-        [mapping(member) for member in members],
-        shape,
-        transform,
-        invert=True,
-        all_touched=False,
+        [mapping(member) for member in members], shape, transform, invert=True, all_touched=False
     )
 
 
@@ -171,20 +153,18 @@ def _polygonal_parts(geometry: BaseGeometry) -> list[Polygon]:
         elif hasattr(part, "geoms"):
             stack.extend(part.geoms)
         # Lines and points carry no area, so they fall through without a branch.
+
     return members
 
 
-def _cell_boxes(
-    transform: Affine,
-    rows: np.ndarray,
-    columns: np.ndarray,
-) -> np.ndarray:
+def _cell_boxes(transform: Affine, rows: np.ndarray, columns: np.ndarray) -> np.ndarray:
     """Return one shapely box per (row, column) cell in the unwrapped frame."""
     # Cells and geometry share the unwrapped frame, so corners need no wrapping.
     north_west_x = transform.c + columns * transform.a + rows * transform.b
     north_west_y = transform.f + columns * transform.d + rows * transform.e
     south_east_x = transform.c + (columns + 1) * transform.a + (rows + 1) * transform.b
     south_east_y = transform.f + (columns + 1) * transform.d + (rows + 1) * transform.e
+
     return shapely.box(
         np.minimum(north_west_x, south_east_x),
         np.minimum(north_west_y, south_east_y),

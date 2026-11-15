@@ -3,6 +3,7 @@
 CHIRPS covers 60S to 60N. A value that is negative or above `CHIRPS_MAX_MM` counts as no value, so
 ERA5 fills it. Implausible values below that limit are kept, for example 1998-08 near the Falklands.
 """
+
 import threading
 import time
 import urllib.error
@@ -49,8 +50,7 @@ OFFLINE_ASSUMED_LAG_MONTHS = 2
 HTTP_MARKER = "http"  # stands in a revision for a month read over HTTP
 
 CHIRPS_URL = (
-    "https://data.chc.ucsb.edu/products/CHIRPS/v3.0/monthly/global/cogs/"
-    "chirps-v3.0.{ym}.cog"
+    "https://data.chc.ucsb.edu/products/CHIRPS/v3.0/monthly/global/cogs/chirps-v3.0.{ym}.cog"
 )
 
 
@@ -94,6 +94,7 @@ class RainDataset(SeriesDataset):
         labels = [step[:MONTH_CHARS] for step in steps]
         cube_months = self._cube_months()
         cube_markers = [cube_months.get(label, HTTP_MARKER) for label in labels]
+
         return revision_digest(*month_markers(self.fallback_months(), labels), *cube_markers)
 
     def fallback_notices(self, steps: list[str], filled: list[bool]) -> list[str]:
@@ -102,10 +103,10 @@ class RainDataset(SeriesDataset):
         markers = self.fallback_months()
         # An empty marker is never preliminary, so months the fallback did not fill drop out.
         used = {
-            label: markers[label] if was_filled else ""
-            for label, was_filled in zip(labels, filled)
+            label: markers[label] if was_filled else "" for label, was_filled in zip(labels, filled)
         }
         runs = preliminary_runs(labels, used)
+
         return [_preliminary_notice(run[0], run[-1]) for run in runs]
 
     def stops_floor(self, stats: dict[str, float]) -> float:
@@ -182,6 +183,7 @@ class ChirpsReader:
         year, month = now.year, now.month
         for _ in range(OFFLINE_ASSUMED_LAG_MONTHS):
             year, month = previous_month(year, month)
+
         return f"{year:04d}-{month:02d}"
 
     def current_revision(self, month: str) -> str:

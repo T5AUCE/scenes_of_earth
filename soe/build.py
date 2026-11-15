@@ -1,4 +1,5 @@
 """Build immutable scene bundles containing raster data and metadata."""
+
 import json
 import os
 import shutil
@@ -15,14 +16,10 @@ from . import __version__
 from .areas import Area, simplify_for_display
 from .bundle import VERSION, JsonObject, make, validate
 from .layer_writer import LayerProgress, ProgressCallback, _write_layers
-from .plan import Plan, plan as make_plan, scene_datasets
+from .plan import Plan, scene_datasets
+from .plan import plan as make_plan
 from .sources import Dataset
-from .zarr_encoding import (
-    COMPRESSION,
-    DeterministicGzipCodec,
-    _DeterministicGZip,
-    encode_values,
-)
+from .zarr_encoding import COMPRESSION, DeterministicGzipCodec, _DeterministicGZip, encode_values
 
 CACHE_DIR_NAME = ".cache"  # in the scenes directory; the leading dot keeps it unserved
 
@@ -68,30 +65,12 @@ def build_scene(
 
     with _temporary_scene_directory(scenes_dir, scene_id) as temp_dir:
         layer_metadata, root = _write_layers(
-            temp_dir,
-            scene_plan,
-            datasets,
-            scenes_dir / CACHE_DIR_NAME,
-            progress,
+            temp_dir, scene_plan, datasets, scenes_dir / CACHE_DIR_NAME, progress
         )
 
-        scene_document = make(
-            scene_id,
-            title,
-            area,
-            scene_plan,
-            datasets,
-            layer_metadata,
-        )
+        scene_document = make(scene_id, title, area, scene_plan, datasets, layer_metadata)
 
-        _finalize_scene(
-            root,
-            temp_dir,
-            scene_document,
-            title,
-            area,
-            scene_plan,
-        )
+        _finalize_scene(root, temp_dir, scene_document, title, area, scene_plan)
 
         _check_local_revisions(datasets, scene_plan, local_revisions)
         built_size = _directory_size(temp_dir)
@@ -103,9 +82,7 @@ def build_scene(
 
 
 def _check_local_revisions(
-    datasets: list[Dataset],
-    scene_plan: Plan,
-    expected: dict[str, str | None] | None,
+    datasets: list[Dataset], scene_plan: Plan, expected: dict[str, str | None] | None
 ) -> None:
     if expected is None:
         return
@@ -148,7 +125,7 @@ def _finalize_scene(
             "conventions": "CF-1.8",
             "generator": f"soe {__version__}",
             "credits": scene_document["credits"],
-        },
+        }
     )
 
     _consolidate_metadata(temp_dir)
@@ -157,19 +134,12 @@ def _finalize_scene(
 
 def _consolidate_metadata(temp_dir: Path) -> None:
     with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message="Consolidated metadata is currently not part",
-        )
+        warnings.filterwarnings("ignore", message="Consolidated metadata is currently not part")
         zarr.consolidate_metadata(str(temp_dir / "data.zarr"))
 
 
 def _write_scene_documents(
-    temp_dir: Path,
-    scene_document: JsonObject,
-    title: str,
-    area: Area,
-    scene_plan: Plan,
+    temp_dir: Path, scene_document: JsonObject, title: str, area: Area, scene_plan: Plan
 ) -> None:
     area_name = (area.boundary or {}).get("name", title)
     area_feature = {
@@ -178,14 +148,8 @@ def _write_scene_documents(
         "geometry": mapping(_display_geometry(scene_plan)),
     }
 
-    (temp_dir / "area.geojson").write_text(
-        json.dumps(area_feature),
-        encoding="utf-8",
-    )
-    (temp_dir / "scene.json").write_text(
-        json.dumps(scene_document, indent=1),
-        encoding="utf-8",
-    )
+    (temp_dir / "area.geojson").write_text(json.dumps(area_feature), encoding="utf-8")
+    (temp_dir / "scene.json").write_text(json.dumps(scene_document, indent=1), encoding="utf-8")
 
 
 def _display_geometry(scene_plan: Plan) -> BaseGeometry:
@@ -212,7 +176,5 @@ def _publish_scene(temp_dir: Path, final_dir: Path, built_size: int) -> int:
 
 def _directory_size(directory: Path | str) -> int:
     return sum(
-        file_path.stat().st_size
-        for file_path in Path(directory).rglob("*")
-        if file_path.is_file()
+        file_path.stat().st_size for file_path in Path(directory).rglob("*") if file_path.is_file()
     )

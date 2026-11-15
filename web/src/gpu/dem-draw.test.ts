@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { PlacedTile, TileId } from "./dem-plan.ts";
+import { createDemHarness, SCENE_BBOX } from "./dem-draw-harness.test.ts";
 import {
   ARRIVAL_FADE_MS,
   ArrivalFades,
@@ -10,7 +10,7 @@ import {
   sourceUv,
   type FadeOf,
 } from "./dem-draw.ts";
-import { createDemHarness, SCENE_BBOX } from "./dem-draw-harness.test.ts";
+import type { PlacedTile, TileId } from "./dem-plan.ts";
 
 const FINE_ZOOM = 7;
 
@@ -115,9 +115,7 @@ test("a quad at a wrapped column samples the wrapped ancestor", () => {
 
 /** A pool stand-in that says how long each tile has been able to draw. */
 function drawableFor(byTile: Record<string, number | null>) {
-  return {
-    drawableForMs: (tile: TileId) => byTile[`${tile.z}/${tile.x}/${tile.y}`] ?? null,
-  };
+  return { drawableForMs: (tile: TileId) => byTile[`${tile.z}/${tile.x}/${tile.y}`] ?? null };
 }
 
 test("a texture fades in over the fade time and then stays", () => {
@@ -126,12 +124,17 @@ test("a texture fades in over the fade time and then stays", () => {
   const tile = { z: 5, x: 1, y: 1 };
 
   fadesOf.startFrame();
+
   assert.equal(fadesOf.fadeOf(tile), 0);
   assert.equal(fadesOf.isFading, true);
+
   drawableMs["5/1/1"] = ARRIVAL_FADE_MS / 2;
+
   assert.equal(fadesOf.fadeOf(tile), 0.5);
+
   drawableMs["5/1/1"] = ARRIVAL_FADE_MS * 2;
   fadesOf.startFrame();
+
   assert.equal(fadesOf.fadeOf(tile), 1);
   assert.equal(fadesOf.isFading, false);
 });
@@ -161,6 +164,7 @@ function drawFrame(
     drawQuad,
   );
   harness.endFrame();
+
   return wantsRepaint;
 }
 
@@ -184,6 +188,7 @@ function setup(fitZoom = 8) {
   });
   const program = {} as WebGLProgram;
   draw.attach(harness.gl, program);
+
   return { harness, draw };
 }
 
@@ -195,6 +200,7 @@ test("a frame asks the pool for the planned tiles before anything can draw", () 
   assert.ok(harness.workers.some((worker) => worker.requests.length > 0));
   assert.equal(harness.draws.length, 0);
   assert.equal(wantsRepaint, false);
+
   draw.detach(harness.gl);
 });
 
@@ -203,6 +209,7 @@ test("landed tiles draw at full weight once their arrival fade is over", async (
   await drawnFrames(harness, draw);
   harness.draws.length = 0;
   harness.advance(ARRIVAL_FADE_MS);
+
   const quadWeights: number[][] = [];
 
   drawFrame(harness, draw, (sources) => {
@@ -210,8 +217,12 @@ test("landed tiles draw at full weight once their arrival fade is over", async (
   });
 
   assert.ok(harness.draws.length > 0);
-  assert.deepEqual(quadWeights.flat(), quadWeights.map(() => 1));
+  assert.deepEqual(
+    quadWeights.flat(),
+    quadWeights.map(() => 1),
+  );
   assert.ok(harness.draws.every((call) => call.textures.get(0) !== undefined));
+
   draw.detach(harness.gl);
 });
 
@@ -222,8 +233,11 @@ test("a frame keeps asking for a repaint while tiles fade in", async () => {
   const wantsRepaint = drawFrame(harness, draw);
 
   assert.equal(wantsRepaint, true);
+
   harness.advance(ARRIVAL_FADE_MS);
+
   assert.equal(drawFrame(harness, draw), false);
+
   draw.detach(harness.gl);
 });
 
@@ -237,9 +251,11 @@ test("outside a blend every quad draws from one sampler", async () => {
   drawFrame(harness, draw);
 
   const weights = harness.draws.map((call) => call.uniforms.get("uWeights") as number[]);
+
   assert.ok(weights.length > 0);
   assert.ok(weights.every(([, second]) => second === 0));
   assert.ok(harness.draws.every((call) => !call.textures.has(1)));
+
   draw.detach(harness.gl);
 });
 
@@ -253,9 +269,11 @@ test("inside a blend a quad mixes two samplers that sum to one", async () => {
   drawFrame(harness, draw);
 
   const weights = harness.draws.map((call) => call.uniforms.get("uWeights") as number[]);
+
   assert.ok(weights.length > 0);
   assert.ok(weights.every(([first, second]) => second > 0 && Math.abs(first + second - 1) < 1e-9));
   assert.ok(harness.draws.every((call) => call.textures.has(1)));
+
   draw.detach(harness.gl);
 });
 
@@ -271,8 +289,9 @@ test("detach gives back the geometry and stops the pool's workers", () => {
 
 /** The urls the pool has been asked to load, in request order. */
 function loadUrls(harness: ReturnType<typeof createDemHarness>): string[] {
-  return harness.workers.flatMap((worker) => worker.requests)
-    .flatMap((request) => request.type === "load" ? [request.url] : []);
+  return harness.workers
+    .flatMap((worker) => worker.requests)
+    .flatMap((request) => (request.type === "load" ? [request.url] : []));
 }
 
 test("the pinned base sits at the rounded fitted zoom the planner draws", () => {
@@ -280,8 +299,10 @@ test("the pinned base sits at the rounded fitted zoom the planner draws", () => 
   draw.loadBase(harness.gl);
 
   const urls = loadUrls(harness);
+
   assert.ok(urls.length > 0);
   assert.ok(urls.every((url) => url.includes("/6/")));
+
   draw.detach(harness.gl);
 });
 
@@ -290,6 +311,7 @@ test("refitting across the half zoom moves the pinned base to the new round leve
   draw.loadBase(harness.gl);
 
   const before = loadUrls(harness);
+
   assert.ok(before.length > 0);
   assert.ok(before.every((url) => url.includes("/5/")));
 
@@ -298,8 +320,10 @@ test("refitting across the half zoom moves the pinned base to the new round leve
   draw.loadBase(harness.gl);
 
   const fresh = loadUrls(harness).slice(before.length);
+
   assert.ok(fresh.length > 0);
   assert.ok(fresh.every((url) => url.includes("/6/")));
+
   draw.detach(harness.gl);
 });
 
@@ -313,6 +337,7 @@ test("refitting within the same round level loads nothing new", () => {
   draw.loadBase(harness.gl);
 
   assert.equal(loadUrls(harness).length, before);
+
   draw.detach(harness.gl);
 });
 
@@ -322,7 +347,9 @@ test("a tenth below the fit still draws the floor level", () => {
   drawFrame(harness, draw);
 
   const urls = loadUrls(harness);
+
   assert.ok(urls.some((url) => url.includes("/5/")));
   assert.ok(urls.some((url) => url.includes("/6/")));
+
   draw.detach(harness.gl);
 });

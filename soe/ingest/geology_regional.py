@@ -6,6 +6,7 @@ the published archives, keep only the needed records, classify them through the 
 `soe.ingest.geology_classification` and rasterise the units. Unknown age or rock names fail the
 ingest with the full unmapped list before any COG is published.
 """
+
 import logging
 import os
 import shutil
@@ -128,13 +129,12 @@ SOURCE_IDS = (
 
 
 def ingest_geology_regional(
-    cubes_dir: Path | str,
-    source_id: str,
-    archive_path: Path | str | None = None,
+    cubes_dir: Path | str, source_id: str, archive_path: Path | str | None = None
 ) -> list[Path]:
     """Publish the COGs of one regional source and return their paths."""
     if source_id not in SOURCE_IDS:
         raise ValueError(f"unknown regional source: {source_id}")
+
     builders = {
         "canada_5m": ingest_canada,
         "europe_igme5000": ingest_igme,
@@ -154,6 +154,7 @@ def ingest_canada(cubes_dir: Path, archive_path: Path | str | None = None) -> li
     classified = _read_canada_units(gdb)
     age_cog = cubes_dir / CANADA_AGE_FILE
     type_cog = cubes_dir / CANADA_TYPE_FILE
+
     return [
         _publish_units(classified, "age", GEOLOGY_AGE_RES_DEG, age_cog, "canada-5m"),
         _publish_units(classified, "type", LITHOLOGY_RES_DEG, type_cog, "canada-5m"),
@@ -168,6 +169,7 @@ def ingest_igme(cubes_dir: Path, archive_path: Path | str | None = None) -> list
     classified = _read_igme_units(shape)
     age_cog = cubes_dir / IGME_AGE_FILE
     type_cog = cubes_dir / IGME_TYPE_FILE
+
     return [
         _publish_units(classified, "age", GEOLOGY_AGE_RES_DEG, age_cog, "igme5000"),
         _publish_units(classified, "type", LITHOLOGY_RES_DEG, type_cog, "igme5000"),
@@ -181,6 +183,7 @@ def ingest_egdi(cubes_dir: Path, archive_path: Path | str | None = None) -> list
     log.info("Reprojecting the EGDI raster")
     cog = cubes_dir / EGDI_TYPE_FILE
     publish_cog(partial(_write_egdi_raster, source), "egdi", cog)
+
     return [cog]
 
 
@@ -195,6 +198,7 @@ def ingest_sgmc(cubes_dir: Path, archive_path: Path | str | None = None) -> list
     folder = cubes_dir / DOWNLOADS_DIR / SGMC_DIR
     gdb = _ensure_member(SGMC_URL, folder, SGMC_GDB, archive_path, archive_name=SGMC_ZIP)
     log.info("Classifying the SGMC units")
+
     return [
         _publish_sgmc(gdb, "age", GEOLOGY_AGE_RES_DEG, cubes_dir / SGMC_AGE_FILE),
         _publish_sgmc(gdb, "type", LITHOLOGY_RES_DEG, cubes_dir / SGMC_TYPE_FILE),
@@ -212,15 +216,10 @@ def ingest_sim3340(cubes_dir: Path, archive_path: Path | str | None = None) -> l
     log.info("Classifying the SIM 3340 units")
     ages = _read_sim3340_ages(gdb)
     types = _read_sim3340_types(gdb)
+
     return [
         _publish_by_key(
-            gdb,
-            SIM3340_LAYER,
-            "NSACLASS",
-            values,
-            res_deg,
-            cubes_dir / file,
-            "sim3340",
+            gdb, SIM3340_LAYER, "NSACLASS", values, res_deg, cubes_dir / file, "sim3340"
         )
         for values, res_deg, file in (
             (ages, GEOLOGY_AGE_RES_DEG, ALASKA_AGE_FILE),
@@ -242,6 +241,7 @@ def ingest_gmna(cubes_dir: Path, archive_path: Path | str | None = None) -> list
     classified = _read_gmna_units(shape)
     age_cog = cubes_dir / GMNA_AGE_FILE
     type_cog = cubes_dir / GMNA_TYPE_FILE
+
     return [
         _publish_units(classified, "age", GEOLOGY_AGE_RES_DEG, age_cog, "gmna"),
         _publish_units(classified, "type", LITHOLOGY_RES_DEG, type_cog, "gmna"),
@@ -254,9 +254,11 @@ def _ensure_file(url: str, target: Path, archive_path: Path | str | None) -> Pat
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(archive_path, target)
         return target
+
     if not target.exists():
         target.parent.mkdir(parents=True, exist_ok=True)
         _download(url, target)
+
     return target
 
 
@@ -271,7 +273,9 @@ def _ensure_member(
     target = folder / member
     if target.exists():
         return target
+
     folder.mkdir(parents=True, exist_ok=True)
+
     if archive_path is not None and Path(archive_path).is_file():
         archive_file = Path(archive_path)
     elif archive_path is not None and Path(archive_path).is_dir():
@@ -280,8 +284,10 @@ def _ensure_member(
         archive_file = folder / (archive_name or Path(url).name.split("?")[0])
         if not archive_file.exists():
             _download(url, archive_file)
+
     with zipfile.ZipFile(archive_file) as archive:
         archive.extractall(folder)
+
     return target
 
 
@@ -293,6 +299,7 @@ def _download(url: str, target: Path) -> None:
         with os.fdopen(descriptor, "wb") as file:
             with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT_SECS) as response:
                 shutil.copyfileobj(response, file, DOWNLOAD_CHUNK_BYTES)
+
         os.replace(temp_name, target)
     except BaseException:
         Path(temp_name).unlink(missing_ok=True)
@@ -311,13 +318,17 @@ def _read_canada_units(gdb_path: Path) -> "object":
     )
     # Offshore polygons carry no onshore geology, so they stay out and become no data.
     frame = frame[frame["DOMAIN"] != "offshore"].reset_index(drop=True)
+
     records = frame[["ERA", "PERIOD", "EPOCH"]].fillna(" ")
     ages = canada_age_batch([tuple(row) for row in records.itertuples(index=False)])
+
     rocks = frame[["RXTP", "SUBRXTP"]].fillna(" ")
     types = canada_type_batch([tuple(row) for row in rocks.itertuples(index=False)])
+
     frame["age"] = [value or 0 for value in ages]
     frame["type"] = [value or 0 for value in types]
     frame.geometry = frame.geometry.segmentize(CANADA_SEGMENT_M)
+
     return gpd.GeoDataFrame(frame.to_crs(4326))
 
 
@@ -342,11 +353,12 @@ def _read_igme_units(shape_path: Path) -> "object":
         [
             (cleaned(first), cleaned(secondary), cleaned(igne), cleaned(mari))
             for first, secondary, igne, mari in records
-        ],
+        ]
     )
     frame["age"] = [value or 0 for value in ages]
     frame["type"] = [value or 0 for value in types]
     frame.geometry = frame.geometry.segmentize(IGME_SEGMENT_M)
+
     return gpd.GeoDataFrame(frame.to_crs(4326))
 
 
@@ -363,6 +375,7 @@ def _read_gmna_units(shape_path: Path) -> "object":
     )
     onshore = ~attributes["UNIT_ABBRE"].fillna("").str.endswith("*")
     frame = attributes[onshore].reset_index(drop=True)
+
     meta, _, wkbs, _ = read_raw(shape_path, columns=["UNIT_ABBRE"])
     geometries = [_gmna_geometry(wkb) for wkb in wkbs]
     frame = gpd.GeoDataFrame(
@@ -370,20 +383,22 @@ def _read_gmna_units(shape_path: Path) -> "object":
         geometry=[geometry for geometry, keep in zip(geometries, onshore) if keep],
         crs=meta["crs"],
     )
+
     pairs = list(zip(frame["MIN_AGE"].fillna(""), frame["MAX_AGE"].fillna("")))
     ages = gmna_age_batch(pairs)
     rocks = list(zip(frame["ROCKTYPE"].fillna(""), frame["LITHOLOGY"].fillna("")))
     types = gmna_type_batch(rocks)
+
     frame["age"] = [value or 0 for value in ages]
     frame["type"] = [value or 0 for value in types]
     frame.geometry = frame.geometry.segmentize(GMNA_SEGMENT_M)
+
     reprojected = gpd.GeoDataFrame(frame.to_crs(4326))
     # Aleutian polygons wrap across the dateline in the transverse mercator source.
     reprojected.geometry = gpd.GeoSeries(
-        _world_geometries(reprojected.geometry),
-        index=reprojected.index,
-        crs=reprojected.crs,
+        _world_geometries(reprojected.geometry), index=reprojected.index, crs=reprojected.crs
     )
+
     return reprojected
 
 
@@ -394,6 +409,7 @@ def _gmna_geometry(wkb: bytes | None) -> BaseGeometry | None:
     """
     if wkb is None:
         return None
+
     raw = bytes(wkb)
     try:
         return shapely.from_wkb(raw)
@@ -408,6 +424,7 @@ def _close_wkb_rings(data: bytes) -> bytes:
     if kind == 3:
         fixed, _ = _close_polygon_rings(data, 5, order)
         return data[:5] + fixed
+
     if kind == 6:
         count = struct.unpack_from(order + "I", data, 5)[0]
         offset = 9
@@ -417,7 +434,9 @@ def _close_wkb_rings(data: bytes) -> bytes:
             head = data[offset : offset + 5]
             fixed, offset = _close_polygon_rings(data, offset + 5, part_order)
             parts.append(head + fixed)
+
         return b"".join(parts)
+
     return data
 
 
@@ -431,34 +450,27 @@ def _close_polygon_rings(data: bytes, offset: int, order: str) -> tuple[bytes, i
         offset += 4
         coords = data[offset : offset + points * 16]
         offset += points * 16
+
         if coords[:16] != coords[-16:]:
             coords += coords[:16]
             points += 1
+
         parts.append(struct.pack(order + "I", points))
         parts.append(coords)
+
     return b"".join(parts), offset
 
 
 def _read_sgmc_lithology(gdb_path: Path) -> dict[str, int]:
     """Return the rock-type class of each SGMC unit link."""
-    hierarchies = _first_major_hierarchies(
-        gdb_path,
-        SGMC_LITHOLOGY_LAYER,
-        "UNIT_LINK",
-        "LITH_RANK",
-    )
+    hierarchies = _first_major_hierarchies(gdb_path, SGMC_LITHOLOGY_LAYER, "UNIT_LINK", "LITH_RANK")
     values = sgmc_type_batch(list(hierarchies.values()))
     return dict(zip(hierarchies, values))
 
 
 def _read_sim3340_types(gdb_path: Path) -> dict[int, int]:
     """Return the rock-type class of each SIM 3340 unit class, 0 where the base map fills in."""
-    hierarchies = _first_major_hierarchies(
-        gdb_path,
-        SIM3340_LITHOLOGY_LAYER,
-        "NSACLASS",
-        "RANK",
-    )
+    hierarchies = _first_major_hierarchies(gdb_path, SIM3340_LITHOLOGY_LAYER, "NSACLASS", "RANK")
     values = sim3340_type_batch(list(hierarchies.values()))
     return {unit: value or 0 for unit, value in zip(hierarchies, values)}
 
@@ -475,14 +487,12 @@ def _read_sim3340_ages(gdb_path: Path) -> dict[int, int]:
     )
     pairs = list(zip(table["FULL_MIN"].fillna(""), table["FULL_MAX"].fillna("")))
     values = sim3340_age_batch(pairs)
+
     return {unit: value or 0 for unit, value in zip(table["NSACLASS"], values)}
 
 
 def _first_major_hierarchies(
-    gdb_path: Path,
-    layer: str,
-    link_column: str,
-    rank_column: str,
+    gdb_path: Path, layer: str, link_column: str, rank_column: str
 ) -> dict:
     """Return the LITH1 to LITH5 hierarchy of each unit link of a lithology table.
 
@@ -507,8 +517,10 @@ def _first_major_hierarchies(
             hierarchies[link] = hierarchy
         elif row[rank_column] == "Indeterminate, major" and link not in fallback:
             fallback[link] = hierarchy
+
     for link, hierarchy in fallback.items():
         hierarchies.setdefault(link, hierarchy)
+
     return hierarchies
 
 
@@ -523,9 +535,7 @@ def _publish_units(frame: object, kind: str, res_deg: float, cog_path: Path, tag
     polygons: gpd.GeoDataFrame = frame  # type: ignore[assignment]
     publish_cog(
         lambda raster: write_tiled_raster(
-            raster,
-            res_deg,
-            partial(_rasterize_units, polygons, kind),
+            raster, res_deg, partial(_rasterize_units, polygons, kind)
         ),
         tag,
         cog_path,
@@ -542,10 +552,7 @@ def _publish_sgmc(gdb_path: Path, kind: str, res_deg: float, cog_path: Path) -> 
     import pyogrio
 
     attributes = pyogrio.read_dataframe(
-        gdb_path,
-        layer=SGMC_LAYER,
-        columns=["UNIT_LINK", "AGE_MIN", "AGE_MAX"],
-        read_geometry=False,
+        gdb_path, layer=SGMC_LAYER, columns=["UNIT_LINK", "AGE_MIN", "AGE_MAX"], read_geometry=False
     )
     pairs = list(zip(attributes["AGE_MIN"].fillna(""), attributes["AGE_MAX"].fillna("")))
     ages = sgmc_age_batch(pairs)
@@ -554,6 +561,7 @@ def _publish_sgmc(gdb_path: Path, kind: str, res_deg: float, cog_path: Path) -> 
     else:
         lithology = _read_sgmc_lithology(gdb_path)
         values = {link: (value or 0) for link, value in lithology.items()}
+
     return _publish_by_key(gdb_path, SGMC_LAYER, "UNIT_LINK", values, res_deg, cog_path, "us-sgmc")
 
 
@@ -578,8 +586,7 @@ def _publish_by_key(
 
     def rasterize_tile(bounds: Bbox, transform: Affine, shape: tuple[int, int]) -> np.ndarray:
         lons, lats = np.meshgrid(
-            np.linspace(bounds[0], bounds[2], 9),
-            np.linspace(bounds[1], bounds[3], 9),
+            np.linspace(bounds[0], bounds[2], 9), np.linspace(bounds[1], bounds[3], 9)
         )
         xs, ys = transformer.transform(lons, lats)
         tile = pyogrio.read_dataframe(
@@ -595,10 +602,12 @@ def _publish_by_key(
         )
         if tile.empty:
             return np.zeros(shape, "uint8")
+
         tile["value"] = [values.get(key, 0) for key in tile[key_column]]
         classed = tile[tile["value"] != 0]
         if classed.empty:
             return np.zeros(shape, "uint8")
+
         classed.geometry = classed.geometry.segmentize(TILED_SEGMENT_M)
         return rasterize(
             zip(_world_geometries(classed.geometry.to_crs(4326)), classed["value"]),
@@ -607,11 +616,7 @@ def _publish_by_key(
             dtype="uint8",
         )
 
-    publish_cog(
-        lambda raster: write_tiled_raster(raster, res_deg, rasterize_tile),
-        tag,
-        cog_path,
-    )
+    publish_cog(lambda raster: write_tiled_raster(raster, res_deg, rasterize_tile), tag, cog_path)
     return cog_path
 
 
@@ -633,15 +638,12 @@ def _split_at_antimeridian(geometry: BaseGeometry) -> BaseGeometry:
     continuous = shapely.transform(geometry, lambda xy: np.column_stack((xy[:, 0] % 360, xy[:, 1])))
     west = continuous.intersection(box(0, -90, 180, 90))
     east = translate(continuous.intersection(box(180, -90, 360, 90)), xoff=-360)
+
     return unary_union([west, east])
 
 
 def _rasterize_units(
-    frame: object,
-    kind: str,
-    bounds: Bbox,
-    transform: Affine,
-    shape: tuple[int, int],
+    frame: object, kind: str, bounds: Bbox, transform: Affine, shape: tuple[int, int]
 ) -> np.ndarray:
     """Return the class of each tile cell, 0 where no unit covers it."""
     import geopandas as gpd
@@ -650,14 +652,13 @@ def _rasterize_units(
     nearby = polygons.iloc[polygons.sindex.query(box(*bounds), predicate="intersects")]
     if nearby.empty:
         return np.zeros(shape, "uint8")
+
     classed = nearby[nearby[kind] != 0]
     if classed.empty:
         return np.zeros(shape, "uint8")
+
     return rasterize(
-        zip(classed.geometry, classed[kind]),
-        out_shape=shape,
-        transform=transform,
-        dtype="uint8",
+        zip(classed.geometry, classed[kind]), out_shape=shape, transform=transform, dtype="uint8"
     )
 
 
@@ -675,20 +676,14 @@ def _write_egdi_raster(source_path: Path | str, raster_path: Path) -> None:
 
         with rasterio.open(classes_path) as classes:
             write_tiled_raster(
-                raster_path,
-                LITHOLOGY_RES_DEG,
-                partial(_reproject_egdi_tile, classes, footprint),
+                raster_path, LITHOLOGY_RES_DEG, partial(_reproject_egdi_tile, classes, footprint)
             )
     finally:
         classes_path.unlink(missing_ok=True)
 
 
 def _reproject_egdi_tile(
-    classes: DatasetReader,
-    footprint: Bbox,
-    bounds: Bbox,
-    transform: Affine,
-    shape: tuple[int, int],
+    classes: DatasetReader, footprint: Bbox, bounds: Bbox, transform: Affine, shape: tuple[int, int]
 ) -> np.ndarray:
     """Return the most common class of the source cells under each cell of the tile."""
     tile = np.zeros(shape, "uint8")
@@ -738,9 +733,11 @@ def _egdi_lookup(source: DatasetReader) -> np.ndarray:
     present: set[int] = set()
     for _, window in source.block_windows(1):
         present.update(np.unique(source.read(1, window=window)).astype(int).tolist())
+
     present.discard(int(source.nodata))
     values = sorted(present)
     lookup = np.zeros(values[-1] + 1, "uint8")
     for value, cls in zip(values, egdi_type_batch(values)):
         lookup[value] = cls or 0
+
     return lookup

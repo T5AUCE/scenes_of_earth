@@ -22,6 +22,9 @@ function describeNode(node: Node | null | undefined): string {
   const id = element.getAttribute?.("id")?.slice(0, DESCRIPTION_LIMIT_CHARS) ?? "";
   const classes = element.getAttribute?.("class")?.slice(0, DESCRIPTION_LIMIT_CHARS) ?? "";
   const text = (node.textContent ?? "").slice(0, DESCRIPTION_LIMIT_CHARS);
-  return `${node.nodeName.toLowerCase()} id=${JSON.stringify(id)}`
-    + ` class=${JSON.stringify(classes)} text=${JSON.stringify(text)}`;
+
+  return (
+    `${node.nodeName.toLowerCase()} id=${JSON.stringify(id)}`
+    + ` class=${JSON.stringify(classes)} text=${JSON.stringify(text)}`
+  );
 }

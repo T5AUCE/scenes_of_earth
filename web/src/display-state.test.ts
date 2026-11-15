@@ -51,12 +51,8 @@ const {
   subscribeMapDetails,
 } = await import("./display-state.ts");
 const { choose, loadStoredShowAs, storeShowAs, toggle } = await import("./show-as.ts");
-const {
-  DENSITY_STEP_LOG2,
-  MAX_DENSITY_RATIO,
-  MIN_DENSITY_RATIO,
-  quantiseDensity,
-} = await import("./render/lattice.ts").finally(() => hooks.deregister());
+const { DENSITY_STEP_LOG2, MAX_DENSITY_RATIO, MIN_DENSITY_RATIO, quantiseDensity } =
+  await import("./render/lattice.ts").finally(() => hooks.deregister());
 
 const LAYERS = [
   {
@@ -131,6 +127,7 @@ test("linked as beats stored as which beats auto", () => {
     {},
     { era5land_temperature: "dots" },
   );
+
   assert.deepEqual(linked.display.showAs, { chirps_monthly: "colour" });
 
   const remembered = resolveDisplay(
@@ -139,13 +136,16 @@ test("linked as beats stored as which beats auto", () => {
     {},
     { era5land_temperature: "colour" },
   );
+
   assert.deepEqual(remembered.display.showAs, { era5land_temperature: "colour" });
 
   const auto = resolveDisplay(COLOUR_LAYERS, NO_TOKENS, {});
+
   assert.deepEqual(auto.display.showAs, {});
   assert.ok(
-    formatDisplayParams(auto.display, COLOUR_LAYERS)
-      .includes("&as=chirps_monthly:dots,era5land_temperature:colour"),
+    formatDisplayParams(auto.display, COLOUR_LAYERS).includes(
+      "&as=chirps_monthly:dots,era5land_temperature:colour",
+    ),
   );
 });
 
@@ -168,6 +168,7 @@ test("a link keeps its explicit choice off while another unit uses colour", () =
   assert.ok(display.off.has("chirps_monthly"));
 
   const text = formatDisplayParams(display, COLOUR_LAYERS);
+
   assert.ok(text.includes("&off=chirps_monthly"));
   assert.ok(text.includes("&as=chirps_monthly:colour,era5land_temperature:colour"));
 });
@@ -221,17 +222,16 @@ test("the link writes the effective draw of every on unit", () => {
   const auto = resolveDisplay(COLOUR_LAYERS, NO_TOKENS, {});
 
   assert.ok(
-    formatDisplayParams(auto.display, COLOUR_LAYERS)
-      .endsWith(
-        "&as=chirps_monthly:dots,era5land_temperature:colour"
-          + "&dens=chirps_monthly:1&outline=on:graphite:1.5",
-      ),
+    formatDisplayParams(auto.display, COLOUR_LAYERS).endsWith(
+      "&as=chirps_monthly:dots,era5land_temperature:colour"
+        + "&dens=chirps_monthly:1&outline=on:graphite:1.5",
+    ),
   );
 
   const single = resolveDisplay([TEMPERATURE], NO_TOKENS, {});
+
   assert.ok(
-    formatDisplayParams(single.display, [TEMPERATURE])
-      .includes("&as=era5land_temperature:colour"),
+    formatDisplayParams(single.display, [TEMPERATURE]).includes("&as=era5land_temperature:colour"),
   );
 });
 
@@ -241,16 +241,16 @@ test("a blend link omits its halves from off", () => {
 
   assert.deepEqual(display.showAs, { blend: "colour" });
   assert.deepEqual([...display.off], ["chirps_monthly", "era5land_temperature"]);
-  assert.ok(
-    text.endsWith("&as=blend:colour&dens=chirps_monthly:1&outline=on:graphite:1.5"),
-  );
+  assert.ok(text.endsWith("&as=blend:colour&dens=chirps_monthly:1&outline=on:graphite:1.5"));
   assert.equal(text.includes("off="), false);
 
   const pair = [LAYERS[0], TEMPERATURE];
   const pairOnly = resolveDisplay(pair, { ...NO_TOKENS, as: "blend:colour" }, {});
+
   assert.ok(
-    formatDisplayParams(pairOnly.display, pair)
-      .endsWith("&as=blend:colour&dens=chirps_monthly:1&outline=on:graphite:1.5"),
+    formatDisplayParams(pairOnly.display, pair).endsWith(
+      "&as=blend:colour&dens=chirps_monthly:1&outline=on:graphite:1.5",
+    ),
   );
 });
 
@@ -312,13 +312,14 @@ test("positioned custom gradients ride the link while legacy names still work", 
     resolveDisplay(LAYERS, { ...NO_TOKENS, pal: `chirps_monthly:${palette}` }, {});
 
   const positioned = resolve("custom-447dc4_0-189d73_50-618d63_80-cf764c_100");
+
   assert.equal(positioned.dropped, false);
-  assert.deepEqual(
-    positioned.display.layers.chirps_monthly,
-    { palette: "custom-447dc4_0-189d73_50-618d63_80-cf764c_100" },
-  );
+  assert.deepEqual(positioned.display.layers.chirps_monthly, {
+    palette: "custom-447dc4_0-189d73_50-618d63_80-cf764c_100",
+  });
 
   const legacy = resolve("custom-1a2b3c-88cc44");
+
   assert.equal(legacy.dropped, false);
   assert.deepEqual(legacy.display.layers.chirps_monthly, { palette: "custom-1a2b3c-88cc44" });
 
@@ -352,10 +353,7 @@ test("converted ranges keep their exact native values through links", () => {
 test("every layer with a menu names its palette but ranges and off parts only when set", () => {
   const { display } = resolveDisplay(
     LAYERS,
-    {
-      ...NO_TOKENS,
-      pal: "chirps_monthly:ink-blue,esa_worldcover:painted",
-    },
+    { ...NO_TOKENS, pal: "chirps_monthly:ink-blue,esa_worldcover:painted" },
     {},
   );
 
@@ -427,6 +425,7 @@ test("editing only the range of a link-opened scene writes no storage", () => {
 
 test("a menu range change keeps the Show as choice", () => {
   useStorage();
+
   const tokens = { ...NO_TOKENS, as: "chirps_monthly:colour" };
   const { display } = resolveDisplay(COLOUR_LAYERS, tokens, {});
   const menu = {
@@ -440,34 +439,37 @@ test("a menu range change keeps the Show as choice", () => {
   assert.deepEqual(display.showAs, { chirps_monthly: "colour" });
   assert.deepEqual(display.layers.chirps_monthly, { range: [0, 90] });
   assert.ok(
-    formatDisplayParams(display, COLOUR_LAYERS)
-      .endsWith(
-        "&as=chirps_monthly:colour,era5land_temperature:isolines"
-          + "&dens=chirps_monthly:1&outline=on:graphite:1.5",
-      ),
+    formatDisplayParams(display, COLOUR_LAYERS).endsWith(
+      "&as=chirps_monthly:colour,era5land_temperature:isolines"
+        + "&dens=chirps_monthly:1&outline=on:graphite:1.5",
+    ),
   );
 });
 
 test("choosing a palette remembers it and choosing the default forgets it", () => {
   useStorage();
+
   const { display } = resolveDisplay(LAYERS, NO_TOKENS, {});
   const menu = { palette: "batlow", defaultPalette: "ink-blue" };
 
   recordMenuChange(display, "chirps_monthly", menu, "palette");
+
   assert.deepEqual(loadStoredPalettes(), { chirps_monthly: "batlow" });
 
   recordMenuChange(display, "chirps_monthly", { ...menu, palette: "ink-blue" }, "palette");
+
   assert.deepEqual(loadStoredPalettes(), {});
   assert.deepEqual(display.layers, {});
 });
 
 test("range decimals follow the scale factor, else the span of the area's values", () => {
-  const unscaled = (min: number, max: number) => ({
-    id: "x",
-    style: { kind: "field" },
-    arrays: { value: {} },
-    stats: { min, max },
-  }) as unknown as LayerDoc;
+  const unscaled = (min: number, max: number) =>
+    ({
+      id: "x",
+      style: { kind: "field" },
+      arrays: { value: {} },
+      stats: { min, max },
+    }) as unknown as LayerDoc;
 
   assert.equal(rangeDecimals(LAYERS[0]), 1);
   assert.equal(rangeDecimals(unscaled(0, 1)), 2);
@@ -501,22 +503,32 @@ test("Edge smoothing persists by dataset and rejects invalid values", () => {
   const items = useStorage();
 
   storeSmoothing("geology", 0.5);
+
   assert.equal(loadStoredSmoothing("geology"), 0.5);
   assert.equal(loadStoredSmoothing("geology_age"), GEOLOGY_SMOOTH_RADIUS_CELLS);
+
   storeSmoothing("geology", 4);
+
   assert.equal(loadStoredSmoothing("geology"), 4);
 
   for (const value of [-1, 4.5, Number.NaN, "1.5", null]) {
     items.set("soe.smoothing.v1", JSON.stringify({ geology: value }));
     assert.equal(loadStoredSmoothing("geology"), GEOLOGY_SMOOTH_RADIUS_CELLS);
   }
+
   items.set("soe.smoothing.v1", "broken JSON");
+
   assert.equal(loadStoredSmoothing("geology"), GEOLOGY_SMOOTH_RADIUS_CELLS);
+
   storeSmoothing("geology", 1);
+
   assert.equal(items.get("soe.smoothing.v1"), "broken JSON");
+
   useBlockedStorage();
+
   assert.equal(loadStoredSmoothing("geology"), GEOLOGY_SMOOTH_RADIUS_CELLS);
   assert.doesNotThrow(() => storeSmoothing("geology", 1));
+
   let writes = 0;
   useStorage({
     getItem: () => {
@@ -524,16 +536,21 @@ test("Edge smoothing persists by dataset and rejects invalid values", () => {
     },
     setItem: () => writes++,
   });
+
   storeSmoothing("geology", 1);
+
   assert.equal(writes, 0);
 });
 
 test("geology edge storage ignores Rounding but keeps softness and outline", () => {
   const items = useStorage();
-  items.set("soe.edges.v1", JSON.stringify({
-    geology: { rounding: 0.6, softnessCells: 1, outline: true },
-    esa_worldcover: { rounding: 0.6, softnessCells: 1, outline: true },
-  }));
+  items.set(
+    "soe.edges.v1",
+    JSON.stringify({
+      geology: { rounding: 0.6, softnessCells: 1, outline: true },
+      esa_worldcover: { rounding: 0.6, softnessCells: 1, outline: true },
+    }),
+  );
 
   assert.deepEqual(loadStoredEdges("geology"), {
     rounding: DEFAULT_EDGES.rounding,
@@ -546,17 +563,21 @@ test("geology edge storage ignores Rounding but keeps softness and outline", () 
     outline: true,
   });
 
-  items.set("soe.edges.v1", JSON.stringify({
-    geology: { rounding: 0.65, softnessCells: 0, outline: false },
-  }));
+  items.set(
+    "soe.edges.v1",
+    JSON.stringify({ geology: { rounding: 0.65, softnessCells: 0, outline: false } }),
+  );
+
   assert.deepEqual(loadStoredEdges("geology"), DEFAULT_EDGES);
 });
 
 test("edges persist by dataset independently of palettes and share links", () => {
   useStorage();
+
   const edges = { rounding: 0.6, softnessCells: 1, outline: true };
   storePalette("esa_worldcover", "esa");
   storeEdges("esa_worldcover", edges);
+
   const { display } = resolveDisplay(LAYERS, NO_TOKENS, loadStoredPalettes());
 
   assert.deepEqual(loadStoredEdges("esa_worldcover"), edges);
@@ -564,7 +585,9 @@ test("edges persist by dataset independently of palettes and share links", () =>
   assert.deepEqual(loadStoredPalettes(), { esa_worldcover: "esa" });
   assert.equal(formatDisplayParams(display, LAYERS).includes("rounding"), false);
   assert.equal(formatDisplayParams(display, LAYERS).includes("edges"), false);
+
   storeEdges("esa_worldcover", { ...DEFAULT_EDGES });
+
   assert.deepEqual(loadStoredEdges("esa_worldcover"), DEFAULT_EDGES);
 });
 
@@ -595,6 +618,7 @@ test("legacy pixel softness resets to zero but keeps the other edge choices", ()
 
 test("invalid or blocked edge storage uses defaults without preventing changes", () => {
   const items = useStorage();
+
   for (const value of [
     null,
     [],
@@ -611,18 +635,19 @@ test("invalid or blocked edge storage uses defaults without preventing changes",
     items.set("soe.edges.v1", JSON.stringify({ esa_worldcover: value }));
     assert.deepEqual(loadStoredEdges("esa_worldcover"), DEFAULT_EDGES);
   }
+
   items.set("soe.edges.v1", "broken JSON");
+
   assert.deepEqual(loadStoredEdges("esa_worldcover"), DEFAULT_EDGES);
+
   useBlockedStorage();
+
   assert.deepEqual(loadStoredEdges("esa_worldcover"), DEFAULT_EDGES);
   assert.doesNotThrow(() => storeEdges("esa_worldcover", { ...DEFAULT_EDGES }));
 });
 
 test("inks round trip through the link text and only non-default inks are written", () => {
-  const tokens = {
-    ...NO_TOKENS,
-    ink: "chirps_monthly:deep-red,era5land_temperature:1a2b3c",
-  };
+  const tokens = { ...NO_TOKENS, ink: "chirps_monthly:deep-red,era5land_temperature:1a2b3c" };
   const { display, dropped } = resolveDisplay(COLOUR_LAYERS, tokens, {}, {}, {});
 
   assert.equal(dropped, false);
@@ -640,13 +665,15 @@ test("inks round trip through the link text and only non-default inks are writte
     {},
     {},
   );
+
   assert.ok(!formatDisplayParams(defaults.display, COLOUR_LAYERS).includes("&ink="));
 });
 
 test("unknown or invalid inks are ignored", () => {
   const tokens = {
     ...NO_TOKENS,
-    ink: "chirps_monthly:pink,chirps_monthly:12345,chirps_monthly:#1a2b3c,"
+    ink:
+      "chirps_monthly:pink,chirps_monthly:12345,chirps_monthly:#1a2b3c,"
       + "chirps_monthly:1A2B3C,nowhere:navy,terrain:navy,esa_worldcover:black,x",
   };
   const { display, dropped } = resolveDisplay(LAYERS, tokens, {}, {}, {});
@@ -680,12 +707,15 @@ test("a remembered ink that is no longer valid is ignored", () => {
 
 test("stored ink values that are not strings are ignored", () => {
   const items = useStorage();
-  items.set("soe.ink.v1", JSON.stringify({
-    chirps_monthly: ["#ffffff"],
-    era5land_temperature: { toString: null },
-    terrain: 7,
-    esa_worldcover: null,
-  }));
+  items.set(
+    "soe.ink.v1",
+    JSON.stringify({
+      chirps_monthly: ["#ffffff"],
+      era5land_temperature: { toString: null },
+      terrain: 7,
+      esa_worldcover: null,
+    }),
+  );
 
   const stored = loadStoredInks();
   const { display, dropped } = resolveDisplay(COLOUR_LAYERS, NO_TOKENS, {}, {}, stored);
@@ -712,6 +742,7 @@ test("the resolver reads no ambient ink storage unless the caller loads it", () 
 
 test("an ink choice keeps the range and is remembered by layer", () => {
   useStorage();
+
   const tokens = { ...NO_TOKENS, range: "chirps_monthly:0:250" };
   const { display } = resolveDisplay(LAYERS, tokens, {}, {}, {});
   const menu = {
@@ -736,6 +767,7 @@ test("an ink choice keeps the range and is remembered by layer", () => {
 test("stored inks are written by layer and storage errors fall back to none", () => {
   useStorage();
   storeInk("chirps_monthly", "white");
+
   assert.deepEqual(loadStoredInks(), { chirps_monthly: "white" });
 
   useStorage({
@@ -743,6 +775,7 @@ test("stored inks are written by layer and storage errors fall back to none", ()
       throw new Error("blocked");
     },
   });
+
   assert.deepEqual(loadStoredInks(), {});
 });
 
@@ -753,9 +786,11 @@ test("a dark ink gets a light halo and a light ink a dark one", () => {
   for (const ink of ["navy", "charcoal", "black", "brown", "deep-red", "#102030"]) {
     assert.deepEqual(inkPaint(ink).halo, light, ink);
   }
+
   for (const ink of ["white", "#f0f0f0", "#ffe08a"]) {
     assert.deepEqual(inkPaint(ink).halo, dark, ink);
   }
+
   assert.deepEqual(inkPaint("navy").ink, [26, 54, 88]);
 });
 
@@ -770,6 +805,7 @@ test("density links carry the normalised density including the explicit default"
   );
 
   const defaults = resolveDisplay(LAYERS, { ...NO_TOKENS, dens: "chirps_monthly:1" }, {});
+
   assert.equal(defaults.dropped, false);
   assert.deepEqual(defaults.display.layers, {});
   assert.ok(formatDisplayParams(defaults.display, LAYERS).includes("&dens=chirps_monthly:1"));
@@ -779,6 +815,7 @@ test("default and reset density links beat receiver storage without saving", () 
   const items = useStorage();
   const oldPreference = JSON.stringify({ chirps_monthly: 2 });
   items.set("soe.density.v1", oldPreference);
+
   const stored = loadStoredDensities();
   const defaultSender = resolveDisplay(COLOUR_LAYERS, NO_TOKENS, {}).display;
   const resetSender = resolveDisplay(
@@ -811,8 +848,8 @@ test("default and reset density links beat receiver storage without saving", () 
 
 test("a density outside the slider's range is clamped to its ends", () => {
   const densityOf = (text: string) =>
-    resolveDisplay(LAYERS, { ...NO_TOKENS, dens: `chirps_monthly:${text}` }, {})
-      .display.layers.chirps_monthly?.density;
+    resolveDisplay(LAYERS, { ...NO_TOKENS, dens: `chirps_monthly:${text}` }, {}).display.layers
+      .chirps_monthly?.density;
 
   assert.equal(densityOf("5"), MAX_DENSITY_RATIO);
   assert.equal(densityOf("0.1"), MIN_DENSITY_RATIO);
@@ -821,11 +858,7 @@ test("a density outside the slider's range is clamped to its ends", () => {
 });
 
 test("a linked density reaches the control on the slider's step", () => {
-  const { display } = resolveDisplay(
-    LAYERS,
-    { ...NO_TOKENS, dens: "chirps_monthly:1.23" },
-    {},
-  );
+  const { display } = resolveDisplay(LAYERS, { ...NO_TOKENS, dens: "chirps_monthly:1.23" }, {});
   const calls: number[] = [];
   const control = densityControl(
     () => display.layers.chirps_monthly!.density!,
@@ -834,28 +867,38 @@ test("a linked density reaches the control on the slider's step", () => {
 
   assert.equal(control.value, 0.25);
   assert.equal((control.value - control.min) / control.step, 14);
+
   control.set(control.value);
+
   assert.deepEqual(calls, [2 ** 0.25]);
 });
 
 test("the logarithmic control has sixteen equal ratio steps and the default on a step", () => {
   let density = 1;
-  const control = densityControl(() => density, (next) => {
-    density = next;
-  });
+  const control = densityControl(
+    () => density,
+    (next) => {
+      density = next;
+    },
+  );
   const steps = (control.max - control.min) / control.step;
 
   assert.equal(steps, 16);
   assert.equal(control.value, 0);
   assert.equal((control.value - control.min) / control.step, 12);
+
   for (let step = 0; step <= steps; step++) {
     control.set(control.min + step * control.step);
     assert.equal(density, 2 ** (control.min + step * DENSITY_STEP_LOG2));
     assert.equal(control.value, control.min + step * control.step);
   }
+
   control.set(-20);
+
   assert.equal(density, MIN_DENSITY_RATIO);
+
   control.set(20);
+
   assert.equal(density, MAX_DENSITY_RATIO);
 });
 
@@ -886,20 +929,22 @@ test("densities are remembered by layer, with the link winning for the visit", (
 
 test("old stored densities clamp while invalid or blocked storage falls back to defaults", () => {
   const items = useStorage();
-  items.set("soe.density.v1", JSON.stringify({
-    chirps_monthly: 3,
-    era5land_temperature: "1.5",
-    terrain: -1,
-  }));
+  items.set(
+    "soe.density.v1",
+    JSON.stringify({ chirps_monthly: 3, era5land_temperature: "1.5", terrain: -1 }),
+  );
+
   assert.deepEqual(loadStoredDensities(), {
     chirps_monthly: MAX_DENSITY_RATIO,
     terrain: MIN_DENSITY_RATIO,
   });
 
   items.set("soe.density.v1", JSON.stringify({ chirps_monthly: 1.23 }));
+
   assert.deepEqual(loadStoredDensities(), { chirps_monthly: 2 ** 0.25 });
 
   useBlockedStorage();
+
   assert.deepEqual(loadStoredDensities(), {});
   assert.doesNotThrow(() => storeDensity("chirps_monthly", 1.5));
 });
@@ -915,7 +960,8 @@ test("forgetting a stored density removes it", () => {
 test("invalid densities and layers without dots fall back to the default", () => {
   const tokens = {
     ...NO_TOKENS,
-    dens: "chirps_monthly:abc,chirps_monthly:,chirps_monthly:Infinity,chirps_monthly:1:2,"
+    dens:
+      "chirps_monthly:abc,chirps_monthly:,chirps_monthly:Infinity,chirps_monthly:1:2,"
       + "nowhere:1.5,terrain:1.5,esa_worldcover:1.5,x",
   };
   const { display, dropped } = resolveDisplay(LAYERS, tokens, {});
@@ -939,6 +985,7 @@ test("the last density for a layer wins, even when it is the default", () => {
 
 test("a menu change keeps the layer's density", () => {
   useStorage();
+
   const { display } = resolveDisplay(LAYERS, { ...NO_TOKENS, dens: "chirps_monthly:1.5" }, {});
   const menu = { palette: "cividis", defaultPalette: "ink-blue" };
 
@@ -963,14 +1010,17 @@ test("linked units beat stored units which beat the bundle default", () => {
     {},
     stored,
   );
+
   assert.deepEqual(linked.display.layers.rain, { units: "in/month" });
   assert.deepEqual(linked.display.layers.temp, { units: "°F" });
 
   const remembered = resolveDisplay(layers, NO_TOKENS, {}, {}, {}, {}, stored);
+
   assert.deepEqual(remembered.display.layers.rain, { units: "in/month" });
   assert.equal(remembered.display.layers.temp, undefined);
 
   const auto = resolveDisplay(layers, NO_TOKENS, {});
+
   assert.deepEqual(auto.display.layers, {});
 });
 
@@ -992,14 +1042,12 @@ test("unknown units in links and storage are ignored with the note", () => {
 
 test("every convertible layer rides the link, including its native default", () => {
   const layers = unitsLayers();
-  const { display } = resolveDisplay(
-    layers,
-    { ...NO_TOKENS, units: "rain:in/month,temp:°C" },
-    {},
-  );
+  const { display } = resolveDisplay(layers, { ...NO_TOKENS, units: "rain:in/month,temp:°C" }, {});
 
   assert.ok(formatDisplayParams(display, layers).includes("&units=rain:in/month,temp:°C"));
+
   const auto = formatDisplayParams(resolveDisplay(layers, NO_TOKENS, {}).display, layers);
+
   assert.ok(auto.includes("&units=rain:mm/month,temp:°C"));
 });
 
@@ -1016,7 +1064,9 @@ test("a linked native default beats a stored alternative", () => {
   );
 
   assert.deepEqual(display.layers, {});
+
   const relinked = formatDisplayParams(display, layers);
+
   assert.ok(relinked.includes("rain:mm/month"));
   assert.ok(relinked.includes("temp:°C"));
 
@@ -1029,11 +1079,13 @@ test("a linked native default beats a stored alternative", () => {
     {},
     { rain: "in/month" },
   );
+
   assert.deepEqual(again.display.layers, {});
 });
 
 test("a link after Reset layer still states the native default", () => {
   useStorage();
+
   const layers = unitsLayers();
   const { display } = resolveDisplay(layers, NO_TOKENS, {});
   const menu = {
@@ -1042,11 +1094,14 @@ test("a link after Reset layer still states the native default", () => {
     units: { value: "in/month", defaultUnit: "mm/month" },
   };
   recordMenuChange(display, "rain", menu, "units");
+
   assert.ok(formatDisplayParams(display, layers).includes("rain:in/month"));
 
   const reset = { ...menu, units: { value: "mm/month", defaultUnit: "mm/month" } };
   recordMenuChange(display, "rain", reset, "units");
+
   const relinked = formatDisplayParams(display, layers);
+
   assert.ok(relinked.includes("rain:mm/month"));
 
   const receiver = resolveDisplay(
@@ -1058,11 +1113,13 @@ test("a link after Reset layer still states the native default", () => {
     {},
     { rain: "in/month" },
   );
+
   assert.deepEqual(receiver.display.layers, {});
 });
 
 test("a units change is remembered by layer and keeps the palette", () => {
   useStorage();
+
   const layers = unitsLayers();
   const { display } = resolveDisplay(layers, NO_TOKENS, {});
   const menu = {
@@ -1085,12 +1142,9 @@ test("a units change is remembered by layer and keeps the palette", () => {
 
 test("a palette change keeps the chosen units", () => {
   useStorage();
+
   const layers = unitsLayers();
-  const { display } = resolveDisplay(
-    layers,
-    { ...NO_TOKENS, units: "rain:in/month" },
-    {},
-  );
+  const { display } = resolveDisplay(layers, { ...NO_TOKENS, units: "rain:in/month" }, {});
   const menu = {
     palette: "batlow",
     defaultPalette: "ink-blue",
@@ -1108,9 +1162,11 @@ test("map details default to hidden and persist per browser", () => {
   assert.equal(loadMapDetailsShown(), false);
 
   storeMapDetailsShown(true);
+
   assert.equal(loadMapDetailsShown(), true);
 
   storeMapDetailsShown(false);
+
   assert.equal(loadMapDetailsShown(), false);
 });
 
@@ -1121,6 +1177,7 @@ test("invalid or blocked map details storage stays hidden without throwing", () 
   assert.equal(loadMapDetailsShown(), false);
 
   useBlockedStorage();
+
   assert.equal(loadMapDetailsShown(), false);
   assert.doesNotThrow(() => storeMapDetailsShown(true));
   assert.equal(loadMapDetailsShown(), false);
@@ -1128,6 +1185,7 @@ test("invalid or blocked map details storage stays hidden without throwing", () 
 
 test("map details changes notify subscribers until removed", () => {
   useStorage();
+
   const seen: boolean[] = [];
   const stop = subscribeMapDetails((shown) => seen.push(shown));
 
@@ -1163,14 +1221,17 @@ test("the stored outline round trips and starts absent", () => {
   assert.equal(loadStoredOutline(), null);
 
   storeOutline({ shown: false, color: "#102030", widthPx: 2 });
+
   assert.deepEqual(loadStoredOutline(), { shown: false, color: "#102030", widthPx: 2 });
 
   storeOutline({ ...DEFAULT_OUTLINE });
+
   assert.deepEqual(loadStoredOutline(), DEFAULT_OUTLINE);
 });
 
 test("invalid or blocked outline storage falls back to null without throwing", () => {
   const items = useStorage();
+
   for (const value of [
     null,
     [],
@@ -1185,9 +1246,13 @@ test("invalid or blocked outline storage falls back to null without throwing", (
     items.set("soe.outline.v1", JSON.stringify(value));
     assert.deepEqual(loadStoredOutline(), null);
   }
+
   items.set("soe.outline.v1", "broken JSON");
+
   assert.deepEqual(loadStoredOutline(), null);
+
   useBlockedStorage();
+
   assert.deepEqual(loadStoredOutline(), null);
   assert.doesNotThrow(() => storeOutline({ ...DEFAULT_OUTLINE }));
 });
@@ -1231,22 +1296,14 @@ test("the outline always rides the link and round trips", () => {
   const { display } = resolveDisplay(LAYERS, { ...NO_TOKENS, outline: "off:navy:2" }, {});
   const text = formatDisplayParams(display, LAYERS);
   const params = new URLSearchParams(text.replace(/^&/, ""));
-  const back = resolveDisplay(
-    LAYERS,
-    { ...NO_TOKENS, outline: params.get("outline") ?? "" },
-    {},
-  );
+  const back = resolveDisplay(LAYERS, { ...NO_TOKENS, outline: params.get("outline") ?? "" }, {});
 
   assert.ok(text.includes("&outline=off:navy:2"));
   assert.deepEqual(back.display.outline, { shown: false, color: "navy", widthPx: 2 });
 });
 
 test("an outline width snaps to the slider step", () => {
-  const { display } = resolveDisplay(
-    LAYERS,
-    { ...NO_TOKENS, outline: "on:graphite:1.23" },
-    {},
-  );
+  const { display } = resolveDisplay(LAYERS, { ...NO_TOKENS, outline: "on:graphite:1.23" }, {});
 
   assert.equal(display.outline.widthPx, 1);
 });
@@ -1276,21 +1333,25 @@ test("elevation units follow the terrain override and default to metres", () => 
     "m",
   );
   assert.equal(
-    elevationUnitFrom(
-      { layers: { terrain: { units: "ft" } }, off: new Set(), showAs: {} },
-      [field, terrain],
-    ),
+    elevationUnitFrom({ layers: { terrain: { units: "ft" } }, off: new Set(), showAs: {} }, [
+      field,
+      terrain,
+    ]),
     "ft",
   );
+
   const display = {
     layers: { terrain: { units: "ft" }, rain: { units: "" } },
     off: new Set<string>(),
     showAs: {},
   };
   const units = displayUnitsFrom(display, [field, terrain]);
+
   assert.deepEqual(units, { rain: "", terrain: "ft" });
   assert.deepEqual(Object.keys(units), ["rain", "terrain"]);
+
   units.terrain = "m";
+
   assert.equal(display.layers.terrain.units, "ft");
   assert.equal(displayUnitsFrom(display, [field, terrain]).terrain, "ft");
   assert.deepEqual(displayUnitsFrom({ ...display, layers: {} }, [field, terrain]), {
@@ -1324,5 +1385,6 @@ function useStorage(overrides: object = {}) {
       ...overrides,
     },
   });
+
   return items;
 }

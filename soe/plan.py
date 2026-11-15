@@ -1,4 +1,5 @@
 """Plan a scene by choosing each layer's grid window, aggregation factor, mask and time steps."""
+
 from copy import copy
 from dataclasses import dataclass, field
 from math import ceil
@@ -94,9 +95,7 @@ def plan(area: Area, datasets: list[Dataset], start: str | None, end: str | None
         datasets = [_limited_to_legacy_extent(dataset) for dataset in datasets]
 
     layer_geometries, layer_notices, shared_geometry, clipped = _clip_to_coverage(
-        geometry,
-        datasets,
-        beyond,
+        geometry, datasets, beyond
     )
     # Below 60N the outline stays as clipped before, so the bundle bytes do not change.
     outline = geometry if beyond else shared_geometry
@@ -112,21 +111,11 @@ def plan(area: Area, datasets: list[Dataset], start: str | None, end: str | None
     caches = _PlanCaches()
     notices += _small_area_notices(area, outline, caches)
 
-    budget_for_series = _budget_after_static_layers(
-        datasets,
-        windows,
-        layer_geometries,
-        caches,
-    )
+    budget_for_series = _budget_after_static_layers(datasets, windows, layer_geometries, caches)
     factors = {}
     if series:
         factors, series_windows = _aggregation_factors(
-            series,
-            windows,
-            steps,
-            budget_for_series,
-            layer_geometries,
-            caches,
+            series, windows, steps, budget_for_series, layer_geometries, caches
         )
         windows.update(series_windows)
         _check_source_size(windows, steps)
@@ -149,8 +138,9 @@ def plan(area: Area, datasets: list[Dataset], start: str | None, end: str | None
     )
     if final_source_cells > MAX_SOURCE_CELL_STEPS:
         raise AreaError(
-            "area and period are too large to read; choose a smaller area or fewer months",
+            "area and period are too large to read; choose a smaller area or fewer months"
         )
+
     bbox = _enclosing_bbox([*(layer.bbox for layer in layers.values()), list(geometry.bounds)])
 
     return Plan(outline, layers, bbox, clipped, period, notices)
@@ -173,6 +163,7 @@ def _limited_to_legacy_extent(dataset: Dataset) -> Dataset:
     west, south, east, north = dataset.coverage
     limited = copy(dataset)
     limited.coverage = (west, south, east, min(north, LEGACY_EXTENT_DEG))
+
     return limited
 
 
@@ -183,9 +174,7 @@ def _check_longitude_span(geometry: BaseGeometry) -> None:
 
 
 def _clip_to_coverage(
-    geometry: BaseGeometry,
-    datasets: list[Dataset],
-    beyond: bool,
+    geometry: BaseGeometry, datasets: list[Dataset], beyond: bool
 ) -> tuple[dict[str, BaseGeometry], dict[str, list[str]], BaseGeometry, bool]:
     """Clip the outline to each layer's coverage and to the coverage all layers share.
 
@@ -203,6 +192,7 @@ def _clip_to_coverage(
         if part is None:
             part = geometry.intersection(shapely.box(*extent))
             clips[extent] = part
+
         if part.is_empty or part.area == 0:
             raise AreaError(f"area is outside {dataset.title} coverage")
 
@@ -210,8 +200,9 @@ def _clip_to_coverage(
         if part.area < outline_area * (1 - AREA_TOLERANCE):
             clipped = True
             layer_notices[dataset.id].append(
-                f"Part of the area lies outside {dataset.title} coverage and has no data there.",
+                f"Part of the area lies outside {dataset.title} coverage and has no data there."
             )
+
         layer_geometries[dataset.id] = part
 
     if beyond:
@@ -221,16 +212,14 @@ def _clip_to_coverage(
         shared_geometry = geometry
         for part in layer_geometries.values():
             shared_geometry = shared_geometry.intersection(part)
+
     if shared_geometry.is_empty or shared_geometry.area == 0:
         raise AreaError("area is outside the coverage shared by the selected layers")
 
     return layer_geometries, layer_notices, shared_geometry, clipped
 
 
-def _shared_coverage_clip(
-    geometry: BaseGeometry,
-    clips: dict[Bbox, BaseGeometry],
-) -> BaseGeometry:
+def _shared_coverage_clip(geometry: BaseGeometry, clips: dict[Bbox, BaseGeometry]) -> BaseGeometry:
     """Clip the outline once to the rectangle all coverages share, reusing a cached clip."""
     shared = _intersect_extents(list(clips))
     if shared is None:
@@ -261,8 +250,7 @@ def _extent(coverage: Bbox) -> Bbox:
 
 
 def _layer_windows(
-    datasets: list[Dataset],
-    layer_geometries: dict[str, BaseGeometry],
+    datasets: list[Dataset], layer_geometries: dict[str, BaseGeometry]
 ) -> tuple[dict[str, CellSpan], bool]:
     """Anchor-grid cell window (c0, c1, r0, r1) of each layer, padded; and whether any was."""
     windows = {}
@@ -280,15 +268,12 @@ def _layer_windows(
         window = columns + rows
         padded |= window != (c0, c1, r0, r1)
         windows[dataset.id] = window
+
     return windows, padded
 
 
 def _pad(
-    low: int,
-    high: int,
-    limit_low: int,
-    limit_high: int,
-    needed_cells: int,
+    low: int, high: int, limit_low: int, limit_high: int, needed_cells: int
 ) -> tuple[int, int]:
     """Grow [low, high) to at least `needed_cells` cells, centred, within the limits."""
     extra = needed_cells - (high - low)
@@ -298,8 +283,10 @@ def _pad(
     low, high = low - extra // 2, high + extra - extra // 2
     if low < limit_low:
         low, high = limit_low, high + limit_low - low
+
     if high > limit_high:
         low, high = max(limit_low, low - (high - limit_high)), limit_high
+
     return low, high
 
 
@@ -312,7 +299,7 @@ def _check_steps_exist(steps: dict[str, list[str]]) -> None:
 def _check_source_size(windows: dict[str, CellSpan], steps: dict[str, list[str]]) -> None:
     if _source_cells(windows, steps) > MAX_SOURCE_CELL_STEPS:
         raise AreaError(
-            "area and period are too large to read; choose a smaller area or fewer months",
+            "area and period are too large to read; choose a smaller area or fewer months"
         )
 
 
@@ -325,29 +312,22 @@ def _source_cells(windows: dict[str, CellSpan], steps: dict[str, list[str]]) -> 
     )
 
 
-def _small_area_notices(
-    area: Area,
-    geometry: BaseGeometry,
-    caches: _PlanCaches,
-) -> list[str]:
+def _small_area_notices(area: Area, geometry: BaseGeometry, caches: _PlanCaches) -> list[str]:
     c0, c1, r0, r1 = WORLD_GRID.span(geometry.bounds)
     window_transform = WORLD_GRID.transform @ Affine.translation(c0, r0)
     native_mask = _cell_mask(
-        geometry,
-        window_transform,
-        (r1 - r0, c1 - c0),
-        geojson_cache=caches.geojson,
+        geometry, window_transform, (r1 - r0, c1 - c0), geojson_cache=caches.geojson
     )
     if int(native_mask.sum()) >= MIN_CELLS:
         return []
 
     if not area.named:
         raise AreaError(
-            f"drawn shape is too small (needs at least {MIN_CELLS} 0.05° cells, about 750 km2)",
+            f"drawn shape is too small (needs at least {MIN_CELLS} 0.05° cells, about 750 km2)"
         )
 
     return [
-        f"This area is smaller than {MIN_CELLS} 0.05° cells (about 750 km2); values are coarse.",
+        f"This area is smaller than {MIN_CELLS} 0.05° cells (about 750 km2); values are coarse."
     ]
 
 
@@ -364,11 +344,7 @@ def _budget_after_static_layers(
             continue
 
         _, grid_shape, bbox, _, _ = _ring_grid(
-            dataset,
-            geometries[dataset.id],
-            windows[dataset.id],
-            1,
-            caches,
+            dataset, geometries[dataset.id], windows[dataset.id], 1, caches
         )
         tile_count = _tile_count(dataset, bbox, geometries[dataset.id])
         if dataset.needs_tiles and tile_count == 0:
@@ -377,8 +353,9 @@ def _budget_after_static_layers(
         if dataset.max_tiles and tile_count > dataset.max_tiles:
             raise AreaError(
                 f"{dataset.id} needs more than {dataset.max_tiles} source tiles; "
-                "choose a smaller area",
+                "choose a smaller area"
             )
+
         budget -= _layer_bytes(dataset, grid_shape)
 
     if budget < 0:
@@ -399,16 +376,13 @@ def _tile_count(dataset: Dataset, bbox: Bbox, geometry: BaseGeometry) -> int:
 
 
 def _ring_grid(
-    dataset: Dataset,
-    geometry: BaseGeometry,
-    window: CellSpan,
-    factor: int,
-    caches: _PlanCaches,
+    dataset: Dataset, geometry: BaseGeometry, window: CellSpan, factor: int, caches: _PlanCaches
 ) -> tuple[Affine, tuple[int, int], list[float], float, np.ndarray]:
     """Grow touched edges within source coverage, then add real-data support around the area."""
     limits = dataset.grid.span(_extent(dataset.coverage))
     if dataset.time_varying:
         window = _fit_series_window(window, limits, factor)
+
     probe_bbox = dataset.grid.bbox(window)
     probe_res = dataset.grid.res * factor if dataset.time_varying else dataset.res_for(probe_bbox)
     key = _ring_key(dataset, geometry, window, factor, probe_res)
@@ -419,57 +393,41 @@ def _ring_grid(
     for _ in range(MAX_RING_GRID_PASSES):
         transform, shape, bbox, res = _layer_grid(dataset, window, factor)
         inside = _cell_mask(
-            geometry,
-            transform,
-            shape,
-            all_touched=True,
-            geojson_cache=caches.geojson,
+            geometry, transform, shape, all_touched=True, geojson_cache=caches.geojson
         )
         native_cells = factor if dataset.time_varying else ceil(res / dataset.grid.res)
         grown = _grow_window(window, limits, inside, native_cells)
         if dataset.time_varying:
             grown = _fit_series_window(grown, limits, factor)
+
         if grown == window:
             break
+
         window = grown
 
     transform, shape, bbox, res = _layer_grid(dataset, window, factor)
-    inside = _cell_mask(
-        geometry,
-        transform,
-        shape,
-        all_touched=True,
-        geojson_cache=caches.geojson,
-    )
+    inside = _cell_mask(geometry, transform, shape, all_touched=True, geojson_cache=caches.geojson)
+
     neighbours = np.zeros(shape, bool)
     neighbours[1:] |= inside[:-1]
     neighbours[:-1] |= inside[1:]
     neighbours[:, 1:] |= inside[:, :-1]
     neighbours[:, :-1] |= inside[:, 1:]
+
     mask = inside.astype("uint8")
     mask[neighbours & ~inside] = MASK_RING
+
     result = transform, shape, bbox, res, mask
     caches.rings[key] = result
+
     return result
 
 
 def _ring_key(
-    dataset: Dataset,
-    geometry: BaseGeometry,
-    window: CellSpan,
-    factor: int,
-    res: float,
+    dataset: Dataset, geometry: BaseGeometry, window: CellSpan, factor: int, res: float
 ) -> tuple:
     """Cache key of a ring grid; layers sharing grid, coverage and window share the work."""
-    return (
-        id(geometry),
-        window,
-        factor,
-        dataset.grid,
-        dataset.coverage,
-        dataset.time_varying,
-        res,
-    )
+    return (id(geometry), window, factor, dataset.grid, dataset.coverage, dataset.time_varying, res)
 
 
 def _fit_series_window(window: CellSpan, limits: CellSpan, factor: int) -> CellSpan:
@@ -483,11 +441,7 @@ def _fit_series_window(window: CellSpan, limits: CellSpan, factor: int) -> CellS
 
 
 def _fit_series_range(
-    low: int,
-    high: int,
-    limit_low: int,
-    limit_high: int,
-    factor: int,
+    low: int, high: int, limit_low: int, limit_high: int, factor: int
 ) -> tuple[int, int]:
     low, high = max(low, limit_low), min(high, limit_high)
     extra = -(high - low) % factor
@@ -498,15 +452,12 @@ def _fit_series_range(
 
     raise AreaError(
         "area cannot fit whole aggregation cells within source coverage; "
-        "choose a smaller area or fewer months",
+        "choose a smaller area or fewer months"
     )
 
 
 def _grow_window(
-    window: CellSpan,
-    limits: CellSpan,
-    inside: np.ndarray,
-    native_cells: int,
+    window: CellSpan, limits: CellSpan, inside: np.ndarray, native_cells: int
 ) -> CellSpan:
     c0, c1, r0, r1 = window
     limit_c0, limit_c1, limit_r0, limit_r1 = limits
@@ -519,9 +470,7 @@ def _grow_window(
 
 
 def _layer_grid(
-    dataset: Dataset,
-    window: CellSpan,
-    factor: int,
+    dataset: Dataset, window: CellSpan, factor: int
 ) -> tuple[Affine, tuple[int, int], list[float], float]:
     """(transform, (height, width), bbox, res) of a layer over its grid cells c0:c1, r0:r1."""
     bbox = dataset.grid.bbox(window)
@@ -529,6 +478,7 @@ def _layer_grid(
     height = round((bbox[3] - bbox[1]) / res)
     width = round((bbox[2] - bbox[0]) / res)
     transform = Affine(res, 0, bbox[0], 0, -res, bbox[3])
+
     return transform, (height, width), bbox, res
 
 
@@ -558,8 +508,7 @@ def _aggregation_factors(
     factors = {dataset.id: 1 for dataset in series}
     while True:
         snapped = {
-            dataset.id: _snap_window(windows[dataset.id], factors[dataset.id])
-            for dataset in series
+            dataset.id: _snap_window(windows[dataset.id], factors[dataset.id]) for dataset in series
         }
         if _series_bytes(series, snapped, steps, factors, geometries, caches) <= budget:
             return factors, snapped
@@ -567,22 +516,19 @@ def _aggregation_factors(
         finest = _finest_coarsenable(series, factors)
         if finest is None:
             raise AreaError(
-                f"area and period are too large even at {MAX_SERIES_RES_DEG:g} degree aggregation",
+                f"area and period are too large even at {MAX_SERIES_RES_DEG:g} degree aggregation"
             )
 
         factors[finest.id] *= 2
 
 
 def _finest_coarsenable(
-    series: list[SeriesDataset],
-    factors: dict[str, int],
+    series: list[SeriesDataset], factors: dict[str, int]
 ) -> SeriesDataset | None:
     """The series with the finest output cells that can double its factor within the cap."""
     max_res = MAX_SERIES_RES_DEG + RES_TOLERANCE_DEG
     coarsenable = [
-        dataset
-        for dataset in series
-        if dataset.grid.res * factors[dataset.id] * 2 <= max_res
+        dataset for dataset in series if dataset.grid.res * factors[dataset.id] * 2 <= max_res
     ]
     return min(
         coarsenable,
@@ -618,13 +564,10 @@ def _series_bytes(
     total_bytes = 0
     for dataset in series:
         _, grid_shape, _, _, _ = _ring_grid(
-            dataset,
-            geometries[dataset.id],
-            windows[dataset.id],
-            factors[dataset.id],
-            caches,
+            dataset, geometries[dataset.id], windows[dataset.id], factors[dataset.id], caches
         )
         total_bytes += _layer_bytes(dataset, grid_shape, len(steps[dataset.id]))
+
     return total_bytes
 
 
@@ -637,18 +580,12 @@ def _layer_plan(
     clip_notices: list[str],
     caches: _PlanCaches,
 ) -> LayerPlan:
-    transform, grid_shape, bbox, res, mask = _ring_grid(
-        dataset,
-        geometry,
-        window,
-        factor,
-        caches,
-    )
+    transform, grid_shape, bbox, res, mask = _ring_grid(dataset, geometry, window, factor, caches)
     notices = list(clip_notices)
     if factor > 1:
         notices.append(
             f"{dataset.title} was averaged over {factor}x{factor} cells "
-            f"({res:g} degrees) to fit the size budget.",
+            f"({res:g} degrees) to fit the size budget."
         )
 
     if not (mask == MASK_INSIDE).any():
@@ -659,6 +596,7 @@ def _layer_plan(
     if weights is None:
         weights = area_weights(geometry, transform, grid_shape, mask)
         caches.weights[key] = weights
+
     # Weights are planned before any source read, so empty overlap fails fast.
     if not weights.sum() > 0:
         raise AreaError(f"area has no positive overlap with {dataset.title} cells")
@@ -709,11 +647,8 @@ def _cell_mask(
         if cached is None:
             cached = mapping(geometry)
             geojson_cache[key] = cached
+
         geojson = cached
     return geometry_mask(
-        [geojson],
-        grid_shape,
-        window_transform,
-        invert=True,
-        all_touched=all_touched,
+        [geojson], grid_shape, window_transform, invert=True, all_touched=all_touched
     )

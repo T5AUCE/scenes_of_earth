@@ -1,11 +1,8 @@
 /** Switch one map between the world and a single scene, holding the camera and masking the rest. */
-import type {
-  FilterSpecification,
-  Map as MapLibreMap,
-  VisibilitySpecification,
-} from "maplibre-gl";
+import type { FilterSpecification, Map as MapLibreMap, VisibilitySpecification } from "maplibre-gl";
 
 import { loadAreaFeature } from "./api";
+import { UNSYNCED_CHARTS_NOTICE, isCompleteUrlOversized } from "./charts/state";
 import {
   noteEntryGap,
   noteEntryWait,
@@ -14,11 +11,8 @@ import {
   sceneLoadStats,
   setPreloadDisabled,
 } from "./dev-stats";
-import {
-  loadMapDetailsShown,
-  subscribeMapDetails,
-} from "./display-state";
-import { prefersReducedMotion } from "./reduced-motion";
+import { loadMapDetailsShown, subscribeMapDetails } from "./display-state";
+import { nextEntryFrame, REVEAL_MS, revealUnderCurtain, type EntryReveal } from "./entry-curtain";
 import {
   addressSearch,
   gestureFlags,
@@ -26,39 +20,29 @@ import {
   subscribeGesture,
   type GestureQualityFlags,
 } from "./gesture-quality";
-import {
-  nextEntryFrame,
-  REVEAL_MS,
-  revealUnderCurtain,
-  type EntryReveal,
-} from "./entry-curtain";
-import { makeHtmlElement } from "./html";
 import { createMaskLayers } from "./gpu/mask-layer";
 import { keepThroughContextLoss } from "./gpu/tiled-layer";
+import { makeHtmlElement } from "./html";
 import { polygonParts } from "./label-filter";
 import { basemapPreloadSource } from "./layers/scene-preload";
 import { pinGpuTerrainBase, setTerrainBaseZoom } from "./layers/terrain";
-import {
-  closeScenePreload,
-  currentScenePreload,
-  openScenePreload,
-} from "./layers/tile-prefetch";
-import { maskRing } from "./mask-ring";
+import { closeScenePreload, currentScenePreload, openScenePreload } from "./layers/tile-prefetch";
 import { MAX_ZOOM, removeLayerAndSource, WORLD_VIEW } from "./map";
+import { maskRing } from "./mask-ring";
 import { resetFetchStats } from "./merging-store";
+import { prefersReducedMotion } from "./reduced-motion";
 import { shiftLongitudes, worldShift } from "./render/mercator";
-import { UNSYNCED_CHARTS_NOTICE, isCompleteUrlOversized } from "./charts/state";
 import { flightDuration, flyIn, watchResize } from "./scene-camera";
 import type { SceneStore } from "./scene-store";
 import { sceneUrl, timeForPrefix, withChartsToken } from "./scene-url";
 import type { AreaFeature, Bbox, DisplayTokens, Scene } from "./types";
-import { createScenePanel } from "./ui/scene-panel";
 import {
   PANEL_TABS,
   type FullOpenOptions,
   PREPARING_STATUS,
   type PanelTab,
 } from "./ui/panel-contract";
+import { createScenePanel } from "./ui/scene-panel";
 import { type EntryPreparation, mountScene, OUTLINE_ID } from "./view";
 
 const MASK_ID = "soe-scene-mask";
@@ -154,13 +138,16 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     entryGeneration += 1;
     noteSceneOpen(performance.now());
     resetFetchStats();
+
     // Captured here because publishing the entry replaces the address and drops trial flags.
     const flags = gestureFlags(addressSearch());
     const preload = openPreload(preloadEnabled(addressSearch()));
 
     entryPanel = buildPanel;
+
     const cards = openColumn(scene, entry);
     const clock = createSceneClock(scene.id);
+
     // A list holds the deferred call because the checker keeps a narrowed let at null.
     const pendingLayerIds: string[][] = [];
     let panelRef: ReturnType<typeof createScenePanel> | null = null;
@@ -172,6 +159,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       if (panelRef) panelRef.setSyncNotice(combined);
       else initialSync = combined;
     };
+
     const syncFromClock = (notice: string | null) => {
       clockSync = notice;
       updatePanelSync();
@@ -207,8 +195,10 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     preload?.add(basemapPreloadSource(map, scene.area.bbox));
     restoreTime(mounted.timeline, linkedTime);
     sceneLayerIds = mounted.layerIds;
+
     const panel = mountPanel(scene, mounted.timeline, clock, mounted.store);
     panelRef = panel;
+
     if (initialSync) panel.setSyncNotice(initialSync);
 
     clock.publishEntry(entry);
@@ -216,8 +206,11 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
     lockEntry();
     current = startScene(scene, mounted, panel, clock, flags, () => leave(entry !== "replace"));
+
     const initialIds = pendingLayerIds[0];
+
     if (initialIds) current.syncLayers(initialIds);
+
     panel.setTime(clock.time, clock.label);
   }
 
@@ -240,12 +233,15 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
         return;
       }
+
       current.panel.closeFull();
       current.clock.syncUrl();
+
       return;
     }
 
     const knownTab = PANEL_TABS.find((known) => known === tab) ?? "about";
+
     if (!current.panel.isOpen) current.panel.openFull(knownTab);
   }
 
@@ -286,12 +282,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     entryPanel?.setInert(isLocked);
   }
 
-  function mountPanel(
-    scene: Scene,
-    timeline: SceneTimeline,
-    clock: SceneClock,
-    store: SceneStore,
-  ) {
+  function mountPanel(scene: Scene, timeline: SceneTimeline, clock: SceneClock, store: SceneStore) {
     const panel = createScenePanel(scene, roots.dialog, store, {
       requestOpen(tab: PanelTab, options?: FullOpenOptions) {
         clock.pushPanel({ panel: tab });
@@ -307,6 +298,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     });
 
     roots.column.append(panel.element);
+
     return panel;
   }
 
@@ -330,27 +322,34 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     // Labels stay until the curtain covers, so early toggles and gestures wait for the stage.
     let isStaged = false;
     const generation = entryGeneration;
+
     const stopGesture = subscribeGesture(map, {
       onStart: () => {
         if (!isStaged) return;
         if (!flags.freezeLabels) return;
+
         labelsFrozen = true;
         setBasemapSymbolsVisible(map, false, symbolBaseline);
       },
       onEnd: () => {
         if (!labelsFrozen) return;
+
         labelsFrozen = false;
+
         const shown = loadMapDetailsShown();
         setBasemapSymbolsVisible(map, shown, symbolBaseline);
         syncFadeVisible(map, shown);
       },
     });
+
     const stopDetails = subscribeMapDetails((shown) => {
       if (!isStaged) return;
       if (labelsFrozen) return;
+
       setBasemapSymbolsVisible(map, shown, symbolBaseline);
       syncFadeVisible(map, shown);
     });
+
     const entryRun = new AbortController();
     const flight = flyIn(map, scene, roots);
     let reveal: EntryReveal | null = null;
@@ -359,6 +358,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     let isPreparing = true;
     let landedMs = 0;
     const canvas = map.getCanvas();
+
     const onEntryContextLost = () => {
       if (reveal) reveal.cancel();
       else failEntry(new Error("WebGL context was lost during entry"));
@@ -373,6 +373,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       flight.refit();
       refitTerrainBase();
     });
+
     const stopDocking = watchDocking(roots);
 
     return {
@@ -393,9 +394,11 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
         stopGesture();
         stopDetails();
         stopEntryContextLoss();
+
         masks?.release();
         closeScenePreload();
         setPreloadDisabled(false);
+
         removeLayerAndSource(map, FADE_ID);
         removeLayerAndSource(map, MASK_ID);
         restoreBasemapFilters(map, savedBasemapFilters);
@@ -403,19 +406,23 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
         restoreBasemapOrder(map, savedBasemapOrder);
         savedBasemapOrder = null;
         restoreBasemapSymbols(map, symbolBaseline);
+
         panel.destroy();
         mounted.unmount();
         sceneLayerIds = [];
         roots.column.replaceChildren();
         roots.column.hidden = true;
         stopSliding();
+
         document.body.classList.remove("scene-mode", ENTERING_CLASS, FLYING_CLASS);
         // Some test doubles stub only setProperty, so the cleanup tolerates its absence.
         document.documentElement.style.removeProperty?.(ENTRY_FLIGHT_PROPERTY);
         document.documentElement.style.removeProperty?.(ENTRY_REVEAL_PROPERTY);
         setInputLocked(false);
+
         if (isPreparing) entryPanel?.showStatus("");
         if (isPreparing) entryPanel?.setBusy(false);
+
         // The area stays selected, so its outline returns with the build panel.
         entryPanel?.showAreaOutline();
       },
@@ -432,11 +439,14 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     async function run() {
       // The status paints before heavy work begins, so the old pixels stay responsive.
       await nextEntryFrame();
+
       if (isStale()) return;
 
       currentScenePreload()?.start(fittedZoom());
+
       try {
         const preparation = await prepareBeforeFlight();
+
         if (isStale()) return;
 
         noteEntryWait(performance.now() - sceneLoadStats.startMs);
@@ -453,6 +463,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     async function prepareBeforeFlight(): Promise<EntryPreparation> {
       // The GPU relief loads the fitted level's tiles during preparation, so it needs the zoom now.
       pinGpuTerrainBase(map, fittedZoom());
+
       const [, preparation] = await Promise.all([
         addMasksWhenLoaded(),
         mounted.prepareEntry(() => clock.time, entryRun.signal),
@@ -468,6 +479,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
         if (signal.aborted) resolve(null);
         else signal.addEventListener("abort", () => resolve(null), { once: true });
       });
+
       const loaded = loadAreaFeature(scene.area.geometry_href).catch((error) => {
         throw new Error(`Area outline: ${error.message}`);
       });
@@ -485,6 +497,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       entryPanel?.setBusy(false);
       entryPanel?.hideAreaOutline();
       document.body.classList.add(FLYING_CLASS);
+
       // Reduced motion hides the panel at once, so no slide duration is needed.
       if (prefersReducedMotion()) return;
 
@@ -504,15 +517,18 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     function isCurrent(preparation: EntryPreparation) {
       const snapshot = mounted.store.getSnapshot();
 
-      return clock.time === preparation.time
+      return (
+        clock.time === preparation.time
         && snapshot.allocation === preparation.allocation
-        && snapshot.display === preparation.display;
+        && snapshot.display === preparation.display
+      );
     }
 
     // The failure hides the scene UI again so only the build panel shows the message.
     function failEntry(error: unknown) {
       const isAbandoned = isStale();
       entryRun.abort();
+
       if (isAbandoned) return;
 
       isPreparing = false;
@@ -536,10 +552,12 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     async function coverWhenLanded(preparation: EntryPreparation) {
       const latest = await settleOnCurrentEntry(preparation);
       await flight.settled();
+
       if (isStale()) return;
 
       refitTerrainBase();
       landedMs ||= performance.now();
+
       const id = ++curtainId;
       reveal = revealUnderCurtain(
         map,
@@ -559,17 +577,21 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
       const basemap = basemapLayers(map, new Set(sceneLayerIds));
       savedBasemapOrder ??= basemap.all;
+
       const geometry = basemap.all.filter((layer) => !basemap.symbols.includes(layer));
       lowerBasemapGeometry(map, sceneLayerIds, geometry);
+
       for (const symbol of basemap.symbols) {
         if (map.getLayer(symbol)) map.moveLayer(symbol, FADE_ID);
       }
+
       masks?.mask.setOpacity(MASK_OPACITY);
       masks?.fade.setOpacity(FADE_OPACITY);
       placeSceneSymbols(map, sceneLayerIds);
       savedBasemapFilters ??= clipBasemapToArea(map, scene.area.bbox, new Set(sceneLayerIds));
       dataLayers.show();
       isStaged = true;
+
       const shown = loadMapDetailsShown();
       setBasemapSymbolsVisible(map, shown, symbolBaseline);
       syncFadeVisible(map, shown);
@@ -580,14 +602,16 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
     // A scrub after the curtain starts reprepares instead, so stale work never shows.
     async function reprepareAndRecurtain() {
       if (isStale()) return;
+
       curtainId++;
+
       const old = reveal;
       old?.retire();
+
       if (reveal === old) reveal = null;
+
       try {
-        await coverWhenLanded(
-          await mounted.prepareEntry(() => clock.time, entryRun.signal),
-        );
+        await coverWhenLanded(await mounted.prepareEntry(() => clock.time, entryRun.signal));
       } catch (error) {
         failEntry(error);
       }
@@ -604,6 +628,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       noteEntryGap(performance.now() - landedMs);
       stopEntryContextLoss();
       document.body.classList.remove(ENTERING_CLASS);
+
       // The sliding styles need an animation to end them, so reduced motion skips them entirely.
       if (prefersReducedMotion()) return;
 
@@ -664,10 +689,14 @@ function watchDocking(roots: SceneRoots): () => void {
       root.style.setProperty("--scene-dock-bottom", `${dockBottom}px`);
     };
     const observer = new ResizeObserver(updateDocking);
+
     if (roots.column instanceof Element) observer.observe(roots.column);
     if (roots.timeBar instanceof Element) observer.observe(roots.timeBar);
+
     const footer = document.querySelector(".maplibregl-ctrl-bottom-left");
+
     if (footer instanceof Element) observer.observe(footer);
+
     window.addEventListener("resize", updateDocking);
     updateDocking();
 
@@ -687,6 +716,7 @@ function dockedExtent(element: Element | null, column: Element | null): number {
 function overlapsColumn(element: Element | null, column: Element | null): boolean {
   if (!(element instanceof Element)) return false;
   if (!(column instanceof Element)) return true;
+
   const elementRect = element.getBoundingClientRect();
   const columnRect = column.getBoundingClientRect();
   if (!elementRect || !columnRect) return true;
@@ -736,11 +766,13 @@ export class SceneDataLayers {
   sync(layerIds: string[]) {
     const kept = new Map(this.ranges.map((range) => [range.id, range]));
     this.ranges.length = 0;
+
     for (const id of layerIds) {
       const previous = kept.get(id);
       const native = nativeRange(this.map, id);
       this.ranges.push(previous && previous.ref === native.ref ? previous : native);
     }
+
     this.apply();
   }
 
@@ -828,6 +860,7 @@ function createSceneClock(sceneId: string) {
 
     publishEntry(entry: SceneEntry) {
       const published = this.publishCandidate(this.fullUrl());
+
       if (entry === "push") history.pushState(null, "", published.url);
       if (entry === "replace") history.replaceState(null, "", published.url);
 
@@ -850,6 +883,7 @@ function createSceneClock(sceneId: string) {
     // One owner publishes share URLs and reports oversized outcomes through the sync handler.
     publishCandidate(relative: string) {
       const complete = completeUrl(relative);
+
       if (!isCompleteUrlOversized(complete)) {
         if (syncNotice !== null) {
           syncNotice = null;
@@ -867,7 +901,9 @@ function createSceneClock(sceneId: string) {
       if (lastSafeComplete !== null && !isCompleteUrlOversized(lastSafeComplete)) {
         return { url: lastSafeComplete, outcome: "safe-fallback" as const };
       }
+
       const fallback = completeUrl(this.baseUrl());
+
       if (!isCompleteUrlOversized(fallback)) {
         lastSafeComplete = fallback;
 
@@ -901,6 +937,7 @@ function makeColumn(scene: Scene, column: HTMLElement, leave: () => void) {
 
   const cards = makeHtmlElement("div", "", column);
   cards.className = "cards";
+
   return cards;
 }
 
@@ -913,14 +950,16 @@ function addHiddenMask(
 ): MaskLayers {
   const shift = worldShift(bbox);
   const { exteriors, interiors } = outlines(feature.geometry);
-  const rings = [...exteriors, ...interiors]
-    .map((ring) => shiftLongitudes(ring, shift) as number[][]);
+  const rings = [...exteriors, ...interiors].map(
+    (ring) => shiftLongitudes(ring, shift) as number[][],
+  );
   // Both start transparent so the basemap stays stable while required work settles.
   const options = { rings, color: pageBackground(), opacity: HIDDEN_OPACITY, onFail };
   // The fade is a second layer above the basemap symbols, so outside labels read as dimmed.
   const [mask, fade] = createMaskLayers(options, [MASK_ID, FADE_ID]);
   map.addLayer(mask.layer);
   map.addLayer(fade.layer);
+
   const stopKeepingMask = keepThroughContextLoss(map, mask.layer, undefined);
   const stopKeepingFade = keepThroughContextLoss(map, fade.layer, undefined);
 
@@ -945,7 +984,9 @@ function lowerBasemapGeometry(
     (layer) => sceneLayerIds.includes(layer.id) && map.getLayer(layer.id),
   )?.id;
   if (!anchor) return;
+
   const anchorIndex = layers.findIndex((layer) => layer.id === anchor);
+
   for (const id of nonSymbols) {
     const index = layers.findIndex((layer) => layer.id === id);
     if (index < 0 || index < anchorIndex || !map.getLayer(id)) continue;
@@ -960,11 +1001,13 @@ function basemapLayers(
 ): { symbols: string[]; all: string[] } {
   const symbols: string[] = [];
   const all: string[] = [];
+
   for (const layer of map.getStyle()?.layers ?? []) {
     if (sceneIds.has(layer.id) || layer.id.startsWith("soe-")) continue;
     all.push(layer.id);
     if (layer.type === "symbol") symbols.push(layer.id);
   }
+
   return { symbols, all };
 }
 
@@ -989,21 +1032,22 @@ function clipBasemapToArea(
 ): Map<string, FilterSpecification | undefined> {
   const baseline = new Map<string, FilterSpecification | undefined>();
   const keep = ["!", ["within", bboxMaskGeometry(bbox)]] as unknown as FilterSpecification;
+
   for (const id of basemapLayers(map, sceneIds).all) {
     if (!map.getLayer(id)) continue;
+
     try {
       const previous: FilterSpecification | undefined = map.getFilter(id) ?? undefined;
       baseline.set(id, previous);
       // Both branches combine already valid filters, so MapLibre need not validate them again.
-      map.setFilter(
-        id,
-        previous ? ["all", previous, keep] as FilterSpecification : keep,
-        { validate: false },
-      );
+      map.setFilter(id, previous ? (["all", previous, keep] as FilterSpecification) : keep, {
+        validate: false,
+      });
     } catch {
       baseline.delete(id);
     }
   }
+
   return baseline;
 }
 
@@ -1013,6 +1057,7 @@ function restoreBasemapFilters(
   baseline: ReadonlyMap<string, FilterSpecification | undefined> | null,
 ): void {
   if (!baseline) return;
+
   for (const [id, previous] of baseline) {
     if (!map.getLayer(id)) continue;
     try {
@@ -1032,10 +1077,8 @@ function bboxMaskGeometry([west, south, east, north]: Bbox) {
     [west, north],
     [west, south],
   ];
-  return {
-    type: "MultiPolygon",
-    coordinates: [[maskRing([ring])]],
-  };
+
+  return { type: "MultiPolygon", coordinates: [[maskRing([ring])]] };
 }
 
 /** Scene symbols sit under the mask so labels are cut at the outline, not drawn outside it. */
@@ -1122,7 +1165,6 @@ function currentAddress(fallback: string) {
     if (typeof location !== "undefined" && typeof location.href === "string") {
       if (!isCompleteUrlOversized(location.href)) return location.href;
     }
-  } catch {
-  }
+  } catch {}
   return fallback;
 }

@@ -1,4 +1,5 @@
 """Test fractional geometry weights on the layer grid, with cosine latitude scaling."""
+
 import math
 import time
 
@@ -23,15 +24,14 @@ def test_half_cell_outline_gives_fraction_one_half():
     assert weights[0, 0] == pytest.approx(0.5)
 
 
-def _single_cell(north_deg: float = 0.5, west_deg: float = 0.0) -> tuple[
-    Affine,
-    tuple[int, int],
-    np.ndarray,
-]:
+def _single_cell(
+    north_deg: float = 0.5, west_deg: float = 0.0
+) -> tuple[Affine, tuple[int, int], np.ndarray]:
     """Return transform, shape and all-inside mask of one cell with the given top edge."""
     transform = Affine(RES_DEG, 0.0, west_deg, 0.0, -RES_DEG, north_deg)
     shape = (1, 1)
     mask = np.ones(shape, dtype="uint8")
+
     return transform, shape, mask
 
 
@@ -93,17 +93,9 @@ def test_weights_follow_cosine_of_row_centre_latitude():
     high_half = box(0.0, 59.5, 0.5, 60.5)
 
     equatorial = area_weights(
-        equatorial_half,
-        equatorial_transform,
-        equatorial_shape,
-        equatorial_mask,
+        equatorial_half, equatorial_transform, equatorial_shape, equatorial_mask
     )
-    high = area_weights(
-        high_half,
-        high_transform,
-        high_shape,
-        high_mask,
-    )
+    high = area_weights(high_half, high_transform, high_shape, high_mask)
 
     assert equatorial[0, 0] == pytest.approx(0.5 * math.cos(math.radians(0.0)))
     assert high[0, 0] == pytest.approx(0.5 * math.cos(math.radians(60.0)))
@@ -114,9 +106,7 @@ def test_antimeridian_and_unwrapped_geometries_agree():
     shape = (1, 2)
     mask = np.ones(shape, dtype="uint8")
     merged = box(179.25, 0.25, 180.75, 0.75)
-    split = MultiPolygon(
-        [box(179.25, 0.25, 180.0, 0.75), box(180.0, 0.25, 180.75, 0.75)],
-    )
+    split = MultiPolygon([box(179.25, 0.25, 180.0, 0.75), box(180.0, 0.25, 180.75, 0.75)])
 
     merged_weights = area_weights(merged, transform, shape, mask)
     split_weights = area_weights(split, transform, shape, mask)
@@ -156,9 +146,7 @@ def test_disjoint_geometry_gives_zero_weights():
 
 def test_equal_area_islands_weigh_equally_so_their_mean_is_exact():
     square = box(36.9901, -1.0101, 36.9941, -1.0061)
-    triangle = Polygon(
-        [(37.1901, -1.0101), (37.1981, -1.0101), (37.1901, -1.0061)],
-    )
+    triangle = Polygon([(37.1901, -1.0101), (37.1981, -1.0101), (37.1901, -1.0061)])
     transform = Affine(0.05, 0.0, 36.95, 0.0, -0.05, -0.95)
     shape = (3, 6)
     mask = np.ones(shape, dtype="uint8")

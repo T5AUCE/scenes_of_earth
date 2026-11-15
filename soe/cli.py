@@ -7,6 +7,7 @@ tile indexes and the ESA WorldCover tile index. It also ingests ERA5-Land, ERA5 
 monthly cubes, the lithology map and the rock-age map into local folders. Run
 `python -m soe.cli --help` to see the commands and their options.
 """
+
 import argparse
 import json
 import logging
@@ -78,6 +79,7 @@ def main(argv: list[str] | None = None) -> None:
             parser.error("--from must be YYYY-MM")
 
         logging.basicConfig(level=logging.INFO)
+
         if args.cube == CHIRPS_CUBE.name:
             if args.from_files:
                 parser.error("--from-files holds ERA5 year files, not CHIRPS")
@@ -85,6 +87,7 @@ def main(argv: list[str] | None = None) -> None:
             chirps.ingest(args.cubes, args.start)
         else:
             ingest(args.cubes, INGEST_SPECS[args.cube], args.start, files_dir=args.from_files)
+
         return
 
     if args.command == "ingest-lithology":
@@ -101,6 +104,7 @@ def main(argv: list[str] | None = None) -> None:
         logging.basicConfig(level=logging.INFO)
         published = ingest_geology_regional(args.cubes, args.source, args.archive)
         print("Regional geology COGs:", *published)
+
         return
 
     if not (args.cgaz or args.ucdb or args.meta):
@@ -108,10 +112,13 @@ def main(argv: list[str] | None = None) -> None:
 
     logging.basicConfig(level=logging.INFO)
     db.ensure_schema(args.db)
+
     if args.cgaz:
         print("CGAZ rows:", import_cgaz(args.db, args.cgaz))
+
     if args.ucdb:
         print("UCDB city rows:", import_ucdb(args.db, args.ucdb))
+
     if args.meta:
         print("Admin kind rows:", import_admin_kinds(args.db, args.meta))
 
@@ -119,6 +126,7 @@ def main(argv: list[str] | None = None) -> None:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="soe")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
     import_parser = subparsers.add_parser(
         "import-boundaries",
         help="load CGAZ ADM0/1/2, GHSL UCDB cities and gbOpen level names into SQLite",
@@ -126,18 +134,20 @@ def _build_parser() -> argparse.ArgumentParser:
     import_parser.add_argument("--cgaz", help="folder with the CGAZ ADM0/ADM1/ADM2 GeoPackages")
     import_parser.add_argument("--ucdb", help="GHS UCDB R2024A GeoPackage or zip")
     import_parser.add_argument(
-        "--meta",
-        help="folder with the gbOpen ADM1/ADM2 metadata JSON files",
+        "--meta", help="folder with the gbOpen ADM1/ADM2 metadata JSON files"
     )
     import_parser.add_argument("--db", default=os.environ.get("SOE_DB", "./data/soe.db"))
+
     subparsers.add_parser(
         "terrain-index",
         help="rebuild the GLO-30 and GLO-90 tile bitmaps in soe/data (downloads 2 MB)",
     )
+
     subparsers.add_parser(
         "worldcover-index",
         help="rebuild the ESA WorldCover tile bitmap in soe/data (downloads 0.5 MB)",
     )
+
     backfill_parser = subparsers.add_parser(
         "backfill-area-previews",
         help="store display previews and geometry digests for boundaries imported before them",
@@ -149,6 +159,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=BACKFILL_BATCH_SIZE,
         help="boundaries read and updated per transaction",
     )
+
     lithology_parser = subparsers.add_parser(
         "ingest-lithology",
         help="write the Rock type COG from the downloaded GLiM, else the OpenLandMap map (232 MB)",
@@ -158,41 +169,40 @@ def _build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("SOE_CUBES_DIR", DEFAULT_CUBES_DIR),
         help="folder of the cubes (default: SOE_CUBES_DIR or ./data/cubes)",
     )
+
     age_parser = subparsers.add_parser(
         "ingest-geology-age",
         help="write the Geological age COG from the GSC world geology map (fetches 27 MB)",
     )
     age_parser.add_argument(
-        "--archive",
-        help="a local copy of GSC Open File 5529 (of_5529.zip), instead of fetching it",
+        "--archive", help="a local copy of GSC Open File 5529 (of_5529.zip), instead of fetching it"
     )
     age_parser.add_argument(
         "--cubes",
         default=os.environ.get("SOE_CUBES_DIR", DEFAULT_CUBES_DIR),
         help="folder of the cubes (default: SOE_CUBES_DIR or ./data/cubes)",
     )
+
     regional_parser = subparsers.add_parser(
         "ingest-geology-regional",
         help="write one regional geology patchwork source's class COGs (age and/or type)",
     )
     regional_parser.add_argument("source", choices=SOURCE_IDS, help="the regional source to build")
     regional_parser.add_argument(
-        "--archive",
-        help="a local copy of the source archive (zip, geodatabase folder or raster)",
+        "--archive", help="a local copy of the source archive (zip, geodatabase folder or raster)"
     )
     regional_parser.add_argument(
         "--cubes",
         default=os.environ.get("SOE_CUBES_DIR", DEFAULT_CUBES_DIR),
         help="folder of the cubes (default: SOE_CUBES_DIR or ./data/cubes)",
     )
+
     ingest_parser = subparsers.add_parser(
         "ingest-cube",
         help="download a monthly variable into its local cube (ERA5 via CDS, CHIRPS via HTTP)",
     )
     ingest_parser.add_argument(
-        "cube",
-        choices=[*INGEST_SPECS, CHIRPS_CUBE.name],
-        help="the cube to fill or update",
+        "cube", choices=[*INGEST_SPECS, CHIRPS_CUBE.name], help="the cube to fill or update"
     )
     ingest_parser.add_argument(
         "--from",
@@ -212,6 +222,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("SOE_CUBES_DIR", DEFAULT_CUBES_DIR),
         help="folder of the cubes (default: SOE_CUBES_DIR or ./data/cubes)",
     )
+
     return parser
 
 
@@ -234,6 +245,7 @@ def _backfill_missing_digests(db_path: Path | str, batch_size: int) -> int:
         batch = db.fetch_boundaries_missing_digest(db_path, batch_size)
         if not batch:
             break
+
         digests = [
             (record["id"], db.geometry_digest(record["geom_geojson"]))
             for record in batch
@@ -241,6 +253,7 @@ def _backfill_missing_digests(db_path: Path | str, batch_size: int) -> int:
         ]
         done += db.set_boundary_digests(db_path, digests)
         print(f"area digests: {done}/{total} stored")
+
     return done
 
 
@@ -252,6 +265,7 @@ def _backfill_missing_previews(db_path: Path | str, batch_size: int) -> int:
         batch = db.fetch_boundaries_missing_preview(db_path, batch_size, skipped)
         if not batch:
             break
+
         previews = [
             (record["id"], preview, record["geom_digest"], _digest_for_backfill(record))
             for record in batch
@@ -260,6 +274,7 @@ def _backfill_missing_previews(db_path: Path | str, batch_size: int) -> int:
         done += db.set_boundary_previews(db_path, previews)
         skipped += len(batch) - len(previews)
         print(f"area previews: {done}/{total} stored")
+
     return done
 
 
@@ -281,6 +296,7 @@ def _preview_for_backfill(record: db.Record) -> str | None:
             print(f"skipping {record['id']}: stored geometry is not JSON")
             return None
         return record["geom_geojson"]
+
     bbox = (record["bbox_w"], record["bbox_s"], record["bbox_e"], record["bbox_n"])
     return json.dumps(display_preview(geometry, bbox))
 
@@ -290,6 +306,7 @@ def build_tile_index(product: str, path: Path | str) -> int:
     exists = np.zeros(TILE_GRID_SHAPE, bool)
     for lat, lon in _listed_tiles(product):
         exists[lat + TILE_ROW_OFFSET_DEG, lon + TILE_COL_OFFSET_DEG] = True
+
     Path(path).write_bytes(np.packbits(exists).tobytes())
     return int(exists.sum())
 
@@ -298,6 +315,7 @@ def _listed_tiles(product: str) -> Iterator[tuple[int, int]]:
     """(lat, lon) of the south-west corner of each tile named in the product's bucket list."""
     with urllib.request.urlopen(TILE_LIST_URLS[product], timeout=DOWNLOAD_TIMEOUT_SECS) as response:
         lines = response.read().decode().splitlines()
+
     tile_code = TERRAIN_PRODUCTS[product].tile_code
     pattern = rf"Copernicus_DSM_COG_{tile_code}_([NS])(\d+)_00_([EW])(\d+)_00_DEM"
     matches = (re.match(pattern, line) for line in lines)
@@ -313,6 +331,7 @@ def build_worldcover_index(path: Path | str) -> int:
     exists = np.zeros(WORLDCOVER_GRID_SHAPE, bool)
     for lat, lon in _worldcover_grid_tiles():
         exists[index_cell(lat, lon)] = True
+
     Path(path).write_bytes(np.packbits(exists).tobytes())
     return int(exists.sum())
 

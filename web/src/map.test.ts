@@ -11,12 +11,8 @@ const hooks = registerHooks({
     return next(specifier, context);
   },
 });
-const {
-  MAX_TILE_CACHE_SIZE,
-  MAX_TILE_CACHE_ZOOM_LEVELS,
-  TILE_SIZE_PX,
-  warmHiddenRaster,
-} = await import("./map.ts").finally(() => hooks.deregister());
+const { MAX_TILE_CACHE_SIZE, MAX_TILE_CACHE_ZOOM_LEVELS, TILE_SIZE_PX, warmHiddenRaster } =
+  await import("./map.ts").finally(() => hooks.deregister());
 
 test("the tile cache cap covers both desktop viewports", () => {
   assert.equal(MAX_TILE_CACHE_ZOOM_LEVELS, 8);
@@ -39,17 +35,20 @@ test("an aborted warming settles at once with cancellation", async () => {
   const controller = new AbortController();
   controller.abort();
 
-  await assert.rejects(warmHiddenRaster(map as never, "blend-series", controller.signal), (
-    error: unknown,
-  ) => (error as Error).name === "AbortError");
+  await assert.rejects(
+    warmHiddenRaster(map as never, "blend-series", controller.signal),
+    (error: unknown) => (error as Error).name === "AbortError",
+  );
   assert.equal(map.repaints, 0);
 });
 
 test("warming settles when the source misses its deadline", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
+
   const map = fakeRasterMap(false);
 
   const warming = warmHiddenRaster(map as never, "blend-series");
+
   for (let turn = 0; turn < 5; turn += 1) {
     await new Promise((resolve) => setImmediate(resolve));
     context.mock.timers.tick(2000);
@@ -60,6 +59,7 @@ test("warming settles when the source misses its deadline", async (context) => {
 
 function fakeRasterMap(isLoaded: boolean) {
   const zoomWrites: [number, number][] = [];
+
   return {
     zoomWrites,
     repaints: 0,
@@ -78,7 +78,9 @@ function fakeRasterMap(isLoaded: boolean) {
 
 /** Mirror MapLibre's per-source out-of-view slots for one viewport at 512 px tiles. */
 function outOfViewSlots(widthPx: number, heightPx: number): number {
-  return (Math.ceil(widthPx / TILE_SIZE_PX) + 1)
+  return (
+    (Math.ceil(widthPx / TILE_SIZE_PX) + 1)
     * (Math.ceil(heightPx / TILE_SIZE_PX) + 1)
-    * MAX_TILE_CACHE_ZOOM_LEVELS;
+    * MAX_TILE_CACHE_ZOOM_LEVELS
+  );
 }

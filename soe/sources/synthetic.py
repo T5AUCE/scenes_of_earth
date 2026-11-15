@@ -2,6 +2,7 @@
 
 Offline runs and tests use it, so nothing here needs the network or a cube.
 """
+
 from collections.abc import Callable
 
 import numpy as np
@@ -26,10 +27,7 @@ from .era5 import (
     ERA5_TEMPERATURE_CUBE,
 )
 from .era5land_precipitation import ERA5_LAND_PRECIPITATION_84N_CUBE
-from .era5land_temperature import (
-    ERA5_LAND_TEMPERATURE_84N_CUBE,
-    ERA5_LAND_TEMPERATURE_CUBE,
-)
+from .era5land_temperature import ERA5_LAND_TEMPERATURE_84N_CUBE, ERA5_LAND_TEMPERATURE_CUBE
 from .grid import Bbox, CellWindow
 from .periods import MONTH_CHARS, add_duration
 from .terrain import terrain_block_count
@@ -106,12 +104,14 @@ class SyntheticSource:
         cols, rows = np.meshgrid(np.arange(col, col + width), np.arange(row, row + height))
         values = CUBE_FIELDS[spec.name](month, cols, rows, spec).astype("float32")
         values[rows >= spec.grid.rows] = np.nan
+
         return values
 
     def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
         self.reads += 1
         col, row, width, height = window
         cols, rows = np.meshgrid(np.arange(col, col + width), np.arange(row, row + height))
+
         return _rain(month, cols, rows).astype("float32")
 
     def terrain(
@@ -132,8 +132,10 @@ class SyntheticSource:
         cols, rows = np.meshgrid(np.arange(width) + 0.5, np.arange(height) + 0.5)
         lon, lat = transform @ (cols, rows)
         elevation = 1000 + 800 * np.sin(lon * 20) * np.cos(lat * 20)
+
         for _ in range(terrain_block_count(bounds, geometry)):
             on_block()
+
         return elevation.astype("float64"), transform
 
     def land_cover(
@@ -170,6 +172,7 @@ class SyntheticSource:
         on_block()
         classes = AGE_CLASSES if file == GEOLOGY_AGE_FILE else GEOLOGY_CLASSES
         values = [0, *(entry["value"] for entry in classes)]
+
         return _class_bands(bounds, res, values), from_origin(bounds[0], bounds[3], res, res)
 
 
@@ -185,6 +188,7 @@ def _class_bands(part: Bbox, res: float, class_values: list[int]) -> np.ndarray:
     lat = north - (np.arange(height) + 0.5) * res
     bands = np.floor(lon * 4)[None, :] + np.floor(lat * 4)[:, None]
     values = np.array(class_values, "uint8")
+
     return values[bands.astype(int) % len(values)]
 
 
@@ -193,6 +197,7 @@ def _rain(month: str, cols: np.ndarray, rows: np.ndarray) -> np.ndarray:
     month_number = int(month[:4]) * 12 + int(month[5:7])
     rain = 100 + 80 * np.sin(cols / 15 + month_number * 0.5) * np.cos(rows / 11)
     rain[(cols * 7 + rows * 13) % 11 == 0] = np.nan
+
     return rain
 
 
@@ -214,10 +219,7 @@ def _era5_temperature(month: str, cols: np.ndarray, rows: np.ndarray, spec: Cube
 
 
 def _era5_precipitation(
-    month: str,
-    cols: np.ndarray,
-    rows: np.ndarray,
-    spec: CubeSpec,
+    month: str, cols: np.ndarray, rows: np.ndarray, spec: CubeSpec
 ) -> np.ndarray:
     month_number = int(month[:4]) * 12 + int(month[5:7])
     return 70 + 30 * np.sin(cols / 6 + month_number * 0.5) * np.cos(rows / 5)

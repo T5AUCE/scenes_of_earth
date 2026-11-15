@@ -9,12 +9,7 @@ import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 
 import { loadPlaces, parseArgs } from "./visual-trial/args.mjs";
-import {
-  launchBrowser,
-  newContext,
-  preflightWebGL,
-  trialSpot,
-} from "./visual-trial/browser.mjs";
+import { launchBrowser, newContext, preflightWebGL, trialSpot } from "./visual-trial/browser.mjs";
 import { installCache } from "./visual-trial/cache.mjs";
 import { layoutFailed } from "./visual-trial/layout.mjs";
 import { ensureScenes } from "./visual-trial/scenes.mjs";
@@ -58,18 +53,22 @@ export async function runTrial(options, system = {}) {
   const records = [];
   const spots = readSpots(options.places);
   await checkBrowser();
+
   const appUrl = options.start ? await bootServers() : options.app.replace(/\/$/, "");
   const sceneIds = await resolveScenes(appUrl, spots);
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const out = options.out ?? path.join(CACHE_DIR, "runs", stamp);
   fs.mkdirSync(out, { recursive: true });
+
   const resultsFile = fs.createWriteStream(path.join(out, "results.jsonl"));
 
   const browser = await openBrowser();
+
   try {
     const context = await openContext(browser);
     await warmCache(context, path.join(CACHE_DIR, "http"));
+
     const runOptions = { screens: options.screens, out };
     const jobs = spots.map((spot, index) => async () => {
       for (const record of await measureSpot(context, appUrl, spot, sceneIds[index], runOptions)) {
@@ -85,6 +84,7 @@ export async function runTrial(options, system = {}) {
     resultsFile.end();
     await finished(resultsFile);
   }
+
   console.error(`results in ${out}`);
 
   // Contour records carry no present flag, so only layout failures flip the exit.
@@ -96,6 +96,7 @@ async function runLimited(jobs, limit) {
   const worker = async () => {
     for (let job = queue.shift(); job; job = queue.shift()) await job();
   };
+
   await Promise.all(Array.from({ length: limit }, worker));
 }
 

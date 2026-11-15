@@ -16,6 +16,7 @@ function planeAt(gradient: { x: number; y: number }) {
 
 function tapsOf(height: (column: number, row: number) => number, column: number, row: number) {
   const at = (dx: number, dy: number) => height(column + dx, row + dy);
+
   return {
     a: at(-1, -1),
     b: at(0, -1),
@@ -28,7 +29,7 @@ function tapsOf(height: (column: number, row: number) => number, column: number,
   };
 }
 
-const SECANT_AT_40_DEG = 1 / Math.cos(40 * Math.PI / 180);
+const SECANT_AT_40_DEG = 1 / Math.cos((40 * Math.PI) / 180);
 
 test("flat ground shades to nothing", () => {
   const flat = { a: 5, b: 5, c: 5, d: 5, f: 5, g: 5, h: 5, i: 5 };
@@ -60,6 +61,7 @@ test("a slope facing away from the light shades darker than one facing it", () =
   const ramp = (toward: number): ReliefTaps => {
     // Rises towards the north-west light (negative column and row direction) when toward is 1.
     const at = (dx: number, dy: number) => -toward * 3000 * (dx + dy);
+
     return {
       a: at(-1, -1),
       b: at(0, -1),
@@ -90,11 +92,13 @@ test("the shader carries the constants of every light and no unresolved text", (
   assert.ok(!RELIEF_FRAGMENT_SHADER.includes("NaN"));
   assert.ok(!RELIEF_FRAGMENT_SHADER.includes("${"));
   assert.equal(LIGHT_TERMS.length, RELIEF_LIGHTS.length);
+
   for (const light of LIGHT_TERMS) {
     for (const value of [light.sinAltitude, light.slopeXTerm, light.slopeYTerm]) {
       assert.ok(RELIEF_FRAGMENT_SHADER.includes(value.toPrecision(9)), `missing ${value}`);
     }
   }
+
   assert.ok(RELIEF_FRAGMENT_SHADER.includes(`light < ${RELIEF_LIGHTS.length}`));
 });
 

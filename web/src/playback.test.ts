@@ -88,17 +88,9 @@ test("the last step holds longer then cuts without fading", () => {
   const count = 3;
   const lastStart = (count - 1) * stepMs;
 
-  assert.deepEqual(playheadAt(lastStart + 100, stepMs, count), {
-    index: 2,
-    next: 0,
-    mix: 0,
-  });
+  assert.deepEqual(playheadAt(lastStart + 100, stepMs, count), { index: 2, next: 0, mix: 0 });
   assert.deepEqual(playheadAt(lastStart + 999, stepMs, count).index, 2);
-  assert.deepEqual(playheadAt(lastStart + 1000, stepMs, count), {
-    index: 0,
-    next: 1,
-    mix: 0,
-  });
+  assert.deepEqual(playheadAt(lastStart + 1000, stepMs, count), { index: 0, next: 1, mix: 0 });
 });
 
 test("reduced motion never fades", () => {
@@ -130,12 +122,9 @@ test("a 76-step 800 by 800 layer at 4x stays inside the byte budget", () => {
 
 test("a warmed step outlasts drawn steps until the map reads it", async () => {
   const loaded: number[] = [];
-  const cache = cacheByIndex(
-    4,
-    async (index) => {
-      loaded.push(index);
-    },
-  );
+  const cache = cacheByIndex(4, async (index) => {
+    loaded.push(index);
+  });
   cache.read(1, true);
   [0, 2, 3, 4, 5].forEach((index) => cache.read(index));
 
@@ -146,12 +135,9 @@ test("a warmed step outlasts drawn steps until the map reads it", async () => {
 
 test("holds left behind by a pause give way so normal reads load once", async () => {
   const loads = new Map<number, number>();
-  const cache = cacheByIndex(
-    3,
-    async (index) => {
-      loads.set(index, (loads.get(index) ?? 0) + 1);
-    },
-  );
+  const cache = cacheByIndex(3, async (index) => {
+    loads.set(index, (loads.get(index) ?? 0) + 1);
+  });
   [1, 2, 3].forEach((index) => cache.read(index, true));
 
   [20, 21, 22, 23].forEach((index) => {
@@ -159,17 +145,17 @@ test("holds left behind by a pause give way so normal reads load once", async ()
     cache.read(index);
   });
 
-  assert.deepEqual([20, 21, 22, 23].map((index) => loads.get(index)), [1, 1, 1, 1]);
+  assert.deepEqual(
+    [20, 21, 22, 23].map((index) => loads.get(index)),
+    [1, 1, 1, 1],
+  );
 });
 
 test("releasing holds makes abandoned prefetches evictable at once", async () => {
   const loaded: number[] = [];
-  const cache = cacheByIndex(
-    4,
-    async (index) => {
-      loaded.push(index);
-    },
-  );
+  const cache = cacheByIndex(4, async (index) => {
+    loaded.push(index);
+  });
   [1, 2].forEach((index) => cache.read(index, true));
   cache.release();
 
@@ -181,12 +167,9 @@ test("releasing holds makes abandoned prefetches evictable at once", async () =>
 
 test("a read never evicts the entry it just inserted", async () => {
   const loaded: number[] = [];
-  const cache = cacheByIndex(
-    1,
-    async (index) => {
-      loaded.push(index);
-    },
-  );
+  const cache = cacheByIndex(1, async (index) => {
+    loaded.push(index);
+  });
 
   cache.read(1);
   cache.read(2);
@@ -201,11 +184,13 @@ test("reads from draws, blends and prepares share two slots", async () => {
 
   const drawn = reader.read(0);
   const warmed = [1, 2, 3, 4].map((step) => reader.read(step, false));
+
   assert.deepEqual(reads.started, [0, 1]);
 
   reads.finish(0);
   await drawn;
   await flush();
+
   assert.deepEqual(reads.started, [0, 1, 2]);
   assert.equal(reads.peak, 2);
 
@@ -213,7 +198,9 @@ test("reads from draws, blends and prepares share two slots", async () => {
     reads.finish(step);
     await flush();
   }
+
   await Promise.all(warmed);
+
   assert.deepEqual(reads.started, [0, 1, 2, 3, 4]);
   assert.equal(reads.peak, 2);
 });
@@ -231,6 +218,7 @@ test("a waiting step the map needs jumps ahead of other prefetches", async () =>
   await flush();
 
   assert.deepEqual(reads.started, [0, 1, 3]);
+
   reads.finish(3);
   await drawn;
 });
@@ -241,20 +229,24 @@ test("playing raises the reads in flight and pausing lowers them again", async (
   const steps = Array.from({ length: 8 }, (_, step) => step);
 
   steps.slice(0, 5).forEach((step) => reader.read(step, false));
+
   assert.equal(reads.active, READS_IN_FLIGHT_PAUSED);
 
   reader.setPlaying(true);
+
   assert.equal(reads.active, READS_IN_FLIGHT_PLAYING);
 
   reader.setPlaying(false);
   steps.slice(5).forEach((step) => reader.read(step, false));
   reads.finish(0);
   await flush();
+
   assert.equal(reads.active, READS_IN_FLIGHT_PLAYING - 1);
   assert.equal(reads.peak, READS_IN_FLIGHT_PLAYING);
 
   [1, 2, 3].forEach((step) => reads.finish(step));
   await flush();
+
   assert.equal(reads.active, READS_IN_FLIGHT_PAUSED);
 });
 
@@ -269,6 +261,7 @@ test("while playing a step the map needs still jumps the queue", async () => {
   await flush();
 
   assert.deepEqual(reads.started, [0, 1, 2, 3, 6]);
+
   reads.finish(6);
   await drawn;
 });
@@ -278,16 +271,19 @@ test("priming warms the steps after a draw and stops at the last step", async ()
   const reader = createStepReader({ nx: 10, ny: 10 }, reads.load);
 
   reader.prime(3, 10);
+
   assert.deepEqual(reads.started, [4, 5].slice(0, PRIME_STEPS));
 
   reader.prime(9, 10);
   [4, 5].forEach((step) => reads.finish(step));
   await flush();
+
   assert.deepEqual(reads.started, [4, 5, 10]);
 });
 
 test("a cap of four nearly removes the stalls of a cap of two", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
+
   const twoSlots = await simulatedStallMs(false, context.mock.timers);
   const fourSlots = await simulatedStallMs(true, context.mock.timers);
 
@@ -306,27 +302,33 @@ async function simulatedStallMs(isPlaying: boolean, timers: { tick(ms: number): 
     const latencyMs = step % 2 === 0 ? 120 : 150;
     await new Promise((resolve) => setTimeout(resolve, latencyMs));
     ready.add(step);
+
     return new Float32Array(1);
   });
   reader.setPlaying(isPlaying);
+
   const warm = (shown: number) => {
     const last = Math.min(shown + SIMULATED_LOOKAHEAD, SIMULATED_STEPS - 1);
     for (let step = shown + 1; step <= last; step++) void reader.read(step, false);
   };
+
   const advanceOneMs = async () => {
     timers.tick(1);
     await flush();
   };
 
   warm(0);
+
   while (!ready.has(1)) await advanceOneMs();
 
   let shown = 1;
   let stallMs = 0;
   let waitedMs = SIMULATED_STEP_MS;
+
   while (shown < SIMULATED_STEPS - 1) {
     await advanceOneMs();
     waitedMs--;
+
     if (waitedMs > 0) continue;
     if (!ready.has(shown + 1)) {
       stallMs++;
@@ -337,6 +339,7 @@ async function simulatedStallMs(isPlaying: boolean, timers: { tick(ms: number): 
     waitedMs = SIMULATED_STEP_MS;
     warm(shown);
   }
+
   return stallMs;
 }
 
@@ -355,6 +358,7 @@ test("a failed read frees its slot for the next one", async () => {
 
 test("one tick of ranges makes one request and each caller gets its bytes", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
+
   const source = rangeSource();
   const store = mergingStore(source.store);
 
@@ -364,18 +368,23 @@ test("one tick of ranges makes one request and each caller gets its bytes", asyn
     store.getRange!("/a", { offset: 40, length: 4 }),
   ];
   context.mock.timers.tick(1);
+
   const parts = await Promise.all(asked);
 
   assert.deepEqual(source.requests, [{ key: "/a", offset: 10, length: 34 }]);
-  assert.deepEqual(parts.map((part) => [...part!]), [
-    [10, 11, 12, 13, 14],
-    [15, 16, 17, 18, 19],
-    [40, 41, 42, 43],
-  ]);
+  assert.deepEqual(
+    parts.map((part) => [...part!]),
+    [
+      [10, 11, 12, 13, 14],
+      [15, 16, 17, 18, 19],
+      [40, 41, 42, 43],
+    ],
+  );
 });
 
 test("ranges asked in different ticks or for different shards are not merged", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
+
   const source = rangeSource();
   const store = mergingStore(source.store);
 
@@ -385,22 +394,29 @@ test("ranges asked in different ticks or for different shards are not merged", a
   ];
   context.mock.timers.tick(1);
   await Promise.all(first);
+
   const later = store.getRange!("/a", { offset: 4, length: 4 });
   context.mock.timers.tick(1);
   await later;
 
-  assert.deepEqual(source.requests.map(({ key }) => key), ["/a", "/b", "/a"]);
+  assert.deepEqual(
+    source.requests.map(({ key }) => key),
+    ["/a", "/b", "/a"],
+  );
 });
 
 test("the byte cap and a wide gap split a merge", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
+
   const source = rangeSource();
   const store = mergingStore(source.store, 20);
 
   const asked = [0, 10, 20, 200000].map((offset) => {
     return store.getRange!("/a", { offset, length: 10 });
   });
+
   context.mock.timers.tick(1);
+
   const parts = await Promise.all(asked);
 
   assert.deepEqual(source.requests, [
@@ -408,20 +424,34 @@ test("the byte cap and a wide gap split a merge", async (context) => {
     { key: "/a", offset: 20, length: 10 },
     { key: "/a", offset: 200000, length: 10 },
   ]);
-  assert.deepEqual(parts.map((part) => part![0]), [0, 10, 20, 200000 % 256]);
+  assert.deepEqual(
+    parts.map((part) => part![0]),
+    [0, 10, 20, 200000 % 256],
+  );
 });
 
 test("a suffix read passes through and a failed merge fails every caller", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
+
   const source = rangeSource();
   const store = mergingStore(source.store);
 
   const tail = await store.getRange!("/a", { suffixLength: 3 });
-  assert.deepEqual([...tail!], [299997, 299998, 299999].map((index) => index % 256));
+
+  assert.deepEqual(
+    [...tail!],
+    [299997, 299998, 299999].map((index) => index % 256),
+  );
 
   source.failNext();
+
   const asked = [0, 4].map((offset) => store.getRange!("/a", { offset, length: 4 }));
-  const outcomes = asked.map((request) => request.then(() => "ok", () => "failed"));
+  const outcomes = asked.map((request) =>
+    request.then(
+      () => "ok",
+      () => "failed",
+    ),
+  );
   context.mock.timers.tick(1);
 
   assert.deepEqual(await Promise.all(outcomes), ["failed", "failed"]);
@@ -437,8 +467,13 @@ test("queued prefetches of consecutive steps share one read and keep their own s
 
   assert.deepEqual(reads.batches, [[1, 8]]);
   assert.deepEqual(reads.started, []);
+
   const values = await Promise.all(loaded);
-  assert.deepEqual(values.map((step) => step[0]), [1, 2, 3, 4, 5, 6, 7, 8]);
+
+  assert.deepEqual(
+    values.map((step) => step[0]),
+    [1, 2, 3, 4, 5, 6, 7, 8],
+  );
 });
 
 test("a shared read stops at one shard of steps", async () => {
@@ -464,9 +499,11 @@ test("an urgent step waiting behind prefetches is read alone and goes first", as
   reads.batchGate = new Promise<void>((resolve) => {
     openGate = resolve;
   });
+
   const reader = createStepReader({ nx: 10, ny: 10 }, reads.load, reads.loadSteps);
   [1, 2, 3, 10, 20, 21, 22].forEach((step) => void reader.read(step, false));
   await flush();
+
   assert.deepEqual(reads.batches, [[1, 3]]);
   assert.deepEqual(reads.started, [10]);
 
@@ -475,10 +512,14 @@ test("an urgent step waiting behind prefetches is read alone and goes first", as
   await flush();
 
   assert.deepEqual(reads.started, [10, 21]);
+
   reads.finish(21);
+
   assert.equal((await drawn)[0], 21);
+
   openGate();
   await flush();
+
   assert.deepEqual(reads.batches, [[1, 3]]);
   assert.deepEqual(reads.started, [10, 21, 20, 22]);
 });
@@ -499,17 +540,24 @@ test("an urgent step inside a shared read waits for it instead of repeating it",
 test("a failed shared read fails each step in it and lets them be retried", async () => {
   const reads = fakeReads();
   reads.failBatches = true;
+
   const reader = createStepReader({ nx: 10, ny: 10 }, reads.load, reads.loadSteps);
 
   const outcomes = [1, 2, 3].map((step) => {
-    return reader.read(step, false).then(() => "ok", () => "failed");
+    return reader.read(step, false).then(
+      () => "ok",
+      () => "failed",
+    );
   });
+
   assert.deepEqual(await Promise.all(outcomes), ["failed", "failed", "failed"]);
 
   reads.failBatches = false;
+
   const retried = reader.read(2, false);
   await flush();
   reads.finish(2);
+
   assert.equal((await retried)[0], 2);
 });
 
@@ -537,7 +585,9 @@ test("a blocked store keeps the default speed without throwing", () => {
   });
 
   assert.equal(loadPlaySpeed(), 1);
+
   storePlaySpeed(2);
+
   assert.equal(loadPlaySpeed(), 1);
 });
 
@@ -545,6 +595,7 @@ test("the remembered speed survives for the next visit", () => {
   const items = useStorage();
 
   storePlaySpeed(4);
+
   assert.equal(items.get(PLAY_SPEED_KEY), "4");
   assert.equal(loadPlaySpeed(), 4);
 });
@@ -559,6 +610,7 @@ function useStorage(overrides: object = {}) {
       ...overrides,
     },
   });
+
   return items;
 }
 
@@ -574,6 +626,7 @@ function fakeReads() {
     async loadSteps(first: number, count: number) {
       reads.batches.push([first, count]);
       await reads.batchGate;
+
       if (reads.failBatches) throw new Error("failed");
 
       return Array.from({ length: count }, (_, index) => Float32Array.of(first + index));
@@ -582,6 +635,7 @@ function fakeReads() {
       reads.started.push(step);
       reads.active += 1;
       reads.peak = Math.max(reads.peak, reads.active);
+
       return new Promise<Float32Array>((resolve, reject) => {
         waiting.set(step, {
           resolve: () => {
@@ -602,6 +656,7 @@ function fakeReads() {
       waiting.get(step)?.reject(new Error("failed"));
     },
   };
+
   return reads;
 }
 
@@ -621,6 +676,7 @@ function rangeSource() {
       if ("suffixLength" in range) return bytes.slice(bytes.length - range.suffixLength);
 
       requests.push({ key, offset: range.offset, length: range.length });
+
       if (failsNext) throw new Error("failed");
 
       return bytes.slice(range.offset, range.offset + range.length);
@@ -658,11 +714,15 @@ test("pacing recovers within seconds after a five minute stall", () => {
   let nowMs = normalArrivals(meter);
 
   for (let step = 0; step < 12; step += 1) meter.begin(nowMs);
+
   nowMs += 5 * 60 * 1000;
+
   for (let step = 0; step < 12; step += 1) meter.finish(nowMs);
+
   assert.ok(meter.stepMs()! <= 1500);
 
   feedBatches(meter, nowMs, 12, 265); // about 3 s of playback
+
   const targetMs = sustainedStepMs(CHOSEN_STEP_MS, meter.stepMs());
 
   assert.ok(targetMs < CHOSEN_STEP_MS * 1.2, `target ${targetMs} ms`);
@@ -673,9 +733,11 @@ test("time while the tab or view is hidden does not slow pacing", () => {
   let nowMs = normalArrivals(meter);
 
   for (let step = 0; step < 12; step += 1) meter.begin(nowMs);
+
   meter.setCounting(false, nowMs);
   nowMs += 5 * 60 * 1000;
   meter.setCounting(true, nowMs);
+
   for (let step = 0; step < 12; step += 1) meter.finish(nowMs);
 
   assert.ok(meter.stepMs()! < 100, `load ${meter.stepMs()} ms a step`);
@@ -704,11 +766,16 @@ test("a crossfade keeps the basemap share whichever image is on top", () => {
   fade.show(2, paintOf("two"));
   fade.arm(3, paintOf("three"));
 
-  for (const [from, to] of [[2, 3], [3, 2]]) {
+  for (const [from, to] of [
+    [2, 3],
+    [3, 2],
+  ]) {
     for (const mix of FADE_MIXES) {
       fade.frame(from, to, mix);
+
       const [bottom, top] = layers.opacities;
       const share = (1 - bottom) * (1 - top);
+
       assert.ok(Math.abs(share - (1 - FADE_ALPHA)) < 1e-12, `${from} to ${to} at ${mix}`);
     }
   }
@@ -732,6 +799,7 @@ test("the images swap roles after a fade and the next step is painted into the i
   layers.images.length = 0;
 
   assert.equal(fade.frame(2, 3, 0), true);
+
   fade.arm(3, paintOf("three"));
 
   assert.deepEqual(layers.opacities, [0, FADE_ALPHA]);
@@ -745,6 +813,7 @@ test("a step that does not change does no work and sets no opacity again", () =>
   layers.images.length = 0;
 
   for (const mix of FADE_MIXES) fade.frame(4, 4, mix);
+
   fade.arm(4, paintOf("four"));
 
   assert.equal(layers.calls, 0);
@@ -756,12 +825,16 @@ test("a step outside the axis fades out and in through transparent", () => {
   fade.show(1, paintOf("one"));
 
   fade.frame(1, null, 0.25);
+
   assert.deepEqual(layers.opacities, [FADE_ALPHA * 0.75, 0]);
+
   fade.frame(null, null, 0);
+
   assert.deepEqual(layers.opacities, [0, 0]);
 
   fade.arm(2, paintOf("two"));
   fade.frame(null, 2, 0.5);
+
   assert.deepEqual(layers.opacities, [0, FADE_ALPHA * 0.5]);
 });
 
@@ -796,8 +869,10 @@ test("a palette change mid-fade repaints one image at full opacity", () => {
   layers.images.length = 0;
 
   fade.invalidate();
+
   assert.equal(fade.holds(1), false);
   assert.equal(fade.holds(2), false);
+
   fade.show(1, paintOf("one again"));
 
   assert.deepEqual(layers.images, [{ slot: 0, name: "one again" }]);
@@ -807,6 +882,7 @@ test("a palette change mid-fade repaints one image at full opacity", () => {
 test("a crossfade never paints more than the two images", () => {
   const { fade, layers } = fadePair();
   fade.show(0, paintOf("0"));
+
   for (let step = 1; step < 20; step += 1) {
     fade.arm(step, paintOf(String(step)));
     fade.frame(step - 1, step, 1);
@@ -826,14 +902,19 @@ test("preparing a key paints it in an idle moment and never for a held one", asy
 
   fade.prepare(2, async () => paintOf("two"));
   fade.prepare(2, async () => paintOf("again"));
+
   assert.deepEqual(layers.images, []);
+
   idle.runAll();
   await flush();
 
   assert.deepEqual(layers.images, [{ slot: 1, name: "two" }]);
+
   fade.prepare(2, async () => paintOf("held"));
   fade.prepare(1, async () => paintOf("held"));
+
   assert.equal(idle.tasks.length, 0);
+
   idle.restore();
 });
 
@@ -847,6 +928,7 @@ test("hiding or invalidating cancels a prepare that has not run", () => {
   idle.runAll();
 
   assert.deepEqual(layers.images, [{ slot: 0, name: "one" }]);
+
   idle.restore();
 });
 
@@ -854,17 +936,20 @@ test("a failed prepare lets a fade proceed once and is not retried", async () =>
   const { fade } = fadePair();
   const idle = stubIdle();
   fade.show(1, paintOf("one"));
+
   assert.equal(fade.isReady(1, 2), false);
 
   fade.prepare(2, async () => {
     throw new Error("read failed");
   });
+
   idle.runAll();
   await flush();
   fade.prepare(2, async () => paintOf("two"));
 
   assert.equal(fade.isReady(1, 2), true);
   assert.equal(idle.tasks.length, 0);
+
   idle.restore();
 });
 
@@ -875,6 +960,7 @@ test("a failed outgoing step stays failed through a hide and fades the next one 
   fade.prepare(2, async () => {
     throw new Error("read failed");
   });
+
   idle.runAll();
   await flush();
   fade.hide();
@@ -883,6 +969,7 @@ test("a failed outgoing step stays failed through a hide and fades the next one 
   assert.equal(fade.isReady(2, 3), true);
   assert.equal(fade.frame(2, 3, 0.5), true);
   assert.deepEqual([...layers.opacities].sort(), [0, FADE_ALPHA * 0.5]);
+
   idle.restore();
 });
 
@@ -893,6 +980,7 @@ test("a dropped image is reported with its key and invalidating reports both", (
   fade.show(1, paintOf("one"));
   fade.arm(2, paintOf("two"));
   fade.show(3, paintOf("three"));
+
   assert.deepEqual(evicted, [1]);
 
   fade.invalidate();

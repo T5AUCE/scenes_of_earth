@@ -86,9 +86,9 @@ const TIMER_QUERY_EXTENSION = "EXT_disjoint_timer_query_webgl2";
  * Draw a cell grid as textured quads through the MapLibre custom-layer lifecycle.
  * Subclasses supply shaders and data while this class manages shared GPU resources.
  */
-export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
-  implements CustomLayerInterface
-{
+export abstract class TiledGpuLayer<
+  Gpu extends TiledGpu = TiledGpu,
+> implements CustomLayerInterface {
   readonly id: string;
   readonly type = "custom";
   readonly renderingMode = "2d";
@@ -110,6 +110,7 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
   onAdd(map: MapLibreMap, gl: WebGL2RenderingContext) {
     this.map = map;
     this.gl = gl;
+
     const canvas = map.getCanvas();
     canvas.addEventListener("webglcontextlost", this.onContextLost);
     canvas.addEventListener("webglcontextrestored", this.onContextRestored);
@@ -125,26 +126,31 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
   async warmUp(signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) throw cancelError();
     if (this.isFailed) throw new Error(`${this.program.name} already failed`);
+
     if (this.isContextLost) {
       if (signal?.aborted) throw cancelError();
 
       throw new Error(`${this.program.name} lost its context`);
     }
+
     if (!this.map || !this.gl) {
       if (signal?.aborted) throw cancelError();
 
       throw new Error(`${this.program.name} has no map`);
     }
+
     if (!this.hasData()) return;
 
     // The save precedes every compile and upload so foreign bindings survive both paths.
     const gl = this.gl;
     const saved = saveGlState(gl);
+
     try {
       if (!this.gpu) {
         this.build();
         if (!this.gpu) throw new Error(`Cannot prepare ${this.program.name.toLowerCase()}`);
       }
+
       if (signal?.aborted) throw cancelError();
 
       this.uploadStaleData(gl, this.gpu);
@@ -155,6 +161,7 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
     } finally {
       restoreGlState(gl, saved);
     }
+
     if (signal?.aborted) throw cancelError();
   }
 
@@ -174,13 +181,16 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
 
   private build() {
     const gl = this.gl!;
+
     try {
       if (typeof gl.createVertexArray !== "function") {
         throw new Error(`${this.program.name} need WebGL 2`);
       }
+
       const { vertex, fragment, uniformNames } = this.program;
       const program = linkProgram(gl, vertex, fragment);
       const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+
       try {
         this.gpu = this.extendGpu({
           program,
@@ -199,6 +209,7 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
         gl.deleteProgram(program);
         throw error;
       }
+
       this.initialize(gl, this.gpu);
     } catch (error) {
       this.release();
@@ -209,6 +220,7 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
   private createQuad(gl: WebGL2RenderingContext, program: WebGLProgram) {
     const vertexArray = gl.createVertexArray();
     const corners = gl.createBuffer();
+
     if (!vertexArray || !corners) {
       deleteResources(gl, { vertexArrays: [vertexArray], buffers: [corners] });
       throw new Error(`Cannot allocate geometry for ${this.program.name.toLowerCase()}`);
@@ -217,11 +229,13 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
     gl.bindVertexArray(vertexArray);
     gl.bindBuffer(gl.ARRAY_BUFFER, corners);
     gl.bufferData(gl.ARRAY_BUFFER, CORNERS, gl.STATIC_DRAW);
+
     const location = gl.getAttribLocation(program, "aCorner");
     gl.enableVertexAttribArray(location);
     gl.vertexAttribPointer(location, 2, gl.FLOAT, false, 0, 0);
 
     gl.bindVertexArray(null);
+
     return { vertexArray, corners };
   }
 
@@ -229,6 +243,7 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
     const canvas = this.map?.getCanvas();
     canvas?.removeEventListener("webglcontextlost", this.onContextLost);
     canvas?.removeEventListener("webglcontextrestored", this.onContextRestored);
+
     this.release();
     this.map = null;
     this.gl = null;
@@ -237,6 +252,7 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
   private release() {
     const { gpu, gl } = this;
     this.gpu = null;
+
     if (!gpu || !gl) return;
 
     deleteResources(gl, {
@@ -261,6 +277,7 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
   render(gl: WebGL2RenderingContext, input: CustomRenderMethodInput) {
     if (this.isFailed || this.isContextLost) return;
     if (!this.map || !this.gl || this.isHidden() || !this.hasData()) return;
+
     if (!this.gpu) {
       this.build();
       if (!this.gpu) return;
@@ -270,7 +287,9 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
       if (this.map?.getProjection()?.type === "globe") {
         throw new Error(`${this.program.name} need Mercator drawing`);
       }
+
       this.uploadStaleData(gl, this.gpu);
+
       const gpu = this.gpu;
       // MapLibre's model-view matrix uses world pixels rather than normalised Mercator coordinates.
       this.draw(gl, gpu, input.defaultProjectionData.mainMatrix);
@@ -317,8 +336,10 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
     gl.bindSampler(0, null);
     gl.bindSampler(1, null);
     gl.bindSampler(2, null);
+
     gl.uniform1i(this.uniform(gpu, "uRows"), 1);
     gl.uniform1i(this.uniform(gpu, "uRowCount"), gpu.rowCount);
+
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, gpu.rows);
     gl.activeTexture(gl.TEXTURE0);
@@ -347,7 +368,9 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
       textures: gpu.tiles.flatMap(({ texture, companion }) => [texture, companion]),
     });
     gpu.tiles = [];
+
     const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+
     for (const tile of textureTiles(grid.nx, grid.ny, maxTextureSize, halo)) {
       const texture = this.uploadWindow(gl, grid, tile.window, cells);
       gpu.tiles.push({
@@ -357,12 +380,14 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
         quad: quadExtent(grid, tile.core, this.options.shift),
       });
     }
+
     this.throwIfUploadFailed(gl);
   }
 
   protected throwIfUploadFailed(gl: WebGL2RenderingContext): void {
     const error = gl.getError();
     if (error === gl.NO_ERROR) return;
+
     throw new Error(`Cannot upload tiled textures (GL error ${error})`);
   }
 
@@ -394,6 +419,7 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
       const start = (window.row + row) * grid.nx + window.column;
       windowCells.set(cells.subarray(start, start + window.width), row * window.width);
     }
+
     return uploadTexture(gl, "ids", window.width, window.height, windowCells);
   }
 
@@ -410,6 +436,7 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
         gl.bindTexture(gl.TEXTURE_2D, companion);
         gl.activeTexture(gl.TEXTURE0);
       }
+
       gl.bindTexture(gl.TEXTURE_2D, texture);
       bindTile(tile);
       gl.uniform4f(
@@ -419,6 +446,7 @@ export abstract class TiledGpuLayer<Gpu extends TiledGpu = TiledGpu>
         quad.rowSpan[0],
         quad.rowSpan[1],
       );
+
       for (const worldOffset of WORLD_COPIES) {
         gl.uniformMatrix4fv(
           this.uniform(gpu, "uMatrix"),
@@ -459,6 +487,7 @@ export function keepThroughContextLoss(
 
     const { beforeId, visibility, minzoom, maxzoom } = lost;
     lost = null;
+
     map.addLayer(layer, beforeId);
     map.setLayoutProperty(layer.id, "visibility", visibility);
     map.setLayerZoomRange(layer.id, minzoom, maxzoom);
@@ -514,6 +543,7 @@ export function isGpuTimingEnabled(): boolean {
   try {
     const dev = (import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV;
     if (dev) return true;
+
     return new URLSearchParams(location.search).has("debug");
   } catch {
     return false;
@@ -521,36 +551,39 @@ export function isGpuTimingEnabled(): boolean {
 }
 
 /** Run a layer draw inside a disjoint timer query when the dev readout allows it. */
-export function timedGpuDraw(
-  gl: WebGL2RenderingContext,
-  layerId: string,
-  run: () => void,
-): void {
+export function timedGpuDraw(gl: WebGL2RenderingContext, layerId: string, run: () => void): void {
   if (!isGpuTimingEnabled()) {
     run();
     return;
   }
+
   timeWithQuery(gl, layerId, run);
 }
 
 function timeWithQuery(gl: WebGL2RenderingContext, layerId: string, run: () => void): void {
   const extension = gl.getExtension(TIMER_QUERY_EXTENSION) as unknown as GpuTimerExtension | null;
+
   if (!extension) {
     markGpuUnavailable();
     run();
     return;
   }
+
   const query = gl.createQuery();
+
   if (!query) {
     run();
     return;
   }
+
   gl.beginQuery(extension.TIME_ELAPSED_EXT, query);
+
   try {
     run();
   } finally {
     gl.endQuery(extension.TIME_ELAPSED_EXT);
   }
+
   pollGpuQuery(gl, extension, query, layerId);
 }
 
@@ -563,18 +596,23 @@ function pollGpuQuery(
   let attempts = 0;
   const check = (): void => {
     attempts += 1;
+
     const available = gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE) as boolean;
     const disjoint = gl.getParameter(extension.GPU_DISJOINT_EXT) as boolean;
+
     if (available && !disjoint) {
       const elapsedNs = gl.getQueryParameter(query, gl.QUERY_RESULT) as number;
       recordGpuMs(layerId, elapsedNs / NS_PER_MS);
       gl.deleteQuery(query);
+
       return;
     }
+
     if (disjoint || attempts >= GPU_QUERY_ATTEMPTS) {
       gl.deleteQuery(query);
       return;
     }
+
     nextFrame(check);
   };
   nextFrame(check);
@@ -590,6 +628,7 @@ function nextFrame(callback: () => void): void {
   } catch {
     // A missing frame scheduler falls through to the timer below.
   }
+
   setTimeout(callback, NEXT_FRAME_FALLBACK_MS);
 }
 
@@ -643,11 +682,14 @@ interface SavedGlState {
 function saveGlState(gl: WebGL2RenderingContext): SavedGlState {
   const boundTextures: (WebGLTexture | null)[] = [];
   const activeTexture = gl.getParameter(gl.ACTIVE_TEXTURE) as number;
+
   for (let unit = 0; unit < 7; unit++) {
     gl.activeTexture(gl.TEXTURE0 + unit);
     boundTextures.push(gl.getParameter(gl.TEXTURE_BINDING_2D) as WebGLTexture | null);
   }
+
   gl.activeTexture(activeTexture);
+
   return {
     program: gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram | null,
     vertexArray: gl.getParameter(gl.VERTEX_ARRAY_BINDING) as WebGLVertexArrayObject | null,
@@ -664,10 +706,12 @@ function restoreGlState(gl: WebGL2RenderingContext, saved: SavedGlState): void {
     gl.useProgram(saved.program);
     gl.bindVertexArray(saved.vertexArray);
     gl.bindBuffer(gl.ARRAY_BUFFER, saved.arrayBuffer);
+
     for (let unit = 0; unit < saved.boundTextures.length; unit++) {
       gl.activeTexture(gl.TEXTURE0 + unit);
       gl.bindTexture(gl.TEXTURE_2D, saved.boundTextures[unit]);
     }
+
     gl.activeTexture(saved.activeTexture);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, saved.unpackAlignment);
   } catch {
@@ -678,5 +722,6 @@ function restoreGlState(gl: WebGL2RenderingContext, saved: SavedGlState): void {
 function cancelError(): Error {
   const error = new Error("Entry preparation was cancelled");
   error.name = "AbortError";
+
   return error;
 }

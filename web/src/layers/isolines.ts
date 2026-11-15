@@ -6,11 +6,7 @@ import type {
   SymbolLayerSpecification,
 } from "maplibre-gl";
 
-import {
-  addressSearch,
-  gestureFlags,
-  subscribeGesture,
-} from "../gesture-quality";
+import { addressSearch, gestureFlags, subscribeGesture } from "../gesture-quality";
 import { labelIndexFor } from "../playback";
 import { labelFadeDurationMs, prefersReducedMotion } from "../reduced-motion";
 import { evenStops } from "../render/colormap";
@@ -25,8 +21,8 @@ import {
   traceIsolines,
 } from "../render/isolines";
 import { type InkPaint, rgbCss } from "../render/palettes";
-import { convertValue, displayUnitFor, isUnitFor } from "../units";
 import type { GridDoc, LayerContext } from "../types";
+import { convertValue, displayUnitFor, isUnitFor } from "../units";
 
 const CACHED_STEPS = 24;
 const LINE_WIDTH_STOPS_PX: readonly (readonly [number, number, number])[] = [
@@ -39,9 +35,7 @@ const LINE_OPACITY_STOPS: readonly (readonly [number, number])[] = [
   [0, 0.85],
   [16, 1],
 ];
-const CASING_DASH_PATTERN = ISOTHERM_DASH_PATTERN.map(
-  (length) => length / ISOTHERM_CASING_RATIO,
-);
+const CASING_DASH_PATTERN = ISOTHERM_DASH_PATTERN.map((length) => length / ISOTHERM_CASING_RATIO);
 const CASING_OPACITY = 0.55;
 
 const LABEL_SIZE_PX = 10;
@@ -102,12 +96,14 @@ export function createIsolineOverlay(
   let displayUnit = displayUnitFor(nativeUnits, display?.units);
   let currentRange = display?.range ?? undefined;
   let { interval, levels } = isothermScale(stops, currentRange, nativeUnits, displayUnit);
+
   const sourceIds = [`${layer.id}-isotherms-a`, `${layer.id}-isotherms-b`] as const;
   const groups = sourceIds.map((sourceId) => ({
     casingId: `${sourceId}-casing`,
     lineId: `${sourceId}-lines`,
     labelId: `${sourceId}-labels`,
   }));
+
   const tracedSteps = new Map<string, Isoline[]>();
   let smooth = true;
   let front: 0 | 1 = 0;
@@ -119,6 +115,7 @@ export function createIsolineOverlay(
   let playing = false;
   let labelsFrozen = false;
   let fadeArmed = false;
+
   // Captured here because scene entry replaces the address and drops trial flags.
   const freezeAllowed = gestureFlags(addressSearch()).freezeLabels;
   const labelShown: [boolean | null, boolean | null] = [null, null];
@@ -129,16 +126,19 @@ export function createIsolineOverlay(
     paintInk(map, groups[index], ink);
     setSlotFactor(groups[index], 0);
   }
+
   const layerIds = groups.flatMap((group) => Object.values(group));
   // Hidden labels skip placement and collision, so a gesture freezes them until moveend.
   const stopGesture = subscribeGesture(map, {
     onStart: () => {
       if (!freezeAllowed) return;
+
       labelsFrozen = true;
       updateLabelVisibility();
     },
     onEnd: () => {
       if (!labelsFrozen) return;
+
       labelsFrozen = false;
       updateLabelVisibility(true);
     },
@@ -187,6 +187,7 @@ export function createIsolineOverlay(
         front = slotOfStep(fromStep)!;
         paintHidden(toStep);
         showSingle();
+
         return true;
       }
 
@@ -197,14 +198,19 @@ export function createIsolineOverlay(
       const incomingFactor = mix;
       const outgoingSlot = fromStep < 0 ? null : slotOfStep(fromStep);
       const incomingSlot = toStep < 0 ? null : slotOfStep(toStep);
+
       for (const [slot, group] of groups.entries()) {
         if (slot === outgoingSlot) setSlotFactor(group, outgoingFactor);
         else if (slot === incomingSlot) setSlotFactor(group, incomingFactor);
         else setSlotFactor(group, 0);
       }
+
       dominantStep = labelIndexFor({ index: fromStep, next: toStep, mix });
+
       if (dominantStep < 0) dominantStep = null;
+
       updateLabelVisibility();
+
       if (mix >= 1 && toStep >= 0) front = slotOfStep(toStep)!;
 
       return true;
@@ -240,9 +246,12 @@ export function createIsolineOverlay(
 
     setRange(range) {
       currentRange = range ?? undefined;
+
       const next = isothermScale(stops, currentRange, nativeUnits, displayUnit);
       interval = next.interval;
+
       if (sameLevels(next.levels, levels)) return;
+
       levels = next.levels;
       tracedSteps.clear();
       failed.clear();
@@ -251,7 +260,9 @@ export function createIsolineOverlay(
 
     setUnits(unit) {
       if (!isUnitFor(nativeUnits, unit) || unit === displayUnit) return;
+
       displayUnit = unit;
+
       const next = isothermScale(stops, currentRange, nativeUnits, displayUnit);
       interval = next.interval;
       levels = next.levels;
@@ -266,11 +277,14 @@ export function createIsolineOverlay(
 
     setVisible(visible) {
       overallVisible = visible;
+
       const visibility = visible ? "visible" : "none";
+
       for (const group of groups) {
         map.setLayoutProperty(group.casingId, "visibility", visibility);
         map.setLayoutProperty(group.lineId, "visibility", visibility);
       }
+
       if (!visible) clearSources();
       else updateLabelVisibility();
     },
@@ -279,21 +293,25 @@ export function createIsolineOverlay(
       if (isPlaying === playing) return;
 
       playing = isPlaying;
+
       // Both sets show at once while playing so the hidden set cannot block the fade.
       for (const group of groups) {
         map.setLayoutProperty(group.labelId, "text-allow-overlap", isPlaying);
         map.setLayoutProperty(group.labelId, "text-ignore-placement", isPlaying);
       }
+
       updateLabelVisibility();
     },
 
     destroy() {
       stopGesture();
+
       for (const group of groups) {
         for (const id of Object.values(group)) {
           if (map.getLayer(id)) map.removeLayer(id);
         }
       }
+
       for (const sourceId of sourceIds) {
         if (map.getSource(sourceId)) map.removeSource(sourceId);
       }
@@ -306,14 +324,13 @@ export function createIsolineOverlay(
     front = slotOfStep(step)!;
     failed.delete(step);
     showSingle();
+
     return true;
   }
 
   function traceStep(step: number, values: ArrayLike<number>): Isoline[] {
-    return cachedTrace(
-      tracedSteps,
-      traceKey(step, smooth),
-      () => traceIsolines(values, layer.grid.nx, layer.grid.ny, levels, smooth),
+    return cachedTrace(tracedSteps, traceKey(step, smooth), () =>
+      traceIsolines(values, layer.grid.nx, layer.grid.ny, levels, smooth),
     );
   }
 
@@ -346,6 +363,7 @@ export function createIsolineOverlay(
   function paintHidden(toStep: number): void {
     // Only the hold paints the hidden slot, so the lookahead never replaces a fading set.
     if (toStep < 0 || holdsStep(toStep)) return;
+
     const cached = tracedSteps.get(traceKey(toStep, smooth));
     if (!cached) return;
 
@@ -357,8 +375,9 @@ export function createIsolineOverlay(
   function setSourceData(slot: 0 | 1, traced: Isoline[]) {
     // A fresh setData needs one loaded report before the slot counts as settled.
     painted[slot] = false;
-    const features = traced.map(
-      (line) => lineFeature(line, interval, layer.grid, shift, nativeUnits, displayUnit),
+
+    const features = traced.map((line) =>
+      lineFeature(line, interval, layer.grid, shift, nativeUnits, displayUnit),
     );
     (map.getSource(sourceIds[slot]) as GeoJSONSource).setData({
       type: "FeatureCollection",
@@ -370,6 +389,7 @@ export function createIsolineOverlay(
     for (const [slot, group] of groups.entries()) {
       setSlotFactor(group, slot === front ? 1 : 0);
     }
+
     dominantStep = keys[front];
     updateLabelVisibility();
   }
@@ -384,11 +404,14 @@ export function createIsolineOverlay(
     for (const sourceId of sourceIds) {
       (map.getSource(sourceId) as GeoJSONSource).setData(EMPTY_LINES);
     }
+
     keys = [null, null];
     front = 0;
     dominantStep = null;
     failed.clear();
+
     for (const group of groups) setSlotFactor(group, 0);
+
     updateLabelVisibility();
   }
 
@@ -396,12 +419,15 @@ export function createIsolineOverlay(
     // Only the gesture restoration arms the fade so per-frame updates never lag behind it.
     if (fade) armLabelFade();
     else disarmLabelFade();
+
     for (const [slot, group] of groups.entries()) {
       const showsDominant = overallVisible && dominantStep !== null && keys[slot] === dominantStep;
       // Frozen labels sit at zero while hidden, so moveend fades them back instead of popping.
       // Opacity flips labels without a reload, and paused visibility keeps culling exact.
       map.setPaintProperty(group.labelId, "text-opacity", !labelsFrozen && showsDominant ? 1 : 0);
+
       const shouldShow = !labelsFrozen && overallVisible && (playing || showsDominant);
+
       if (labelShown[slot] !== shouldShow) {
         labelShown[slot] = shouldShow;
         map.setLayoutProperty(group.labelId, "visibility", shouldShow ? "visible" : "none");
@@ -411,6 +437,7 @@ export function createIsolineOverlay(
 
   function armLabelFade() {
     fadeArmed = true;
+
     for (const group of groups) {
       map.setPaintProperty(group.labelId, "text-opacity-transition", {
         duration: labelFadeDurationMs(),
@@ -420,7 +447,9 @@ export function createIsolineOverlay(
 
   function disarmLabelFade() {
     if (!fadeArmed) return;
+
     fadeArmed = false;
+
     for (const group of groups) {
       map.setPaintProperty(group.labelId, "text-opacity-transition", { duration: 0 });
     }
@@ -539,10 +568,12 @@ function scaledZoomStops(factor: number): ExpressionSpecification {
 }
 
 function textFont(map: MapLibreMap) {
-  return map.getStyle().layers.find(
-    (layer): layer is SymbolLayerSpecification =>
-      layer.type === "symbol" && layer.layout?.["text-font"] !== undefined,
-  )?.layout?.["text-font"];
+  return map
+    .getStyle()
+    .layers.find(
+      (layer): layer is SymbolLayerSpecification =>
+        layer.type === "symbol" && layer.layout?.["text-font"] !== undefined,
+    )?.layout?.["text-font"];
 }
 
 function otherSlot(slot: 0 | 1): 0 | 1 {
@@ -558,15 +589,9 @@ function isothermScale(
   // Geometry stays in native units while the interval stays round in the display unit.
   const effectiveStops = range ? evenStops(...range, stops.length) : stops;
   // Full precision keeps label rounding out of level selection.
-  const shownStops = effectiveStops.map(
-    (stop) => convertValue(stop, nativeUnits, displayUnit),
-  );
+  const shownStops = effectiveStops.map((stop) => convertValue(stop, nativeUnits, displayUnit));
   const interval = isolineInterval(shownStops);
-  const shownLevels = isolineLevels(
-    shownStops[0],
-    shownStops[shownStops.length - 1],
-    interval,
-  );
+  const shownLevels = isolineLevels(shownStops[0], shownStops[shownStops.length - 1], interval);
 
   const levels = shownLevels.map((level) => convertValue(level, displayUnit, nativeUnits));
 
@@ -574,8 +599,7 @@ function isothermScale(
 }
 
 function sameLevels(left: readonly number[], right: readonly number[]) {
-  return left.length === right.length
-    && left.every((level, index) => level === right[index]);
+  return left.length === right.length && left.every((level, index) => level === right[index]);
 }
 
 function traceKey(step: number, smooth: boolean): string {
@@ -588,6 +612,7 @@ function cachedTrace(
   trace: () => Isoline[],
 ): Isoline[] {
   const traced = cache.get(key);
+
   if (traced) {
     cache.delete(key);
     cache.set(key, traced);
@@ -596,7 +621,9 @@ function cachedTrace(
 
   const next = trace();
   cache.set(key, next);
+
   if (cache.size > CACHED_STEPS) cache.delete(cache.keys().next().value!);
+
   return next;
 }
 
@@ -612,14 +639,8 @@ function lineFeature(
   const shown = convertValue(line.value, nativeUnits, displayUnit);
   return {
     type: "Feature" as const,
-    properties: {
-      bold: isBoldLevel(shown, interval),
-      label: `${formatLevel(shown)}°`,
-    },
-    geometry: {
-      type: "LineString" as const,
-      coordinates: toLngLat(line.coordinates, grid, shift),
-    },
+    properties: { bold: isBoldLevel(shown, interval), label: `${formatLevel(shown)}°` },
+    geometry: { type: "LineString" as const, coordinates: toLngLat(line.coordinates, grid, shift) },
   };
 }
 

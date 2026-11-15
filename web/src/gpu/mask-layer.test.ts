@@ -73,6 +73,7 @@ test("vertices stay near the area so single precision holds at high zoom", () =>
 
   const { first, count } = geometry.outlines[0];
   const outline = geometry.vertices.slice(first * 2, (first + count) * 2);
+
   assert.ok(outline.every((value) => Math.abs(value) < 1e-5));
 });
 
@@ -158,7 +159,9 @@ test("a target that fails at 2x is rebuilt at the canvas size without failing", 
   await Promise.resolve();
 
   assert.deepEqual(failures, []);
+
   const sizes = names(calls, "renderbufferStorage").map((args) => args[2]);
+
   assert.deepEqual(sizes, [CANVAS_WIDTH_PX * 2, CANVAS_WIDTH_PX]);
   assert.equal(names(calls, "drawArrays").length > 0, true);
 });
@@ -174,15 +177,17 @@ test("the covered pixels are filled by stencil parity into a supersampled target
     CANVAS_WIDTH_PX * 2,
     CANVAS_HEIGHT_PX * 2,
   ]);
+
   const fans = names(calls, "drawArrays").filter(([mode]) => mode === "TRIANGLE_FAN");
+
   assert.equal(fans.length, WORLD_COPIES.length * AREA_RINGS.length);
+
   const quads = names(calls, "drawArrays").filter(([mode]) => mode === "TRIANGLE_STRIP");
+
   assert.equal(quads.length, 1);
   assert.deepEqual(find("clearStencil"), [1]);
   assert.ok(index(calls, "stencilOp", ["KEEP", "KEEP", "INVERT"]) < lastIndex(calls, "drawArrays"));
-  assert.ok(
-    index(calls, "stencilFunc", ["EQUAL", 1, 1]) < lastIndex(calls, "drawArrays"),
-  );
+  assert.ok(index(calls, "stencilFunc", ["EQUAL", 1, 1]) < lastIndex(calls, "drawArrays"));
 });
 
 test("the page colour paints the covered pixels", () => {
@@ -228,10 +233,12 @@ test("the target is composited premultiplied at the layer opacity", () => {
 test("a frame without an offscreen draw composites nothing", () => {
   const { gl, calls } = fakeGl();
   const [{ layer, setOpacity }] = createMaskLayers(options(), IDS);
+
   setOpacity(1);
   layer.prerender!(gl, input());
   setOpacity(0);
   layer.prerender!(gl, input());
+
   calls.length = 0;
 
   layer.render(gl, input());
@@ -247,6 +254,7 @@ test("map state is restored after the offscreen draw", () => {
   layer.prerender!(gl, input());
 
   const binds = names(calls, "bindFramebuffer");
+
   assert.equal(binds.at(-1)![1], framebuffer);
   assert.deepEqual(names(calls, "viewport").at(-1), [0, 0, CANVAS_WIDTH_PX, CANVAS_HEIGHT_PX]);
   assert.deepEqual(names(calls, "disable").at(-1), ["STENCIL_TEST"]);
@@ -331,6 +339,7 @@ test("removing the layer frees every resource and a later add draws again", () =
   const { gl, calls } = fakeGl();
   const map = { triggerRepaint() {} } as unknown as MapLibreMap;
   const [{ layer, setOpacity }] = createMaskLayers(options(), IDS);
+
   layer.onAdd!(map, gl);
   setOpacity(1);
   layer.prerender!(gl, input());
@@ -346,6 +355,7 @@ test("removing the layer frees every resource and a later add draws again", () =
 
   layer.onAdd!(map, gl);
   layer.prerender!(gl, input());
+
   assert.equal(names(calls, "linkProgram").length, 4);
 });
 
@@ -353,13 +363,16 @@ test("removing one of two layers keeps the shared resources until the last is re
   const { gl, calls } = fakeGl();
   const map = { triggerRepaint() {} } as unknown as MapLibreMap;
   const [mask, fade] = createMaskLayers(options(), ["mask", "fade"]);
+
   for (const { layer, setOpacity } of [mask, fade]) {
     layer.onAdd!(map, gl);
     setOpacity(1);
   }
+
   mask.layer.prerender!(gl, input());
 
   mask.layer.onRemove!(map, gl);
+
   const drawsBefore = names(calls, "drawArrays").length;
   fade.layer.prerender!(gl, input());
   fade.layer.render(gl, input());
@@ -390,12 +403,7 @@ test("changing the opacity asks the map for another frame", () => {
 });
 
 function options() {
-  return {
-    rings: AREA_RINGS,
-    color: "#faf8f3",
-    opacity: 0,
-    onFail: () => {},
-  };
+  return { rings: AREA_RINGS, color: "#faf8f3", opacity: 0, onFail: () => {} };
 }
 
 function input(mainMatrix = MAIN_MATRIX) {
@@ -414,8 +422,7 @@ const index = (calls: Call[], name: string, args: unknown[]) =>
     ([call, given]) => call === name && JSON.stringify(given) === JSON.stringify(args),
   );
 
-const lastIndex = (calls: Call[], name: string) =>
-  calls.map(([call]) => call).lastIndexOf(name);
+const lastIndex = (calls: Call[], name: string) => calls.map(([call]) => call).lastIndexOf(name);
 
 /** Whether the fans flip the parity bit an odd number of times at a longitude and latitude. */
 function isMasked(geometry: MaskGeometry, longitude: number, latitude: number) {
@@ -427,6 +434,7 @@ function isMasked(geometry: MaskGeometry, longitude: number, latitude: number) {
     fanContains(vertices, fan, x - dx, y);
 
   let flips = 1;
+
   for (const offset of WORLD_COPIES) {
     for (const fan of outlines) if (covers(fan, offset)) flips++;
   }
@@ -444,6 +452,7 @@ function fanContains(
   const point = (vertex: number) => [vertices[vertex * 2], vertices[vertex * 2 + 1]];
   const centre = point(first);
   let parity = false;
+
   for (let step = 1; step < count - 1; step++) {
     if (inTriangle([x, y], centre, point(first + step), point(first + step + 1))) {
       parity = !parity;
@@ -468,6 +477,7 @@ function fakeGl(config: FakeGlConfig = {}) {
   const framebuffer = { name: "map framebuffer" };
   let framebufferWidth = 0;
   const constants = new Map<string, number>();
+
   const constant = (name: string) => {
     if (!constants.has(name)) constants.set(name, FIRST_CONSTANT + constants.size);
 
@@ -478,6 +488,7 @@ function fakeGl(config: FakeGlConfig = {}) {
 
     return name ?? value;
   };
+
   const returns: Record<string, (...args: unknown[]) => unknown> = {
     getParameter: (name) => {
       if (name === constant("FRAMEBUFFER_BINDING")) return framebuffer;
@@ -494,13 +505,15 @@ function fakeGl(config: FakeGlConfig = {}) {
       framebufferWidth = width as number;
     },
     checkFramebufferStatus: () => {
-      const isComplete = config.framebufferComplete !== false
+      const isComplete =
+        config.framebufferComplete !== false
         && framebufferWidth <= (config.maxCompleteWidth ?? Infinity);
 
       return isComplete ? constant("FRAMEBUFFER_COMPLETE") : 0;
     },
     getUniformLocation: (_program, name) => name,
   };
+
   const gl = new Proxy({} as Record<string, unknown>, {
     get(_target, property: string) {
       if (property === "drawingBufferWidth") return size.width;
@@ -515,6 +528,7 @@ function fakeGl(config: FakeGlConfig = {}) {
       };
     },
   }) as unknown as WebGL2RenderingContext;
+
   const find = (name: string) => calls.find(([call]) => call === name)?.[1];
 
   return { gl, calls, size, framebuffer, find };

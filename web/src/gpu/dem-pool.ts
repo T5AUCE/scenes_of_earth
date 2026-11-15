@@ -3,12 +3,7 @@
  * and decodes in workers, keeps the tile edges so neighbours can fill each other's halo, and
  * uploads from a call the layer makes inside `render`.
  */
-import {
-  DEM_TILE_SIZE_PX,
-  STRIP_WIDTH_PX,
-  stripOf,
-  type StripSide,
-} from "../workers/dem-decode";
+import { DEM_TILE_SIZE_PX, STRIP_WIDTH_PX, stripOf, type StripSide } from "../workers/dem-decode";
 import type { DemWorkerRequest, DemWorkerResponse } from "../workers/dem-worker";
 import type { WantedTile } from "./dem-plan";
 
@@ -143,20 +138,11 @@ interface Corner {
 
 // Corners in facing pairs like EDGES, so `index ^ 1` is the corner that faces back.
 const CORNERS: Corner[] = [
-  {
-    dx: -1,
-    dy: -1,
-    halo: { x: 0, y: 0, width: STRIP_WIDTH_PX, height: STRIP_WIDTH_PX },
-  },
+  { dx: -1, dy: -1, halo: { x: 0, y: 0, width: STRIP_WIDTH_PX, height: STRIP_WIDTH_PX } },
   {
     dx: 1,
     dy: 1,
-    halo: {
-      x: HALO_OFFSET_PX,
-      y: HALO_OFFSET_PX,
-      width: STRIP_WIDTH_PX,
-      height: STRIP_WIDTH_PX,
-    },
+    halo: { x: HALO_OFFSET_PX, y: HALO_OFFSET_PX, width: STRIP_WIDTH_PX, height: STRIP_WIDTH_PX },
   },
   {
     dx: 1,
@@ -228,10 +214,12 @@ export class DemPool {
     this.store = options.store;
     this.onChange = options.onChange;
     this.now = options.now ?? (() => performance.now());
+
     this.workerLoads = new Array<number>(WORKER_COUNT).fill(0);
     this.workers = this.workerLoads.map(() => {
       const worker = options.createWorker();
       worker.onResponse((response) => this.handleResponse(response));
+
       return worker;
     });
   }
@@ -259,10 +247,12 @@ export class DemPool {
     this.frame++;
     this.wantedList = wanted;
     this.wanted.clear();
+
     for (const tile of wanted) {
       const key = tileKey(tile);
       if (!this.wanted.has(key)) this.wanted.set(key, tile);
     }
+
     this.markTextures();
     this.cancelUnwanted();
     this.dropUnwantedHeights();
@@ -276,10 +266,12 @@ export class DemPool {
     if (!store) return 0;
 
     this.applyHaloPatches(store);
+
     const start = this.now();
     let uploads = this.uploadTier(store, start, true, 0);
     uploads = this.uploadTier(store, start, false, uploads);
     this.latchDrawable();
+
     return uploads;
   }
 
@@ -295,10 +287,13 @@ export class DemPool {
 
       const isFirst = tile.tier === "pinned" || tile.tier === "view";
       if (isFirst !== isFirstTier) continue;
+
       const key = tileKey(tile);
       const heights = this.pending.get(key);
+
       if (heights && this.uploadTile(store, tile, key, heights)) uploads++;
     }
+
     return uploads;
   }
 
@@ -311,6 +306,7 @@ export class DemPool {
     if (!this.store) return false;
 
     const now = this.now();
+
     for (const tile of this.wantedList) {
       const key = tileKey(tile);
       if (this.pending.has(key) && this.hasRoom()) return true;
@@ -318,6 +314,7 @@ export class DemPool {
       const entry = this.textures.get(key);
       if (entry?.drawableAt === null && now - entry.uploadedAt < DRAWABLE_CAP_MS) return true;
     }
+
     return false;
   }
 
@@ -343,6 +340,7 @@ export class DemPool {
       if (tile.tier !== "view" && tile.tier !== "pinned") continue;
       if (!this.isDrawable(tile)) return false;
     }
+
     return true;
   }
 
@@ -358,9 +356,11 @@ export class DemPool {
     if (!entry) return null;
 
     const now = this.now();
+
     if (entry.drawableAt !== null) return now - entry.drawableAt;
 
     const cappedAt = entry.uploadedAt + DRAWABLE_CAP_MS;
+
     return now >= cappedAt ? now - cappedAt : null;
   }
 
@@ -381,10 +381,12 @@ export class DemPool {
   stats(): DemPoolStats {
     const texturesPerZoom: Record<number, number> = {};
     let pinnedTextures = 0;
+
     for (const entry of this.textures.values()) {
       texturesPerZoom[entry.z] = (texturesPerZoom[entry.z] ?? 0) + 1;
       if (entry.pinned) pinnedTextures++;
     }
+
     return {
       textures: this.textures.size,
       pinnedTextures,
@@ -407,7 +409,9 @@ export class DemPool {
   /** Stop the workers and free every texture. */
   destroy(): void {
     for (const worker of this.workers) worker.terminate();
+
     for (const entry of this.textures.values()) this.store?.remove(entry.texture);
+
     this.textures.clear();
     this.jobs.clear();
     this.pending.clear();
@@ -457,14 +461,17 @@ export class DemPool {
       const key = tileKey(tile);
       if (!this.jobs.has(key) && this.needsLoad(key)) missing.add(key);
     }
+
     return missing.size;
   }
 
   private needsLoad(key: number): boolean {
-    return !this.textures.has(key)
+    return (
+      !this.textures.has(key)
       && !this.pending.has(key)
       && !this.jobs.has(key)
-      && !this.hasFailed(key);
+      && !this.hasFailed(key)
+    );
   }
 
   private startJob(tile: WantedTile, key: number): void {
@@ -473,6 +480,7 @@ export class DemPool {
       .replace("{z}", String(tile.z))
       .replace("{x}", String(tile.x))
       .replace("{y}", String(tile.y));
+
     this.workers[worker].post({ type: "load", id: key, url });
     this.workerLoads[worker]++;
     this.jobs.set(key, { tile, worker });
@@ -485,8 +493,10 @@ export class DemPool {
 
     this.jobs.delete(response.id);
     this.workerLoads[job.worker]--;
+
     if (response.kind === "tile") this.land(job.tile, response);
     else this.remember(this.failures, response.id, FAILURES_MEMO_LIMIT, this.retryTime(response));
+
     this.onChange();
     this.fillFetchSlots();
   }
@@ -495,17 +505,16 @@ export class DemPool {
     return response.kind === "missing" ? NEVER_RETRY : this.now() + ERROR_RETRY_MS;
   }
 
-  private land(
-    tile: WantedTile,
-    response: Extract<DemWorkerResponse, { kind: "tile" }>,
-  ): void {
+  private land(tile: WantedTile, response: Extract<DemWorkerResponse, { kind: "tile" }>): void {
     const key = tileKey(tile);
     const hadStrips = this.strips.has(key);
     this.remember(this.strips, key, STRIPS_MEMO_LIMIT, response.strips);
     this.pending.set(key, response.heights);
+
     this.loaded++;
     this.lastDecodeMs = response.decodeMs;
     this.totalDecodeMs += response.decodeMs;
+
     // A tile re-decoded after eviction already gave its edges to the neighbours that exist.
     if (!hadStrips) this.queueHaloPatches(tile, key);
   }
@@ -523,6 +532,7 @@ export class DemPool {
     if (retryAt > this.now()) return true;
 
     this.failures.delete(key);
+
     return false;
   }
 
@@ -531,6 +541,7 @@ export class DemPool {
       const target = neighbourKey(tile, edge);
       if (this.textures.has(target)) this.patches.push({ target, source: key, edge: index ^ 1 });
     });
+
     CORNERS.forEach((corner, index) => {
       const target = neighbourKey(tile, corner);
       if (this.textures.has(target)) {
@@ -561,6 +572,7 @@ export class DemPool {
         );
       }
     }
+
     this.patches.length = 0;
   }
 
@@ -581,6 +593,7 @@ export class DemPool {
       return strips ? diagonalCorner(strips, CORNERS[index ^ 1]) : null;
     });
     fillPaddedTile(this.scratch, heights, neighbourStrips, cornerData);
+
     const uploadedAt = this.now();
     this.textures.set(key, {
       z: tile.z,
@@ -594,6 +607,7 @@ export class DemPool {
     });
     this.pending.delete(key);
     this.uploaded++;
+
     return true;
   }
 
@@ -606,6 +620,7 @@ export class DemPool {
       this.store?.remove(this.textures.get(victim)!.texture);
       this.textures.delete(victim);
     }
+
     return this.fitsBytes();
   }
 
@@ -616,6 +631,7 @@ export class DemPool {
   private unpinnedCount(): number {
     let count = 0;
     for (const entry of this.textures.values()) if (!entry.pinned) count++;
+
     return count;
   }
 
@@ -623,12 +639,14 @@ export class DemPool {
   private leastRecentlyUsed(): number | null {
     let oldest: number | null = null;
     let oldestFrame = this.frame;
+
     for (const [key, entry] of this.textures) {
       if (entry.pinned || entry.lastUsedFrame >= oldestFrame) continue;
 
       oldest = key;
       oldestFrame = entry.lastUsedFrame;
     }
+
     return oldest;
   }
 
@@ -659,6 +677,7 @@ export class DemPool {
     for (const entry of this.textures.values()) {
       if (!entry.pinned && entry.lastUsedFrame < this.frame) evictable++;
     }
+
     return (this.textures.size - evictable + 1) * TEXTURE_BYTES <= TEXTURE_BYTES_LIMIT;
   }
 }
@@ -705,17 +724,21 @@ export function demPoolHas(tileUrl: string, tile: Pick<WantedTile, "z" | "x" | "
 /** The stats of the url's pool, or the summed stats when no url is given. */
 export function demPoolStats(tileUrl?: string): DemPoolStats | null {
   if (tileUrl) return poolsByUrl.get(tileUrl)?.stats() ?? null;
+
   const live = [...poolsByUrl.values()];
   if (live.length === 0) return null;
   if (live.length === 1) return live[0].stats();
+
   return sumPoolStats(live.map((pool) => pool.stats()));
 }
 
 /** Whether the pools hold every pinned and view tile they want, null without a pool. */
 export function demPoolViewReady(tileUrl?: string): boolean | null {
   if (tileUrl) return poolsByUrl.get(tileUrl)?.areViewTilesDrawable() ?? null;
+
   const live = [...poolsByUrl.values()];
   if (live.length === 0) return null;
+
   return live.every((pool) => pool.areViewTilesDrawable());
 }
 
@@ -724,12 +747,16 @@ export function acquireDemPool(options: AcquireDemPoolOptions): DemPool {
   const { map, gl, tileUrl } = options;
   const createStore = options.createStore ?? createGlTextureStore;
   let entry = pools.get(map)?.get(tileUrl);
+
   if (!entry) entry = createEntry(options, createStore);
+
   entry.refs++;
+
   if (entry.gl !== gl) {
     entry.gl = gl;
     entry.pool.useStore(createStore(gl));
   }
+
   return entry.pool;
 }
 
@@ -740,6 +767,7 @@ export function releaseDemPool(map: DemPoolMap, tileUrl: string): void {
 
   // A release that runs before the lost event still sees a lost context here.
   const glLost = entry.gl?.isContextLost?.() ?? false;
+
   if (entry.lost || glLost) {
     setTimeout(() => destroyIfUnused(map, tileUrl, entry), LOST_CONTEXT_GRACE_MS);
   } else destroyEntry(map, tileUrl, entry);
@@ -758,6 +786,7 @@ function createEntry(
     now: options.now,
     onChange: () => map.triggerRepaint(),
   });
+
   const onLost = () => {
     entry.lost = true;
     entry.gl = null;
@@ -767,6 +796,7 @@ function createEntry(
     entry.lost = false;
   };
   const onRender = () => pool.endMapFrame();
+
   const entry: PoolEntry = {
     pool,
     refs: 0,
@@ -778,13 +808,16 @@ function createEntry(
       map.off("render", onRender);
     },
   };
+
   canvas.addEventListener("webglcontextlost", onLost);
   canvas.addEventListener("webglcontextrestored", onRestored);
   map.on("render", onRender);
+
   const mapPools = pools.get(map) ?? new Map<string, PoolEntry>();
   mapPools.set(tileUrl, entry);
   pools.set(map, mapPools);
   poolsByUrl.set(tileUrl, pool);
+
   return entry;
 }
 
@@ -798,6 +831,7 @@ function destroyEntry(map: DemPoolMap, tileUrl: string, entry: PoolEntry): void 
   entry.dispose();
   entry.pool.destroy();
   pools.get(map)?.delete(tileUrl);
+
   if (poolsByUrl.get(tileUrl) === entry.pool) poolsByUrl.delete(tileUrl);
 }
 
@@ -805,16 +839,20 @@ function sumPoolStats(all: DemPoolStats[]): DemPoolStats {
   const texturesPerZoom: Record<number, number> = {};
   let loaded = 0;
   let totalDecodeMs = 0;
+
   for (const stats of all) {
     for (const [zoom, count] of Object.entries(stats.texturesPerZoom)) {
       texturesPerZoom[Number(zoom)] = (texturesPerZoom[Number(zoom)] ?? 0) + count;
     }
+
     loaded += stats.loaded;
     totalDecodeMs += stats.meanDecodeMs * stats.loaded;
   }
+
   const summed = (pick: (stats: DemPoolStats) => number): number => {
     return all.reduce((total, stats) => total + pick(stats), 0);
   };
+
   return {
     textures: summed((stats) => stats.textures),
     pinnedTextures: summed((stats) => stats.pinnedTextures),
@@ -848,10 +886,10 @@ try {
 
 /** Start a dem-worker; the bundler picks the file up from this `new URL`. */
 export function createDemWorker(): DemWorkerPort {
-  const worker = new Worker(
-    new URL("../workers/dem-worker.ts", import.meta.url),
-    { type: "module" },
-  );
+  const worker = new Worker(new URL("../workers/dem-worker.ts", import.meta.url), {
+    type: "module",
+  });
+
   return {
     post: (request) => worker.postMessage(request),
     onResponse: (handler) => {
@@ -868,6 +906,7 @@ export function createDemWorker(): DemWorkerPort {
 export function createGlTextureStore(gl: WebGL2RenderingContext): DemTextureStore {
   const linear = gl.getExtension("OES_texture_float_linear") !== null;
   const filter = linear ? gl.LINEAR : gl.NEAREST;
+
   return {
     linear,
     create(data) {
@@ -879,6 +918,7 @@ export function createGlTextureStore(gl: WebGL2RenderingContext): DemTextureStor
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
       withPlainUnpack(gl, () => {
         gl.texImage2D(
           gl.TEXTURE_2D,
@@ -892,6 +932,7 @@ export function createGlTextureStore(gl: WebGL2RenderingContext): DemTextureStor
           data,
         );
       });
+
       return texture;
     },
     patch(texture, x, y, width, height, data) {
@@ -909,10 +950,13 @@ function withPlainUnpack(gl: WebGL2RenderingContext, upload: () => void): void {
   const flipY = gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL) as boolean;
   const premultiply = gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL) as boolean;
   const alignment = gl.getParameter(gl.UNPACK_ALIGNMENT) as number;
+
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+
   upload();
+
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, flipY);
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, premultiply);
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, alignment);
@@ -953,25 +997,30 @@ function fillPaddedTile(
   const size = DEM_TILE_SIZE_PX;
   const stride = TEXTURE_SIZE_PX;
   const last = size - 1;
+
   for (let row = 0; row < size; row++) {
     const start = (row + STRIP_WIDTH_PX) * stride;
     padded.set(heights.subarray(row * size, (row + 1) * size), start + STRIP_WIDTH_PX);
+
     for (let column = 0; column < STRIP_WIDTH_PX; column++) {
       const west = neighbourStrips[WEST]?.[row * STRIP_WIDTH_PX + column] ?? heights[row * size];
-      const east = neighbourStrips[EAST]?.[row * STRIP_WIDTH_PX + column]
-        ?? heights[row * size + last];
+      const east =
+        neighbourStrips[EAST]?.[row * STRIP_WIDTH_PX + column] ?? heights[row * size + last];
       padded[start + column] = west;
       padded[start + HALO_OFFSET_PX + column] = east;
     }
   }
+
   for (let line = 0; line < STRIP_WIDTH_PX; line++) {
-    const north = neighbourStrips[NORTH]?.subarray(line * size, (line + 1) * size)
-      ?? heights.subarray(0, size);
-    const south = neighbourStrips[SOUTH]?.subarray(line * size, (line + 1) * size)
+    const north =
+      neighbourStrips[NORTH]?.subarray(line * size, (line + 1) * size) ?? heights.subarray(0, size);
+    const south =
+      neighbourStrips[SOUTH]?.subarray(line * size, (line + 1) * size)
       ?? heights.subarray(last * size);
     padded.set(north, line * stride + STRIP_WIDTH_PX);
     padded.set(south, (HALO_OFFSET_PX + line) * stride + STRIP_WIDTH_PX);
   }
+
   fillCorners(padded, heights, cornerData);
 }
 
@@ -992,6 +1041,7 @@ function fillCorners(
   const fallbacks = [corners[0], corners[3], corners[1], corners[2]];
   CORNERS.forEach((corner, index) => {
     const data = cornerData[index];
+
     for (let line = 0; line < STRIP_WIDTH_PX; line++) {
       for (let column = 0; column < STRIP_WIDTH_PX; column++) {
         padded[(corner.halo.y + line) * stride + corner.halo.x + column] = data
@@ -1006,6 +1056,7 @@ function fillCorners(
 function diagonalCorner(strips: Float32Array, corner: Corner): Float32Array {
   const side = stripOf(strips, corner.dy < 0 ? "top" : "bottom");
   const first = corner.dx < 0 ? 0 : DEM_TILE_SIZE_PX - STRIP_WIDTH_PX;
+
   return Float32Array.of(
     side[first],
     side[first + 1],

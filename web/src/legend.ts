@@ -99,8 +99,10 @@ function dashGradient(color: number[]) {
   const periodLengths = ISOTHERM_DASH_PATTERN[0] + ISOTHERM_DASH_PATTERN[1];
   const periodPx = periodLengths * ISOTHERM_SAMPLE_LINE_PX;
 
-  return `repeating-linear-gradient(to right, ${rgbCss(color)} 0 ${dashPx}px, `
-    + `transparent ${dashPx}px ${periodPx}px)`;
+  return (
+    `repeating-linear-gradient(to right, ${rgbCss(color)} 0 ${dashPx}px, `
+    + `transparent ${dashPx}px ${periodPx}px)`
+  );
 }
 
 /** The legend line for cells inside the area that have no data, which the marks layer hatches. */
@@ -168,30 +170,31 @@ interface DotShell {
   latitude: number;
 }
 
-function buildDotShell(
-  stops: number[],
-  units: string,
-  grid: GridDoc,
-  ink: InkPaint,
-): DotShell {
-  const element = document.createElement("div");
+function buildDotShell(stops: number[], units: string, grid: GridDoc, ink: InkPaint): DotShell {
   const unitsCaption = document.createElement("div");
   unitsCaption.className = "legend-units";
   unitsCaption.textContent = units;
+
   const boxes = document.createElement("div");
   boxes.className = "legend-dot-row";
+
   const labels = document.createElement("div");
   labels.className = "legend-dot-row";
+
   const ticks = legendTicks(stops).slice(1);
   const columns = `repeat(${ticks.length}, ${DOT_SWATCH_PX + DOT_SWATCH_GAP_PX}px)`;
+
   boxes.style.gridTemplateColumns = columns;
   labels.style.gridTemplateColumns = columns;
+
   const positions = ticks.map(({ position }) => position);
   const inkCss = rgbCss(ink.ink);
   const haloCss = rgbCss(ink.halo);
+
   const [west, south, east, north] = grid.bbox;
   const cellDegrees = { width: (east - west) / grid.nx, height: (north - south) / grid.ny };
   const latitude = (south + north) / 2;
+
   const swatches: RetainedSwatch[] = [];
   for (const { position, value } of ticks) {
     const canvas = document.createElement("canvas");
@@ -200,10 +203,13 @@ function buildDotShell(
     canvas.style.height = `${DOT_SWATCH_PX}px`;
     boxes.append(canvas);
     swatches.push({ canvas, context: canvas.getContext("2d")! });
+
     const label = document.createElement("span");
     label.textContent = openLabel(position, value, false);
     labels.append(label);
   }
+
+  const element = document.createElement("div");
   element.append(unitsCaption, boxes, labels);
 
   return { element, swatches, positions, inkCss, haloCss, cellDegrees, latitude };
@@ -275,36 +281,45 @@ function paintSwatch(
 ) {
   const { canvas, context } = swatch;
   const backingPx = Math.round(DOT_SWATCH_PX * pixelRatio);
+
   if (canvas.width !== backingPx || canvas.height !== backingPx) {
     canvas.width = backingPx;
     canvas.height = backingPx;
   }
+
   // Resizing clears the transform, so reset it before every redraw.
   context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   context.clearRect(0, 0, DOT_SWATCH_PX, DOT_SWATCH_PX);
+
   if (opacity === 0) return;
 
   // The size fade shrinks the radius first, so tiny swatch dots fade rather than persisting.
   const fullPx = radiusPx * position ** VALUE_RADIUS_EXPONENT * sizeScale;
   const drawnPx = fullPx >= MIN_DOT_RADIUS_PX ? fullPx : MIN_DOT_RADIUS_PX;
   const fullAlpha = fullPx >= MIN_DOT_RADIUS_PX ? 1 : (fullPx / MIN_DOT_RADIUS_PX) ** 2;
+
   const spacingPx = DOT_SWATCH_PX / dotsPerSide;
   const haloPx = (HALO_WIDTH_PX / pixelRatio) * sizeScale;
+
   for (let row = 0; row < dotsPerSide; row++) {
     for (let column = 0; column < dotsPerSide; column++) {
       const jitter = SITE_JITTER[row * MAX_DOTS_PER_SIDE + column];
       const x = (column + 0.5 + jitter.x * POSITION_JITTER_RATIO) * spacingPx;
       const y = (row + 0.5 + jitter.y * POSITION_JITTER_RATIO) * spacingPx;
+
       const dotOpacity = fullAlpha;
       const haloOpacity = DOT_SWATCH_HALO_ALPHA * fullAlpha;
+
       fillCircle(context, x, y, drawnPx + haloPx, haloCss, haloOpacity);
       fillCircle(context, x, y, drawnPx, inkCss, dotOpacity);
     }
   }
+
   // The composed swatch fades once, so overlapping dot and halo alphas scale together.
   context.globalCompositeOperation = "destination-in";
   context.globalAlpha = opacity;
   context.fillRect(0, 0, DOT_SWATCH_PX, DOT_SWATCH_PX);
+
   context.globalCompositeOperation = "source-over";
   context.globalAlpha = 1;
 }
@@ -382,25 +397,18 @@ function fullValueInkShare(lattice: DotLattice) {
   return (1 - fade) * parentShare + fade * levelInkShare(lattice, level + 1);
 }
 
-function levelInkShare(
-  { sidesPx, aimedPx, pixelRatio, density, zoom }: DotLattice,
-  level: number,
-) {
+function levelInkShare({ sidesPx, aimedPx, pixelRatio, density, zoom }: DotLattice, level: number) {
   const spacingPx = levelSpacingPx(sidesPx, level);
   // The cap bounds the share at close zoom while the size fade leaves it alone.
   const radiusPx = levelRadiusPx(sidesPx, level, aimedPx, pixelRatio, density, zoom);
-  return Math.PI * radiusPx ** 2 / (spacingPx.x * spacingPx.y);
+  return (Math.PI * radiusPx ** 2) / (spacingPx.x * spacingPx.y);
 }
 
 /**
  * How many whole sample sites fit across a swatch box at the map's spacing. The radius keeps
  * the map size, so the reach check only lowers the count and one centred dot always remains.
  */
-export function previewDotsPerSide(
-  spacingPx: number,
-  radiusPx: number,
-  haloPx: number,
-): number {
+export function previewDotsPerSide(spacingPx: number, radiusPx: number, haloPx: number): number {
   const roomy = Math.max(1, Math.min(MAX_DOTS_PER_SIDE, Math.floor(DOT_SWATCH_PX / spacingPx) + 1));
   for (let dots = roomy; dots > 1; dots--) {
     if (swatchFits(dots, spacingPx, radiusPx, haloPx)) return dots;
@@ -531,8 +539,10 @@ function axisDescription(axis: BivariateLegendAxis, direction: string) {
   const middle = axis.stops[Math.round(last / 2)];
   const start = axis.isBottomOpen ? `${first} or less` : String(first);
 
-  return `${axis.title} grows ${direction} from ${start} to ${end} or more ${axis.units}, `
-    + `with ${middle} in the middle.`;
+  return (
+    `${axis.title} grows ${direction} from ${start} to ${end} or more ${axis.units}, `
+    + `with ${middle} in the middle.`
+  );
 }
 
 function axisTitle(text: string, className: string) {

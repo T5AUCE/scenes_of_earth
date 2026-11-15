@@ -1,4 +1,5 @@
 """Load geoBoundaries CGAZ shapes, GHSL UCDB cities and gbOpen level names into SQLite."""
+
 import json
 import re
 import zipfile
@@ -53,12 +54,11 @@ def _read_cgaz_level(folder: Path | str, level: int) -> "gpd.GeoDataFrame":
     files = sorted(Path(folder).glob(f"*ADM{level}*.gpkg"))
     if not files:
         raise SystemExit(f"no *ADM{level}*.gpkg in {folder}")
+
     return gpd.read_file(files[0]).to_crs(4326)
 
 
-def _cgaz_rows(
-    frames: dict[int, "gpd.GeoDataFrame"],
-) -> Iterator[db.BoundaryValues | None]:
+def _cgaz_rows(frames: dict[int, "gpd.GeoDataFrame"]) -> Iterator[db.BoundaryValues | None]:
     """Boundary row per CGAZ shape, countries first; None for a shape outside the coverage."""
     country_names = dict(zip(frames[0]["shapeGroup"], frames[0]["shapeName"]))
     county_states = _county_states(counties=frames[2], states=frames[1])
@@ -78,17 +78,13 @@ def _cgaz_rows(
             )
 
 
-def _parent_name(
-    level: int,
-    index: int,
-    country_name: str,
-    county_states: "pd.Series",
-) -> str:
+def _parent_name(level: int, index: int, country_name: str, county_states: "pd.Series") -> str:
     """No parent for a country, its country for a state, the containing state for a county."""
     if level == 0:
         return ""
     if level == 1:
         return country_name
+
     return county_states.get(index, country_name)
 
 
@@ -97,10 +93,9 @@ def _county_states(counties: "gpd.GeoDataFrame", states: "gpd.GeoDataFrame") -> 
     county_points = counties.copy()
     county_points.geometry = counties.representative_point()
     joined = county_points.sjoin(
-        states[["geometry", "shapeName"]],
-        predicate="within",
-        rsuffix="state",
+        states[["geometry", "shapeName"]], predicate="within", rsuffix="state"
     )
+
     # Overlapping states can both contain the point; keep the first.
     return joined.groupby(level=0)["shapeName_state"].first()
 
@@ -124,6 +119,7 @@ def _meta_kinds(folder: Path | str, filename: str) -> Iterator[tuple[str, str]]:
     path = Path(folder) / filename
     if not path.exists():
         raise SystemExit(f"no {filename} in {folder}")
+
     entries = json.loads(path.read_text(encoding="utf-8"))
     for entry in entries:
         kind = normalise_kind(entry.get("boundaryCanonical") or "")
@@ -145,6 +141,7 @@ def normalise_kind(raw: str) -> str | None:
         return KIND_OVERRIDES[lowered]
     if len(text) > MAX_KIND_CHARS:
         return None
+
     named = WORD_RE.sub(_singularise_match, text.title())
     return _connectors_lowered(named)
 
@@ -161,6 +158,7 @@ def _singularise_match(match: re.Match[str]) -> str:
         return word[:-2].capitalize()
     if word.endswith("s") and len(word) > 2 and not word.endswith("ss"):
         return word[:-1].capitalize()
+
     return word.capitalize()
 
 
@@ -196,6 +194,7 @@ def import_ucdb(db_path: Path | str, path: Path | str) -> int:
         )
         for index, city in large_cities.iterrows()
     )
+
     return _store(db_path, UCDB_SOURCE, "UCDB", rows)
 
 
@@ -206,6 +205,7 @@ def _read_ucdb(path: Path | str) -> "gpd.GeoDataFrame":
     path = str(path)
     if path.endswith(".zip"):
         path = _zipped_geopackage(path)
+
     return gpd.read_file(path, layer=_ucdb_layer(path)).to_crs(4326)
 
 
@@ -230,15 +230,13 @@ def _latest_column(frame: "gpd.GeoDataFrame", part: str) -> str:
 
 
 def _store(
-    db_path: Path | str,
-    source: str,
-    label: str,
-    rows: Iterable[db.BoundaryValues | None],
+    db_path: Path | str, source: str, label: str, rows: Iterable[db.BoundaryValues | None]
 ) -> int:
     """Replace the boundaries of `source` with `rows`, skipping None; returns the count stored."""
     kept = _PresentRows(rows)
     replaced = db.add_boundaries(db_path, source, kept)
     print(f"{label}: {replaced} duplicate ids replaced")
+
     return kept.count
 
 
@@ -278,12 +276,14 @@ def _row(
     if not polygons:
         print(f"skipping {row_id}: no polygonal parts after repair")
         return None
+
     merged = MultiPolygon(polygons) if len(polygons) > 1 else polygons[0]
     try:
         clipped = merged.intersection(box(*SUPPORTED_BOUNDS_DEG))
     except GEOSException as error:
         print(f"skipping {row_id}: cannot clip to the supported extent ({error})")
         return None
+
     if clipped.is_empty:
         return None
 

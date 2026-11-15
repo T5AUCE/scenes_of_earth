@@ -6,6 +6,7 @@ readers see new data only together with its revision marker. Months that are sti
 are fetched again on later runs, so that final data replaces them. Year files that were
 downloaded beforehand can be stored without a request.
 """
+
 import calendar
 import logging
 from collections.abc import Callable, Iterable, Iterator
@@ -28,12 +29,7 @@ from ..sources import (
     CubeSpec,
     Grid,
 )
-from ..sources.cubes import (
-    FINAL_EXPVER,
-    HIGH_LATITUDE_SUFFIX,
-    PRELIMINARY_EXPVER,
-    is_preliminary,
-)
+from ..sources.cubes import FINAL_EXPVER, HIGH_LATITUDE_SUFFIX, PRELIMINARY_EXPVER, is_preliminary
 from ..sources.periods import MONTH_CHARS
 from .cubes import (
     DOWNLOADS_DIR,
@@ -115,8 +111,10 @@ def ingest(
     newest = newest_month()
     attrs = cube_attrs(cube_dir, spec.cube)
     stored = attrs.get("months", {})
+
     months = _wanted_months(stored, attrs.get("pending", []), start_month, newest)
     batches = year_batches(months, newest, min(stored, default=None))
+
     year_files = _year_files(Path(files_dir), spec) if files_dir is not None else {}
     downloads = cube_dir / DOWNLOADS_DIR
     for batch in batches:
@@ -145,11 +143,7 @@ def _year_files(files_dir: Path, spec: IngestSpec) -> dict[int, Path]:
 
 
 def _store_from_year_file(
-    cube_dir: Path,
-    spec: IngestSpec,
-    batch: list[str],
-    start_month: str,
-    year_file: Path | None,
+    cube_dir: Path, spec: IngestSpec, batch: list[str], start_month: str, year_file: Path | None
 ) -> list[str]:
     """Store the months of the batch that the year file holds and the cube can take now.
 
@@ -165,14 +159,13 @@ def _store_from_year_file(
     kept = stored.keys() - set(attrs.get("pending", []))
     replaceable = set(batch) - kept
     fields = {
-        field[0]: field
-        for field in read_grib_months(year_file, spec)
-        if field[0] in replaceable
+        field[0]: field for field in read_grib_months(year_file, spec) if field[0] in replaceable
     }
     joining = _joining_months(stored, fields.keys(), start_month)
     if joining:
         log.info("%s: storing %d months from %s", spec.cube.title, len(joining), year_file.name)
         write_months(cube_dir, spec.cube, spec.complete, [fields[month] for month in joining])
+
     return [month for month in batch if month not in joining]
 
 
@@ -187,27 +180,24 @@ def _joining_months(stored: dict[str, str], candidates: Iterable[str], first: st
     joining |= _consecutive_from(forward, next_month, candidates)
     if stored:
         joining |= _consecutive_from(previous_month(min(stored)), previous_month, candidates)
+
     return joining
 
 
 def _consecutive_from(
-    month: str,
-    following: Callable[[str], str],
-    candidates: set[str],
+    month: str, following: Callable[[str], str], candidates: set[str]
 ) -> set[str]:
     """Return the candidates from `month` on, stopping at the first month that is not one."""
     run = set()
     while month in candidates:
         run.add(month)
         month = following(month)
+
     return run
 
 
 def _wanted_months(
-    stored: dict[str, str],
-    pending: list[str],
-    start_month: str,
-    newest: str,
+    stored: dict[str, str], pending: list[str], start_month: str, newest: str
 ) -> list[str]:
     """Return the months that need fetching in ascending order.
 
@@ -308,12 +298,13 @@ def grib_expvers(path: Path | str) -> list[str]:
         length, expver = _grib1_message(content, start)
         expvers.append(expver)
         start += length
+
     return expvers
 
 
 def _grib1_message(content: bytes, start: int) -> tuple[int, str]:
     """(length in bytes, experiment version) of the GRIB1 message that starts at `start`."""
-    if content[start:start + len(GRIB_MAGIC)] != GRIB_MAGIC:
+    if content[start : start + len(GRIB_MAGIC)] != GRIB_MAGIC:
         raise ValueError(f"expected a GRIB message at byte {start}")
 
     edition_at = start + GRIB_EDITION_OFFSET_BYTES
@@ -336,7 +327,7 @@ def _grib1_message(content: bytes, start: int) -> tuple[int, str]:
         length = _large_message_length(stated_length, data_section_field)
 
     end = start + length
-    if end > len(content) or content[end - len(GRIB_END):end] != GRIB_END:
+    if end > len(content) or content[end - len(GRIB_END) : end] != GRIB_END:
         raise ValueError(f"GRIB message at byte {start} is truncated or has a bad length")
 
     data_section_bytes = end - len(GRIB_END) - data_section
@@ -368,7 +359,7 @@ def _experiment_version(content: bytes, section1: int, section1_length: int) -> 
         raise ValueError("GRIB message has no experiment version")
 
     expver_at = section1 + EXPVER_OFFSET_BYTES
-    expver = content[expver_at:expver_at + EXPVER_CHARS].decode("ascii", errors="replace")
+    expver = content[expver_at : expver_at + EXPVER_CHARS].decode("ascii", errors="replace")
     if expver not in (FINAL_EXPVER, PRELIMINARY_EXPVER):
         raise ValueError(f"unknown experiment version {expver!r}")
 
@@ -387,7 +378,7 @@ def _length_at(content: bytes, offset: int) -> int:
     if offset < 0 or offset + GRIB_LENGTH_BYTES > len(content):
         raise ValueError("GRIB message is truncated")
 
-    return int.from_bytes(content[offset:offset + GRIB_LENGTH_BYTES], "big")
+    return int.from_bytes(content[offset : offset + GRIB_LENGTH_BYTES], "big")
 
 
 @contextmanager
@@ -398,9 +389,7 @@ def open_grib(path: Path | str) -> Iterator[rasterio.DatasetReader]:
 
 
 def read_months(
-    dataset: rasterio.DatasetReader,
-    expvers: list[str],
-    spec: IngestSpec,
+    dataset: rasterio.DatasetReader, expvers: list[str], spec: IngestSpec
 ) -> Iterator[MonthField]:
     """Yield each raster band as its month and cube-grid values together with its experiment
     version.
@@ -449,17 +438,18 @@ def _cube_positions(dataset: rasterio.DatasetReader, grid: Grid) -> tuple[np.nda
     columns_exact = (lon_centres + 180) / grid.res
     rows_exact = (grid.north_deg - grid.res / 2 - lat_centres) / grid.res
     columns, rows = np.rint(columns_exact), np.rint(rows_exact)
-    on_centres = (
-        np.allclose(columns_exact, columns, rtol=0, atol=CENTRE_TOLERANCE_CELLS)
-        and np.allclose(rows_exact, rows, rtol=0, atol=CENTRE_TOLERANCE_CELLS)
-    )
+    on_centres = np.allclose(
+        columns_exact, columns, rtol=0, atol=CENTRE_TOLERANCE_CELLS
+    ) and np.allclose(rows_exact, rows, rtol=0, atol=CENTRE_TOLERANCE_CELLS)
     if not on_centres:
         raise ValueError(f"cell centres are not on {grid.res} degree multiples")
 
     columns = columns.astype(int) % grid.columns
     rows = rows.astype(int)
+
     if not np.array_equal(np.unique(columns), np.arange(grid.columns)):
         raise ValueError("the raster does not cover all longitudes")
+
     if not np.array_equal(rows, np.arange(grid.rows)):
         north, south = _row_extent_deg(grid)
         raise ValueError(f"the raster rows must run from {north:g}N to {abs(south):g}S")

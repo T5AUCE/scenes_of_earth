@@ -4,13 +4,8 @@ import { useState } from "react";
 import type { SceneStore } from "../scene-store";
 import type { LayerDoc, Scene } from "../types";
 import { useSceneStore } from "../ui/use-scene-store";
-import {
-  buildByMonthCsv,
-  buildElevationCsv,
-  buildLayerAreaMeansCsv,
-  downloadCsv,
-} from "./csv";
 import { ChartPreview } from "./chart-preview";
+import { buildByMonthCsv, buildElevationCsv, buildLayerAreaMeansCsv, downloadCsv } from "./csv";
 import { unionDomainFor } from "./series";
 
 /** Props of the close-up; the dialog entry stays Charts while detail shows. */
@@ -67,9 +62,7 @@ export function ChartDetail({
   const effectiveInk = display.layers[layer.id]?.ink ?? null;
   const setMain = () => {
     store.dispatch({ kind: "setMain", id: definition.id });
-    setConfirmation(
-      `${definition.title} is now the main chart in the scene panel's Charts tab.`,
-    );
+    setConfirmation(`${definition.title} is now the main chart in the scene panel's Charts tab.`);
   };
   const remove = () => {
     store.dispatch({ kind: "deleteChart", id: definition.id });

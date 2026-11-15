@@ -12,20 +12,17 @@ import {
   warmerSnapshot,
 } from "../dev-stats.ts";
 import { DWELL_REQUEST_CAP } from "../render/tile-viewport.ts";
-import {
-  DWELL_IDLE_FALLBACK_MS,
-  TileWarmer,
-  WARMER_LANES,
-  type WarmerMap,
-} from "./tile-warmer.ts";
 import type { PreloadSource, PreloadTask } from "./tile-prefetch.ts";
+import { DWELL_IDLE_FALLBACK_MS, TileWarmer, WARMER_LANES, type WarmerMap } from "./tile-warmer.ts";
 
 test("entry warms three at once in registration order", async () => {
   const map = fakeMap();
   const warmer = new TileWarmer(map);
+
   try {
     const dem = fakeSource("dem", ["d0", "d1", "d2", "d3"], { layer: "terrain" });
     const contours = fakeSource("contours", ["c0"], { layer: "contours", after: "dem" });
+
     warmer.add(dem.source);
     warmer.add(contours.source);
     warmer.start(8);
@@ -33,10 +30,12 @@ test("entry warms three at once in registration order", async () => {
 
     assert.deepEqual([...dem.runs.keys()], ["d0", "d1", "d2"]);
     assert.equal(contours.runs.size, 0);
+
     dem.finish("d0");
     await settled();
 
     assert.deepEqual([...dem.runs.keys()], ["d0", "d1", "d2", "d3"]);
+
     dem.finish("d1");
     dem.finish("d2");
     dem.finish("d3");
@@ -51,11 +50,14 @@ test("entry warms three at once in registration order", async () => {
 test("a gated trace runs while the gate holds only deeper work", async () => {
   const map = fakeMap();
   const warmer = new TileWarmer(map);
+
   try {
     const gates = new Map<string, (blob: Blob | undefined) => void>();
-    const gated = (key: string) => new Promise<Blob | undefined>((resolve) => {
-      gates.set(key, resolve);
-    });
+    const gated = (key: string) =>
+      new Promise<Blob | undefined>((resolve) => {
+        gates.set(key, resolve);
+      });
+
     warmer.add({
       id: "dem",
       layer: "terrain",
@@ -72,10 +74,12 @@ test("a gated trace runs while the gate holds only deeper work", async () => {
       after: "dem",
       tasks: () => [{ key: "trace-8", zoom: 8, run: () => gated("trace-8") }],
     } satisfies PreloadSource);
+
     warmer.start(8);
     await settled();
 
     assert.equal(gates.has("trace-8"), false);
+
     gates.get("dem-8")!(undefined);
     await settled();
 
@@ -88,15 +92,14 @@ test("a gated trace runs while the gate holds only deeper work", async () => {
 test("a trace without ready parents drops instead of running", async () => {
   const map = fakeMap();
   const warmer = new TileWarmer(map);
+
   try {
     const feed = fakeSource("contours", ["trace-0"], { layer: "contours" });
     const original = feed.source.tasks;
-    feed.source.tasks = () => [{
-      key: "trace-0",
-      zoom: 9,
-      needs: ["missing-parent"],
-      run: original()[0].run,
-    }];
+    feed.source.tasks = () => [
+      { key: "trace-0", zoom: 9, needs: ["missing-parent"], run: original()[0].run },
+    ];
+
     warmer.add(feed.source);
     warmer.start(9);
     await settled();
@@ -111,20 +114,24 @@ test("a trace without ready parents drops instead of running", async () => {
 test("a missing tile is remembered while other failures warm again on dwell", async () => {
   const map = fakeMap(8);
   const warmer = new TileWarmer(map);
+
   try {
     const feed = fakeSource("dem", ["ocean", "flaky"], { layer: "terrain" });
     const dwellWarmed: string[] = [];
-    feed.source.dwell = () => ["ocean", "flaky"].map((key) => ({
-      key,
-      zoom: 8,
-      run: () => {
-        dwellWarmed.push(key);
-        return Promise.resolve(undefined);
-      },
-    }));
+    feed.source.dwell = () =>
+      ["ocean", "flaky"].map((key) => ({
+        key,
+        zoom: 8,
+        run: () => {
+          dwellWarmed.push(key);
+          return Promise.resolve(undefined);
+        },
+      }));
+
     warmer.add(feed.source);
     warmer.start(8);
     await settled();
+
     feed.fail("ocean", "Bad response: 404 for https://tiles.example.test/ocean");
     feed.fail("flaky", "Bad response: 503 for https://tiles.example.test/flaky");
     await settled();
@@ -142,6 +149,7 @@ test("a missing tile is remembered while other failures warm again on dwell", as
 test("a dwell warms the resting viewport once landed and stays in the cap", async () => {
   const map = fakeMap(8);
   const warmer = new TileWarmer(map);
+
   try {
     const seen: string[] = [];
     warmer.add({
@@ -152,6 +160,7 @@ test("a dwell warms the resting viewport once landed and stays in the cap", asyn
       dwell: (_viewport, _fitted, _current) => {
         return Array.from({ length: 200 }, (_, index) => {
           const key = `dwell-${index}`;
+
           return {
             key,
             zoom: 9,
@@ -163,22 +172,20 @@ test("a dwell warms the resting viewport once landed and stays in the cap", asyn
         });
       },
     } satisfies PreloadSource);
+
     warmer.start(5);
     await settled();
     map.emit("idle", {});
     await settled();
 
     assert.equal(seen.length, 0);
+
     warmer.noteLanded();
     map.emit("idle", {});
     await idle(warmer);
 
     assert.ok(seen.length > 0 && seen.length <= DWELL_REQUEST_CAP);
-    assert.deepEqual(warmer.progress(), {
-      done: seen.length,
-      total: seen.length,
-      bytes: 0,
-    });
+    assert.deepEqual(warmer.progress(), { done: seen.length, total: seen.length, bytes: 0 });
   } finally {
     warmer.destroy();
   }
@@ -187,32 +194,35 @@ test("a dwell warms the resting viewport once landed and stays in the cap", asyn
 test("a dwell warms on idle and counts apart from the entry plan", async () => {
   const map = fakeMap(8);
   const warmer = new TileWarmer(map);
+
   try {
     warmer.add({
       id: "dem",
       layer: "terrain",
       lanes: 3,
-      tasks: () => [{
-        key: "entry-0",
-        run: (abort: AbortController) => new Promise<Blob | undefined>((_resolve, reject) => {
-          abort.signal.addEventListener("abort", () => reject(new Error("aborted")));
-        }),
-      }],
-      dwell: () => [{
-        key: "dwell-0",
-        zoom: 8,
-        run: () => Promise.resolve(undefined),
-      }],
+      tasks: () => [
+        {
+          key: "entry-0",
+          run: (abort: AbortController) =>
+            new Promise<Blob | undefined>((_resolve, reject) => {
+              abort.signal.addEventListener("abort", () => reject(new Error("aborted")));
+            }),
+        },
+      ],
+      dwell: () => [{ key: "dwell-0", zoom: 8, run: () => Promise.resolve(undefined) }],
     } satisfies PreloadSource);
+
     warmer.start(8);
     await settled();
 
     assert.deepEqual(warmerSnapshot(), { entry: { done: 0, total: 1 }, dwell: 0 });
+
     warmer.noteLanded();
     map.emit("moveend", {});
     await settled();
 
     assert.deepEqual(warmerSnapshot(), { entry: { done: 0, total: 1 }, dwell: 0 });
+
     map.emit("idle", {});
     await settled();
 
@@ -225,6 +235,7 @@ test("a dwell warms on idle and counts apart from the entry plan", async () => {
 test("a dwell warms without idle once the fallback delay passes", async () => {
   const map = fakeMap(8);
   const warmer = new TileWarmer(map);
+
   try {
     const seen: string[] = [];
     warmer.add({
@@ -232,15 +243,18 @@ test("a dwell warms without idle once the fallback delay passes", async () => {
       layer: "terrain",
       lanes: 3,
       tasks: () => [],
-      dwell: () => [{
-        key: "dwell-0",
-        zoom: 8,
-        run: () => {
-          seen.push("dwell-0");
-          return Promise.resolve(undefined);
+      dwell: () => [
+        {
+          key: "dwell-0",
+          zoom: 8,
+          run: () => {
+            seen.push("dwell-0");
+            return Promise.resolve(undefined);
+          },
         },
-      }],
+      ],
     } satisfies PreloadSource);
+
     warmer.start(8);
     warmer.noteLanded();
     map.emit("moveend", {});
@@ -257,6 +271,7 @@ test("a dwell warms without idle once the fallback delay passes", async () => {
 test("an idle dwell wins over the fallback without launching twice", async () => {
   const map = fakeMap(8);
   const warmer = new TileWarmer(map);
+
   try {
     let launches = 0;
     warmer.add({
@@ -264,15 +279,18 @@ test("an idle dwell wins over the fallback without launching twice", async () =>
       layer: "terrain",
       lanes: 3,
       tasks: () => [],
-      dwell: () => [{
-        key: "dwell-0",
-        zoom: 8,
-        run: () => {
-          launches += 1;
-          return Promise.resolve(undefined);
+      dwell: () => [
+        {
+          key: "dwell-0",
+          zoom: 8,
+          run: () => {
+            launches += 1;
+            return Promise.resolve(undefined);
+          },
         },
-      }],
+      ],
     } satisfies PreloadSource);
+
     warmer.start(8);
     warmer.noteLanded();
     map.emit("moveend", {});
@@ -281,6 +299,7 @@ test("an idle dwell wins over the fallback without launching twice", async () =>
     await settled();
 
     assert.equal(launches, 1);
+
     await sleepPastFallback();
     await settled();
 
@@ -294,6 +313,7 @@ test("an idle dwell wins over the fallback without launching twice", async () =>
 test("a new gesture or destroy cancels the pending dwell", async () => {
   const map = fakeMap(8);
   const warmer = new TileWarmer(map);
+
   try {
     let launches = 0;
     warmer.add({
@@ -301,19 +321,24 @@ test("a new gesture or destroy cancels the pending dwell", async () => {
       layer: "terrain",
       lanes: 3,
       tasks: () => [],
-      dwell: () => [{
-        key: "dwell-0",
-        zoom: 8,
-        run: () => {
-          launches += 1;
-          return Promise.resolve(undefined);
+      dwell: () => [
+        {
+          key: "dwell-0",
+          zoom: 8,
+          run: () => {
+            launches += 1;
+            return Promise.resolve(undefined);
+          },
         },
-      }],
+      ],
     } satisfies PreloadSource);
+
     warmer.start(8);
     warmer.noteLanded();
+
     map.emit("moveend", {});
     await settled();
+
     map.emit("movestart", {});
     await sleepPastFallback();
     map.emit("idle", {});
@@ -333,15 +358,18 @@ test("a new gesture or destroy cancels the pending dwell", async () => {
     layer: "terrain",
     lanes: 3,
     tasks: () => [],
-    dwell: () => [{
-      key: "dwell-0",
-      zoom: 8,
-      run: () => {
-        lateLaunches += 1;
-        return Promise.resolve(undefined);
+    dwell: () => [
+      {
+        key: "dwell-0",
+        zoom: 8,
+        run: () => {
+          lateLaunches += 1;
+          return Promise.resolve(undefined);
+        },
       },
-    }],
+    ],
   } satisfies PreloadSource);
+
   lateWarmer.start(8);
   lateWarmer.noteLanded();
   lateWarmer.destroy();
@@ -354,12 +382,14 @@ test("a new gesture or destroy cancels the pending dwell", async () => {
 test("destroying aborts running work and switches the readout off", async () => {
   const map = fakeMap();
   const warmer = new TileWarmer(map);
+
   assert.equal(isWarmerEnabled(), true);
 
   const feed = fakeSource("dem", ["d0", "d1"], { layer: "terrain" });
   warmer.add(feed.source);
   warmer.start(8);
   await settled();
+
   warmer.destroy();
   await settled();
 
@@ -371,6 +401,7 @@ test("destroying aborts running work and switches the readout off", async () => 
 test("replacing a source aborts its work and warms the replacement", async () => {
   const map = fakeMap();
   const warmer = new TileWarmer(map);
+
   try {
     const first = fakeSource("dem", ["old"], { layer: "terrain" });
     warmer.add(first.source);
@@ -391,6 +422,7 @@ test("replacing a source aborts its work and warms the replacement", async () =>
 test("a second dwell replaces the first dwell instead of piling up", async () => {
   const map = fakeMap(8);
   const warmer = new TileWarmer(map);
+
   try {
     let pan = 0;
     const aborted: string[] = [];
@@ -402,25 +434,29 @@ test("a second dwell replaces the first dwell instead of piling up", async () =>
       dwell: () => {
         return Array.from({ length: 200 }, (_, index) => {
           const key = `p${pan}-${index}`;
+
           return {
             key,
             zoom: 9,
-            run: (abort: AbortController) => new Promise<undefined>((_resolve, reject) => {
-              abort.signal.addEventListener("abort", () => {
-                aborted.push(key);
-                reject(new Error("aborted"));
-              });
-            }),
+            run: (abort: AbortController) =>
+              new Promise<undefined>((_resolve, reject) => {
+                abort.signal.addEventListener("abort", () => {
+                  aborted.push(key);
+                  reject(new Error("aborted"));
+                });
+              }),
           } satisfies PreloadTask;
         });
       },
     } satisfies PreloadSource);
+
     warmer.start(5);
     warmer.noteLanded();
     map.emit("idle", {});
     await settled();
 
     assert.equal(warmer.progress().total, DWELL_REQUEST_CAP);
+
     pan = 1;
     map.emit("moveend", {});
     map.emit("idle", {});
@@ -437,6 +473,7 @@ test("a second dwell replaces the first dwell instead of piling up", async () =>
 test("a prior dwell completion before the new idle launches no stale tile", async () => {
   const map = fakeMap(8);
   const warmer = new TileWarmer(map);
+
   try {
     let pan = 0;
     const launched: string[] = [];
@@ -450,21 +487,24 @@ test("a prior dwell completion before the new idle launches no stale tile", asyn
       dwell: () => {
         return Array.from({ length: 200 }, (_, index) => {
           const key = `p${pan}-${index}`;
+
           return {
             key,
             zoom: 9,
-            run: (abort: AbortController) => new Promise<undefined>((resolve, reject) => {
-              launched.push(key);
-              resolvers.set(key, () => resolve(undefined));
-              abort.signal.addEventListener("abort", () => {
-                aborted.push(key);
-                reject(new Error("aborted"));
-              });
-            }),
+            run: (abort: AbortController) =>
+              new Promise<undefined>((resolve, reject) => {
+                launched.push(key);
+                resolvers.set(key, () => resolve(undefined));
+                abort.signal.addEventListener("abort", () => {
+                  aborted.push(key);
+                  reject(new Error("aborted"));
+                });
+              }),
           } satisfies PreloadTask;
         });
       },
     } satisfies PreloadSource);
+
     warmer.start(5);
     warmer.noteLanded();
     map.emit("idle", {});
@@ -472,22 +512,27 @@ test("a prior dwell completion before the new idle launches no stale tile", asyn
 
     assert.equal(launched.length, WARMER_LANES);
     assert.equal(warmer.progress().total, DWELL_REQUEST_CAP);
+
     pan = 1;
     map.emit("moveend", {});
     await settled();
 
     assert.ok(warmer.progress().total < DWELL_REQUEST_CAP);
+
     const before = launched.length;
     resolvers.get("p0-0")!();
     await settled();
 
     assert.equal(launched.length, before);
+
     map.emit("idle", {});
     await settled();
 
     assert.ok(launched.some((key) => key.startsWith("p1-")));
     assert.ok(!launched.slice(before).some((key) => key.startsWith("p0-")));
+
     const fresh = launched.filter((key) => key.startsWith("p1-"));
+
     assert.ok(fresh.length <= DWELL_REQUEST_CAP);
     assert.ok(warmer.progress().total <= DWELL_REQUEST_CAP + 1);
     assert.ok(aborted.every((key) => key.startsWith("p0-")));
@@ -499,6 +544,7 @@ test("a prior dwell completion before the new idle launches no stale tile", asyn
 test("a stale rejection never settles a replacement job with the same key", async () => {
   const map = fakeMap();
   const warmer = new TileWarmer(map);
+
   try {
     const firstResolvers: Array<(value: undefined) => void> = [];
     const secondResolvers: Array<(value: undefined) => void> = [];
@@ -506,24 +552,30 @@ test("a stale rejection never settles a replacement job with the same key", asyn
       id: "dem",
       layer: "terrain",
       lanes: 3,
-      tasks: () => [{
-        key: "same",
-        zoom: 8,
-        run: (abort: AbortController) => new Promise<undefined>((resolve, reject) => {
-          resolvers.push(resolve);
-          abort.signal.addEventListener("abort", () => reject(new Error("aborted")));
-        }),
-      }],
+      tasks: () => [
+        {
+          key: "same",
+          zoom: 8,
+          run: (abort: AbortController) =>
+            new Promise<undefined>((resolve, reject) => {
+              resolvers.push(resolve);
+              abort.signal.addEventListener("abort", () => reject(new Error("aborted")));
+            }),
+        },
+      ],
     });
+
     warmer.add(make(firstResolvers));
     warmer.start(8);
     await settled();
 
     assert.equal(firstResolvers.length, 1);
+
     warmer.add(make(secondResolvers));
     await settled();
 
     assert.equal(secondResolvers.length, 1);
+
     secondResolvers[0]?.(undefined);
     await settled();
 
@@ -537,11 +589,13 @@ test("a stale rejection never settles a replacement job with the same key", asyn
 test("the dwell cap is shared round-robin so basemap warms on the first dwell", async () => {
   const map = fakeMap(8);
   const warmer = new TileWarmer(map);
+
   try {
     const seen = new Map<string, string[]>();
     const dwellFor = (id: string) => () => {
       return Array.from({ length: 200 }, (_, index) => {
         const key = `${id}-${index}`;
+
         return {
           key,
           zoom: 9,
@@ -549,11 +603,13 @@ test("the dwell cap is shared round-robin so basemap warms on the first dwell", 
             const entries = seen.get(id) ?? [];
             entries.push(key);
             seen.set(id, entries);
+
             return Promise.resolve(undefined);
           },
         } satisfies PreloadTask;
       });
     };
+
     warmer.add({
       id: "dem",
       layer: "terrain",
@@ -568,6 +624,7 @@ test("the dwell cap is shared round-robin so basemap warms on the first dwell", 
       tasks: () => [],
       dwell: dwellFor("basemap"),
     } satisfies PreloadSource);
+
     warmer.start(5);
     warmer.noteLanded();
     map.emit("idle", {});
@@ -584,21 +641,25 @@ test("the dwell cap is shared round-robin so basemap warms on the first dwell", 
 test("dwell launches round-robin while DEM tasks stay pending", async () => {
   const map = fakeMap(8);
   const warmer = new TileWarmer(map);
+
   try {
     const launched: string[] = [];
     const dwellFor = (id: string) => () => {
       return Array.from({ length: 10 }, (_, index) => {
         const key = `${id}-${index}`;
+
         return {
           key,
           zoom: 9,
-          run: (abort: AbortController) => new Promise<undefined>((_resolve, reject) => {
-            launched.push(key);
-            abort.signal.addEventListener("abort", () => reject(new Error("aborted")));
-          }),
+          run: (abort: AbortController) =>
+            new Promise<undefined>((_resolve, reject) => {
+              launched.push(key);
+              abort.signal.addEventListener("abort", () => reject(new Error("aborted")));
+            }),
         } satisfies PreloadTask;
       });
     };
+
     warmer.add({
       id: "dem",
       layer: "terrain",
@@ -613,6 +674,7 @@ test("dwell launches round-robin while DEM tasks stay pending", async () => {
       tasks: () => [],
       dwell: dwellFor("basemap"),
     } satisfies PreloadSource);
+
     warmer.start(5);
     warmer.noteLanded();
     map.emit("idle", {});
@@ -628,6 +690,7 @@ test("dwell launches round-robin while DEM tasks stay pending", async () => {
 test("a source with one lane runs one at a time inside the global lanes", async () => {
   const map = fakeMap();
   const warmer = new TileWarmer(map);
+
   try {
     const feed = fakeSource("contours", ["t0", "t1", "t2"], { layer: "contours" });
     feed.source.lanes = 1;
@@ -636,6 +699,7 @@ test("a source with one lane runs one at a time inside the global lanes", async 
     await settled();
 
     assert.deepEqual([...feed.runs.keys()], ["t0"]);
+
     feed.finish("t0");
     await settled();
 
@@ -648,24 +712,17 @@ test("a source with one lane runs one at a time inside the global lanes", async 
 test("entry progress and dwell launches share the dev readout without held bytes", async () => {
   const map = fakeMap();
   const warmer = new TileWarmer(map);
+
   try {
-    assert.deepEqual(warmerSnapshot(), {
-      entry: { done: 0, total: 0 },
-      dwell: 0,
-    });
+    assert.deepEqual(warmerSnapshot(), { entry: { done: 0, total: 0 }, dwell: 0 });
+
     warmer.add(fakeSource("dem", ["d0"], { layer: "terrain" }).source);
     warmer.add(fakeSource("basemap", ["b0"], { layer: "basemap" }).source);
     warmer.start(8);
     await settled();
 
-    assert.deepEqual(warmerSnapshot(), {
-      entry: { done: 0, total: 2 },
-      dwell: 0,
-    });
-    assert.equal(
-      formatWarmerPart(warmerSnapshot()),
-      "warmer entry 0/2 dwell 0",
-    );
+    assert.deepEqual(warmerSnapshot(), { entry: { done: 0, total: 2 }, dwell: 0 });
+    assert.equal(formatWarmerPart(warmerSnapshot()), "warmer entry 0/2 dwell 0");
   } finally {
     warmer.destroy();
   }
@@ -673,20 +730,16 @@ test("entry progress and dwell launches share the dev readout without held bytes
 
 test("warmer counters reset per scene and format the badge part", () => {
   setWarmerEnabled(true);
+
   try {
     beginWarmer();
     setWarmerEntryProgress(3, 9);
     noteDwellWarmerRequest();
     noteDwellWarmerRequest();
 
-    assert.deepEqual(warmerSnapshot(), {
-      entry: { done: 3, total: 9 },
-      dwell: 2,
-    });
-    assert.equal(
-      formatWarmerPart(warmerSnapshot()),
-      "warmer entry 3/9 dwell 2",
-    );
+    assert.deepEqual(warmerSnapshot(), { entry: { done: 3, total: 9 }, dwell: 2 });
+    assert.equal(formatWarmerPart(warmerSnapshot()), "warmer entry 3/9 dwell 2");
+
     beginWarmer();
 
     assert.deepEqual(warmerSnapshot(), { entry: { done: 0, total: 0 }, dwell: 0 });
@@ -716,17 +769,20 @@ function fakeSource(
     layer: options.layer,
     lanes: 3,
     after: options.after,
-    tasks: () => keys.map((key) => ({
-      key,
-      run: (abort: AbortController) => new Promise<Blob | undefined>((resolve, reject) => {
-        runs.set(key, { resolve, reject });
-        abort.signal.addEventListener("abort", () => {
-          aborted.push(key);
-          reject(new Error("aborted"));
-        });
-      }),
-    })),
+    tasks: () =>
+      keys.map((key) => ({
+        key,
+        run: (abort: AbortController) =>
+          new Promise<Blob | undefined>((resolve, reject) => {
+            runs.set(key, { resolve, reject });
+            abort.signal.addEventListener("abort", () => {
+              aborted.push(key);
+              reject(new Error("aborted"));
+            });
+          }),
+      })),
   };
+
   return {
     runs,
     aborted,
@@ -763,6 +819,7 @@ function fakeMap(zoom = 8) {
       for (const listener of [...(listeners.get(type) ?? [])]) listener(event);
     },
   };
+
   return map as unknown as WarmerMap & { emit(type: string, event: object): void };
 }
 

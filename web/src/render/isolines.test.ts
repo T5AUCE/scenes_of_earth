@@ -21,10 +21,17 @@ const SAMPLE_STEPS = 16;
 const MIN_CLOSED_LOOP_SPAN_CELLS = 0.25;
 
 test("the interval keeps a scene at twelve isotherm levels or fewer", () => {
-  for (const [low, high] of [[5, 29], [-12, 10], [0, 50], [-60, 60], [-100, 100]]) {
+  for (const [low, high] of [
+    [5, 29],
+    [-12, 10],
+    [0, 50],
+    [-60, 60],
+    [-100, 100],
+  ]) {
     const interval = isolineInterval([low, high]);
     assert.ok(isolineLevels(low, high, interval).length <= 12);
   }
+
   assert.equal(isolineInterval([2, 13]), 1);
   assert.equal(isolineInterval([-60, 60]), 20);
 });
@@ -35,21 +42,31 @@ test("levels sit on interval multiples and round stably", () => {
 });
 
 test("adjacent segments chain into one open polyline", () => {
-  assert.deepEqual(
-    traceIsolines([2, 2, 2, 0, 0, 0], 3, 2, [1]),
-    [
-      {
-        value: 1,
-        coordinates: [[0, 0.5], [1, 0.5], [2, 0.5]],
-      },
-    ],
-  );
+  assert.deepEqual(traceIsolines([2, 2, 2, 0, 0, 0], 3, 2, [1]), [
+    {
+      value: 1,
+      coordinates: [
+        [0, 0.5],
+        [1, 0.5],
+        [2, 0.5],
+      ],
+    },
+  ]);
 });
 
 test("an exact-level ridge does not retrace a segment", () => {
   const lines = traceIsolines([0, 0, 0, 1, 1, 1, 0, 0, 0], 3, 3, [1]);
 
-  assert.deepEqual(lines, [{ value: 1, coordinates: [[0, 1], [1, 1], [2, 1]] }]);
+  assert.deepEqual(lines, [
+    {
+      value: 1,
+      coordinates: [
+        [0, 1],
+        [1, 1],
+        [2, 1],
+      ],
+    },
+  ]);
 });
 
 test("a cell with a no-data corner produces no segments", () => {
@@ -62,7 +79,10 @@ test("a finite native strip beside no-data keeps its raw endpoints", () => {
   const smooth = traceIsolines(values, 3, 2, [0.9], true);
 
   assert.equal(smooth.length, 1);
-  assert.deepEqual(openEndpoints(raw), [[0.9, 0], [0.9, 1]]);
+  assert.deepEqual(openEndpoints(raw), [
+    [0.9, 0],
+    [0.9, 1],
+  ]);
   assert.deepEqual(openEndpoints(smooth), openEndpoints(raw));
 });
 
@@ -87,6 +107,7 @@ test("different levels never cross", () => {
   for (const { values, size, levels } of smoothCases()) {
     assertNoLevelCrossings(traceIsolines(values, size, size, levels, true));
   }
+
   assertNoLevelCrossings(traceIsolines(saddleField(21, 10), 21, 21, [0.5, 1.5, 2.5], true));
 });
 
@@ -102,12 +123,15 @@ test("the worst field error stays below two percent of the level interval", () =
     { ...smoothCases()[0], interval: 1, sample: samplePeak },
     { ...smoothCases()[1], interval: 2, sample: sampleSaddle },
   ];
+
   for (const { values, size, levels, interval, sample } of cases) {
     const lines = traceIsolines(values, size, size, levels, true);
     let worst = 0;
+
     for (const { value, coordinates } of lines) {
       worst = Math.max(worst, maximumFieldError(coordinates, value, sample));
     }
+
     assert.ok(worst < MAX_ERROR_SHARE * interval, `worst error was ${worst}`);
   }
 });
@@ -116,22 +140,35 @@ test("data-ring lines reach the grid outline", () => {
   const lines = traceIsolines(ringField(), 5, 5, [0.5], true);
 
   assert.equal(lines.length, 1);
-  const ends = [lines[0].coordinates[0], lines[0].coordinates.at(-1)!]
-    .sort(([left], [right]) => left - right);
-  assert.deepEqual(ends, [[0, 2.5], [4, 2.5]]);
+
+  const ends = [lines[0].coordinates[0], lines[0].coordinates.at(-1)!].sort(
+    ([left], [right]) => left - right,
+  );
+
+  assert.deepEqual(ends, [
+    [0, 2.5],
+    [4, 2.5],
+  ]);
 });
 
 test("open-line endpoints stay fixed by rounding", () => {
   const lines = traceIsolines([2, 2, 2, 0, 0, 0], 3, 2, [1], true);
 
   assert.equal(lines.length, 1);
-  assert.deepEqual([lines[0].coordinates[0], lines[0].coordinates.at(-1)], [[0, 0.5], [2, 0.5]]);
+  assert.deepEqual(
+    [lines[0].coordinates[0], lines[0].coordinates.at(-1)],
+    [
+      [0, 0.5],
+      [2, 0.5],
+    ],
+  );
 });
 
 test("closed loops stay closed after rounding", () => {
   const lines = traceIsolines(peakedField(), PEAK_SIZE, PEAK_SIZE, [4], true);
 
   assert.ok(lines.length > 0);
+
   for (const { coordinates } of lines) {
     assert.ok(isClosed(coordinates));
     assert.deepEqual(coordinates[0], coordinates.at(-1));
@@ -140,33 +177,7 @@ test("closed loops stay closed after rounding", () => {
 
 test("a plateau junction stays a fixed anchor on every rounded trail", () => {
   // An exact-level ridge and spur meet at a T junction, and a loop returns to the ridge.
-  const values = [
-    0,
-    0,
-    1,
-    0,
-    0,
-    2,
-    0,
-    1,
-    0,
-    0,
-    1,
-    1,
-    1,
-    1,
-    1,
-    0,
-    1,
-    1,
-    2,
-    0,
-    0,
-    1,
-    1,
-    0,
-    0,
-  ];
+  const values = [0, 0, 1, 0, 0, 2, 0, 1, 0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 2, 0, 0, 1, 1, 0, 0];
   const lines = traceIsolines(values, 5, 5, [1], true);
 
   assert.equal(junctionMeetingCount(lines, [2, 1.75]), 3);
@@ -174,24 +185,7 @@ test("a plateau junction stays a fixed anchor on every rounded trail", () => {
 });
 
 test("a junction loop chained from an interior segment stays fixed", () => {
-  const values = [
-    0,
-    0,
-    0,
-    0,
-    0,
-    2,
-    1,
-    0,
-    0,
-    0,
-    1,
-    0,
-    0,
-    0,
-    1,
-    0,
-  ];
+  const values = [0, 0, 0, 0, 0, 2, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0];
   const lines = traceIsolines(values, 4, 4, [1], true);
 
   assert.equal(junctionMeetingCount(lines, [2, 1.75]), 3);
@@ -202,56 +196,32 @@ test("sub-cell closed loops are dropped while open and long thin lines stay", ()
 
   assert.equal(traceIsolines(spike, 3, 3, [4.9]).length, 1);
   assert.deepEqual(traceIsolines(spike, 3, 3, [4.9], true), []);
+
   const larger = traceIsolines(spike, 3, 3, [4], true);
+
   assert.equal(larger.length, 1);
   assert.ok(loopSpan(larger[0]) >= MIN_CLOSED_LOOP_SPAN_CELLS);
 
   const thin = traceIsolines(ridgeField(), 7, 5, [4.9], true);
+
   assert.equal(thin.length, 1);
   assert.ok(loopSpan(thin[0]) > 1);
   assert.equal(traceIsolines([2, 2, 2, 0, 0, 0], 3, 2, [1], true).length, 1);
 });
 
 test("refinement never enters a cell with a no-data corner", () => {
-  const values = [
-    0,
-    1,
-    2,
-    3,
-    4,
-    1,
-    2,
-    NaN,
-    4,
-    5,
-    2,
-    3,
-    4,
-    5,
-    6,
-    3,
-    4,
-    5,
-    6,
-    7,
-    4,
-    5,
-    6,
-    7,
-    8,
-  ];
+  const values = [0, 1, 2, 3, 4, 1, 2, NaN, 4, 5, 2, 3, 4, 5, 6, 3, 4, 5, 6, 7, 4, 5, 6, 7, 8];
   const lines = traceIsolines(values, 5, 5, [2.5, 4.5], true);
   const blocked = cellsWithNoData(values, 5, 5);
 
   assert.ok(lines.length > 0);
+
   for (const { coordinates } of lines) {
     for (let index = 1; index < coordinates.length; index++) {
       for (const along of [0.25, 0.5, 0.75]) {
         const [x, y] = alongSegment(coordinates[index - 1], coordinates[index], along);
         assert.ok(
-          !blocked.some(
-            ([column, row]) => x > column && x < column + 1 && y > row && y < row + 1,
-          ),
+          !blocked.some(([column, row]) => x > column && x < column + 1 && y > row && y < row + 1),
         );
       }
     }
@@ -265,6 +235,7 @@ test("a synthetic fallback boundary keeps a continuous bicubic edge", () => {
 
   for (const row of [1.25, 1.5, 1.75]) {
     const edge = sampleSmoothField(values, size, size, 2, row);
+
     assert.ok(Math.abs(sampleSmoothField(values, size, size, 2 - 1e-8, row) - edge) < 1e-6);
     assert.ok(Math.abs(sampleSmoothField(values, size, size, 2 + 1e-8, row) - edge) < 1e-6);
     assert.ok(Math.abs(edge - bilinearAt(values, size, 2, row)) < 1e-9);
@@ -274,26 +245,8 @@ test("a synthetic fallback boundary keeps a continuous bicubic edge", () => {
 test("adjacent finite bicubic quads share one clamp range", () => {
   // This crop exposes a clamp seam because the lower quad's maximum is below the shared cubic edge.
   const values = [
-    24.0,
-    27.7,
-    26.7,
-    24.6,
-    20.1,
-    26.3,
-    26.0,
-    23.4,
-    19.0,
-    26.1,
-    25.9,
-    23.4,
-    20.2,
-    26.0,
-    25.2,
-    24.0,
-    21.7,
-    26.2,
-    24.2,
-    24.3,
+    24.0, 27.7, 26.7, 24.6, 20.1, 26.3, 26.0, 23.4, 19.0, 26.1, 25.9, 23.4, 20.2, 26.0, 25.2, 24.0,
+    21.7, 26.2, 24.2, 24.3,
   ];
 
   const upper = sampleSmoothField(values, 4, 5, 1.375, 2 - 1e-8);
@@ -317,7 +270,15 @@ test("rows map to latitude at cell centres and take the world shift", () => {
   const grid = { bbox: [34, -5, 42, 5] as [number, number, number, number], nx: 4, ny: 2 };
 
   assert.deepEqual(
-    toLngLat([[0, 0], [2, 1], [4, 2]], grid, -360),
+    toLngLat(
+      [
+        [0, 0],
+        [2, 1],
+        [4, 2],
+      ],
+      grid,
+      -360,
+    ),
     [
       [-325, 2.5],
       [-321, -2.5],
@@ -339,6 +300,7 @@ function peakedField(): number[] {
   return Array.from({ length: PEAK_SIZE ** 2 }, (_, index) => {
     const column = index % PEAK_SIZE;
     const row = Math.floor(index / PEAK_SIZE);
+
     return 5 * Math.exp(-(((column - centre) ** 2 + (row - centre) ** 2) / PEAK_WIDTH));
   });
 }
@@ -353,6 +315,7 @@ function saddleField(size = SADDLE_SIZE, scale = 5): number[] {
   return Array.from({ length: size ** 2 }, (_, index) => {
     const column = index % size;
     const row = Math.floor(index / size);
+
     return ((column - centre) ** 2 - (row - centre) ** 2) / scale;
   });
 }
@@ -367,6 +330,7 @@ function ringField(): number[] {
     const row = Math.floor(index / 5);
     const column = index % 5;
     const corner = (row === 0 || row === 4) && (column === 0 || column === 4);
+
     return corner ? NaN : row - 2;
   });
 }
@@ -376,6 +340,7 @@ function quadraticField(size: number): number[] {
   return Array.from({ length: size ** 2 }, (_, index) => {
     const column = index % size;
     const row = Math.floor(index / size);
+
     return 5 - ((column - centre) ** 2 + (row - centre) ** 2);
   });
 }
@@ -384,16 +349,12 @@ function ridgeField(): number[] {
   return Array.from({ length: 35 }, (_, index) => {
     const row = Math.floor(index / 7);
     const column = index % 7;
+
     return row === 2 && column >= 1 && column <= 5 ? 5 : 0;
   });
 }
 
-function bilinearAt(
-  values: ArrayLike<number>,
-  nx: number,
-  x: number,
-  y: number,
-): number {
+function bilinearAt(values: ArrayLike<number>, nx: number, x: number, y: number): number {
   const ny = values.length / nx;
   const column = Math.min(Math.floor(x), nx - 2);
   const row = Math.min(Math.floor(y), ny - 2);
@@ -412,6 +373,7 @@ function maximumFieldError(
   sample: ([x, y]: [number, number]) => number,
 ): number {
   let worst = 0;
+
   for (let index = 1; index < coordinates.length; index++) {
     for (let step = 0; step <= SAMPLE_STEPS; step++) {
       const point = alongSegment(coordinates[index - 1], coordinates[index], step / SAMPLE_STEPS);
@@ -419,13 +381,16 @@ function maximumFieldError(
       if (Number.isFinite(error)) worst = Math.max(worst, error);
     }
   }
+
   return worst;
 }
 
 function maximumTurnDegrees(lines: readonly Isoline[]): number {
   let maximum = 0;
+
   for (const { coordinates } of lines) {
     const closed = isClosed(coordinates);
+
     for (let index = closed ? 0 : 1; index + 1 < coordinates.length; index++) {
       const before = index > 0 ? coordinates[index - 1] : coordinates[coordinates.length - 2];
       maximum = Math.max(
@@ -437,12 +402,14 @@ function maximumTurnDegrees(lines: readonly Isoline[]): number {
       );
     }
   }
+
   return maximum;
 }
 
 function isClosed(coordinates: readonly [number, number][]): boolean {
   const first = coordinates[0];
   const last = coordinates.at(-1)!;
+
   return coordinates.length > 2 && first[0] === last[0] && first[1] === last[1];
 }
 
@@ -453,23 +420,23 @@ function samePoint(
   return leftColumn === rightColumn && leftRow === rightRow;
 }
 
-function junctionMeetingCount(
-  lines: readonly Isoline[],
-  junction: [number, number],
-): number {
+function junctionMeetingCount(lines: readonly Isoline[], junction: [number, number]): number {
   let meeting = 0;
+
   for (const { coordinates } of lines) {
     for (let index = 1; index < coordinates.length; index++) {
-      if (samePoint(coordinates[index - 1], junction)
-        || samePoint(coordinates[index], junction)) meeting++;
+      if (samePoint(coordinates[index - 1], junction) || samePoint(coordinates[index], junction))
+        meeting++;
     }
   }
+
   return meeting;
 }
 
 function loopSpan({ coordinates }: Isoline): number {
   const columns = coordinates.map(([column]) => column);
   const rows = coordinates.map(([, row]) => row);
+
   return Math.max(
     Math.max(...columns) - Math.min(...columns),
     Math.max(...rows) - Math.min(...rows),
@@ -480,16 +447,17 @@ function openEndpoints(lines: readonly Isoline[]): [number, number][] {
   return lines
     .filter(({ coordinates }) => !isClosed(coordinates))
     .flatMap(({ coordinates }) => [coordinates[0], coordinates.at(-1)!])
-    .sort(([leftColumn, leftRow], [rightColumn, rightRow]) =>
-      leftColumn - rightColumn || leftRow - rightRow,
+    .sort(
+      ([leftColumn, leftRow], [rightColumn, rightRow]) =>
+        leftColumn - rightColumn || leftRow - rightRow,
     );
 }
 
 function assertNoLevelCrossings(lines: readonly Isoline[]): void {
-  const segments = lines.flatMap(
-    ({ value, coordinates }) =>
-      coordinates.slice(1).map((end, index) => ({ value, start: coordinates[index], end })),
+  const segments = lines.flatMap(({ value, coordinates }) =>
+    coordinates.slice(1).map((end, index) => ({ value, start: coordinates[index], end })),
   );
+
   for (let left = 0; left < segments.length; left++) {
     for (let right = left + 1; right < segments.length; right++) {
       if (segments[left].value === segments[right].value) continue;
@@ -502,15 +470,21 @@ function segmentsCross(
   left: { start: [number, number]; end: [number, number] },
   right: { start: [number, number]; end: [number, number] },
 ): boolean {
-  if (Math.max(left.start[0], left.end[0]) < Math.min(right.start[0], right.end[0])
+  if (
+    Math.max(left.start[0], left.end[0]) < Math.min(right.start[0], right.end[0])
     || Math.max(right.start[0], right.end[0]) < Math.min(left.start[0], left.end[0])
     || Math.max(left.start[1], left.end[1]) < Math.min(right.start[1], right.end[1])
-    || Math.max(right.start[1], right.end[1]) < Math.min(left.start[1], left.end[1])) return false;
+    || Math.max(right.start[1], right.end[1]) < Math.min(left.start[1], left.end[1])
+  )
+    return false;
 
-  return orientation(left.start, left.end, right.start)
-      * orientation(left.start, left.end, right.end) <= 0
+  return (
+    orientation(left.start, left.end, right.start) * orientation(left.start, left.end, right.end)
+      <= 0
     && orientation(right.start, right.end, left.start)
-      * orientation(right.start, right.end, left.end) <= 0;
+      * orientation(right.start, right.end, left.end)
+      <= 0
+  );
 }
 
 function orientation(
@@ -518,24 +492,17 @@ function orientation(
   end: [number, number],
   point: [number, number],
 ): number {
-  return (end[0] - start[0]) * (point[1] - start[1])
-    - (end[1] - start[1]) * (point[0] - start[0]);
+  return (end[0] - start[0]) * (point[1] - start[1]) - (end[1] - start[1]) * (point[0] - start[0]);
 }
 
-function segmentDirection(
-  start: [number, number],
-  end: [number, number],
-): [number, number] {
+function segmentDirection(start: [number, number], end: [number, number]): [number, number] {
   return [end[0] - start[0], end[1] - start[1]];
 }
 
-function angleBetweenDegrees(
-  left: [number, number],
-  right: [number, number],
-): number {
-  const cosine = (left[0] * right[0] + left[1] * right[1])
-    / (Math.hypot(...left) * Math.hypot(...right));
-  return Math.acos(Math.min(1, Math.max(-1, cosine))) * 180 / Math.PI;
+function angleBetweenDegrees(left: [number, number], right: [number, number]): number {
+  const cosine =
+    (left[0] * right[0] + left[1] * right[1]) / (Math.hypot(...left) * Math.hypot(...right));
+  return (Math.acos(Math.min(1, Math.max(-1, cosine))) * 180) / Math.PI;
 }
 
 function alongSegment(
@@ -548,6 +515,7 @@ function alongSegment(
 
 function cellsWithNoData(values: ArrayLike<number>, nx: number, ny: number): [number, number][] {
   const cells: [number, number][] = [];
+
   for (let row = 0; row + 1 < ny; row++) {
     for (let column = 0; column + 1 < nx; column++) {
       const top = row * nx + column;
@@ -555,5 +523,6 @@ function cellsWithNoData(values: ArrayLike<number>, nx: number, ny: number): [nu
       if (corners.some((value) => !Number.isFinite(value))) cells.push([column, row]);
     }
   }
+
   return cells;
 }

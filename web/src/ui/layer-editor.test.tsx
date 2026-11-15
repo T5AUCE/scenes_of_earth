@@ -6,8 +6,8 @@ import { Window } from "happy-dom";
 // Tests sit outside the tsconfig, so tsx gives them the classic JSX runtime.
 import React from "react";
 
-import { createSceneStore } from "../scene-store.ts";
 import { DEFAULT_OUTLINE } from "../display-state.ts";
+import { createSceneStore } from "../scene-store.ts";
 import { assertSameNode } from "../testing/dom-assert.ts";
 import type { LayerDoc, LayerMenu, LayerView } from "../types.ts";
 
@@ -30,22 +30,26 @@ test("Show as chooses the draw and names the displaced layer", async (context) =
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN, TEMPERATURE], display());
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
-      layers={[RAIN, TEMPERATURE]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
+        layers={[RAIN, TEMPERATURE]}
+        store={store}
+      />,
+    ),
+  );
 
   const colour = inputByValue(container, "colour");
   assert.equal(colour.checked, false);
@@ -65,22 +69,26 @@ test("a layer with one draw offers Colour and Hidden", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([LAND], display({ showAs: {} }));
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "land", title: "Land cover", view: fieldView("land") }}
-      layers={[LAND]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "land", title: "Land cover", view: fieldView("land") }}
+        layers={[LAND]}
+        store={store}
+      />,
+    ),
+  );
 
   const section = container.querySelector(".show-as");
   assert.ok(section);
@@ -97,28 +105,33 @@ test("Close and Escape both close the editor", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN], display());
   let closed = 0;
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
-      layers={[RAIN]}
-      store={store}
-      onClose={() => closed++}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
+        layers={[RAIN]}
+        store={store}
+        onClose={() => closed++}
+      />,
+    ),
+  );
 
   await act(async () => {
-    buttonWithText(container, "Close")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    buttonWithText(container, "Close").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   assert.equal(closed, 1);
 
@@ -134,24 +147,28 @@ test("an Escape claimed by an inner control keeps the editor open", async (conte
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN], display());
   let closed = 0;
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
-      layers={[RAIN]}
-      store={store}
-      onClose={() => closed++}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
+        layers={[RAIN]}
+        store={store}
+        onClose={() => closed++}
+      />,
+    ),
+  );
 
   await act(async () => {
     const claimed = new window.KeyboardEvent("keydown", { key: "Escape", cancelable: true });
@@ -173,8 +190,10 @@ test("Area Outline opens its colour and thickness editor from Edit", async (cont
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { mountSceneColumn } = await import("./scene-column.tsx");
+
   const store = createSceneStore([RAIN], display());
   const container = document.createElement("div");
   document.body.append(container);
@@ -190,22 +209,28 @@ test("Area Outline opens its colour and thickness editor from Edit", async (cont
 
   for (const title of ["Area Outline", "Map details"]) {
     await act(async () => {
-      editButtonFor(container, title)
-        .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+      editButtonFor(container, title).dispatchEvent(
+        new window.MouseEvent("click", { bubbles: true }),
+      );
     });
+
     const panel = container.querySelector(".layer-editor") as HTMLElement;
     assert.equal(panel.getAttribute("aria-label"), `Edit ${title}`);
     assert.equal(panel.querySelector("h2")?.textContent, title);
-    const legends = [...panel.querySelectorAll("fieldset > legend")]
-      .map((element) => element.textContent);
+
+    const legends = [...panel.querySelectorAll("fieldset > legend")].map(
+      (element) => element.textContent,
+    );
     if (title === "Area Outline") assert.deepEqual(legends, ["Colour", "Thickness"]);
     else assert.deepEqual(legends, []);
+
     assert.equal(editButtonFor(container, title).getAttribute("aria-expanded"), "true");
     assert.equal(cardFor(container, title).classList.contains("editing"), true);
 
     await act(async () => {
-      buttonWithText(container, "Close")
-        .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+      buttonWithText(container, "Close").dispatchEvent(
+        new window.MouseEvent("click", { bubbles: true }),
+      );
     });
     assertSameNode(container.querySelector(".layer-editor"), null);
     assertSameNode(document.activeElement, editButtonFor(container, title));
@@ -218,27 +243,33 @@ test("Reset layer keeps the layer's Show as choice", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN, TEMPERATURE], display());
   store.dispatch({ kind: "choose", unit: "rain", draw: "colour" });
+
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
-      layers={[RAIN, TEMPERATURE]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
+        layers={[RAIN, TEMPERATURE]}
+        store={store}
+      />,
+    ),
+  );
 
   await act(async () => {
-    buttonWithText(container, "Reset layer")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    buttonWithText(container, "Reset layer").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
 
   assert.deepEqual(store.getSnapshot().display.showAs, { rain: "colour" });
@@ -251,22 +282,26 @@ test("a part switch in the editor changes the store's off units", async (context
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([TERRAIN], display());
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "terrain", title: "Terrain", view: terrainView() }}
-      layers={[TERRAIN]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "terrain", title: "Terrain", view: terrainView() }}
+        layers={[TERRAIN]}
+        store={store}
+      />,
+    ),
+  );
 
   const contours = checkboxByLabel(container, "Contours");
   await act(async () => {
@@ -282,22 +317,26 @@ test("a later menu or option change clears the displacement notice", async (cont
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN, TEMPERATURE], display());
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
-      layers={[RAIN, TEMPERATURE]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
+        layers={[RAIN, TEMPERATURE]}
+        store={store}
+      />,
+    ),
+  );
 
   const colour = inputByValue(container, "colour");
   await act(async () => {
@@ -318,22 +357,26 @@ test("an option change clears the displacement notice", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN, TEMPERATURE], display());
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
-      layers={[RAIN, TEMPERATURE]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
+        layers={[RAIN, TEMPERATURE]}
+        store={store}
+      />,
+    ),
+  );
 
   const colour = inputByValue(container, "colour");
   await act(async () => {
@@ -354,9 +397,11 @@ test("reopening and swapping editors leaves no retained part listeners", async (
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const countsA = { adds: 0, removes: 0 };
   const countsB = { adds: 0, removes: 0 };
   const viewA = controlView(countingTarget(countsA));
@@ -366,24 +411,28 @@ test("reopening and swapping editors leaves no retained part listeners", async (
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "rain", title: "Rainfall", view: viewA }}
-      layers={[RAIN]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view: viewA }}
+        layers={[RAIN]}
+        store={store}
+      />,
+    ),
+  );
   assert.ok(countsA.adds > 0);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "temp", title: "Temperature", view: viewB }}
-      layers={[RAIN]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "temp", title: "Temperature", view: viewB }}
+        layers={[RAIN]}
+        store={store}
+      />,
+    ),
+  );
   assert.equal(countsA.removes, countsA.adds);
   assert.ok(countsB.adds > 0);
 
@@ -395,9 +444,11 @@ test("reopened part controls show the edited relief strength", async (context) =
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   let strength = 5;
   const updates = new EventTarget();
   const control = {
@@ -420,9 +471,10 @@ test("reopened part controls show the edited relief strength", async (context) =
   const root = createRoot(container);
   const target = { unit: "terrain", title: "Terrain", view: terrain };
 
-  await act(async () => root.render(
-    <Harness Editor={LayerEditor} target={target} layers={[TERRAIN]} store={store} />,
-  ));
+  await act(async () =>
+    root.render(<Harness Editor={LayerEditor} target={target} layers={[TERRAIN]} store={store} />),
+  );
+
   const first = container.querySelector(".part-controls input") as HTMLInputElement;
   assert.equal(first.value, "5");
 
@@ -432,17 +484,20 @@ test("reopened part controls show the edited relief strength", async (context) =
   });
   assert.equal(strength, 7);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "rain", title: "Rain", view: fieldView("rain") }}
-      layers={[TERRAIN]}
-      store={store}
-    />,
-  ));
-  await act(async () => root.render(
-    <Harness Editor={LayerEditor} target={target} layers={[TERRAIN]} store={store} />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rain", view: fieldView("rain") }}
+        layers={[TERRAIN]}
+        store={store}
+      />,
+    ),
+  );
+  await act(async () =>
+    root.render(<Harness Editor={LayerEditor} target={target} layers={[TERRAIN]} store={store} />),
+  );
+
   const reopened = container.querySelector(".part-controls input") as HTMLInputElement;
   assert.equal(reopened.value, "7");
 
@@ -453,17 +508,22 @@ test("mounting the column keeps its sibling notices", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { mountSceneColumn } = await import("./scene-column.tsx");
+
   const store = createSceneStore([RAIN], display());
   const box = document.createElement("div");
   document.body.append(box);
+
   const notes = document.createElement("div");
   box.append(notes);
+
   const first = document.createElement("div");
   first.textContent = "dropped";
   first.className = "notice";
   notes.append(first);
+
   const host = document.createElement("div");
   box.append(host);
 
@@ -484,6 +544,7 @@ test("mounting the column keeps its sibling notices", async (context) => {
   late.textContent = "late";
   late.className = "notice";
   notes.append(late);
+
   assert.equal(late.isConnected, true);
   assert.match(host.textContent ?? "", /Rainfall/);
 
@@ -494,8 +555,10 @@ test("closing the editor returns focus to its Edit button", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { mountSceneColumn } = await import("./scene-column.tsx");
+
   const store = createSceneStore([RAIN, TEMPERATURE], display());
   const container = document.createElement("div");
   document.body.append(container);
@@ -516,6 +579,7 @@ test("closing the editor returns focus to its Edit button", async (context) => {
   await act(async () => {
     edits()[0].dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   const panel = container.querySelector(".layer-editor") as HTMLElement;
   assertSameNode(document.activeElement, panel);
 
@@ -543,6 +607,7 @@ test("closing the editor returns focus to its Edit button", async (context) => {
   await act(async () => {
     edits()[1].dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   const swapped = container.querySelector(".layer-editor") as HTMLElement;
   assert.match(swapped.getAttribute("aria-label") ?? "", /Temperature/);
   assertSameNode(document.activeElement, swapped);
@@ -554,8 +619,10 @@ test("a contours-only terrain card stays on with its contours title", async (con
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { mountSceneColumn } = await import("./scene-column.tsx");
+
   const terrainLayer = {
     id: "terrain",
     title: "Terrain",
@@ -582,6 +649,7 @@ test("a contours-only terrain card stays on with its contours title", async (con
 
   const title = () => container.querySelector(".card-title")?.textContent ?? "";
   const master = () => container.querySelector('input[role="switch"]') as HTMLInputElement;
+
   assert.equal(title(), "Terrain · Contours");
   assert.equal(master().checked, true);
 
@@ -604,9 +672,11 @@ test("the blend switch remembers its choice for a fresh scene", async (context) 
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { mountSceneColumn } = await import("./scene-column.tsx");
   const { loadStoredShowAs } = await import("../show-as.ts");
+
   const blend = {
     parts: [{ id: "blend", label: "Blend", layerIds: ["blend"] }],
     options: [],
@@ -659,22 +729,26 @@ test("part controls live in Options with no Parts heading", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN], display());
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "rain", title: "Rainfall", view: controlView(new EventTarget()) }}
-      layers={[RAIN]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view: controlView(new EventTarget()) }}
+        layers={[RAIN]}
+        store={store}
+      />,
+    ),
+  );
 
   assertSameNode(container.querySelector(".editor-parts"), null);
   assert.ok(container.querySelector(".editor-options"));
@@ -687,24 +761,28 @@ test("a single part needs no on/off checkbox", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN], display());
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
-      layers={[RAIN]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
+        layers={[RAIN]}
+        store={store}
+      />,
+    ),
+  );
 
-  const boxes = [...container.querySelectorAll(".editor-options input[type=\"checkbox\"]")];
+  const boxes = [...container.querySelectorAll('.editor-options input[type="checkbox"]')];
   assert.equal(boxes.length, 1);
   assert.match(boxes[0].closest("label")?.textContent ?? "", /Smooth/);
 
@@ -715,27 +793,33 @@ test("multi-part layers keep per-part checkboxes in Options", async (context) =>
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([TERRAIN], display());
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "terrain", title: "Terrain", view: terrainView() }}
-      layers={[TERRAIN]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "terrain", title: "Terrain", view: terrainView() }}
+        layers={[TERRAIN]}
+        store={store}
+      />,
+    ),
+  );
 
   assertSameNode(container.querySelector(".editor-parts"), null);
   assert.ok(checkboxByLabel(container, "Relief"));
   assert.ok(checkboxByLabel(container, "Contours"));
-  assert.ok(container.querySelector(".editor-options")?.contains(checkboxByLabel(container, "Relief")));
+  assert.ok(
+    container.querySelector(".editor-options")?.contains(checkboxByLabel(container, "Relief")),
+  );
 
   await act(async () => root.unmount());
 });
@@ -744,22 +828,26 @@ test("the terrain editor keeps the contours switch without the interval text", a
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([TERRAIN], display());
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "terrain", title: "Terrain", view: terrainView() }}
-      layers={[TERRAIN]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "terrain", title: "Terrain", view: terrainView() }}
+        layers={[TERRAIN]}
+        store={store}
+      />,
+    ),
+  );
 
   assert.ok(checkboxByLabel(container, "Contours"));
   assert.doesNotMatch(container.textContent ?? "", /Contours every/);
@@ -771,22 +859,26 @@ test("Show as offers Hidden alongside each draw", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN, TEMPERATURE], display());
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "temp", title: "Temperature", view: fieldView("temp") }}
-      layers={[RAIN, TEMPERATURE]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "temp", title: "Temperature", view: fieldView("temp") }}
+        layers={[RAIN, TEMPERATURE]}
+        store={store}
+      />,
+    ),
+  );
 
   const section = container.querySelector(".show-as");
   assert.ok(section);
@@ -802,9 +894,11 @@ test("Hidden is selected while the unit is off and a draw shows again", async (c
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN, TEMPERATURE], {
     layers: {},
     off: new Set(["rain"]),
@@ -814,21 +908,24 @@ test("Hidden is selected while the unit is off and a draw shows again", async (c
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
-      layers={[RAIN, TEMPERATURE]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
+        layers={[RAIN, TEMPERATURE]}
+        store={store}
+      />,
+    ),
+  );
 
   assert.equal(inputByValue(container, "hidden").checked, true);
   assert.equal(inputByValue(container, "dots").checked, false);
 
   await act(async () => {
-    inputByValue(container, "dots")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    inputByValue(container, "dots").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
 
   assert.equal(store.getSnapshot().display.off.has("rain"), false);
@@ -842,9 +939,11 @@ test("Hidden is selected while hidden by allocation", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const landOnly = layer("land", "Land cover", ["fill"]);
   const tempOnly = layer("temp", "Temperature", ["ramp", "isolines"]);
   const store = createSceneStore([landOnly, tempOnly], display());
@@ -852,14 +951,16 @@ test("Hidden is selected while hidden by allocation", async (context) => {
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "land", title: "Land cover", view: fieldView("land") }}
-      layers={[landOnly, tempOnly]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "land", title: "Land cover", view: fieldView("land") }}
+        layers={[landOnly, tempOnly]}
+        store={store}
+      />,
+    ),
+  );
 
   assert.equal(store.getSnapshot().allocation.owner, "temp");
   assert.equal(inputByValue(container, "hidden").checked, true);
@@ -872,9 +973,11 @@ test("clicking Hidden while hidden by allocation switches the unit off", async (
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const landOnly = layer("land", "Land cover", ["fill"]);
   const tempOnly = layer("temp", "Temperature", ["ramp", "isolines"]);
   const store = createSceneStore([landOnly, tempOnly], display());
@@ -882,20 +985,23 @@ test("clicking Hidden while hidden by allocation switches the unit off", async (
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "land", title: "Land cover", view: fieldView("land") }}
-      layers={[landOnly, tempOnly]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "land", title: "Land cover", view: fieldView("land") }}
+        layers={[landOnly, tempOnly]}
+        store={store}
+      />,
+    ),
+  );
 
   assert.equal(inputByValue(container, "hidden").checked, true);
 
   await act(async () => {
-    inputByValue(container, "hidden")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    inputByValue(container, "hidden").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
 
   assert.equal(store.getSnapshot().display.off.has("land"), true);
@@ -908,26 +1014,31 @@ test("choosing Hidden switches the unit off", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN, TEMPERATURE], display());
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
-      layers={[RAIN, TEMPERATURE]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
+        layers={[RAIN, TEMPERATURE]}
+        store={store}
+      />,
+    ),
+  );
 
   await act(async () => {
-    inputByValue(container, "hidden")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    inputByValue(container, "hidden").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
 
   assert.equal(store.getSnapshot().display.off.has("rain"), true);
@@ -940,25 +1051,30 @@ test("the editor shows Low and High on one line", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN], display());
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "rain", title: "Rainfall", view: rangeView() }}
-      layers={[RAIN]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view: rangeView() }}
+        layers={[RAIN]}
+        store={store}
+      />,
+    ),
+  );
 
   const low = container.querySelector('input[aria-label="Low"]') as HTMLInputElement;
   const high = container.querySelector('input[aria-label="High"]') as HTMLInputElement;
+
   assert.ok(low);
   assert.ok(high);
   assertSameNode(low.closest(".range-row"), high.closest(".range-row"));
@@ -970,34 +1086,40 @@ test("a convertible layer offers a Units choice and others show none", async (co
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN], display());
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "rain", title: "Rainfall", view: unitsView("rain", "mm/month") }}
-      layers={[RAIN]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view: unitsView("rain", "mm/month") }}
+        layers={[RAIN]}
+        store={store}
+      />,
+    ),
+  );
   assert.ok(container.querySelector(".editor-units"));
   assert.ok(inputByValue(container, "mm/month"));
   assert.ok(inputByValue(container, "in/month"));
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "land", title: "Land cover", view: fieldView("land") }}
-      layers={[LAND]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "land", title: "Land cover", view: fieldView("land") }}
+        layers={[LAND]}
+        store={store}
+      />,
+    ),
+  );
   assertSameNode(container.querySelector(".editor-units"), null);
 
   await act(async () => root.unmount());
@@ -1007,37 +1129,44 @@ test("choosing inches updates the store and Reset returns to millimetres", async
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN], display());
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   const view = unitsView("rain", "mm/month");
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "rain", title: "Rainfall", view }}
-      layers={[RAIN]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view }}
+        layers={[RAIN]}
+        store={store}
+      />,
+    ),
+  );
 
   await act(async () => {
-    inputByValue(container, "in/month")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    inputByValue(container, "in/month").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   assert.equal(store.getSnapshot().display.layers.rain?.units, "in/month");
 
   await act(async () => {
-    buttonWithText(container, "Reset layer")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    buttonWithText(container, "Reset layer").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   await act(async () => {
-    buttonWithText(container, "Reset")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    buttonWithText(container, "Reset").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   assert.equal(store.getSnapshot().display.layers.rain?.units, undefined);
 
@@ -1050,28 +1179,34 @@ test("the notice fades and clears after about three seconds", async (context) =>
     mock.timers.reset();
     window.happyDOM.abort();
   });
+
   installBrowser(window);
   mock.timers.enable({ apis: ["setTimeout"] });
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN, TEMPERATURE], display());
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
-      layers={[RAIN, TEMPERATURE]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
+        layers={[RAIN, TEMPERATURE]}
+        store={store}
+      />,
+    ),
+  );
 
   await act(async () => {
-    inputByValue(container, "colour")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    inputByValue(container, "colour").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   assert.ok(container.querySelector(".colour-notice"));
   assertSameNode(container.querySelector(".colour-notice.fading"), null);
@@ -1095,28 +1230,34 @@ test("a new notice restarts the fade timer", async (context) => {
     mock.timers.reset();
     window.happyDOM.abort();
   });
+
   installBrowser(window);
   mock.timers.enable({ apis: ["setTimeout"] });
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN, TEMPERATURE], display());
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
-      layers={[RAIN, TEMPERATURE]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
+        layers={[RAIN, TEMPERATURE]}
+        store={store}
+      />,
+    ),
+  );
 
   await act(async () => {
-    inputByValue(container, "colour")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    inputByValue(container, "colour").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   await act(async () => {
     mock.timers.tick(2 * 1000);
@@ -1124,14 +1265,16 @@ test("a new notice restarts the fade timer", async (context) => {
   assertSameNode(container.querySelector(".colour-notice.fading"), null);
 
   await act(async () => {
-    inputByValue(container, "hidden")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    inputByValue(container, "hidden").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   assertSameNode(container.querySelector(".colour-notice"), null);
 
   await act(async () => {
-    inputByValue(container, "colour")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    inputByValue(container, "colour").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   await act(async () => {
     mock.timers.tick(2 * 1000);
@@ -1152,8 +1295,10 @@ test("unmounting clears the notice timer", async (context) => {
     mock.timers.reset();
     window.happyDOM.abort();
   });
+
   installBrowser(window);
   mock.timers.enable({ apis: ["setTimeout"] });
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
@@ -1195,14 +1340,18 @@ test("unmounting clears the notice timer", async (context) => {
   const firstStore = createSceneStore([RAIN, TEMPERATURE], display());
   const firstHost = document.createElement("div");
   document.body.append(firstHost);
+
   const firstRoot = createRoot(firstHost);
-  await act(async () => firstRoot.render(
-    <SpyHarness Editor={LayerEditor} target={target} layers={layers} store={firstStore} />,
-  ));
+  await act(async () =>
+    firstRoot.render(
+      <SpyHarness Editor={LayerEditor} target={target} layers={layers} store={firstStore} />,
+    ),
+  );
 
   await act(async () => {
-    inputByValue(firstHost, "colour")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    inputByValue(firstHost, "colour").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   assert.ok(firstHost.querySelector(".colour-notice"));
   assert.equal(notices.length, 1);
@@ -1216,15 +1365,20 @@ test("unmounting clears the notice timer", async (context) => {
   const secondStore = createSceneStore([RAIN, TEMPERATURE], display());
   const secondHost = document.createElement("div");
   document.body.append(secondHost);
+
   const secondRoot = createRoot(secondHost);
-  await act(async () => secondRoot.render(
-    <SpyHarness Editor={LayerEditor} target={target} layers={layers} store={secondStore} />,
-  ));
+  await act(async () =>
+    secondRoot.render(
+      <SpyHarness Editor={LayerEditor} target={target} layers={layers} store={secondStore} />,
+    ),
+  );
 
   await act(async () => {
-    inputByValue(secondHost, "colour")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    inputByValue(secondHost, "colour").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
+
   const beforeFade = notices.length;
   await act(async () => {
     mock.timers.tick(3 * 1000);
@@ -1243,31 +1397,39 @@ test("palette choices are swatches with Custom last and no extra chrome", async 
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN], display());
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness
-      Editor={LayerEditor}
-      target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
-      layers={[RAIN]}
-      store={store}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view: fieldView("rain") }}
+        layers={[RAIN]}
+        store={store}
+      />,
+    ),
+  );
 
-  const group = container.querySelector(".editor-colours [role=\"radiogroup\"]") as HTMLElement;
+  const group = container.querySelector('.editor-colours [role="radiogroup"]') as HTMLElement;
   assert.equal(group.getAttribute("aria-label"), "Colours — Ink blue (default)");
   assert.equal(
     container.querySelector(".editor-colours legend")?.textContent,
     "Colours — Ink blue (default)",
   );
+
   const radios = [...group.querySelectorAll('input[type="radio"]')] as HTMLInputElement[];
-  assert.deepEqual(radios.map((radio) => radio.value), ["ink-blue", "batlow", "custom"]);
+  assert.deepEqual(
+    radios.map((radio) => radio.value),
+    ["ink-blue", "batlow", "custom"],
+  );
   assert.deepEqual(
     radios.map((radio) => radio.getAttribute("aria-label")),
     ["Ink blue (default)", "Batlow", "Custom"],
@@ -1284,9 +1446,11 @@ test("picking a palette swatch applies it", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN], display());
   let paletteValue = "ink-blue";
   const view = fieldView("rain");
@@ -1300,23 +1464,29 @@ test("picking a palette swatch applies it", async (context) => {
       paletteValue = next;
     },
   } as LayerMenu;
+
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness Editor={LayerEditor} target={{ unit: "rain", title: "Rainfall", view }} layers={[RAIN]} store={store} />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view }}
+        layers={[RAIN]}
+        store={store}
+      />,
+    ),
+  );
 
   await act(async () => {
-    swatchByLabel(container, "Batlow")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    swatchByLabel(container, "Batlow").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   assert.equal(paletteValue, "batlow");
-  assert.equal(
-    container.querySelector(".editor-colours legend")?.textContent,
-    "Colours — Batlow",
-  );
+  assert.equal(container.querySelector(".editor-colours legend")?.textContent, "Colours — Batlow");
 
   await act(async () => root.unmount());
 });
@@ -1325,9 +1495,11 @@ test("Reset keeps a stored custom palette in the Custom box", async (context) =>
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN], display());
   let paletteValue = "ink-blue";
   const view = fieldView("rain");
@@ -1341,37 +1513,51 @@ test("Reset keeps a stored custom palette in the Custom box", async (context) =>
       paletteValue = next;
     },
   } as LayerMenu;
+
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness Editor={LayerEditor} target={{ unit: "rain", title: "Rainfall", view }} layers={[RAIN]} store={store} />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view }}
+        layers={[RAIN]}
+        store={store}
+      />,
+    ),
+  );
 
   await act(async () => {
-    swatchByLabel(container, "Custom")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    swatchByLabel(container, "Custom").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   assert.match(paletteValue, /^custom-/);
+
   const seeded = paletteValue;
+
   assert.equal(container.querySelectorAll(".gradient-stops .gradient-stop").length, 3);
 
   await act(async () => {
-    buttonWithText(container, "Reset layer")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    buttonWithText(container, "Reset layer").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   await act(async () => {
-    buttonWithText(container, "Reset")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    buttonWithText(container, "Reset").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   assert.equal(paletteValue, "ink-blue");
   assert.equal(container.querySelector(".gradient-stops"), null);
   assert.equal(container.querySelector(".swatch-face.custom-empty"), null);
 
   await act(async () => {
-    swatchByLabel(container, "Custom")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    swatchByLabel(container, "Custom").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   assert.equal(paletteValue, seeded);
 
@@ -1382,9 +1568,11 @@ test("ink choices are swatches and Reset keeps a stored custom ink", async (cont
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerEditor } = await import("./layer-editor.tsx");
+
   const store = createSceneStore([RAIN], display());
   let inkValue = "navy";
   const view = fieldView("rain");
@@ -1409,28 +1597,42 @@ test("ink choices are swatches and Reset keeps a stored custom ink", async (cont
       },
     },
   } as LayerMenu;
+
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <Harness Editor={LayerEditor} target={{ unit: "rain", title: "Rainfall", view }} layers={[RAIN]} store={store} />,
-  ));
+  await act(async () =>
+    root.render(
+      <Harness
+        Editor={LayerEditor}
+        target={{ unit: "rain", title: "Rainfall", view }}
+        layers={[RAIN]}
+        store={store}
+      />,
+    ),
+  );
 
-  const group = container.querySelector(".editor-colours [role=\"radiogroup\"]") as HTMLElement;
+  const group = container.querySelector('.editor-colours [role="radiogroup"]') as HTMLElement;
   assert.equal(group.getAttribute("aria-label"), "Dot ink");
   assert.equal(container.querySelector(".editor-colours legend")?.textContent, "Dot ink");
+
   const radios = [...group.querySelectorAll('input[type="radio"]')] as HTMLInputElement[];
-  assert.deepEqual(radios.map((radio) => radio.value), ["navy", "white", "custom"]);
+  assert.deepEqual(
+    radios.map((radio) => radio.value),
+    ["navy", "white", "custom"],
+  );
   assert.equal(container.querySelector(".swatch-caption")?.textContent, "Navy (default)");
   assert.equal(container.querySelector(".mode-switch"), null);
   assert.doesNotMatch(container.textContent ?? "", /currently shows/);
 
   await act(async () => {
-    swatchByLabel(container, "Custom")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    swatchByLabel(container, "Custom").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   assert.equal(inkValue, "#1a3658");
+
   const customInput = container.querySelector(
     '.custom-colors input, .editor-colours input[type="color"]',
   ) as HTMLInputElement;
@@ -1443,18 +1645,21 @@ test("ink choices are swatches and Reset keeps a stored custom ink", async (cont
   assert.equal(inkValue, "#102030");
 
   await act(async () => {
-    buttonWithText(container, "Reset layer")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    buttonWithText(container, "Reset layer").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   await act(async () => {
-    buttonWithText(container, "Reset")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    buttonWithText(container, "Reset").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   assert.equal(inkValue, "navy");
 
   await act(async () => {
-    swatchByLabel(container, "Custom")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    swatchByLabel(container, "Custom").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   assert.equal(inkValue, "#102030");
 
@@ -1465,22 +1670,27 @@ test("the outline editor shows six swatches plus Custom with graphite checked", 
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { OutlineEditor } = await import("./layer-editor.tsx");
+
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <OutlineEditor
-      outline={{ shown: true, color: "graphite", widthPx: 1.5 }}
-      onChange={() => {}}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <OutlineEditor
+        outline={{ shown: true, color: "graphite", widthPx: 1.5 }}
+        onChange={() => {}}
+      />,
+    ),
+  );
 
-  const group = container.querySelector(".editor-colours [role=\"radiogroup\"]") as HTMLElement;
+  const group = container.querySelector('.editor-colours [role="radiogroup"]') as HTMLElement;
   assert.equal(group.getAttribute("aria-label"), "Colour");
+
   const radios = [...group.querySelectorAll('input[type="radio"]')] as HTMLInputElement[];
   assert.deepEqual(
     radios.map((radio) => radio.value),
@@ -1514,24 +1724,29 @@ test("picking a colour while the outline is off turns it on", async (context) =>
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { OutlineEditor } = await import("./layer-editor.tsx");
+
   const changes: { shown: boolean; color: string; widthPx: number }[] = [];
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <OutlineEditor
-      outline={{ shown: false, color: "graphite", widthPx: 1.5 }}
-      onChange={(next) => changes.push(next)}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <OutlineEditor
+        outline={{ shown: false, color: "graphite", widthPx: 1.5 }}
+        onChange={(next) => changes.push(next)}
+      />,
+    ),
+  );
 
   await act(async () => {
-    swatchByLabel(container, "Navy")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    swatchByLabel(container, "Navy").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
 
   assert.deepEqual(changes, [{ shown: true, color: "navy", widthPx: 1.5 }]);
@@ -1543,19 +1758,23 @@ test("the outline editor shows no explanatory note while the outline is off", as
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { OutlineEditor } = await import("./layer-editor.tsx");
+
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <OutlineEditor
-      outline={{ shown: false, color: "graphite", widthPx: 2 }}
-      onChange={() => {}}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <OutlineEditor
+        outline={{ shown: false, color: "graphite", widthPx: 2 }}
+        onChange={() => {}}
+      />,
+    ),
+  );
 
   assertSameNode(container.querySelector(".off-note"), null);
   assert.doesNotMatch(container.textContent ?? "", /turns it on/);
@@ -1567,27 +1786,31 @@ test("Custom seeds from the shown colour and remembers the custom hex", async (c
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { OutlineEditor } = await import("./layer-editor.tsx");
+
   const changes: { shown: boolean; color: string; widthPx: number }[] = [];
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   const render = (outline: { shown: boolean; color: string; widthPx: number }) =>
-    act(async () => root.render(
-      <OutlineEditor outline={outline} onChange={(next) => changes.push(next)} />,
-    ));
+    act(async () =>
+      root.render(<OutlineEditor outline={outline} onChange={(next) => changes.push(next)} />),
+    );
 
   await render({ shown: true, color: "graphite", widthPx: 1.5 });
 
   await act(async () => {
-    swatchByLabel(container, "Custom")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    swatchByLabel(container, "Custom").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   assert.deepEqual(changes.at(-1), { shown: true, color: "#333333", widthPx: 1.5 });
 
   await render({ shown: true, color: "#333333", widthPx: 1.5 });
+
   const well = container.querySelector('input[type="color"]') as HTMLInputElement;
   assert.equal(well.value, "#333333");
 
@@ -1598,14 +1821,16 @@ test("Custom seeds from the shown colour and remembers the custom hex", async (c
   assert.deepEqual(changes.at(-1), { shown: true, color: "#102030", widthPx: 1.5 });
 
   await render({ shown: true, color: "navy", widthPx: 1.5 });
+
   assert.match(
     container.querySelector(".swatch-option:last-child .swatch-face")?.getAttribute("style") ?? "",
     /102030|16, 32, 48/,
   );
 
   await act(async () => {
-    swatchByLabel(container, "Custom")
-      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    swatchByLabel(container, "Custom").dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
   });
   assert.deepEqual(changes.at(-1), { shown: true, color: "#102030", widthPx: 1.5 });
 
@@ -1616,20 +1841,24 @@ test("the thickness slider commits the width with a labelled preview", async (co
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { OutlineEditor } = await import("./layer-editor.tsx");
+
   const changes: { shown: boolean; color: string; widthPx: number }[] = [];
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <OutlineEditor
-      outline={{ shown: true, color: "white", widthPx: 1 }}
-      onChange={(next) => changes.push(next)}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <OutlineEditor
+        outline={{ shown: true, color: "white", widthPx: 1 }}
+        onChange={(next) => changes.push(next)}
+      />,
+    ),
+  );
 
   const preview = container.querySelector(".line-preview i") as HTMLElement;
   assert.match(preview.style.background, /255|ffffff/i);
@@ -1642,16 +1871,19 @@ test("the thickness slider commits the width with a labelled preview", async (co
   });
   assert.deepEqual(changes, [{ shown: true, color: "white", widthPx: 2.5 }]);
 
-  await act(async () => root.render(
-    <OutlineEditor
-      outline={{ shown: true, color: "white", widthPx: 2.5 }}
-      onChange={(next) => changes.push(next)}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <OutlineEditor
+        outline={{ shown: true, color: "white", widthPx: 2.5 }}
+        onChange={(next) => changes.push(next)}
+      />,
+    ),
+  );
   assert.equal(container.querySelector("output")?.textContent, "2.5 px");
   assert.equal(
-    (container.querySelector('input[type="range"]') as HTMLInputElement)
-      .getAttribute("aria-valuetext"),
+    (container.querySelector('input[type="range"]') as HTMLInputElement).getAttribute(
+      "aria-valuetext",
+    ),
     "2.5 pixels",
   );
 
@@ -1689,23 +1921,11 @@ function Harness({
 
 function display({
   showAs = {},
-}: {
-  showAs?: Record<string, "colour" | "dots" | "isolines">;
-} = {}) {
-  return {
-    layers: {},
-    off: new Set<string>(),
-    showAs,
-    outline: { ...DEFAULT_OUTLINE },
-  };
+}: { showAs?: Record<string, "colour" | "dots" | "isolines"> } = {}) {
+  return { layers: {}, off: new Set<string>(), showAs, outline: { ...DEFAULT_OUTLINE } };
 }
 
-function layer(
-  id: string,
-  title: string,
-  encodings: string[],
-  parts: string[] = [],
-): LayerDoc {
+function layer(id: string, title: string, encodings: string[], parts: string[] = []): LayerDoc {
   return {
     id,
     title,
@@ -1802,12 +2022,16 @@ function countingTarget(counts: { adds: number; removes: number }): EventTarget 
 
 function controlView(updates: EventTarget): LayerView {
   return {
-    parts: [{
-      id: "rain",
-      label: "Rain",
-      layerIds: ["rain"],
-      controls: [{ label: "Strength", min: 0, max: 10, step: 1, value: 5, set: () => {}, updates }],
-    }],
+    parts: [
+      {
+        id: "rain",
+        label: "Rain",
+        layerIds: ["rain"],
+        controls: [
+          { label: "Strength", min: 0, max: 10, step: 1, value: 5, set: () => {}, updates },
+        ],
+      },
+    ],
     options: [],
     time: null,
     setTime: () => {},
@@ -1859,8 +2083,9 @@ function inputByValue(container: HTMLElement, value: string): HTMLInputElement {
 }
 
 function checkboxByLabel(container: HTMLElement, label: string): HTMLInputElement {
-  const row = [...container.querySelectorAll("label")]
-    .find((element) => element.textContent?.trim() === label);
+  const row = [...container.querySelectorAll("label")].find(
+    (element) => element.textContent?.trim() === label,
+  );
 
   return row!.querySelector("input") as HTMLInputElement;
 }
@@ -1877,13 +2102,15 @@ function setRange(window: Window, slider: HTMLInputElement, value: string): void
 }
 
 function buttonWithText(container: HTMLElement, text: string): HTMLButtonElement {
-  return [...container.querySelectorAll("button")]
-    .find((button) => button.textContent?.trim() === text) as HTMLButtonElement;
+  return [...container.querySelectorAll("button")].find(
+    (button) => button.textContent?.trim() === text,
+  ) as HTMLButtonElement;
 }
 
 function cardFor(container: HTMLElement, title: string): HTMLElement {
-  return [...container.querySelectorAll(".card")]
-    .find((card) => card.querySelector(".card-title")?.textContent === title) as HTMLElement;
+  return [...container.querySelectorAll(".card")].find(
+    (card) => card.querySelector(".card-title")?.textContent === title,
+  ) as HTMLElement;
 }
 
 function editButtonFor(container: HTMLElement, title: string): HTMLButtonElement {
@@ -1905,6 +2132,7 @@ function installBrowser(window: Window): void {
   for (const name of names) {
     defineGlobal(name, window[name]);
   }
+
   defineGlobal("window", window);
   defineGlobal("document", window.document);
   defineGlobal("navigator", window.navigator);

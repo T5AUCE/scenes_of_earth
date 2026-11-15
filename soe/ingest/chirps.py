@@ -5,6 +5,7 @@ plus the first month for revisions and downloads one file at a time because the 
 bursts. Each calendar year is published on its own, so an interrupted run continues after the
 last stored month.
 """
+
 import logging
 import time
 from collections.abc import Callable, Iterator
@@ -50,11 +51,7 @@ SOURCE_MODIFIED_ATTR = "source_modified"
 log = logging.getLogger("soe")
 
 
-def ingest(
-    cube_dir: Path | str,
-    start_month: str,
-    cube: CubeSpec = CHIRPS_CUBE,
-) -> None:
+def ingest(cube_dir: Path | str, start_month: str, cube: CubeSpec = CHIRPS_CUBE) -> None:
     """Add CHIRPS months from `start_month` to the cube, refreshing revised ones.
 
     The first run starts at `start_month`; later runs continue after the last stored month and
@@ -63,6 +60,7 @@ def ingest(
     """
     cube_dir = Path(cube_dir)
     stored, source_modified, pending = _stored_state(cube_dir, cube)
+
     newest = newest_month()
     new_months, first_unpublished = _probe_new_months(stored, start_month, newest)
     refetch = _revision_months(stored, source_modified)
@@ -75,14 +73,14 @@ def ingest(
     batches = year_batches(wanted, pending_newest, min(stored, default=None))
     downloads = cube_dir / DOWNLOADS_DIR
     downloads.mkdir(parents=True, exist_ok=True)
+
     for batch in batches:
         log.info("%s: ingesting %s to %s", cube.title, batch[0], batch[-1])
         _ingest_batch(cube_dir, cube, batch, downloads)
 
 
 def _stored_state(
-    cube_dir: Path,
-    cube: CubeSpec,
+    cube_dir: Path, cube: CubeSpec
 ) -> tuple[dict[str, str], dict[str, str], list[str]]:
     """Return stored markers, Last-Modified dates and pending months, empty when missing."""
     stored_attrs = cube_attrs(cube_dir, cube)
@@ -94,9 +92,7 @@ def _stored_state(
 
 
 def _probe_new_months(
-    stored: dict[str, str],
-    start_month: str,
-    newest: str,
+    stored: dict[str, str], start_month: str, newest: str
 ) -> tuple[list[str], str | None]:
     """Return months published after storage and the first month that is not yet published.
 
@@ -127,10 +123,7 @@ def _probe_new_months(
     return published, first_unpublished
 
 
-def _revision_months(
-    stored: dict[str, str],
-    source_modified: dict[str, str],
-) -> list[str]:
+def _revision_months(stored: dict[str, str], source_modified: dict[str, str]) -> list[str]:
     """Return stored months whose Last-Modified changed, checking the last year plus the first.
 
     The first month stands in for the whole archive because a republish stamps it as well.
@@ -191,23 +184,14 @@ def _head_once(url: str, timeout: float) -> tuple[bool, str | None]:
         raise
 
 
-def _ingest_batch(
-    cube_dir: Path,
-    cube: CubeSpec,
-    batch: list[str],
-    downloads: Path,
-) -> None:
+def _ingest_batch(cube_dir: Path, cube: CubeSpec, batch: list[str], downloads: Path) -> None:
     """Download one year batch, check it and publish it with its Last-Modified dates."""
     targets = {month: downloads / f"{cube.name}-{month}.cog" for month in batch}
     combined = dict(cube_attrs(cube_dir, cube).get(SOURCE_MODIFIED_ATTR, {}))
     try:
         fields = _batch_fields(batch, targets, cube, combined)
         write_months(
-            cube_dir,
-            cube,
-            complete=False,
-            months=fields,
-            attrs={SOURCE_MODIFIED_ATTR: combined},
+            cube_dir, cube, complete=False, months=fields, attrs={SOURCE_MODIFIED_ATTR: combined}
         )
     finally:
         for target in targets.values():
@@ -215,10 +199,7 @@ def _ingest_batch(
 
 
 def _batch_fields(
-    batch: list[str],
-    targets: dict[str, Path],
-    cube: CubeSpec,
-    combined: dict[str, str],
+    batch: list[str], targets: dict[str, Path], cube: CubeSpec, combined: dict[str, str]
 ) -> Iterator[MonthField]:
     """Yield each month after downloading it, recording its Last-Modified date."""
     for month in batch:
@@ -234,6 +215,7 @@ def _download_month(month: str, target: Path) -> str | None:
     url = _chirps_url(month)
     body, last_modified = _with_retries(url, lambda: _fetch_once(url, DOWNLOAD_TIMEOUT_SECS))
     target.write_bytes(body)
+
     return last_modified
 
 
@@ -262,10 +244,10 @@ def _read_cog_month(path: Path | str, month: str, cube: CubeSpec) -> MonthField:
 def _check_grid(dataset: rasterio.DatasetReader, grid: Grid) -> None:
     """Reject a raster whose edges, size or rotation do not match the cube grid."""
     transform = dataset.transform
+
     if (dataset.width, dataset.height) != (grid.columns, grid.rows):
         raise ValueError(
-            f"expected {grid.columns}x{grid.rows} cells, "
-            f"got {dataset.width}x{dataset.height}",
+            f"expected {grid.columns}x{grid.rows} cells, got {dataset.width}x{dataset.height}"
         )
 
     aligned = (
@@ -279,7 +261,7 @@ def _check_grid(dataset: rasterio.DatasetReader, grid: Grid) -> None:
     if not aligned:
         raise ValueError(
             f"expected unrotated {grid.res} degree cells from "
-            f"{grid.west_deg}E {grid.north_deg}N, got {transform}",
+            f"{grid.west_deg}E {grid.north_deg}N, got {transform}"
         )
 
 
@@ -309,12 +291,15 @@ def _retry_after_delay(headers: Message) -> float:
         return max(0, int(value))
     except (TypeError, ValueError):
         pass
+
     try:
         date = parsedate_to_datetime(value)
     except (TypeError, ValueError):
         return 0
+
     if date.tzinfo is None:
         date = date.replace(tzinfo=timezone.utc)
+
     now = datetime.now(timezone.utc)
     return max(0, (date - now).total_seconds())
 

@@ -5,7 +5,8 @@ import type { Bbox } from "../types.ts";
 import {
   DEFAULT_BLEND_WINDOW,
   demLevels,
-  pinnedBase, planDemTiles,
+  pinnedBase,
+  planDemTiles,
   type DemPlanRequest,
 } from "./dem-plan.ts";
 
@@ -15,13 +16,16 @@ const ANTIMERIDIAN: Bbox = [170, -10, 190, 10];
 
 const worldX = (longitude: number) => (longitude + 180) / 360;
 const worldY = (latitude: number) =>
-  (1 - Math.log(Math.tan(latitude * Math.PI / 180) + 1 / Math.cos(latitude * Math.PI / 180))
-    / Math.PI) / 2;
+  (1
+    - Math.log(Math.tan((latitude * Math.PI) / 180) + 1 / Math.cos((latitude * Math.PI) / 180))
+      / Math.PI)
+  / 2;
 
 // A view a few tiles wide around a point, at the tile size of the given level.
 function request(overrides: Partial<DemPlanRequest> & { zoom: number }): DemPlanRequest {
   const half = 1.5 / 2 ** Math.round(overrides.zoom);
   const centre = { x: worldX(38), y: worldY(0) };
+
   return {
     view: {
       west: centre.x - half,
@@ -72,6 +76,7 @@ test("share is 1 when the clamps make the two levels equal", () => {
 
 test("pinned base is the fit level over the scene while it needs at most 48 tiles", () => {
   const base = pinnedBase(KENYA_LIKE, 5);
+
   assert.equal(base.zoom, 5);
   assert.ok(base.tiles.length > 0 && base.tiles.length <= 48);
   assert.ok(base.tiles.every((tile) => tile.z === 5 && tile.tier === "pinned"));
@@ -86,6 +91,7 @@ test("pinned base moves one level coarser above 48 tiles", () => {
 test("pinned base of a scene across the antimeridian holds wrapped tiles from both sides", () => {
   const base = pinnedBase(ANTIMERIDIAN, 4);
   const columns = new Set(base.tiles.map((tile) => tile.x));
+
   assert.ok(columns.has(15) && columns.has(0));
   assert.equal(new Set(base.tiles.map(keyOf)).size, base.tiles.length);
 });
@@ -94,7 +100,11 @@ test("wanted tiles come in tier order with pinned first and no repeats", () => {
   const { wanted } = planDemTiles(request({ zoom: 7.5 }));
   const order = ["pinned", "view", "partner", "parent", "ring"];
   const ranks = wanted.map((tile) => order.indexOf(tile.tier));
-  assert.deepEqual(ranks, [...ranks].sort((left, right) => left - right));
+
+  assert.deepEqual(
+    ranks,
+    [...ranks].sort((left, right) => left - right),
+  );
   assert.equal(new Set(wanted.map(keyOf)).size, wanted.length);
   assert.equal(wanted[0].tier, "pinned");
 });
@@ -102,13 +112,19 @@ test("wanted tiles come in tier order with pinned first and no repeats", () => {
 test("view tiles sit at the sharp level and start at the centre", () => {
   const { wanted, levels } = planDemTiles(request({ zoom: 7.2 }));
   const view = wanted.filter((tile) => tile.tier === "view");
+
   assert.ok(view.length > 1);
   assert.ok(view.every((tile) => tile.z === levels.sharp));
+
   const count = 2 ** levels.sharp;
   const distance = (tile: { x: number; y: number }) =>
     (tile.x + 0.5 - worldX(38) * count) ** 2 + (tile.y + 0.5 - worldY(0) * count) ** 2;
   const distances = view.map(distance);
-  assert.deepEqual(distances, [...distances].sort((left, right) => left - right));
+
+  assert.deepEqual(
+    distances,
+    [...distances].sort((left, right) => left - right),
+  );
 });
 
 test("no partner is wanted outside the blend window", () => {
@@ -119,8 +135,11 @@ test("no partner is wanted outside the blend window", () => {
 
 test("inside the window the finer level is the partner of a lower sharp level", () => {
   const { wanted, quads, levels } = planDemTiles(request({ zoom: 7.48 }));
+
   assert.equal(levels.sharp, 7);
+
   const partners = wanted.filter((tile) => tile.tier === "partner");
+
   assert.ok(partners.length > 0 && partners.every((tile) => tile.z === 8));
   assert.ok(quads.every((quad) => quad.z === 8));
   assert.ok(quads.every((quad) => Math.abs(quad.selfWeight + quad.parentWeight - 1) < 1e-9));
@@ -129,8 +148,11 @@ test("inside the window the finer level is the partner of a lower sharp level", 
 
 test("inside the window the lower level is the partner of a finer sharp level", () => {
   const { wanted, quads, levels } = planDemTiles(request({ zoom: 7.52 }));
+
   assert.equal(levels.sharp, 8);
+
   const partners = wanted.filter((tile) => tile.tier === "partner");
+
   assert.ok(partners.length > 0 && partners.every((tile) => tile.z === 7));
   assert.ok(quads[0].selfWeight > 0.5);
 });
@@ -146,16 +168,19 @@ test("ring tiles are the one-tile border of the view and lean towards the headin
   const view = plain.wanted.filter((tile) => tile.tier === "view");
   const ring = plain.wanted.filter((tile) => tile.tier === "ring");
   const viewKeys = new Set(view.map(keyOf));
+
   const columns = view.map((tile) => tile.x);
   const rows = view.map((tile) => tile.y);
   const [minX, maxX] = [Math.min(...columns), Math.max(...columns)];
   const [minY, maxY] = [Math.min(...rows), Math.max(...rows)];
+
   assert.ok(ring.length > 0 && ring.every((tile) => !viewKeys.has(keyOf(tile))));
   assert.ok(ring.every((tile) => tile.x >= minX - 1 && tile.x <= maxX + 1));
   assert.ok(ring.every((tile) => tile.y >= minY - 1 && tile.y <= maxY + 1));
 
   const first = (heading: { x: number; y: number }) =>
     planDemTiles(request({ zoom: 9.3, heading })).wanted.find((tile) => tile.tier === "ring")!;
+
   assert.equal(first({ x: 1, y: 0 }).x, maxX + 1);
   assert.equal(first({ x: -1, y: 0 }).x, minX - 1);
   assert.equal(first({ x: 0, y: -1 }).y, minY - 1);
@@ -166,11 +191,13 @@ test("tiles outside the scene are never wanted or drawn", () => {
   const wide = request({ zoom: 7.3 });
   const half = 40 / 2 ** 7;
   wide.view = { west: worldX(38) - half, east: worldX(38) + half, north: 0.4, south: 0.6 };
+
   const { wanted, quads } = planDemTiles(wide);
   const count = 2 ** 7;
   const westEdge = Math.floor(worldX(KENYA_LIKE[0]) * count);
   const eastEdge = Math.floor(worldX(KENYA_LIKE[2]) * count);
   const columns = wanted.filter((tile) => tile.z === 7).map((tile) => tile.x);
+
   assert.ok(columns.every((x) => x >= westEdge && x <= eastEdge));
   assert.ok(quads.every((quad) => quad.x >= westEdge && quad.x <= eastEdge));
 });
@@ -183,8 +210,10 @@ test("quads keep an unwrapped x while textures use the wrapped key", () => {
     north: shifted.view.north,
     south: shifted.view.south,
   };
+
   const { quads, wanted } = planDemTiles(shifted);
   const count = 2 ** 7;
+
   assert.ok(quads.length > 0);
   assert.ok(quads.every((quad) => quad.x >= count && quad.wrappedX === quad.x - count));
   assert.ok(wanted.every((tile) => tile.x >= 0 && tile.x < count));
@@ -201,6 +230,7 @@ test("a view across the antimeridian wants tiles from both ends of the world", (
     blendWindow: WINDOW,
   });
   const columns = new Set(wanted.filter((tile) => tile.tier === "view").map((tile) => tile.x));
+
   assert.ok(columns.has(63) && columns.has(0));
   assert.ok(quads.some((quad) => quad.x >= 64) && quads.some((quad) => quad.x < 64));
 });
@@ -208,8 +238,12 @@ test("a view across the antimeridian wants tiles from both ends of the world", (
 test("ancestor chains run from the parent down to the pinned level", () => {
   const { quads, baseZoom } = planDemTiles(request({ zoom: 8 }));
   const quad = quads[0];
+
   assert.equal(baseZoom, 5);
-  assert.deepEqual(quad.ancestors.map((tile) => tile.z), [7, 6, 5]);
+  assert.deepEqual(
+    quad.ancestors.map((tile) => tile.z),
+    [7, 6, 5],
+  );
   assert.deepEqual(
     quad.ancestors.map((tile) => [tile.x, tile.y]),
     [1, 2, 3].map((up) => [quad.wrappedX >> up, quad.y >> up]),
@@ -235,9 +269,13 @@ test("a window wider than half a zoom is limited so the share has no jump at who
 
 test("chains end at a pinned level one coarser than the fit level", () => {
   const { quads, baseZoom } = planDemTiles(request({ zoom: 10, fitLevel: 9 }));
+
   assert.equal(baseZoom, 8);
   assert.ok(quads.length > 0);
-  assert.deepEqual(quads[0].ancestors.map((tile) => tile.z), [9, 8]);
+  assert.deepEqual(
+    quads[0].ancestors.map((tile) => tile.z),
+    [9, 8],
+  );
 });
 
 // A scene that covers exactly the given block of level 4 tiles, inset from the tile edges.
@@ -245,7 +283,8 @@ function blockOfLevel4(columns: number, rows: number): Bbox {
   const count = 2 ** 4;
   const inset = 0.05;
   const latitudeOf = (row: number) =>
-    Math.atan(Math.sinh(Math.PI * (1 - 2 * row / count))) * 180 / Math.PI;
+    (Math.atan(Math.sinh(Math.PI * (1 - (2 * row) / count))) * 180) / Math.PI;
+
   return [
     -180 + (inset / count) * 360,
     latitudeOf(6 + rows - inset),
@@ -256,8 +295,11 @@ function blockOfLevel4(columns: number, rows: number): Bbox {
 
 test("the pinned base keeps exactly 48 tiles and moves coarser at 49", () => {
   const kept = pinnedBase(blockOfLevel4(12, 4), 4);
+
   assert.deepEqual([kept.zoom, kept.tiles.length], [4, 48]);
+
   const coarser = pinnedBase(blockOfLevel4(7, 7), 4);
+
   assert.equal(coarser.zoom, 3);
 });
 
@@ -275,6 +317,7 @@ test("a view far below the fit zoom plans a bounded number of tiles", () => {
     maxZoom: 12,
     blendWindow: WINDOW,
   });
+
   assert.ok(plan.wanted.length < 600);
   assert.ok(plan.quads.length < 600);
 });

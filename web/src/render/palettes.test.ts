@@ -21,15 +21,24 @@ test("legacy even custom names still parse to evenly spaced stops", () => {
   const stops = customStops("custom-000000-ffffff")!;
 
   assert.equal(stops.length, 2);
-  assert.deepEqual(stops.map(({ at }) => at), [0, 1]);
+  assert.deepEqual(
+    stops.map(({ at }) => at),
+    [0, 1],
+  );
   assert.deepEqual(customColors("custom-000000-ffffff"), ["#000000", "#ffffff"]);
-  assert.deepEqual(fieldGradient("custom-000000-ffffff"), [[0, 0, 0], [255, 255, 255]]);
+  assert.deepEqual(fieldGradient("custom-000000-ffffff"), [
+    [0, 0, 0],
+    [255, 255, 255],
+  ]);
 });
 
 test("positioned custom names parse with integer percents in non-decreasing order", () => {
   const stops = customStops("custom-447dc4_0-189d73_50-618d63_80-cf764c_100")!;
 
-  assert.deepEqual(stops.map(({ at }) => at), [0, 0.5, 0.8, 1]);
+  assert.deepEqual(
+    stops.map(({ at }) => at),
+    [0, 0.5, 0.8, 1],
+  );
   assert.deepEqual(customColors("custom-447dc4_0-189d73_50-618d63_80-cf764c_100"), [
     "#447dc4",
     "#189d73",
@@ -48,7 +57,9 @@ test("custom names reject mixed, unordered or out-of-range positions", () => {
     "custom-00000g-ffffff",
     "custom-000000-FFFFff",
   ];
+
   for (const name of bad) assert.equal(customStops(name), null, name);
+
   assert.equal(customStops("custom-000000_0-000000_0-ffffff_100")!.length, 3);
 });
 
@@ -61,7 +72,10 @@ test("custom names canonically omit positions when the stops sit evenly", () => 
 
   assert.equal(customPalette(even), "custom-000000-888888-ffffff");
   assert.equal(
-    customPalette([{ at: 0, rgb: [0, 0, 0] }, { at: 0.4, rgb: [255, 255, 255] }]),
+    customPalette([
+      { at: 0, rgb: [0, 0, 0] },
+      { at: 0.4, rgb: [255, 255, 255] },
+    ]),
     "custom-000000_0-ffffff_40",
   );
   assert.equal(customPalette(customStops("custom-000000-ffffff")!), "custom-000000-ffffff");
@@ -71,8 +85,14 @@ test("built-in gradients expose even stops while unknown names stay unknown", ()
   const stops = fieldStops("ink-blue")!;
 
   assert.equal(stops.length, 9);
-  assert.deepEqual(stops.map(({ at }) => at), stops.map((_, index) => index / 8));
-  assert.deepEqual(fieldStops("custom-000000_0-ffffff_100")!.map(({ at }) => at), [0, 1]);
+  assert.deepEqual(
+    stops.map(({ at }) => at),
+    stops.map((_, index) => index / 8),
+  );
+  assert.deepEqual(
+    fieldStops("custom-000000_0-ffffff_100")!.map(({ at }) => at),
+    [0, 1],
+  );
   assert.equal(fieldStops("nope"), undefined);
   assert.equal(fieldGradient("nope"), undefined);
 });
@@ -121,12 +141,14 @@ const MIN_SIBLING_OKLAB_DISTANCE = 0.03;
 function oklabOf(rgb: number[]): [number, number, number] {
   const { lightness, chroma, hue } = rgbToOklch(rgb);
   const angle = (hue * Math.PI) / 180;
+
   return [lightness, chroma * Math.cos(angle), chroma * Math.sin(angle)];
 }
 
 function pairwiseDistances(rgbs: number[][]) {
   const labs = rgbs.map(oklabOf);
   const distances = [];
+
   for (let first = 0; first < labs.length; first++) {
     for (let second = first + 1; second < labs.length; second++) {
       distances.push(
@@ -138,6 +160,7 @@ function pairwiseDistances(rgbs: number[][]) {
       );
     }
   }
+
   return distances;
 }
 
@@ -147,6 +170,7 @@ test("siliciclastic coarse, fine and mixed grains differ by a minimum colour dis
   );
 
   assert.equal(new Set(rgbs.map((rgb) => rgb.join(","))).size, rgbs.length);
+
   for (const distance of pairwiseDistances(rgbs)) {
     assert.ok(distance > MIN_SIBLING_OKLAB_DISTANCE, `distance ${distance}`);
   }
@@ -158,6 +182,7 @@ test("unconsolidated mixed, coarse, fine, alluvial and loess differ by a minimum
   );
 
   assert.equal(new Set(rgbs.map((rgb) => rgb.join(","))).size, rgbs.length);
+
   for (const distance of pairwiseDistances(rgbs)) {
     assert.ok(distance > MIN_SIBLING_OKLAB_DISTANCE, `distance ${distance}`);
   }

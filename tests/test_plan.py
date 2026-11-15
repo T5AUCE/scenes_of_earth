@@ -1,4 +1,5 @@
 """Test that planning stores per-layer geometry and area weights, with a zero-area guard."""
+
 import math
 from dataclasses import replace
 
@@ -57,6 +58,7 @@ def test_polygon_touching_coverage_edge_keeps_weights():
             polygons.append(member)
         elif member.geom_type == "MultiPolygon":
             polygons.extend(member.geoms)
+
     expected = area_weights(MultiPolygon(polygons), layer.transform, layer.shape, layer.mask)
     west = layer.transform.c
     north = layer.transform.f
@@ -168,12 +170,7 @@ def test_area_crossing_60_north_reads_beyond_60_for_terrain_and_land_cover():
     assert scene_plan.layers["esa_worldcover"].bbox[3] > 60
 
 
-TWO_ISLANDS = MultiPolygon(
-    [
-        box(36.5, -1.5, 37.5, -0.5),
-        box(42.6, 10.8, 43.8, 11.9),
-    ],
-)
+TWO_ISLANDS = MultiPolygon([box(36.5, -1.5, 37.5, -0.5), box(42.6, 10.8, 43.8, 11.9)])
 
 
 def test_tile_cap_counts_only_tiles_the_outline_touches():
@@ -184,12 +181,10 @@ def test_tile_cap_counts_only_tiles_the_outline_touches():
     cover_layer = scene_plan.layers["esa_worldcover"]
 
     assert TERRAIN.tile_count(terrain_layer.bbox) > TERRAIN.tile_count(
-        terrain_layer.bbox,
-        terrain_layer.geometry,
+        terrain_layer.bbox, terrain_layer.geometry
     )
     assert LAND_COVER.tile_count(cover_layer.bbox) > LAND_COVER.tile_count(
-        cover_layer.bbox,
-        cover_layer.geometry,
+        cover_layer.bbox, cover_layer.geometry
     )
 
 
@@ -197,10 +192,12 @@ def test_tile_cap_passes_when_only_touched_tiles_fit_and_fails_on_them():
     area = Area(TWO_ISLANDS)
 
     assert plan(area, [replace(TERRAIN, max_tiles=10)], None, None)
+
     with pytest.raises(AreaError, match="needs more than 7 source tiles"):
         plan(area, [replace(TERRAIN, max_tiles=7)], None, None)
 
     assert plan(area, [replace(LAND_COVER, max_tiles=2)], None, None)
+
     with pytest.raises(AreaError, match="needs more than 1 source tiles"):
         plan(area, [replace(LAND_COVER, max_tiles=1)], None, None)
 
@@ -233,10 +230,7 @@ def test_plan_keeps_edge_only_contact_across_outline_sizes():
     assert small_layer.bbox == large_layer.bbox
     np.testing.assert_array_equal(small_layer.mask, large_layer.mask)
     np.testing.assert_allclose(
-        small_layer.area_weights,
-        large_layer.area_weights,
-        rtol=1e-12,
-        atol=0.0,
+        small_layer.area_weights, large_layer.area_weights, rtol=1e-12, atol=0.0
     )
     assert small_layer.sources == large_layer.sources
     assert small_layer.geometry.equals(large_layer.geometry)
@@ -256,10 +250,7 @@ def test_plan_keeps_hole_crossing_coverage_edge_across_outline_sizes():
     assert small_layer.bbox == large_layer.bbox
     np.testing.assert_array_equal(small_layer.mask, large_layer.mask)
     np.testing.assert_allclose(
-        small_layer.area_weights,
-        large_layer.area_weights,
-        rtol=1e-12,
-        atol=0.0,
+        small_layer.area_weights, large_layer.area_weights, rtol=1e-12, atol=0.0
     )
     assert small_layer.sources == large_layer.sources
     assert small_layer.geometry.equals(large_layer.geometry)
@@ -280,10 +271,7 @@ def test_plan_keeps_touching_parts_across_outline_sizes():
     assert small_layer.bbox == large_layer.bbox
     np.testing.assert_array_equal(small_layer.mask, large_layer.mask)
     np.testing.assert_allclose(
-        small_layer.area_weights,
-        large_layer.area_weights,
-        rtol=1e-12,
-        atol=0.0,
+        small_layer.area_weights, large_layer.area_weights, rtol=1e-12, atol=0.0
     )
     assert small_layer.sources == large_layer.sources
     assert small_layer.geometry.equals(large_layer.geometry)

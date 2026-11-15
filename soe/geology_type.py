@@ -30,104 +30,20 @@ WATER_CLASS = 255
 
 # Each family lists its level 2 codes in value order, with "__" for no level 2 code.
 GLIM_FAMILIES = [
-    (
-        "su",
-        "Unconsolidated",
-        "Sediments",
-        "#fdf0a8",
-        "mx ss sh pu py ad ds la lo or",
-    ),
-    (
-        "ss",
-        "Siliciclastic",
-        "Sediments",
-        "#e8c33c",
-        "mx ss sh py am la lo",
-    ),
-    (
-        "sm",
-        "Mixed",
-        "Sediments",
-        "#c2ab5a",
-        "mx ss sh py ad ds la lo or am gr",
-    ),
-    (
-        "sc",
-        "Carbonate",
-        "Sediments",
-        "#6fa8d6",
-        "mx ss sh pu py ad la lo am",
-    ),
-    (
-        "ev",
-        "Evaporites",
-        "Sediments",
-        "#c5a3d6",
-        "__ mx ss sh pu",
-    ),
-    (
-        "py",
-        "Pyroclastics",
-        "Volcanic",
-        "#d9753b",
-        "__ mx ss sh pu or am",
-    ),
-    (
-        "va",
-        "Acid",
-        "Volcanic",
-        "#e57373",
-        "__ pu py am",
-    ),
-    (
-        "vi",
-        "Intermediate",
-        "Volcanic",
-        "#c0392b",
-        "__ mx pu py am",
-    ),
-    (
-        "vb",
-        "Basic",
-        "Volcanic",
-        "#6c3483",
-        "__ mx pu py la am gr",
-    ),
-    (
-        "pa",
-        "Acid",
-        "Plutonic",
-        "#f194b4",
-        "__ pu py am gr",
-    ),
-    (
-        "pi",
-        "Intermediate",
-        "Plutonic",
-        "#d65d8a",
-        "__ pu py am gr",
-    ),
-    (
-        "pb",
-        "Basic",
-        "Plutonic",
-        "#8e2f5c",
-        "__ pu py am",
-    ),
-    (
-        "mt",
-        "Metamorphic",
-        "Metamorphic",
-        "#8a9a7b",
-        "__ mx sh pu py la am gr",
-    ),
-    (
-        "ig",
-        "Ice and glaciers",
-        "Ice/other",
-        "#f2f4f5",
-        "__",
-    ),
+    ("su", "Unconsolidated", "Sediments", "#fdf0a8", "mx ss sh pu py ad ds la lo or"),
+    ("ss", "Siliciclastic", "Sediments", "#e8c33c", "mx ss sh py am la lo"),
+    ("sm", "Mixed", "Sediments", "#c2ab5a", "mx ss sh py ad ds la lo or am gr"),
+    ("sc", "Carbonate", "Sediments", "#6fa8d6", "mx ss sh pu py ad la lo am"),
+    ("ev", "Evaporites", "Sediments", "#c5a3d6", "__ mx ss sh pu"),
+    ("py", "Pyroclastics", "Volcanic", "#d9753b", "__ mx ss sh pu or am"),
+    ("va", "Acid", "Volcanic", "#e57373", "__ pu py am"),
+    ("vi", "Intermediate", "Volcanic", "#c0392b", "__ mx pu py am"),
+    ("vb", "Basic", "Volcanic", "#6c3483", "__ mx pu py la am gr"),
+    ("pa", "Acid", "Plutonic", "#f194b4", "__ pu py am gr"),
+    ("pi", "Intermediate", "Plutonic", "#d65d8a", "__ pu py am gr"),
+    ("pb", "Basic", "Plutonic", "#8e2f5c", "__ pu py am"),
+    ("mt", "Metamorphic", "Metamorphic", "#8a9a7b", "__ mx sh pu py la am gr"),
+    ("ig", "Ice and glaciers", "Ice/other", "#f2f4f5", "__"),
 ]
 GLIM_LEVEL2_NAMES = {
     "__": "",
@@ -161,6 +77,7 @@ def _glim_class_table() -> list[tuple[str, dict]]:
                 "variant": variant,
             }
             table.append((code + level2, entry))
+
     return table
 
 
@@ -168,4 +85,3 @@ _GLIM_TABLE = _glim_class_table()
 GEOLOGY_CLASSES = [entry for _, entry in _GLIM_TABLE]  # the classes of the GLiM COG
 # Water bodies (wb) and no data (nd) have no value, so the COG stores them as 0.
 GLIM_VALUES = {code: entry["value"] for code, entry in _GLIM_TABLE}
-

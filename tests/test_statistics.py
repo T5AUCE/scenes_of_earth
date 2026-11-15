@@ -1,4 +1,5 @@
 """Exact area-weighted means, shares and quantiles for chart blocks."""
+
 import json
 
 import numpy as np
@@ -162,8 +163,10 @@ def test_zero_total_weight_raises_area_error():
 
     with pytest.raises(AreaError):
         weighted_step(values, weights)
+
     with pytest.raises(AreaError):
         AreaSeriesAccumulator(weights)
+
     with pytest.raises(AreaError):
         weighted_distribution(values, weights)
 
@@ -247,11 +250,7 @@ def test_blocks_survive_json_round_trip():
     assert series["values"][1] != round(series["values"][1], 2)
 
     references = [{"id": "sea_level", "value": 0}]
-    block = weighted_distribution(
-        np.array([[FIRST_VALUE, SECOND_VALUE]]),
-        weights,
-        references,
-    )
+    block = weighted_distribution(np.array([[FIRST_VALUE, SECOND_VALUE]]), weights, references)
 
     assert json.loads(json.dumps(block)) == block
     assert block["reference_values"] == references

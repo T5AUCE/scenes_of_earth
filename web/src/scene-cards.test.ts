@@ -4,8 +4,8 @@ import { test } from "node:test";
 
 import type { Map as MapLibreMap } from "maplibre-gl";
 
-import type { BlendView } from "./layers/blend.ts";
 import { DEFAULT_OUTLINE } from "./display-state.ts";
+import type { BlendView } from "./layers/blend.ts";
 import type { MountedLayer } from "./scene-cards.ts";
 import { createSceneStore } from "./scene-store.ts";
 import type { LayerDoc, LayerView } from "./types.ts";
@@ -21,6 +21,7 @@ const hooks = registerHooks({
       if (specifier.endsWith(".ts")) return next(specifier, context);
       return next(new URL(`${specifier}.ts`, context.parentURL).href, context);
     }
+
     return next(specifier, context);
   },
 });
@@ -39,7 +40,10 @@ test("the map draws the store's allocation and follows later choices", () => {
 
   const stop = subscribeDrawing(
     map,
-    [{ layer: RAIN, view: rain }, { layer: TEMPERATURE, view: temperature }],
+    [
+      { layer: RAIN, view: rain },
+      { layer: TEMPERATURE, view: temperature },
+    ],
     null,
     store,
   );
@@ -55,6 +59,7 @@ test("the map draws the store's allocation and follows later choices", () => {
 
   stop();
   store.dispatch({ kind: "clear", unit: "rain" });
+
   assert.equal(rain.shown.length, 2);
 });
 
@@ -71,10 +76,7 @@ test("switching a part off hides its map layers and shows them again", () => {
 
   store.dispatch({ kind: "toggle", unit: "terrain.contours", on: false });
 
-  assert.deepEqual(changes, [
-    "terrain:visible",
-    "terrain.contours:none",
-  ]);
+  assert.deepEqual(changes, ["terrain:visible", "terrain.contours:none"]);
 });
 
 test("the blend follows colour ownership and hides its legend when it stops drawing", () => {
@@ -86,7 +88,10 @@ test("the blend follows colour ownership and hides its legend when it stops draw
 
   subscribeDrawing(
     map,
-    [{ layer: RAIN, view: rain }, { layer: TEMPERATURE, view: temperature }],
+    [
+      { layer: RAIN, view: rain },
+      { layer: TEMPERATURE, view: temperature },
+    ],
     blend,
     store,
   );
@@ -125,13 +130,17 @@ test("the blend restyles only when its ranges change", () => {
 
   subscribeDrawing(
     map,
-    [{ layer: RAIN, view: rain }, { layer: TEMPERATURE, view: temperature }],
+    [
+      { layer: RAIN, view: rain },
+      { layer: TEMPERATURE, view: temperature },
+    ],
     blend,
     store,
   );
   restyles = 0;
 
   store.dispatch({ kind: "toggle", unit: "rain", on: false });
+
   assert.equal(restyles, 0);
 
   store.dispatch({
@@ -140,6 +149,7 @@ test("the blend restyles only when its ranges change", () => {
       next.layers.rain = { range: [0, 5] };
     },
   });
+
   assert.equal(restyles, 1);
 
   store.dispatch({
@@ -148,6 +158,7 @@ test("the blend restyles only when its ranges change", () => {
       next.layers.rain = { range: [0, 5] };
     },
   });
+
   assert.equal(restyles, 1);
 });
 
@@ -161,7 +172,10 @@ test("the blend restyles when a half's display units change", () => {
 
   subscribeDrawing(
     map,
-    [{ layer: RAIN, view: rain }, { layer: TEMPERATURE, view: temperature }],
+    [
+      { layer: RAIN, view: rain },
+      { layer: TEMPERATURE, view: temperature },
+    ],
     blend,
     store,
   );
@@ -173,6 +187,7 @@ test("the blend restyles when a half's display units change", () => {
       next.layers.rain = { units: "in/month" };
     },
   });
+
   assert.equal(restyles, 1);
 
   store.dispatch({
@@ -181,6 +196,7 @@ test("the blend restyles when a half's display units change", () => {
       next.layers.rain = { units: "in/month" };
     },
   });
+
   assert.equal(restyles, 1);
 });
 
@@ -222,12 +238,7 @@ test("chart-only changes keep map identity and skip redraws", () => {
 });
 
 function display() {
-  return {
-    layers: {},
-    off: new Set<string>(),
-    showAs: {},
-    outline: { ...DEFAULT_OUTLINE },
-  };
+  return { layers: {}, off: new Set<string>(), showAs: {}, outline: { ...DEFAULT_OUTLINE } };
 }
 
 function chartLayers(): LayerDoc[] {
@@ -236,6 +247,7 @@ function chartLayers(): LayerDoc[] {
       const date = new Date(Date.UTC(2019, index, 1));
       return date.toISOString().slice(0, 10);
     });
+
     return {
       id,
       title: id,
@@ -250,15 +262,11 @@ function chartLayers(): LayerDoc[] {
       },
     } as unknown as LayerDoc;
   };
+
   return [monthly("chirps", "sum"), monthly("era5", "mean")];
 }
 
-function layer(
-  id: string,
-  title: string,
-  encodings: string[],
-  parts: string[] = [],
-): LayerDoc {
+function layer(id: string, title: string, encodings: string[], parts: string[] = []): LayerDoc {
   return {
     id,
     title,

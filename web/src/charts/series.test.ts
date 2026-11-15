@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import type { LayerDoc } from "../types.ts";
 import {
   buildDistributionTable,
   buildSeasonalCycle,
@@ -15,7 +16,6 @@ import {
   unionDomainFor,
   unionIntervals,
 } from "./series.ts";
-import type { LayerDoc } from "../types.ts";
 
 test("monthly layers need two full years before By month is offered", () => {
   assert.equal(SEASONAL_MIN_STEPS, 24);
@@ -52,10 +52,17 @@ test("seasonal tables average finite yearly means with counts and year ranges", 
   const table = buildSeasonalCycle(seasonalLayer());
 
   assert.equal(table.rows.length, 12);
-  assert.deepEqual(table.rows.map((row) => row.x), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-  assert.deepEqual(table.rows.map((row) => row.label), MONTH_LABELS);
+  assert.deepEqual(
+    table.rows.map((row) => row.x),
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+  );
+  assert.deepEqual(
+    table.rows.map((row) => row.label),
+    MONTH_LABELS,
+  );
 
   const january = table.rows[0];
+
   assert.equal(january.value, 15);
   assert.equal(january.sampleCount, 2);
   assert.deepEqual(january.yearRange, [2019, 2020]);
@@ -63,6 +70,7 @@ test("seasonal tables average finite yearly means with counts and year ranges", 
   assert.ok(Math.abs((january.fallbackFraction ?? 0) - 0.05) < 1e-12);
 
   const february = table.rows[1];
+
   assert.equal(february.value, null);
   assert.equal(february.sampleCount, 0);
   assert.equal(february.yearRange, null);
@@ -124,10 +132,9 @@ test("union intervals never invent a common period for unlike layers", () => {
   ]);
   assert.equal(unionDomainFor([]), null);
   assert.equal(unionDomainFor([terrainLayer()]), null);
-  const invalid = {
-    ...other,
-    time: { ...other.time!, values: ["not a date"] },
-  };
+
+  const invalid = { ...other, time: { ...other.time!, values: ["not a date"] } };
+
   assert.equal(unionDomainFor([invalid]), null);
 });
 

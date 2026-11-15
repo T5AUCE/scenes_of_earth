@@ -18,9 +18,11 @@ export function useElementWidth(
     const element = ref.current;
     if (!element) return;
     if (typeof ResizeObserver === "undefined") return;
+
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry) return;
+
       const next = entry.contentRect.width;
       if (Number.isFinite(next) && next > 0) setWidth(next);
     });

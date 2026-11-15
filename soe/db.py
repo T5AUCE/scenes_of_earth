@@ -1,4 +1,5 @@
 """SQLite: boundaries (search), scene jobs and source revisions; one WAL connection per call."""
+
 import hashlib
 import logging
 import sqlite3
@@ -154,6 +155,7 @@ def _add_missing_columns(connection: sqlite3.Connection) -> None:
         except sqlite3.OperationalError as error:
             if "duplicate column" not in str(error):
                 raise
+
     if "geom_digest" not in boundaries_columns:
         try:
             connection.execute("ALTER TABLE boundaries ADD COLUMN geom_digest TEXT")
@@ -162,12 +164,7 @@ def _add_missing_columns(connection: sqlite3.Connection) -> None:
                 raise
 
 
-def search(
-    path: Path | str,
-    query: str,
-    level: str | None = None,
-    limit: int = 20,
-) -> list[Record]:
+def search(path: Path | str, query: str, level: str | None = None, limit: int = 20) -> list[Record]:
     """Boundaries whose name starts with `query`, or has a word that does; best matches first.
 
     Countries also match their official long name under the same rules, after direct matches.
@@ -182,10 +179,8 @@ def search(
     where = "(name LIKE ? ESCAPE '!' OR name LIKE ? ESCAPE '!'"
     if official_iso3s:
         placeholders = ", ".join("?" for _ in official_iso3s)
-        where += (
-            " OR (boundaries.level = 'country' "
-            f"AND boundaries.iso3 IN ({placeholders}))"
-        )
+        where += f" OR (boundaries.level = 'country' AND boundaries.iso3 IN ({placeholders}))"
+
     where += ")"
     where += f" AND NOT ({SHADOWED_SYNTHETIC_COUNTRY})"
     if level:
@@ -225,11 +220,7 @@ def _official_matches(needle: str) -> list[str]:
     ]
 
 
-def get_boundary(
-    path: Path | str,
-    boundary_id: str,
-    with_geometry: bool = True,
-) -> Record | None:
+def get_boundary(path: Path | str, boundary_id: str, with_geometry: bool = True) -> Record | None:
     """One boundaries row, or None. Without geometry only the digest and preview load.
 
     The preview read skips the full stored geometry, so serving it stays fast; the stored
@@ -251,6 +242,7 @@ def get_boundary(
             "AND admin_kinds.level = boundaries.level WHERE id = ?",
             (boundary_id,),
         ).fetchone()
+
     return dict(row) if row else None
 
 
@@ -268,17 +260,22 @@ def add_boundaries(path: Path | str, source: str, rows: Iterable[BoundaryValues]
         for row in rows:
             if row[0] in seen:
                 replaced += 1
+
             seen.add(row[0])
             batch.append(_complete_row(row))
+
             if len(batch) >= INSERT_BATCH_ROWS:
                 connection.executemany(INSERT_BOUNDARY, batch)
                 batch = []
+
         if batch:
             connection.executemany(INSERT_BOUNDARY, batch)
+
         connection.execute("COMMIT")
 
     if replaced:
         log.warning("%s: %d duplicate boundary ids replaced", source, replaced)
+
     return replaced
 
 
@@ -288,12 +285,15 @@ def _complete_row(row: BoundaryValues) -> BoundaryValues:
         if row[11] is None and isinstance(row[10], str):
             return (*row[:11], geometry_digest(row[10]), *row[12:])
         return row
+
     if len(row) == 14:
         digest = geometry_digest(row[10]) if isinstance(row[10], str) else None
         return (*row[:11], digest, *row[11:])
+
     if len(row) == 13:
         digest = geometry_digest(row[10]) if isinstance(row[10], str) else None
         return (*row[:11], digest, None, *row[11:])
+
     raise ValueError(f"boundary row has {len(row)} values, expected 13, 14 or 15")
 
 
@@ -306,16 +306,12 @@ def count_boundaries_missing_preview(path: Path | str) -> int:
     """The number of boundaries whose display preview is not stored yet."""
     with connect(path) as connection:
         row = connection.execute(
-            "SELECT COUNT(*) FROM boundaries WHERE preview_geojson IS NULL",
+            "SELECT COUNT(*) FROM boundaries WHERE preview_geojson IS NULL"
         ).fetchone()
     return row[0]
 
 
-def fetch_boundaries_missing_preview(
-    path: Path | str,
-    limit: int,
-    offset: int = 0,
-) -> list[Record]:
+def fetch_boundaries_missing_preview(path: Path | str, limit: int, offset: int = 0) -> list[Record]:
     """Up to `limit` boundaries without a stored preview, oldest first, geometry included.
 
     `offset` skips rows, so a backfill moves past geometries too broken to store a preview
@@ -334,16 +330,12 @@ def count_boundaries_missing_digest(path: Path | str) -> int:
     """The number of boundaries whose geometry revision is not stored yet."""
     with connect(path) as connection:
         row = connection.execute(
-            "SELECT COUNT(*) FROM boundaries WHERE geom_digest IS NULL",
+            "SELECT COUNT(*) FROM boundaries WHERE geom_digest IS NULL"
         ).fetchone()
     return row[0]
 
 
-def fetch_boundaries_missing_digest(
-    path: Path | str,
-    limit: int,
-    offset: int = 0,
-) -> list[Record]:
+def fetch_boundaries_missing_digest(path: Path | str, limit: int, offset: int = 0) -> list[Record]:
     """Up to `limit` boundaries without a stored digest, oldest first, geometry included."""
     with connect(path) as connection:
         rows = connection.execute(
@@ -354,10 +346,7 @@ def fetch_boundaries_missing_digest(
     return [dict(row) for row in rows]
 
 
-def set_boundary_digests(
-    path: Path | str,
-    digests: Iterable[tuple[str, str]],
-) -> int:
+def set_boundary_digests(path: Path | str, digests: Iterable[tuple[str, str]]) -> int:
     """Store geometry digests as (boundary id, digest) pairs; returns the rows stored.
 
     Rows whose digest is already set keep it, so a concurrent reimport is never overwritten.
@@ -370,6 +359,7 @@ def set_boundary_digests(
             [(digest, boundary_id) for boundary_id, digest in digests],
         )
         connection.execute("COMMIT")
+
         return connection.total_changes - before
 
 
@@ -390,10 +380,7 @@ def set_boundary_preview(
     )
 
 
-def set_boundary_previews(
-    path: Path | str,
-    previews: Iterable[PreviewWrite],
-) -> int:
+def set_boundary_previews(path: Path | str, previews: Iterable[PreviewWrite]) -> int:
     """Store display previews; returns the rows stored, skipping concurrent reimports.
 
     Each write holds (boundary id, preview GeoJSON, the digest the computation was based on,
@@ -412,6 +399,7 @@ def set_boundary_previews(
             ],
         )
         connection.execute("COMMIT")
+
         return connection.total_changes - before
 
 
@@ -424,8 +412,7 @@ def set_admin_kinds(path: Path | str, rows: list[tuple[str, str, str]]) -> int:
         connection.execute("BEGIN")
         connection.execute("DELETE FROM admin_kinds")
         connection.executemany(
-            "INSERT OR REPLACE INTO admin_kinds (iso3, level, kind) VALUES (?,?,?)",
-            rows,
+            "INSERT OR REPLACE INTO admin_kinds (iso3, level, kind) VALUES (?,?,?)", rows
         )
         connection.execute("COMMIT")
         stored = connection.execute("SELECT COUNT(*) FROM admin_kinds").fetchone()[0]
@@ -437,8 +424,7 @@ def has_boundaries_besides(path: Path | str, source: str) -> bool:
     """Used to skip seeding if real boundaries exist from another source."""
     with connect(path) as connection:
         row = connection.execute(
-            "SELECT 1 FROM boundaries WHERE source != ? LIMIT 1",
-            (source,),
+            "SELECT 1 FROM boundaries WHERE source != ? LIMIT 1", (source,)
         ).fetchone()
     return row is not None
 
@@ -455,8 +441,7 @@ def update_scene(path: Path | str, scene_id: str, **fields: SqlValue) -> None:
     assignments = ", ".join(f"{column} = ?" for column in fields)
     with connect(path) as connection:
         connection.execute(
-            f"UPDATE scenes SET {assignments} WHERE id = ?",
-            (*fields.values(), scene_id),
+            f"UPDATE scenes SET {assignments} WHERE id = ?", (*fields.values(), scene_id)
         )
 
 
@@ -479,6 +464,7 @@ def submit(
         if start:
             _check_capacity(connection, max_active)
             _queue_scene(connection, scene_id, request_json, is_new=row is None)
+
         row = _select_scene(connection, scene_id)
         connection.execute("COMMIT")
     return dict(row), start
@@ -499,17 +485,14 @@ def _check_capacity(connection: sqlite3.Connection, max_active: int | None) -> N
         return
 
     active = connection.execute(
-        f"SELECT COUNT(*) FROM scenes WHERE status IN {ACTIVE_STATUSES}",
+        f"SELECT COUNT(*) FROM scenes WHERE status IN {ACTIVE_STATUSES}"
     ).fetchone()[0]
     if active >= max_active:
         raise Busy()
 
 
 def _queue_scene(
-    connection: sqlite3.Connection,
-    scene_id: str,
-    request_json: str,
-    is_new: bool,
+    connection: sqlite3.Connection, scene_id: str, request_json: str, is_new: bool
 ) -> None:
     """Insert a new job as queued, or reset an existing one to queued."""
     if is_new:
@@ -533,6 +516,7 @@ def get_revision(path: Path | str, dataset_id: str, period: str) -> tuple[str, f
             "SELECT revision, checked FROM period_revisions WHERE dataset_id = ? AND period = ?",
             (dataset_id, period),
         ).fetchone()
+
     if row is None:
         return None
 
@@ -554,13 +538,9 @@ def set_revision(path: Path | str, dataset_id: str, period: str, revision: str) 
 def connect(path: Path | str) -> Iterator[sqlite3.Connection]:
     """An autocommit WAL connection with a busy timeout, closed on exit."""
     # isolation_level=None is autocommit; submit() and add_boundaries() use explicit BEGIN.
-    connection = sqlite3.connect(
-        path,
-        timeout=SQLITE_TIMEOUT_SECS,
-        isolation_level=None,
-    )
+    connection = sqlite3.connect(path, timeout=SQLITE_TIMEOUT_SECS, isolation_level=None)
     connection.row_factory = sqlite3.Row
-    
+
     try:
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")

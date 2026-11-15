@@ -1,3 +1,11 @@
+import {
+  allocate,
+  BLEND,
+  blendPair,
+  type BlendPair,
+  type Draw,
+  layerDraws,
+} from "./layers/allocate";
 /** Resolve scene display choices and persist browser preferences independently of links. */
 import {
   DEFAULT_DENSITY_RATIO,
@@ -17,23 +25,9 @@ import {
   inkFromLink,
   inkToLink,
 } from "./render/palettes";
-import {
-  allocate,
-  BLEND,
-  blendPair,
-  type BlendPair,
-  type Draw,
-  layerDraws,
-} from "./layers/allocate";
 import { formatShowAs, parseShowAs, showAsOptions } from "./show-as";
+import type { DisplayTokens, EdgeSettings, LayerControl, LayerDisplay, LayerDoc } from "./types";
 import { displayUnitFor, isUnitFor, unitOptions } from "./units";
-import type {
-  DisplayTokens,
-  EdgeSettings,
-  LayerControl,
-  LayerDisplay,
-  LayerDoc,
-} from "./types";
 
 const STORAGE_KEY = "soe.display.v1";
 const EDGES_STORAGE_KEY = "soe.edges.v1";
@@ -119,10 +113,7 @@ function storedEdges(): Record<string, StoredEdges> {
 }
 
 function isStoredRounding(value: unknown): value is number {
-  return typeof value === "number"
-    && Number.isFinite(value)
-    && value >= 0
-    && value <= MAX_ROUNDING;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= MAX_ROUNDING;
 }
 
 function storedSoftness(value: StoredEdges) {
@@ -135,17 +126,18 @@ function storedSoftness(value: StoredEdges) {
 }
 
 function isLegacySoftness(value: unknown): value is number {
-  return typeof value === "number"
+  return (
+    typeof value === "number"
     && Number.isFinite(value)
     && value >= 0
-    && value <= MAX_LEGACY_SOFTNESS_PX;
+    && value <= MAX_LEGACY_SOFTNESS_PX
+  );
 }
 
 function isSoftness(value: unknown): value is number {
-  return typeof value === "number"
-    && Number.isFinite(value)
-    && value >= 0
-    && value <= MAX_SOFTNESS_CELLS;
+  return (
+    typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= MAX_SOFTNESS_CELLS
+  );
 }
 
 /** Remember edge choices per dataset, leaving palette storage and share links untouched. */
@@ -222,14 +214,17 @@ export function loadStoredSmoothing(datasetId: string): number {
   } catch {
     // Blocked storage falls back to the default below.
   }
+
   return GEOLOGY_SMOOTH_RADIUS_CELLS;
 }
 
 function isSmoothing(value: unknown): value is number {
-  return typeof value === "number"
+  return (
+    typeof value === "number"
     && Number.isFinite(value)
     && value >= 0
-    && value <= MAX_SMOOTH_RADIUS_CELLS;
+    && value <= MAX_SMOOTH_RADIUS_CELLS
+  );
 }
 
 /** Remember the Edge smoothing radius per dataset, leaving links untouched. */
@@ -361,6 +356,7 @@ export function resolveDisplay(
   let dropped = false;
 
   const linked = new Map<string, string>();
+
   for (const fields of tokenFields(tokens.pal)) {
     const [id, palette] = fields;
     if (fields.length === PALETTE_FIELDS && isPaletteOf(byId.get(id), palette)) {
@@ -379,6 +375,7 @@ export function resolveDisplay(
   }
 
   const linkedInks = new Map<string, string>();
+
   for (const fields of tokenFields(tokens.ink)) {
     const [id, value] = fields;
     const ink = fields.length === INK_FIELDS ? inkFromLink(value) : undefined;
@@ -388,14 +385,15 @@ export function resolveDisplay(
 
   for (const layer of layers) {
     const remembered = storedInks[layer.id];
-    const chosen = linkedInks.get(layer.id)
-      ?? (hasInk(layer) && inkColor(remembered ?? "") ? remembered : null);
+    const chosen =
+      linkedInks.get(layer.id) ?? (hasInk(layer) && inkColor(remembered ?? "") ? remembered : null);
     if (chosen && chosen !== defaultInk(layer)) {
       setLayerDisplay(display, layer.id, { ...display.layers[layer.id], ink: chosen });
     }
   }
 
   const linkedDensities = new Map<string, number>();
+
   for (const fields of tokenFields(tokens.dens)) {
     const [id, text] = fields;
     const density = fields.length === DENSITY_FIELDS ? densityOf(byId.get(id), text) : null;
@@ -406,9 +404,9 @@ export function resolveDisplay(
   for (const layer of layers) {
     const remembered = storedDensities[layer.id];
     const linked = linkedDensities.get(layer.id);
-    const density = linked ?? (hasDots(layer) && remembered !== undefined
-      ? quantiseDensity(remembered)
-      : null);
+    const density =
+      linked ?? (hasDots(layer) && remembered !== undefined ? quantiseDensity(remembered) : null);
+
     if (density !== null && density !== DEFAULT_DENSITY_RATIO) {
       setLayerDisplay(display, layer.id, { ...display.layers[layer.id], density });
     }
@@ -422,6 +420,7 @@ export function resolveDisplay(
   }
 
   const linkedUnits = new Map<string, string>();
+
   for (const fields of tokenFields(tokens.units ?? "")) {
     const [id, unit] = fields;
     if (fields.length === UNITS_FIELDS && isUnitFor(byId.get(id)?.units ?? "", unit)) {
@@ -434,10 +433,10 @@ export function resolveDisplay(
   for (const layer of layers) {
     const linked = linkedUnits.get(layer.id);
     const remembered = storedUnits[layer.id];
-    const validRemembered = remembered !== undefined && isUnitFor(layer.units, remembered)
-      ? remembered
-      : null;
+    const validRemembered =
+      remembered !== undefined && isUnitFor(layer.units, remembered) ? remembered : null;
     const chosen = linked ?? validRemembered;
+
     if (chosen && chosen !== displayUnitFor(layer.units, undefined)) {
       setLayerDisplay(display, layer.id, { ...display.layers[layer.id], units: chosen });
     }
@@ -452,18 +451,20 @@ export function resolveDisplay(
   }
 
   const units = new Set(layers.flatMap(layerUnits));
+
   for (const unit of tokens.off.split(",").filter(Boolean)) {
     if (units.has(unit)) display.off.add(unit);
     else dropped = true;
   }
 
   const linkedShowAs = parseShowAs(tokens.as, layers, display.off);
+
   if (linkedShowAs.dropped) dropped = true;
 
   const pair = blendPair(layers);
-  display.showAs = tokens.as === ""
-    ? storedChoices(storedShowAs, layers, display.off)
-    : linkedShowAs.showAs;
+  display.showAs =
+    tokens.as === "" ? storedChoices(storedShowAs, layers, display.off) : linkedShowAs.showAs;
+
   if (display.showAs[BLEND] === "colour") addBlendHalves(display.off, pair);
 
   return { display, dropped };
@@ -531,8 +532,8 @@ export function formatDisplayParams(display: SceneDisplay, layers: LayerDoc[]) {
   const on = new Set(units.filter((unit) => !display.off.has(unit)));
   const allocation = allocate(layers, on, display.showAs);
   const pair = blendPair(layers);
-  const off = units.filter((unit) =>
-    display.off.has(unit) && !(allocation.owner === BLEND && pair?.includes(unit)),
+  const off = units.filter(
+    (unit) => display.off.has(unit) && !(allocation.owner === BLEND && pair?.includes(unit)),
   );
 
   const parameters = {
@@ -577,6 +578,7 @@ export function formatDisplayParams(display: SceneDisplay, layers: LayerDoc[]) {
 /** Replace a layer's overrides or remove its entry when no overrides remain. */
 export function setLayerDisplay(display: SceneDisplay, layerId: string, layer: LayerDisplay) {
   const { palette, range, ink, density, units } = layer;
+
   if (!palette && !range && !ink && !density && !units) {
     delete display.layers[layerId];
     return;
@@ -609,9 +611,8 @@ export function recordMenuChange(
 ) {
   const palette = menu.palette === menu.defaultPalette ? undefined : menu.palette;
   const ink = menu.ink && menu.ink.value !== menu.ink.defaultInk ? menu.ink.value : undefined;
-  const units = menu.units && menu.units.value !== menu.units.defaultUnit
-    ? menu.units.value
-    : undefined;
+  const units =
+    menu.units && menu.units.value !== menu.units.defaultUnit ? menu.units.value : undefined;
   setLayerDisplay(display, layerId, {
     ...display.layers[layerId],
     palette,
@@ -619,6 +620,7 @@ export function recordMenuChange(
     ink,
     units: units ?? (menu.units ? undefined : display.layers[layerId]?.units),
   });
+
   if (changed === "palette") storePalette(layerId, palette ?? null);
   if (changed === "ink") storeInk(layerId, ink ?? null);
   if (changed === "units") storeUnits(layerId, units ?? null);
@@ -682,15 +684,19 @@ function isOutlineState(value: unknown): value is OutlineState {
 }
 
 function isOutlineColor(value: unknown): value is string {
-  return typeof value === "string"
-    && (OUTLINE_COLORS.some(({ name }) => name === value) || OUTLINE_HEX_PATTERN.test(value));
+  return (
+    typeof value === "string"
+    && (OUTLINE_COLORS.some(({ name }) => name === value) || OUTLINE_HEX_PATTERN.test(value))
+  );
 }
 
 function isOutlineWidth(value: unknown): value is number {
-  return typeof value === "number"
+  return (
+    typeof value === "number"
     && Number.isFinite(value)
     && value >= MIN_OUTLINE_WIDTH_PX
-    && value <= MAX_OUTLINE_WIDTH_PX;
+    && value <= MAX_OUTLINE_WIDTH_PX
+  );
 }
 
 /** Whether scenes show the dense basemap details, off until the viewer opts in. */
@@ -709,6 +715,7 @@ export function storeMapDetailsShown(shown: boolean): void {
   } catch {
     // Blocked storage must not prevent this visit's display changes.
   }
+
   for (const listener of [...mapDetailsListeners]) {
     listener(shown);
   }
@@ -760,8 +767,8 @@ function loadStoredNames(key: string): Record<string, string> {
     const parsed = readStoredRecord(key);
 
     return Object.fromEntries(
-      Object.entries(parsed).filter((entry): entry is [string, string] =>
-        typeof entry[1] === "string",
+      Object.entries(parsed).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
       ),
     );
   } catch {
@@ -796,7 +803,10 @@ function hasMenu(layer: LayerDoc) {
 }
 
 function tokenFields(list: string) {
-  return list.split(",").filter(Boolean).map((token) => token.split(":"));
+  return list
+    .split(",")
+    .filter(Boolean)
+    .map((token) => token.split(":"));
 }
 
 function isPaletteOf(layer: LayerDoc | undefined, palette: string | undefined) {
@@ -842,8 +852,10 @@ function outlineToLink(color: string): string {
 function outlineOf(token: string): OutlineState | null {
   const last = token.split(",").pop() ?? "";
   const [shownText, colorText, widthText] = last.split(":");
+
   if (last.split(":").length !== OUTLINE_FIELDS) return null;
   if (shownText !== "on" && shownText !== "off") return null;
+
   const color = outlineFromLink(colorText);
   const width = Number(widthText);
   if (color === undefined || !isOutlineWidth(width)) return null;

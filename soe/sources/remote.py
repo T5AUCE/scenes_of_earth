@@ -1,4 +1,5 @@
 """What every reader of a remote server shares."""
+
 import time
 from collections.abc import Callable
 from typing import TypeVar

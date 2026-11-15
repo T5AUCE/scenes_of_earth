@@ -11,8 +11,9 @@ test("the relief keeps three lights that stay transparent on flat ground", () =>
     RELIEF_LIGHTS.map((light) => light.azimuthDeg),
     [315, 255, 15],
   );
+
   for (const light of RELIEF_LIGHTS) {
-    const flatBrightness = Math.sin(light.altitudeDeg * Math.PI / 180);
+    const flatBrightness = Math.sin((light.altitudeDeg * Math.PI) / 180);
     assert.ok(Math.abs(2 * flatBrightness - 1) < 1e-12);
   }
 });
@@ -42,7 +43,10 @@ test("strength 0 gives zero exaggeration at every zoom", () => {
 });
 
 test("a higher strength never lowers the exaggeration", () => {
-  for (const [weaker, stronger] of [[0.5, 1], [1, 2]]) {
+  for (const [weaker, stronger] of [
+    [0.5, 1],
+    [1, 2],
+  ]) {
     for (const zoom of [0, 4, 8, 12, 20]) {
       assert.ok(reliefExaggeration(zoom, weaker) <= reliefExaggeration(zoom, stronger));
     }

@@ -43,13 +43,14 @@ export function paletteInkFor(
   fallback: string = FALLBACK_CHART_INK,
 ): string {
   if (!stops || stops.length === 0) return fallback;
+
   const middle = (stops.length - 1) / 2;
-  const order = stops.map((_, index) => index).sort((
-    first,
-    second,
-  ) =>
-    Math.abs(first - middle) - Math.abs(second - middle) || first - second
-  );
+  const order = stops
+    .map((_, index) => index)
+    .sort(
+      (first, second) => Math.abs(first - middle) - Math.abs(second - middle) || first - second,
+    );
+
   for (const index of order) {
     const candidate = rgbToHex([...stops[index]]);
     if (contrastRatio(candidate, CHART_SURFACE_HEX) >= MIN_PAINT_CONTRAST) return candidate;

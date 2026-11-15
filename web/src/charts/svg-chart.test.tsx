@@ -101,10 +101,7 @@ test("null gaps break lines while zero and single values stay visible", async (c
   const single = document.createElement("div");
   document.body.append(single);
   const singleRoot = createRoot(single);
-  const one: TimeSeriesTable = {
-    ...timeTable(),
-    rows: [{ ...timeTable().rows[0] }],
-  };
+  const one: TimeSeriesTable = { ...timeTable(), rows: [{ ...timeTable().rows[0] }] };
   await act(async () => {
     singleRoot.render(<SvgChart table={one} chartType="line" />);
   });
@@ -115,47 +112,44 @@ test("null gaps break lines while zero and single values stay visible", async (c
   });
 });
 
-test(
-  "tables stay exact while tooltips use concise values and arrows move the cursor",
-  async (context) => {
-    const window = new Window({ url: "http://localhost" });
-    context.after(() => window.happyDOM.abort());
-    installBrowser(window);
-    const { act } = await import("react");
-    const { createRoot } = await import("react-dom/client");
-    const { SvgChart } = await import("./svg-chart.tsx");
+test("tables stay exact while tooltips use concise values and arrows move the cursor", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
 
-    const table = timeTable();
-    const precise = String(table.rows[0].value);
-    const host = document.createElement("div");
-    document.body.append(host);
-    const root = createRoot(host);
-    await act(async () => {
-      root.render(<SvgChart table={table} chartType="line" />);
-    });
-    const cells = [...host.querySelectorAll("td")].map((cell) => cell.textContent);
-    assert.ok(cells.includes(precise));
-    const tooltip = host.querySelector(".chart-tooltip")!;
-    assert.ok((tooltip.textContent ?? "").includes("-3.75"));
-    const svg = host.querySelector("svg")!;
-    await act(async () => {
-      svg.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
-    });
-    assert.match(tooltip.textContent ?? "", /2015-01-01/);
-    assert.ok((tooltip.textContent ?? "").includes("10.123"));
-    assert.equal((tooltip.textContent ?? "").includes(precise), false);
-    assert.ok((tooltip.textContent ?? "").includes("valid 100%"));
-    await act(async () => {
-      svg.dispatchEvent(new window.KeyboardEvent("keydown", { key: "End", bubbles: true }));
-    });
-    assert.match(tooltip.textContent ?? "", /2015-04-01/);
-    assert.ok((tooltip.textContent ?? "").includes("-3.75"));
-    assert.ok((tooltip.textContent ?? "").includes("valid 70%"));
-    await act(async () => {
-      root.unmount();
-    });
-  },
-);
+  const table = timeTable();
+  const precise = String(table.rows[0].value);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<SvgChart table={table} chartType="line" />);
+  });
+  const cells = [...host.querySelectorAll("td")].map((cell) => cell.textContent);
+  assert.ok(cells.includes(precise));
+  const tooltip = host.querySelector(".chart-tooltip")!;
+  assert.ok((tooltip.textContent ?? "").includes("-3.75"));
+  const svg = host.querySelector("svg")!;
+  await act(async () => {
+    svg.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+  });
+  assert.match(tooltip.textContent ?? "", /2015-01-01/);
+  assert.ok((tooltip.textContent ?? "").includes("10.123"));
+  assert.equal((tooltip.textContent ?? "").includes(precise), false);
+  assert.ok((tooltip.textContent ?? "").includes("valid 100%"));
+  await act(async () => {
+    svg.dispatchEvent(new window.KeyboardEvent("keydown", { key: "End", bubbles: true }));
+  });
+  assert.match(tooltip.textContent ?? "", /2015-04-01/);
+  assert.ok((tooltip.textContent ?? "").includes("-3.75"));
+  assert.ok((tooltip.textContent ?? "").includes("valid 70%"));
+  await act(async () => {
+    root.unmount();
+  });
+});
 
 test("low coverage draws hollow marks with credited fallback shares", async (context) => {
   const window = new Window({ url: "http://localhost" });
@@ -405,7 +399,11 @@ test("isolated points around nulls stay visible including zero and negative", as
   const { createRoot } = await import("react-dom/client");
   const { SvgChart } = await import("./svg-chart.tsx");
 
-  for (const values of [[1, null, 2], [0, null, 2], [-5, null, 5]]) {
+  for (const values of [
+    [1, null, 2],
+    [0, null, 2],
+    [-5, null, 5],
+  ]) {
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
@@ -611,9 +609,9 @@ test("seasonal counts years with exact distribution summaries", async (context) 
   assert.match(host.textContent ?? "", /Sample count.*contributed/);
   const tooltip = host.querySelector(".chart-tooltip")?.textContent ?? "";
   await act(async () => {
-    host.querySelector("svg")!.dispatchEvent(
-      new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
-    );
+    host
+      .querySelector("svg")!
+      .dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
   });
   assert.match(host.querySelector(".chart-tooltip")?.textContent ?? "", /years/);
   assert.ok((host.querySelector(".chart-tooltip")?.textContent ?? "").length >= tooltip.length);
@@ -625,9 +623,7 @@ test("seasonal counts years with exact distribution summaries", async (context) 
   document.body.append(terrainHost);
   const terrainRoot = createRoot(terrainHost);
   await act(async () => {
-    terrainRoot.render(
-      <HypsometryChart layer={wrapperTerrain()} chartType="area" options={{}} />,
-    );
+    terrainRoot.render(<HypsometryChart layer={wrapperTerrain()} chartType="area" options={{}} />);
   });
   assert.match(terrainHost.textContent ?? "", /Mean 500/);
   assert.match(terrainHost.textContent ?? "", /Median/);
@@ -653,16 +649,13 @@ test("constant references stagger bounded with inward endpoints", async (context
     shape: "distribution",
     layerId: "terrain",
     units: "m",
-    rows: Array.from(
-      { length: 101 },
-      (_, index) => ({
-        x: index,
-        value: 0,
-        label: `${index}%`,
-        validFraction: 0.9,
-        fallbackFraction: null,
-      }),
-    ),
+    rows: Array.from({ length: 101 }, (_, index) => ({
+      x: index,
+      value: 0,
+      label: `${index}%`,
+      validFraction: 0.9,
+      fallbackFraction: null,
+    })),
     xTitle: "Share",
     yTitle: "Elevation (m)",
     validFraction: 0.9,
@@ -707,9 +700,9 @@ test("constant references stagger bounded with inward endpoints", async (context
   const frame = host.querySelector(".chart-plot-frame")!;
   assert.equal(Number(frame.getAttribute("y1")), 20);
   assert.equal(Number(frame.getAttribute("y2")), 144);
-  const gridY = [...host.querySelectorAll(".chart-grid line")].map((line) => (
-    Number(line.getAttribute("y1"))
-  ));
+  const gridY = [...host.querySelectorAll(".chart-grid line")].map((line) =>
+    Number(line.getAttribute("y1")),
+  );
   assert.equal(gridY.length, 1);
   assert.equal(gridY[0], 82);
   assert.ok(labels.some((entry) => entry.y > gridY[0]));
@@ -729,16 +722,13 @@ test("constant references stagger bounded with inward endpoints", async (context
     shape: "distribution",
     layerId: "terrain",
     units: "m",
-    rows: Array.from(
-      { length: 101 },
-      (_, index) => ({
-        x: index,
-        value: index === 100 ? 1000 : 0,
-        label: `${index}%`,
-        validFraction: 0.9,
-        fallbackFraction: null,
-      }),
-    ),
+    rows: Array.from({ length: 101 }, (_, index) => ({
+      x: index,
+      value: index === 100 ? 1000 : 0,
+      label: `${index}%`,
+      validFraction: 0.9,
+      fallbackFraction: null,
+    })),
     xTitle: "Share",
     yTitle: "Elevation (m)",
     validFraction: 0.9,
@@ -840,8 +830,8 @@ test("hypsometry direction and bar baseline use exact coordinates", async (conte
   const seriesTop_PX = 20;
   const seriesHeight_PX = 140 - 20 - 36;
   const seriesSpan = seriesHigh - seriesLow;
-  const seriesYOf = (value: number) => seriesTop_PX
-    + ((seriesHigh - value) / seriesSpan) * seriesHeight_PX;
+  const seriesYOf = (value: number) =>
+    seriesTop_PX + ((seriesHigh - value) / seriesSpan) * seriesHeight_PX;
   const baseY = seriesYOf(0);
   assert.equal(Number(rects[0].getAttribute("y")), seriesYOf(10.123456789012345));
   assert.equal(Number(rects[0].getAttribute("height")), baseY - seriesYOf(10.123456789012345));
@@ -850,10 +840,7 @@ test("hypsometry direction and bar baseline use exact coordinates", async (conte
   assert.equal(Number(rects[2].getAttribute("y")), baseY);
   // A stroked edge bar insets by half its stroke so the outer extent stays inside.
   const strokeHalf_PX = 1.5 / 2;
-  assert.equal(
-    Number(rects[2].getAttribute("height")),
-    seriesYOf(-3.75) - baseY - strokeHalf_PX,
-  );
+  assert.equal(Number(rects[2].getAttribute("height")), seriesYOf(-3.75) - baseY - strokeHalf_PX);
   await act(async () => {
     barRoot.unmount();
   });
@@ -969,9 +956,11 @@ test("negative area closes at its minimum with converted baselines", async (cont
       />,
     );
   });
-  const explicit = explicitHost.querySelector("polygon")!.getAttribute("points")!.trim().split(
-    /\s+/,
-  );
+  const explicit = explicitHost
+    .querySelector("polygon")!
+    .getAttribute("points")!
+    .trim()
+    .split(/\s+/);
   const explicitY = explicit.map((corner) => Number(corner.split(",")[1]));
   assert.equal(explicitY[0], explicitY[explicitY.length - 1]);
   assert.equal(explicitY[0], Math.max(...explicitY));
@@ -1028,9 +1017,11 @@ test("negative area closes at its minimum with converted baselines", async (cont
   assert.ok(convertedTicks.includes("14"));
   assert.ok(convertedTicks.includes("23"));
   assert.equal(convertedTicks.includes("32"), false);
-  const converted = convertedHost.querySelector("polygon")!.getAttribute("points")!.trim().split(
-    /\s+/,
-  );
+  const converted = convertedHost
+    .querySelector("polygon")!
+    .getAttribute("points")!
+    .trim()
+    .split(/\s+/);
   const convertedY = converted.map((corner) => Number(corner.split(",")[1]));
   assert.equal(convertedY[0], convertedY[convertedY.length - 1]);
   assert.equal(convertedY[0], Math.max(...convertedY));
@@ -1045,10 +1036,7 @@ test("negative area closes at its minimum with converted baselines", async (cont
   const lowTerrain = wrapperTerrain();
   lowTerrain.distribution = {
     ...lowTerrain.distribution,
-    values: Array.from(
-      { length: 101 },
-      (_, index) => (index % 2 === 0 ? -10 : -5),
-    ),
+    values: Array.from({ length: 101 }, (_, index) => (index % 2 === 0 ? -10 : -5)),
     min: -10,
     max: -5,
     mean: -7.5,
@@ -1060,9 +1048,11 @@ test("negative area closes at its minimum with converted baselines", async (cont
   await act(async () => {
     terrainRoot.render(<HypsometryChart layer={lowTerrain} chartType="area" options={{}} />);
   });
-  const terrainPoints = terrainHost.querySelector("polygon")!.getAttribute("points")!.trim().split(
-    /\s+/,
-  );
+  const terrainPoints = terrainHost
+    .querySelector("polygon")!
+    .getAttribute("points")!
+    .trim()
+    .split(/\s+/);
   const terrainY = terrainPoints.map((corner) => Number(corner.split(",")[1]));
   assert.equal(terrainY[0], terrainY[terrainY.length - 1]);
   assert.equal(terrainY[0], Math.max(...terrainY));
@@ -1087,9 +1077,11 @@ test("negative area closes at its minimum with converted baselines", async (cont
       <HypsometryChart layer={lowTerrain} chartType="area" options={{ yRange: [-10, -5] }} />,
     );
   });
-  const explicitTerrainPoints = explicitTerrainHost.querySelector("polygon")!.getAttribute(
-    "points",
-  )!.trim().split(/\s+/);
+  const explicitTerrainPoints = explicitTerrainHost
+    .querySelector("polygon")!
+    .getAttribute("points")!
+    .trim()
+    .split(/\s+/);
   const explicitTerrainY = explicitTerrainPoints.map((corner) => Number(corner.split(",")[1]));
   assert.equal(explicitTerrainY[0], explicitTerrainY[explicitTerrainY.length - 1]);
   assert.equal(explicitTerrainY[0], 144);
@@ -1106,9 +1098,11 @@ test("negative area closes at its minimum with converted baselines", async (cont
       <SeriesChart layer={negative} shape="seasonal_cycle" chartType="area" options={{}} />,
     );
   });
-  const seasonalPoints = seasonalHost.querySelector("polygon")!.getAttribute(
-    "points",
-  )!.trim().split(/\s+/);
+  const seasonalPoints = seasonalHost
+    .querySelector("polygon")!
+    .getAttribute("points")!
+    .trim()
+    .split(/\s+/);
   const seasonalY = seasonalPoints.map((corner) => Number(corner.split(",")[1]));
   assert.equal(seasonalY[0], seasonalY[seasonalY.length - 1]);
   assert.equal(seasonalY[0], 104);
@@ -1170,10 +1164,7 @@ test("singleton time chart keeps unique ticks without key warnings", async (cont
   const { createRoot } = await import("react-dom/client");
   const { SvgChart } = await import("./svg-chart.tsx");
 
-  const single: TimeSeriesTable = {
-    ...timeTable(),
-    rows: [{ ...timeTable().rows[0] }],
-  };
+  const single: TimeSeriesTable = { ...timeTable(), rows: [{ ...timeTable().rows[0] }] };
   const errors: unknown[][] = [];
   const original = console.error;
   console.error = (...args: unknown[]) => {
@@ -1231,14 +1222,20 @@ test("presentation rounds axes while tables stay exact", async (context) => {
   assert.ok(visible.includes("Mean 500"));
   assert.ok(visible.includes("Median 401"));
   assert.ok(visible.includes("Sea level 0"));
-  assert.equal(visible.some((text) => (text ?? "").includes("500.123456789")), false);
+  assert.equal(
+    visible.some((text) => (text ?? "").includes("500.123456789")),
+    false,
+  );
   const titles = [...host.querySelectorAll(".chart-references > g > title")].map(
     (node) => node.textContent,
   );
   assert.ok(titles.includes("Mean 500.123"));
   assert.ok(titles.includes("Median 400.988"));
   assert.ok(titles.includes("Sea level 0"));
-  assert.equal(titles.some((text) => (text ?? "").includes("500.123456789")), false);
+  assert.equal(
+    titles.some((text) => (text ?? "").includes("500.123456789")),
+    false,
+  );
   const exact = host.querySelector("details")!;
   assert.match(exact.textContent ?? "", /Mean 500\.123456789/);
   assert.ok((host.querySelector(".chart-tooltip")?.textContent ?? "").includes("1000.988"));
@@ -1286,8 +1283,8 @@ test("time edge labels anchor inward while share labels stay centered", async (c
   await act(async () => {
     root.render(<SvgChart table={timeTable()} chartType="line" />);
   });
-  const anchors = [...host.querySelectorAll(".chart-x-ticks text")].map(
-    (node) => node.getAttribute("text-anchor"),
+  const anchors = [...host.querySelectorAll(".chart-x-ticks text")].map((node) =>
+    node.getAttribute("text-anchor"),
   );
   assert.ok(anchors.length >= 2);
   assert.equal(anchors[0], "start");
@@ -1302,8 +1299,8 @@ test("time edge labels anchor inward while share labels stay centered", async (c
   await act(async () => {
     shareRoot.render(<SvgChart table={distributionTable()} chartType="line" />);
   });
-  const shareAnchors = [...shareHost.querySelectorAll(".chart-x-ticks text")].map(
-    (node) => node.getAttribute("text-anchor"),
+  const shareAnchors = [...shareHost.querySelectorAll(".chart-x-ticks text")].map((node) =>
+    node.getAttribute("text-anchor"),
   );
   assert.ok(shareAnchors.length >= 2);
   for (const anchor of shareAnchors) assert.equal(anchor, "middle");
@@ -1465,7 +1462,10 @@ test("narrow tiny relative spans use a shared base and scale", async (context) =
     assert.ok((text ?? "").length <= 12);
   }
   const titles = [...host.querySelectorAll(".chart-axes text")].map((node) => node.textContent);
-  assert.equal(titles.find((text) => (text ?? "").includes("Rain")), "Rain (mm/month)");
+  assert.equal(
+    titles.find((text) => (text ?? "").includes("Rain")),
+    "Rain (mm/month)",
+  );
   const disclosure = host.querySelector(".chart-offset")?.textContent ?? "";
   assert.ok(disclosure.includes("ticks"));
   assert.ok(disclosure.includes(String(low)));
@@ -1500,18 +1500,18 @@ test("narrow tiny relative spans use a shared base and scale", async (context) =
     const width = (tick.textContent ?? "").length * 6;
     assert.ok(tickX - width >= 20);
   }
-  const gridY = [...host.querySelectorAll(".chart-grid line")].map((line) => (
-    Number(line.getAttribute("y1"))
-  ));
+  const gridY = [...host.querySelectorAll(".chart-grid line")].map((line) =>
+    Number(line.getAttribute("y1")),
+  );
   assert.equal(gridY.length, yTexts.length);
   assert.ok(Math.abs(gridY[0] - 104) <= 1e-9);
   assert.ok(Math.abs(gridY[gridY.length - 1] - 20) <= 1e-9);
   for (let index = 1; index < gridY.length; index += 1) {
     assert.ok(Math.abs(gridY[index] - gridY[index - 1]) >= 10);
   }
-  const tickY = [...host.querySelectorAll(".chart-y-ticks text")].map((node) => (
-    Number(node.getAttribute("y"))
-  ));
+  const tickY = [...host.querySelectorAll(".chart-y-ticks text")].map((node) =>
+    Number(node.getAttribute("y")),
+  );
   assert.equal(tickY.length, gridY.length);
   for (let first = 0; first < tickY.length; first += 1) {
     for (let second = first + 1; second < tickY.length; second += 1) {
@@ -1651,9 +1651,9 @@ test("long base and scale wrap inside narrow desktop cards", async (context) => 
     const width = (line.textContent ?? "").length * 6;
     assert.ok(x + width <= svgWidth + 1);
   }
-  const gridY = [...host.querySelectorAll(".chart-grid line")].map((line) => (
-    Number(line.getAttribute("y1"))
-  ));
+  const gridY = [...host.querySelectorAll(".chart-grid line")].map((line) =>
+    Number(line.getAttribute("y1")),
+  );
   const lastCaptionY = Math.max(...lines.map((line) => Number(line.getAttribute("y"))));
   assert.ok(Math.min(...gridY) > lastCaptionY);
   await act(async () => {
@@ -1706,12 +1706,7 @@ test("wrapped disclosure keeps the current-time cursor inside the plot", async (
   const root = createRoot(host);
   await act(async () => {
     root.render(
-      <SvgChart
-        table={table}
-        chartType="line"
-        yRange={[low, high]}
-        currentTime="2019-01-15"
-      />,
+      <SvgChart table={table} chartType="line" yRange={[low, high]} currentTime="2019-01-15" />,
     );
   });
   await act(async () => {
@@ -1720,9 +1715,9 @@ test("wrapped disclosure keeps the current-time cursor inside the plot", async (
   assert.equal(Number(host.querySelector("svg")?.getAttribute("width")), 264);
   const lines = [...host.querySelectorAll(".chart-offset")];
   assert.ok(lines.length >= 2);
-  const gridY = [...host.querySelectorAll(".chart-grid line")].map((line) => (
-    Number(line.getAttribute("y1"))
-  ));
+  const gridY = [...host.querySelectorAll(".chart-grid line")].map((line) =>
+    Number(line.getAttribute("y1")),
+  );
   assert.equal(Math.min(...gridY), 32);
   assert.equal(Math.max(...gridY), 104);
   const cursor = host.querySelector(".chart-cursor line")!;
@@ -1749,7 +1744,10 @@ test("wide fixed labels widen the gutter and clear the title", async (context) =
   const { createRoot } = await import("react-dom/client");
   const { SvgChart } = await import("./svg-chart.tsx");
 
-  for (const range of [[0, 123456789], [-123456789, 0]] as [number, number][]) {
+  for (const range of [
+    [0, 123456789],
+    [-123456789, 0],
+  ] as [number, number][]) {
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
@@ -1759,9 +1757,9 @@ test("wide fixed labels widen the gutter and clear the title", async (context) =
     const grid = host.querySelector(".chart-grid line")!;
     const left = Number(grid.getAttribute("x1"));
     assert.ok(left > 48);
-    const title = [...host.querySelectorAll(".chart-axes text")].find((node) => (
-      (node.textContent ?? "").includes("Rain")
-    ))!;
+    const title = [...host.querySelectorAll(".chart-axes text")].find((node) =>
+      (node.textContent ?? "").includes("Rain"),
+    )!;
     const titleX = Number(title.getAttribute("x"));
     assert.equal(titleX, 12);
     const ticks = [...host.querySelectorAll(".chart-y-ticks text")];
@@ -1818,10 +1816,7 @@ test("gallery time labels stay separate at card widths", async (context) => {
       label: start,
       validFraction: 1,
       fallbackFraction: null,
-      interval: {
-        start,
-        end: index + 1 < starts.length ? starts[index + 1] : "2026-09-01",
-      },
+      interval: { start, end: index + 1 < starts.length ? starts[index + 1] : "2026-09-01" },
     })),
     xTitle: "Time",
     yTitle: "Rain (mm/month)",
@@ -1895,10 +1890,7 @@ test("gallery bars stay inside the plot clear of y ticks", async (context) => {
       label: start,
       validFraction: 1,
       fallbackFraction: null,
-      interval: {
-        start,
-        end: index + 1 < starts.length ? starts[index + 1] : "2026-09-01",
-      },
+      interval: { start, end: index + 1 < starts.length ? starts[index + 1] : "2026-09-01" },
     })),
     xTitle: "Time",
     yTitle: "Rain (mm/month)",
@@ -1989,9 +1981,7 @@ test("two gallery bars stay separated, aligned and contained", async (context) =
   document.body.append(host);
   const root = createRoot(host);
   await act(async () => {
-    root.render(
-      <SvgChart table={table} chartType="bar" currentTime="2026-04-15" />,
-    );
+    root.render(<SvgChart table={table} chartType="bar" currentTime="2026-04-15" />);
   });
   await act(async () => {
     notify?.(300);
@@ -2079,10 +2069,7 @@ test("five gallery bars stay separated, aligned and contained", async (context) 
       label: start,
       validFraction: 1,
       fallbackFraction: null,
-      interval: {
-        start,
-        end: index + 1 < starts.length ? starts[index + 1] : "2026-09-01",
-      },
+      interval: { start, end: index + 1 < starts.length ? starts[index + 1] : "2026-09-01" },
     })),
     xTitle: "Time",
     yTitle: "Rain (mm/month)",
@@ -2091,9 +2078,7 @@ test("five gallery bars stay separated, aligned and contained", async (context) 
   document.body.append(host);
   const root = createRoot(host);
   await act(async () => {
-    root.render(
-      <SvgChart table={table} chartType="bar" currentTime="2026-06-15" />,
-    );
+    root.render(<SvgChart table={table} chartType="bar" currentTime="2026-06-15" />);
   });
   await act(async () => {
     notify?.(300);
@@ -2175,39 +2160,18 @@ test("minimum-height and stroked bars stay inside the plot", async (context) => 
   const { SvgChart } = await import("./svg-chart.tsx");
 
   const cases: { table: TimeSeriesTable; currentTime: string | null }[] = [
-    {
-      table: twoValueTable([0, 20], [1, 1]),
-      currentTime: "2026-04-15",
-    },
-    {
-      table: twoValueTable([-5, 10], [1, 1]),
-      currentTime: "2026-04-15",
-    },
-    {
-      table: twoValueTable([5, 5], [1, 1]),
-      currentTime: null,
-    },
-    {
-      table: twoValueTable([10, 20], [0.5, 1]),
-      currentTime: null,
-    },
-    {
-      table: twoValueTable([10, 20], [1, 1]),
-      currentTime: "2026-05-15",
-    },
+    { table: twoValueTable([0, 20], [1, 1]), currentTime: "2026-04-15" },
+    { table: twoValueTable([-5, 10], [1, 1]), currentTime: "2026-04-15" },
+    { table: twoValueTable([5, 5], [1, 1]), currentTime: null },
+    { table: twoValueTable([10, 20], [0.5, 1]), currentTime: null },
+    { table: twoValueTable([10, 20], [1, 1]), currentTime: "2026-05-15" },
   ];
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   for (const entry of cases) {
     await act(async () => {
-      root.render(
-        <SvgChart
-          table={entry.table}
-          chartType="bar"
-          currentTime={entry.currentTime}
-        />,
-      );
+      root.render(<SvgChart table={entry.table} chartType="bar" currentTime={entry.currentTime} />);
     });
     await act(async () => {
       notify?.(300);
@@ -2414,10 +2378,7 @@ test("narrow time-series tick clears its single-line title", async (context) => 
       label: start,
       validFraction: 1,
       fallbackFraction: null,
-      interval: {
-        start,
-        end: index + 1 < starts.length ? starts[index + 1] : "2026-09-01",
-      },
+      interval: { start, end: index + 1 < starts.length ? starts[index + 1] : "2026-09-01" },
     })),
     xTitle: "Time",
     yTitle: "Rain (mm/month)",
@@ -2461,9 +2422,9 @@ test("narrow time-series tick clears its single-line title", async (context) => 
 
     return { left: x - width / 2, right: x + width / 2 };
   });
-  const overlapping = tickBoxes.some((box) => (
-    box.left < titleBox.right - 1 && titleBox.left < box.right - 1
-  ));
+  const overlapping = tickBoxes.some(
+    (box) => box.left < titleBox.right - 1 && titleBox.left < box.right - 1,
+  );
   assert.ok(overlapping);
   const tickBottom = bottom + 16 + 4;
   const titleTop = bottom + 32 - 9;
@@ -2486,86 +2447,83 @@ test("narrow time-series tick clears its single-line title", async (context) => 
   host.remove();
 });
 
-test(
-  "light paint keeps its ink with a dark edge and no duplicate announcements",
-  async (context) => {
-    const window = new Window({ url: "http://localhost" });
-    context.after(() => window.happyDOM.abort());
-    installBrowser(window);
-    const { act } = await import("react");
-    const { createRoot } = await import("react-dom/client");
-    const { SvgChart } = await import("./svg-chart.tsx");
+test("light paint keeps its ink with a dark edge and no duplicate announcements", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { SvgChart } = await import("./svg-chart.tsx");
 
-    const host = document.createElement("div");
-    document.body.append(host);
-    const root = createRoot(host);
-    await act(async () => {
-      root.render(<SvgChart table={timeTable()} chartType="bar" ink="#ffffff" />);
-    });
-    const bars = [...host.querySelectorAll("rect")];
-    assert.ok(bars.length >= 2);
-    const solid = bars.find((rect) => rect.getAttribute("fill") === "#ffffff")!;
-    assert.equal(solid.getAttribute("stroke"), "#1a3658");
-    assert.equal(solid.getAttribute("stroke-width"), "1.5");
-    const hollow = bars.find((rect) => rect.getAttribute("fill") === "none")!;
-    assert.equal(hollow.getAttribute("fill"), "none");
-    assert.equal(hollow.getAttribute("stroke"), "#1a3658");
-    const barTitles = bars.map((rect) => rect.querySelector("title")?.textContent ?? "");
-    assert.ok(barTitles.every((text) => text.length > 0));
-    const frame = host.querySelector(".chart-plot-frame")!;
-    const left = Number(frame.getAttribute("x1"));
-    const right = Number(frame.getAttribute("x2"));
-    const top = Number(frame.getAttribute("y1"));
-    const bottom = Number(frame.getAttribute("y2"));
-    for (const bar of bars) {
-      const x = Number(bar.getAttribute("x"));
-      const y = Number(bar.getAttribute("y"));
-      const width = Number(bar.getAttribute("width"));
-      const height = Number(bar.getAttribute("height"));
-      const strokeHalf_PX = Number(bar.getAttribute("stroke-width")) / 2;
-      assert.ok(x - strokeHalf_PX >= left);
-      assert.ok(x + width + strokeHalf_PX <= right);
-      assert.ok(y - strokeHalf_PX >= top);
-      assert.ok(y + height + strokeHalf_PX <= bottom);
-    }
-    await act(async () => {
-      root.unmount();
-    });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<SvgChart table={timeTable()} chartType="bar" ink="#ffffff" />);
+  });
+  const bars = [...host.querySelectorAll("rect")];
+  assert.ok(bars.length >= 2);
+  const solid = bars.find((rect) => rect.getAttribute("fill") === "#ffffff")!;
+  assert.equal(solid.getAttribute("stroke"), "#1a3658");
+  assert.equal(solid.getAttribute("stroke-width"), "1.5");
+  const hollow = bars.find((rect) => rect.getAttribute("fill") === "none")!;
+  assert.equal(hollow.getAttribute("fill"), "none");
+  assert.equal(hollow.getAttribute("stroke"), "#1a3658");
+  const barTitles = bars.map((rect) => rect.querySelector("title")?.textContent ?? "");
+  assert.ok(barTitles.every((text) => text.length > 0));
+  const frame = host.querySelector(".chart-plot-frame")!;
+  const left = Number(frame.getAttribute("x1"));
+  const right = Number(frame.getAttribute("x2"));
+  const top = Number(frame.getAttribute("y1"));
+  const bottom = Number(frame.getAttribute("y2"));
+  for (const bar of bars) {
+    const x = Number(bar.getAttribute("x"));
+    const y = Number(bar.getAttribute("y"));
+    const width = Number(bar.getAttribute("width"));
+    const height = Number(bar.getAttribute("height"));
+    const strokeHalf_PX = Number(bar.getAttribute("stroke-width")) / 2;
+    assert.ok(x - strokeHalf_PX >= left);
+    assert.ok(x + width + strokeHalf_PX <= right);
+    assert.ok(y - strokeHalf_PX >= top);
+    assert.ok(y + height + strokeHalf_PX <= bottom);
+  }
+  await act(async () => {
+    root.unmount();
+  });
 
-    const lineHost = document.createElement("div");
-    document.body.append(lineHost);
-    const lineRoot = createRoot(lineHost);
-    await act(async () => {
-      lineRoot.render(<SvgChart table={timeTable()} chartType="line" ink="#ffffff" />);
-    });
-    const lines = [...lineHost.querySelectorAll(".chart-lines polyline")];
-    assert.ok(lines.some((line) => line.getAttribute("stroke") === "#ffffff"));
-    const under = lines.find((line) => line.getAttribute("aria-hidden") === "true")!;
-    assert.equal(under.getAttribute("stroke"), "#1a3658");
-    assertSameNode(under.querySelector("title"), null);
-    await act(async () => {
-      lineRoot.unmount();
-    });
+  const lineHost = document.createElement("div");
+  document.body.append(lineHost);
+  const lineRoot = createRoot(lineHost);
+  await act(async () => {
+    lineRoot.render(<SvgChart table={timeTable()} chartType="line" ink="#ffffff" />);
+  });
+  const lines = [...lineHost.querySelectorAll(".chart-lines polyline")];
+  assert.ok(lines.some((line) => line.getAttribute("stroke") === "#ffffff"));
+  const under = lines.find((line) => line.getAttribute("aria-hidden") === "true")!;
+  assert.equal(under.getAttribute("stroke"), "#1a3658");
+  assertSameNode(under.querySelector("title"), null);
+  await act(async () => {
+    lineRoot.unmount();
+  });
 
-    const areaHost = document.createElement("div");
-    document.body.append(areaHost);
-    const areaRoot = createRoot(areaHost);
-    await act(async () => {
-      areaRoot.render(<SvgChart table={timeTable()} chartType="area" ink="#ffffff" />);
-    });
-    const polygon = areaHost.querySelector("polygon")!;
-    assert.equal(polygon.getAttribute("fill"), "#ffffff");
-    const edge = areaHost.querySelector('.chart-areas polyline[aria-hidden="true"]')!;
-    assert.equal(edge.getAttribute("stroke"), "#1a3658");
-    assertSameNode(edge.querySelector("title"), null);
-    await act(async () => {
-      areaRoot.unmount();
-    });
-    host.remove();
-    lineHost.remove();
-    areaHost.remove();
-  },
-);
+  const areaHost = document.createElement("div");
+  document.body.append(areaHost);
+  const areaRoot = createRoot(areaHost);
+  await act(async () => {
+    areaRoot.render(<SvgChart table={timeTable()} chartType="area" ink="#ffffff" />);
+  });
+  const polygon = areaHost.querySelector("polygon")!;
+  assert.equal(polygon.getAttribute("fill"), "#ffffff");
+  const edge = areaHost.querySelector('.chart-areas polyline[aria-hidden="true"]')!;
+  assert.equal(edge.getAttribute("stroke"), "#1a3658");
+  assertSameNode(edge.querySelector("title"), null);
+  await act(async () => {
+    areaRoot.unmount();
+  });
+  host.remove();
+  lineHost.remove();
+  areaHost.remove();
+});
 
 test("light solid and hollow circles keep contrasting outlines", async (context) => {
   const window = new Window({ url: "http://localhost" });
@@ -2690,9 +2648,7 @@ test("preview readouts stay short while full readouts keep rounded coverage", as
   document.body.append(full);
   const fullRoot = createRoot(full);
   await act(async () => {
-    fullRoot.render(
-      <SvgChart table={timeTable()} chartType="bar" fallbackNames="ERA5" />,
-    );
+    fullRoot.render(<SvgChart table={timeTable()} chartType="bar" fallbackNames="ERA5" />);
   });
   const fullTooltip = full.querySelector(".chart-tooltip")!;
   assert.ok((fullTooltip.textContent ?? "").includes("-3.75"));
@@ -2733,10 +2689,7 @@ test("time bars keep full width inside while lines stay on the edges", async (co
       label: start,
       validFraction: 1,
       fallbackFraction: null,
-      interval: {
-        start,
-        end: index + 1 < starts.length ? starts[index + 1] : "2026-09-01",
-      },
+      interval: { start, end: index + 1 < starts.length ? starts[index + 1] : "2026-09-01" },
     })),
     xTitle: "Time",
     yTitle: "Rain (mm/month)",
@@ -2777,9 +2730,11 @@ test("time bars keep full width inside while lines stay on the edges", async (co
   const lineFrame = host.querySelector(".chart-plot-frame")!;
   const lineLeft = Number(lineFrame.getAttribute("x1"));
   const lineRight = Number(lineFrame.getAttribute("x2"));
-  const points = host.querySelector(".chart-lines polyline")!.getAttribute("points")!.trim().split(
-    /\s+/,
-  );
+  const points = host
+    .querySelector(".chart-lines polyline")!
+    .getAttribute("points")!
+    .trim()
+    .split(/\s+/);
   const firstPoint = points[0].split(",").map(Number);
   const lastPoint = points[points.length - 1].split(",").map(Number);
   assert.ok(Math.abs(firstPoint[0] - lineLeft) < 0.001);
@@ -2799,15 +2754,18 @@ test("time bars keep full width inside while lines stay on the edges", async (co
   }
   const overrideFirst = Number(overrideRects[0].getAttribute("x"));
   const overrideLast = overrideRects[overrideRects.length - 1];
-  const overrideLastRight = Number(overrideLast.getAttribute("x"))
-    + Number(overrideLast.getAttribute("width"));
+  const overrideLastRight =
+    Number(overrideLast.getAttribute("x")) + Number(overrideLast.getAttribute("width"));
   assert.ok(overrideFirst > overrideLeft + 0.001);
   assert.ok(overrideLastRight < overrideRight - 0.001);
 
   await act(async () => {
     root.render(<SvgChart table={table} chartType="line" xDomain={[low, high]} />);
   });
-  const overrideLine = host.querySelector(".chart-lines polyline")!.getAttribute("points")!.trim()
+  const overrideLine = host
+    .querySelector(".chart-lines polyline")!
+    .getAttribute("points")!
+    .trim()
     .split(/\s+/);
   const overrideFirstPoint = overrideLine[0].split(",").map(Number);
   const overrideLastPoint = overrideLine[overrideLine.length - 1].split(",").map(Number);
@@ -2834,8 +2792,8 @@ test("time bars keep full width inside while lines stay on the edges", async (co
   }
   const compactFirst = Number(compactRects[0].getAttribute("x"));
   const compactLast = compactRects[compactRects.length - 1];
-  const compactLastRight = Number(compactLast.getAttribute("x"))
-    + Number(compactLast.getAttribute("width"));
+  const compactLastRight =
+    Number(compactLast.getAttribute("x")) + Number(compactLast.getAttribute("width"));
   assert.ok(compactFirst > compactLeft + 0.001);
   assert.ok(compactLastRight < compactRight - 0.001);
   await act(async () => {
@@ -2917,9 +2875,11 @@ test("seasonal bars keep full width inside while lines stay on the edges", async
   const lineFrame = host.querySelector(".chart-plot-frame")!;
   const lineLeft = Number(lineFrame.getAttribute("x1"));
   const lineRight = Number(lineFrame.getAttribute("x2"));
-  const points = host.querySelector(".chart-lines polyline")!.getAttribute("points")!.trim().split(
-    /\s+/,
-  );
+  const points = host
+    .querySelector(".chart-lines polyline")!
+    .getAttribute("points")!
+    .trim()
+    .split(/\s+/);
   const firstPoint = points[0].split(",").map(Number);
   const lastPoint = points[points.length - 1].split(",").map(Number);
   assert.ok(Math.abs(firstPoint[0] - lineLeft) < 0.001);
@@ -2962,9 +2922,9 @@ test("distribution bars keep full width inside while lines stay on the edges", a
     assert.ok(x >= left - 0.001);
     assert.ok(x + width <= right + 0.001);
   }
-  const centres = rects.map((rect) => (
-    Number(rect.getAttribute("x")) + Number(rect.getAttribute("width")) / 2
-  ));
+  const centres = rects.map(
+    (rect) => Number(rect.getAttribute("x")) + Number(rect.getAttribute("width")) / 2,
+  );
   assert.ok(centres[0] > centres[1]);
   assert.ok(centres[1] > centres[2]);
   assert.ok(centres[0] < right - 0.001);
@@ -2976,9 +2936,11 @@ test("distribution bars keep full width inside while lines stay on the edges", a
   const lineFrame = host.querySelector(".chart-plot-frame")!;
   const lineLeft = Number(lineFrame.getAttribute("x1"));
   const lineRight = Number(lineFrame.getAttribute("x2"));
-  const points = host.querySelector(".chart-lines polyline")!.getAttribute("points")!.trim().split(
-    /\s+/,
-  );
+  const points = host
+    .querySelector(".chart-lines polyline")!
+    .getAttribute("points")!
+    .trim()
+    .split(/\s+/);
   const firstPoint = points[0].split(",").map(Number);
   const lastPoint = points[points.length - 1].split(",").map(Number);
   assert.ok(Math.abs(firstPoint[0] - lineRight) < 0.001);
@@ -2990,10 +2952,11 @@ test("distribution bars keep full width inside while lines stay on the edges", a
 });
 
 function xTitleNodes(host: Element): Element[] {
-  return [...host.querySelectorAll(".chart-axes text")].filter((node) => (
-    (node.getAttribute("transform") ?? "").indexOf("rotate") === -1
-    && !node.classList.contains("chart-offset")
-  ));
+  return [...host.querySelectorAll(".chart-axes text")].filter(
+    (node) =>
+      (node.getAttribute("transform") ?? "").indexOf("rotate") === -1
+      && !node.classList.contains("chart-offset"),
+  );
 }
 
 function xTitleLines(host: Element): string[] {
@@ -3036,10 +2999,7 @@ function twoValueTable(values: number[], fractions: number[]): TimeSeriesTable {
       label: start,
       validFraction: fractions[index] ?? 1,
       fallbackFraction: null,
-      interval: {
-        start,
-        end: index + 1 < starts.length ? starts[index + 1] : "2026-06-01",
-      },
+      interval: { start, end: index + 1 < starts.length ? starts[index + 1] : "2026-06-01" },
     })),
     xTitle: "Time",
     yTitle: "Rain (mm/month)",
@@ -3047,9 +3007,8 @@ function twoValueTable(values: number[], fractions: number[]): TimeSeriesTable {
 }
 
 function wrapperRain(): import("../types.ts").LayerDoc {
-  const values = Array.from(
-    { length: 30 },
-    (_, index) => new Date(Date.UTC(2019, index, 1)).toISOString().slice(0, 10),
+  const values = Array.from({ length: 30 }, (_, index) =>
+    new Date(Date.UTC(2019, index, 1)).toISOString().slice(0, 10),
   );
   return {
     id: "rain",

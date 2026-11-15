@@ -9,11 +9,14 @@ test("a card shows its legend, title, master switch and Edit button", async (con
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerCard } = await import("./layer-card.tsx");
+
   const legend = document.createElement("div");
   legend.textContent = "legend";
+
   let toggled: boolean | null = null;
   let edited = 0;
 
@@ -21,21 +24,24 @@ test("a card shows its legend, title, master switch and Edit button", async (con
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <LayerCard
-      title="Rainfall · Dots, Smoothed"
-      checked
-      expanded={false}
-      onToggle={(on) => {
-        toggled = on;
-      }}
-      onEdit={() => edited++}
-      legend={legend}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <LayerCard
+        title="Rainfall · Dots, Smoothed"
+        checked
+        expanded={false}
+        onToggle={(on) => {
+          toggled = on;
+        }}
+        onEdit={() => edited++}
+        legend={legend}
+      />,
+    ),
+  );
 
   assert.match(container.textContent ?? "", /Rainfall · Dots, Smoothed/);
   assert.equal(container.querySelector(".card-legend")?.textContent, "legend");
+
   const input = container.querySelector('input[role="switch"]') as HTMLInputElement;
   assert.equal(input.checked, true);
   assert.equal(container.querySelector(".edit-button")?.getAttribute("aria-expanded"), "false");
@@ -47,7 +53,8 @@ test("a card shows its legend, title, master switch and Edit button", async (con
   assert.equal(toggled, false);
 
   await act(async () => {
-    container.querySelector("button")!
+    container
+      .querySelector("button")!
       .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assert.equal(edited, 1);
@@ -59,6 +66,7 @@ test("a card head holds title, switch and Edit in that order", async (context) =
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerCard } = await import("./layer-card.tsx");
@@ -67,19 +75,22 @@ test("a card head holds title, switch and Edit in that order", async (context) =
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <LayerCard
-      title="Area Outline"
-      checked
-      expanded={false}
-      onToggle={() => {}}
-      onEdit={() => {}}
-      legend={null}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <LayerCard
+        title="Area Outline"
+        checked
+        expanded={false}
+        onToggle={() => {}}
+        onEdit={() => {}}
+        legend={null}
+      />,
+    ),
+  );
 
-  const cells = [...container.querySelector(".card-head")!.children]
-    .map((element) => element.tagName);
+  const cells = [...container.querySelector(".card-head")!.children].map(
+    (element) => element.tagName,
+  );
   assert.deepEqual(cells, ["H4", "LABEL", "BUTTON"]);
 
   await act(async () => root.unmount());
@@ -89,6 +100,7 @@ test("an open card marks its Edit expanded and rings the card", async (context) 
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { LayerCard } = await import("./layer-card.tsx");
@@ -97,16 +109,18 @@ test("an open card marks its Edit expanded and rings the card", async (context) 
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <LayerCard
-      title="Area Outline"
-      checked
-      expanded
-      onToggle={() => {}}
-      onEdit={() => {}}
-      legend={null}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <LayerCard
+        title="Area Outline"
+        checked
+        expanded
+        onToggle={() => {}}
+        onEdit={() => {}}
+        legend={null}
+      />,
+    ),
+  );
 
   assert.equal(container.querySelector(".edit-button")?.getAttribute("aria-expanded"), "true");
   assert.equal(container.querySelector("section")?.classList.contains("editing"), true);
@@ -129,6 +143,7 @@ function installBrowser(window: Window): void {
   for (const name of names) {
     defineGlobal(name, window[name]);
   }
+
   defineGlobal("window", window);
   defineGlobal("document", window.document);
   defineGlobal("navigator", window.navigator);

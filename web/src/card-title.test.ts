@@ -38,10 +38,7 @@ test("any visible draw says that it is smoothed while the option applies", () =>
 });
 
 test("a temperature field names its lines isotherms and other fields name them lines", () => {
-  assert.equal(
-    cardTitle(TEMPERATURE, { draw: "isolines", off: false }),
-    "Temperature · Isotherms",
-  );
+  assert.equal(cardTitle(TEMPERATURE, { draw: "isolines", off: false }), "Temperature · Isotherms");
   assert.equal(cardTitle(OTHER, { draw: "isolines", off: false }), "Wind · Lines");
 });
 
@@ -53,20 +50,16 @@ test("colour, contours and relief keep their plain names", () => {
 
 test("a layer hidden by colour reads hidden", () => {
   assert.equal(
-    cardTitle({ title: "Land Cover", units: "" }, {
-      draw: { hidden: "Shown only in colour" },
-      off: false,
-    }),
+    cardTitle(
+      { title: "Land Cover", units: "" },
+      { draw: { hidden: "Shown only in colour" }, off: false },
+    ),
     "Land Cover · Hidden",
   );
   assert.equal(
     cardTitle(
       { title: "Land Cover", units: "" },
-      {
-        draw: { hidden: "Shown only in colour" },
-        off: false,
-        smoothed: true,
-      },
+      { draw: { hidden: "Shown only in colour" }, off: false, smoothed: true },
     ),
     "Land Cover · Hidden",
   );
@@ -83,18 +76,13 @@ test("a layer stopped by a slot conflict keeps its reason in the title", () => {
 });
 
 test("a switched-off layer reads off whatever it would draw", () => {
-  assert.equal(
-    cardTitle(RAIN, { draw: "dots", off: true, smoothed: true }),
-    "Rainfall · Off",
-  );
-  assert.equal(
-    cardTitle(RAIN, { draw: "colour", off: true, smoothed: true }),
-    "Rainfall · Off",
-  );
+  assert.equal(cardTitle(RAIN, { draw: "dots", off: true, smoothed: true }), "Rainfall · Off");
+  assert.equal(cardTitle(RAIN, { draw: "colour", off: true, smoothed: true }), "Rainfall · Off");
 });
 
 test("a multi-part layer with no draw names the parts that are on", () => {
   const terrain = layer("Terrain", "");
+
   assert.equal(
     cardTitle(terrain, { draw: undefined, off: false, parts: ["relief", "contours"] }),
     "Terrain · Relief, Contours",
@@ -108,15 +96,12 @@ test("a multi-part layer with no draw names the parts that are on", () => {
     "Terrain · Contours",
   );
   assert.equal(
-    cardTitle(
-      terrain,
-      {
-        draw: undefined,
-        off: false,
-        smoothed: true,
-        parts: ["relief", "contours"],
-      },
-    ),
+    cardTitle(terrain, {
+      draw: undefined,
+      off: false,
+      smoothed: true,
+      parts: ["relief", "contours"],
+    }),
     "Terrain · Relief, Contours",
   );
 });

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import type { DistributionTable, TimeSeriesTable } from "./table.ts";
 import {
   autoDomain,
   baselineFor,
@@ -13,7 +14,6 @@ import {
   ticksForDomain,
   validateYRange,
 } from "./ticks.ts";
-import type { DistributionTable, TimeSeriesTable } from "./table.ts";
 
 test("bars anchor at zero while filled areas include negative minima", () => {
   assert.equal(DENSITY_HINT_THRESHOLD, 60);
@@ -27,16 +27,19 @@ test("bars anchor at zero while filled areas include negative minima", () => {
 
 test("automatic domains include baselines and sea level without rounding", () => {
   const time = timeTable();
+
   assert.deepEqual(autoDomain(time, "bar"), [0, 20.5]);
   assert.deepEqual(autoDomain(time, "line"), [5.25, 20.5]);
   assert.deepEqual(autoDomain(distributionTable(), "area"), [0, 1000]);
 
   const empty = { ...time, rows: time.rows.map((row) => ({ ...row, value: null })) };
+
   assert.equal(autoDomain(empty, "line"), null);
 });
 
 test("explicit ranges must stay finite, increasing and wide enough for baselines", () => {
   const time = timeTable();
+
   assert.equal(validateYRange(null, time, "line"), null);
   assert.equal(validateYRange([0, 100], time, "bar"), null);
   assert.ok(validateYRange([10, 100], time, "bar")?.includes("baseline"));
@@ -110,6 +113,7 @@ test("presentation values keep three decimals without trailing zeros or negative
   assert.equal(formatPresentationValue(0.0005), "0.001");
   assert.equal(formatPresentationValue(Number.NaN), "NaN");
   assert.equal(formatPresentationValue(Number.POSITIVE_INFINITY), "Infinity");
+
   assert.deepEqual(autoDomain(timeTable(), "bar"), [0, 20.5]);
   assert.equal(baselineFor("bar", 10), 0);
 });

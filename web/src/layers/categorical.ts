@@ -90,8 +90,10 @@ class CategoricalView implements LayerView {
 
   constructor(context: LayerContext) {
     this.context = context;
+
     const { layer } = context;
     this.id = `${layer.id}-classes`;
+
     const classes = layer.style.classes;
     if (!classes) throw new Error(`Layer "${layer.id}" needs classes`);
 
@@ -101,6 +103,7 @@ class CategoricalView implements LayerView {
     this.colors = classColors(layer.id, this.classes, this.palette);
     this.edges = loadStoredEdges(layer.id);
     this.smoothing = loadStoredSmoothing(layer.id);
+
     this.gpu = createClassFieldLayer({
       id: this.id,
       grid: layer.grid,
@@ -109,8 +112,10 @@ class CategoricalView implements LayerView {
       edges: { smooth: this.smooth, ...this.edges, smoothRadiusCells: this.smoothing },
       onFail: () => this.useImage(),
     });
+
     this.edgeMenu = this.createEdgesMenu();
     this.menu = this.createMenu();
+
     this.parts = [{ id: layer.id, label: layer.title, layerIds: [this.id] }];
     this.options = [
       {
@@ -123,6 +128,7 @@ class CategoricalView implements LayerView {
         },
       },
     ];
+
     this.mount();
     this.ready = this.load();
   }
@@ -131,18 +137,20 @@ class CategoricalView implements LayerView {
     const view = this;
     const layerId = this.context.layer.id;
     // Geology smooths widely and keeps the default rounding internally, so its menu hides it.
-    const controls: LayerControl[] = isGeologyLayer(layerId) ? [] : [
-      {
-        label: "Smoothing",
-        min: 0,
-        max: MAX_ROUNDING,
-        step: ROUNDING_STEP,
-        get value() {
-          return view.edges.rounding;
-        },
-        set: (rounding: number) => this.setEdges({ ...this.edges, rounding }),
-      },
-    ];
+    const controls: LayerControl[] = isGeologyLayer(layerId)
+      ? []
+      : [
+          {
+            label: "Smoothing",
+            min: 0,
+            max: MAX_ROUNDING,
+            step: ROUNDING_STEP,
+            get value() {
+              return view.edges.rounding;
+            },
+            set: (rounding: number) => this.setEdges({ ...this.edges, rounding }),
+          },
+        ];
     controls.push({
       label: "Softness",
       unit: "cells",
@@ -154,6 +162,7 @@ class CategoricalView implements LayerView {
       },
       set: (softnessCells: number) => this.setEdges({ ...this.edges, softnessCells }),
     });
+
     if (isGeologyLayer(layerId)) {
       controls.push({
         label: "Smoothing",
@@ -177,10 +186,12 @@ class CategoricalView implements LayerView {
         set: (outline: boolean) => this.setEdges({ ...this.edges, outline }),
       },
       get isDefault() {
-        return view.edges.rounding === DEFAULT_EDGES.rounding
+        return (
+          view.edges.rounding === DEFAULT_EDGES.rounding
           && view.edges.softnessCells === DEFAULT_EDGES.softnessCells
           && view.edges.outline === DEFAULT_EDGES.outline
-          && view.smoothing === defaultSmoothing(layerId);
+          && view.smoothing === defaultSmoothing(layerId)
+        );
       },
       reset: () => {
         this.setEdges({ ...DEFAULT_EDGES });
@@ -239,6 +250,7 @@ class CategoricalView implements LayerView {
 
   private mount() {
     const { map, slots } = this.context;
+
     if (gpuDisabled() || map.getProjection()?.type === "globe") {
       this.useImage();
       return;
@@ -248,6 +260,7 @@ class CategoricalView implements LayerView {
     // Capture removes the custom layer before MapLibre serializes and destroys the lost style.
     canvas.addEventListener("webglcontextlost", this.onContextLost, true);
     canvas.addEventListener("webglcontextrestored", this.onContextRestored);
+
     map.addLayer(this.gpu.layer, slots.fill);
     document.body.dataset.landcoverRenderer = "gpu";
     this.repaint();
@@ -275,6 +288,7 @@ class CategoricalView implements LayerView {
     const { map } = this.context;
     const position = this.restorePosition;
     this.restorePosition = null;
+
     map.addLayer(this.gpu.layer, position.beforeId);
     this.applyPosition(position);
     map.triggerRepaint();
@@ -296,6 +310,7 @@ class CategoricalView implements LayerView {
     const { map, layer, shift, report } = this.context;
     const position = this.drawPosition();
     removeLayerAndSource(map, this.id);
+
     try {
       this.image = createImagePainter({
         map,
@@ -316,6 +331,7 @@ class CategoricalView implements LayerView {
 
   private setVisible(visible: boolean) {
     const visibility = visible ? "visible" : "none";
+
     if (this.restorePosition) {
       this.restorePosition = { ...this.restorePosition, visibility };
       return;
@@ -329,14 +345,18 @@ class CategoricalView implements LayerView {
 
   private repaint() {
     const colors = this.classValues.map((value) => this.colors.get(value) ?? [0, 0, 0]);
+
     if (this.image) {
       if (this.ids) this.image.paint(unhatchIds(this.ids), colors, this.smooth);
     } else {
       this.gpu.setColors(colors);
       this.gpu.setEdges({ smooth: this.smooth, ...this.edges, smoothRadiusCells: this.smoothing });
     }
+
     const legend = classLegend(this.classes, this.present, this.colors, this.expandedGroups);
+
     if (this.hasHatched && !this.image) legend.append(classNoDataLegend());
+
     this.legendBox.replaceChildren(legend);
   }
 
@@ -346,21 +366,27 @@ class CategoricalView implements LayerView {
     const valueArray = arrayDoc(layer, "value");
     const opened = await store;
     const raw = await readArray(opened, valueArray.path, [null, null]);
+
     if (!this.alive || signal.aborted) return;
 
     const values = await decodeInSlices(raw, valueArray, signal);
+
     if (!this.alive || signal.aborted) return;
 
     this.ids = await cellClassIdsInSlices(values, this.classValues, signal);
+
     if (!this.alive || signal.aborted) return;
 
     this.present = await presentInSlices(values, signal);
+
     if (!this.alive || signal.aborted) return;
 
     await this.markAndFillNoData(opened, signal);
+
     if (!this.alive || signal.aborted) return;
 
     if (!this.image) this.gpu.setIds(this.ids);
+
     this.repaint();
   }
 
@@ -371,16 +397,19 @@ class CategoricalView implements LayerView {
   async prepareEntry(time: string | null, signal?: AbortSignal): Promise<void> {
     void time;
     await this.ready;
+
     if (!this.alive || !this.ids || signal?.aborted) return;
 
     const palette = this.palette;
     const smooth = this.smooth;
+
     if (this.image) {
       if (!this.alive || this.palette !== palette) return;
 
       await warmHiddenRaster(this.context.map, this.id, signal);
     } else {
       await this.gpu.prepareFlags(signal);
+
       if (!this.alive || signal?.aborted || this.palette !== palette || this.smooth !== smooth) {
         return;
       }
@@ -391,13 +420,16 @@ class CategoricalView implements LayerView {
         if (!this.alive || signal?.aborted) return;
 
         this.useImage();
+
         if (!this.alive || !this.image) throw error;
 
         this.repaint();
         await warmHiddenRaster(this.context.map, this.id, signal);
+
         return;
       }
     }
+
     if (!this.alive || signal?.aborted) return;
 
     await nextEntryFrame(signal);
@@ -407,6 +439,7 @@ class CategoricalView implements LayerView {
     try {
       const mask = await readMask(store, this.context.layer);
       await markHatchedNoDataInSlices(this.ids!, mask, signal);
+
       if (isGeologyLayer(this.context.layer.id)) {
         const { bbox, nx, ny, res } = this.context.layer.grid;
         const meanLatitude = (bbox[1] + bbox[3]) / 2;
@@ -421,6 +454,7 @@ class CategoricalView implements LayerView {
           signal,
         );
       }
+
       this.hasHatched = this.ids!.includes(CLASS_HATCH_ID);
     } catch (error) {
       if (isCancel(error)) throw error;
@@ -449,11 +483,14 @@ class CategoricalView implements LayerView {
   destroy() {
     this.alive = false;
     this.loadAbort.abort();
+
     const { map } = this.context;
     const canvas = map.getCanvas();
+
     canvas.removeEventListener("webglcontextlost", this.onContextLost, true);
     canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
     map.off("style.load", this.restoreLayer);
+
     removeLayerAndSource(map, this.id);
     delete document.body.dataset.landcoverRenderer;
   }
@@ -482,6 +519,7 @@ async function markHatchedNoDataInSlices(
   signal?: AbortSignal,
 ) {
   let sliceMs = performance.now();
+
   for (let cell = 0; cell < ids.length; cell++) {
     if (ids[cell] === 0 && mask[cell] === 1) ids[cell] = CLASS_HATCH_ID;
     if ((cell + 1) % ENTRY_CHECK_CELLS !== 0) continue;
@@ -491,6 +529,7 @@ async function markHatchedNoDataInSlices(
     await yieldToBrowser(signal);
     sliceMs = performance.now();
   }
+
   if (signal?.aborted) throw cancelError();
 }
 
@@ -498,8 +537,10 @@ async function markHatchedNoDataInSlices(
 async function presentInSlices(values: Float32Array, signal?: AbortSignal): Promise<Set<number>> {
   const present = new Set<number>();
   let sliceMs = performance.now();
+
   for (let cell = 0; cell < values.length; cell++) {
     present.add(values[cell]);
+
     if ((cell + 1) % ENTRY_CHECK_CELLS !== 0) continue;
     if (signal?.aborted) throw cancelError();
     if (performance.now() - sliceMs < ENTRY_BUDGET_MS) continue;
@@ -507,13 +548,16 @@ async function presentInSlices(values: Float32Array, signal?: AbortSignal): Prom
     await yieldToBrowser(signal);
     sliceMs = performance.now();
   }
+
   if (signal?.aborted) throw cancelError();
+
   return present;
 }
 
 /** Wait a frame so the preparing note paints before heavy work continues. */
 function nextEntryFrame(signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(cancelError());
+
   return new Promise((done, fail) => {
     const onFrame = () => {
       signal?.removeEventListener("abort", onAbort);
@@ -521,10 +565,12 @@ function nextEntryFrame(signal?: AbortSignal): Promise<void> {
     };
     const onAbort = () => fail(cancelError());
     signal?.addEventListener("abort", onAbort, { once: true });
+
     if (typeof requestAnimationFrame === "function") {
       requestAnimationFrame(onFrame);
       return;
     }
+
     setTimeout(onFrame, 0);
   });
 }
@@ -532,6 +578,7 @@ function nextEntryFrame(signal?: AbortSignal): Promise<void> {
 function cancelError(): Error {
   const error = new Error("Entry preparation was cancelled");
   error.name = "AbortError";
+
   return error;
 }
 
@@ -574,12 +621,17 @@ export function fillCoastalGaps(
   heightM = 1,
 ): Uint8Array {
   const filled = Uint8Array.from(ids);
+
   if (radiusCells <= 0) return filled;
-  const { maxDistance, stepX, stepY, widthM: cellWidth, heightM: cellHeight } = fillWindow(
-    radiusCells,
-    widthM,
-    heightM,
-  );
+
+  const {
+    maxDistance,
+    stepX,
+    stepY,
+    widthM: cellWidth,
+    heightM: cellHeight,
+  } = fillWindow(radiusCells, widthM, heightM);
+
   for (let row = 0; row < ny; row++) {
     for (let column = 0; column < nx; column++) {
       const cell = row * nx + column;
@@ -598,9 +650,11 @@ export function fillCoastalGaps(
         cellWidth,
         cellHeight,
       );
+
       if (best !== 0) filled[cell] = best;
     }
   }
+
   return filled;
 }
 
@@ -627,20 +681,26 @@ async function fillCoastalGapsInSlices(
   signal?: AbortSignal,
 ): Promise<Uint8Array> {
   const filled = Uint8Array.from(ids);
+
   if (radiusCells <= 0) return filled;
-  const { maxDistance, stepX, stepY, widthM: cellWidth, heightM: cellHeight } = fillWindow(
-    radiusCells,
-    widthM,
-    heightM,
-  );
+
+  const {
+    maxDistance,
+    stepX,
+    stepY,
+    widthM: cellWidth,
+    heightM: cellHeight,
+  } = fillWindow(radiusCells, widthM, heightM);
   // The window area sets the check cadence so one slice never carries many costly scans.
   const windowCells = (2 * stepX + 1) * (2 * stepY + 1);
   const checkCells = Math.max(1, Math.floor(ENTRY_CHECK_CELLS / Math.max(1, windowCells)));
   let sliceMs = performance.now();
   let checked = 0;
+
   for (let row = 0; row < ny; row++) {
     for (let column = 0; column < nx; column++) {
       const cell = row * nx + column;
+
       if (mask[cell] === 1 && filled[cell] === CLASS_HATCH_ID) {
         const best = nearestCoastalSource(
           ids,
@@ -655,9 +715,12 @@ async function fillCoastalGapsInSlices(
           cellWidth,
           cellHeight,
         );
+
         if (best !== 0) filled[cell] = best;
       }
+
       checked += 1;
+
       if (checked % checkCells !== 0) continue;
       if (signal?.aborted) throw cancelError();
       if (performance.now() - sliceMs < ENTRY_BUDGET_MS) continue;
@@ -666,7 +729,9 @@ async function fillCoastalGapsInSlices(
       sliceMs = performance.now();
     }
   }
+
   if (signal?.aborted) throw cancelError();
+
   return filled;
 }
 
@@ -677,6 +742,7 @@ function fillWindow(radiusCells: number, widthM: number, heightM: number) {
 
   const meanCell = (widthM + heightM) / 2;
   const maxDistance = radiusCells * meanCell;
+
   return {
     maxDistance,
     stepX: Math.max(1, Math.ceil(maxDistance / widthM)),
@@ -705,6 +771,7 @@ function nearestCoastalSource(
   const maxRow = Math.min(ny - 1, row + stepY);
   const minColumn = Math.max(0, column - stepX);
   const maxColumn = Math.min(nx - 1, column + stepX);
+
   for (let sourceRow = minRow; sourceRow <= maxRow; sourceRow++) {
     for (let sourceColumn = minColumn; sourceColumn <= maxColumn; sourceColumn++) {
       const sourceCell = sourceRow * nx + sourceColumn;
@@ -715,11 +782,13 @@ function nearestCoastalSource(
 
       const distance = Math.hypot((column - sourceColumn) * widthM, (row - sourceRow) * heightM);
       if (distance > maxDistance) continue;
+
       if (distance < bestDistance || (distance === bestDistance && source < bestSource)) {
         bestDistance = distance;
         bestSource = source;
       }
     }
   }
+
   return bestSource;
 }

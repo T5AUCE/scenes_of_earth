@@ -84,7 +84,8 @@ test("the explicit centre viewport matches the map helper for the same centre", 
 test("the basemap descriptor prefers the loaded source over the style", () => {
   const template = "https://tiles.openfreemap.org/planet/{z}/{x}/{y}.pbf";
   const live = {
-    getSource: (id: string) => id === BASEMAP_SOURCE_ID ? { tiles: [template], maxzoom: 14 } : null,
+    getSource: (id: string) =>
+      id === BASEMAP_SOURCE_ID ? { tiles: [template], maxzoom: 14 } : null,
     getStyle: () => ({ sources: {} }),
   };
   const inline = {
@@ -122,11 +123,18 @@ test("the scene pyramid lists whole levels coarsest first until the next would o
   const tiles = scenePyramidTiles([10, 10, 12, 12], 5, 12, 40);
 
   assert.ok(tiles.length > 0 && tiles.length <= 40);
+
   const zooms = tiles.map((tile) => tile.z);
-  assert.deepEqual(zooms, [...zooms].sort((first, second) => first - second));
+
+  assert.deepEqual(
+    zooms,
+    [...zooms].sort((first, second) => first - second),
+  );
   assert.ok(tiles.every((tile) => tileInScene(tile, [10, 10, 12, 12])));
+
   const deepest = Math.max(...zooms);
   const nextLevel = scenePyramidTiles([10, 10, 12, 12], deepest + 1, deepest + 1, 1000);
+
   assert.ok(tiles.length + nextLevel.length > 40);
 });
 
@@ -158,12 +166,18 @@ test("a dwell warms ancestors first and stays inside the request cap", () => {
   const zooms = tiles.map((tile) => tile.z);
 
   assert.ok(tiles.length > 0 && tiles.length <= DWELL_REQUEST_CAP);
-  assert.deepEqual(zooms, [...zooms].sort((first, second) => first - second));
+  assert.deepEqual(
+    zooms,
+    [...zooms].sort((first, second) => first - second),
+  );
   assert.ok(Math.min(...zooms) >= 5 && Math.max(...zooms) <= 11);
+
   const ancestors = tiles.filter((tile) => tile.z < 9);
+
   for (let zoom = 5; zoom < 9; zoom += 1) {
     assert.ok(ancestors.filter((tile) => tile.z === zoom).length <= 12);
   }
+
   assert.ok(tiles.filter((tile) => tile.z === 10).length <= 48);
   assert.ok(tiles.filter((tile) => tile.z === 11).length <= 16);
 });
@@ -238,6 +252,7 @@ function fakeMap(
       getNorth: () => lat + spanLat / 2,
     }),
   };
+
   return map as unknown as ViewportMap;
 }
 
@@ -256,5 +271,6 @@ function noCanvasMap(): ViewportMap {
       getNorth: () => 10,
     }),
   };
+
   return map as unknown as ViewportMap;
 }

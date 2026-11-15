@@ -1,4 +1,5 @@
 """Test CHIRPS rainfall revisions, cube and HTTP reads, notices and probes offline."""
+
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -63,8 +64,7 @@ def test_rain_remote_revision_follows_the_chirps_file_and_local_one_the_fallback
     base = replace(RAIN, backend=FakeRainBackend(markers))
     revised_chirps = replace(RAIN, backend=FakeRainBackend(markers, "chirps again"))
     final_fallback = replace(
-        RAIN,
-        backend=FakeRainBackend({"2026-06": "0001:a", "2026-07": "0001:c"}),
+        RAIN, backend=FakeRainBackend({"2026-06": "0001:a", "2026-07": "0001:c"})
     )
 
     assert base.remote_revision(steps) != revised_chirps.remote_revision(steps)
@@ -75,8 +75,7 @@ def test_rain_remote_revision_follows_the_chirps_file_and_local_one_the_fallback
 
 
 def rain_over(
-    chirps_cube: dict[str, str],
-    fallback_months: tuple[str, ...] = ("2026-06", "2026-07"),
+    chirps_cube: dict[str, str], fallback_months: tuple[str, ...] = ("2026-06", "2026-07")
 ) -> tuple[RainDataset, FakeRainBackend]:
     fallback = {month: "0001:a" for month in fallback_months}
     backend = FakeRainBackend(fallback, "http file", chirps_cube)
@@ -184,6 +183,7 @@ def test_http_rain_above_the_cube_maximum_or_negative_becomes_no_value(tmp_path,
     }
     with rasterio.open(path, "w", **profile) as dataset:
         dataset.write(values, 1)
+
     monkeypatch.setattr(chirps, "_chirps_url", lambda month: str(path))
     monkeypatch.setattr(chirps, "CHIRPS_GRID", Grid(-180, 60, CELL_DEG, 3, 2))
 
@@ -211,13 +211,9 @@ def test_rain_cube_that_is_updating_is_unavailable_instead_of_read_over_http(tmp
         source.optional_cube_months(CHIRPS_CUBE)
 
 
-@pytest.mark.parametrize(
-    ("chirps_cube", "chirps_has_cube"),
-    [(True, True), (False, False)],
-)
+@pytest.mark.parametrize(("chirps_cube", "chirps_has_cube"), [(True, True), (False, False)])
 def test_synthetic_has_cube_follows_the_chirps_flag_and_keeps_era5_cubes(
-    chirps_cube,
-    chirps_has_cube,
+    chirps_cube, chirps_has_cube
 ):
     source = SyntheticSource(chirps_cube=chirps_cube)
 
@@ -308,9 +304,7 @@ def test_latest_month_is_rechecked_soon_when_a_newer_month_was_unreachable(monke
     now = datetime.now(timezone.utc)
     this_month = chirps._chirps_url(f"{now.year:04d}-{now.month:02d}")
     monkeypatch.setattr(
-        chirps,
-        "_head",
-        lambda url: (None, None) if url == this_month else (True, None),
+        chirps, "_head", lambda url: (None, None) if url == this_month else (True, None)
     )
     source = RealSource()
 

@@ -57,9 +57,7 @@ test("the zoom preset reuses the standard areas for sweeping", () => {
 });
 
 test("checkPlaces keeps the zoom flag and rejects a non-boolean", () => {
-  const [spot] = checkPlaces({
-    spots: [{ name: "A", area: "x", centre: [1, 2], zoom: true }],
-  });
+  const [spot] = checkPlaces({ spots: [{ name: "A", area: "x", centre: [1, 2], zoom: true }] });
 
   assert.equal(spot.zoom, true);
   assert.equal(checkPlaces({ spots: [{ name: "B", area: "x", centre: [1, 2] }] })[0].zoom, false);
@@ -89,12 +87,10 @@ test("the colour preset covers both places with every colour pick", () => {
 
   assert.ok(spots.every((spot) => spot.layers.length === 4 && spot.colour));
   assert.deepEqual([...new Set(spots.map((spot) => spot.area))], ["sample:kenya", "sample:fiji"]);
-  assert.deepEqual([...new Set(spots.map((spot) => spot.colour))], [
-    "era5land_temperature",
-    "chirps_monthly",
-    "esa_worldcover",
-    "blend",
-  ]);
+  assert.deepEqual(
+    [...new Set(spots.map((spot) => spot.colour))],
+    ["era5land_temperature", "chirps_monthly", "esa_worldcover", "blend"],
+  );
 });
 
 test("the layout preset checks four layers over a period without a file", () => {
@@ -113,9 +109,7 @@ test("the layout preset checks four layers over a period without a file", () => 
 });
 
 test("checkPlaces keeps the layout flag and rejects a non-boolean", () => {
-  const [spot] = checkPlaces({
-    spots: [{ name: "A", area: "x", centre: [1, 2], layout: true }],
-  });
+  const [spot] = checkPlaces({ spots: [{ name: "A", area: "x", centre: [1, 2], layout: true }] });
 
   assert.equal(spot.layout, true);
   assert.equal(checkPlaces({ spots: [{ name: "B", area: "x", centre: [1, 2] }] })[0].layout, false);

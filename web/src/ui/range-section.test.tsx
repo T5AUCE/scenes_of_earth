@@ -22,9 +22,11 @@ test("a valid low and high applies the range", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { RangeSection } = await import("./range-section.tsx");
+
   const { range, sets, changes } = testRange({ fitted: [0, 10] });
   const container = document.createElement("div");
   document.body.append(container);
@@ -52,9 +54,11 @@ test("a low above the high reverts to the shown range", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { RangeSection } = await import("./range-section.tsx");
+
   const { range, sets, changes } = testRange({ fitted: [0, 10] });
   const container = document.createElement("div");
   document.body.append(container);
@@ -84,9 +88,11 @@ test("an empty input reverts to the shown range", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { RangeSection } = await import("./range-section.tsx");
+
   const { range, sets } = testRange({ fitted: [0, 10], value: [2, 8] });
   const container = document.createElement("div");
   document.body.append(container);
@@ -112,9 +118,11 @@ test("Reset returns to the fitted range", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { RangeSection } = await import("./range-section.tsx");
+
   const { range, sets, changes } = testRange({ fitted: [0, 10], value: [2, 8] });
   const container = document.createElement("div");
   document.body.append(container);
@@ -139,9 +147,11 @@ test("Low and High share one line", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { RangeSection } = await import("./range-section.tsx");
+
   const { range } = testRange({});
   const container = document.createElement("div");
   document.body.append(container);
@@ -161,9 +171,11 @@ test("leaving an unchanged range without edits keeps the fitted stops", async (c
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { RangeSection } = await import("./range-section.tsx");
+
   const { range, sets, changes } = testRange({ fitted: [0, 10] });
   const container = document.createElement("div");
   document.body.append(container);
@@ -190,9 +202,11 @@ test("Enter followed by blur commits only once", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { RangeSection } = await import("./range-section.tsx");
+
   const { range, sets, changes } = testRange({ fitted: [0, 10] });
   const container = document.createElement("div");
   document.body.append(container);
@@ -223,9 +237,11 @@ test("inches show converted stops and store millimetres", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { RangeSection } = await import("./range-section.tsx");
+
   const { range, sets, changes } = testRange({ fitted: [0, 25.4], displayUnit: "in/month" });
   const container = document.createElement("div");
   document.body.append(container);
@@ -257,9 +273,11 @@ test("a fractional inch stores the exact millimetres and redisplays stably", asy
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { RangeSection } = await import("./range-section.tsx");
+
   const { range, sets } = testRange({ fitted: [0, 25.4], displayUnit: "in/month" });
   const container = document.createElement("div");
   document.body.append(container);
@@ -287,9 +305,11 @@ test("an untouched endpoint keeps its stored native through display rounding", a
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { RangeSection } = await import("./range-section.tsx");
+
   const { range, sets } = testRange({
     fitted: [0, 25.4],
     value: [0, 2.54],
@@ -317,10 +337,12 @@ test("an edited low beside a non-round high keeps the high native", async (conte
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { RangeSection } = await import("./range-section.tsx");
   const { convertValue } = await import("../units.ts");
+
   const { range, sets } = testRange({ fitted: [0, 2.6], displayUnit: "in/month" });
   const container = document.createElement("div");
   document.body.append(container);
@@ -348,9 +370,11 @@ test("a unit swap never shows more than the shown decimals", async (context) => 
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { RangeSection } = await import("./range-section.tsx");
+
   const { range } = testRange({ fitted: [0, 2.6], displayUnit: "in/month" });
   const container = document.createElement("div");
   document.body.append(container);
@@ -364,6 +388,7 @@ test("a unit swap never shows more than the shown decimals", async (context) => 
 
     assert.ok(decimals <= 3, `${label} shows ${text}`);
   }
+
   assert.equal(inputByLabel(container, "High").value, "0.102");
 
   await act(async () => root.unmount());
@@ -373,10 +398,12 @@ test("a Fahrenheit edit stores exact Celsius and redisplays stably", async (cont
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { RangeSection } = await import("./range-section.tsx");
   const { convertValue } = await import("../units.ts");
+
   const { range, sets } = testRange({
     fitted: [0, 30],
     units: "°C",
@@ -409,17 +436,19 @@ test("a Fahrenheit edit stores exact Celsius and redisplays stably", async (cont
   await act(async () => root.unmount());
 });
 
-function testRange({ fitted = [0, 10], value = null, displayUnit, units, decimals }: {
+function testRange({
+  fitted = [0, 10],
+  value = null,
+  displayUnit,
+  units,
+  decimals,
+}: {
   fitted?: [number, number];
   value?: [number, number] | null;
   displayUnit?: string;
   units?: string;
   decimals?: number;
-}): {
-  range: RangeMenu;
-  sets: Array<[number, number] | null>;
-  changes: string[];
-} {
+}): { range: RangeMenu; sets: Array<[number, number] | null>; changes: string[] } {
   let current = value;
   const sets: Array<[number, number] | null> = [];
   const changes: string[] = [];
@@ -451,8 +480,9 @@ function onChange(changes: string[]): (change: "range") => void {
 }
 
 function inputByLabel(container: HTMLElement, label: string): HTMLInputElement {
-  const row = [...container.querySelectorAll("label")]
-    .find((element) => element.textContent?.includes(label));
+  const row = [...container.querySelectorAll("label")].find((element) =>
+    element.textContent?.includes(label),
+  );
 
   return row!.querySelector("input") as HTMLInputElement;
 }
@@ -464,8 +494,9 @@ function setNumber(container: HTMLElement, label: string, text: string): void {
 }
 
 function commitWithEnter(container: HTMLElement, label: string): void {
-  inputByLabel(container, label)
-    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  inputByLabel(container, label).dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+  );
 }
 
 function blurInput(container: HTMLElement, label: string): void {
@@ -489,6 +520,7 @@ function installBrowser(window: Window): void {
   for (const name of names) {
     defineGlobal(name, window[name]);
   }
+
   defineGlobal("window", window);
   defineGlobal("document", window.document);
   defineGlobal("navigator", window.navigator);

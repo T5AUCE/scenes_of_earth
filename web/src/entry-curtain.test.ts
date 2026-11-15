@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 
 import { Window } from "happy-dom";
-
 import type { Map as MapLibreMap } from "maplibre-gl";
 
 import { REVEAL_MS, revealUnderCurtain } from "./entry-curtain.ts";
@@ -210,6 +209,7 @@ test("retiring after the cover drops the picture without fading", async () => {
   await reveal.done;
 
   assert.deepEqual(events, ["copy", "stage"]);
+
   map.emit("idle");
 
   assert.deepEqual(events, ["copy", "stage"]);
@@ -249,6 +249,7 @@ test("cancelling twice runs every step once", async () => {
 
 test("reduced motion makes no picture and runs every step at once", async () => {
   reducedMotion = true;
+
   const reveal = start();
   await reveal.done;
 

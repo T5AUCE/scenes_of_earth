@@ -64,6 +64,7 @@ export function flyIn(map: MapLibreMap, scene: Scene, roots: CameraRoots) {
 
       padding = nextPadding;
       fitted = next;
+
       if (hold) {
         hold.refit(next);
         return;
@@ -71,25 +72,29 @@ export function flyIn(map: MapLibreMap, scene: Scene, roots: CameraRoots) {
       if (isLanded) moveToFit();
     },
 
-    start: () => new Promise<void>((resolve) => {
-      let isCorrected = false;
-      const land = () => {
-        if (fitted && !isCorrected && !isAtFit(map, fitted)) {
-          isCorrected = true;
-          // A resize or an interruption moved the target, so one short ease finishes the fit.
-          map.easeTo({ ...fitted, duration: SNAP_BACK_MS, easing: easeOut });
-          return;
-        }
-        stopLanding();
-        isLanded = true;
-        resolve();
-      };
-      const duration = flightDuration(fitted ? Math.abs(fitted.zoom - map.getZoom()) : Infinity);
-      stopLanding = () => map.off("moveend", land);
-      map.on("moveend", land);
-      fitToBbox(map, scene.area.bbox, { padding, duration });
-      if (!map.isMoving()) land();
-    }),
+    start: () =>
+      new Promise<void>((resolve) => {
+        let isCorrected = false;
+        const land = () => {
+          if (fitted && !isCorrected && !isAtFit(map, fitted)) {
+            isCorrected = true;
+            // A resize or an interruption moved the target, so one short ease finishes the fit.
+            map.easeTo({ ...fitted, duration: SNAP_BACK_MS, easing: easeOut });
+            return;
+          }
+
+          stopLanding();
+          isLanded = true;
+          resolve();
+        };
+
+        const duration = flightDuration(fitted ? Math.abs(fitted.zoom - map.getZoom()) : Infinity);
+        stopLanding = () => map.off("moveend", land);
+        map.on("moveend", land);
+        fitToBbox(map, scene.area.bbox, { padding, duration });
+
+        if (!map.isMoving()) land();
+      }),
 
     settled() {
       return settlePromise ?? Promise.resolve();
@@ -131,6 +136,7 @@ export function flyIn(map: MapLibreMap, scene: Scene, roots: CameraRoots) {
     settlePromise = new Promise<void>((resolve) => {
       finishSettle = resolve;
     });
+
     const onMoveEnd = () => {
       if (!fitted || !isAtFit(map, fitted)) return;
 
@@ -140,11 +146,13 @@ export function flyIn(map: MapLibreMap, scene: Scene, roots: CameraRoots) {
       map.off("moveend", onMoveEnd);
       stopSettling = () => {};
     };
+
     map.on("moveend", onMoveEnd);
   }
 
   function resolveSettle() {
     stopSettling();
+
     const finish = finishSettle;
     settlePromise = null;
     finishSettle = null;
@@ -155,9 +163,11 @@ export function flyIn(map: MapLibreMap, scene: Scene, roots: CameraRoots) {
 function isAtFit(map: MapLibreMap, fitted: FittedCamera) {
   const { lng, lat } = map.getCenter();
 
-  return Math.abs(map.getZoom() - fitted.zoom) <= FIT_TOLERANCE_ZOOM
+  return (
+    Math.abs(map.getZoom() - fitted.zoom) <= FIT_TOLERANCE_ZOOM
     && Math.abs(lng - fitted.center.lng) <= FIT_TOLERANCE_DEG
-    && Math.abs(lat - fitted.center.lat) <= FIT_TOLERANCE_DEG;
+    && Math.abs(lat - fitted.center.lat) <= FIT_TOLERANCE_DEG
+  );
 }
 
 function scenePadding(roots: CameraRoots): PaddingOptions {
@@ -223,6 +233,7 @@ function holdView(map: MapLibreMap, first: FittedCamera) {
   map.setMinZoom(fitted.zoom - FIT_OVERSHOOT_ZOOM);
   map.on("zoomend", snapBack);
   map.on("moveend", endMove);
+
   let stopPanLock = lockPan(map, fitted);
 
   for (const type of USER_INPUT_EVENTS) {

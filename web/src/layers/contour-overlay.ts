@@ -27,8 +27,8 @@ import { makeHtmlElement } from "../html";
 import { contourLegendText } from "../legend";
 import { labelFadeDurationMs } from "../reduced-motion";
 import { contourColor, DEFAULT_CONTOUR_COLOR } from "../render/palettes";
-import { convertValue, displayUnitFor, isUnitFor } from "../units";
 import type { LayerContext, Part, TerrainStats, TerrainTiles } from "../types";
+import { convertValue, displayUnitFor, isUnitFor } from "../units";
 
 const LABEL_SIZE_PX = 10;
 const LABEL_SPACING_PX = 350;
@@ -70,6 +70,7 @@ export function sharedDemSource(tiles: TerrainTiles): DemSource {
   source.setupMaplibre(maplibregl);
   memoizeMissingDemTiles(source);
   demSources.set(key, source);
+
   return source;
 }
 
@@ -82,18 +83,22 @@ export function sharedDemSource(tiles: TerrainTiles): DemSource {
 export function memoizeMissingDemTiles(dem: DemSource): void {
   const manager = (dem as unknown as { manager?: DemManager }).manager;
   if (!manager) return;
+
   const missingTiles = new Map<string, true>();
+
   if (typeof manager.fetchTile === "function") {
     const fetchTile = manager.fetchTile.bind(manager);
     manager.fetchTile = ((z: number, x: number, y: number, ...rest: unknown[]) => {
       const key = `dem:${z}/${x}/${y}`;
       if (missingTiles.has(key)) return Promise.reject(missingTileError(key));
+
       return (fetchTile(z, x, y, ...rest) as Promise<unknown>).catch((error: unknown) => {
         if (isDem404(error)) rememberMissingTile(missingTiles, key);
         throw error;
       });
     }) as DemManager["fetchTile"];
   }
+
   if (typeof manager.fetchContourTile === "function") {
     const fetchContourTile = manager.fetchContourTile.bind(manager);
     const fetchWithMemo = (
@@ -105,11 +110,13 @@ export function memoizeMissingDemTiles(dem: DemSource): void {
     ) => {
       const key = `contours:${z}/${x}/${y}`;
       if (missingTiles.has(key)) return Promise.reject(missingTileError(key));
-      return (fetchContourTile(z, x, y, options, ...rest) as Promise<unknown>)
-        .catch((error: unknown) => {
+
+      return (fetchContourTile(z, x, y, options, ...rest) as Promise<unknown>).catch(
+        (error: unknown) => {
           if (isDem404(error)) rememberMissingTile(missingTiles, key);
           throw error;
-        });
+        },
+      );
     };
     manager.fetchContourTile = fetchWithMemo as DemManager["fetchContourTile"];
   }
@@ -118,10 +125,12 @@ export function memoizeMissingDemTiles(dem: DemSource): void {
 /** Remember a missing tile, dropping the oldest entry once the memo is full. */
 function rememberMissingTile(missingTiles: Map<string, true>, key: string) {
   if (missingTiles.has(key)) return;
+
   if (missingTiles.size >= MAX_MISSING_DEM_TILES) {
     const oldest = missingTiles.keys().next().value;
     if (oldest !== undefined) missingTiles.delete(oldest);
   }
+
   missingTiles.set(key, true);
 }
 
@@ -141,6 +150,7 @@ function isDem404(error: unknown): boolean {
   const withoutPrefix = message.startsWith(WORKER_ERROR_PREFIX)
     ? message.slice(WORKER_ERROR_PREFIX.length)
     : message;
+
   return withoutPrefix.startsWith("Bad response: 404");
 }
 
@@ -188,13 +198,9 @@ export class ContourOverlay {
   private readonly freezeAllowed = gestureFlags(addressSearch()).freezeLabels;
   private readonly stopGesture: () => void;
 
-  constructor(
-    context: LayerContext,
-    dem: DemSource,
-    tiles: TerrainTiles,
-    stats: TerrainStats,
-  ) {
+  constructor(context: LayerContext, dem: DemSource, tiles: TerrainTiles, stats: TerrainStats) {
     const { map, layer, beforeId, display } = context;
+
     // The interval note shares the isotherm note's style so both legend lines read alike.
     this.legend.className = "legend-contour";
     this.map = map;
@@ -203,11 +209,13 @@ export class ContourOverlay {
     this.bbox = layer.grid.bbox;
     this.beforeId = beforeId;
     this.color = contourColor(display?.palette ?? DEFAULT_CONTOUR_COLOR)!;
+
     this.labelSourceId = `${layer.id}-labels-contours`;
     this.labelBaseId = `${layer.id}-contours`;
     this.contourSourceIds = [this.labelSourceId];
     this.elevationUnit = displayUnitFor(layer.units, display?.units);
     this.maxzoom = Math.min(MAX_CONTOUR_ZOOM, cappedDemMaxZoom(tiles.maxzoom + CONTOUR_OVERZOOM));
+
     this.part = {
       id: `${layer.id}.contours`,
       label: "Contours",
@@ -219,6 +227,7 @@ export class ContourOverlay {
         this.updateLegend();
       },
     };
+
     this.build();
     map.on("zoomend", this.updateLegend);
     this.updateLegend();
@@ -227,6 +236,7 @@ export class ContourOverlay {
       onStart: () => this.setLabelsFrozen(true),
       onEnd: () => this.setLabelsFrozen(false),
     });
+
     if (isGestureActive(map)) this.setLabelsFrozen(true);
   }
 
@@ -244,6 +254,7 @@ export class ContourOverlay {
       elevationUnit: this.elevationUnit,
     });
     this.labelFadeZeroed = false;
+
     const protocolOptions = {
       thresholds: labelThresholds(this.ladder),
       overzoom: CONTOUR_OVERZOOM,
@@ -261,17 +272,21 @@ export class ContourOverlay {
 
   private rebuild() {
     for (const id of this.part.layerIds) this.map.removeLayer(id);
+
     this.removeSources();
     this.part.layerIds.length = 0;
     this.labelId = undefined;
     this.build();
+
     if (!this.isOn) {
       for (const id of this.part.layerIds) {
         this.map.setLayoutProperty(id, "visibility", "none");
       }
     }
+
     if (isGestureActive(this.map)) this.setLabelsFrozen(true);
     else if (this.freezeAllowed) this.updateLabelVisibility();
+
     this.updateLegend();
   }
 
@@ -282,11 +297,15 @@ export class ContourOverlay {
     const id = `${this.labelBaseId}-labels`;
     this.labelId = id;
     this.halo = getComputedStyle(document.documentElement)
-      .getPropertyValue(PAGE_BACKGROUND_PROPERTY).trim();
-    const font = this.map.getStyle().layers.find(
-      (layer): layer is SymbolLayerSpecification =>
-        layer.type === "symbol" && layer.layout?.["text-font"] !== undefined,
-    )?.layout?.["text-font"];
+      .getPropertyValue(PAGE_BACKGROUND_PROPERTY)
+      .trim();
+
+    const font = this.map
+      .getStyle()
+      .layers.find(
+        (layer): layer is SymbolLayerSpecification =>
+          layer.type === "symbol" && layer.layout?.["text-font"] !== undefined,
+      )?.layout?.["text-font"];
     this.map.addLayer(
       {
         id,
@@ -323,9 +342,11 @@ export class ContourOverlay {
   /** Recolour the contour labels. */
   setColor(color: string) {
     this.color = color;
+
     for (const id of this.part.layerIds) {
       this.map.setPaintProperty(id, "text-color", color);
     }
+
     if (this.labelId !== undefined) {
       // A recolour during the restore would otherwise inherit its remaining fade duration.
       const instant = { duration: 0 };
@@ -337,6 +358,7 @@ export class ContourOverlay {
   // Placement runs once per gesture instead of every zoom frame while frozen.
   private setLabelsFrozen(frozen: boolean) {
     if (!this.freezeAllowed) return;
+
     this.labelsFrozen = frozen;
     this.updateLabelVisibility();
   }
@@ -345,14 +367,17 @@ export class ContourOverlay {
   private updateLabelVisibility() {
     if (this.labelId === undefined || !this.map.getLayer(this.labelId)) return;
     if (typeof this.map.setLayoutProperty !== "function") return;
+
     const id = this.labelId;
     // The user toggle wins over the gesture, so off stays off through moveend.
     const show = this.isOn && !this.labelsFrozen;
     this.map.setLayoutProperty(id, "visibility", show ? "visible" : "none");
+
     if (show && this.labelFadeZeroed) {
       this.labelFadeZeroed = false;
       // Restart from transparent so a recolour or a half-run fade cannot skip the start.
       this.snapLabelFadeStart(id);
+
       const fade = { duration: labelFadeDurationMs() };
       this.map.setPaintProperty(id, "text-color-transition", fade);
       this.map.setPaintProperty(id, "text-halo-color-transition", fade);
@@ -384,7 +409,9 @@ export class ContourOverlay {
   destroy() {
     this.stopGesture();
     this.map.off("zoomend", this.updateLegend);
+
     for (const id of this.part.layerIds) this.map.removeLayer(id);
+
     this.removeSources();
   }
 
@@ -397,19 +424,21 @@ function transparentColor(color: string): string {
   const trimmed = color.trim();
   const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(trimmed);
   if (hex) return transparentHex(hex[1]);
+
   const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(trimmed);
   if (rgb) return `rgba(${rgb[1]}, ${rgb[2]}, ${rgb[3]}, 0)`;
+
   // An unknown format still fades from transparent black instead of popping in.
   return "rgba(0, 0, 0, 0)";
 }
 
 function transparentHex(digits: string): string {
-  const expanded = digits.length === 3
-    ? [...digits].map((digit) => digit + digit).join("")
-    : digits;
+  const expanded =
+    digits.length === 3 ? [...digits].map((digit) => digit + digit).join("") : digits;
   const red = parseInt(expanded.slice(0, 2), 16);
   const green = parseInt(expanded.slice(2, 4), 16);
   const blue = parseInt(expanded.slice(4, 6), 16);
+
   return `rgba(${red}, ${green}, ${blue}, 0)`;
 }
 
@@ -418,14 +447,13 @@ function transparentHex(digits: string): string {
  * finer heights are the expensive traces and the labels hide them until then.
  */
 function labelThresholds(ladder: ContourLadder): Record<number, number> {
-  return Object.fromEntries(
-    labelledTiers(ladder).map((tier) => [tier.entryZoom, tier.interval]),
-  );
+  return Object.fromEntries(labelledTiers(ladder).map((tier) => [tier.entryZoom, tier.interval]));
 }
 
 function labelledTiers(ladder: ContourLadder): ContourLadder["labelTiers"] {
   const bold = ladder.tiers.filter((tier) => tier.interval >= ladder.boldInterval);
   const sparse = ladder.labelTiers.filter((tier) => tier.interval < ladder.boldInterval);
+
   return [...bold, ...sparse];
 }
 
@@ -449,8 +477,8 @@ function labelFilter(
 
 function labelPriority(elevationUnit: string): ExpressionSpecification {
   const chain = elevationUnit === "ft" ? INTERVAL_CHAIN_FT : INTERVAL_CHAIN_M;
-  const conditions = [...chain].reverse()
-    .flatMap((interval) => [multipleOf(interval), -interval]);
+  const conditions = [...chain].reverse().flatMap((interval) => [multipleOf(interval), -interval]);
+
   return ["case", ...conditions, 0] as ExpressionSpecification;
 }
 
@@ -460,10 +488,12 @@ function labelField(
 ): ExpressionSpecification {
   const field: ExpressionSpecification = ["step", ["zoom"], ""];
   const intervalsByZoom = new Map(tiers.map((tier) => [tier.entryZoom, tier.interval]));
+
   for (const [zoom, interval] of intervalsByZoom) {
     const label: ExpressionSpecification = ["concat", ["get", "ele"], ` ${elevationUnit}`];
     field.push(zoom, ["case", multipleOf(interval), label, ""]);
   }
+
   return field;
 }
 
@@ -479,11 +509,9 @@ function tierFades(
   maxOpacity: number,
 ): ExpressionSpecification {
   const opacity: ExpressionSpecification = ["interpolate", ["linear"], ["zoom"]];
-  const fadeStops = tiers.flatMap((tier) => [
-    tier.entryZoom,
-    tier.entryZoom + FADE_SPAN_ZOOM,
-  ]);
+  const fadeStops = tiers.flatMap((tier) => [tier.entryZoom, tier.entryZoom + FADE_SPAN_ZOOM]);
   const stops = [...new Set(fadeStops)].sort((first, second) => first - second);
+
   for (const zoom of stops) {
     const conditions = tiers.flatMap((tier) => {
       const alpha = Math.max(0, Math.min(1, (zoom - tier.entryZoom) / FADE_SPAN_ZOOM));
@@ -492,6 +520,7 @@ function tierFades(
     const value = ["case", ...conditions, 0] as ExpressionSpecification;
     opacity.push(zoom, value);
   }
+
   return opacity;
 }
 

@@ -1,4 +1,5 @@
 """Test scene.json validation and the credit lines of a bundle."""
+
 import copy
 import json
 
@@ -394,9 +395,7 @@ def test_categorical_palette_rejects_unknown_names_and_non_text_values(tmp_path,
     layer = doc["layers"][0]
     layer["style"]["palette"] = palette
 
-    assert validate(doc) == [
-        f"{layer['id']}: style.palette must be omitted or one of: painted",
-    ]
+    assert validate(doc) == [f"{layer['id']}: style.palette must be omitted or one of: painted"]
 
 
 def test_p6_bundle_carries_the_current_contract_and_generator(tmp_path):
@@ -528,20 +527,13 @@ def test_contract_rejects_nonfinite_numbers(tmp_path, value):
     doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-01"))
 
     assert any(
-        "finite number or null" in problem
-        for problem in validate(_with_series_value(doc, value))
+        "finite number or null" in problem for problem in validate(_with_series_value(doc, value))
     )
+    assert any("between 0 and 1" in problem for problem in validate(_with_valid_share(doc, value)))
     assert any(
-        "between 0 and 1" in problem
-        for problem in validate(_with_valid_share(doc, value))
+        "finite numbers" in problem for problem in validate(_with_distribution_value(doc, value))
     )
-    assert any(
-        "finite numbers" in problem
-        for problem in validate(_with_distribution_value(doc, value))
-    )
-    assert any(
-        "positive finite" in problem for problem in validate(_with_grid_res(doc, value))
-    )
+    assert any("positive finite" in problem for problem in validate(_with_grid_res(doc, value)))
 
 
 def test_contract_rejects_wrong_lengths_and_fractions(tmp_path):
@@ -549,9 +541,9 @@ def test_contract_rejects_wrong_lengths_and_fractions(tmp_path):
     rain_id = "chirps_monthly"
 
     shortened = copy.deepcopy(doc)
-    shortened["layers"][1]["area_series"]["values"] = shortened["layers"][1][
-        "area_series"
-    ]["values"][:-1]
+    shortened["layers"][1]["area_series"]["values"] = shortened["layers"][1]["area_series"][
+        "values"
+    ][:-1]
 
     assert any("time.count entries" in problem for problem in validate(shortened))
 
@@ -644,9 +636,7 @@ def test_contract_rejects_invalid_resolution_and_references(tmp_path):
     assert any("must be an object" in problem for problem in validate(not_an_object))
 
     bad_entry = copy.deepcopy(doc)
-    bad_entry["layers"][0]["distribution"]["reference_values"] = [
-        {"id": "", "value": float("nan")},
-    ]
+    bad_entry["layers"][0]["distribution"]["reference_values"] = [{"id": "", "value": float("nan")}]
 
     problems = validate(bad_entry)
 
@@ -655,7 +645,7 @@ def test_contract_rejects_invalid_resolution_and_references(tmp_path):
 
     bad_sea_level = copy.deepcopy(doc)
     bad_sea_level["layers"][0]["distribution"]["reference_values"] = [
-        {"id": "sea_level", "value": 2},
+        {"id": "sea_level", "value": 2}
     ]
 
     assert any("sea_level reference must be 0" in problem for problem in validate(bad_sea_level))
@@ -690,16 +680,12 @@ def test_contract_rejects_positive_fallback_without_credited_sources(tmp_path):
     uncredited = copy.deepcopy(doc)
     del uncredited["layers"][1]["fallback_sources"]
 
-    assert any(
-        "without fallback_sources" in problem for problem in validate(uncredited)
-    )
+    assert any("without fallback_sources" in problem for problem in validate(uncredited))
 
     missing_shares = copy.deepcopy(doc)
     del missing_shares["layers"][1]["area_series"]["fallback_fraction"]
 
-    assert any(
-        "without fallback_fraction" in problem for problem in validate(missing_shares)
-    )
+    assert any("without fallback_fraction" in problem for problem in validate(missing_shares))
 
 
 def test_contract_rejects_null_and_share_mismatches(tmp_path):
@@ -795,9 +781,7 @@ def test_contract_rejects_oversized_integers_without_raising(tmp_path):
     assert any(
         "area_series.values" in problem for problem in validate(_with_series_value(doc, huge))
     )
-    assert any(
-        "between 0 and 1" in problem for problem in validate(_with_valid_share(doc, huge))
-    )
+    assert any("between 0 and 1" in problem for problem in validate(_with_valid_share(doc, huge)))
     assert any(
         "between 0 and 1" in problem for problem in validate(_with_fallback_share(doc, huge))
     )
@@ -852,9 +836,7 @@ def test_contract_rejects_malformed_fallback_sources_on_static_terrain(tmp_path)
         assert any("fallback_sources" in problem for problem in validate(mutated)), bad
 
     control = copy.deepcopy(doc)
-    control["layers"][0]["fallback_sources"] = copy.deepcopy(
-        doc["layers"][1]["fallback_sources"],
-    )
+    control["layers"][0]["fallback_sources"] = copy.deepcopy(doc["layers"][1]["fallback_sources"])
 
     assert validate(control) == []
 
@@ -862,12 +844,9 @@ def test_contract_rejects_malformed_fallback_sources_on_static_terrain(tmp_path)
 def test_contract_enforces_exact_zero_and_nonnegative_shares(tmp_path):
     doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
 
+    assert any("between 0 and 1" in problem for problem in validate(_with_valid_share(doc, -5e-13)))
     assert any(
-        "between 0 and 1" in problem for problem in validate(_with_valid_share(doc, -5e-13))
-    )
-    assert any(
-        "between 0 and 1" in problem
-        for problem in validate(_with_fallback_share(doc, -5e-13))
+        "between 0 and 1" in problem for problem in validate(_with_fallback_share(doc, -5e-13))
     )
 
     empty_with_fallback = copy.deepcopy(doc)
@@ -876,8 +855,7 @@ def test_contract_enforces_exact_zero_and_nonnegative_shares(tmp_path):
     empty_with_fallback["layers"][1]["area_series"]["fallback_fraction"][0] = 5e-13
 
     assert any(
-        "must not exceed valid_fraction" in problem
-        for problem in validate(empty_with_fallback)
+        "must not exceed valid_fraction" in problem for problem in validate(empty_with_fallback)
     )
 
     empty_clean = copy.deepcopy(doc)
@@ -890,8 +868,7 @@ def test_contract_enforces_exact_zero_and_nonnegative_shares(tmp_path):
     assert validate(_with_valid_share(doc, 1 + 5e-13)) == []
 
     assert any(
-        "between 0 and 1" in problem
-        for problem in validate(_with_valid_share(doc, 1 + 2e-12))
+        "between 0 and 1" in problem for problem in validate(_with_valid_share(doc, 1 + 2e-12))
     )
 
 
@@ -914,9 +891,7 @@ def test_contract_rejects_timed_terrain(tmp_path):
     assert any("must be static" in problem for problem in validate(timed_without_distribution))
 
     timed_with_series = copy.deepcopy(timed)
-    timed_with_series["layers"][0]["area_series"] = copy.deepcopy(
-        doc["layers"][1]["area_series"],
-    )
+    timed_with_series["layers"][0]["area_series"] = copy.deepcopy(doc["layers"][1]["area_series"])
 
     assert any("must be static" in problem for problem in validate(timed_with_series))
     assert validate(doc) == []
@@ -937,35 +912,28 @@ def test_contract_rejects_explicit_null_blocks_and_shares(tmp_path):
     timed_null_distribution["layers"][1]["distribution"] = None
 
     assert any(
-        "must not have distribution" in problem
-        for problem in validate(timed_null_distribution)
+        "must not have distribution" in problem for problem in validate(timed_null_distribution)
     )
 
     null_fallback = copy.deepcopy(doc)
     null_fallback["layers"][1]["area_series"]["fallback_fraction"] = None
 
-    assert any(
-        "fallback_fraction must be a list" in problem for problem in validate(null_fallback)
-    )
+    assert any("fallback_fraction must be a list" in problem for problem in validate(null_fallback))
 
     null_sources = copy.deepcopy(doc)
     null_sources["layers"][1]["fallback_sources"] = None
 
-    assert any(
-        "fallback_sources must be a list" in problem for problem in validate(null_sources)
-    )
+    assert any("fallback_sources must be a list" in problem for problem in validate(null_sources))
 
     categorical_null = copy.deepcopy(doc)
     categorical_null["layers"][0]["style"]["kind"] = "categorical"
     categorical_null["layers"][0]["style"]["classes"] = [
-        {"value": 10, "label": "Tree cover", "color": "#006400"},
+        {"value": 10, "label": "Tree cover", "color": "#006400"}
     ]
     del categorical_null["layers"][0]["distribution"]
     categorical_null["layers"][0]["distribution"] = None
 
-    assert any(
-        "must not have distribution" in problem for problem in validate(categorical_null)
-    )
+    assert any("must not have distribution" in problem for problem in validate(categorical_null))
 
     static_field_null = copy.deepcopy(doc)
     static_field_null["layers"][0]["style"]["kind"] = "field"
@@ -974,8 +942,7 @@ def test_contract_rejects_explicit_null_blocks_and_shares(tmp_path):
     static_field_null["layers"][0]["distribution"] = None
 
     assert any(
-        "distribution must be an object" in problem
-        for problem in validate(static_field_null)
+        "distribution must be an object" in problem for problem in validate(static_field_null)
     )
 
 
@@ -986,9 +953,7 @@ def test_contract_rejects_boolean_distribution_percent(tmp_path):
         mutated = copy.deepcopy(doc)
         mutated["layers"][0]["distribution"]["percent"] = bad
 
-        assert any(
-            "distribution.percent" in problem for problem in validate(mutated)
-        ), bad
+        assert any("distribution.percent" in problem for problem in validate(mutated)), bad
 
 
 def test_bundle_outline_is_a_named_display_feature(tmp_path):

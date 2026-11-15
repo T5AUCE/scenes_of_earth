@@ -14,10 +14,9 @@ const hooks = registerHooks({
     return next(new URL(`${specifier}.ts`, context.parentURL).href, context);
   },
 });
-const {
-  menuMainSections,
-  menuResetButton,
-} = await import("./layer-menu.ts").finally(() => hooks.deregister());
+const { menuMainSections, menuResetButton } = await import("./layer-menu.ts").finally(() =>
+  hooks.deregister(),
+);
 
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
 
@@ -42,6 +41,7 @@ test("the menu shows the edge section without colour radios or notes", () => {
     },
     reset: () => {},
   };
+
   const sections = sectionsOf(menu);
 
   assert.deepEqual(legendsOf(sections), ["Edges"]);
@@ -58,8 +58,9 @@ test("a menu without edges has no sections left", () => {
 
 test("reset layer reports a reset after applying the defaults", () => {
   const { menu, changes } = fieldMenu(false);
-  const reset = descendants(sectionsOf(menu, changes))
-    .find((element) => element.className === "menu-reset")!;
+  const reset = descendants(sectionsOf(menu, changes)).find(
+    (element) => element.className === "menu-reset",
+  )!;
 
   reset.onclick!();
 
@@ -79,8 +80,10 @@ test("reset layer returns units to the bundle default", () => {
       sets.push(next);
     },
   };
-  const reset = descendants(sectionsOf(menu, changes))
-    .find((element) => element.className === "menu-reset")!;
+
+  const reset = descendants(sectionsOf(menu, changes)).find(
+    (element) => element.className === "menu-reset",
+  )!;
 
   reset.onclick!();
 
@@ -109,10 +112,9 @@ test("the edges section shows a smoothing radius with its cells unit", () => {
     },
     reset: () => {},
   };
+
   const sections = sectionsOf(menu);
-  const rows = descendants(sections).filter(
-    (element) => element.className === "edge-control",
-  );
+  const rows = descendants(sections).filter((element) => element.className === "edge-control");
   const smoothing = rows.find((row) => row.textContent.startsWith("Wide smoothing"))!;
   const input = descendants([smoothing]).find((element) => element.type === "range")!;
 
@@ -162,6 +164,7 @@ function fieldMenu(isDrawn: boolean, ink = "navy", palette = "ink-blue") {
   const setDrawn = (next: boolean) => {
     isInk = next;
   };
+
   return { menu, changes, setDrawn };
 }
 
@@ -239,5 +242,6 @@ class TestElement {
 function textNode(text: string) {
   const node = new TestElement("#text");
   node.textContent = text;
+
   return node;
 }

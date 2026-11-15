@@ -62,9 +62,11 @@ test("a blocked fallback is hidden with its reason while colour stays available"
   const blocked = new Map([["rain", "Dots need more zoom"]]);
 
   const dotted = allocate([RAIN, TEMP], on("rain", "temp"), { temp: "colour" }, blocked);
+
   assert.deepEqual(dotted.draws.get("rain"), { hidden: "Dots need more zoom" });
 
   const coloured = allocate([RAIN, TEMP], on("rain", "temp"), { rain: "colour" }, blocked);
+
   assert.equal(coloured.draws.get("rain"), "colour");
 });
 
@@ -72,6 +74,7 @@ test("a categorical layer without a fallback draws only in colour", () => {
   assert.equal(layerDraws(LAND).fallback, null);
 
   const allocation = allocate([LAND, TEMP], on("land", "temp"), { land: "colour" });
+
   assert.equal(allocation.draws.get("land"), "colour");
   assert.equal(allocation.draws.get("temp"), "isolines");
   assert.equal(layerDraws(TEMP).fallback, "isolines");
@@ -102,11 +105,9 @@ test("a field outranks a categorical layer that offers dots", () => {
 test("hidden land cover leaves the line slots free", () => {
   const isotherm = layer("isotherm", ["ramp", "isolines"]);
   const units = [LAND, RAIN, isotherm, TERRAIN];
-  const allocation = allocate(
-    units,
-    on("land", "rain", "isotherm", "terrain.contours"),
-    { rain: "colour" },
-  );
+  const allocation = allocate(units, on("land", "rain", "isotherm", "terrain.contours"), {
+    rain: "colour",
+  });
 
   assert.deepEqual(allocation.draws.get("land"), { hidden: "Shown only in colour" });
   assert.equal(allocation.draws.get("isotherm"), "isolines");
@@ -115,11 +116,7 @@ test("hidden land cover leaves the line slots free", () => {
 
 test("contours keep the solid slot while land cover is hidden", () => {
   const units = [LAND, TEMP, TERRAIN];
-  const allocation = allocate(
-    units,
-    on("land", "temp", "terrain.contours"),
-    { temp: "colour" },
-  );
+  const allocation = allocate(units, on("land", "temp", "terrain.contours"), { temp: "colour" });
 
   assert.equal(allocation.draws.get("temp"), "colour");
   assert.deepEqual(allocation.draws.get("land"), { hidden: "Shown only in colour" });
@@ -143,11 +140,9 @@ test("an extra isoline layer is hidden while contours stay visible", () => {
 
 test("a slot-hidden unit keeps its chosen draw in as", () => {
   const second = layer("second", ["ramp", "isolines"]);
-  const allocation = allocate(
-    [RAIN, TEMP, second],
-    on("rain", "temp", "second"),
-    { rain: "colour" },
-  );
+  const allocation = allocate([RAIN, TEMP, second], on("rain", "temp", "second"), {
+    rain: "colour",
+  });
 
   assert.equal(allocation.as.get("temp"), "isolines");
   assert.equal(allocation.as.get("second"), "isolines");
@@ -159,11 +154,9 @@ test("a slot-hidden unit keeps its chosen draw in as", () => {
 test("a hidden isoline names the dashed line in use", () => {
   const second = layer("second", ["ramp", "isolines"]);
   const third = layer("third", ["ramp", "isolines"]);
-  const allocation = allocate(
-    [LAND, TEMP, second, third],
-    on("land", "temp", "second", "third"),
-    { land: "colour" },
-  );
+  const allocation = allocate([LAND, TEMP, second, third], on("land", "temp", "second", "third"), {
+    land: "colour",
+  });
 
   assert.deepEqual(allocation.draws.get("third"), {
     hidden: "Hidden: the dashed line is in use (isotherms)",
@@ -185,15 +178,13 @@ test("unknown encodings are skipped", () => {
   assert.equal(layerDraws(isotherm).fallback, "isolines");
 
   const allocation = allocate([unknown, isotherm], on("unknown", "isotherm"), {});
+
   assert.equal(allocation.owner, "isotherm");
   assert.deepEqual(allocation.draws.get("unknown"), { hidden: "Shown only in colour" });
 });
 
 function layer(id: string, encodings: string[], kind = "field", parts?: string[]) {
-  return {
-    id,
-    style: { kind, encodings, ...(parts && { parts }) },
-  } as unknown as LayerDoc;
+  return { id, style: { kind, encodings, ...(parts && { parts }) } } as unknown as LayerDoc;
 }
 
 function on(...units: string[]) {

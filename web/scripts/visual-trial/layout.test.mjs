@@ -39,34 +39,36 @@ test("parseViewportList names the bad entry", () => {
   for (const text of ["", "320", "320x", "x800", "0x800", "320x0", "99999x800", "axb"]) {
     assert.throws(() => parseViewportList(text), new RegExp(`bad viewport "${text}"`));
   }
+
   assert.throws(() => parseViewportList("320x800,wide"), /bad viewport "wide"/);
 });
 
 test("layoutViewports defaults without an override and reads one", () => {
   assert.equal(layoutViewports({}), DEFAULT_LAYOUT_VIEWPORTS_PX);
   assert.equal(layoutViewports({ SOE_LAYOUT_VIEWPORTS: "" }), DEFAULT_LAYOUT_VIEWPORTS_PX);
-  assert.deepEqual(
-    layoutViewports({ SOE_LAYOUT_VIEWPORTS: "320x560" }),
-    [{ width: 320, height: 560 }],
-  );
+  assert.deepEqual(layoutViewports({ SOE_LAYOUT_VIEWPORTS: "320x560" }), [
+    { width: 320, height: 560 },
+  ]);
 });
 
 test("the control list matches roles with names and scopes the slider", () => {
   const roles = new Set(["button", "switch", "slider", "radio", "link", "page"]);
 
   assert.ok(LAYOUT_CONTROLS.length > 10);
+
   for (const control of LAYOUT_CONTROLS) {
     assert.ok(roles.has(control.role), `unexpected role ${control.role}`);
     assert.ok(typeof control.name === "string" || control.name instanceof RegExp);
     assert.ok(control.when === undefined || ["open", "closed", "both"].includes(control.when));
     assert.ok(control.scroll === undefined || typeof control.scroll === "string");
     assert.ok(
-      control.samples === undefined
-        || (Number.isInteger(control.samples) && control.samples >= 2),
+      control.samples === undefined || (Number.isInteger(control.samples) && control.samples >= 2),
     );
     assert.ok(control.optional === undefined || control.optional === true);
   }
+
   const slider = LAYOUT_CONTROLS.find((control) => control.role === "slider");
+
   assert.equal(slider.scope, "#time-bar");
   assert.ok(LAYOUT_CONTROLS.includes(LAYOUT_EDITOR));
   assert.ok(LAYOUT_CONTROLS.some((control) => control.name === "Play"));
@@ -100,6 +102,7 @@ test("requiredInState expects editor-only entries while the editor is open", () 
 
 test("the scrollable controls name their container while fixed ones stay put", () => {
   const scrolled = new Map();
+
   for (const control of LAYOUT_CONTROLS) {
     if (control.scroll !== undefined) scrolled.set(controlDisplay(control), control.scroll);
   }
@@ -110,10 +113,13 @@ test("the scrollable controls name their container while fixed ones stay put", (
   assert.equal(scrolled.get("mm/month"), ".layer-editor");
   assert.equal(scrolled.get("Reset layer"), ".layer-editor");
   assert.equal(scrolled.get(controlDisplay(LAYOUT_EDITOR)), "#scene-column .cards");
-  const cards = LAYOUT_CONTROLS.filter((control) =>
-    control.role === "switch" && control.name !== "Show Area outline",
+
+  const cards = LAYOUT_CONTROLS.filter(
+    (control) => control.role === "switch" && control.name !== "Show Area outline",
   );
+
   assert.ok(cards.length > 0);
+
   for (const control of cards) assert.equal(control.scroll, "#scene-column .cards");
 });
 
@@ -152,7 +158,7 @@ test("viewportLabel renders the WxH text records carry", () => {
 test("hitLabel renders a short selector with clipped text", () => {
   assert.equal(
     hitLabel({ tag: "a", id: null, classes: ["maplibregl-ctrl-attrib"], text: "© OpenMapTiles" }),
-    "a.maplibregl-ctrl-attrib \"© OpenMapTiles\"",
+    'a.maplibregl-ctrl-attrib "© OpenMapTiles"',
   );
   assert.equal(hitLabel({ tag: "div", id: "map", classes: [], text: "" }), "div#map");
   assert.equal(hitLabel(null), null);
@@ -176,7 +182,7 @@ test("layoutRecord shapes a passing hit-test with its interceptor", () => {
     name: "Play",
     present: true,
     pass: false,
-    hit: "a \"OpenFreeMap\"",
+    hit: 'a "OpenFreeMap"',
   });
 });
 
@@ -210,12 +216,15 @@ test("chart workflow controls stay scoped to the full dialog", () => {
   const workflow = [...CHART_GALLERY_CONTROLS, ...CHART_EDITOR_CONTROLS];
 
   assert.ok(workflow.length >= 5);
+
   for (const control of workflow) {
     assert.equal(control.role, "button");
     assert.equal(control.scope, "#scene-full");
     assert.equal(control.scroll, "#scene-full main");
   }
+
   const names = workflow.map(controlDisplay);
+
   assert.ok(names.includes("+ New chart"));
   assert.ok(names.includes("Open"));
   assert.ok(names.includes("Save"));
@@ -236,6 +245,7 @@ test("chart page checks name rendering, bounds and overflow", () => {
   ];
 
   assert.equal(new Set(names).size, names.length);
+
   for (const name of names) assert.match(name, /chart/);
 });
 

@@ -8,6 +8,7 @@ reaches 84N.
 The synthetic.py module stands in for all of them offline. The registry.py module lists the
 datasets.
 """
+
 from .chirps import CHIRPS_CUBE, CHIRPS_GRID, RainDataset
 from .cubes import DEFAULT_CUBES_DIR, CubeSpec, CubeStore, MonthlyCube
 from .datasets import (
@@ -41,9 +42,9 @@ from .era5land_temperature import (
     ERA5_LAND_TEMPERATURE_GRID,
     Era5LandTemperatureDataset,
 )
+from .geology import GeologyDataset
 from .grid import CELL_DEG, Bbox, CellSpan, CellWindow, Grid, read_wrapped
 from .licences import SOURCES
-from .geology import GeologyDataset
 from .lithology import LithologyReader
 from .periods import (
     REQUEST_FORMATS,

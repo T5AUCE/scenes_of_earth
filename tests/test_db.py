@@ -1,4 +1,5 @@
 """Database tests: schema upgrades of existing files and scene state across restarts."""
+
 import json
 import sqlite3
 from pathlib import Path
@@ -41,6 +42,7 @@ def test_database_without_stage_column_gets_it_and_keeps_its_rows(tmp_path):
 
     with db.connect(path) as connection:
         row = connection.execute("SELECT status, stage FROM scenes WHERE id='a'").fetchone()
+
     assert "stage" in scene_columns(path)
     assert row["status"] == "done" and row["stage"] is None
 
@@ -73,9 +75,7 @@ def test_search_hides_sample_country_covered_by_import(tmp_path):
         [boundary_row("sample:kenya", "country", "Kenya", iso3="KEN", source="synthetic")],
     )
     db.add_boundaries(
-        path,
-        "geoBoundaries CGAZ",
-        [boundary_row("cgaz:ADM0:KEN", "country", "Kenya", iso3="KEN")],
+        path, "geoBoundaries CGAZ", [boundary_row("cgaz:ADM0:KEN", "country", "Kenya", iso3="KEN")]
     )
 
     assert [row["id"] for row in db.search(path, "Kenya")] == ["cgaz:ADM0:KEN"]
@@ -102,9 +102,7 @@ def test_imported_country_leaves_sample_lookup_by_id(tmp_path):
         [boundary_row("sample:kenya", "country", "Kenya", iso3="KEN", source="synthetic")],
     )
     db.add_boundaries(
-        path,
-        "geoBoundaries CGAZ",
-        [boundary_row("cgaz:ADM0:KEN", "country", "Kenya", iso3="KEN")],
+        path, "geoBoundaries CGAZ", [boundary_row("cgaz:ADM0:KEN", "country", "Kenya", iso3="KEN")]
     )
 
     assert db.get_boundary(path, "sample:kenya")["name"] == "Kenya"
@@ -151,10 +149,7 @@ def test_search_keeps_same_name_states(tmp_path):
         ],
     )
 
-    assert {row["id"] for row in db.search(path, "Springfield")} == {
-        "cgaz:ADM1:A",
-        "cgaz:ADM1:B",
-    }
+    assert {row["id"] for row in db.search(path, "Springfield")} == {"cgaz:ADM1:A", "cgaz:ADM1:B"}
 
 
 def test_startup_marks_interrupted_and_repost_requeues(tmp_path):
@@ -221,15 +216,11 @@ def test_geometry_digest_changes_on_geometry_edit_but_not_on_identical_reimport(
     legacy = boundary_row("cgaz:ADM1:NBO", "state", "Nairobi", "Kenya", "KEN")
     with db.connect(path) as connection:
         connection.execute(db.INSERT_BOUNDARY, db._complete_row(legacy))
+
     assert db.get_boundary(path, "cgaz:ADM1:NBO")["geom_digest"] == before
 
     edited = boundary_row(
-        "cgaz:ADM1:NBO",
-        "state",
-        "Nairobi",
-        "Kenya",
-        "KEN",
-        geometry='{"edited": true}',
+        "cgaz:ADM1:NBO", "state", "Nairobi", "Kenya", "KEN", geometry='{"edited": true}'
     )
     db.add_boundaries(path, "geoBoundaries CGAZ", [edited])
 
@@ -255,6 +246,7 @@ def test_old_database_without_preview_column_gets_it_with_null_previews(tmp_path
 
     with db.connect(path) as connection:
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(boundaries)")}
+
     assert "preview_geojson" in columns
     assert db.get_boundary(path, "x")["preview_geojson"] is None
 
@@ -313,10 +305,12 @@ def test_boundary_preview_helpers_count_fetch_and_store(tmp_path):
 
     second = db.get_boundary(path, "x:2")
 
-    assert db.set_boundary_previews(
-        path,
-        [("x:2", "{}", second["geom_digest"], second["geom_digest"])],
-    ) == 1
+    assert (
+        db.set_boundary_previews(
+            path, [("x:2", "{}", second["geom_digest"], second["geom_digest"])]
+        )
+        == 1
+    )
 
     assert db.count_boundaries_missing_preview(path) == 0
     assert db.get_boundary(path, "x:2", with_geometry=False)["preview_geojson"] == "{}"
@@ -329,11 +323,7 @@ def test_guarded_preview_write_stores_when_the_geometry_is_unchanged(tmp_path):
     row = db.get_boundary(path, "x:1")
 
     assert db.set_boundary_preview(
-        path,
-        "x:1",
-        '{"new": true}',
-        row["geom_digest"],
-        row["geom_digest"],
+        path, "x:1", '{"new": true}', row["geom_digest"], row["geom_digest"]
     )
 
     assert db.get_boundary(path, "x:1")["preview_geojson"] == '{"new": true}'
@@ -343,34 +333,25 @@ def test_guarded_preview_write_keeps_a_concurrent_reimport(tmp_path):
     path = tmp_path / "soe.db"
     db.init(path)
     db.add_boundaries(
-        path,
-        "geoBoundaries CGAZ",
-        [boundary_row("x:1", "state", "One", geometry='{"old": true}')],
+        path, "geoBoundaries CGAZ", [boundary_row("x:1", "state", "One", geometry='{"old": true}')]
     )
     fetched = db.get_boundary(path, "x:1")
     old_preview = '{"old": true}'
 
     db.add_boundaries(
-        path,
-        "geoBoundaries CGAZ",
-        [boundary_row("x:1", "state", "One", geometry='{"new": true}')],
+        path, "geoBoundaries CGAZ", [boundary_row("x:1", "state", "One", geometry='{"new": true}')]
     )
     current = db.get_boundary(path, "x:1")
     db.set_boundary_preview(
-        path,
-        "x:1",
-        '{"fresh": true}',
-        current["geom_digest"],
-        current["geom_digest"],
+        path, "x:1", '{"fresh": true}', current["geom_digest"], current["geom_digest"]
     )
 
-    assert db.set_boundary_preview(
-        path,
-        "x:1",
-        old_preview,
-        fetched["geom_digest"],
-        db.geometry_digest('{"old": true}'),
-    ) is False
+    assert (
+        db.set_boundary_preview(
+            path, "x:1", old_preview, fetched["geom_digest"], db.geometry_digest('{"old": true}')
+        )
+        is False
+    )
 
     assert db.get_boundary(path, "x:1")["preview_geojson"] == '{"fresh": true}'
 
@@ -394,6 +375,7 @@ def test_old_database_without_digest_column_gets_it_with_null_digests(tmp_path):
 
     with db.connect(path) as connection:
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(boundaries)")}
+
     assert "geom_digest" in columns
     assert "preview_geojson" in columns
     assert db.get_boundary(path, "x")["geom_digest"] is None
@@ -458,9 +440,7 @@ def test_backfill_area_previews_skips_a_row_whose_geometry_is_not_json(tmp_path,
     path = str(tmp_path / "soe.db")
     db.init(path)
     db.add_boundaries(
-        path,
-        "geoBoundaries CGAZ",
-        [boundary_row("x:bad", "state", "Bad", geometry="not json")],
+        path, "geoBoundaries CGAZ", [boundary_row("x:bad", "state", "Bad", geometry="not json")]
     )
 
     assert backfill_area_previews(path, batch_size=1) == 0

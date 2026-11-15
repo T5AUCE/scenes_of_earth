@@ -167,10 +167,7 @@ CANADA_EPOCH_NAMES: dict[str, tuple[str, str] | None] = {
     "undivided Paleoarchean-Neoarchean": ("Archean", "Archean"),
     "undivided Paleoproterozoic": ("Paleoproterozoic", "Paleoproterozoic"),
     "undivided Paleoproterozoic-Mesoproterozoic": ("Paleoproterozoic", "Mesoproterozoic"),
-    "undivided Paleoproterozoic-early Mesoproterozoic": (
-        "Paleoproterozoic",
-        "Mesoproterozoic",
-    ),
+    "undivided Paleoproterozoic-early Mesoproterozoic": ("Paleoproterozoic", "Mesoproterozoic"),
     "undivided Paleozoic": ("Cambrian", "Permian"),
     "undivided Paleozoic-Mesozoic": ("Cambrian", "Cretaceous"),
     "undivided Pennsylvanian": ("Carboniferous", "Carboniferous"),
@@ -623,14 +620,8 @@ SGMC_STAGE_PERIODS: dict[str, str] = {
 
 
 # Exact archive names keep invented substrings from matching real lithologies.
-SGMC_EVAPORITE_PURE_NAMES = (
-    "Anhydrite",
-    "Gypsum",
-    "Salt",
-)
-SGMC_EVAPORITE_NAMES = (
-    "Evaporite",
-)
+SGMC_EVAPORITE_PURE_NAMES = ("Anhydrite", "Gypsum", "Salt")
+SGMC_EVAPORITE_NAMES = ("Evaporite",)
 SGMC_CARBONATE_CLASSES = {
     "Calcarenite": "scss",
     "Carbonate": "scmx",
@@ -640,25 +631,10 @@ SGMC_CARBONATE_CLASSES = {
     "Dolostone": "scpu",
     "Limestone": "scpu",
 }
-SGMC_MIXED_FINE_NAMES = (
-    "Marlstone",
-)
-SGMC_MIXED_NAMES = (
-    "Mixed-clastic",
-)
-SGMC_COAL_NAMES = (
-    "Anthracite",
-    "Bituminous",
-    "Coal",
-    "Lignite",
-    "Peat",
-    "Sub-bituminous",
-)
-SGMC_SILICEOUS_NAMES = (
-    "Chert",
-    "Diatomite",
-    "Novaculite",
-)
+SGMC_MIXED_FINE_NAMES = ("Marlstone",)
+SGMC_MIXED_NAMES = ("Mixed-clastic",)
+SGMC_COAL_NAMES = ("Anthracite", "Bituminous", "Coal", "Lignite", "Peat", "Sub-bituminous")
+SGMC_SILICEOUS_NAMES = ("Chert", "Diatomite", "Novaculite")
 SGMC_CLASTIC_COARSE_NAMES = (
     "Arenite",
     "Arkose",
@@ -679,18 +655,9 @@ SGMC_CLASTIC_FINE_NAMES = (
     "Siltstone",
     "Siltstone-mudstone",
 )
-SGMC_CLASTIC_MIXED_NAMES = (
-    "Clastic",
-    "Conglomerate-mudstone",
-    "Sandstone-mudstone",
-)
-SGMC_CHEMICAL_OTHER_NAMES = (
-    "Banded-iron-formation",
-    "Phosphorite",
-)
-SGMC_SEDIMENTARY_GROUP_NAMES = (
-    "Chemical",
-)
+SGMC_CLASTIC_MIXED_NAMES = ("Clastic", "Conglomerate-mudstone", "Sandstone-mudstone")
+SGMC_CHEMICAL_OTHER_NAMES = ("Banded-iron-formation", "Phosphorite")
+SGMC_SEDIMENTARY_GROUP_NAMES = ("Chemical",)
 
 SGMC_BASIC_NAMES = (
     "Anorthosite",
@@ -769,15 +736,8 @@ SGMC_ACID_NAMES = (
     "Tonalite",
     "Trondhjemite",
 )
-SGMC_CARBONATITE_NAMES = (
-    "Intrusive-carbonatite",
-)
-SGMC_IGNEOUS_GROUP_NAMES = (
-    "Alkalic-volcanic",
-    "Hypabyssal",
-    "Plutonic",
-    "Volcanic",
-)
+SGMC_CARBONATITE_NAMES = ("Intrusive-carbonatite",)
+SGMC_IGNEOUS_GROUP_NAMES = ("Alkalic-volcanic", "Hypabyssal", "Plutonic", "Volcanic")
 
 SGMC_METAMORPHIC_CLASSES = {
     "Amphibolite": "mtam",
@@ -844,30 +804,11 @@ SGMC_METAMORPHIC_NAMES = (
     "Skarn",
     "Spilite",
 )
-SGMC_UNCONSOLIDATED_COARSE_NAMES = (
-    "Boulders",
-    "Coarse-detrital",
-    "Coral",
-    "Gravel",
-    "Sand",
-)
-SGMC_UNCONSOLIDATED_FINE_NAMES = (
-    "Clay",
-    "Fine-detrital",
-    "Silt",
-)
-SGMC_UNCONSOLIDATED_ORGANIC_NAMES = (
-    "Peat",
-)
-SGMC_UNCONSOLIDATED_MIXED_NAMES = (
-    "Marl",
-)
-SGMC_TECTONITE_NAMES = (
-    "Cataclasite",
-    "Melange",
-    "Mylonite",
-    "Phyllonite",
-)
+SGMC_UNCONSOLIDATED_COARSE_NAMES = ("Boulders", "Coarse-detrital", "Coral", "Gravel", "Sand")
+SGMC_UNCONSOLIDATED_FINE_NAMES = ("Clay", "Fine-detrital", "Silt")
+SGMC_UNCONSOLIDATED_ORGANIC_NAMES = ("Peat",)
+SGMC_UNCONSOLIDATED_MIXED_NAMES = ("Marl",)
+SGMC_TECTONITE_NAMES = ("Cataclasite", "Melange", "Mylonite", "Phyllonite")
 SGMC_KNOWN_NAMES = frozenset(
     (
         *SGMC_EVAPORITE_PURE_NAMES,
@@ -894,7 +835,7 @@ SGMC_KNOWN_NAMES = frozenset(
         *SGMC_UNCONSOLIDATED_ORGANIC_NAMES,
         *SGMC_UNCONSOLIDATED_MIXED_NAMES,
         *SGMC_TECTONITE_NAMES,
-    ),
+    )
 )
 SGMC_LITH1_DEFAULTS: dict[str, str] = {
     "Ice": "ig__",
@@ -995,31 +936,19 @@ GMNA_TYPE_HIERARCHIES: dict[tuple[str, str], tuple[str, str, str]] = {
         "Metatonalite",
     ),
     ("Metamorphic and undivided crystalline", "marble"): ("Metamorphic", "", "Marble"),
-    ("Metamorphic and undivided crystalline", "orthogneiss"): (
-        "Metamorphic",
-        "",
-        "Orthogneiss",
-    ),
+    ("Metamorphic and undivided crystalline", "orthogneiss"): ("Metamorphic", "", "Orthogneiss"),
     ("Metamorphic and undivided crystalline", "orthogneiss and paragneiss"): (
         "Metamorphic",
         "",
         "Gneiss",
     ),
-    ("Metamorphic and undivided crystalline", "paragneiss"): (
-        "Metamorphic",
-        "",
-        "Paragneiss",
-    ),
+    ("Metamorphic and undivided crystalline", "paragneiss"): ("Metamorphic", "", "Paragneiss"),
     ("Metamorphic and undivided crystalline", "sedimentary and volcanic gneiss"): (
         "Metamorphic",
         "",
         "Gneiss",
     ),
-    ("Metamorphic and undivided crystalline", "syenite gneiss"): (
-        "Metamorphic",
-        "",
-        "Gneiss",
-    ),
+    ("Metamorphic and undivided crystalline", "syenite gneiss"): ("Metamorphic", "", "Gneiss"),
     (
         "Metamorphic and undivided crystalline",
         "undivided crystalline rocks (seafloor units may include a variety of metamorphosed rock)",
@@ -1080,16 +1009,8 @@ GMNA_TYPE_HIERARCHIES: dict[tuple[str, str], tuple[str, str, str]] = {
     ("Volcanic", "felsic and intermediate rocks"): ("Igneous", "Volcanic", ""),
     ("Volcanic", "felsic and mafic rocks"): ("Igneous", "Volcanic", ""),
     ("Volcanic", "felsic rocks"): ("Igneous", "Volcanic", "Felsic-volcanic"),
-    ("Volcanic", "interlayered sedimentary and alkaline volcanic rocks"): (
-        "Sedimentary",
-        "",
-        "",
-    ),
-    ("Volcanic", "interlayered sedimentary and mafic volcanic rocks"): (
-        "Sedimentary",
-        "",
-        "",
-    ),
+    ("Volcanic", "interlayered sedimentary and alkaline volcanic rocks"): ("Sedimentary", "", ""),
+    ("Volcanic", "interlayered sedimentary and mafic volcanic rocks"): ("Sedimentary", "", ""),
     ("Volcanic", "interlayered sedimentary and volcanic rocks"): ("Sedimentary", "", ""),
     ("Volcanic", "intermediate and mafic rocks"): ("Igneous", "Volcanic", ""),
     ("Volcanic", "intermediate rocks"): ("Igneous", "Volcanic", "Andesite"),
@@ -1224,5 +1145,3 @@ EGDI_TYPE_NAMES: dict[int, str | None] = {
     122: None,  # Unknown
     123: None,  # Unpopulated
 }
-
-

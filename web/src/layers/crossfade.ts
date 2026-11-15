@@ -61,6 +61,7 @@ export class ImageCrossfade<Key> {
 
     this.front = held;
     this.setFront(this.alpha);
+
     return true;
   }
 
@@ -120,7 +121,9 @@ export class ImageCrossfade<Key> {
       opacities[outgoing] = top.incoming;
       opacities[incoming] = top.outgoing;
     }
+
     this.apply(opacities);
+
     return true;
   }
 
@@ -134,6 +137,7 @@ export class ImageCrossfade<Key> {
   invalidate() {
     this.cancelPending();
     this.failed.clear();
+
     for (const slot of [0, 1] as const) this.evict(slot);
   }
 

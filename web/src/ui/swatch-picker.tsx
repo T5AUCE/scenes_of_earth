@@ -37,6 +37,7 @@ export function SwatchPicker({
   onSelect,
 }: SwatchPickerProps): React.ReactElement {
   const selected = options.find((option) => option.value === value);
+
   return (
     <>
       <div className={tiles ? "swatches tiles" : "swatches"} role="radiogroup" aria-label={legend}>

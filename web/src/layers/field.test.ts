@@ -10,10 +10,12 @@ const hooks = registerHooks({
     if (source && context.parentURL?.includes("/src/")) {
       return { url: `data:text/javascript,${encodeURIComponent(source)}`, shortCircuit: true };
     }
+
     if (context.parentURL?.includes("/src/") && specifier.startsWith(".")) {
       const extension = specifier.endsWith(".ts") ? "" : ".ts";
       return next(new URL(`${specifier}${extension}`, context.parentURL).href, context);
     }
+
     return next(specifier, context);
   },
 });
@@ -234,14 +236,20 @@ const COMPLETE = [1, 2, 3, 4];
 test("the no-data hatch switches to the step that shows more at the midpoint", async () => {
   const { view, hatch, flush } = mountField([COMPLETE, HAS_NO_DATA, COMPLETE]);
   await showFirstStep(view, flush);
+
   assert.equal(hatch(), false);
 
   view.setFrame!(TIMES[0], TIMES[1], 0.25);
+
   assert.equal(hatch(), false);
+
   view.setFrame!(TIMES[0], TIMES[1], 0.75);
+
   assert.equal(hatch(), true);
   assert.equal(legendHatch(view), true);
+
   view.setFrame!(TIMES[0], TIMES[1], 0.25);
+
   assert.equal(hatch(), false);
   assert.equal(legendHatch(view), false);
 });
@@ -249,6 +257,7 @@ test("the no-data hatch switches to the step that shows more at the midpoint", a
 test("the cached hatch is applied without repainting or rereading a step", async () => {
   const { view, images, flush } = mountField([COMPLETE, HAS_NO_DATA, COMPLETE]);
   await showFirstStep(view, flush);
+
   const created = images();
 
   for (const mix of [0.2, 0.4, 0.6, 0.8]) view.setFrame!(TIMES[0], TIMES[1], mix);
@@ -262,6 +271,7 @@ test("a step outside the axis drops the hatch at the midpoint", async () => {
   view.show("colour");
   view.setTime(TIMES[1]);
   await flush();
+
   assert.equal(hatch(), true);
 
   view.setFrame!(TIMES[1], TIMES[2], 0.75);
@@ -273,6 +283,7 @@ test("switching to dots and back resets the hatch to the shown step", async () =
   const { view, hatch, flush } = mountField([COMPLETE, HAS_NO_DATA, COMPLETE]);
   await showFirstStep(view, flush);
   view.setFrame!(TIMES[0], TIMES[1], 0.75);
+
   assert.equal(hatch(), true);
 
   view.show("dots");
@@ -288,11 +299,14 @@ test("a palette change drops the cached hatch and redraws the shown step", async
   const { view, hatch, flush } = mountField([COMPLETE, HAS_NO_DATA, COMPLETE]);
   await showFirstStep(view, flush);
   view.setFrame!(TIMES[0], TIMES[1], 0.75);
+
   assert.equal(hatch(), true);
 
   view.menu!.setPalette("climate");
   view.setFrame!(TIMES[0], TIMES[1], 0.75);
+
   assert.equal(hatch(), true);
+
   await flush();
 
   assert.equal(hatch(), false);
@@ -307,6 +321,7 @@ test("a pause at the next step shows its cached hatch before the read returns", 
 
   assert.deepEqual(opacities().at(-1), [0, 0.8]);
   assert.equal(hatch(), true);
+
   await flush();
 });
 
@@ -317,11 +332,14 @@ test("a failing incoming read lets the fade move on and the draw reports it", as
 
   view.setFrame!(TIMES[0], TIMES[1], 0);
   await flush();
+
   assert.equal(view.isFrameReady!(TIMES[0], TIMES[1]), true);
   assert.equal(reports.length, 0);
 
   view.setFrame!(TIMES[0], TIMES[1], 0.5);
+
   assert.deepEqual(opacities().at(-1), [0.8, 0]);
+
   view.setFrame!(TIMES[1], TIMES[2], 0);
   await flush();
 
@@ -332,16 +350,20 @@ test("a failing incoming read lets the fade move on and the draw reports it", as
 test("after a failed step reports, the next good step fades in from nothing", async () => {
   const { view, opacities, reports, flush } = mountField([COMPLETE, HAS_NO_DATA, COMPLETE]);
   await showFirstStep(view, flush, false);
+
   failedSteps.add(1);
   view.setFrame!(TIMES[0], TIMES[1], 0);
   await flush();
   view.setFrame!(TIMES[1], TIMES[2], 0);
   await flush();
+
   assert.equal(reports.length, 1);
 
   view.setFrame!(TIMES[1], TIMES[2], 0);
   await flush();
+
   assert.equal(view.isFrameReady!(TIMES[1], TIMES[2]), true);
+
   view.setFrame!(TIMES[1], TIMES[2], 0.5);
 
   assert.deepEqual(opacities().at(-1)!.toSorted(), [0, 0.4]);
@@ -352,28 +374,35 @@ test("a reverse scrub keeps each retained image's hatch through a hide and show"
   view.show("colour");
   view.setTime(TIMES[2]);
   await flush();
+
   view.setTime(TIMES[1]);
   await flush();
   view.setFrame!(TIMES[1], TIMES[2], 0);
   await flush();
+
   view.show("dots");
   view.show("colour");
+
   const reads = pendingReads.length;
 
   view.setFrame!(TIMES[1], TIMES[2], 0.25);
+
   assert.equal(hatch(), true);
   assert.equal(legendHatch(view), true);
+
   view.setFrame!(TIMES[1], TIMES[2], 0.75);
 
   assert.equal(hatch(), false);
   assert.equal(legendHatch(view), false);
   assert.equal(pendingReads.length, reads);
+
   await flush();
 });
 
 test("repeated frames never paint an image themselves", async () => {
   const { view, images, flush } = mountField([COMPLETE, COMPLETE, COMPLETE]);
   await showFirstStep(view, flush);
+
   const created = imageDataCount;
   const painted = images();
 
@@ -391,6 +420,7 @@ test("a pause shows the painted step before its decoded read returns", async () 
   view.setTime(TIMES[1]);
 
   assert.deepEqual(opacities().at(-1), [0, 0.8]);
+
   await flush();
 });
 
@@ -401,9 +431,12 @@ test("isolines prepare traces the next step for the hidden source", async () => 
   await flush();
 
   await prepareStep(view, flush, TIMES[1]);
+
   assert.deepEqual(isolinePrepares(), [1]);
   assert.equal(view.isFrameReady!(TIMES[0], TIMES[1]), false);
+
   view.setFrame!(TIMES[0], TIMES[1], 0);
+
   assert.equal(view.isFrameReady!(TIMES[0], TIMES[1]), true);
 });
 
@@ -412,6 +445,7 @@ test("isolines stall while the next set is not loaded", async () => {
   view.show("isolines");
   view.setTime(TIMES[0]);
   await flush();
+
   await prepareStep(view, flush, TIMES[1]);
   view.setFrame!(TIMES[0], TIMES[1], 0);
   (globalThis as Record<string, unknown>).isolineLoaded = false;
@@ -423,7 +457,9 @@ test("isolines stall while the next set is not loaded", async () => {
   }
 
   assert.equal(view.isFrameReady!(TIMES[0], TIMES[1]), true);
+
   view.setFrame!(TIMES[0], TIMES[1], 0.5);
+
   assert.equal(isolineFrames().at(-1)?.mix, 0.5);
 });
 
@@ -432,10 +468,12 @@ test("entry proceeds when the isolines miss their deadline", async (context) => 
   view.show("isolines");
   view.setTime(TIMES[0]);
   await flush();
+
   Object.assign(globalThis, { isolineLoaded: false });
   context.mock.timers.enable({ apis: ["setTimeout"] });
 
   const preparing = view.prepareEntry!(TIMES[0]);
+
   for (let turn = 0; turn < 20; turn += 1) {
     await new Promise((resolve) => setImmediate(resolve));
     pendingReads.splice(0).forEach((resolve) => resolve());
@@ -450,6 +488,7 @@ test("isolines with equal steps do no work", async () => {
   view.show("isolines");
   view.setTime(TIMES[0]);
   await flush();
+
   const frames = isolineFrames().length;
 
   view.setFrame!(TIMES[0], TIMES[0], 0.5);
@@ -464,12 +503,15 @@ test("isolines fade to and from minus one", async () => {
   await flush();
 
   assert.equal(view.isFrameReady!(TIMES[1], "2026-11-01"), true);
+
   view.setFrame!(TIMES[1], "2026-11-01", 0.5);
+
   assert.deepEqual(isolineFrames().at(-1), { from: 1, to: -1, mix: 0.5 });
 
   view.setTime("2026-11-01");
   await prepareStep(view, flush, TIMES[1]);
   view.setFrame!("2026-11-01", TIMES[1], 0.5);
+
   assert.deepEqual(isolineFrames().at(-1), { from: -1, to: 1, mix: 0.5 });
 });
 
@@ -478,6 +520,7 @@ test("isolines pause and scrub show one set at full opacity", async () => {
   view.show("isolines");
   view.setTime(TIMES[0]);
   await flush();
+
   const selects = isolineSelects().length;
 
   view.setTime(TIMES[1]);
@@ -493,6 +536,7 @@ test("isolines never set a partial opacity under reduced motion", async () => {
   view.setTime(TIMES[0]);
   await flush();
   await prepareStep(view, flush, TIMES[1]);
+
   useReducedMotion(true);
 
   try {
@@ -508,6 +552,7 @@ test("isolines reset both sources on settings change mid-fade", async () => {
   view.show("isolines");
   view.setTime(TIMES[0]);
   await flush();
+
   await prepareStep(view, flush, TIMES[1]);
   view.setFrame!(TIMES[0], TIMES[1], 0);
   view.setFrame!(TIMES[0], TIMES[1], 0.5);
@@ -524,9 +569,11 @@ test("isolines reset both sources when toggled off mid-fade", async () => {
   view.show("isolines");
   view.setTime(TIMES[0]);
   await flush();
+
   await prepareStep(view, flush, TIMES[1]);
   view.setFrame!(TIMES[0], TIMES[1], 0);
   view.setFrame!(TIMES[0], TIMES[1], 0.5);
+
   view.show(null);
 
   assert.equal((globalThis.lastIsolineOverlay as { holds(n: number): boolean }).holds(0), false);
@@ -543,6 +590,7 @@ test("isolines keep at most two traced sets", async () => {
 
   const overlay = globalThis.lastIsolineOverlay as { holds(n: number): boolean };
   const held = [0, 1, 2].filter((step) => overlay.holds(step));
+
   assert.ok(held.length <= 2);
 });
 
@@ -551,13 +599,17 @@ test("isolines re-prepare a lost hidden set so play never stalls", async () => {
   view.show("isolines");
   view.setTime(TIMES[0]);
   await flush();
+
   await prepareStep(view, flush, TIMES[1]);
   view.setFrame!(TIMES[0], TIMES[1], 0);
   view.setFrame!(TIMES[0], TIMES[1], 0.5);
+
   const prepared = isolinePrepares().length;
 
   view.options.find((option) => option.label === "Smooth")!.set(false);
+
   const overlay = globalThis.lastIsolineOverlay as { holds(n: number): boolean };
+
   assert.equal(overlay.holds(1), false);
 
   view.setFrame!(TIMES[0], TIMES[1], 0.5);
@@ -565,7 +617,9 @@ test("isolines re-prepare a lost hidden set so play never stalls", async () => {
   await flush();
 
   assert.ok(isolinePrepares().length > prepared);
+
   view.setFrame!(TIMES[0], TIMES[1], 0);
+
   assert.equal(view.isFrameReady!(TIMES[0], TIMES[1]), true);
 });
 
@@ -574,6 +628,7 @@ test("isolines fading in from minus one makes the lines visible", async () => {
   view.show("isolines");
   view.setTime(TIMES[0]);
   await flush();
+
   view.setTime("2026-11-01");
   await prepareStep(view, flush, TIMES[0]);
   view.setFrame!("2026-11-01", TIMES[0], 0.5);
@@ -596,11 +651,13 @@ test("isolines forward play state to the overlay", async () => {
 test("dots fade from the shown step to the armed next step by the mix", async () => {
   const { view, fades, flush } = mountField([COMPLETE, [4, 3, 2, 1], COMPLETE]);
   await showDotsStep(view, flush);
+
   const held = fades().at(-1)!;
 
   view.setFrame!(TIMES[0], TIMES[1], 0.5);
 
   const fade = fades().at(-1)!;
+
   assert.deepEqual(fade.from, held.from);
   assert.notDeepEqual(fade.to, fade.from);
   assert.equal(fade.mix, 0.5);
@@ -611,12 +668,14 @@ test("dots hold the shown step while the next one is not loaded", async () => {
   view.show("dots");
   view.setTime(TIMES[0]);
   await flush();
+
   const shown = fades().length;
 
   view.setFrame!(TIMES[0], TIMES[1], 0.5);
 
   assert.equal(fades().length, shown);
   assert.equal(view.isFrameReady!(TIMES[0], TIMES[1]), false);
+
   await flush();
 });
 
@@ -626,9 +685,11 @@ test("dots stall until the next step is uploaded", async () => {
   view.show("dots");
   view.setTime(TIMES[0]);
   await flush();
+
   view.setFrame!(TIMES[0], TIMES[1], 0);
   await flush();
   view.setFrame!(TIMES[0], TIMES[1], 0);
+
   assert.equal(view.isFrameReady!(TIMES[0], TIMES[1]), false);
 
   Object.assign(globalThis, { markUploads: true });
@@ -653,6 +714,7 @@ test("dots with a failing next read let the fade move on", async () => {
 test("dots with equal steps do no work and read nothing", async () => {
   const { view, fades, flush } = mountField([COMPLETE, COMPLETE, COMPLETE]);
   await showDotsStep(view, flush);
+
   const drawn = fades().length;
 
   view.setFrame!(TIMES[0], TIMES[0], 0.5);
@@ -668,6 +730,7 @@ test("dots fade out to a step outside the axis and in from one", async () => {
   await flush();
 
   view.setFrame!(TIMES[1], TIMES[2], 0.5);
+
   assert.equal(fades().at(-1)!.to, null);
   assert.equal(fades().at(-1)!.mix, 0.5);
 
@@ -683,28 +746,37 @@ test("dots fade out to a step outside the axis and in from one", async () => {
 test("dots hatch follows the step that shows more from the midpoint", async () => {
   const { view, hatch, flush } = mountField([COMPLETE, HAS_NO_DATA, COMPLETE]);
   await showDotsStep(view, flush);
+
   assert.equal(legendHatch(view), false);
 
   view.setFrame!(TIMES[0], TIMES[1], 0.25);
+
   assert.equal(hatch(), true);
   assert.equal(legendHatch(view), false);
+
   view.setFrame!(TIMES[0], TIMES[1], 0.75);
+
   assert.equal(legendHatch(view), true);
+
   view.setFrame!(TIMES[0], TIMES[1], 0.25);
+
   assert.equal(legendHatch(view), false);
 });
 
 test("a pause shows the next step's dots alone before its read returns", async () => {
   const { view, fades, flush } = mountField([COMPLETE, [4, 3, 2, 1], COMPLETE]);
   await showDotsStep(view, flush);
+
   const leaving = fades().at(-1)!.from;
   view.setFrame!(TIMES[0], TIMES[1], 0.6);
+
   const entering = fades().at(-1)!.to;
 
   view.setTime(TIMES[1]);
 
   assert.deepEqual(fades().at(-1), { from: entering, to: null, mix: 0 });
   assert.notDeepEqual(entering, leaving);
+
   await flush();
 });
 
@@ -725,6 +797,7 @@ test("dots draw a step they were handed again without rereading it", async () =>
   const { view, fades, flush } = mountField([COMPLETE, [4, 3, 2, 1], COMPLETE]);
   await showDotsStep(view, flush);
   view.setFrame!(TIMES[0], TIMES[1], 0.5);
+
   const entering = fades().at(-1)!.to;
   view.setTime(TIMES[1]);
   await flush();
@@ -737,6 +810,7 @@ test("entry warms the real source even when the image is already held", async ()
   const { view, flush } = mountField([COMPLETE, COMPLETE, COMPLETE]);
   await showFirstStep(view, flush);
   Object.assign(globalThis, { warmedIds: [] });
+
   const warming = view.prepareEntry!(TIMES[0]);
   await flush();
   await warming;
@@ -748,6 +822,7 @@ test("an aborted entry settles at once without warming", async () => {
   const { view, flush } = mountField([COMPLETE, COMPLETE, COMPLETE]);
   await showFirstStep(view, flush);
   Object.assign(globalThis, { warmedIds: [] });
+
   const controller = new AbortController();
   controller.abort();
   await view.prepareEntry!(TIMES[0], controller.signal);
@@ -775,13 +850,11 @@ function legendHatch(view: ReturnType<typeof createSeriesView>) {
   return children.includes("hatch");
 }
 
-async function showDotsStep(
-  view: ReturnType<typeof createSeriesView>,
-  flush: () => Promise<void>,
-) {
+async function showDotsStep(view: ReturnType<typeof createSeriesView>, flush: () => Promise<void>) {
   view.show("dots");
   view.setTime(TIMES[0]);
   await flush();
+
   view.setFrame!(TIMES[0], TIMES[1], 0);
   await flush();
   view.setFrame!(TIMES[0], TIMES[1], 0);
@@ -795,6 +868,7 @@ async function showFirstStep(
   view.show("colour");
   view.setFrame!(TIMES[0], TIMES[1], 0);
   await flush();
+
   if (!armNext) return;
 
   view.setFrame!(TIMES[0], TIMES[1], 0);
@@ -818,8 +892,9 @@ function isolinePrepares(): number[] {
 }
 
 function isolineFrames(): { from: number; to: number; mix: number }[] {
-  return (globalThis as Record<string, { from: number; to: number; mix: number }[]>)
-    .isolineFrames ?? [];
+  return (
+    (globalThis as Record<string, { from: number; to: number; mix: number }[]>).isolineFrames ?? []
+  );
 }
 
 function isolineValues(): number[] {
@@ -841,11 +916,7 @@ function isolinePlaying(): boolean[] {
 function useReducedMotion(matches: boolean) {
   const target = globalThis as unknown as Record<string, unknown>;
   if (matches) {
-    target.matchMedia = () => ({
-      matches: true,
-      addEventListener() {},
-      removeEventListener() {},
-    });
+    target.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
   } else {
     Reflect.deleteProperty(target, "matchMedia");
   }
@@ -856,6 +927,7 @@ function mountWithEncodings(steps: number[][], encodings: string[], end = "2026-
   failedSteps.clear();
   pendingReads.length = 0;
   imageDataCount = 0;
+
   Object.assign(globalThis, {
     failedSteps,
     pendingReads,
@@ -881,8 +953,10 @@ function mountWithEncodings(steps: number[][], encodings: string[], end = "2026-
       }
     },
   });
+
   Reflect.deleteProperty(globalThis as Record<string, unknown>, "matchMedia");
   Reflect.deleteProperty(globalThis as Record<string, unknown>, "lastIsolineOverlay");
+
   const layer = {
     id: "rain",
     title: "Rainfall",
@@ -893,12 +967,7 @@ function mountWithEncodings(steps: number[][], encodings: string[], end = "2026-
     arrays: {},
   } as unknown as LayerDoc;
   const view = createSeriesView({
-    map: {
-      setPaintProperty() {},
-      addLayer() {},
-      getZoom: () => 3,
-      getPixelRatio: () => 1,
-    },
+    map: { setPaintProperty() {}, addLayer() {}, getZoom: () => 3, getPixelRatio: () => 1 },
     store: Promise.resolve({}),
     layer,
     shift: 0,
@@ -927,6 +996,7 @@ function mountWithEncodings(steps: number[][], encodings: string[], end = "2026-
         await new Promise((resolve) => setTimeout(resolve, 5));
         pendingReads.splice(0).forEach((resolve) => resolve());
       }
+
       await new Promise((resolve) => setTimeout(resolve, 5));
     },
   };

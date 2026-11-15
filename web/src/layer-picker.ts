@@ -24,10 +24,12 @@ export async function loadLayerChoices({ layerBox, start, end }: LayerChoiceCont
   if (requestStep !== MONTH_STEP) throw new Error(`request step ${requestStep} is not supported`);
 
   appendLayerBoxes(layerBox, layers, defaultIds);
+
   const updateRange = () => setMonthRange(start, end, checkedAxes(layerBox, layers));
   layerBox.addEventListener("change", updateRange);
   keepMonthOrder(start, end);
   updateRange();
+
   return layers;
 }
 
@@ -35,8 +37,12 @@ export async function loadLayerChoices({ layerBox, start, end }: LayerChoiceCont
 export function commonRange(axes: TimeAxis[]) {
   if (!axes.length) return null;
 
-  const first = axes.map((axis) => axis.first).sort().at(-1)!;
+  const first = axes
+    .map((axis) => axis.first)
+    .sort()
+    .at(-1)!;
   const last = axes.map((axis) => axis.last).sort()[0];
+
   return { first, last };
 }
 
@@ -44,6 +50,7 @@ function appendLayerBoxes(layerBox: HTMLElement, layers: Layer[], defaultIds: st
   for (const layer of layers) {
     const label = document.createElement("label");
     layerBox.append(label);
+
     const box = document.createElement("input");
     box.type = "checkbox";
     box.value = layer.id;
@@ -83,6 +90,7 @@ function setMonthRange(start: MonthSelect, end: MonthSelect, axes: TimeAxis[]) {
   start.max = end.max = range.last;
   end.value = withinRange(previousEnd, range);
   start.value = withinRange(previousStart, range);
+
   // Both ends clamp separately, so From still wins after an inverted pick.
   if (start.value > end.value) end.value = start.value;
 }

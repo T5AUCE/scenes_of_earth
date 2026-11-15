@@ -2,11 +2,7 @@
  * The contour fragment shader and its scalar reference. The reference runs the same arithmetic
  * as the shader, so tests can check the line rules without a GPU.
  */
-import {
-  FADE_SPAN_ZOOM,
-  INTERVAL_CHAIN_M,
-  type ContourLadder,
-} from "../contour-ladder";
+import { FADE_SPAN_ZOOM, INTERVAL_CHAIN_M, type ContourLadder } from "../contour-ladder";
 import { convertValue } from "../units";
 import { demFragmentShader } from "./dem-draw";
 
@@ -51,10 +47,10 @@ export function tierUniformsOf(ladder: ContourLadder, elevationUnit: string): Ti
   const widthsPx = new Float32Array(MAX_TIERS);
   ladder.tiers.forEach((tier, index) => {
     intervalsM[index] = tier.interval * metresPerUnit;
-    widthsPx[index] = tier.interval >= ladder.boldInterval
-      ? BOLD_LINE_WIDTH_PX
-      : MINOR_LINE_WIDTH_PX;
+    widthsPx[index] =
+      tier.interval >= ladder.boldInterval ? BOLD_LINE_WIDTH_PX : MINOR_LINE_WIDTH_PX;
   });
+
   return { intervalsM, widthsPx, entryZooms: ladder.tiers.map((tier) => tier.entryZoom) };
 }
 
@@ -72,6 +68,7 @@ export function fillTierAlphas(
     const entered = Math.min(Math.max((zoom - entryZoom) / FADE_SPAN_ZOOM, 0), 1);
     alphas[index] = entered * CONTOUR_OPACITY;
   });
+
   return alphas.some((alpha) => alpha > 0);
 }
 
@@ -94,16 +91,21 @@ export function smoothSurfaceOf(
   const [weightsX, slopesX] = bSplineWeights(fractionX);
   const [weightsY, slopesY] = bSplineWeights(fractionY);
   const origin = heights[1][1];
+
   let relative = 0;
   let slopeX = 0;
   let slopeY = 0;
-  heights.forEach((row, rowIndex) => row.forEach((height, columnIndex) => {
-    const above = height - origin;
-    relative += weightsX[columnIndex] * weightsY[rowIndex] * above;
-    slopeX += slopesX[columnIndex] * weightsY[rowIndex] * above;
-    slopeY += weightsX[columnIndex] * slopesY[rowIndex] * above;
-  }));
+  heights.forEach((row, rowIndex) =>
+    row.forEach((height, columnIndex) => {
+      const above = height - origin;
+      relative += weightsX[columnIndex] * weightsY[rowIndex] * above;
+      slopeX += slopesX[columnIndex] * weightsY[rowIndex] * above;
+      slopeY += weightsX[columnIndex] * slopesY[rowIndex] * above;
+    }),
+  );
+
   const all = heights.flat();
+
   return {
     height: origin + relative,
     gradientX: slopeX / pixelsPerTexel,
@@ -127,6 +129,7 @@ export function blendSurfaces(
 ): { height: number; metresPerPixel: number; rangeM: number } {
   const totalWeight = firstWeight + secondWeight;
   const mix = (from: number, to: number) => (from * firstWeight + to * secondWeight) / totalWeight;
+
   return {
     height: mix(first.height, second.height),
     metresPerPixel: Math.hypot(
@@ -152,6 +155,7 @@ function bSplineWeights(fraction: number): [number[], number[]] {
     (-9 * f ** 2 + 6 * f + 3) / 6,
     f ** 2 / 2,
   ];
+
   return [weights, slopes];
 }
 
@@ -171,6 +175,7 @@ export function contourCoverage(
 
   const slope = Math.max(metresPerPixel, MIN_SLOPE_M_PER_CSS_PX / pixelRatio);
   let strongest = 0;
+
   for (const tier of tiers) {
     if (tier.alpha <= 0) continue;
 
@@ -185,6 +190,7 @@ export function contourCoverage(
     );
     strongest = Math.max(strongest, line * (1 - crowding) * tier.alpha);
   }
+
   return strongest;
 }
 

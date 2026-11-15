@@ -44,6 +44,7 @@ let current: ScenePreloader | null = null;
 export function openScenePreload(map: PreloadMap): ScenePreloader {
   closeScenePreload();
   current = new TileWarmer(map);
+
   return current;
 }
 

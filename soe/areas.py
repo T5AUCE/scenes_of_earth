@@ -1,4 +1,5 @@
 """Area handling: validate drawn GeoJSON and bring shapes that cross 180 into one frame."""
+
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -39,6 +40,7 @@ def clean_polygon(obj: object) -> Polygon | MultiPolygon:
     """Validate drawn GeoJSON; return a repaired, rounded (1e-4 degrees), normalised polygon."""
     if isinstance(obj, dict) and obj.get("type") == "Feature":
         obj = obj.get("geometry")
+
     if not isinstance(obj, dict) or obj.get("type") not in ("Polygon", "MultiPolygon"):
         raise AreaError("geometry must be a Polygon or MultiPolygon")
 
@@ -79,6 +81,7 @@ def _positions(coordinates: object) -> list[Sequence[float]]:
             positions.append(node)
         else:
             stack.extend((child, depth + 1) for child in node)
+
     return positions
 
 
@@ -111,8 +114,7 @@ def polygonal_parts(geometry: BaseGeometry) -> list[Polygon]:
 
 
 def display_preview(
-    geometry: BaseGeometry,
-    bbox: tuple[float, float, float, float],
+    geometry: BaseGeometry, bbox: tuple[float, float, float, float]
 ) -> dict[str, Any]:
     """Return the simplified preview of `geometry` in its bbox longitude frame.
 
@@ -121,6 +123,7 @@ def display_preview(
     west, south, east, north = bbox
     frame = unwrap(geometry) if east > MAX_LONGITUDE_DEG else geometry
     tolerance_deg = max(east - west, north - south) / PREVIEW_SIMPLIFY_DIVISOR
+
     return mapping(simplify_for_display(frame, tolerance_deg))
 
 

@@ -68,6 +68,7 @@ interface DrawableImage {
 /** Creates the basemap, with its attribution at the bottom left. */
 export function createMap(container: string): MapLibreMap {
   ensureWorkerCount();
+
   const ratio = cappedPixelRatio(location.search, devicePixelRatio());
   const map = new MapLibreMap({
     container,
@@ -81,6 +82,7 @@ export function createMap(container: string): MapLibreMap {
 
   // Bottom right belongs to the scene column.
   map.addControl(new AttributionControl({ compact: false }), "bottom-left");
+
   return map;
 }
 
@@ -91,10 +93,12 @@ export function createMap(container: string): MapLibreMap {
 export function trialPixelRatio(search: string): number | undefined {
   const value = new URLSearchParams(search).get("pixelRatio");
   if (value === null) return undefined;
+
   const ratio = Number(value);
   if (!Number.isFinite(ratio) || ratio < MIN_TRIAL_PIXEL_RATIO || ratio > MAX_TRIAL_PIXEL_RATIO) {
     return undefined;
   }
+
   return ratio;
 }
 
@@ -107,7 +111,9 @@ export function cappedPixelRatio(search: string, deviceRatio: number): number | 
   const override = trialPixelRatio(search);
   const cap = maxPixelRatioSetting(search);
   if (cap === undefined) return override;
+
   const base = override ?? (Number.isFinite(deviceRatio) && deviceRatio > 0 ? deviceRatio : 1);
+
   return Math.min(base, cap);
 }
 
@@ -133,11 +139,7 @@ export function showScaleBar(map: MapLibreMap, elevationUnit = "m") {
 export function fitToBbox(
   map: MapLibreMap,
   [west, south, east, north]: Bbox,
-  options: {
-    padding?: PaddingOptions;
-    duration?: number;
-    maxZoom?: number;
-  } = {},
+  options: { padding?: PaddingOptions; duration?: number; maxZoom?: number } = {},
 ) {
   map.fitBounds(
     [
@@ -187,7 +189,8 @@ export function lockPan(map: MapLibreMap, fitted: { center: LngLat; zoom: number
     if (
       Math.abs(x - centre.x) <= CENTRE_TOLERANCE_WORLDS
       && Math.abs(y - centre.y) <= CENTRE_TOLERANCE_WORLDS
-    ) return;
+    )
+      return;
 
     map.setCenter(new MercatorCoordinate(x, y, 0).toLngLat());
   };
@@ -318,11 +321,13 @@ export async function warmHiddenRaster(
   const minzoom = layer?.minzoom ?? 0;
   const maxzoom = layer?.maxzoom ?? MAX_ZOOM;
   let opacity: unknown;
+
   try {
     opacity = map.getPaintProperty(id, "raster-opacity");
   } catch {
     opacity = undefined;
   }
+
   try {
     map.setLayerZoomRange(id, 0, MAX_ZOOM);
     map.setPaintProperty(id, "raster-opacity", 0);
@@ -337,6 +342,7 @@ export async function warmHiddenRaster(
       // A torn-down map must not hide the warm-up result the caller already holds.
     }
   }
+
   if (signal?.aborted) throw cancelError();
 }
 
@@ -346,16 +352,19 @@ function waitForSource(map: MapLibreMap, id: string, signal?: AbortSignal): Prom
       fail(cancelError());
       return;
     }
+
     let isSettled = false;
     let frame: number | ReturnType<typeof setTimeout> | undefined;
     // Stalled frames must not fail the entry, so the image may paint a moment late instead.
     const timer = setTimeout(() => {
       if (isSettled) return;
+
       isSettled = true;
       cancelFrame(frame);
       signal?.removeEventListener("abort", onAbort);
       done();
     }, 2000);
+
     const check = () => {
       if (isSettled) return;
       if (signal?.aborted) {
@@ -364,8 +373,10 @@ function waitForSource(map: MapLibreMap, id: string, signal?: AbortSignal): Prom
         clearTimeout(timer);
         signal?.removeEventListener("abort", onAbort);
         fail(cancelError());
+
         return;
       }
+
       try {
         if (map.isSourceLoaded(id)) {
           isSettled = true;
@@ -373,6 +384,7 @@ function waitForSource(map: MapLibreMap, id: string, signal?: AbortSignal): Prom
           clearTimeout(timer);
           signal?.removeEventListener("abort", onAbort);
           done();
+
           return;
         }
       } catch (error) {
@@ -381,13 +393,17 @@ function waitForSource(map: MapLibreMap, id: string, signal?: AbortSignal): Prom
         clearTimeout(timer);
         signal?.removeEventListener("abort", onAbort);
         fail(error);
+
         return;
       }
+
       map.triggerRepaint();
       frame = requestFrame(check);
     };
+
     const onAbort = () => {
       if (isSettled) return;
+
       isSettled = true;
       cancelFrame(frame);
       clearTimeout(timer);
@@ -402,15 +418,18 @@ function waitForSource(map: MapLibreMap, id: string, signal?: AbortSignal): Prom
 /** Wait one frame so a hidden source prepares its current image before the flag is read. */
 function frameOnce(signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(cancelError());
+
   return new Promise((done, fail) => {
     const onAbort = () => {
       cancelFrame(frame);
       fail(cancelError());
     };
+
     const frame = requestFrame(() => {
       signal?.removeEventListener("abort", onAbort);
       done();
     });
+
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
@@ -423,11 +442,13 @@ function requestFrame(task: () => void): number | ReturnType<typeof setTimeout> 
   } catch {
     // A missing frame scheduler falls through to the timer below.
   }
+
   return setTimeout(task, 16);
 }
 
 function cancelFrame(frame: number | ReturnType<typeof setTimeout> | undefined): void {
   if (frame === undefined) return;
+
   try {
     if (typeof cancelAnimationFrame === "function" && typeof frame === "number") {
       cancelAnimationFrame(frame);
@@ -436,6 +457,7 @@ function cancelFrame(frame: number | ReturnType<typeof setTimeout> | undefined):
   } catch {
     // A missing canceller falls through to clearing the timer.
   }
+
   clearTimeout(frame as ReturnType<typeof setTimeout>);
 }
 

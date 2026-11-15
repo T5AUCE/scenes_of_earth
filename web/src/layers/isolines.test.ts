@@ -4,7 +4,7 @@ import { test } from "node:test";
 
 import { validateStyleMin } from "@maplibre/maplibre-gl-style-spec";
 
-import type { GridDoc, LayerContext } from "../types.ts";
+import { LABEL_FADE_MS } from "../reduced-motion.ts";
 import {
   ISOTHERM_CASING_RATIO,
   ISOTHERM_DASH_PATTERN,
@@ -14,7 +14,7 @@ import {
   traceIsolines,
 } from "../render/isolines.ts";
 import { inkPaint } from "../render/palettes.ts";
-import { LABEL_FADE_MS } from "../reduced-motion.ts";
+import type { GridDoc, LayerContext } from "../types.ts";
 
 const KENYA_STOPS = [5, 8, 11, 14, 17, 20, 23, 26, 29];
 
@@ -24,11 +24,11 @@ const hooks = registerHooks({
       const extension = specifier.endsWith(".ts") ? "" : ".ts";
       return next(new URL(`${specifier}${extension}`, context.parentURL).href, context);
     }
+
     return next(specifier, context);
   },
 });
-const { createIsolineOverlay } = await import("./isolines.ts")
-  .finally(() => hooks.deregister());
+const { createIsolineOverlay } = await import("./isolines.ts").finally(() => hooks.deregister());
 
 test("the overlay follows the display range and retraces after a change", () => {
   const { map, data } = fakeMap();
@@ -37,22 +37,21 @@ test("the overlay follows the display range and retraces after a change", () => 
     grid: { bbox: [0, 0, 1, 1], nx: 2, ny: 2, res: 1 },
     style: { stops: KENYA_STOPS },
   };
-  const context = {
-    map,
-    layer,
-    shift: 0,
-    display: { range: [20, 24] },
-  } as unknown as LayerContext;
+  const context = { map, layer, shift: 0, display: { range: [20, 24] } } as unknown as LayerContext;
   const overlay = createIsolineOverlay(context, inkPaint("charcoal"));
   overlay.setValues([0, 30, 30, 0], 0);
+
   const initial = overlayLevels(data());
+
   assert.ok(initial.every((level) => level >= 20 && level <= 24));
   assert.ok(initial.includes(20));
   assert.ok(!initial.includes(6));
 
   overlay.setRange([10, 14]);
   overlay.setValues([0, 30, 30, 0], 0);
+
   const changed = overlayLevels(data());
+
   assert.ok(changed.every((level) => level >= 10 && level <= 14));
   assert.ok(changed.includes(10));
 });
@@ -74,8 +73,11 @@ test("fahrenheit intervals stay round with native geometry", () => {
   const overlay = createIsolineOverlay(context, inkPaint("charcoal"));
 
   assert.equal(overlay.interval, 5);
+
   overlay.setValues([0, 100, 100, 0], 0);
+
   const levels = overlayLevels(data());
+
   assert.ok(levels.length > 0);
   assert.ok(new Set(levels).size <= 12);
   assert.ok(levels.every((level) => level >= 50 && level <= 86 && level % 5 === 0));
@@ -90,42 +92,32 @@ test("switching display units retraces with converted labels", () => {
     grid: { bbox: [0, 0, 1, 1], nx: 3, ny: 3, res: 1 },
     style: { stops: KENYA_STOPS },
   };
-  const context = {
-    map,
-    layer,
-    shift: 0,
-    display: { range: [20, 24] },
-  } as unknown as LayerContext;
+  const context = { map, layer, shift: 0, display: { range: [20, 24] } } as unknown as LayerContext;
   const overlay = createIsolineOverlay(context, inkPaint("charcoal"));
   const values = [0, 30, 0, 30, 0, 30, 0, 30, 0];
 
   overlay.setValues(values, 0);
+
   assert.equal(overlay.interval, 0.5);
 
   overlay.setUnits("°F");
   overlay.setValues(values, 0);
+
   assert.equal(overlay.interval, 1);
+
   const levels = overlayLevels(data());
+
   assert.ok(levels.every((level) => level >= 68 && level <= 75.2));
 });
 
 test("the overlay defaults to smooth tracing and caches each step and mode", () => {
   const { map, data } = fakeMap();
-  const grid = {
-    bbox: [0, 0, 1, 1] as [number, number, number, number],
-    nx: 3,
-    ny: 3,
-    res: 1,
-  };
+  const grid = { bbox: [0, 0, 1, 1] as [number, number, number, number], nx: 3, ny: 3, res: 1 };
   const layer = { id: "temperature", grid, style: { stops: KENYA_STOPS } };
   const range: [number, number] = [20, 24];
-  const context = {
-    map,
-    layer,
-    shift: 0,
-    display: { range },
-  } as unknown as LayerContext;
+  const context = { map, layer, shift: 0, display: { range } } as unknown as LayerContext;
   const overlay = createIsolineOverlay(context, inkPaint("charcoal"));
+
   const values = [0, 30, 0, 30, 0, 30, 0, 30, 0];
   const counted = countingValues(values);
   const levels = isolineLevels(range[0], range[1], isolineInterval(range));
@@ -133,26 +125,33 @@ test("the overlay defaults to smooth tracing and caches each step and mode", () 
   const expectedRaw = tracedCoordinates(values, grid, levels, false);
 
   overlay.setValues(counted.values, 0);
+
   const smoothReads = counted.reads();
+
   assert.ok(smoothReads > 0);
   assert.deepEqual(overlayCoordinates(data()), expectedSmooth);
   assert.notDeepEqual(overlayCoordinates(data()), expectedRaw);
 
   overlay.setValues(counted.values, 0);
+
   assert.equal(counted.reads(), smoothReads);
 
   overlay.setSmooth(false);
   overlay.setValues(counted.values, 0);
+
   const rawReads = counted.reads();
+
   assert.ok(rawReads > smoothReads);
   assert.deepEqual(overlayCoordinates(data()), expectedRaw);
 
   overlay.setSmooth(true);
   overlay.setValues(counted.values, 0);
+
   assert.equal(counted.reads(), rawReads);
   assert.deepEqual(overlayCoordinates(data()), expectedSmooth);
 
   overlay.setValues(counted.values, 1);
+
   assert.ok(counted.reads() > rawReads);
 });
 
@@ -163,22 +162,19 @@ test("changing the display interval retraces the same step", () => {
     grid: { bbox: [0, 0, 1, 1], nx: 3, ny: 3, res: 1 },
     style: { stops: KENYA_STOPS },
   };
-  const context = {
-    map,
-    layer,
-    shift: 0,
-    display: { range: [20, 24] },
-  } as unknown as LayerContext;
+  const context = { map, layer, shift: 0, display: { range: [20, 24] } } as unknown as LayerContext;
   const overlay = createIsolineOverlay(context, inkPaint("charcoal"));
   const counted = countingValues([0, 30, 0, 30, 0, 30, 0, 30, 0]);
 
   overlay.setValues(counted.values, 0);
+
   const initialReads = counted.reads();
   const initial = overlayLevels(data());
   const initialInterval = overlay.interval;
 
   overlay.setRange([10, 30]);
   overlay.setValues(counted.values, 0);
+
   const changed = overlayLevels(data());
 
   assert.equal(initialInterval, 0.5);
@@ -198,6 +194,7 @@ test("the isotherm overlays validate in MapLibre", () => {
   };
   const context = { map, layer, shift: 0, display: null } as unknown as LayerContext;
   createIsolineOverlay(context, inkPaint("charcoal"));
+
   const errors = validateStyleMin({
     version: 8,
     glyphs: "https://example.test/{fontstack}/{range}.pbf",
@@ -208,7 +205,10 @@ test("the isotherm overlays validate in MapLibre", () => {
     layers,
   });
 
-  assert.deepEqual(errors.map((error) => error.message), []);
+  assert.deepEqual(
+    errors.map((error) => error.message),
+    [],
+  );
 });
 
 test("changing the ink repaints the lines, casing and labels with the matching halo", () => {
@@ -241,6 +241,7 @@ test("the casing dashes line up with the isotherms in screen pixels at every zoo
   };
   const context = { map, layer, shift: 0, display: null } as unknown as LayerContext;
   createIsolineOverlay(context, inkPaint("charcoal"));
+
   const paintOf = (suffix: string) => layers.find(({ id }) => id.endsWith(suffix))!.paint!;
   const line = paintOf("-lines");
   const casing = paintOf("-casing");
@@ -248,10 +249,12 @@ test("the casing dashes line up with the isotherms in screen pixels at every zoo
   const casingDashes = casing["line-dasharray"] as number[];
 
   assert.deepEqual(lineDashes, ISOTHERM_DASH_PATTERN);
+
   for (const zoom of [0, 5, 8, 14, 18, 22]) {
     for (const isBold of [false, true]) {
       const linePx = widthAt(line["line-width"] as unknown[], zoom, isBold);
       const casingPx = widthAt(casing["line-width"] as unknown[], zoom, isBold);
+
       assert.ok(approximately(casingPx, linePx * ISOTHERM_CASING_RATIO), `${zoom} width`);
 
       const lineDashPx = lineDashes.map((length) => length * linePx);
@@ -268,6 +271,7 @@ test("the crossfade keeps zoom on top and scales the stops by the mix", () => {
   const overlay = mountOverlay(map);
   overlay.setValues([0, 30, 30, 0], 0);
   overlay.prepareStep(1, [0, 20, 20, 0]);
+
   assert.equal(overlay.holds(1), false);
   assert.equal(overlay.frame(0, 1, 0), true);
   assert.equal(overlay.isReady(0, 1), true);
@@ -276,6 +280,7 @@ test("the crossfade keeps zoom on top and scales the stops by the mix", () => {
 
   const outgoing = opacityOf(layers, "temperature-isotherms-a-lines");
   const incoming = opacityOf(layers, "temperature-isotherms-b-lines");
+
   assert.deepEqual(outgoing.slice(0, 3), ["interpolate", ["linear"], ["zoom"]]);
   assert.deepEqual(incoming.slice(0, 3), ["interpolate", ["linear"], ["zoom"]]);
   assert.ok(approximately(stopAt(outgoing, 0), 0.85 * 0.75));
@@ -287,6 +292,7 @@ test("the crossfade keeps zoom on top and scales the stops by the mix", () => {
 test("the crossfade disables opacity transitions so per-frame values apply", () => {
   const { map, layers } = fakeMap();
   mountOverlay(map);
+
   const paintOf = (id: string) => layers.find((layer) => layer.id === id)!.paint!;
 
   for (const source of ["temperature-isotherms-a", "temperature-isotherms-b"]) {
@@ -304,10 +310,12 @@ test("labels show only on the dominant set and flip halfway", () => {
   overlay.frame(0, 1, 0);
 
   overlay.frame(0, 1, 0.25);
+
   assert.equal(labelOpacityOf(layers, "temperature-isotherms-a-labels"), 1);
   assert.equal(labelOpacityOf(layers, "temperature-isotherms-b-labels"), 0);
 
   overlay.frame(0, 1, 0.75);
+
   assert.equal(labelOpacityOf(layers, "temperature-isotherms-a-labels"), 0);
   assert.equal(labelOpacityOf(layers, "temperature-isotherms-b-labels"), 1);
 });
@@ -316,13 +324,17 @@ test("a camera gesture hides the isotherm labels and restores the dominant set",
   const { map, layoutOf } = fakeMap();
   const overlay = mountOverlay(map);
   overlay.setValues([0, 30, 30, 0], 0);
+
   assert.equal(layoutOf("temperature-isotherms-a-labels", "visibility"), "visible");
 
   map.emit("movestart");
+
   assert.equal(layoutOf("temperature-isotherms-a-labels", "visibility"), "none");
 
   map.emit("moveend");
+
   assert.equal(layoutOf("temperature-isotherms-a-labels", "visibility"), "visible");
+
   overlay.destroy();
 });
 
@@ -332,14 +344,17 @@ test("the isotherm labels fade back after a gesture instead of popping", () => {
   overlay.setValues([0, 30, 30, 0], 0);
 
   map.emit("movestart");
+
   assert.equal(labelOpacityOf(layers, "temperature-isotherms-a-labels"), 0);
 
   map.emit("moveend");
+
   assert.equal(layoutOf("temperature-isotherms-a-labels", "visibility"), "visible");
   assert.deepEqual(transitionOf(layers, "temperature-isotherms-a-labels"), {
     duration: LABEL_FADE_MS,
   });
   assert.equal(labelOpacityOf(layers, "temperature-isotherms-a-labels"), 1);
+
   overlay.destroy();
 });
 
@@ -352,11 +367,13 @@ test("reduced motion restores the isotherm labels instantly", () => {
   try {
     map.emit("movestart");
     map.emit("moveend");
+
     assert.deepEqual(transitionOf(layers, "temperature-isotherms-a-labels"), { duration: 0 });
     assert.equal(labelOpacityOf(layers, "temperature-isotherms-a-labels"), 1);
   } finally {
     useReducedMotion(false);
   }
+
   overlay.destroy();
 });
 
@@ -369,18 +386,22 @@ test("the next crossfade frame clears the gesture fade transition", () => {
 
   map.emit("movestart");
   map.emit("moveend");
+
   assert.equal(overlay.frame(0, 1, 0.5), true);
   assert.deepEqual(transitionOf(layers, "temperature-isotherms-a-labels"), { duration: 0 });
+
   overlay.destroy();
 });
 
 test("the sources swap roles after the fade ends", () => {
   const { map } = fakeMap();
   const overlay = mountOverlay(map);
+
   overlay.setValues([0, 30, 30, 0], 0);
   overlay.prepareStep(1, [0, 20, 20, 0]);
   overlay.frame(0, 1, 0);
   overlay.frame(0, 1, 1);
+
   overlay.prepareStep(2, [0, 25, 25, 0]);
   overlay.frame(1, 2, 0);
 
@@ -396,14 +417,18 @@ test("the fade waits while the hidden source has not loaded", () => {
   overlay.setValues([0, 30, 30, 0], 0);
   overlay.prepareStep(1, [0, 20, 20, 0]);
   setLoaded("temperature-isotherms-b", false);
+
   assert.equal(overlay.frame(0, 1, 0), true);
 
   assert.equal(overlay.isReady(0, 1), false);
+
   const before = opacityOf(layers, "temperature-isotherms-a-lines");
+
   assert.equal(overlay.frame(0, 1, 0.5), false);
   assert.deepEqual(opacityOf(layers, "temperature-isotherms-a-lines"), before);
 
   setLoaded("temperature-isotherms-b", true);
+
   assert.equal(overlay.isReady(0, 1), true);
   assert.equal(overlay.frame(0, 1, 0.5), true);
 });
@@ -413,6 +438,7 @@ test("a label flip reloading the sources never stalls the fade", () => {
   const overlay = mountOverlay(map);
   overlay.setValues([0, 30, 30, 0], 0);
   overlay.prepareStep(1, [0, 20, 20, 0]);
+
   assert.equal(overlay.frame(0, 1, 0), true);
   assert.equal(overlay.frame(0, 1, 0.3), true);
   assert.equal(overlay.frame(0, 1, 0.6), true);
@@ -422,8 +448,10 @@ test("a label flip reloading the sources never stalls the fade", () => {
 
   assert.equal(overlay.isReady(0, 1), true);
   assert.equal(overlay.frame(0, 1, 0.7), true);
+
   const outgoing = stopAt(opacityOf(layers, "temperature-isotherms-a-lines"), 0);
   const incoming = stopAt(opacityOf(layers, "temperature-isotherms-b-lines"), 0);
+
   assert.ok(approximately(outgoing, 0.85 * 0.3));
   assert.ok(approximately(incoming, 0.85 * 0.7));
 });
@@ -433,6 +461,7 @@ test("a reload after the label flip keeps the fade ready with one source loaded"
   const overlay = mountOverlay(map);
   overlay.setValues([0, 30, 30, 0], 0);
   overlay.prepareStep(1, [0, 20, 20, 0]);
+
   assert.equal(overlay.frame(0, 1, 0), true);
   assert.equal(overlay.frame(0, 1, 0.3), true);
   assert.equal(overlay.frame(0, 1, 0.6), true);
@@ -448,8 +477,11 @@ test("fade frames flip labels by opacity with both sets visible while playing", 
   const overlay = mountOverlay(map);
   overlay.setValues([0, 30, 30, 0], 0);
   overlay.prepareStep(1, [0, 20, 20, 0]);
+
   assert.equal(overlay.frame(0, 1, 0), true);
+
   overlay.setPlaying(true);
+
   const calls = layoutCalls();
 
   assert.equal(overlay.frame(0, 1, 0.25), true);
@@ -474,6 +506,7 @@ test("play start shows both label sets with overlap and play stop restores pause
     layoutOf(id, name) ?? layers.find((layer) => layer.id === id)!.layout![name];
   overlay.setValues([0, 30, 30, 0], 0);
   overlay.prepareStep(1, [0, 20, 20, 0]);
+
   assert.equal(overlay.frame(0, 1, 0), true);
 
   assert.equal(flagOf("temperature-isotherms-a-labels", "text-allow-overlap"), false);
@@ -493,6 +526,7 @@ test("play start shows both label sets with overlap and play stop restores pause
   assert.equal(layoutOf("temperature-isotherms-b-labels", "visibility"), "visible");
 
   assert.equal(overlay.frame(0, 1, 0.75), true);
+
   overlay.setPlaying(false);
 
   assert.equal(layoutOf("temperature-isotherms-a-labels", "text-allow-overlap"), false);
@@ -517,6 +551,7 @@ test("equal steps do no work and keep the single set", () => {
   const { map, paintCalls } = fakeMap();
   const overlay = mountOverlay(map);
   overlay.setValues([0, 30, 30, 0], 0);
+
   const calls = paintCalls();
 
   assert.equal(overlay.frame(0, 0, 0.5), true);
@@ -532,6 +567,7 @@ test("an equal step still waits for its newly set source", () => {
   overlay.setValues([0, 30, 30, 0], 0);
 
   assert.equal(overlay.isReady(0, 0), false);
+
   setLoaded("temperature-isotherms-a", true);
 
   assert.equal(overlay.isReady(0, 0), true);
@@ -544,13 +580,17 @@ test("a step at minus one fades to and from empty", () => {
 
   assert.equal(overlay.isReady(0, -1), true);
   assert.equal(overlay.frame(0, -1, 0.25), true);
+
   const faded = stopAt(opacityOf(layers, "temperature-isotherms-a-lines"), 0);
+
   assert.ok(approximately(faded, 0.85 * 0.75));
   assert.equal(labelOpacityOf(layers, "temperature-isotherms-a-labels"), 1);
 
   assert.equal(overlay.isReady(-1, 0), true);
   assert.equal(overlay.frame(-1, 0, 0.5), true);
+
   const half = stopAt(opacityOf(layers, "temperature-isotherms-a-lines"), 0);
+
   assert.ok(approximately(half, 0.85 * 0.5));
 
   assert.equal(overlay.frame(-1, -1, 0), true);
@@ -587,10 +627,12 @@ test("reduced motion never sets a partial opacity", () => {
 test("a settings change mid-fade resets both sources cleanly", () => {
   const { map, layers } = fakeMap();
   const overlay = mountOverlay(map);
+
   overlay.setValues([0, 30, 30, 0], 0);
   overlay.prepareStep(1, [0, 20, 20, 0]);
   overlay.frame(0, 1, 0);
   overlay.frame(0, 1, 0.5);
+
   overlay.setRange([10, 14]);
 
   assert.equal(overlay.holds(0), false);
@@ -602,10 +644,12 @@ test("a settings change mid-fade resets both sources cleanly", () => {
 test("hiding the overlay resets both sources including mid-fade", () => {
   const { map } = fakeMap();
   const overlay = mountOverlay(map);
+
   overlay.setValues([0, 30, 30, 0], 0);
   overlay.prepareStep(1, [0, 20, 20, 0]);
   overlay.frame(0, 1, 0);
   overlay.frame(0, 1, 0.5);
+
   overlay.setVisible(false);
 
   assert.equal(overlay.holds(0), false);
@@ -618,14 +662,19 @@ test("smoothing change resets the sources but keeps the traced cache", () => {
   const values = [0, 30, 0, 30, 0, 30, 0, 30, 0];
   const counted = countingValues(values);
   overlay.setValues(counted.values, 0);
+
   const reads = counted.reads();
   overlay.setSmooth(false);
 
   assert.equal(overlay.holds(0), false);
+
   overlay.setValues(counted.values, 0);
+
   assert.ok(counted.reads() > reads);
+
   overlay.setSmooth(true);
   overlay.setValues(counted.values, 0);
+
   assert.equal(counted.reads(), counted.reads());
 });
 
@@ -647,10 +696,12 @@ test("preparing further steps caches without painting new sources", () => {
 test("preparing the step after next never overwrites the incoming set", () => {
   const { map, dataOf } = fakeMap();
   const overlay = mountOverlay(map);
+
   overlay.setValues([0, 30, 30, 0], 0);
   overlay.prepareStep(1, [0, 20, 20, 0]);
   overlay.prepareStep(2, [0, 25, 25, 0]);
   overlay.frame(0, 1, 0);
+
   const incoming = dataOf("temperature-isotherms-b");
 
   assert.equal(overlay.frame(0, 1, 0.6), true);
@@ -662,12 +713,15 @@ test("preparing the step after next never overwrites the incoming set", () => {
 test("the trace cache survives a lookahead of further steps", () => {
   const { map } = fakeMap();
   const overlay = mountOverlay(map);
+
   const values = [0, 30, 0, 30, 0, 30, 0, 30, 0];
   const counted = countingValues(values);
+
   overlay.setValues(counted.values, 0);
   overlay.prepareStep(1, counted.values);
   overlay.prepareStep(2, counted.values);
   overlay.prepareStep(3, counted.values);
+
   const preparedReads = counted.reads();
 
   overlay.setValues(counted.values, 1);
@@ -690,6 +744,7 @@ function fakeMap() {
   const gestureListeners = new Map<string, Set<() => void>>();
   let paintCalls = 0;
   let layoutCalls = 0;
+
   const map = {
     addSource(id: string, source: { data: unknown }) {
       data = source.data;
@@ -713,6 +768,7 @@ function fakeMap() {
     isSourceLoaded: (id: string) => loaded.get(id) ?? true,
     setLayoutProperty(id: string, name: string, value: unknown) {
       layoutCalls += 1;
+
       const entries = layouts.get(id) ?? new Map<string, unknown>();
       entries.set(name, value);
       layouts.set(id, entries);
@@ -757,9 +813,7 @@ function overlayLevels(data: unknown) {
 }
 
 function overlayCoordinates(data: unknown): [number, number][][] {
-  const collection = data as {
-    features: { geometry: { coordinates: [number, number][] } }[];
-  };
+  const collection = data as { features: { geometry: { coordinates: [number, number][] } }[] };
   return collection.features.map(({ geometry }) => geometry.coordinates);
 }
 
@@ -769,8 +823,9 @@ function tracedCoordinates(
   levels: readonly number[],
   refine: boolean,
 ): [number, number][][] {
-  return traceIsolines(values, grid.nx, grid.ny, levels, refine)
-    .map(({ coordinates }) => toLngLat(coordinates, grid, 0));
+  return traceIsolines(values, grid.nx, grid.ny, levels, refine).map(({ coordinates }) =>
+    toLngLat(coordinates, grid, 0),
+  );
 }
 
 function countingValues(values: readonly number[]) {
@@ -787,12 +842,14 @@ function countingValues(values: readonly number[]) {
 
 function widthAt(expression: readonly unknown[], zoom: number, isBold: boolean): number {
   const stops: [number, number][] = [];
+
   for (let index = 3; index < expression.length; index += 2) {
     const branch = expression[index + 1] as readonly unknown[];
     stops.push([Number(expression[index]), Number(isBold ? branch[2] : branch[3])]);
   }
 
   if (zoom <= stops[0][0]) return stops[0][1];
+
   for (let index = 1; index < stops.length; index++) {
     const [lowZoom, lowWidth] = stops[index - 1];
     const [highZoom, highWidth] = stops[index];
@@ -818,6 +875,7 @@ function mountOverlay(map: unknown) {
   const context = { map, layer, shift: 0, display: null } as unknown as LayerContext;
   const overlay = createIsolineOverlay(context, inkPaint("charcoal"));
   overlay.setVisible(true);
+
   return overlay;
 }
 
@@ -844,11 +902,13 @@ function transitionOf(
 
 function stopAt(expression: readonly unknown[], zoom: number): number {
   const stops: [number, number][] = [];
+
   for (let index = 3; index < expression.length; index += 2) {
     stops.push([Number(expression[index]), Number(expression[index + 1])]);
   }
 
   if (zoom <= stops[0][0]) return stops[0][1];
+
   for (let index = 1; index < stops.length; index++) {
     const [lowZoom, lowOpacity] = stops[index - 1];
     const [highZoom, highOpacity] = stops[index];
@@ -864,11 +924,7 @@ function stopAt(expression: readonly unknown[], zoom: number): number {
 function useReducedMotion(matches: boolean) {
   const target = globalThis as unknown as Record<string, unknown>;
   if (matches) {
-    target.matchMedia = () => ({
-      matches: true,
-      addEventListener() {},
-      removeEventListener() {},
-    });
+    target.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
   } else {
     Reflect.deleteProperty(target, "matchMedia");
   }

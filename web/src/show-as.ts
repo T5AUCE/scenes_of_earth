@@ -48,17 +48,10 @@ export function choose(
   if (draw === "colour") return chooseColour(state, unit, layers);
   if (unit === BLEND) return state;
 
-  return {
-    showAs: { ...state.showAs, [unit]: draw },
-    off: state.off,
-  };
+  return { showAs: { ...state.showAs, [unit]: draw }, off: state.off };
 }
 
-function chooseColour(
-  state: ShowAsState,
-  unit: string,
-  layers: readonly LayerDoc[],
-): ShowAsState {
+function chooseColour(state: ShowAsState, unit: string, layers: readonly LayerDoc[]): ShowAsState {
   const pair = blendPair(layers);
   if (unit === BLEND && pair === null) return state;
 
@@ -66,8 +59,11 @@ function chooseColour(
   showAs[unit] = "colour";
 
   const off = new Set(state.off);
+
   if (state.showAs[BLEND] === "colour") restoreBlendHalves(off, pair);
+
   off.delete(unit);
+
   if (unit === BLEND) addBlendHalves(off, pair);
 
   return { showAs, off };
@@ -99,6 +95,7 @@ export function toggle(
   layers: readonly LayerDoc[],
 ): ShowAsState {
   const pair = blendPair(layers);
+
   if (unit === BLEND) {
     if (on) return choose(state, BLEND, "colour", layers);
 
@@ -116,6 +113,7 @@ export function toggle(
   }
 
   const off = new Set(state.off);
+
   if (on) off.delete(unit);
   else off.add(unit);
 
@@ -155,8 +153,8 @@ export function parseShowAs(
   for (const token of text.split(",").filter(Boolean)) {
     const fields = token.split(":");
     const [unit, draw] = fields;
-    const isKnown = fields.length === 2
-      && showAsOptions(unit, layers).includes(draw as Draw);
+    const isKnown = fields.length === 2 && showAsOptions(unit, layers).includes(draw as Draw);
+
     if (!isKnown) {
       dropped = true;
       continue;
@@ -170,6 +168,7 @@ export function parseShowAs(
     } else if (draw !== "colour" && colourOwner === unit) {
       colourOwner = null;
     }
+
     showAs[unit] = draw as Draw;
   }
 
@@ -198,8 +197,10 @@ export function formatShowAs(
     }
 
     const draw = allocation.as.get(layer.id);
+
     if (draw && options.includes(draw)) entries.push(`${layer.id}:${draw}`);
   }
+
   if (allocation.as.get(BLEND) === "colour") entries.push(`${BLEND}:colour`);
 
   return entries;
@@ -212,8 +213,9 @@ export function loadStoredShowAs(): Record<string, Draw> {
     if (!isRecord(parsed)) return {};
 
     return Object.fromEntries(
-      Object.entries(parsed).filter((entry): entry is [string, Draw] =>
-        typeof entry[1] === "string" && STORED_DRAWS.has(entry[1] as Draw),
+      Object.entries(parsed).filter(
+        (entry): entry is [string, Draw] =>
+          typeof entry[1] === "string" && STORED_DRAWS.has(entry[1] as Draw),
       ),
     );
   } catch {
@@ -227,6 +229,7 @@ export function storeShowAs(unit: string, draw: Draw | null) {
     const stored = loadStoredShowAs();
     // Re-inserting the unit keeps object order equal to recency because ids are not integer-like.
     delete stored[unit];
+
     if (draw !== null) stored[unit] = draw;
 
     localStorage.setItem(SHOW_AS_STORAGE_KEY, JSON.stringify(stored));
@@ -237,9 +240,7 @@ export function storeShowAs(unit: string, draw: Draw | null) {
 }
 
 function withoutColours(showAs: Readonly<Record<string, Draw>>): Record<string, Draw> {
-  return Object.fromEntries(
-    Object.entries(showAs).filter(([, draw]) => draw !== "colour"),
-  );
+  return Object.fromEntries(Object.entries(showAs).filter(([, draw]) => draw !== "colour"));
 }
 
 function addBlendHalves(off: Set<string>, pair: BlendPair | null) {

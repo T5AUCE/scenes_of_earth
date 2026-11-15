@@ -4,7 +4,6 @@ import { test } from "node:test";
 import { Window } from "happy-dom";
 import type { AsyncReadable } from "zarrita";
 
-import { assertSameNode } from "./testing/dom-assert.ts";
 import {
   beginWarmer,
   DevStatsLoop,
@@ -36,6 +35,7 @@ import {
   worstFrameMs,
 } from "./dev-stats.ts";
 import { fetchStats, mergingStore, noteFetch, resetFetchStats } from "./merging-store.ts";
+import { assertSameNode } from "./testing/dom-assert.ts";
 
 test("dev builds show the readout without the query", () => {
   assert.equal(shouldShowDevStats(true, ""), true);
@@ -193,6 +193,7 @@ test("the fetch counter totals covering requests", () => {
 test("one tick of ranges counts one covering request", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
   resetFetchStats();
+
   const source = rangeSource();
   const store = mergingStore(source.store);
   const asked = [
@@ -211,6 +212,7 @@ test("one tick of ranges counts one covering request", async (context) => {
 
 test("a suffix read counts one request with its bytes", async () => {
   resetFetchStats();
+
   const source = rangeSource();
   const store = mergingStore(source.store);
   const tail = await store.getRange!("/a", { suffixLength: 3 });
@@ -224,6 +226,7 @@ test("a suffix read counts one request with its bytes", async () => {
 
 test("a metadata read counts one request with its bytes", async () => {
   resetFetchStats();
+
   const store = mergingStore(metaSource());
   const bytes = await store.get("/a");
 
@@ -237,10 +240,12 @@ test("a metadata read counts one request with its bytes", async () => {
 test("a short covering read credits only the bytes returned", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
   resetFetchStats();
+
   const store = mergingStore(shortRangeSource());
 
   const asked = store.getRange!("/a", { offset: 10, length: 10 });
   context.mock.timers.tick(1);
+
   const bytes = await asked;
 
   assert.equal(bytes?.byteLength, 3);
@@ -253,11 +258,16 @@ test("a short covering read credits only the bytes returned", async (context) =>
 test("a failed covering read counts the request without bytes", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
   resetFetchStats();
+
   const store = mergingStore(failingRangeSource());
 
   const asked = [0, 4].map((offset) => {
-    return store.getRange!("/a", { offset, length: 4 }).then(() => "ok", () => "failed");
+    return store.getRange!("/a", { offset, length: 4 }).then(
+      () => "ok",
+      () => "failed",
+    );
   });
+
   context.mock.timers.tick(1);
 
   assert.deepEqual(await Promise.all(asked), ["failed", "failed"]);
@@ -272,6 +282,7 @@ test("rendering writes the badge and keeps its node", () => {
   const badge = window.document.createElement("div");
   badge.id = "dev-stats";
   window.document.body.append(badge);
+
   try {
     renderDevStats(badge, "60 fps · worst 16 ms");
 
@@ -285,10 +296,12 @@ test("rendering writes the badge and keeps its node", () => {
 test("a second start keeps one frame chain", () => {
   const window = new Window({ url: "http://localhost/" });
   const stubs = installFrameStubs(window);
+
   try {
     const badge = window.document.createElement("div");
     badge.hidden = true;
     window.document.body.append(badge);
+
     const loop = new DevStatsLoop(badge, { getZoom: () => 5 });
     loop.start();
     loop.start();
@@ -310,10 +323,12 @@ test("a second start keeps one frame chain", () => {
 test("stopping the readout hides the badge and frees the panel", () => {
   const window = new Window({ url: "http://localhost/" });
   const stubs = installFrameStubs(window);
+
   try {
     const badge = window.document.createElement("div");
     badge.hidden = true;
     window.document.body.append(badge);
+
     const stop = startDevStats(badge, { getZoom: () => 5 });
 
     assert.equal(badge.hidden, false);
@@ -341,9 +356,11 @@ function installFrameStubs(window: Window): FrameStubs {
   const previousDocument = target.document;
   const previousSchedule = target.requestAnimationFrame;
   const previousCancel = target.cancelAnimationFrame;
+
   const scheduled: FrameRequestCallback[] = [];
   const cancelled: number[] = [];
   let nextId = 0;
+
   target.document = window.document;
   target.requestAnimationFrame = (callback: FrameRequestCallback): number => {
     scheduled.push(callback);
@@ -439,6 +456,7 @@ test("the tile readout stays empty without a gesture", () => {
     basemap: { settleMs: null, requests: 0 },
     contours: { settleMs: null, requests: 0 },
   });
+
   tracker.stop();
 });
 
@@ -459,6 +477,7 @@ test("a zoom gesture counts basemap requests and times them until loaded", () =>
   map.emit("moveend", {});
 
   const settled = tracker.snapshot();
+
   assert.equal(settled.terrain.requests, 0);
   assert.equal(settled.terrain.settleMs, null);
   assert.equal(settled.contours.requests, 0);
@@ -483,6 +502,7 @@ test("a loading-loaded-end sequence keeps its requests and settle time", () => {
   map.emit("moveend", {});
 
   assert.deepEqual(tracker.snapshot().basemap, { settleMs: 40, requests: 1 });
+
   tracker.stop();
 });
 
@@ -490,6 +510,7 @@ test("moveend settles an already-loaded basemap with no further events", () => {
   let now = 1000;
   const map = tileMap(() => 8);
   map.loaded.add("openmaptiles");
+
   const tracker = new TileSettleTracker(map, () => now);
   tracker.start();
 
@@ -499,6 +520,7 @@ test("moveend settles an already-loaded basemap with no further events", () => {
   map.emit("moveend", {});
 
   assert.deepEqual(tracker.snapshot().basemap, { settleMs: 40, requests: 1 });
+
   tracker.stop();
 });
 
@@ -519,6 +541,7 @@ test("idle settles a loaded basemap after an unresolved moveend", () => {
   map.emit("idle", {});
 
   assert.equal(tracker.snapshot().basemap.settleMs, 80);
+
   tracker.stop();
 });
 
@@ -533,6 +556,7 @@ test("a new gesture resets the previous counts", () => {
   map.emit("movestart", {});
 
   assert.deepEqual(tracker.snapshot().basemap, { settleMs: null, requests: 0 });
+
   tracker.stop();
 });
 
@@ -546,6 +570,7 @@ test("a zoomstart outside a gesture opens a step without resetting mid-gesture",
   map.emit("zoomstart", {});
 
   assert.equal(tracker.snapshot().basemap.requests, 1);
+
   tracker.stop();
 });
 
@@ -558,6 +583,7 @@ test("the bubbled dataloading event counts nothing on its own", () => {
   map.emit("dataloading", { sourceId: "terrain-relief" });
 
   assert.equal(tracker.snapshot().terrain.requests, 0);
+
   tracker.stop();
 });
 
@@ -565,6 +591,7 @@ test("the tracker falls back to isSourceLoaded and ignores unknown sources", () 
   let now = 1000;
   const map = tileMap(() => 8);
   map.loaded.add("openmaptiles");
+
   const tracker = new TileSettleTracker(map, () => now);
   tracker.start();
 
@@ -574,8 +601,10 @@ test("the tracker falls back to isSourceLoaded and ignores unknown sources", () 
   map.emit("sourcedata", { sourceId: "openmaptiles" });
 
   const settled = tracker.snapshot();
+
   assert.equal(settled.basemap.settleMs, 40);
   assert.equal(settled.terrain.requests, 0);
+
   tracker.stop();
 });
 
@@ -584,12 +613,9 @@ test("a gesture with no source events settles the cached basemap source", () => 
   const map = tileMap(() => 8);
   map.loaded.add("openmaptiles");
   (map as unknown as { getStyle: () => { sources: Record<string, object> } }).getStyle = () => ({
-    sources: {
-      "terrain-relief": {},
-      "openmaptiles": {},
-      "terrain-contours": {},
-    },
+    sources: { "terrain-relief": {}, openmaptiles: {}, "terrain-contours": {} },
   });
+
   const tracker = new TileSettleTracker(map, () => now);
   tracker.start();
 
@@ -598,6 +624,7 @@ test("a gesture with no source events settles the cached basemap source", () => 
   map.emit("moveend", {});
 
   const settled = tracker.snapshot();
+
   assert.equal(settled.terrain.settleMs, null);
   assert.equal(settled.basemap.settleMs, 50);
   assert.equal(settled.contours.settleMs, null);
@@ -609,6 +636,7 @@ test("a gesture with no source events settles the cached basemap source", () => 
   map.emit("moveend", {});
 
   assert.equal(tracker.snapshot().basemap.settleMs, null);
+
   tracker.stop();
 });
 
@@ -616,7 +644,11 @@ test("a cached pool settles terrain and contours on moveend", () => {
   let now = 1000;
   const map = tileMap(() => 8);
   const pool = { requests: 7, viewReady: true };
-  const tracker = new TileSettleTracker(map, () => now, () => ({ ...pool }));
+  const tracker = new TileSettleTracker(
+    map,
+    () => now,
+    () => ({ ...pool }),
+  );
   tracker.start();
 
   map.emit("movestart", {});
@@ -624,10 +656,12 @@ test("a cached pool settles terrain and contours on moveend", () => {
   map.emit("moveend", {});
 
   const settled = tracker.snapshot();
+
   assert.equal(settled.terrain.settleMs, 0);
   assert.equal(settled.contours.settleMs, 0);
   assert.equal(settled.terrain.requests, 0);
   assert.equal(settled.contours.requests, 0);
+
   tracker.stop();
 });
 
@@ -635,7 +669,11 @@ test("a loading pool settles terrain and contours once it drains", () => {
   let now = 1000;
   const map = tileMap(() => 8);
   const pool = { requests: 10, viewReady: false };
-  const tracker = new TileSettleTracker(map, () => now, () => ({ ...pool }));
+  const tracker = new TileSettleTracker(
+    map,
+    () => now,
+    () => ({ ...pool }),
+  );
   tracker.start();
 
   map.emit("movestart", {});
@@ -651,10 +689,12 @@ test("a loading pool settles terrain and contours once it drains", () => {
   map.emit("idle", {});
 
   const settled = tracker.snapshot();
+
   assert.equal(settled.terrain.settleMs, 80);
   assert.equal(settled.contours.settleMs, 80);
   assert.equal(settled.terrain.requests, 3);
   assert.equal(settled.contours.requests, 3);
+
   tracker.stop();
 });
 
@@ -662,16 +702,22 @@ test("held tiles settle immediately", () => {
   let now = 1000;
   const map = tileMap(() => 8);
   const pool = { requests: 7, viewReady: true };
-  const tracker = new TileSettleTracker(map, () => now, () => ({ ...pool }));
+  const tracker = new TileSettleTracker(
+    map,
+    () => now,
+    () => ({ ...pool }),
+  );
   tracker.start();
 
   map.emit("movestart", {});
 
   const settled = tracker.snapshot();
+
   assert.equal(settled.terrain.settleMs, 0);
   assert.equal(settled.contours.settleMs, 0);
   assert.equal(settled.terrain.requests, 0);
   assert.equal(settled.contours.requests, 0);
+
   tracker.stop();
 });
 
@@ -679,7 +725,11 @@ test("ring refills don't hold a settled gesture open", () => {
   let now = 1000;
   const map = tileMap(() => 8);
   const pool = { requests: 7, viewReady: true };
-  const tracker = new TileSettleTracker(map, () => now, () => ({ ...pool }));
+  const tracker = new TileSettleTracker(
+    map,
+    () => now,
+    () => ({ ...pool }),
+  );
   tracker.start();
 
   map.emit("movestart", {});
@@ -691,10 +741,12 @@ test("ring refills don't hold a settled gesture open", () => {
   map.emit("render", {});
 
   const settled = tracker.snapshot();
+
   assert.equal(settled.terrain.settleMs, 0);
   assert.equal(settled.contours.settleMs, 0);
   assert.equal(settled.terrain.requests, 0);
   assert.equal(settled.contours.requests, 0);
+
   tracker.stop();
 });
 
@@ -702,7 +754,11 @@ test("a drain during movement is recorded at the frame it happens", () => {
   let now = 1000;
   const map = tileMap(() => 8);
   const pool = { requests: 10, viewReady: false };
-  const tracker = new TileSettleTracker(map, () => now, () => ({ ...pool }));
+  const tracker = new TileSettleTracker(
+    map,
+    () => now,
+    () => ({ ...pool }),
+  );
   tracker.start();
 
   map.emit("movestart", {});
@@ -717,10 +773,12 @@ test("a drain during movement is recorded at the frame it happens", () => {
   map.emit("render", {});
 
   const settled = tracker.snapshot();
+
   assert.equal(settled.terrain.settleMs, 40);
   assert.equal(settled.contours.settleMs, 40);
   assert.equal(settled.terrain.requests, 3);
   assert.equal(settled.contours.requests, 3);
+
   tracker.stop();
 });
 
@@ -728,7 +786,11 @@ test("continuous movement can't keep the badge open forever", () => {
   let now = 1000;
   const map = tileMap(() => 8);
   const pool = { requests: 10, viewReady: false };
-  const tracker = new TileSettleTracker(map, () => now, () => ({ ...pool }));
+  const tracker = new TileSettleTracker(
+    map,
+    () => now,
+    () => ({ ...pool }),
+  );
   tracker.start();
 
   map.emit("movestart", {});
@@ -737,10 +799,12 @@ test("continuous movement can't keep the badge open forever", () => {
   map.emit("render", {});
 
   const settled = tracker.snapshot();
+
   assert.equal(settled.terrain.settleMs, 10 * 1000);
   assert.equal(settled.contours.settleMs, 10 * 1000);
   assert.equal(settled.terrain.requests, 15);
   assert.equal(settled.contours.requests, 15);
+
   tracker.stop();
 });
 
@@ -772,6 +836,7 @@ test("a second load wave in one gesture reopens until the basemap loads", () => 
   map.emit("sourcedata", { sourceId: "openmaptiles", isSourceLoaded: true });
 
   assert.deepEqual(tracker.snapshot().basemap, { settleMs: 140, requests: 3 });
+
   tracker.stop();
 });
 
@@ -779,6 +844,7 @@ test("a removed source never queries its manager after delete-before-metadata", 
   let now = 1000;
   const map = removalTileMap(() => 8);
   map.live.add("openmaptiles");
+
   const tracker = new TileSettleTracker(map, () => now);
   tracker.start();
 
@@ -791,6 +857,7 @@ test("a removed source never queries its manager after delete-before-metadata", 
   assert.deepEqual(map.errors, []);
   assert.equal(tracker.snapshot().basemap.settleMs, 40);
   assert.equal(tracker.snapshot().basemap.requests, 1);
+
   tracker.stop();
 });
 
@@ -798,6 +865,7 @@ test("a pending source removed on exit settles without a manager error", () => {
   let now = 1000;
   const map = removalTileMap(() => 8);
   map.live.add("openmaptiles");
+
   const tracker = new TileSettleTracker(map, () => now);
   tracker.start();
 
@@ -809,6 +877,7 @@ test("a pending source removed on exit settles without a manager error", () => {
 
   assert.deepEqual(map.errors, []);
   assert.equal(tracker.snapshot().basemap.settleMs, 50);
+
   tracker.stop();
 });
 
@@ -816,6 +885,7 @@ test("a units rebuild keeps waiting for the recreated source without errors", ()
   let now = 1000;
   const map = removalTileMap(() => 8);
   map.live.add("openmaptiles");
+
   const tracker = new TileSettleTracker(map, () => now);
   tracker.start();
 
@@ -839,6 +909,7 @@ test("a units rebuild keeps waiting for the recreated source without errors", ()
 
   assert.equal(tracker.snapshot().basemap.settleMs, 40);
   assert.deepEqual(map.errors, []);
+
   tracker.stop();
 });
 
@@ -848,6 +919,7 @@ test("an unknown source never blocks the basemap settle", () => {
   map.live.add("openmaptiles");
   map.live.add("rain");
   map.loaded.add("openmaptiles");
+
   const tracker = new TileSettleTracker(map, () => now);
   tracker.start();
 
@@ -866,6 +938,7 @@ test("an unknown source never blocks the basemap settle", () => {
 
   assert.equal(tracker.snapshot().basemap.settleMs, 40);
   assert.deepEqual(map.errors, []);
+
   tracker.stop();
 });
 
@@ -874,6 +947,7 @@ test("a late removal event after settle leaves the settle time alone", () => {
   const map = removalTileMap(() => 8);
   map.live.add("openmaptiles");
   map.loaded.add("openmaptiles");
+
   const tracker = new TileSettleTracker(map, () => now);
   tracker.start();
 
@@ -888,6 +962,7 @@ test("a late removal event after settle leaves the settle time alone", () => {
 
   assert.deepEqual(map.errors, []);
   assert.equal(tracker.snapshot().basemap.settleMs, 30);
+
   tracker.stop();
 });
 
@@ -895,6 +970,7 @@ test("a repeat entry after removal starts from live sources only", () => {
   let now = 1000;
   const map = removalTileMap(() => 8);
   map.live.add("openmaptiles");
+
   const tracker = new TileSettleTracker(map, () => now);
   tracker.start();
 
@@ -918,6 +994,7 @@ test("a repeat entry after removal starts from live sources only", () => {
 
   assert.deepEqual(map.errors, []);
   assert.equal(tracker.snapshot().basemap.settleMs, 30);
+
   tracker.stop();
 });
 
@@ -943,8 +1020,11 @@ test("the badge says preload off when disabled", () => {
     gpuUnavailable: true,
     longtasks: 0,
   };
+
   assert.equal(formatDevStats(stats).includes("preload off"), false);
+
   setPreloadDisabled(true);
+
   try {
     assert.ok(formatDevStats(stats).includes("preload off"));
   } finally {
@@ -964,6 +1044,7 @@ test("the badge line gains the tile part only while tracking", () => {
     gpuUnavailable: true,
     longtasks: 0,
   });
+
   assert.ok(!plain.includes("tiles"));
 
   const withTiles = formatDevStats({
@@ -982,25 +1063,22 @@ test("the badge line gains the tile part only while tracking", () => {
       contours: { settleMs: 40, requests: 1 },
     },
   });
+
   assert.ok(withTiles.includes("tiles terrain 120 ms 3 req"));
 });
 
 test("the warmer badge shows entry progress apart from dwell launches", () => {
   setWarmerEnabled(true);
+
   try {
     beginWarmer();
     setWarmerEntryProgress(4, 96);
     noteDwellWarmerRequest();
     noteDwellWarmerRequest();
 
-    assert.deepEqual(warmerSnapshot(), {
-      entry: { done: 4, total: 96 },
-      dwell: 2,
-    });
-    assert.equal(
-      formatWarmerPart(warmerSnapshot()),
-      "warmer entry 4/96 dwell 2",
-    );
+    assert.deepEqual(warmerSnapshot(), { entry: { done: 4, total: 96 }, dwell: 2 });
+    assert.equal(formatWarmerPart(warmerSnapshot()), "warmer entry 4/96 dwell 2");
+
     const stats = {
       fps: 60,
       worstMs: 33,
@@ -1012,7 +1090,9 @@ test("the warmer badge shows entry progress apart from dwell launches", () => {
       gpuUnavailable: true,
       longtasks: 0,
     };
+
     assert.ok(formatDevStats({ ...stats, warmer: warmerSnapshot() }).includes("warmer entry 4/96"));
+
     beginWarmer();
 
     assert.deepEqual(warmerSnapshot(), { entry: { done: 0, total: 0 }, dwell: 0 });
@@ -1069,6 +1149,7 @@ test("the badge line gains the pool part only with pool data", () => {
     requests: 120,
     decodeMs: 3.25,
   };
+
   assert.ok(!formatDevStats(stats).includes("pool "));
   assert.ok(formatDevStats({ ...stats, pool }).includes("pool 32 tex 34.1 MB"));
 });
@@ -1076,10 +1157,7 @@ test("the badge line gains the pool part only with pool data", () => {
 test("the pool badge counts every request start, not only decoded tiles", () => {
   const window = new Window({ url: "http://localhost/" });
   const stubs = installFrameStubs(window);
-  const scope = globalThis as unknown as {
-    __getDemPoolStats?: unknown;
-    __gpuMs?: unknown;
-  };
+  const scope = globalThis as unknown as { __getDemPoolStats?: unknown; __gpuMs?: unknown };
   const previousHook = scope.__getDemPoolStats;
   scope.__getDemPoolStats = () => ({
     textures: 32,
@@ -1089,16 +1167,19 @@ test("the pool badge counts every request start, not only decoded tiles", () => 
     requests: 120,
     meanDecodeMs: 3.25,
   });
+
   try {
     const badge = window.document.createElement("div");
     badge.hidden = true;
     window.document.body.append(badge);
+
     const loop = new DevStatsLoop(badge, { getZoom: () => 5 });
     loop.start();
     stubs.scheduled[0](6000);
 
     assert.ok(badge.textContent?.includes("pool 32 tex 34.1 MB"));
     assert.ok(badge.textContent?.includes("req 120"));
+
     loop.stop();
   } finally {
     scope.__getDemPoolStats = previousHook;
@@ -1109,6 +1190,7 @@ test("the pool badge counts every request start, not only decoded tiles", () => 
 
 test("the badge line hides the warmer part without warmer data", () => {
   assert.equal(isWarmerEnabled(), false);
+
   const text = formatDevStats({
     fps: 60,
     worstMs: 33,
@@ -1127,6 +1209,7 @@ test("the badge line hides the warmer part without warmer data", () => {
 function tileMap(zoom: () => number) {
   const listeners = new Map<string, Set<(event: object) => void>>();
   const loaded = new Set<string>();
+
   return {
     loaded,
     getZoom: zoom,
@@ -1151,6 +1234,7 @@ function removalTileMap(zoom: () => number) {
   const live = new Set<string>();
   const loaded = new Set<string>();
   const errors: string[] = [];
+
   return {
     live,
     loaded,

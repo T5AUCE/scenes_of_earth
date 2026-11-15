@@ -47,12 +47,15 @@ export function rowTable({ bbox, ny }: Grid, samples: number) {
   const yBottom = mercatorY(south);
 
   const rows = new Float32Array(samples);
+
   for (let sample = 0; sample < samples; sample++) {
     const latitude = latitudeOf(yTop + ((yBottom - yTop) * sample) / (samples - 1));
     rows[sample] = (north - latitude) / rowDegrees;
   }
+
   rows[0] = 0;
   rows[samples - 1] = ny;
+
   return rows;
 }
 
@@ -68,6 +71,7 @@ export function localMatrix(
 ) {
   const matrix = new Float32Array(MATRIX_SIZE * MATRIX_SIZE);
   const originX = origin[0] + worldOffset;
+
   for (let row = 0; row < MATRIX_SIZE; row++) {
     const x = main[row];
     const y = main[MATRIX_SIZE + row];
@@ -76,6 +80,7 @@ export function localMatrix(
     matrix[2 * MATRIX_SIZE + row] = main[2 * MATRIX_SIZE + row];
     matrix[3 * MATRIX_SIZE + row] = x * originX + y * origin[1] + main[3 * MATRIX_SIZE + row];
   }
+
   return matrix;
 }
 
@@ -88,6 +93,7 @@ export function textureTiles(nx: number, ny: number, maxSize: number, halo = HAL
   const rows = axisSpans(ny, maxSize, halo);
 
   const tiles: TextureTile[] = [];
+
   for (const row of rows) {
     for (const column of columns) {
       tiles.push({
@@ -101,6 +107,7 @@ export function textureTiles(nx: number, ny: number, maxSize: number, halo = HAL
       });
     }
   }
+
   return tiles;
 }
 
@@ -118,10 +125,7 @@ export function quadExtent(grid: Grid, core: CellWindow, shift: number): QuadExt
 
   return {
     origin: [(left + WORLD_WIDTH_DEG / 2) / WORLD_WIDTH_DEG, 0.5 - top / (2 * Math.PI)],
-    extent: [
-      (core.width * columnDegrees) / WORLD_WIDTH_DEG,
-      (top - bottom) / (2 * Math.PI),
-    ],
+    extent: [(core.width * columnDegrees) / WORLD_WIDTH_DEG, (top - bottom) / (2 * Math.PI)],
     rowSpan: [(gridTop - top) / gridHeight, (top - bottom) / gridHeight],
   };
 }
@@ -130,12 +134,14 @@ function axisSpans(count: number, maxSize: number, halo: number) {
   const coreSize = count <= maxSize ? count : maxSize - 2 * halo;
 
   const spans = [];
+
   for (let start = 0; start < count; start += coreSize) {
     const size = Math.min(coreSize, count - start);
     const windowStart = Math.max(0, start - halo);
     const windowEnd = Math.min(count, start + size + halo);
     spans.push({ start, size, windowStart, windowSize: windowEnd - windowStart });
   }
+
   return spans;
 }
 

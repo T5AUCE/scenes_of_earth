@@ -71,6 +71,7 @@ export class ReliefLayer implements CustomLayerInterface {
   onAdd(map: MapLibreMap, gl: WebGL2RenderingContext): void {
     this.map = map;
     this.gl = gl;
+
     try {
       if (!hasLinearHeights(gl)) throw new Error("Relief needs linear filtering of float textures");
 
@@ -112,6 +113,7 @@ export class ReliefLayer implements CustomLayerInterface {
     if (!gl || !map || !program || this.isFailed) return true;
 
     this.draw.warmDraw(gl, () => this.setState(gl, program, map.getZoom()));
+
     return this.draw.loadBase(gl);
   }
 
@@ -121,14 +123,14 @@ export class ReliefLayer implements CustomLayerInterface {
 
     try {
       this.setState(gl, program, map.getZoom());
+
       let needsRepaint = false;
       timedGpuDraw(gl, this.id, () => {
-        needsRepaint = this.draw.draw(
-          gl,
-          input.defaultProjectionData.mainMatrix,
-          (sources) => this.setSlopeScales(gl, sources),
+        needsRepaint = this.draw.draw(gl, input.defaultProjectionData.mainMatrix, (sources) =>
+          this.setSlopeScales(gl, sources),
         );
       });
+
       if (needsRepaint) map.triggerRepaint();
     } catch (error) {
       this.fail(error as Error);
@@ -144,6 +146,7 @@ export class ReliefLayer implements CustomLayerInterface {
     gl.enable(gl.BLEND);
     // The shader writes premultiplied colour, so the basemap shows through what it leaves.
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+
     const exaggeration = reliefExaggeration(zoom, this.strength);
     gl.uniform1f(this.uniforms.get("uExaggeration") ?? null, exaggeration);
   }
@@ -159,6 +162,7 @@ export class ReliefLayer implements CustomLayerInterface {
   private release(): void {
     const { gl, program } = this;
     this.program = null;
+
     if (!gl) return;
 
     this.draw.detach(gl);
@@ -189,8 +193,10 @@ export function addReliefLayer(
   const { map } = options;
   const layer = new ReliefLayer(options);
   map.addLayer(layer, beforeId);
+
   // The keeper removes the layer on capture, before the pool hears of the loss.
   const stopKeeping = keepThroughContextLoss(map, layer, beforeId);
+
   return {
     setStrength: (strength) => layer.setStrength(strength),
     setBaseZoom: (zoom) => layer.setBaseZoom(zoom),

@@ -60,10 +60,7 @@ export function ShowAsSection({
         </label>
       </div>
       {notice && (
-        <p
-          className={fading ? "colour-notice fading" : "colour-notice"}
-          aria-live="polite"
-        >
+        <p className={fading ? "colour-notice fading" : "colour-notice"} aria-live="polite">
           {notice}
         </p>
       )}

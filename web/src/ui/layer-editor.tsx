@@ -12,24 +12,13 @@ import {
   recordMenuChange,
   type OutlineState,
 } from "../display-state";
-import {
-  BLEND,
-  type ColourAllocation,
-  type Draw,
-} from "../layers/allocate";
+import { BLEND, type ColourAllocation, type Draw } from "../layers/allocate";
 import {
   menuMainSections,
   menuResetButton,
   partControls,
   type MenuChange,
 } from "../layers/layer-menu";
-import type { SceneStore } from "../scene-store";
-import {
-  displacedOwner,
-  showAsOptions,
-  storeShowAs,
-  type ShowAsAction,
-} from "../show-as";
 import {
   customPalette,
   customStops,
@@ -37,6 +26,8 @@ import {
   rgbToHex,
   type GradientStop,
 } from "../render/palettes";
+import type { SceneStore } from "../scene-store";
+import { displacedOwner, showAsOptions, storeShowAs, type ShowAsAction } from "../show-as";
 import type { InkMenu, LayerDoc, LayerMenu, LayerView, Part } from "../types";
 import { DomNode } from "./dom-node";
 import { GradientStops } from "./gradient-stops";
@@ -96,12 +87,11 @@ export function LayerEditor({
 
       return;
     }
+
     setFading(false);
+
     const fadeTimer = setTimeout(() => setFading(true), NOTICE_VISIBLE_MS);
-    const removeTimer = setTimeout(
-      () => onNotice(null),
-      NOTICE_VISIBLE_MS + NOTICE_FADE_MS,
-    );
+    const removeTimer = setTimeout(() => onNotice(null), NOTICE_VISIBLE_MS + NOTICE_FADE_MS);
 
     return () => {
       clearTimeout(fadeTimer);
@@ -111,11 +101,14 @@ export function LayerEditor({
 
   const chooseDraw = (draw: Draw) => {
     const before = store.getSnapshot().allocation;
+
     // Choosing a draw while off shows the layer again.
     if (display.off.has(unit)) toggleTarget(true);
+
     const action: ShowAsAction = { kind: "choose", unit, draw };
     store.dispatch(action);
     storeShowAs(unit, draw);
+
     const after = store.getSnapshot().allocation;
     onNotice(noticeFor(displacedOwner(before, after, action), after, layers));
   };
@@ -125,18 +118,24 @@ export function LayerEditor({
     onNotice(null);
   };
 
-  const toggleTarget = useCallback((on: boolean) => {
-    if (onToggleTarget) {
-      onToggleTarget(on);
+  const toggleTarget = useCallback(
+    (on: boolean) => {
+      if (onToggleTarget) {
+        onToggleTarget(on);
 
-      return;
-    }
-    store.dispatch({ kind: "toggle", unit, on });
-    // The blend switch remembers its choice because it has no card switch of its own.
-    if (unit === BLEND) storeShowAs(BLEND, on ? "colour" : null);
-  }, [onToggleTarget, store, unit]);
+        return;
+      }
+
+      store.dispatch({ kind: "toggle", unit, on });
+
+      // The blend switch remembers its choice because it has no card switch of its own.
+      if (unit === BLEND) storeShowAs(BLEND, on ? "colour" : null);
+    },
+    [onToggleTarget, store, unit],
+  );
 
   const clearNotice = useCallback(() => onNotice(null), [onNotice]);
+
   const applyMenuChange = useCallback(
     (change: MenuChange) => {
       // Reset restores values such as palette and range but keeps the current Show as choice.
@@ -195,11 +194,7 @@ interface EditorPanelProps {
 }
 
 /** The floating shell every card editor shares: title, Close and Escape handling. */
-export function EditorPanel({
-  title,
-  onClose,
-  children,
-}: EditorPanelProps): React.ReactElement {
+export function EditorPanel({ title, onClose, children }: EditorPanelProps): React.ReactElement {
   const panel = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -220,12 +215,7 @@ export function EditorPanel({
   }, [onClose]);
 
   return (
-    <aside
-      ref={panel}
-      className="layer-editor"
-      aria-label={`Edit ${title}`}
-      tabIndex={-1}
-    >
+    <aside ref={panel} className="layer-editor" aria-label={`Edit ${title}`} tabIndex={-1}>
       <header className="editor-head">
         <h2>{title}</h2>
         <button type="button" onClick={onClose}>
@@ -252,6 +242,7 @@ function noticeFor(
   }
 
   const draw = after.as.get(displaced);
+
   return draw && layer
     ? `${COLOUR_NOTICE} ${title} now shows as ${drawLabel(draw, layer)}.`
     : COLOUR_NOTICE;
@@ -344,8 +335,10 @@ function PartRow({
       setControls(null);
       return;
     }
+
     const built = partControls(part.controls);
     setControls(built.element);
+
     const clear = () => onControlChange();
     built.element.addEventListener("input", clear);
 
@@ -385,17 +378,13 @@ interface MenuContentProps {
 }
 
 /** Mount the menu sections built by the old menu module inside the React editor. */
-function MenuContent({
-  menu,
-  draw,
-  onChange,
-  onUserInput,
-}: MenuContentProps): React.ReactElement {
+function MenuContent({ menu, draw, onChange, onUserInput }: MenuContentProps): React.ReactElement {
   const [topHost] = useState(() => {
     const element = document.createElement("div");
     element.className = "menu-sections";
     return element;
   });
+
   const [bottomHost] = useState(() => document.createElement("div"));
   const fillRef = useRef<() => void>(() => {});
   const fill = useCallback(() => {
@@ -432,10 +421,13 @@ function MenuContent({
     };
   }, [bottomHost, onUserInput, topHost]);
 
-  useEffect(() => () => {
-    topHost.replaceChildren();
-    bottomHost.replaceChildren();
-  }, [bottomHost, topHost]);
+  useEffect(
+    () => () => {
+      topHost.replaceChildren();
+      bottomHost.replaceChildren();
+    },
+    [bottomHost, topHost],
+  );
 
   return (
     <>
@@ -455,11 +447,11 @@ interface ColourSectionProps {
 
 /** The palette or ink swatches; the Custom box keeps its last choice across resets. */
 function ColourSection({ menu, onChange }: ColourSectionProps): React.ReactElement {
-  const [rememberedPalette, setRememberedPalette] = useState<string | null>(
-    () => (customStops(menu.palette) === null ? null : menu.palette),
+  const [rememberedPalette, setRememberedPalette] = useState<string | null>(() =>
+    customStops(menu.palette) === null ? null : menu.palette,
   );
-  const [rememberedInk, setRememberedInk] = useState<string | null>(
-    () => (menu.ink && isCustomInk(menu.ink) ? menu.ink.value : null),
+  const [rememberedInk, setRememberedInk] = useState<string | null>(() =>
+    menu.ink && isCustomInk(menu.ink) ? menu.ink.value : null,
   );
   if (menu.ink?.inUse) {
     return (
@@ -507,6 +499,7 @@ function PaletteSection({
     blocks: menu.blocks,
   }));
   if (menu.custom) options.push({ value: "custom", label: "Custom", colors: faceColors });
+
   // The heading already names the selection so the caption below would repeat it.
   const selectedOption = options.find((option) => option.value === selected);
   const heading = selectedOption
@@ -527,9 +520,11 @@ function PaletteSection({
       onChange("palette");
     }
   };
+
   const previewCustom = (stops: GradientStop[]) => {
     menu.setPalette(customPalette(stops));
   };
+
   const commitCustom = (stops: GradientStop[]) => {
     const next = customPalette(stops);
     menu.setPalette(next);
@@ -600,6 +595,7 @@ function InkSection({
       onChange("ink");
     }
   };
+
   const commitCustom = (next: string) => {
     ink.set(next);
     onRemember(next);
@@ -631,8 +627,8 @@ interface OutlineEditorProps {
 export function OutlineEditor({ outline, onChange }: OutlineEditorProps): React.ReactElement {
   const group = useId();
   const custom = outline.color.startsWith("#");
-  const [remembered, setRemembered] = useState<string | null>(
-    () => (custom ? outline.color : null),
+  const [remembered, setRemembered] = useState<string | null>(() =>
+    custom ? outline.color : null,
   );
   const faceColors = custom ? [outline.color] : remembered ? [remembered] : [];
 
@@ -647,6 +643,7 @@ export function OutlineEditor({ outline, onChange }: OutlineEditorProps): React.
     // Choosing a colour while the outline is off shows it again.
     onChange({ ...outline, color, shown: true });
   };
+
   const select = (next: string) => {
     if (next !== "custom") {
       setColor(next);
@@ -659,10 +656,12 @@ export function OutlineEditor({ outline, onChange }: OutlineEditorProps): React.
       setColor(seeded);
     }
   };
+
   const commitCustom = (color: string) => {
     setRemembered(color);
     setColor(color);
   };
+
   const css = outlineCss(outline.color);
 
   return (
@@ -721,6 +720,7 @@ function hasWideFaces(menu: NonNullable<LayerView["menu"]>): boolean {
 function facePaletteColors(customName: string | null, remembered: string | null): string[] {
   const shown = customName ?? remembered;
   if (shown === null) return [];
+
   const stops = customStops(shown);
   if (!stops) return [];
 
@@ -772,7 +772,9 @@ function CommitColorInput({
   useEffect(() => {
     const input = ref.current;
     if (!input) return;
+
     input.value = value;
+
     // The picker fires input continuously while dragging, so only change commits.
     const commit = () => onCommit(input.value);
     input.addEventListener("change", commit);

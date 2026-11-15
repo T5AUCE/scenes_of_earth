@@ -1,8 +1,8 @@
 /** Draw tiled categorical class fills with their optional outline through the GPU lifecycle. */
 import type { CustomLayerInterface, Map as MapLibreMap } from "maplibre-gl";
 
-import { addressSearch, gestureFlags, subscribeGesture } from "../gesture-quality";
 import { yieldToBrowser } from "../data";
+import { addressSearch, gestureFlags, subscribeGesture } from "../gesture-quality";
 import {
   BAND_BYTES_PER_CELL,
   bakeBandInto,
@@ -107,6 +107,7 @@ const BAKE_UNIFORM_NAMES = ["uBandIds", "uBandLow", "uBandHigh", "uBake"];
  */
 export function createClassFieldLayer(options: ClassFieldOptions) {
   const layer = new ClassFieldLayer(options);
+
   return {
     layer: layer as CustomLayerInterface,
     setIds: (ids: Uint8Array) => layer.setIds(ids),
@@ -160,11 +161,15 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
   override onAdd(map: MapLibreMap, gl: WebGL2RenderingContext) {
     super.onAdd(map, gl);
     this.isRemoved = false;
+
     if (this.ids && this.needsFlags() && !this.flags) {
       void this.ensureFlags().catch(() => {});
     }
+
     this.scheduleBandBuild();
+
     if (!this.fastAllowed || this.stopGesture) return;
+
     this.stopGesture = subscribeGesture(map, {
       onStart: () => this.setGestureFast(true),
       onEnd: () => this.setGestureFast(false),
@@ -174,11 +179,13 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
   override onRemove() {
     this.stopGesture?.();
     this.stopGesture = null;
+
     this.isRemoved = true;
     this.flagGeneration += 1;
     this.flagPromise = null;
     this.pendingWindow = null;
     this.clearBand();
+
     super.onRemove();
   }
 
@@ -190,6 +197,7 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     this.flagPromise = null;
     this.pendingWindow = null;
     this.clearBand();
+
     this.isIdsStale = true;
     this.map?.triggerRepaint();
     void this.ensureFlags().catch(() => {});
@@ -200,6 +208,7 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     colors.forEach((color, index) => {
       this.paletteBytes.set([...color, 255], (index + 1) * CHANNELS);
     });
+
     this.isPaletteStale = true;
     this.map?.triggerRepaint();
   }
@@ -211,6 +220,7 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
    */
   setGestureFast(isFast: boolean) {
     if (isFast === this.isGestureFast) return;
+
     this.isGestureFast = isFast;
     this.map?.triggerRepaint();
   }
@@ -219,6 +229,7 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     const hadFlags = this.needsFlags();
     const hadBake = this.isBakeReady();
     this.edges = edges;
+
     // A radius crossing the stride threshold needs a new flag window, so drop the cached pair.
     // Pending builds retarget too, so a window change while flags build restarts them.
     if (
@@ -232,15 +243,20 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
       this.pendingWindow = null;
       this.clearBand();
     }
+
     void this.ensureFlags().catch(() => {});
+
     const needs = this.needsFlags();
+
     // A new companion texture needs an upload, while a radius change within use does not.
     if (this.ids && (hadFlags !== needs || (needs && !this.flags))) {
       this.isIdsStale = true;
     }
+
     if (this.ids && hadBake !== this.isBakeReady() && this.isBakeReady()) {
       this.isIdsStale = true;
     }
+
     this.map?.triggerRepaint();
   }
 
@@ -256,8 +272,11 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
    */
   async prepareFlags(signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) throw cancelError();
+
     await this.ensureFlags();
+
     if (signal?.aborted) throw cancelError();
+
     while (!sameWindow(this.flagsWindow, this.wantedWindow())) {
       if (!this.ids || !this.needsFlags()) return;
 
@@ -288,6 +307,7 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     if (this.flags && sameWindow(this.flagsWindow, this.wantedWindow())) {
       return Promise.resolve();
     }
+
     if (this.flagPromise) {
       if (sameWindow(this.pendingWindow, this.wantedWindow())) return this.flagPromise;
 
@@ -300,23 +320,27 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     const ids = this.ids;
     const { nx, ny } = this.options.grid;
     const radius = this.edges.smoothRadiusCells ?? 0;
-    this.pendingWindow = this.wantedWindow();
-    this.flagPromise = buildFlagsInStrips(ids, nx, ny, radius).then((built) => {
-      if (generation !== this.flagGeneration || this.isRemoved) return;
-      if (this.ids !== ids) return;
-      if (!sameWindow(built.window, this.wantedWindow())) return;
 
-      this.flags = built.flags;
-      this.flagsWindow = built.window;
-      this.isIdsStale = true;
-      this.scheduleBandBuild();
-      this.map?.triggerRepaint();
-    }).finally(() => {
-      if (generation === this.flagGeneration) {
-        this.flagPromise = null;
-        this.pendingWindow = null;
-      }
-    });
+    this.pendingWindow = this.wantedWindow();
+    this.flagPromise = buildFlagsInStrips(ids, nx, ny, radius)
+      .then((built) => {
+        if (generation !== this.flagGeneration || this.isRemoved) return;
+        if (this.ids !== ids) return;
+        if (!sameWindow(built.window, this.wantedWindow())) return;
+
+        this.flags = built.flags;
+        this.flagsWindow = built.window;
+        this.isIdsStale = true;
+        this.scheduleBandBuild();
+        this.map?.triggerRepaint();
+      })
+      .finally(() => {
+        if (generation === this.flagGeneration) {
+          this.flagPromise = null;
+          this.pendingWindow = null;
+        }
+      });
+
     return this.flagPromise;
   }
 
@@ -324,6 +348,7 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     this.bakeGeneration += 1;
     this.cancelBakeSlice?.();
     this.cancelBakeSlice = null;
+
     this.bandIds = null;
     this.bandLow = null;
     this.bandHigh = null;
@@ -332,6 +357,7 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     this.bakeCpuBytes = 0;
     this.bakeGpuBytes = 0;
     clearBakeStats(this.id);
+
     this.bakeResolve?.();
     this.bakePromise = null;
     this.bakeResolve = null;
@@ -347,14 +373,18 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     const cells = this.ids;
     const flags = this.flags;
     const count = Math.max(0, nx) * Math.max(0, ny);
+
     let band: { ids: Uint8Array; low: Uint32Array; high: Uint32Array } | null = null;
     let nextRow = 0;
     let cpuMs = 0;
+
     this.bakePromise = new Promise<void>((done) => {
       this.bakeResolve = done;
     });
+
     const step = (budgetMs: number): void => {
       this.cancelBakeSlice = null;
+
       if (generation !== this.bakeGeneration) return;
 
       const start = performance.now();
@@ -364,12 +394,15 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
         low: new Uint32Array(count),
         high: new Uint32Array(count),
       };
+
       do {
         const { ids, low, high } = band;
         bakeBandInto(cells, nx, ny, radius, flags, ids, low, high, nextRow, nextRow + 1);
         nextRow += 1;
       } while (nextRow < ny && performance.now() - start < budgetMs);
+
       cpuMs += performance.now() - start;
+
       if (nextRow < ny) {
         this.cancelBakeSlice = scheduleIdle(step);
         return;
@@ -382,8 +415,10 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
       this.bakeMs = cpuMs;
       this.bakeCpuBytes = count * BAND_BYTES_PER_CELL;
       this.publishBakeStats();
+
       this.isBandStale = true;
       this.map?.triggerRepaint();
+
       this.bakeResolve?.();
       this.bakePromise = null;
       this.bakeResolve = null;
@@ -395,11 +430,7 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     const stats = bakeStatsScope();
     if (!stats) return;
 
-    stats[this.id] = {
-      ms: this.bakeMs,
-      cpuBytes: this.bakeCpuBytes,
-      gpuBytes: this.bakeGpuBytes,
-    };
+    stats[this.id] = { ms: this.bakeMs, cpuBytes: this.bakeCpuBytes, gpuBytes: this.bakeGpuBytes };
   }
 
   protected hasData() {
@@ -414,9 +445,9 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     return [
       gpu.palette,
       ...gpu.bandTiles.flatMap((band) => (band ? [band.ids, band.low, band.high] : [])),
-      ...gpu.bandStaging.flatMap((staging) => (
-        staging ? [staging.ids, staging.low, staging.high] : []
-      )),
+      ...gpu.bandStaging.flatMap((staging) =>
+        staging ? [staging.ids, staging.low, staging.high] : [],
+      ),
     ];
   }
 
@@ -432,23 +463,30 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
       gpu.palette = uploadTexture(gl, "colors", PALETTE_SIZE, 1, this.paletteBytes);
       this.isPaletteStale = false;
     }
+
     if (this.isIdsStale) {
       // Flags build in strips after the ids arrive, so the first upload waits for them.
       if (this.needsFlags() && !this.flags) return;
+
       // A zero radius never samples the flags, so land cover uploads ids alone.
       const flags = this.needsFlags() ? this.flags! : undefined;
       this.uploadTiles(gl, gpu, this.options.grid, this.ids!, flags, WIDE_HALO_CELLS);
+
       // New tiles invalidate every band decision, so skipped tiles are reconsidered.
       deleteBandTextures(gl, gpu);
       gpu.bandTiles = [];
       gpu.bandStaging = [];
       this.bakeGpuBytes = 0;
+
       const pending = this.uploadBandTiles(gl, gpu);
       this.isIdsStale = false;
       this.isBandStale = pending;
+
       if (pending) this.map?.triggerRepaint();
+
       return;
     }
+
     if (this.isBandStale) {
       const pending = this.uploadBandTiles(gl, gpu);
       this.isBandStale = pending;
@@ -465,37 +503,45 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
       gpu.bandStaging = [];
       this.bakeGpuBytes = 0;
       this.publishBakeStats();
+
       return false;
     }
 
     const radius = this.edges.smoothRadiusCells ?? 0;
     const { nx, ny } = this.options.grid;
+
     if (gpu.bandTiles.length !== gpu.tiles.length) {
       deleteBandTextures(gl, gpu);
       gpu.bandTiles = new Array(gpu.tiles.length).fill(undefined);
       gpu.bandStaging = new Array(gpu.tiles.length).fill(undefined);
       this.bakeGpuBytes = 0;
     }
+
     if (gpu.bandStaging.length !== gpu.tiles.length) {
       gpu.bandStaging = new Array(gpu.tiles.length).fill(undefined);
     }
+
     let gpuBytes = this.bakeGpuBytes;
     let bytesUsed = 0;
     let tilesUsed = 0;
     const startMs = performance.now();
+
     for (let index = 0; index < gpu.tiles.length; index++) {
       if (gpu.bandTiles[index] !== undefined) continue;
 
       const { window } = gpu.tiles[index].tile;
+
       // Tiles that fall back never sample the band, so they keep the full gather.
       if (isBandParityMismatched(window.column, window.row, radius)) {
         gpu.bandTiles[index] = null;
         continue;
       }
+
       if (this.flags && isUniformBandWindow(this.flags, nx, window)) {
         gpu.bandTiles[index] = null;
         continue;
       }
+
       if (tilesUsed >= BAKE_UPLOAD_TILES_PER_RENDER) break;
       if (bytesUsed > 0 && performance.now() - startMs >= BAKE_UPLOAD_MS_PER_RENDER) break;
 
@@ -504,15 +550,19 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
       if (!result) break;
 
       bytesUsed += result.bytes;
+
       if (result.finished) {
         gpuBytes += window.width * window.height * BAND_BYTES_PER_CELL;
         tilesUsed += 1;
       }
+
       if (bytesUsed >= BAKE_UPLOAD_BYTES_PER_RENDER) break;
       if (performance.now() - startMs >= BAKE_UPLOAD_MS_PER_RENDER) break;
     }
+
     this.bakeGpuBytes = gpuBytes;
     this.publishBakeStats();
+
     return gpu.bandTiles.some((band) => band === undefined);
   }
 
@@ -526,17 +576,18 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     bytesLeft: number,
   ): { bytes: number; finished: boolean } | null {
     const windowBytes = window.width * window.height * BAND_BYTES_PER_CELL;
+
     if (gpu.bandStaging[index] === undefined && windowBytes <= bytesLeft) {
-      const fullGrid = window.column === 0
-        && window.row === 0
-        && window.width === nx
-        && window.height === ny;
+      const fullGrid =
+        window.column === 0 && window.row === 0 && window.width === nx && window.height === ny;
       const idsWindow = fullGrid ? this.bandIds! : bandIdsWindow(this.bandIds!, nx, window);
       const lowWindow = fullGrid ? this.bandLow! : bandMaskWindow(this.bandLow!, nx, window);
       const highWindow = fullGrid ? this.bandHigh! : bandMaskWindow(this.bandHigh!, nx, window);
+
       let idsTexture: WebGLTexture | null = null;
       let lowTexture: WebGLTexture | null = null;
       let highTexture: WebGLTexture | null = null;
+
       try {
         idsTexture = uploadTexture(gl, "bandIds", window.width, window.height, idsWindow);
         lowTexture = uploadTexture(gl, "bandMask", window.width, window.height, lowWindow);
@@ -545,9 +596,12 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
         deleteResources(gl, { textures: [idsTexture, lowTexture, highTexture] });
         throw error;
       }
+
       gpu.bandTiles[index] = { ids: idsTexture, low: lowTexture, high: highTexture };
+
       return { bytes: windowBytes, finished: true };
     }
+
     return this.uploadPartialBand(gl, gpu, index, window, nx, bytesLeft);
   }
 
@@ -565,6 +619,7 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     if (bytesLeft <= 0 || rowsCanDo <= 0 || rowsLeft <= 0) return null;
 
     let staging = gpu.bandStaging[index];
+
     if (!staging) {
       try {
         staging = allocateBandStaging(gl, window.width, window.height);
@@ -572,13 +627,16 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
         gpu.bandStaging[index] = undefined;
         throw error;
       }
+
       gpu.bandStaging[index] = staging;
     }
+
     const rows = Math.min(rowsLeft, rowsCanDo);
     const startRow = staging.nextRow;
     const idsRows = bandIdsRowRange(this.bandIds!, nx, window, startRow, rows);
     const lowRows = bandMaskRowRange(this.bandLow!, nx, window, startRow, rows);
     const highRows = bandMaskRowRange(this.bandHigh!, nx, window, startRow, rows);
+
     try {
       uploadBandRows(gl, staging.ids, "ids", window.width, startRow, rows, idsRows);
       uploadBandRows(gl, staging.low, "mask", window.width, startRow, rows, lowRows);
@@ -588,12 +646,16 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
       gpu.bandStaging[index] = undefined;
       throw error;
     }
+
     staging.nextRow += rows;
+
     if (staging.nextRow < window.height) {
       return { bytes: rows * bytesPerRow, finished: false };
     }
+
     gpu.bandTiles[index] = { ids: staging.ids, low: staging.low, high: staging.high };
     gpu.bandStaging[index] = undefined;
+
     return { bytes: rows * bytesPerRow, finished: true };
   }
 
@@ -603,6 +665,7 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
 
     this.beginDraw(gl, gpu);
     gl.bindSampler(3, null);
+
     gl.uniform1i(uniform("uIds"), 0);
     // Unit 0 holds an integer texture, which keeps the unsigned sampler valid without flags.
     gl.uniform1i(uniform("uHomogeneous"), this.needsFlags() ? 2 : 0);
@@ -614,36 +677,42 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     gl.uniform1i(uniform("uOutline"), outline && !this.isGestureFast ? 1 : 0);
     gl.uniform1f(uniform("uOutlineStrength"), FILL_OUTLINE_STRENGTH);
     gl.uniform1f(uniform("uOpacity"), this.fieldOptions.opacity);
+
     const pixelRatio = this.map?.getPixelRatio?.() ?? 1;
     gl.uniform1f(uniform("uPixelRatio"), pixelRatio);
 
     gl.activeTexture(gl.TEXTURE3);
     gl.bindTexture(gl.TEXTURE_2D, gpu.palette);
     gl.activeTexture(gl.TEXTURE0);
+
     if (this.bakeAllowed) this.bindBakeUniforms(gl, gpu);
 
     let tileIndex = 0;
-    timedGpuDraw(gl, this.id, () => this.drawTiles(gl, gpu, mainMatrix, ({ window }) => {
-      if (this.bakeAllowed) {
-        const band = gpu.bandTiles[tileIndex];
-        const ready = band !== null && band !== undefined;
-        gl.uniform1i(uniform("uBake"), ready ? 1 : 0);
-        if (ready) {
-          gl.uniform1i(uniform("uBandIds"), BAND_IDS_UNIT);
-          gl.uniform1i(uniform("uBandLow"), BAND_LOW_UNIT);
-          gl.uniform1i(uniform("uBandHigh"), BAND_HIGH_UNIT);
-          this.bindBandTile(gl, gpu, tileIndex);
-        } else {
-          // Unsigned samplers must stay valid even when their branch is inactive.
-          gl.uniform1i(uniform("uBandIds"), 0);
-          gl.uniform1i(uniform("uBandLow"), 0);
-          gl.uniform1i(uniform("uBandHigh"), 0);
+    timedGpuDraw(gl, this.id, () =>
+      this.drawTiles(gl, gpu, mainMatrix, ({ window }) => {
+        if (this.bakeAllowed) {
+          const band = gpu.bandTiles[tileIndex];
+          const ready = band !== null && band !== undefined;
+          gl.uniform1i(uniform("uBake"), ready ? 1 : 0);
+
+          if (ready) {
+            gl.uniform1i(uniform("uBandIds"), BAND_IDS_UNIT);
+            gl.uniform1i(uniform("uBandLow"), BAND_LOW_UNIT);
+            gl.uniform1i(uniform("uBandHigh"), BAND_HIGH_UNIT);
+            this.bindBandTile(gl, gpu, tileIndex);
+          } else {
+            // Unsigned samplers must stay valid even when their branch is inactive.
+            gl.uniform1i(uniform("uBandIds"), 0);
+            gl.uniform1i(uniform("uBandLow"), 0);
+            gl.uniform1i(uniform("uBandHigh"), 0);
+          }
         }
-      }
-      tileIndex += 1;
-      gl.uniform2i(uniform("uIdsSize"), window.width, window.height);
-      gl.uniform1f(uniform("uWindowRow"), window.row);
-    }));
+
+        tileIndex += 1;
+        gl.uniform2i(uniform("uIdsSize"), window.width, window.height);
+        gl.uniform1f(uniform("uWindowRow"), window.row);
+      }),
+    );
   }
 
   private bindBakeUniforms(gl: WebGL2RenderingContext, gpu: Gpu): void {
@@ -651,6 +720,7 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     gl.bindSampler(BAND_IDS_UNIT, null);
     gl.bindSampler(BAND_LOW_UNIT, null);
     gl.bindSampler(BAND_HIGH_UNIT, null);
+
     gl.uniform1i(uniform("uBandIds"), 0);
     gl.uniform1i(uniform("uBandLow"), 0);
     gl.uniform1i(uniform("uBandHigh"), 0);
@@ -684,25 +754,31 @@ async function buildFlagsInStrips(
   const window = homogeneousWindow(radius);
   const halo = Math.max(window.span, 2);
   const flags = new Uint8Array(nx * ny);
+
   if (nx <= 0 || ny <= 0) return { flags, window };
 
   const stripRows = Math.max(1, Math.min(FLAG_STRIP_ROWS, Math.floor(FLAG_STRIP_CELLS / nx)));
   let sliceMs = performance.now();
+
   for (let startRow = 0; startRow < ny; startRow += stripRows) {
     const endRow = Math.min(ny, startRow + stripRows);
     const haloStart = Math.max(0, startRow - halo);
     const haloEnd = Math.min(ny, endRow + halo);
     const height = haloEnd - haloStart;
+
     const stripIds = ids.subarray(haloStart * nx, haloEnd * nx);
     const stripFlags = homogeneousFlags(stripIds, nx, height, radius);
     markThinCells(stripIds, nx, height, stripFlags);
+
     const coreStart = (startRow - haloStart) * nx;
     flags.set(stripFlags.subarray(coreStart, coreStart + (endRow - startRow) * nx), startRow * nx);
+
     if (performance.now() - sliceMs < FLAG_BUDGET_MS) continue;
 
     await yieldToBrowser();
     sliceMs = performance.now();
   }
+
   return { flags, window };
 }
 
@@ -723,6 +799,7 @@ function bandIdsWindow(
     const source = ((window.row + row) * nx + window.column) * 2;
     cells.set(bandIds.subarray(source, source + window.width * 2), row * window.width * 2);
   }
+
   return cells;
 }
 
@@ -736,6 +813,7 @@ function bandMaskWindow(
     const source = (window.row + row) * nx + window.column;
     cells.set(bandMasks.subarray(source, source + window.width), row * window.width);
   }
+
   return cells;
 }
 
@@ -752,6 +830,7 @@ function bandIdsRowRange(
     const target = row * window.width * 2;
     cells.set(bandIds.subarray(source, source + window.width * 2), target);
   }
+
   return cells;
 }
 
@@ -767,6 +846,7 @@ function bandMaskRowRange(
     const source = (window.row + startRow + row) * nx + window.column;
     cells.set(bandMasks.subarray(source, source + window.width), row * window.width);
   }
+
   return cells;
 }
 
@@ -784,6 +864,7 @@ function isUniformBandWindow(
       if (flags[(window.row + row) * nx + window.column + column] !== 1) return false;
     }
   }
+
   return true;
 }
 
@@ -792,9 +873,9 @@ function deleteBandTextures(gl: WebGL2RenderingContext, gpu: Gpu): void {
   deleteResources(gl, {
     textures: [
       ...gpu.bandTiles.flatMap((band) => (band ? [band.ids, band.low, band.high] : [])),
-      ...(gpu.bandStaging ?? []).flatMap((staging) => (
-        staging ? [staging.ids, staging.low, staging.high] : []
-      )),
+      ...(gpu.bandStaging ?? []).flatMap((staging) =>
+        staging ? [staging.ids, staging.low, staging.high] : [],
+      ),
     ],
   });
 }
@@ -810,8 +891,10 @@ function allocateBandStaging(
   height: number,
 ): BandStaging {
   const ids = allocateBandTexture(gl, "ids", width, height);
+
   try {
     const low = allocateBandTexture(gl, "mask", width, height);
+
     try {
       const high = allocateBandTexture(gl, "mask", width, height);
       return { ids, low, high, nextRow: 0 };
@@ -844,12 +927,15 @@ function allocateBandTexture(
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texImage2D(gl.TEXTURE_2D, 0, internal, width, height, 0, layout, type, null);
+
     return gl.getError();
   });
+
   if (error !== gl.NO_ERROR) {
     gl.deleteTexture(texture);
     throw new Error(`Cannot allocate a ${width} x ${height} band texture`);
   }
+
   return texture;
 }
 
@@ -871,6 +957,7 @@ function uploadBandRows(
   const error = withIsolatedUnpack(gl, () => {
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, startRow, width, rowCount, layout, type, data);
+
     return gl.getError();
   });
   if (error !== gl.NO_ERROR) {
@@ -887,6 +974,7 @@ function withIsolatedUnpack<T>(gl: WebGL2RenderingContext, task: () => T): T {
   const skipRows = gl.getParameter(gl.UNPACK_SKIP_ROWS) as number;
   const skipPixels = gl.getParameter(gl.UNPACK_SKIP_PIXELS) as number;
   const unpackBuffer = gl.getParameter(gl.PIXEL_UNPACK_BUFFER_BINDING) as WebGLBuffer | null;
+
   gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
@@ -894,6 +982,7 @@ function withIsolatedUnpack<T>(gl: WebGL2RenderingContext, task: () => T): T {
   gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
   gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
   gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
+
   try {
     return task();
   } finally {
@@ -919,6 +1008,7 @@ function scheduleIdle(slice: (budgetMs: number) => void): () => void {
     ) => number;
     cancelIdleCallback?: (handle: number) => void;
   };
+
   if (typeof scope.requestIdleCallback === "function") {
     const handle = scope.requestIdleCallback(
       (deadline) => {
@@ -928,10 +1018,12 @@ function scheduleIdle(slice: (budgetMs: number) => void): () => void {
       },
       { timeout: BAKE_IDLE_TIMEOUT_MS },
     );
+
     return () => scope.cancelIdleCallback?.(handle);
   }
 
   const timer = setTimeout(() => slice(BAKE_SLICE_MS), 0);
+
   return () => clearTimeout(timer);
 }
 
@@ -941,7 +1033,7 @@ type BakeStatsScope = Record<string, { ms: number; cpuBytes: number; gpuBytes: n
 function bakeStatsScope(): BakeStatsScope | undefined {
   try {
     const scope = globalThis as unknown as { __bakeStats?: BakeStatsScope };
-    return scope.__bakeStats ??= {};
+    return (scope.__bakeStats ??= {});
   } catch {
     // Stats must not break drawing.
     return undefined;
@@ -956,6 +1048,7 @@ function clearBakeStats(id: string): void {
 function cancelError(): Error {
   const error = new Error("Entry preparation was cancelled");
   error.name = "AbortError";
+
   return error;
 }
 

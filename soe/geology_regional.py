@@ -4,6 +4,7 @@ Regional COGs are read in priority order and remaining cells use the global base
 Every cell keeps its source code so notices and attribution list only the sources used.
 Sources missing on disk are skipped silently so the base maps still work on their own.
 """
+
 from collections.abc import Callable
 
 import numpy as np
@@ -161,7 +162,9 @@ def read_composited(
         regional, _ = backend.lithology(bounds, res, lambda: None, source[key])
         if translate:
             regional = _glim_to_openlandmap(regional)
+
         overlays.append((SOURCE_CODES[source["id"]], regional))
+
     value, codes = composite_values(base, overlays)
     return value, codes, transform
 
@@ -171,13 +174,12 @@ def _glim_to_openlandmap(classes: np.ndarray) -> np.ndarray:
     lookup = np.zeros(256, "uint8")
     for entry in GEOLOGY_CLASSES:
         lookup[entry["value"]] = OPENLANDMAP_FAMILY_VALUES[entry["parent"]]
+
     return lookup[classes]
 
 
 def candidates_for(
-    kind: str,
-    bbox: tuple[float, ...],
-    present: Callable[[str], bool],
+    kind: str, bbox: tuple[float, ...], present: Callable[[str], bool]
 ) -> list[dict]:
     """Return the sources supplying `kind` whose footprint meets bbox and whose COG is present."""
     key = "age_file" if kind == "age" else "type_file"
@@ -209,8 +211,7 @@ def footprint_intersects(source: dict, bbox: tuple[float, ...]) -> bool:
 
 
 def composite_values(
-    base: np.ndarray,
-    overlays: list[tuple[int, np.ndarray]],
+    base: np.ndarray, overlays: list[tuple[int, np.ndarray]]
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return the composited classes and the code of the source behind each cell.
 
@@ -223,6 +224,7 @@ def composite_values(
         covered = overlay != 0
         value[covered] = overlay[covered]
         codes[covered] = code
+
     return value, codes
 
 
@@ -231,6 +233,7 @@ def used_in(codes: np.ndarray) -> tuple[str, ...]:
     present = set(np.unique(codes[codes > 0]).tolist())
     ids = ["global_base"] if BASE_CODE in present else []
     ids += [source["id"] for source in REGIONAL_SOURCES if SOURCE_CODES[source["id"]] in present]
+
     return tuple(ids)
 
 
@@ -242,6 +245,7 @@ def regional_notices(used_ids: tuple[str, ...], kind: str) -> list[str]:
             continue
         notices.append(
             f"{source['title']}: rock {kind} comes from {source['title'].split(' (')[0]} "
-            f"at {source['scale']}, {source['representation']}.",
+            f"at {source['scale']}, {source['representation']}."
         )
+
     return notices

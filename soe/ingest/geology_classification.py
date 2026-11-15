@@ -1,4 +1,5 @@
 """Classify regional geology ingest records using the published country name tables."""
+
 from ..geology_age import TIMELINE, smallest_containing_class
 from ..geology_type import GLIM_VALUES
 from .geology_names import (
@@ -89,8 +90,10 @@ def _canada_age_value(era: str, period: str, epoch: str) -> int | None:
     span = CANADA_PERIOD_NAMES.get(period)
     if span is None:
         span = CANADA_ERA_NAMES.get(era)
+
     if span is None:
         return None
+
     narrow = CANADA_EPOCH_NAMES.get(epoch)
     if narrow is not None:
         outer = _timeline_span(*span)
@@ -99,6 +102,7 @@ def _canada_age_value(era: str, period: str, epoch: str) -> int | None:
         newest = min(outer[1], inner[1], key=TIMELINE.index)
         if TIMELINE.index(oldest) <= TIMELINE.index(newest):
             span = (oldest, newest)
+
     return smallest_containing_class(*_timeline_span(*span))
 
 
@@ -122,7 +126,9 @@ def canada_type_batch(records: list[tuple[str, str]]) -> list[int | None]:
         code = CANADA_TYPE_NAMES.get(subrxtp)
         if code is None and subrxtp in NO_DATA_NAMES:
             code = CANADA_RXTP_FALLBACK.get(rxtp)
+
         values.append(class_value(code) if code else None)
+
     return values
 
 
@@ -149,6 +155,7 @@ def _normalize_igme_range(agename: str) -> list[str]:
         first, second = sides[0].split(), sides[1].split()
         if len(first) == 1 and len(second) == 2:
             return [second[1]]
+
     return sides
 
 
@@ -160,12 +167,15 @@ def _split_igme_range(agename: str) -> list[str]:
 def _igme_age_value(agename: str) -> int | None:
     if agename in NO_DATA_NAMES:
         return None
+
     sides = _normalize_igme_range(agename)
     if any(side in NO_DATA_NAMES for side in sides):
         return None
+
     reaches = [IGME_AGE_SIDES[side] for side in sides if side in IGME_AGE_SIDES]
     if not reaches:
         return None
+
     oldest = min((reach[0] for reach in reaches), key=TIMELINE.index)
     newest = max((reach[1] for reach in reaches), key=TIMELINE.index)
     return smallest_containing_class(*_timeline_span(oldest, newest))
@@ -198,11 +208,15 @@ def igme_type_batch(
         code = IGME_TYPE_NAMES.get(petr or "")
         if code is None and (not petr or petr in NO_DATA_NAMES):
             code = IGME_TYPE_NAMES.get(secondary or "")
+
         if code is None and (not secondary or secondary in NO_DATA_NAMES):
             code = IGME_IGNE_FALLBACK.get(igne or "")
+
         if code is None and (not igne or igne in NO_DATA_NAMES):
             code = IGME_MARI_FALLBACK.get(mari or "")
+
         values.append(class_value(code) if code else None)
+
     return values
 
 
@@ -213,11 +227,13 @@ def sgmc_age_batch(records: list[tuple[str, str]]) -> list[int | None]:
     and an empty bound collapses the range onto the other side. A leaf missing from the tables
     fails the whole call and lists every such leaf.
     """
-    leaves = {
-        _sgmc_leaf(path) for age_min, age_max in records for path in (age_min, age_max)
-    } - {"", "Undetermined"}
+    leaves = {_sgmc_leaf(path) for age_min, age_max in records for path in (age_min, age_max)} - {
+        "",
+        "Undetermined",
+    }
     unmapped = {leaf for leaf in leaves if _sgmc_base(leaf) is None}
     _fail_unmapped("SGMC age names", unmapped)
+
     return [_sgmc_age_value(age_min, age_max) for age_min, age_max in records]
 
 
@@ -226,6 +242,7 @@ def _sgmc_age_value(age_min: str, age_max: str) -> int | None:
     old = _sgmc_base(_sgmc_leaf(age_max))
     if young is None and old is None:
         return None
+
     oldest = (old or young)[0]
     newest = (young or old)[1]
     return smallest_containing_class(*_timeline_span(oldest, newest))
@@ -242,12 +259,15 @@ def _sgmc_base(leaf: str) -> tuple[str, str] | None:
         return None
     if leaf in SGMC_BASE_NAMES:
         return SGMC_BASE_NAMES[leaf]
+
     base = leaf
     for prefix in ("Early-", "Middle-", "Late-"):
         if base.startswith(prefix):
             base = base.removeprefix(prefix)
+
     if base in SGMC_BASE_NAMES:
         return SGMC_BASE_NAMES[base]
+
     period = SGMC_STAGE_PERIODS.get(base)
     return SGMC_BASE_NAMES[period] if period else None
 
@@ -264,6 +284,7 @@ def sgmc_type_batch(records: list[tuple[str, str, str, str, str]]) -> list[int |
             unmapped.add(lith1)
         else:
             unmapped.update(name for name in finer if name and name not in SGMC_KNOWN_NAMES)
+
     _fail_unmapped("SGMC lithology", unmapped)
     return [class_value(sgmc_class(*record)) for record in records]
 
@@ -292,6 +313,7 @@ def sgmc_class(lith1: str, lith2: str, lith3: str, lith4: str, lith5: str) -> st
         return "vi__" if lith2 == "Volcanic" else "pi__"
     if finer & set(SGMC_ACID_NAMES):
         return "va__" if lith2 == "Volcanic" else "pa__"
+
     return SGMC_LITH1_DEFAULTS[lith1]
 
 
@@ -303,6 +325,7 @@ def _sgmc_unconsolidated_class(finer: set[str]) -> str:
         return "sush"
     if finer & set(SGMC_UNCONSOLIDATED_ORGANIC_NAMES):
         return "suor"
+
     return "sumx"
 
 
@@ -318,13 +341,16 @@ def _sgmc_sedimentary_class(levels: tuple[str, ...]) -> str:
         return "evpu"
     if finer & set(SGMC_EVAPORITE_NAMES):
         return "ev__"
+
     carbonate_class = _deepest_class(levels, SGMC_CARBONATE_CLASSES)
     if carbonate_class:
         if finer & set(SGMC_MIXED_FINE_NAMES):
             return "smsh"
         if finer & set(SGMC_MIXED_NAMES):
             return "smmx"
+
         return carbonate_class
+
     if finer & set(SGMC_COAL_NAMES):
         return "smor"
     if finer & set(SGMC_MIXED_FINE_NAMES):
@@ -339,6 +365,7 @@ def _sgmc_sedimentary_class(levels: tuple[str, ...]) -> str:
         return "sssh"
     if finer & set(SGMC_CLASTIC_MIXED_NAMES):
         return "ssmx"
+
     return "smmx"
 
 
@@ -418,6 +445,7 @@ def gmna_type_batch(records: list[tuple[str, str]]) -> list[int | None]:
         (*GMNA_TYPE_HIERARCHIES[(rocktype, lithology or "")], "", "")
         for rocktype, lithology in records
     ]
+
     return sgmc_type_batch(hierarchies)
 
 
@@ -429,8 +457,7 @@ def egdi_type_batch(values: list[int]) -> list[int | None]:
     unmapped = {value for value in values if value not in EGDI_TYPE_NAMES}
     _fail_unmapped("EGDI lithology values", {str(value) for value in sorted(unmapped)})
     return [
-        class_value(EGDI_TYPE_NAMES[value]) if EGDI_TYPE_NAMES[value] else None
-        for value in values
+        class_value(EGDI_TYPE_NAMES[value]) if EGDI_TYPE_NAMES[value] else None for value in values
     ]
 
 

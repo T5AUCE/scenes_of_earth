@@ -73,6 +73,7 @@ export function createScenePanel(
   let time: PanelTime = { time: null, label: null };
   const timeListeners = new Set<() => void>();
   const getTime = () => time;
+
   const subscribeTime = (listener: () => void) => {
     timeListeners.add(listener);
 
@@ -80,6 +81,7 @@ export function createScenePanel(
       timeListeners.delete(listener);
     };
   };
+
   const setTime = (nextTime: string | null, nextLabel: string | null) => {
     if (time.time === nextTime && time.label === nextLabel) return;
 
@@ -90,6 +92,7 @@ export function createScenePanel(
   let fullRequest: FullRequest = { tab: "about", seq: 0, scrollToNotices: false };
   const fullListeners = new Set<() => void>();
   const getFullRequest = () => fullRequest;
+
   const subscribeFull = (listener: () => void) => {
     fullListeners.add(listener);
 
@@ -97,10 +100,12 @@ export function createScenePanel(
       fullListeners.delete(listener);
     };
   };
+
   const requestFull = (tab: PanelTab, scrollToNotices = false) => {
     fullRequest = { tab, seq: fullRequest.seq + 1, scrollToNotices };
     for (const listener of [...fullListeners]) listener();
   };
+
   const selectFull = (tab: PanelTab) => {
     requestFull(tab, false);
   };
@@ -108,6 +113,7 @@ export function createScenePanel(
   let chartSyncNotice: string | null = null;
   const syncListeners = new Set<() => void>();
   const getSync = () => chartSyncNotice;
+
   const subscribeSync = (listener: () => void) => {
     syncListeners.add(listener);
 
@@ -115,6 +121,7 @@ export function createScenePanel(
       syncListeners.delete(listener);
     };
   };
+
   const setSyncNotice = (notice: string | null) => {
     if (chartSyncNotice === notice) return;
     chartSyncNotice = notice;
@@ -125,6 +132,7 @@ export function createScenePanel(
   let showCloseConfirmFn: (() => void) | null = null;
 
   dialog.replaceChildren();
+
   const collapsedRoot = createRoot(element);
   collapsedRoot.render(
     <CollapsedPanel
@@ -135,6 +143,7 @@ export function createScenePanel(
       getTime={getTime}
     />,
   );
+
   const fullRoot = createRoot(dialog);
   fullRoot.render(
     <DeferredFullPanel
@@ -170,7 +179,6 @@ export function createScenePanel(
   };
 
   return {
-
     element,
 
     setTime,
@@ -203,6 +211,7 @@ export function createScenePanel(
 
     destroy() {
       if (dialog.open) dialog.close();
+
       dialog.oncancel = null;
       fullRoot.unmount();
       collapsedRoot.unmount();
@@ -220,6 +229,7 @@ function DeferredFullPanel(props: FullPanelProps): React.ReactElement | null {
   const chunk = useChunk(loadFullPanel, request.seq);
   if (request.seq === 0 || chunk === null) return null;
   if (chunk === "failed") return <p>{FULL_LOAD_FAILED}</p>;
+
   const Panel = chunk.component;
 
   return (
@@ -244,19 +254,23 @@ function CollapsedPanel({
   const showDetailsRef = useRef<HTMLButtonElement | null>(null);
   const collapseRef = useRef<HTMLButtonElement | null>(null);
   const focusAfterToggle = useRef<"show" | "collapse" | null>(null);
+
   useEffect(() => {
     if (focusAfterToggle.current === "show") showDetailsRef.current?.focus();
     if (focusAfterToggle.current === "collapse") collapseRef.current?.focus();
     focusAfterToggle.current = null;
   }, [collapsed]);
+
   const collapsePanel = () => {
     focusAfterToggle.current = "show";
     setCollapsed(true);
   };
+
   const expandPanel = () => {
     focusAfterToggle.current = "collapse";
     setCollapsed(false);
   };
+
   const elevationUnit = elevationUnitFrom(display, scene.layers);
   const count = noticeCount(scene);
   const noun = count === 1 ? "note" : "notes";
@@ -286,9 +300,11 @@ function CollapsedPanel({
       </>
     );
   }
-  const body = selected === "charts"
-    ? chartChipBody(chip, scene, store, time.time)
-    : summaryText(scene, elevationUnit);
+
+  const body =
+    selected === "charts"
+      ? chartChipBody(chip, scene, store, time.time)
+      : summaryText(scene, elevationUnit);
 
   return (
     <>
@@ -344,6 +360,7 @@ function chartChipBody(
 ): ReactNode {
   if (chip === null) return null;
   if (chip === "failed") return <span>{CHIP_LOAD_FAILED}</span>;
+
   const Chip = chip.component;
 
   return (

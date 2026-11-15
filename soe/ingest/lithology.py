@@ -6,6 +6,7 @@ GeoTIFF in 1-row strips, crops it, turns water and the undefined class into no d
 repairs its edge columns. Either way the result is a tiled COG whose overviews keep the most
 common class and whose tags name the source.
 """
+
 import logging
 import os
 import shutil
@@ -21,7 +22,6 @@ from rasterio.features import rasterize
 from rasterio.transform import Affine
 from rasterio.windows import Window, from_bounds
 
-from ..sources.grid import Bbox
 from ..geology_type import (
     GLIM_SOURCE,
     GLIM_VALUES,
@@ -32,14 +32,8 @@ from ..geology_type import (
     UNDEFINED_CLASS,
     WATER_CLASS,
 )
-from .cog import (
-    BLOCK_PX,
-    NORTH_EDGE_DEG,
-    SOUTH_EDGE_DEG,
-    TILE_DEG,
-    publish_cog,
-    write_tiled_raster,
-)
+from ..sources.grid import Bbox
+from .cog import BLOCK_PX, NORTH_EDGE_DEG, SOUTH_EDGE_DEG, TILE_DEG, publish_cog, write_tiled_raster
 from .cubes import DOWNLOADS_DIR
 
 if TYPE_CHECKING:
@@ -77,6 +71,7 @@ def ingest_lithology(cubes_dir: Path | str) -> Path:
     if not source.exists():
         log.info("Downloading the lithology map")
         _download(LITHOLOGY_URL, source)
+
     build_lithology_cog(source, published)
     return published
 
@@ -84,18 +79,14 @@ def ingest_lithology(cubes_dir: Path | str) -> Path:
 def build_lithology_cog(source_path: Path | str, cog_path: Path | str) -> None:
     """Write the cropped, cleaned COG of the OpenLandMap map, replacing cog_path when complete."""
     publish_cog(
-        lambda cleaned: _write_cleaned(source_path, cleaned),
-        OPENLANDMAP_SOURCE,
-        Path(cog_path),
+        lambda cleaned: _write_cleaned(source_path, cleaned), OPENLANDMAP_SOURCE, Path(cog_path)
     )
 
 
 def build_glim_cog(glim_path: Path | str, cog_path: Path | str) -> None:
     """Write the COG of GLiM level 1 and 2 classes, replacing cog_path only when complete."""
     publish_cog(
-        lambda rasterised: _write_glim_raster(glim_path, rasterised),
-        GLIM_SOURCE,
-        Path(cog_path),
+        lambda rasterised: _write_glim_raster(glim_path, rasterised), GLIM_SOURCE, Path(cog_path)
     )
 
 
@@ -119,13 +110,17 @@ def _write_cleaned(source_path: Path | str, cleaned_path: Path) -> None:
     nearest inner column, per row.
     """
     with rasterio.open(source_path) as source:
-        crop = from_bounds(
-            source.bounds.left,
-            SOUTH_EDGE_DEG,
-            source.bounds.right,
-            NORTH_EDGE_DEG,
-            source.transform,
-        ).round_offsets().round_lengths()
+        crop = (
+            from_bounds(
+                source.bounds.left,
+                SOUTH_EDGE_DEG,
+                source.bounds.right,
+                NORTH_EDGE_DEG,
+                source.transform,
+            )
+            .round_offsets()
+            .round_lengths()
+        )
         profile = {
             "driver": "GTiff",
             "dtype": "uint8",
@@ -161,24 +156,18 @@ def _repair_edge_columns(values: np.ndarray, edge_pixels: int) -> None:
     """
     if values.shape[1] <= 2 * edge_pixels:
         return
-    values[:, :edge_pixels] = values[:, edge_pixels:edge_pixels + 1]
-    values[:, -edge_pixels:] = values[:, -edge_pixels - 1:-edge_pixels]
+
+    values[:, :edge_pixels] = values[:, edge_pixels : edge_pixels + 1]
+    values[:, -edge_pixels:] = values[:, -edge_pixels - 1 : -edge_pixels]
 
 
 def _write_glim_raster(glim_path: Path | str, raster_path: Path) -> None:
     """Rasterise the GLiM codes tile by tile onto the 60°S-84°N grid of LITHOLOGY_RES_DEG."""
-    write_tiled_raster(
-        raster_path,
-        LITHOLOGY_RES_DEG,
-        partial(_rasterize_glim_tile, glim_path),
-    )
+    write_tiled_raster(raster_path, LITHOLOGY_RES_DEG, partial(_rasterize_glim_tile, glim_path))
 
 
 def _rasterize_glim_tile(
-    glim_path: Path | str,
-    bounds: Bbox,
-    transform: Affine,
-    shape: tuple[int, int],
+    glim_path: Path | str, bounds: Bbox, transform: Affine, shape: tuple[int, int]
 ) -> np.ndarray:
     """Return the class of each cell of the tile, 0 where GLiM has none, water or no data."""
     polygons = _read_glim_polygons(glim_path, bounds)
@@ -200,10 +189,9 @@ def _read_glim_polygons(glim_path: Path | str, bounds: Bbox) -> "gpd.GeoDataFram
     lons, lats = np.meshgrid(np.linspace(west, east, 9), np.linspace(south, north, 9))
     xs, ys = Transformer.from_crs(4326, GLIM_CRS, always_xy=True).transform(lons, lats)
     polygons = pyogrio.read_dataframe(
-        glim_path,
-        columns=["Litho"],
-        bbox=(xs.min(), ys.min(), xs.max(), ys.max()),
+        glim_path, columns=["Litho"], bbox=(xs.min(), ys.min(), xs.max(), ys.max())
     )
     polygons["code"] = polygons["Litho"].str[:GLIM_CODE_CHARS]
     polygons.geometry = polygons.geometry.segmentize(GLIM_SEGMENT_M)
+
     return polygons.to_crs(4326)

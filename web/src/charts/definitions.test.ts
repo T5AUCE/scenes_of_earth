@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import type { LayerDoc } from "../types.ts";
 import {
   allowedTypesFor,
   creationAvailability,
@@ -17,7 +18,6 @@ import {
   validateDefinition,
   type ChartDefinition,
 } from "./definitions.ts";
-import type { LayerDoc } from "../types.ts";
 
 test("only the three continuous shapes can be saved", () => {
   assert.equal(isSupportedShape("time_series"), true);
@@ -40,6 +40,7 @@ test("every continuous shape allows line, bar and area with hints instead of hid
   for (const shape of ["time_series", "seasonal_cycle", "distribution"] as const) {
     assert.deepEqual(allowedTypesFor(shape), ["line", "bar", "area"]);
   }
+
   assert.deepEqual(allowedTypesFor("categorical_shares"), []);
 });
 
@@ -60,12 +61,14 @@ test("defaults use metadata rather than hard-coded dataset ids", () => {
   const defaults = defaultDefinitions(layers);
 
   assert.equal(defaults.length, 3);
-  assert.deepEqual(defaults.map((definition) => definition.source.shape), [
-    "time_series",
-    "time_series",
-    "distribution",
-  ]);
-  assert.deepEqual(defaults.map((definition) => definition.chartType), ["bar", "line", "area"]);
+  assert.deepEqual(
+    defaults.map((definition) => definition.source.shape),
+    ["time_series", "time_series", "distribution"],
+  );
+  assert.deepEqual(
+    defaults.map((definition) => definition.chartType),
+    ["bar", "line", "area"],
+  );
   assert.deepEqual(
     defaults.map((definition) => definition.id),
     ["rain:time_series", "temp:time_series", "terrain:distribution"],
@@ -76,24 +79,28 @@ test("defaults use metadata rather than hard-coded dataset ids", () => {
 
 test("unavailable templates explain missing sources without fabricated numbers", () => {
   const rainOnly = unavailableTemplates([rainLayer()]);
+
   assert.deepEqual(
     rainOnly.map((template) => template.title),
     ["No temperature series", "No elevation distribution"],
   );
 
   const tempOnly = unavailableTemplates([tempLayer()]);
+
   assert.deepEqual(
     tempOnly.map((template) => template.title),
     ["No rainfall accumulation", "No elevation distribution"],
   );
 
   const rainTerrain = unavailableTemplates([rainLayer(), terrainLayer()]);
+
   assert.deepEqual(
     rainTerrain.map((template) => template.title),
     ["No temperature series"],
   );
 
   const empty = unavailableTemplates([]);
+
   assert.deepEqual(
     empty.map((template) => template.title),
     ["No rainfall accumulation", "No temperature series", "No elevation distribution"],
@@ -121,10 +128,13 @@ test("the main chart prefers rainfall and falls back deterministically", () => {
   assert.equal(resolveMainId(defaults, "temp:time_series", layers), "temp:time_series");
   assert.equal(resolveMainId(defaults, "missing", layers), "rain:time_series");
   assert.equal(resolveMainId([], null, layers), null);
+
   const tempOnly = defaultDefinitions([tempLayer()]);
+
   assert.equal(resolveMainId(tempOnly, null, [tempLayer()]), "temp:time_series");
 
   const reversed = [defaults[1], defaults[0]];
+
   assert.equal(resolveMainId(reversed, null, layers), "rain:time_series");
   assert.equal(resolveMainId(reversed, "missing", layers), "temp:time_series");
 });
@@ -134,10 +144,12 @@ test("fresh ids avoid collisions deterministically", () => {
   const original = Math.random;
   let index = 0;
   Math.random = () => values[index++ % values.length];
+
   try {
     const first = newChartId([]);
 
     assert.ok(first.length > 0);
+
     const second = newChartId([first]);
 
     assert.ok(second.length > 0);
@@ -156,54 +168,66 @@ test("validation rejects unknown layers, shapes, types and bad options", () => {
     chartType: "bar",
     options: defaultOptionsFor(),
   } as ChartDefinition;
+
   assert.equal(validateDefinition(valid, layers), null);
 
   const missingLayer = { ...valid, source: { layerId: "nowhere", shape: "time_series" } };
+
   assert.ok((validateDefinition(missingLayer, layers) ?? "").includes("missing"));
 
   const badShape = { ...valid, source: { layerId: "rain", shape: "categorical_shares" } };
+
   assert.ok((validateDefinition(badShape, layers) ?? "").includes("shape"));
 
   const badType = { ...valid, chartType: "pie" };
+
   assert.ok((validateDefinition(badType, layers) ?? "").includes("type"));
 
-  const seasonalOnYearly = {
-    ...valid,
-    source: { layerId: "rain", shape: "seasonal_cycle" },
-  };
+  const seasonalOnYearly = { ...valid, source: { layerId: "rain", shape: "seasonal_cycle" } };
+
   assert.ok((validateDefinition(seasonalOnYearly, [shortRainLayer()]) ?? "").includes("24"));
 
   const badInk = { ...valid, options: { ...valid.options, ink: "pink" } };
+
   assert.ok((validateDefinition(badInk, layers) ?? "").includes("ink"));
 
   const arrayInk = { ...valid, options: { ...valid.options, ink: ["#123456"] } };
+
   assert.ok((validateDefinition(arrayInk, layers) ?? "").includes("ink"));
 
   const hostileInk = {
     ...valid,
     options: { ...valid.options, ink: { toString: null } as unknown as string },
   };
+
   assert.ok((validateDefinition(hostileInk, layers) ?? "").includes("ink"));
 
   const nullOptions = { ...valid, options: null };
+
   assert.ok((validateDefinition(nullOptions, layers) ?? "").includes("options"));
 
   const arrayOptions = { ...valid, options: [] };
+
   assert.ok((validateDefinition(arrayOptions, layers) ?? "").includes("options"));
 
   const { options: _dropped, ...missingOptions } = valid;
+
   assert.ok((validateDefinition(missingOptions, layers) ?? "").includes("options"));
 
   const arrayDefinition = [] as unknown as ChartDefinition;
+
   assert.ok((validateDefinition(arrayDefinition, layers) ?? "").includes("object"));
 
   const badUnit = { ...valid, options: { ...valid.options, displayUnit: "°F" } };
+
   assert.ok((validateDefinition(badUnit, layers) ?? "").includes("display unit"));
 
   const longTitle = { ...valid, title: "x".repeat(MAX_TITLE_CHARS + 1) };
+
   assert.ok((validateDefinition(longTitle, layers) ?? "").includes("too long"));
 
   const clippingRange = { ...valid, options: { ...valid.options, yRange: [10, 100] } };
+
   assert.ok((validateDefinition(clippingRange, layers) ?? "").includes("baseline"));
 });
 
@@ -223,6 +247,7 @@ test("ranges stay in canonical units through display-unit switches", () => {
     ...valid,
     options: { ...valid.options, yRange: [10, 100] as [number, number] },
   };
+
   assert.ok((validateDefinition(clipped, layers) ?? "").includes("baseline"));
 });
 
@@ -235,6 +260,7 @@ test("no-table validation uses canonical bounds and references", () => {
     chartType: "bar",
     options: { ...defaultOptionsFor(), yRange: [0, 100] as [number, number] },
   } as ChartDefinition;
+
   assert.ok((validateDefinition(negativeBar, negativeLayers) ?? "").includes("observed"));
 
   const negativeLine = {
@@ -242,26 +268,23 @@ test("no-table validation uses canonical bounds and references", () => {
     chartType: "line" as const,
     options: { ...defaultOptionsFor(), yRange: [10, 20] as [number, number] },
   } as ChartDefinition;
+
   assert.ok((validateDefinition(negativeLine, negativeLayers) ?? "").includes("observed"));
 
   const negativeAreaFit = {
     ...negativeBar,
     chartType: "area" as const,
-    options: {
-      ...defaultOptionsFor(),
-      yRange: [-5, 20] as [number, number],
-    },
+    options: { ...defaultOptionsFor(), yRange: [-5, 20] as [number, number] },
   } as ChartDefinition;
+
   assert.equal(validateDefinition(negativeAreaFit, negativeLayers), null);
 
   const negativeAreaClipped = {
     ...negativeBar,
     chartType: "area" as const,
-    options: {
-      ...defaultOptionsFor(),
-      yRange: [0, 20] as [number, number],
-    },
+    options: { ...defaultOptionsFor(), yRange: [0, 20] as [number, number] },
   } as ChartDefinition;
+
   assert.ok((validateDefinition(negativeAreaClipped, negativeLayers) ?? "").includes("baseline"));
 
   const terrainLayers = [terrainWithSeaLevel()];
@@ -276,6 +299,7 @@ test("no-table validation uses canonical bounds and references", () => {
       yRange: [200, 300] as [number, number],
     },
   } as ChartDefinition;
+
   assert.ok((validateDefinition(shown, terrainLayers) ?? "").includes("observed"));
 
   const hidden = {
@@ -286,6 +310,7 @@ test("no-table validation uses canonical bounds and references", () => {
       yRange: [200, 300] as [number, number],
     },
   } as ChartDefinition;
+
   assert.ok((validateDefinition(hidden, terrainLayers) ?? "").includes("observed"));
 
   const fitting = {
@@ -296,6 +321,7 @@ test("no-table validation uses canonical bounds and references", () => {
       yRange: [0, 1000] as [number, number],
     },
   } as ChartDefinition;
+
   assert.equal(validateDefinition(fitting, terrainLayers), null);
 
   const positiveLayers = [positiveTerrainWithSeaLevel()];
@@ -310,6 +336,7 @@ test("no-table validation uses canonical bounds and references", () => {
       yRange: [100, 1000] as [number, number],
     },
   } as ChartDefinition;
+
   assert.ok((validateDefinition(positiveShown, positiveLayers) ?? "").includes("visible"));
 
   const positiveHidden = {
@@ -320,6 +347,7 @@ test("no-table validation uses canonical bounds and references", () => {
       yRange: [100, 1000] as [number, number],
     },
   } as ChartDefinition;
+
   assert.equal(validateDefinition(positiveHidden, positiveLayers), null);
 });
 
@@ -431,6 +459,7 @@ function positiveTerrainWithSeaLevel() {
       reference_values: { id: string; value: number }[];
     };
   };
+
   layer.distribution.values = Array.from({ length: 101 }, (_, index) => 100 + index * 9);
   layer.distribution.min = 100;
   layer.distribution.max = 1000;

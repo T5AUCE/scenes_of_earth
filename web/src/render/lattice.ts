@@ -99,6 +99,7 @@ export function cellSizePx(
 ) {
   const worldPx = WORLD_PX_AT_ZOOM_0 * 2 ** zoom;
   const stretch = 1 / Math.cos(latitude / DEGREES_PER_RADIAN);
+
   return (worldPx / 360) * Math.sqrt(cellDegrees.width * cellDegrees.height * stretch);
 }
 
@@ -110,6 +111,7 @@ export function cellSidesPx(
 ) {
   const pxPerDegree = (WORLD_PX_AT_ZOOM_0 * 2 ** zoom) / 360;
   const stretch = 1 / Math.cos(latitude / DEGREES_PER_RADIAN);
+
   return {
     width: pxPerDegree * cellDegrees.width,
     height: pxPerDegree * cellDegrees.height * stretch,
@@ -135,15 +137,18 @@ export function aimedSpacingPx(zoom: number, density = DEFAULT_DENSITY_RATIO) {
   const span = ZOOMED_IN_ZOOM - ZOOMED_OUT_ZOOM;
   const progress = Math.min(1, Math.max(0, (zoom - ZOOMED_OUT_ZOOM) / span));
   const spacingPx = ZOOMED_OUT_SPACING_PX * (MIN_SPACING_PX / ZOOMED_OUT_SPACING_PX) ** progress;
+
   return spacingPx / density;
 }
 
 /** Choose the level whose dot spacing is one to two aimed spacings and its progress to the next. */
 export function levelFor(cellPx: number, aimedPx = MIN_SPACING_PX, previousLevel?: number) {
   const exact = Math.log2(cellPx / aimedPx);
+
   if (previousLevel === undefined || !Number.isInteger(previousLevel)) {
     return statelessLevel(exact);
   }
+
   const previous = Math.min(MAX_LEVEL, Math.max(MIN_LEVEL, previousLevel));
   if (previous === MAX_LEVEL) return { level: MAX_LEVEL, fade: 0 };
 
@@ -152,6 +157,7 @@ export function levelFor(cellPx: number, aimedPx = MIN_SPACING_PX, previousLevel
     // Zoom jitter at a boundary keeps its level instead of thrashing re-bakes each crossing.
     return { level: previous, fade: levelFade(exact - previous) };
   }
+
   if (level === MAX_LEVEL) return { level, fade: 0 };
 
   return { level, fade: levelFade(exact - level) };
@@ -231,6 +237,7 @@ export function highZoomDotSizeScale(zoom: number, pixelRatio: number) {
   if (opacity <= 0) return 0;
 
   const startZoom = highZoomFadeStartZoom(pixelRatio);
+
   return Math.sqrt(opacity) * 2 ** -Math.max(0, zoom - startZoom);
 }
 
@@ -246,6 +253,7 @@ export function containedRadiusPx(
 ) {
   const reachPx = EDGE_PX + haloWidthPx;
   const marginPx = Math.min(spacingXPx, spacingYPx) * (0.5 - POSITION_JITTER_RATIO) - reachPx;
+
   return Math.min(maxRadiusPx, Math.max(marginPx, 0) / MAX_RADIUS_SCALE);
 }
 
@@ -287,12 +295,15 @@ export function levelRadiusPx(
   const cellPx = Math.sqrt(sidesPx.width * sidesPx.height);
   const baseCapPx = maxDotRadiusPx(cellPx / divisor, level, aimedPx, density);
   const zoomCapPx = zoom === undefined ? baseCapPx : limitCloseRadiusPx(baseCapPx, zoom);
-  return containedRadiusPx(
-    spacingXPx * pixelRatio,
-    spacingYPx * pixelRatio,
-    zoomCapPx * pixelRatio,
-    HALO_WIDTH_PX,
-  ) / pixelRatio;
+
+  return (
+    containedRadiusPx(
+      spacingXPx * pixelRatio,
+      spacingYPx * pixelRatio,
+      zoomCapPx * pixelRatio,
+      HALO_WIDTH_PX,
+    ) / pixelRatio
+  );
 }
 
 /**
@@ -334,11 +345,14 @@ export function writeContinuousLattice(
   // Same math as cellSidesPx, written in place so tween frames skip its object.
   lattice.sidesPx.width = pxPerDegree * cellDegrees.width;
   lattice.sidesPx.height = pxPerDegree * cellDegrees.height * stretch;
+
   const cellPx = Math.sqrt(lattice.sidesPx.width * lattice.sidesPx.height);
   lattice.aimedPx = aimedSpacingPx(zoom, density);
   lattice.zoom = zoom;
+
   const exact = Math.log2(cellPx / lattice.aimedPx);
   const level = Math.min(MAX_LEVEL, Math.max(MIN_LEVEL, Math.floor(exact)));
+
   lattice.level = level;
   // Stateless like levelFor without a previous level, so the map and the preview agree at rest.
   lattice.fade = level === MAX_LEVEL ? 0 : levelFade(exact - level);
@@ -362,6 +376,7 @@ export function representativeRadiusPx(lattice: DotLattice): number {
     lattice.density,
     lattice.zoom,
   );
+
   if (lattice.fade === 0) return parentPx;
 
   const childPx = levelRadiusPx(
@@ -395,6 +410,7 @@ function containedDensity(
 ) {
   const highestStep = Math.round(Math.log2(quantiseDensity(density)) / DENSITY_STEP_LOG2);
   const lowestStep = MIN_DENSITY_LOG2 / DENSITY_STEP_LOG2;
+
   for (let step = highestStep; step >= lowestStep; step--) {
     const candidate = 2 ** (step * DENSITY_STEP_LOG2);
     if (fitsContainment(cellPx, sidesPx, zoom, candidate, pixelRatio)) return candidate;
@@ -413,6 +429,7 @@ function fitsContainment(
   const aimedPx = aimedSpacingPx(zoom, density);
   const { level, fade } = levelFor(cellPx, aimedPx);
   const drawnLevel = fade > 0 ? level + 1 : level;
+
   for (let activeLevel = level; activeLevel <= drawnLevel; activeLevel++) {
     const fullRadiusPx = maxDotRadiusPx(cellPx / 2 ** activeLevel, activeLevel, aimedPx, density);
     const containedPx = levelRadiusPx(sidesPx, activeLevel, aimedPx, pixelRatio, density);
@@ -424,8 +441,9 @@ function fitsContainment(
 
 /** The radius of a dot that grows with its position by the exponent, then jittered by area. */
 export function dotRadiusPx(position: number, maxRadiusPx: number, areaNoise: number) {
-  return maxRadiusPx * position ** VALUE_RADIUS_EXPONENT
-    * Math.sqrt(1 + AREA_JITTER_RATIO * areaNoise);
+  return (
+    maxRadiusPx * position ** VALUE_RADIUS_EXPONENT * Math.sqrt(1 + AREA_JITTER_RATIO * areaNoise)
+  );
 }
 
 /** The radius to draw and the opacity of a dot, which fades by area below the minimum radius. */
@@ -444,6 +462,7 @@ export function dotAppearance(radiusPx: number) {
 export function highZoomDotOpacity(zoom: number, pixelRatio: number) {
   const startZoom = highZoomFadeStartZoom(pixelRatio);
   const progress = Math.min(1, Math.max(0, (zoom - startZoom) / HIGH_ZOOM_FADE_SPAN_ZOOM));
+
   return 1 - progress * progress * (3 - 2 * progress);
 }
 
@@ -458,10 +477,7 @@ function highZoomFadeStartZoom(pixelRatio: number) {
  */
 export function siteNoise(finestColumn: number, finestRow: number) {
   const hash = siteHash(finestColumn, finestRow);
-  return {
-    x: noiseFrom(hash & 0xffff),
-    y: noiseFrom(hash >>> NOISE_BITS),
-  };
+  return { x: noiseFrom(hash & 0xffff), y: noiseFrom(hash >>> NOISE_BITS) };
 }
 
 /**
@@ -479,9 +495,11 @@ export function areaNoise(column: number, row: number, level: number) {
   });
   const isLower = column < partnerColumn || (column === partnerColumn && row < partnerRow);
   const [lowerColumn, lowerRow] = isLower ? [column, row] : [partnerColumn, partnerRow];
+
   const finestStep = 2 ** (MAX_LEVEL - Math.max(level, 0));
   const hash = siteHash(lowerColumn * finestStep, lowerRow * finestStep);
   const noise = noiseFrom(hash32(hash ^ HASH_SALT) & 0xffff);
+
   return isLower ? noise : -noise;
 }
 
@@ -507,6 +525,7 @@ function hash32(value: number) {
   hash ^= hash >>> 15;
   hash = Math.imul(hash, 0x846ca68b);
   hash ^= hash >>> 16;
+
   return hash >>> 0;
 }
 
@@ -520,6 +539,7 @@ export function hasHatchedCells(positions: ArrayLike<number>, mask: ArrayLike<nu
   for (let cell = 0; cell < positions.length; cell++) {
     if (isHatched(mask[cell] === 1, positions[cell])) return true;
   }
+
   return false;
 }
 
@@ -542,11 +562,13 @@ export function blockMeans(bytes: Uint8Array, nx: number, ny: number, factor: nu
   const width = Math.ceil(nx / factor);
   const height = Math.ceil(ny / factor);
   const means = new Uint8Array(width * height);
+
   for (let row = 0; row < height; row++) {
     for (let column = 0; column < width; column++) {
       means[row * width + column] = blockMean(bytes, nx, ny, factor, column, row);
     }
   }
+
   return { means, width, height };
 }
 
@@ -561,9 +583,11 @@ function blockMean(
   let sum = 0;
   let count = 0;
   let isAllHatched = true;
+
   for (let y = row * factor; y < Math.min(ny, (row + 1) * factor); y++) {
     for (let x = column * factor; x < Math.min(nx, (column + 1) * factor); x++) {
       const byte = bytes[y * nx + x];
+
       if (byte !== HATCH_BYTE) isAllHatched = false;
       if (byte === NO_DATA_BYTE || byte === HATCH_BYTE) continue;
 
@@ -571,6 +595,7 @@ function blockMean(
       count++;
     }
   }
+
   if (count > 0) return Math.round(sum / count);
 
   return isAllHatched ? HATCH_BYTE : NO_DATA_BYTE;

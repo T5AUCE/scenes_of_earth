@@ -1,6 +1,8 @@
 """Assemble scene.json from a plan and expose its contract validator."""
+
 from . import __version__
 from .areas import Area
+
 # Existing importers must keep using bundle.validate and its contract names.
 from .bundle_validation import (
     COLOUR_PATTERN,
@@ -31,7 +33,7 @@ def make(
     """Assemble scene.json from the plan, dataset metadata and per-layer build results."""
     boundary = _boundary_block(area) if area.named else None
     static_layers_first = sorted(datasets, key=lambda dataset: dataset.time_varying)
-    
+
     layer_blocks = [
         _layer_block(dataset, plan.layers[dataset.id], info[dataset.id])
         for dataset in static_layers_first
@@ -90,6 +92,7 @@ def _boundary_block(area: Area) -> JsonObject:
     }
     source = SOURCES[row["source"]]
     block.update({key: source[key] for key in BOUNDARY_SOURCE_FIELDS if key in source})
+
     return block
 
 
@@ -105,6 +108,7 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
     sources = layer_plan.sources
     if "used_sources" in result:
         sources = result["used_sources"] or layer_plan.sources[:1]
+
     layer = {
         "id": dataset.id,
         "title": dataset.title,
@@ -126,6 +130,7 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
     fallback_sources = sources[1:]
     if result.get("fallback_used"):
         fallback_sources = [*fallback_sources, dataset.fallback.source]
+
     if fallback_sources:
         layer["fallback_sources"] = [dict(source) for source in fallback_sources]
 
@@ -143,12 +148,16 @@ def _layer_block(dataset: Dataset, layer_plan: LayerPlan, result: JsonObject) ->
 
     if "stats" in result:
         layer["stats"] = result["stats"]
+
     if "area_series" in result:
         layer["area_series"] = result["area_series"]
+
     if "distribution" in result:
         layer["distribution"] = result["distribution"]
+
     if dataset.tiles:
         layer["tiles"] = dict(dataset.tiles)
+
     return layer
 
 
@@ -170,9 +179,7 @@ def _array_blocks(dataset: Dataset, result: JsonObject) -> dict[str, JsonObject]
 
 
 def credits(
-    layer_blocks: list[JsonObject],
-    boundary_source: dict[str, str] | None,
-    synthetic: bool = False,
+    layer_blocks: list[JsonObject], boundary_source: dict[str, str] | None, synthetic: bool = False
 ) -> JsonObject:
     """Generate attribution for the sources actually used and any synthetic data."""
     sources = _layer_sources(layer_blocks)

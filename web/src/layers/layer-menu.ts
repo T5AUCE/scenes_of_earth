@@ -21,10 +21,14 @@ export interface PartControls {
 export function partControls(controls: LayerControl[]): PartControls {
   const box = makeHtmlElement("div");
   box.className = "part-controls";
+
   const cleanups: Array<() => void> = [];
+
   for (const control of controls) {
     const hint = control.hint ? makeHtmlElement("div", control.hint, box) : null;
+
     if (hint) hint.className = "control-hint";
+
     const input = slider(control);
     box.append(input);
     cleanups.push(keepInSync(control, [hint, input], input));
@@ -47,6 +51,7 @@ function keepInSync(
     for (const element of elements) {
       if (element) element.hidden = control.isShown === false;
     }
+
     input.value = String(control.value);
   };
   control.updates?.addEventListener("change", sync);
@@ -66,7 +71,9 @@ function slider({ label, min, max, step, value, set }: LayerControl) {
   input.max = String(max);
   input.step = String(step);
   input.value = String(value);
+
   input.oninput = () => set(Number(input.value));
+
   return input;
 }
 
@@ -84,21 +91,27 @@ export function menuResetButton(
   const reset = makeHtmlElement("button", "Reset layer");
   reset.type = "button";
   reset.className = "menu-reset";
+
   const resetLayer = () => {
     menu.setPalette(menu.defaultPalette);
     menu.range?.set(null);
     menu.edges?.reset();
+
     if (menu.ink) menu.ink.set(menu.ink.defaultInk);
     if (menu.units) menu.units.set(menu.units.defaultUnit);
+
     menu.resetDensity?.();
     onChange("palette");
+
     if (menu.ink) onChange("ink");
     if (menu.units) onChange("units");
+
     onChange("reset");
     refill();
   };
   reset.onclick = () => {
-    const isDefault = menu.palette === menu.defaultPalette
+    const isDefault =
+      menu.palette === menu.defaultPalette
       && !menu.range?.value
       && (menu.edges?.isDefault ?? true)
       && (menu.ink === undefined || menu.ink.value === menu.ink.defaultInk)
@@ -122,17 +135,21 @@ function edgesSection(menu: LayerMenu) {
     note.className = "option-note";
     return [note];
   }
+
   const edges = menu.edges;
   if (!edges) return [];
 
   const section = makeHtmlElement("fieldset");
   makeHtmlElement("legend", "Edges", section);
+
   for (const control of edges.controls) section.append(edgeSlider(control));
+
   const outline = document.createElement("input");
   outline.type = "checkbox";
   outline.checked = edges.outline.value;
   outline.onchange = () => edges.outline.set(outline.checked);
   section.append(labelled("Faint outline", outline));
+
   return [section];
 }
 
@@ -140,6 +157,7 @@ function edgeSlider(control: LayerControl) {
   const row = makeHtmlElement("label");
   row.className = "edge-control";
   makeHtmlElement("span", control.label, row);
+
   const value = makeHtmlElement("output", "", row);
   const show = (number: number) => {
     value.value = `${number}${control.unit ? ` ${control.unit}` : ""}`;
@@ -150,8 +168,10 @@ function edgeSlider(control: LayerControl) {
     control.set(number);
     show(number);
   };
+
   show(control.value);
   row.append(input);
+
   return row;
 }
 
@@ -167,6 +187,7 @@ function askBeforeReset(trigger: HTMLButtonElement, message: string, reset: () =
 
   const confirm = makeHtmlElement("button", "Reset", warning);
   confirm.type = "button";
+
   const cancel = makeHtmlElement("button", "Cancel", warning);
   cancel.type = "button";
 
@@ -178,6 +199,7 @@ function askBeforeReset(trigger: HTMLButtonElement, message: string, reset: () =
     reset();
     close();
   };
+
   cancel.onclick = close;
 
   trigger.after(warning);
@@ -187,5 +209,6 @@ function askBeforeReset(trigger: HTMLButtonElement, message: string, reset: () =
 function labelled(text: string, input: HTMLInputElement) {
   const row = makeHtmlElement("label", `${text} `);
   row.append(input);
+
   return row;
 }

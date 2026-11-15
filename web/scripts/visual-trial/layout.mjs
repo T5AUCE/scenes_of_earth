@@ -116,15 +116,19 @@ export function spreadPoints(box, count) {
  * Throws an error that names the bad entry.
  */
 export function parseViewportList(text) {
-  return String(text).split(",").map((part) => parseViewport(part.trim()));
+  return String(text)
+    .split(",")
+    .map((part) => parseViewport(part.trim()));
 }
 
 function parseViewport(text) {
   const match = VIEWPORT_PATTERN.exec(text);
+
   if (!match) throwInvalidViewport(text);
 
   const width = Number(match[1]);
   const height = Number(match[2]);
+
   if (width < 1 || height < 1 || width > MAX_VIEWPORT_PX || height > MAX_VIEWPORT_PX) {
     throwInvalidViewport(text);
   }

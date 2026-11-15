@@ -1,4 +1,5 @@
 """Share a real-mode source that reads synthetic data so tests need no network."""
+
 from collections.abc import Callable
 
 import numpy as np
@@ -6,14 +7,7 @@ import pytest
 from rasterio.transform import Affine
 from shapely.geometry.base import BaseGeometry
 
-from soe.sources import (
-    Bbox,
-    CellWindow,
-    CubeSpec,
-    RealSource,
-    SourceUnavailable,
-    SyntheticSource,
-)
+from soe.sources import Bbox, CellWindow, CubeSpec, RealSource, SourceUnavailable, SyntheticSource
 
 
 class RevisionSource(RealSource):

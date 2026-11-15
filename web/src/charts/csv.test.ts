@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { LayerDoc, Scene } from "../types.ts";
-import { buildSeasonalCycle } from "./series.ts";
 import {
   areaMeansFilename,
   buildAreaMeansCsv,
@@ -14,6 +13,7 @@ import {
   formatCsvValue,
   titleSlug,
 } from "./csv.ts";
+import { buildSeasonalCycle } from "./series.ts";
 
 test("csv cells quote commas, quotes and newlines by doubling quotes", () => {
   assert.equal(escapeCsvCell("plain"), "plain");
@@ -37,10 +37,14 @@ test("csv documents use CRLF and prefix every metadata physical line", () => {
 
   assert.ok(file.content.endsWith("\r\n"));
   assert.equal(file.content.includes("\n") && !file.content.includes("\r\n"), false);
+
   const lines = file.content.split("\r\n").slice(0, -1);
   const headerIndex = lines.findIndex((line) => line.startsWith("period_start,"));
+
   assert.ok(headerIndex > 0);
+
   for (const line of lines.slice(0, headerIndex)) assert.ok(line.startsWith("# "));
+
   for (const line of lines.slice(headerIndex)) assert.equal(line.startsWith("# "), false);
 });
 
@@ -72,10 +76,14 @@ test("area csv unions distinct intervals without inventing a common period", () 
 
   assert.equal(rows.length, 3);
   assert.ok(rows[0].startsWith("2020-01-01,2020-02-01,"));
+
   const january = splitRow(rows[0]);
+
   assert.equal(january[2], "10");
   assert.equal(january[5], "");
+
   const february = splitRow(rows[1]);
+
   assert.equal(february[2], "10");
   assert.equal(february[5], "20");
 });
@@ -90,13 +98,19 @@ test("area csv matches exact intervals so nested periods stay empty", () => {
   assert.ok(rows[0].startsWith("2020-01-01,2020-02-01,"));
   assert.ok(rows[1].startsWith("2020-01-01,2021-01-01,"));
   assert.ok(rows[2].startsWith("2020-02-01,2020-03-01,"));
+
   const januaryMonth = splitRow(rows[0]);
+
   assert.equal(januaryMonth[2], "");
   assert.equal(januaryMonth[5], "20");
+
   const annualRow = splitRow(rows[1]);
+
   assert.equal(annualRow[2], "10");
   assert.equal(annualRow[5], "");
+
   const februaryMonth = splitRow(rows[2]);
+
   assert.equal(februaryMonth[2], "");
   assert.equal(februaryMonth[5], "20");
 });
@@ -104,9 +118,11 @@ test("area csv matches exact intervals so nested periods stay empty", () => {
 test("area csv omits fallback columns unless a fallback is configured", () => {
   const withFallback = buildAreaMeansCsv(makeScene([rainLayer()]));
   const withoutFallback = buildAreaMeansCsv(makeScene([tempLayer()]));
-  const headerWith = withFallback.content.split("\r\n")
+  const headerWith = withFallback.content
+    .split("\r\n")
     .find((line) => line.startsWith("period_start,"))!;
-  const headerWithout = withoutFallback.content.split("\r\n")
+  const headerWithout = withoutFallback.content
+    .split("\r\n")
     .find((line) => line.startsWith("period_start,"))!;
 
   assert.ok(headerWith.includes("rain_fallback_fraction"));
@@ -120,19 +136,25 @@ test("seasonal csv matches the chart transformation with counts and years", () =
   const rows = dataRows(file.content);
 
   assert.equal(rows.length, 12);
+
   const header = file.content.split("\r\n").find((line) => line.startsWith("month,"))!;
+
   assert.ok(header.includes("rain_mean [mm/month]"));
   assert.ok(header.includes("sample_count"));
   assert.ok(header.includes("year_start"));
+
   rows.forEach((row, index) => {
     const cells = splitRow(row);
     const tableRow = table.rows[index];
+
     assert.equal(cells[0], String(index + 1));
     assert.equal(cells[1], tableRow.label);
     assert.equal(cells[2], formatCsvValue(tableRow.value));
     assert.equal(cells[3], formatCsvValue(tableRow.validFraction));
   });
+
   const january = splitRow(rows[0]);
+
   assert.equal(january[january.length - 3], "2");
   assert.equal(january[january.length - 2], "2019");
   assert.equal(january[january.length - 1], "2020");
@@ -143,7 +165,9 @@ test("csv metadata carries every credit, disclaimer, endorsement and terms line"
   const file = buildAreaMeansCsv(scene);
 
   for (const line of scene.credits!.lines!) assert.ok(file.content.includes(line));
+
   for (const line of scene.credits!.disclaimers!) assert.ok(file.content.includes(line));
+
   assert.ok(file.content.includes(scene.credits!.endorsement!));
   assert.ok(file.content.includes(scene.credits!.terms_passthrough!));
   assert.ok(file.content.includes("Rain credit"));
@@ -157,6 +181,7 @@ test("csv metadata carries every credit, disclaimer, endorsement and terms line"
 test("multiline metadata prefixes each physical line with a hash", () => {
   const scene = makeScene([rainLayer()]);
   scene.credits!.disclaimers = ["First line.\nSecond line."];
+
   const file = buildAreaMeansCsv(scene);
   const lines = file.content.split("\r\n");
 
@@ -169,13 +194,17 @@ test("metadata prefixes CRLF and bare CR lines in terms and sources", () => {
   scene.credits!.disclaimers = ["First line.\r\nSecond line.\rThird line."];
   scene.credits!.terms_passthrough = "Terms first.\r\nTerms second.\rTerms third.";
   scene.layers[0].source.attribution = "Rain credit\r\nSecond credit\rThird credit";
+
   const file = buildAreaMeansCsv(scene);
   const lines = file.content.split("\r\n").slice(0, -1);
   const headerIndex = lines.findIndex((line) => !line.startsWith("# "));
 
   assert.ok(headerIndex > 0);
+
   for (const line of lines.slice(0, headerIndex)) assert.ok(line.startsWith("# "));
+
   for (const line of lines.slice(0, headerIndex)) assert.equal(line.includes("\r"), false);
+
   assert.ok(lines.includes("# Disclaimer: First line."));
   assert.ok(lines.includes("# Second line."));
   assert.ok(lines.includes("# Third line."));
@@ -189,6 +218,7 @@ test("metadata prefixes CRLF and bare CR lines in terms and sources", () => {
 test("metadata with commas stays a comment without csv quoting", () => {
   const scene = makeScene([rainLayer()]);
   scene.credits!.lines = ["Rain, summed over the month."];
+
   const file = buildAreaMeansCsv(scene);
 
   assert.ok(file.content.includes("# Credit: Rain, summed over the month."));
@@ -216,19 +246,14 @@ test("filenames slug titles and ranges while static-only names omit dates", () =
   assert.equal(titleSlug("!!!"), "scene");
 
   const scene = makeScene([rainLayer()]);
-  assert.equal(
-    areaMeansFilename(scene),
-    "test-scene_2019-01-01_2021-07-01_area-means.csv",
-  );
+
+  assert.equal(areaMeansFilename(scene), "test-scene_2019-01-01_2021-07-01_area-means.csv");
   assert.equal(
     byMonthFilename(scene, seasonalLayer()),
     "test-scene_2019-01-01_2021-01-01_by-month.csv",
   );
   assert.ok(byMonthFilename(scene, seasonalLayer()).includes("_by-month.csv"));
-  assert.equal(
-    elevationFilename(scene, terrainLayer()),
-    "test-scene_elevation-distribution.csv",
-  );
+  assert.equal(elevationFilename(scene, terrainLayer()), "test-scene_elevation-distribution.csv");
 });
 
 test("area filenames end at the maximum union end regardless of order", () => {
@@ -236,10 +261,7 @@ test("area filenames end at the maximum union end regardless of order", () => {
   const monthly = tempLayer(["2020-01-01", "2020-02-01"], "2020-03-01");
   const scene = makeScene([annual, monthly]);
 
-  assert.equal(
-    areaMeansFilename(scene),
-    "test-scene_2020-01-01_2021-01-01_area-means.csv",
-  );
+  assert.equal(areaMeansFilename(scene), "test-scene_2020-01-01_2021-01-01_area-means.csv");
 });
 
 function dataRows(content: string): string[] {
@@ -286,10 +308,7 @@ function makeScene(layers: LayerDoc[]): Scene {
   } as unknown as Scene;
 }
 
-function rainLayer(
-  values: string[] = monthlyValues(30),
-  end = "2021-07-01",
-): LayerDoc {
+function rainLayer(values: string[] = monthlyValues(30), end = "2021-07-01"): LayerDoc {
   return {
     id: "rain",
     title: "Rain",
@@ -310,10 +329,7 @@ function rainLayer(
   } as unknown as LayerDoc;
 }
 
-function tempLayer(
-  values: string[] = monthlyValues(30),
-  end = "2021-07-01",
-): LayerDoc {
+function tempLayer(values: string[] = monthlyValues(30), end = "2021-07-01"): LayerDoc {
   return {
     id: "temp",
     title: "Temperature",

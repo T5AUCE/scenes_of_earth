@@ -112,9 +112,11 @@ export function hintFor(
   nativeUnits: string,
   rowCount: number,
 ): string | null {
-  return quantileBarHint(shape, chartType)
+  return (
+    quantileBarHint(shape, chartType)
     ?? offsetFillWarning(nativeUnits, chartType)
-    ?? (chartType === "bar" ? densityHint(rowCount) : null);
+    ?? (chartType === "bar" ? densityHint(rowCount) : null)
+  );
 }
 
 /** The v2 appearance a new chart starts from. */
@@ -125,6 +127,7 @@ export function defaultOptionsFor(): ChartOptions {
 /** Seed one time chart per timed layer and one hypsometry chart per distribution layer. */
 export function defaultDefinitions(layers: readonly LayerDoc[]): ChartDefinition[] {
   const definitions: ChartDefinition[] = [];
+
   for (const layer of layers) {
     if (isTimeSeriesLayer(layer)) {
       const shape: SupportedShape = "time_series";
@@ -137,6 +140,7 @@ export function defaultDefinitions(layers: readonly LayerDoc[]): ChartDefinition
       });
     }
   }
+
   for (const layer of layers) {
     if (isDistributionLayer(layer)) {
       const shape: SupportedShape = "distribution";
@@ -163,6 +167,7 @@ export function unavailableTemplates(layers: readonly LayerDoc[]): UnavailableTe
   const hasAccumulation = layers.some(
     (layer) => isTimeSeriesLayer(layer) && layer.time?.method === SUM_METHOD,
   );
+
   if (!hasAccumulation) {
     templates.push({
       shape: "time_series",
@@ -174,6 +179,7 @@ export function unavailableTemplates(layers: readonly LayerDoc[]): UnavailableTe
   const hasOffsetSeries = layers.some(
     (layer) => isTimeSeriesLayer(layer) && isOffsetUnits(layer.units),
   );
+
   if (!hasOffsetSeries) {
     templates.push({
       shape: "time_series",
@@ -183,6 +189,7 @@ export function unavailableTemplates(layers: readonly LayerDoc[]): UnavailableTe
   }
 
   const hasDistribution = layers.some((layer) => isDistributionLayer(layer));
+
   if (!hasDistribution) {
     templates.push({
       shape: "distribution",
@@ -196,14 +203,11 @@ export function unavailableTemplates(layers: readonly LayerDoc[]): UnavailableTe
 
 /** Whether New chart can run, with the reason shown when the scene has nothing to draw. */
 export function creationAvailability(layers: readonly LayerDoc[]) {
-  const allowed = layers.some((layer) =>
-    isTimeSeriesLayer(layer) || isSeasonalEligible(layer) || isDistributionLayer(layer),
+  const allowed = layers.some(
+    (layer) => isTimeSeriesLayer(layer) || isSeasonalEligible(layer) || isDistributionLayer(layer),
   );
 
-  return {
-    allowed,
-    reason: allowed ? null : "This scene has no chartable layer yet.",
-  };
+  return { allowed, reason: allowed ? null : "This scene has no chartable layer yet." };
 }
 
 /**
@@ -221,10 +225,7 @@ export function resolveMainId(
   return initialMainId(definitions, layers);
 }
 
-function initialMainId(
-  definitions: readonly ChartDefinition[],
-  layers: readonly LayerDoc[],
-) {
+function initialMainId(definitions: readonly ChartDefinition[], layers: readonly LayerDoc[]) {
   const byId = new Map(layers.map((layer) => [layer.id, layer]));
   const rainfall = definitions.find(
     (definition) => byId.get(definition.source.layerId)?.time?.method === SUM_METHOD,
@@ -253,6 +254,7 @@ export function validateDefinition(
 ): string | null {
   if (typeof definition !== "object" || definition === null) return "The chart is not an object.";
   if (Array.isArray(definition)) return "The chart is not an object.";
+
   const { id, title, source, chartType, options } = definition as Partial<ChartDefinition>;
   if (typeof id !== "string" || id.length === 0) return "The chart needs an id.";
   if (typeof title !== "string" || title.length === 0) return "The chart needs a title.";
@@ -260,25 +262,31 @@ export function validateDefinition(
   if (typeof source !== "object" || source === null || Array.isArray(source)) {
     return "The chart needs a source.";
   }
+
   if (!isSupportedShape((source as ChartSource).shape)) return "The chart shape is not supported.";
   if (!isChartType(chartType)) return "The chart type is not supported.";
 
   const byId = new Map(layers.map((layer) => [layer.id, layer]));
   const layer = byId.get((source as ChartSource).layerId);
   if (!layer) return "The chart source layer is missing.";
+
   const shape = (source as ChartSource).shape;
   if (shape === "time_series" && !isTimeSeriesLayer(layer)) {
     return "The layer has no time series to chart.";
   }
+
   if (shape === "seasonal_cycle" && !isSeasonalEligible(layer)) {
     return "The layer needs 24 monthly steps for a By month chart.";
   }
+
   if (shape === "distribution" && !isDistributionLayer(layer)) {
     return "The layer has no distribution to chart.";
   }
+
   if (!allowedTypesFor(shape).includes(chartType!)) {
     return "The chart type is not supported for this shape.";
   }
+
   if (
     options === undefined
     || options === null
@@ -289,6 +297,7 @@ export function validateDefinition(
   }
 
   let validationTable = table ?? null;
+
   if (validationTable === null) {
     try {
       validationTable = canonicalTableFor(layer, shape);
@@ -321,19 +330,23 @@ function validateOptions(
   if (typeof options !== "object" || options === null || Array.isArray(options)) {
     return "The chart options are not an object.";
   }
+
   if (options.ink !== undefined) {
     if (typeof options.ink !== "string" || inkColor(options.ink) === undefined) {
       return "The series ink is not a preset or #rrggbb colour.";
     }
   }
+
   if (options.displayUnit !== undefined && !isUnitFor(nativeUnits, options.displayUnit)) {
     return "The display unit does not belong to this layer.";
   }
+
   for (const title of [options.xTitle, options.yTitle]) {
     if (title !== undefined && (typeof title !== "string" || title.length > MAX_TITLE_CHARS)) {
       return "An axis title is too long.";
     }
   }
+
   for (const flag of [
     options.showGrid,
     options.showPoints,
@@ -343,9 +356,7 @@ function validateOptions(
     if (flag !== undefined && typeof flag !== "boolean") return "A chart toggle is not a boolean.";
   }
 
-  const references = options.showReferences === false
-    ? []
-    : visibleReferencesFor(shape, table);
+  const references = options.showReferences === false ? [] : visibleReferencesFor(shape, table);
   const rangeError = validateYRange(options.yRange ?? null, table, chartType, references);
   if (rangeError) return rangeError;
 
@@ -355,7 +366,11 @@ function validateOptions(
 function visibleReferencesFor(shape: SupportedShape, table: ChartTable) {
   if (shape !== "distribution" || table.shape !== "distribution") return [];
 
-  const references = [{ id: "mean", value: table.mean }, { id: "median", value: table.median }];
+  const references = [
+    { id: "mean", value: table.mean },
+    { id: "median", value: table.median },
+  ];
+
   for (const reference of table.referenceValues) {
     if (reference.id === SEA_LEVEL_ID) references.push(reference);
   }

@@ -59,14 +59,13 @@ export function GradientStops({ stops, onPreview, onCommit }: GradientStopsProps
           />
         ))}
       </div>
-      {editor.detail === null
-        ? (
-          <p className="stops-hint">
-            Click the bar to add a colour. Drag a pin to move it,
-            or click it to change or remove it.
-          </p>
-        )
-        : <StopDetail {...editor.detail} />}
+      {editor.detail === null ? (
+        <p className="stops-hint">
+          Click the bar to add a colour. Drag a pin to move it, or click it to change or remove it.
+        </p>
+      ) : (
+        <StopDetail {...editor.detail} />
+      )}
       <div aria-live="polite" role="status" className="visually-hidden">
         {editor.announcement}
       </div>
@@ -124,12 +123,14 @@ function useGradientEditor(
   const frame = useRef<number | null>(null);
   const previewRef = useRef(onPreview);
   previewRef.current = onPreview;
+
   const commitRef = useRef(onCommit);
   commitRef.current = onCommit;
 
   useEffect(() => () => cancelPreview(frame), []);
   useEffect(() => {
     if (dragging.current) return;
+
     const incoming = toGradient(draft);
     const current = [...stops].sort((first, second) => first.at - second.at);
     if (gradientName(incoming) !== gradientName(current)) {
@@ -141,12 +142,16 @@ function useGradientEditor(
     // The draft is the edited copy, so syncing only answers outside changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stops]);
+
   useEffect(() => {
     if (pendingFocus.current === null) return;
+
     const id = pendingFocus.current;
     pendingFocus.current = null;
+
     const element = handles.current.get(id);
     element?.focus();
+
     // A reorder can drop pointer capture, so the active drag reclaims it here.
     if (drag.current !== null && dragging.current) {
       try {
@@ -156,6 +161,7 @@ function useGradientEditor(
       }
     }
   }, [draft]);
+
   useEffect(() => {
     if (wellFocusQueued.current && well.current) {
       wellFocusQueued.current = false;
@@ -174,10 +180,12 @@ function useGradientEditor(
     }
     commitRef.current(committed);
   };
+
   const commit = (next: UiStop[]) => {
     setDraft(next);
     commitNow(toGradient(next));
   };
+
   const preview = (next: UiStop[]) => {
     setDraft(next);
     queueFrame(frame, previewLatest, previewRef, next);
@@ -188,21 +196,26 @@ function useGradientEditor(
       setAnnouncement("Up to 8 colours");
       return;
     }
+
     const clamped = clampPosition(position);
     const id = `stop-${nextId.current++}`;
     const next = [...draft, { id, color: sampleHexAt(draft, clamped), position: clamped }];
     next.sort((first, second) => first.position - second.position);
+
     setDraft(next);
     setSelectedId(id);
     pendingFocus.current = id;
     setAnnouncement(`Colour added at ${clamped} %`);
     commitNow(toGradient(next));
   };
+
   const removeById = (id: string, focusNeighbour: boolean) => {
     if (draft.length <= MIN_CUSTOM_COLORS) return;
+
     const index = ordered.findIndex((stop) => stop.id === id);
     const next = withoutStop(draft, id);
     setDraft(next);
+
     if (focusNeighbour && index >= 0) {
       const neighbour = ordered[index + 1] ?? ordered[index - 1] ?? null;
       setSelectedId(neighbour ? neighbour.id : null);
@@ -210,27 +223,35 @@ function useGradientEditor(
     } else if (selectedId === id) {
       setSelectedId(null);
     }
+
     setAnnouncement("Colour removed");
     commitNow(toGradient(next));
   };
+
   const finishDrag = () => {
     const state = drag.current;
     if (state === null) return;
+
     drag.current = null;
+
     const wasDragging = dragging.current;
     dragging.current = false;
+
     const pullRemove = removingId === state.id;
     setRemovingId(null);
     setPull(null);
+
     if (pullRemove) {
       removeById(state.id, true);
       return;
     }
     if (wasDragging) commitNow(toGradient(draft));
   };
+
   // A cancelled drag keeps its previewed stops, because the map already shows them.
   const cancelDrag = () => {
     if (drag.current === null) return;
+
     drag.current = null;
     dragging.current = false;
     setRemovingId(null);
@@ -241,11 +262,15 @@ function useGradientEditor(
   const moveDragTo = (clientX: number, clientY: number) => {
     const state = drag.current;
     if (state === null) return;
+
     const moved = Math.hypot(clientX - state.startX, clientY - state.startY);
     if (!dragging.current && moved <= DRAG_START_PX) return;
+
     dragging.current = true;
+
     const rect = bar.current?.getBoundingClientRect();
     if (!rect || rect.width === 0) return;
+
     const position = clampPosition(
       state.startPosition + ((clientX - state.startX) / rect.width) * POSITION_MAX,
     );
@@ -254,19 +279,24 @@ function useGradientEditor(
     preview(next);
     // Pulling a last pair only previews, because release keeps two stops.
     setPull({ id: state.id, px: Math.max(0, clientY - state.startY) });
+
     const pulledOff = clientY - rect.bottom > REMOVE_PULL_PX;
     setRemovingId(pulledOff && draft.length > MIN_CUSTOM_COLORS ? state.id : null);
   };
+
   const beginHandleDrag = (event: React.PointerEvent<HTMLDivElement>, stop: UiStop) => {
     if (event.button !== 0) return;
+
     event.stopPropagation();
     setSelectedId(stop.id);
+
     const element = event.currentTarget;
     try {
       element.setPointerCapture(event.pointerId);
     } catch {
       // Some test environments lack pointer capture, while dragging still works.
     }
+
     drag.current = {
       id: stop.id,
       pointerId: event.pointerId,
@@ -277,18 +307,22 @@ function useGradientEditor(
     dragging.current = false;
     element.focus();
   };
+
   const editWell = () => {
     // The detail row mounts after selection, so an early Enter waits for the well.
     if (well.current) well.current.focus();
     else wellFocusQueued.current = true;
   };
+
   const openWell = () => {
     const input = well.current;
     if (!input) {
       wellFocusQueued.current = true;
       return;
     }
+
     input.focus();
+
     try {
       input.showPicker?.();
     } catch {
@@ -326,8 +360,10 @@ function useGradientEditor(
       style: { background: gradientCss(draft) },
       onPointerDown: (event) => {
         if (event.target !== event.currentTarget || event.button !== 0) return;
+
         const rect = bar.current?.getBoundingClientRect();
         if (!rect || rect.width === 0) return;
+
         addAt(((event.clientX - rect.left) / rect.width) * POSITION_MAX);
       },
       onPointerMove: (event) => {
@@ -338,24 +374,27 @@ function useGradientEditor(
       onPointerUp: finishDrag,
     },
     handleProps: (stop: UiStop) => handleProps(stop, callbacks),
-    detail: selected === null ? null : {
-      stop: selected,
-      index: ordered.findIndex(({ id }) => id === selected.id),
-      count: ordered.length,
-      wellRef: well,
-      onColor: (color: string) => {
-        commit(withRecoloredStop(draft, selected.id, color));
-      },
-      onPreviewColor: (color: string) => {
-        preview(withRecoloredStop(draft, selected.id, color));
-      },
-      onPosition: (position: number) => {
-        if (position === selected.position) return;
-        commit(withMovedStop(draft, selected.id, position));
-      },
-      onRemove: () => removeById(selected.id, true),
-      onEscape: () => handles.current.get(selected.id)?.focus(),
-    },
+    detail:
+      selected === null
+        ? null
+        : {
+            stop: selected,
+            index: ordered.findIndex(({ id }) => id === selected.id),
+            count: ordered.length,
+            wellRef: well,
+            onColor: (color: string) => {
+              commit(withRecoloredStop(draft, selected.id, color));
+            },
+            onPreviewColor: (color: string) => {
+              preview(withRecoloredStop(draft, selected.id, color));
+            },
+            onPosition: (position: number) => {
+              if (position === selected.position) return;
+              commit(withMovedStop(draft, selected.id, position));
+            },
+            onRemove: () => removeById(selected.id, true),
+            onEscape: () => handles.current.get(selected.id)?.focus(),
+          },
   };
 }
 
@@ -462,11 +501,13 @@ function StopHandle({
       className={["gradient-stop", selected ? "selected" : "", removing ? "removing" : ""]
         .filter(Boolean)
         .join(" ")}
-      style={{
-        left: `${stop.position}%`,
-        zIndex: selected ? 2 : 1,
-        ...pullStyle(pullPx, removing),
-      } as React.CSSProperties}
+      style={
+        {
+          left: `${stop.position}%`,
+          zIndex: selected ? 2 : 1,
+          ...pullStyle(pullPx, removing),
+        } as React.CSSProperties
+      }
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -509,8 +550,10 @@ function StopDetail({
   const [invalid, setInvalid] = useState(false);
   const colorRef = useRef(onColor);
   colorRef.current = onColor;
+
   const previewColorRef = useRef(onPreviewColor);
   previewColorRef.current = onPreviewColor;
+
   useEffect(() => {
     setText(stop.color);
     setInvalid(false);
@@ -519,7 +562,9 @@ function StopDetail({
   useEffect(() => {
     const input = wellRef.current;
     if (!input) return;
+
     input.value = stop.color;
+
     // Refs stay current across edits, so a position change never stales the well.
     const preview = () => previewColorRef.current(input.value.toLowerCase());
     const commit = () => colorRef.current(input.value.toLowerCase());
@@ -541,6 +586,7 @@ function StopDetail({
       setInvalid(true);
       return;
     }
+
     setInvalid(false);
     if (normalised !== stop.color) onColor(normalised);
   };
@@ -694,9 +740,9 @@ function withRecoloredStop(draft: UiStop[], id: string, color: string) {
 function gradientCss(stops: UiStop[]) {
   const ordered = [...stops].sort((first, second) => first.position - second.position);
 
-  return `linear-gradient(to right, ${
-    ordered.map(({ color, position }) => `${color} ${position}%`).join(", ")
-  })`;
+  return `linear-gradient(to right, ${ordered
+    .map(({ color, position }) => `${color} ${position}%`)
+    .join(", ")})`;
 }
 
 /** The gradient colour at an integer percent, so added stops blend in invisibly. */
@@ -710,6 +756,7 @@ function sampleHexAt(stops: UiStop[], position: number) {
 /** Draft stops with stable ids for focus, sorted as given. */
 function toUi(stops: GradientStop[], nextId: { current: number }) {
   const ordered = [...stops].sort((first, second) => first.at - second.at);
+
   return ordered.map(({ at, rgb }) => {
     const stop = {
       id: `stop-${nextId.current++}`,
@@ -730,9 +777,7 @@ function toGradient(stops: UiStop[]) {
 
 /** Canonical names compare equal exactly when the gradients match. */
 function gradientName(stops: GradientStop[]) {
-  return stops
-    .map(({ at, rgb }) => `${Math.round(at * POSITION_MAX)}:${rgbToHex(rgb)}`)
-    .join(",");
+  return stops.map(({ at, rgb }) => `${Math.round(at * POSITION_MAX)}:${rgbToHex(rgb)}`).join(",");
 }
 
 /** Clamp a position to the bar and round it to whole percent. */
@@ -750,13 +795,17 @@ function queueFrame(
   next: UiStop[],
 ) {
   latest.current = toGradient(next);
+
   if (frame.current !== null) return;
+
   const fire = () => {
     frame.current = null;
     const pending = latest.current;
     latest.current = null;
+
     if (pending) preview.current(pending);
   };
+
   if (typeof requestAnimationFrame === "function") frame.current = requestAnimationFrame(fire);
   else frame.current = setTimeout(fire, 16) as unknown as number;
 }
@@ -772,9 +821,12 @@ function cancelPreview(frame: React.MutableRefObject<number | null>) {
 /** Stretch the stem with the pull, and fade the pin once the pull would remove it. */
 function pullStyle(pullPx: number, removing: boolean) {
   if (pullPx <= 0) return {};
+
   const stretch = { "--pull": `${stretchPx(pullPx).toFixed(1)}px` };
   if (!removing) return stretch;
+
   const opacity = Math.max(MIN_PULLED_OPACITY, 1 - pullPx / PULL_FADE_PX);
+
   return { ...stretch, opacity: opacity.toFixed(2) };
 }
 

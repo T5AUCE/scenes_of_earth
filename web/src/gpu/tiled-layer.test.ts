@@ -2,11 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { createHarness, TiledGpuLayer } from "./class-field-harness.test.ts";
-import {
-  clearGpuMs,
-  clearGpuUnavailable,
-  timedGpuDraw,
-} from "./tiled-layer.ts";
+import { clearGpuMs, clearGpuUnavailable, timedGpuDraw } from "./tiled-layer.ts";
 import type { TiledGpu } from "./tiled-layer.ts";
 
 class UploadingLayer extends TiledGpuLayer {
@@ -46,8 +42,9 @@ test("a failed companion allocation frees the primary texture uploaded just befo
   const gl = harness.gl;
   let creations = 0;
   const createTexture = gl.createTexture.bind(gl);
-  gl.createTexture = (() => (++creations === 2 ? null : createTexture())) as
-    WebGL2RenderingContext["createTexture"];
+  gl.createTexture = (() =>
+    ++creations === 2 ? null : createTexture()) as WebGL2RenderingContext["createTexture"];
+
   const gpu = { tiles: [] } as unknown as TiledGpu;
   const cells = new Uint8Array(12);
 
@@ -66,24 +63,28 @@ test("a hidden layer does not compile until shown", () => {
     compiles++;
     return createProgram();
   }) as WebGL2RenderingContext["createProgram"];
-  const map = harness.map as unknown as {
-    getLayoutProperty: (id: string, name: string) => string;
-  };
+
+  const map = harness.map as unknown as { getLayoutProperty: (id: string, name: string) => string };
   let visibility = "none";
   map.getLayoutProperty = () => visibility;
+
   const layer = new UploadingLayer();
 
   layer.onAdd(harness.map, harness.gl);
+
   assert.equal(compiles, 0);
 
   layer.render(harness.gl, harness.input);
+
   assert.equal(compiles, 0);
 
   visibility = "visible";
   layer.render(harness.gl, harness.input);
+
   assert.equal(compiles, 1);
 
   layer.render(harness.gl, harness.input);
+
   assert.equal(compiles, 1);
 });
 
@@ -91,11 +92,13 @@ test("a pending timer query waits for the next frame instead of spinning", () =>
   const previousLocation = (globalThis as Record<string, unknown>).location;
   const previousFrame = (globalThis as Record<string, unknown>).requestAnimationFrame;
   (globalThis as Record<string, unknown>).location = { search: "?debug" };
+
   const frames: (() => void)[] = [];
   (globalThis as Record<string, unknown>).requestAnimationFrame = (callback: () => void) => {
     frames.push(callback);
     return frames.length;
   };
+
   const timeouts: number[] = [];
   const previousTimeout = globalThis.setTimeout;
   (globalThis as unknown as Record<string, unknown>).setTimeout = (
@@ -105,6 +108,7 @@ test("a pending timer query waits for the next frame instead of spinning", () =>
     timeouts.push(delay ?? 0);
     return previousTimeout(callback, 0);
   };
+
   try {
     let polls = 0;
     const gl = {
@@ -121,6 +125,7 @@ test("a pending timer query waits for the next frame instead of spinning", () =>
           polls += 1;
           return polls > 1;
         }
+
         return 2e6;
       },
       getParameter: () => false,
@@ -131,6 +136,7 @@ test("a pending timer query waits for the next frame instead of spinning", () =>
     assert.equal(polls, 0);
     assert.equal(frames.length, 1);
     assert.ok(!timeouts.includes(0));
+
     frames[0]();
 
     assert.equal(polls, 1);
@@ -150,11 +156,14 @@ test("context restore clears stale timings and the unavailable flag", () => {
   (globalThis as Record<string, unknown>).__gpuUnavailable = true;
 
   const restored = harness.listeners.get("webglcontextrestored");
+
   assert.ok(restored);
+
   restored!({});
 
   assert.deepEqual((globalThis as Record<string, unknown>).__gpuMs, {});
   assert.equal((globalThis as Record<string, unknown>).__gpuUnavailable, undefined);
+
   clearGpuMs("uploading");
   clearGpuUnavailable();
 });

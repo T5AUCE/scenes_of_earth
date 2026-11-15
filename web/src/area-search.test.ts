@@ -24,11 +24,12 @@ const hooks = registerHooks({
     ) {
       return next(new URL(`${specifier}.ts`, context.parentURL).href, context);
     }
+
     return next(specifier, context);
   },
 });
-const { bindAreaSearch, createSearchControls } = await import("./area-search.ts").finally(
-  () => hooks.deregister(),
+const { bindAreaSearch, createSearchControls } = await import("./area-search.ts").finally(() =>
+  hooks.deregister(),
 );
 
 test("a pick draws the fetched outline without a bbox preview", async (context) => {
@@ -64,7 +65,15 @@ test("a 180°-crossing pick draws only the shifted outline", async (context) => 
 
   const fetched = {
     type: "Polygon",
-    coordinates: [[[179, -19], [191, -19], [191, -16], [179, -16], [179, -19]]],
+    coordinates: [
+      [
+        [179, -19],
+        [191, -19],
+        [191, -16],
+        [179, -16],
+        [179, -19],
+      ],
+    ],
   };
   outline.resolve(Response.json({ ...areaHit({ bbox: crossing }), geometry: fetched }));
   await flush();
@@ -84,6 +93,7 @@ test("a stale outline never overwrites a newer pick", async (context) => {
     areaHit({ id: "cgaz:ADM1:FIRST", name: "First", bbox: [35, -1, 36, 1] }),
     areaHit({ id: "cgaz:ADM1:SECOND", name: "Second", bbox: [37, -1, 38, 1] }),
   ];
+
   const harness = await searchWithHits(context, hits, (url) => {
     if (url.includes("FIRST")) return first.promise;
     if (url.includes("SECOND")) return second.promise;
@@ -144,6 +154,7 @@ test("a stale failed outline fetch stays silent", async (context) => {
   const firstFailure = new Promise<Response>((_resolve, reject) => {
     rejectFirst = reject;
   });
+
   const harness = await searchWithHits(context, hits, (url) => {
     if (url.includes("FIRST")) return firstFailure;
     if (url.includes("SECOND")) return outline.promise;
@@ -299,10 +310,13 @@ async function searchWithHits(
   stubOutlineStyle(context);
   context.mock.method(globalThis, "fetch", async (url: string) => {
     if (url.startsWith("/api/areas/search?")) return Response.json(hits);
+
     const pending = areaResponse(url);
     if (pending) return pending;
+
     assert.fail(`Unexpected request: ${url}`);
   });
+
   const sources: unknown[] = [];
   const outlineLayers = new Set<string>();
   const map = {
@@ -327,11 +341,14 @@ async function searchWithHits(
       outlineLayers.delete(id);
     },
   } as unknown as MapLibreMap;
+
   const root = document.createElement("div");
   document.body.append(root);
+
   const { search, level, results } = createSearchControls(root);
   const chosen = document.createElement("div");
   root.append(chosen);
+
   const notices: string[] = [];
   const controls = bindAreaSearch(
     { search, level, results, chosen },
@@ -342,28 +359,38 @@ async function searchWithHits(
       notices.push(text);
     },
   );
+
   context.mock.timers.enable({ apis: ["setTimeout"] });
 
   const pick = async (index: number) => {
     const box = document.querySelector<HTMLInputElement>("[role=combobox]");
+
     assert.ok(box);
+
     box.value = "Nakuru";
     box.dispatchEvent(new window.Event("input"));
     context.mock.timers.tick(SEARCH_DEBOUNCE_MS);
     await flush();
+
     const options = [...document.querySelectorAll("[role=option]")];
+
     assert.ok(options[index]);
+
     options[index].dispatchEvent(
       new window.Event("mousedown", { bubbles: true, cancelable: true }),
     );
     await flush();
   };
+
   const clearSearch = () => {
     const box = document.querySelector<HTMLInputElement>("[role=combobox]");
+
     assert.ok(box);
+
     box.value = "";
     box.dispatchEvent(new window.Event("input"));
   };
+
   return {
     sources,
     notices,
@@ -379,19 +406,41 @@ async function searchWithHits(
 function outlineA(): { type: string; coordinates: number[][][] } {
   return {
     type: "Polygon",
-    coordinates: [[[34.9, -1.1], [36.1, -1.1], [36.1, 1.1], [34.9, 1.1], [34.9, -1.1]]],
+    coordinates: [
+      [
+        [34.9, -1.1],
+        [36.1, -1.1],
+        [36.1, 1.1],
+        [34.9, 1.1],
+        [34.9, -1.1],
+      ],
+    ],
   };
 }
 
 function outlineB(): { type: string; coordinates: number[][][] } {
   return {
     type: "Polygon",
-    coordinates: [[[36.9, -1.1], [38.1, -1.1], [38.1, 1.1], [36.9, 1.1], [36.9, -1.1]]],
+    coordinates: [
+      [
+        [36.9, -1.1],
+        [38.1, -1.1],
+        [38.1, 1.1],
+        [36.9, 1.1],
+        [36.9, -1.1],
+      ],
+    ],
   };
 }
 
 function rectRing([west, south, east, north]: Bbox): number[][] {
-  return [[west, south], [east, south], [east, north], [west, north], [west, south]];
+  return [
+    [west, south],
+    [east, south],
+    [east, north],
+    [west, north],
+    [west, south],
+  ];
 }
 
 async function flush(turns = 3): Promise<void> {
@@ -417,6 +466,7 @@ function areaHit(overrides: Partial<AreaHit> = {}): AreaHit {
 function installBrowser(context: TestContext, window: Window): void {
   // Happy DOM has option elements but does not implement the browser's Option constructor.
   const globals = { document: window.document, location: window.location, Option: createOption };
+
   for (const [name, value] of Object.entries(globals)) {
     const previous = Object.getOwnPropertyDescriptor(globalThis, name);
     Object.defineProperty(globalThis, name, { value, configurable: true });
@@ -431,6 +481,7 @@ function createOption(text: string, value: string): HTMLOptionElement {
   const option = document.createElement("option");
   option.textContent = text;
   option.value = value;
+
   return option;
 }
 

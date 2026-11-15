@@ -26,6 +26,7 @@ test("choosing colour re-derives the allocation and leaves the old snapshot unto
   const before = store.getSnapshot();
 
   store.dispatch({ kind: "choose", unit: "rain", draw: "colour" });
+
   const after = store.getSnapshot();
 
   assert.notEqual(after, before);
@@ -39,6 +40,7 @@ test("toggling a layer changes the visible units and the allocation", () => {
   const store = createSceneStore(LAYERS, display());
 
   store.dispatch({ kind: "toggle", unit: "temp", on: false });
+
   const snapshot = store.getSnapshot();
 
   assert.equal(snapshot.on.has("temp"), false);
@@ -67,6 +69,7 @@ test("a display update changes a copy of the layer entries", () => {
       next.layers.temp = { ...next.layers.temp, ink: "#000000" };
     },
   });
+
   const after = store.getSnapshot();
 
   assert.deepEqual(before.display.layers.temp, { palette: "thermal" });
@@ -74,14 +77,12 @@ test("a display update changes a copy of the layer entries", () => {
 });
 
 test("a range tuple is copied for every snapshot and for the initial display", () => {
-  const initial: SceneDisplay = {
-    ...display(),
-    layers: { temp: { range: [0, 10] } },
-  };
+  const initial: SceneDisplay = { ...display(), layers: { temp: { range: [0, 10] } } };
   const store = createSceneStore(LAYERS, initial);
   const before = store.getSnapshot();
 
   store.dispatch({ kind: "clear", unit: "rain" });
+
   const after = store.getSnapshot();
   after.display.layers.temp!.range![0] = -5;
   initial.layers.temp!.range![0] = -99;
@@ -116,10 +117,12 @@ test("listeners fire once per dispatch and stop after unsubscribing", () => {
   const unsubscribe = store.subscribe(() => calls++);
 
   store.dispatch({ kind: "clear", unit: "rain" });
+
   assert.equal(calls, 1);
 
   unsubscribe();
   store.dispatch({ kind: "clear", unit: "rain" });
+
   assert.equal(calls, 1);
 });
 
@@ -172,20 +175,25 @@ test("a provided slice is kept while a missing main falls back deterministically
     mainChartId: "custom",
   };
   const store = createSceneStore(layers, display(), null);
+
   assert.equal(store.getSnapshot().charts.mainChartId, "chirps:time_series");
 
   const kept = createSceneStore(layers, display(), stored);
+
   assert.deepEqual(kept.getSnapshot().charts, stored);
 
   const invalid = createSceneStore(layers, display(), { ...stored, mainChartId: "missing" });
+
   assert.equal(invalid.getSnapshot().charts.mainChartId, "chirps:time_series");
 
   const emptyForAvailable = { version: 1 as const, definitions: [], mainChartId: null };
   const emptyFallback = createSceneStore(layers, display(), emptyForAvailable);
+
   assert.equal(emptyFallback.getSnapshot().charts.mainChartId, "chirps:time_series");
 
   const nullMain = { ...stored, mainChartId: null };
   const nullFallback = createSceneStore(layers, display(), nullMain);
+
   assert.equal(nullFallback.getSnapshot().charts.mainChartId, "chirps:time_series");
 });
 
@@ -198,9 +206,11 @@ test("deleting the main chart falls back to the first remaining definition", () 
     mainChartId: defaults.definitions[2].id,
   };
   const store = createSceneStore(layers, display(), reordered);
+
   assert.equal(store.getSnapshot().charts.mainChartId, reordered.mainChartId);
 
   store.dispatch({ kind: "deleteChart", id: reordered.mainChartId });
+
   assert.deepEqual(
     store.getSnapshot().charts.definitions.map((definition) => definition.id),
     [defaults.definitions[1].id, defaults.definitions[0].id],
@@ -240,6 +250,7 @@ test("chart ingress copies nested inputs so later mutations stay local", () => {
     options: { yRange: [0, 50] as [number, number] },
   };
   store.dispatch({ kind: "saveChart", definition });
+
   const saved = store.getSnapshot();
   definition.options.yRange![0] = -99;
 
@@ -259,6 +270,7 @@ test("saves validate against canonical source tables and references", () => {
     chartType: "bar" as const,
     options: { yRange: [0, 1] as [number, number] },
   };
+
   assert.throws(() => store.dispatch({ kind: "saveChart", definition: clippedRain }));
 
   const terrainId = store.getSnapshot().charts.definitions[2].id;
@@ -269,18 +281,21 @@ test("saves validate against canonical source tables and references", () => {
     chartType: "area" as const,
     options: { showReferences: true, yRange: [0, 1] as [number, number] },
   };
+
   assert.throws(() => store.dispatch({ kind: "saveChart", definition: clippedTerrain }));
 
   const hiddenTerrain = {
     ...clippedTerrain,
     options: { showReferences: false, yRange: [0, 1] as [number, number] },
   };
+
   assert.throws(() => store.dispatch({ kind: "saveChart", definition: hiddenTerrain }));
 
   const switchedRain = {
     ...clippedRain,
     options: { displayUnit: "in/month", yRange: [0, 1] as [number, number] },
   };
+
   assert.throws(() => store.dispatch({ kind: "saveChart", definition: switchedRain }));
   assert.equal(store.getSnapshot().charts.definitions.length, 3);
 });
@@ -343,12 +358,15 @@ test("set-main and reset keep the nonempty invariant", () => {
   const second = store.getSnapshot().charts.definitions[1].id;
 
   store.dispatch({ kind: "setMain", id: second });
+
   assert.equal(store.getSnapshot().charts.mainChartId, second);
 
   store.dispatch({ kind: "setMain", id: "missing" });
+
   assert.equal(store.getSnapshot().charts.mainChartId, second);
 
   store.dispatch({ kind: "resetCharts" });
+
   assert.equal(store.getSnapshot().charts.mainChartId, "chirps:time_series");
 });
 
@@ -366,6 +384,7 @@ test("chart edits keep display, allocation and on identity for map subscribers",
   store.dispatch({ kind: "saveChart", definition });
 
   const after = store.getSnapshot();
+
   assert.equal(after.display, before.display);
   assert.equal(after.allocation, before.allocation);
   assert.equal(after.on, before.on);
@@ -390,6 +409,7 @@ test("draw layers drive allocation while validation layers keep failed charts", 
   assert.deepEqual([...before.on], ["chirps"]);
   assert.equal(before.allocation.owner, "chirps");
   assert.equal(before.charts.definitions.length, 3);
+
   const extra = {
     id: "extra",
     title: "Extra",
@@ -410,10 +430,7 @@ function display(): SceneDisplay {
 }
 
 function layer(id: string, encodings: string[]): LayerDoc {
-  return {
-    id,
-    style: { kind: "field", encodings },
-  } as unknown as LayerDoc;
+  return { id, style: { kind: "field", encodings } } as unknown as LayerDoc;
 }
 
 function chartLayers(): LayerDoc[] {
@@ -422,6 +439,7 @@ function chartLayers(): LayerDoc[] {
       const date = new Date(Date.UTC(2019, index, 1));
       return date.toISOString().slice(0, 10);
     });
+
     return {
       id,
       title: id,
@@ -436,6 +454,7 @@ function chartLayers(): LayerDoc[] {
       },
     } as unknown as LayerDoc;
   };
+
   return [
     monthly("chirps", "sum"),
     monthly("era5", "mean"),

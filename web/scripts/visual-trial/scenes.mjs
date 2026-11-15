@@ -16,6 +16,7 @@ const LOCAL_SCENES_DIR = fileURLToPath(new URL("../../../data/scenes/", import.m
  */
 export async function ensureScenes(appUrl, spots) {
   const sceneIds = new Map();
+
   for (const spot of spots) {
     const key = requestKey(spot);
     if (sceneIds.has(key)) continue;
@@ -33,6 +34,7 @@ export async function ensureScenes(appUrl, spots) {
 function existingScene(spot) {
   const directory = process.env.SOE_SCENES_DIR ?? LOCAL_SCENES_DIR;
   const matches = [];
+
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     if (!entry.isDirectory() || !/^[a-f0-9]{20}$/.test(entry.name)) continue;
 
@@ -43,17 +45,19 @@ function existingScene(spot) {
     const boundary = scene.area.boundary;
     const sameArea = boundary?.id === spot.area || boundary?.name === spot.area;
     const hasLayers = spot.layers.every((id) => scene.layers.some((layer) => layer.id === id));
-    const samePeriod = (!spot.start || scene.period?.start.startsWith(spot.start))
+    const samePeriod =
+      (!spot.start || scene.period?.start.startsWith(spot.start))
       && (!spot.end || periodEndMatches(scene.period?.end, spot.end));
+
     if (sameArea && hasLayers && samePeriod) {
-      matches.push({
-        ...scene,
-        builtMs: fs.statSync(file).mtimeMs,
-      });
+      matches.push({ ...scene, builtMs: fs.statSync(file).mtimeMs });
     }
   }
-  matches.sort((first, second) => first.layers.length - second.layers.length
-    || second.builtMs - first.builtMs);
+
+  matches.sort(
+    (first, second) => first.layers.length - second.layers.length || second.builtMs - first.builtMs,
+  );
+
   if (!matches.length) throw new Error(`no local built scene for ${spot.area}`);
 
   return matches[0].id;
@@ -81,6 +85,7 @@ function nextMonthStart(month) {
 async function sceneBody(appUrl, spot) {
   const area = await resolveArea(appUrl, spot.area);
   const body = { area: { type: "boundary", id: area.id }, layers: spot.layers };
+
   if (spot.start) body.start = spot.start;
   if (spot.end) body.end = spot.end;
 
@@ -101,10 +106,13 @@ async function resolveArea(appUrl, text) {
 async function buildScene(appUrl, body) {
   const deadline = Date.now() + BUILD_TIMEOUT_MS;
   let scene = await postScene(appUrl, body, deadline);
+
   while (scene.status !== "done") {
     if (scene.status === "failed") throw new Error(`build of ${scene.id} failed: ${scene.error}`);
+
     console.error(`building ${scene.id}: ${scene.stage ?? scene.status}`);
     await waitWithinDeadline(BUILD_POLL_MS, deadline);
+
     const response = await fetch(`${appUrl}/api/scenes/${scene.id}`, {
       signal: AbortSignal.timeout(getRemainingMs(deadline)),
     });
@@ -112,6 +120,7 @@ async function buildScene(appUrl, body) {
 
     scene = await response.json();
   }
+
   getRemainingMs(deadline);
 
   return scene.id;
@@ -126,18 +135,21 @@ export async function postScene(appUrl, body, deadline) {
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(getRemainingMs(deadline)),
     });
+
     if (response.status === 503) {
       const delayMs = getRetryDelayMs(response.headers.get("Retry-After"), deadline);
       await response.body?.cancel();
       await waitWithinDeadline(delayMs, deadline);
       continue;
     }
+
     if (!response.ok) {
       throw new Error(`POST /api/scenes ${response.status}: ${await response.text()}`);
     }
 
     const scene = await response.json();
     getRemainingMs(deadline);
+
     return scene;
   }
 }

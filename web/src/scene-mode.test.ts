@@ -15,11 +15,11 @@ registerHooks({
   },
 });
 
-import { REVEAL_MS } from "./entry-curtain.ts";
-import { assertSameNode } from "./testing/dom-assert.ts";
 import { entryStats, isPreloadDisabled } from "./dev-stats.ts";
 import { DEFAULT_OUTLINE, storeMapDetailsShown } from "./display-state.ts";
+import { REVEAL_MS } from "./entry-curtain.ts";
 import { currentScenePreload } from "./layers/tile-prefetch.ts";
+import { assertSameNode } from "./testing/dom-assert.ts";
 import {
   createHarness,
   DATA_IDS,
@@ -54,18 +54,23 @@ afterEach(resetHarness);
 
 test("a scene preloads its basemap once the flight starts and frees it on exit", async (t) => {
   t.mock.method(globalThis, "fetch", () => new Promise(() => {}));
+
   const harness = createHarness();
   harness.map.sources.set("openmaptiles", { tiles: [BASEMAP_TEMPLATE], maxzoom: 14 });
   harness.enter();
+
   const preload = currentScenePreload()!;
+
   assert.deepEqual(preload.progress(), { done: 0, total: 0, bytes: 0 });
 
   harness.data.resolve();
   harness.geometry.resolve(FEATURE);
   await settle();
+
   assert.ok(preload.progress().total > 0);
 
   await exitActiveHarness();
+
   assert.equal(currentScenePreload(), null);
   assert.equal(preload.progress().total, 0);
   assert.equal(isPreloadDisabled(), false);
@@ -77,6 +82,7 @@ test("the preload switch off opens no preload and the badge says so", (t) => {
   t.after(() => {
     (globalThis as Record<string, unknown>).location = search;
   });
+
   const harness = createHarness();
 
   harness.enter();
@@ -92,6 +98,7 @@ test("basemap geometry stays below scene data with the mask above both", async (
     id: "soe-area-outline",
     layout: { visibility: "visible" },
   });
+
   // Liberty-like order: scene data mounts between early fills and the first symbol.
   const styleOrder = [
     "background",
@@ -119,6 +126,7 @@ test("basemap geometry stays below scene data with the mask above both", async (
   (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
     layers: styleOrder.map((id) => ({ id, type: types[id] ?? "raster" })),
   });
+
   const basemapIds = [
     "background",
     "landcover_wood",
@@ -128,32 +136,40 @@ test("basemap geometry stays below scene data with the mask above both", async (
     "highway-shield-non-us",
     "label_city",
   ];
+
   for (const id of basemapIds) {
     harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
   }
+
   const order = [...styleOrder];
   const place = (id: string, beforeId?: string) => {
     const at = order.indexOf(id);
+
     if (at >= 0) order.splice(at, 1);
+
     const anchor = beforeId === undefined ? order.length : order.indexOf(beforeId);
     order.splice(anchor < 0 ? order.length : anchor, 0, id);
   };
+
   const originalAdd = harness.map.addLayer.bind(harness.map);
   harness.map.addLayer = ((layer: { id: string }, beforeId?: string) => {
     place(layer.id, beforeId);
     return originalAdd(layer as never);
   }) as typeof harness.map.addLayer;
+
   const originalMove = harness.map.moveLayer.bind(harness.map);
   harness.map.moveLayer = ((id: string, beforeId?: string) => {
     place(id, beforeId);
     return originalMove(id, beforeId);
   }) as typeof harness.map.moveLayer;
+
   const originalRemove = harness.map.removeLayer.bind(harness.map);
   harness.map.removeLayer = ((id: string) => {
     const at = order.indexOf(id);
     if (at >= 0) order.splice(at, 1);
     return originalRemove(id);
   }) as typeof harness.map.removeLayer;
+
   harness.enter();
   harness.data.resolve();
   harness.geometry.resolve(FEATURE);
@@ -183,16 +199,19 @@ test("basemap geometry stays below scene data with the mask above both", async (
 
   assert.equal(harness.map.getLayer(MASK_ID), undefined);
   assert.equal(harness.map.getLayer(FADE_ID), undefined);
-  assert.deepEqual(order.filter((id) => !["relief", "contours", "rain", "overview"].includes(id)), [
-    "soe-area-outline",
-    "background",
-    "landcover_wood",
-    "road_one_way_arrow",
-    "bridge_motorway",
-    "boundary_2",
-    "highway-shield-non-us",
-    "label_city",
-  ]);
+  assert.deepEqual(
+    order.filter((id) => !["relief", "contours", "rain", "overview"].includes(id)),
+    [
+      "soe-area-outline",
+      "background",
+      "landcover_wood",
+      "road_one_way_arrow",
+      "bridge_motorway",
+      "boundary_2",
+      "highway-shield-non-us",
+      "label_city",
+    ],
+  );
 });
 
 test("scene entry hides fully-outside basemap features and exit restores filters", async () => {
@@ -205,12 +224,12 @@ test("scene entry hides fully-outside basemap features and exit restores filters
       { id: "label_city", type: "symbol" },
     ],
   });
+
   for (const id of ["background", "road_minor", "building_3d", "label_city"]) {
     harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
   }
-  const filters = new Map<string, unknown>([
-    ["road_minor", ["==", ["get", "class"], "minor"]],
-  ]);
+
+  const filters = new Map<string, unknown>([["road_minor", ["==", ["get", "class"], "minor"]]]);
   const writes: [string, unknown][] = [];
   const stub = harness.map as unknown as Record<string, unknown>;
   stub.getFilter = (id: string) => filters.get(id);
@@ -219,15 +238,18 @@ test("scene entry hides fully-outside basemap features and exit restores filters
     if (filter === null || filter === undefined) filters.delete(id);
     else filters.set(id, filter);
   };
+
   harness.enter();
   harness.data.resolve();
   harness.geometry.resolve(FEATURE);
   await settle();
 
   const clipped = new Map(writes);
+
   for (const id of ["background", "road_minor", "building_3d", "label_city"]) {
     assert.ok(JSON.stringify(clipped.get(id)).includes("within"), id);
   }
+
   assert.ok(JSON.stringify(clipped.get("road_minor")).includes("minor"));
   assert.ok(!clipped.has("relief") && !clipped.has(MASK_ID) && !clipped.has(FADE_ID));
 
@@ -236,6 +258,7 @@ test("scene entry hides fully-outside basemap features and exit restores filters
   await settle();
 
   const restored = new Map(writes);
+
   assert.deepEqual(restored.get("road_minor"), ["==", ["get", "class"], "minor"]);
   assert.equal(restored.get("background"), null);
   assert.equal(restored.get("label_city"), null);
@@ -250,12 +273,14 @@ test("a camera gesture hides basemap symbols and restores the details choice", a
     ],
   });
   harness.map.layers.set("label_city", { id: "label_city", layout: { visibility: "visible" } });
+
   const visibilities = new Map<string, unknown>();
   const stub = harness.map as unknown as Record<string, unknown>;
   stub.getLayoutProperty = (id: string) => visibilities.get(id);
   stub.setLayoutProperty = (id: string, _property: string, value: unknown) => {
     visibilities.set(id, value);
   };
+
   const storage = new Map<string, string>();
   const globals = globalThis as Record<string, unknown>;
   const previousStorage = globals.localStorage;
@@ -263,24 +288,29 @@ test("a camera gesture hides basemap symbols and restores the details choice", a
     getItem: (key: string) => storage.get(key) ?? null,
     setItem: (key: string, value: string) => void storage.set(key, value),
   };
+
   try {
     harness.enter();
     storeMapDetailsShown(true);
     harness.data.resolve();
     harness.geometry.resolve(FEATURE);
     await settle();
+
     assert.equal(visibilities.get("label_city"), "visible");
 
     visibilities.clear();
     harness.map.emit("movestart");
+
     assert.equal(visibilities.get("label_city"), "none");
 
     // A details change mid-gesture waits for moveend instead of showing symbols.
     storeMapDetailsShown(false);
+
     assert.equal(visibilities.get("label_city"), "none");
 
     storeMapDetailsShown(true);
     harness.map.emit("moveend");
+
     assert.equal(visibilities.get("label_city"), "visible");
   } finally {
     if (previousStorage === undefined) Reflect.deleteProperty(globals, "localStorage");
@@ -291,6 +321,7 @@ test("a camera gesture hides basemap symbols and restores the details choice", a
 
 test("basemap symbols stay visible until the curtain stages when details are off", async () => {
   storeMapDetailsShown(false);
+
   const harness = phasedHarness();
   (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
     layers: [
@@ -298,35 +329,45 @@ test("basemap symbols stay visible until the curtain stages when details are off
       { id: "label_city", type: "symbol" },
     ],
   });
+
   for (const id of ["background", "label_city"]) {
     harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
   }
+
   const visibilityOf = () => harness.map.getLayer("label_city")?.layout.visibility;
   harness.enter();
   await settle();
+
   assert.equal(visibilityOf(), "visible");
 
   // An early toggle or gesture must not hide the names before the curtain.
   storeMapDetailsShown(false);
+
   assert.equal(visibilityOf(), "visible");
+
   harness.map.emit("movestart");
   harness.map.emit("moveend");
+
   assert.equal(visibilityOf(), "visible");
 
   await finishPreparation(harness);
+
   assert.deepEqual(harness.events, ["fly"]);
   assert.equal(visibilityOf(), "visible");
 
   harness.land();
   await settle();
+
   assert.ok(harness.events.includes("curtain"));
   assert.equal(visibilityOf(), "visible");
 
   harness.curtain!.cover();
+
   assert.equal(visibilityOf(), "none");
 
   harness.curtain!.fade();
   harness.curtain!.finish();
+
   assert.equal(visibilityOf(), "none");
 
   storeMapDetailsShown(false);
@@ -340,15 +381,18 @@ test("the basemap clip keeps an area crossing 180 in its 0 to 360 frame", async 
       { id: "label_city", type: "symbol" },
     ],
   });
+
   for (const id of ["background", "label_city"]) {
     harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
   }
+
   const writes: [string, unknown][] = [];
   const stub = harness.map as unknown as Record<string, unknown>;
   stub.getFilter = () => undefined;
   stub.setFilter = (id: string, filter: unknown) => {
     writes.push([id, filter]);
   };
+
   const crossing = {
     ...(SCENE as unknown as Record<string, unknown>),
     area: { bbox: [179, -5, 181, 5], geometry_href: "/area.geojson" },
@@ -359,18 +403,29 @@ test("the basemap clip keeps an area crossing 180 in its 0 to 360 frame", async 
     ...FEATURE,
     geometry: {
       type: "Polygon",
-      coordinates: [[[179, -5], [181, -5], [181, 5], [179, 5], [179, -5]]],
+      coordinates: [
+        [
+          [179, -5],
+          [181, -5],
+          [181, 5],
+          [179, 5],
+          [179, -5],
+        ],
+      ],
     },
   });
   await settle();
 
   const clipped = new Map(writes);
+
   for (const id of ["background", "label_city"]) {
     const dumped = JSON.stringify(clipped.get(id));
+
     assert.ok(dumped.includes("within"), id);
     assert.ok(dumped.includes("179"), id);
     assert.ok(dumped.includes("181"), id);
   }
+
   assert.ok(!clipped.has("relief") && !clipped.has(MASK_ID) && !clipped.has(FADE_ID));
 });
 
@@ -382,15 +437,18 @@ test("the basemap clip covers every part of a multi-part area", async () => {
       { id: "label_city", type: "symbol" },
     ],
   });
+
   for (const id of ["background", "label_city"]) {
     harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
   }
+
   const writes: [string, unknown][] = [];
   const stub = harness.map as unknown as Record<string, unknown>;
   stub.getFilter = () => undefined;
   stub.setFilter = (id: string, filter: unknown) => {
     writes.push([id, filter]);
   };
+
   const scattered = {
     ...(SCENE as unknown as Record<string, unknown>),
     area: { bbox: [0, 0, 11, 11], geometry_href: "/area.geojson" },
@@ -403,21 +461,36 @@ test("the basemap clip covers every part of a multi-part area", async () => {
     geometry: {
       type: "Polygon",
       coordinates: [
-        [[0, 0], [11, 0], [11, 11], [0, 11], [0, 0]],
-        [[4, 4], [6, 4], [6, 6], [4, 6], [4, 4]],
+        [
+          [0, 0],
+          [11, 0],
+          [11, 11],
+          [0, 11],
+          [0, 0],
+        ],
+        [
+          [4, 4],
+          [6, 4],
+          [6, 6],
+          [4, 6],
+          [4, 4],
+        ],
       ],
     },
   });
   await settle();
 
   const clipped = new Map(writes);
+
   for (const id of ["background", "label_city"]) {
     const dumped = JSON.stringify(clipped.get(id));
     assert.ok(dumped.includes("within"), id);
     assert.ok(dumped.includes("11"), id);
   }
+
   const mask = (clipped.get("background") as unknown[])[1] as unknown[];
   const vertices = JSON.stringify(mask).split("[").length;
+
   assert.ok(vertices < 100, `the bbox clip stays cheap, got ${vertices} brackets`);
   assert.ok(!clipped.has("relief") && !clipped.has(MASK_ID) && !clipped.has(FADE_ID));
 });
@@ -431,9 +504,11 @@ test("exiting a scene removes the fade and shows details again", async () => {
       { id: "label_city", type: "symbol" },
     ],
   });
+
   for (const id of ["poi_transit", "label_city"]) {
     harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
   }
+
   (harness.map as unknown as Record<string, unknown>).getLayoutProperty = (id: string) =>
     (harness.map.layers.get(id) as unknown as { layout: { visibility?: string } })?.layout
       ?.visibility;
@@ -443,14 +518,13 @@ test("exiting a scene removes the fade and shows details again", async () => {
     value: string | undefined,
   ) => {
     layouts.push([id, value]);
-    const layer = harness.map.layers.get(id) as unknown as {
-      layout?: { visibility?: string };
-    };
+    const layer = harness.map.layers.get(id) as unknown as { layout?: { visibility?: string } };
     if (layer) {
       layer.layout ??= {};
       layer.layout.visibility = value;
     }
   };
+
   harness.enter();
   harness.data.resolve();
   harness.geometry.resolve(FEATURE);
@@ -469,6 +543,7 @@ test("exiting a scene removes the fade and shows details again", async () => {
 test("every basemap symbol hides in scenes and follows the toggle", async () => {
   const { storeMapDetailsShown } = await import("./display-state.ts");
   storeMapDetailsShown(false);
+
   const harness = createHarness();
   const layouts: [string, string | undefined][] = [];
   (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
@@ -482,19 +557,19 @@ test("every basemap symbol hides in scenes and follows the toggle", async () => 
       { id: "highway-name-major", type: "symbol" },
     ],
   });
-  for (
-    const id of [
-      "poi_transit",
-      "road_one_way_arrow",
-      "highway-shield-non-us",
-      "highway-name-minor",
-      "label_city",
-      "airport",
-      "highway-name-major",
-    ]
-  ) {
+
+  for (const id of [
+    "poi_transit",
+    "road_one_way_arrow",
+    "highway-shield-non-us",
+    "highway-name-minor",
+    "label_city",
+    "airport",
+    "highway-name-major",
+  ]) {
     harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
   }
+
   (harness.map as unknown as Record<string, unknown>).getLayoutProperty = (id: string) =>
     (harness.map.layers.get(id) as unknown as { layout: { visibility?: string } })?.layout
       ?.visibility;
@@ -504,14 +579,13 @@ test("every basemap symbol hides in scenes and follows the toggle", async () => 
     value: string | undefined,
   ) => {
     layouts.push([id, value]);
-    const layer = harness.map.layers.get(id) as unknown as {
-      layout?: { visibility?: string };
-    };
+    const layer = harness.map.layers.get(id) as unknown as { layout?: { visibility?: string } };
     if (layer) {
       layer.layout ??= {};
       layer.layout.visibility = value;
     }
   };
+
   harness.enter();
   harness.data.resolve();
   harness.geometry.resolve(FEATURE);
@@ -522,6 +596,7 @@ test("every basemap symbol hides in scenes and follows the toggle", async () => 
     .map(([id]) => id)
     .filter((id) => id !== FADE_ID)
     .sort();
+
   assert.deepEqual(hidden, [
     "airport",
     "highway-name-major",
@@ -535,11 +610,13 @@ test("every basemap symbol hides in scenes and follows the toggle", async () => 
 
   layouts.length = 0;
   storeMapDetailsShown(true);
+
   const shown = layouts
     .filter(([, value]) => value === "visible")
     .map(([id]) => id)
     .filter((id) => id !== FADE_ID)
     .sort();
+
   assert.deepEqual(shown, [
     "airport",
     "highway-name-major",
@@ -557,11 +634,13 @@ test("every basemap symbol hides in scenes and follows the toggle", async () => 
 test("the fade hides when details are off and shows with them", async () => {
   const { storeMapDetailsShown } = await import("./display-state.ts");
   storeMapDetailsShown(false);
+
   const harness = createHarness();
   (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
     layers: [{ id: "label_city", type: "symbol" }],
   });
   harness.map.layers.set("label_city", { id: "label_city", layout: { visibility: "visible" } });
+
   const layouts: [string, string | undefined][] = [];
   (harness.map as unknown as Record<string, unknown>).getLayoutProperty = (id: string) =>
     (harness.map.layers.get(id) as unknown as { layout: { visibility?: string } })?.layout
@@ -572,14 +651,13 @@ test("the fade hides when details are off and shows with them", async () => {
     value: string | undefined,
   ) => {
     layouts.push([id, value]);
-    const layer = harness.map.layers.get(id) as unknown as {
-      layout?: { visibility?: string };
-    };
+    const layer = harness.map.layers.get(id) as unknown as { layout?: { visibility?: string } };
     if (layer) {
       layer.layout ??= {};
       layer.layout.visibility = value;
     }
   };
+
   harness.enter();
   harness.data.resolve();
   harness.geometry.resolve(FEATURE);
@@ -589,10 +667,12 @@ test("the fade hides when details are off and shows with them", async () => {
 
   layouts.length = 0;
   storeMapDetailsShown(true);
+
   assert.ok(layouts.some(([id, value]) => id === FADE_ID && value === "visible"));
 
   layouts.length = 0;
   storeMapDetailsShown(false);
+
   assert.ok(layouts.some(([id, value]) => id === FADE_ID && value === "none"));
 
   storeMapDetailsShown(false);
@@ -601,6 +681,7 @@ test("the fade hides when details are off and shows with them", async () => {
 test("an originally hidden symbol shows with the toggle but exit restores it", async () => {
   const harness = createHarness();
   const layouts: [string, string | undefined][] = [];
+
   (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
     layers: [
       { id: "poi_hidden", type: "symbol" },
@@ -608,9 +689,11 @@ test("an originally hidden symbol shows with the toggle but exit restores it", a
       { id: "label_city", type: "symbol" },
     ],
   });
+
   harness.map.layers.set("poi_hidden", { id: "poi_hidden", layout: { visibility: "none" } });
   harness.map.layers.set("poi_plain", { id: "poi_plain", layout: {} });
   harness.map.layers.set("label_city", { id: "label_city", layout: { visibility: "visible" } });
+
   (harness.map as unknown as Record<string, unknown>).getLayoutProperty = (id: string) =>
     (harness.map.layers.get(id) as unknown as { layout: { visibility?: string } })?.layout
       ?.visibility;
@@ -620,14 +703,13 @@ test("an originally hidden symbol shows with the toggle but exit restores it", a
     value: string | undefined,
   ) => {
     layouts.push([id, value]);
-    const layer = harness.map.layers.get(id) as unknown as {
-      layout?: { visibility?: string };
-    };
+    const layer = harness.map.layers.get(id) as unknown as { layout?: { visibility?: string } };
     if (layer) {
       layer.layout ??= {};
       layer.layout.visibility = value;
     }
   };
+
   const { storeMapDetailsShown } = await import("./display-state.ts");
 
   harness.enter();
@@ -664,10 +746,12 @@ test("an originally hidden symbol shows with the toggle but exit restores it", a
 
   layouts.length = 0;
   storeMapDetailsShown(false);
+
   // The stub unmount removes scene layers without re-adding them, so reseed them.
   for (const id of DATA_IDS) {
     if (!harness.map.layers.has(id)) harness.map.layers.set(id, { id, layout: {} });
   }
+
   harness.enter();
   harness.data.resolve();
   harness.geometry.resolve(FEATURE);
@@ -684,6 +768,7 @@ test("an originally hidden symbol shows with the toggle but exit restores it", a
 test("scene symbols stay out of the details toggle", async () => {
   const { storeMapDetailsShown } = await import("./display-state.ts");
   storeMapDetailsShown(false);
+
   const harness = createHarness();
   (harness.map.layers.get("contours") as unknown as Record<string, unknown>).type = "symbol";
   (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
@@ -694,9 +779,11 @@ test("scene symbols stay out of the details toggle", async () => {
       { id: "label_city", type: "symbol" },
     ],
   });
+
   for (const id of ["background", "label_city"]) {
     harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
   }
+
   const layouts: [string, string | undefined][] = [];
   (harness.map as unknown as Record<string, unknown>).getLayoutProperty = (id: string) =>
     (harness.map.layers.get(id) as unknown as { layout: { visibility?: string } })?.layout
@@ -707,14 +794,13 @@ test("scene symbols stay out of the details toggle", async () => {
     value: string | undefined,
   ) => {
     layouts.push([id, value]);
-    const layer = harness.map.layers.get(id) as unknown as {
-      layout?: { visibility?: string };
-    };
+    const layer = harness.map.layers.get(id) as unknown as { layout?: { visibility?: string } };
     if (layer) {
       layer.layout ??= {};
       layer.layout.visibility = value;
     }
   };
+
   harness.enter();
   harness.data.resolve();
   harness.geometry.resolve(FEATURE);
@@ -738,6 +824,7 @@ test("scene symbols stay out of the details toggle", async () => {
   await settle();
 
   assert.deepEqual(layouts, [["label_city", "visible"]]);
+
   storeMapDetailsShown(false);
 });
 
@@ -746,10 +833,12 @@ test("the Map details toggle defaults off and persists per browser", async (cont
   context.after(() => window.happyDOM.abort());
   installBrowser(context, window);
   window.localStorage.clear();
+
   const { act } = await import("react");
   const { mountSceneColumn } = await import("./ui/scene-column.tsx");
   const { createSceneStore } = await import("./scene-store.ts");
   const { loadMapDetailsShown } = await import("./display-state.ts");
+
   const rain = {
     id: "rain",
     title: "Rainfall",
@@ -762,23 +851,26 @@ test("the Map details toggle defaults off and persists per browser", async (cont
     showAs: {},
     outline: { ...DEFAULT_OUTLINE },
   });
+
   const container = document.createElement("div");
   document.body.append(container);
 
   let column: { unmount(): void } | null = null;
   await act(async () => {
     column = mountSceneColumn(container, {
-      mounted: [{
-        layer: rain as never,
-        view: {
-          parts: [{ id: "rain", label: "rain", layerIds: ["rain"] }],
-          options: [],
-          time: null,
-          setTime: () => {},
-          legend: () => null,
-          destroy: () => {},
+      mounted: [
+        {
+          layer: rain as never,
+          view: {
+            parts: [{ id: "rain", label: "rain", layerIds: ["rain"] }],
+            options: [],
+            time: null,
+            setTime: () => {},
+            legend: () => null,
+            destroy: () => {},
+          },
         },
-      }],
+      ],
       blend: null,
       store,
       onOutline: () => {},
@@ -786,9 +878,10 @@ test("the Map details toggle defaults off and persists per browser", async (cont
   });
 
   const card = [...container.querySelectorAll(".card")].find((element) =>
-    (element.textContent ?? "").includes("Map details")
+    (element.textContent ?? "").includes("Map details"),
   )!;
   const input = card.querySelector('input[role="switch"]') as HTMLInputElement;
+
   assert.equal(input.checked, false);
   assert.equal(loadMapDetailsShown(), false);
 
@@ -801,7 +894,7 @@ test("the Map details toggle defaults off and persists per browser", async (cont
   assertSameNode(
     card,
     [...container.querySelectorAll(".card")].find((element) =>
-      (element.textContent ?? "").includes("Map details")
+      (element.textContent ?? "").includes("Map details"),
     ),
   );
 
@@ -824,6 +917,7 @@ test("closing during the wait starts no flight", async () => {
   const harness = createHarness();
   harness.enter();
   harness.mode.exit();
+
   const writes = harness.map.rangeWrites;
   harness.geometry.resolve(FEATURE);
   harness.data.resolve();
@@ -840,6 +934,7 @@ test("closing during geometry loading ignores late completion", async () => {
   const harness = createHarness();
   harness.enter();
   harness.mode.exit();
+
   const writes = harness.map.rangeWrites;
   harness.geometry.resolve(FEATURE);
   await settle();
@@ -856,6 +951,7 @@ test("closing right after the masks are added cannot reveal disposed layers", as
   harness.geometry.resolve(FEATURE);
   await settle();
   harness.mode.exit();
+
   const writes = harness.map.rangeWrites;
   await settle();
 
@@ -870,13 +966,17 @@ test("the masks get every outline of the area, lakes included", async () => {
   const harness = createHarness();
   harness.enter();
   harness.data.resolve();
-  const lake = [[36, -1], [38, -1], [38, 1], [36, 1], [36, -1]];
+
+  const lake = [
+    [36, -1],
+    [38, -1],
+    [38, 1],
+    [36, 1],
+    [36, -1],
+  ];
   harness.geometry.resolve({
     ...FEATURE,
-    geometry: {
-      type: "Polygon",
-      coordinates: [FEATURE.geometry.coordinates[0], lake],
-    },
+    geometry: { type: "Polygon", coordinates: [FEATURE.geometry.coordinates[0], lake] },
   });
   await settle();
 
@@ -889,6 +989,7 @@ test("the masks are kept through a context loss until the scene closes", async (
   harness.data.resolve();
   harness.geometry.resolve(FEATURE);
   await settle();
+
   assert.deepEqual([...harness.keptLayers].sort(), [FADE_ID, MASK_ID]);
 
   harness.mode.exit();
@@ -899,10 +1000,12 @@ test("the masks are kept through a context loss until the scene closes", async (
 test("scene entry adds no tile warm-up listeners", async () => {
   const harness = createHarness();
   harness.enter();
+
   assert.equal(harness.map.listeners.get("zoom")?.size ?? 0, 0);
   assert.equal(harness.map.listeners.get("move")?.size ?? 0, 0);
 
   harness.mode.exit();
+
   assert.equal(harness.map.listeners.get("zoom")?.size ?? 0, 0);
   assert.equal(harness.map.listeners.get("move")?.size ?? 0, 0);
   assertListenersRemoved(harness.map);
@@ -931,6 +1034,7 @@ test("the panel owner pushes history and forwards notice options to reopen", () 
       },
     },
   });
+
   harness.enter();
 
   const hooks = harness.panelHooks as {
@@ -945,11 +1049,7 @@ test("the panel owner pushes history and forwards notice options to reopen", () 
   hooks.requestOpen("about", { scrollToNotices: true });
 
   assert.deepEqual(pushedEntries.at(-1), [{ panel: "about" }, "?scene=test"]);
-  assert.deepEqual(recorded.panelCalls.at(-1), [
-    "open",
-    "about",
-    { scrollToNotices: true },
-  ]);
+  assert.deepEqual(recorded.panelCalls.at(-1), ["open", "about", { scrollToNotices: true }]);
   assert.equal(recorded.panelState.open, true);
 
   hooks.requestOpen("credits");
@@ -984,6 +1084,7 @@ test("the panel owner pushes history and forwards notice options to reopen", () 
   assert.deepEqual(recorded.panelCalls.at(-1), ["open", "about", undefined]);
 
   historyState = null;
+
   const callsBeforeDirect = recorded.panelCalls.length;
   const backsBeforeDirect = backCalls.length;
   hooks.requestClose();
@@ -999,27 +1100,33 @@ test("the owner and real panel keep history through Back and Forward", async (co
     await exitActiveHarness();
     window.happyDOM.abort();
   });
+
   const harness = createHarness();
   installBrowser(context, window);
   (globalThis as Record<string, unknown>).location = window.location;
+
   const previousHistory = (globalThis as Record<string, unknown>).history;
   (globalThis as Record<string, unknown>).history = window.history;
   context.after(() => {
     (globalThis as Record<string, unknown>).history = previousHistory;
   });
+
   const { act } = await import("react");
   const { createScenePanel: realCreate } = await import("./ui/scene-panel.tsx");
   const testState = harness as unknown as Record<string, unknown>;
   testState.useRealPanel = true;
   testState.realCreateScenePanel = realCreate;
+
   const column = document.createElement("div");
   const timeBar = document.createElement("div");
   const dialog = makeIntegrationDialog();
   document.body.append(column, timeBar, dialog);
+
   const roots = harness.roots as unknown as Record<string, unknown>;
   roots.column = column;
   roots.timeBar = timeBar;
   roots.dialog = dialog;
+
   const scrolled = installScrollSpy(context);
   const backCalls: string[] = [];
   const originalBack = window.history.back.bind(window.history);
@@ -1027,17 +1134,20 @@ test("the owner and real panel keep history through Back and Forward", async (co
     backCalls.push("back");
     originalBack();
   };
+
   const originalReplace = window.history.replaceState.bind(window.history);
   window.history.replaceState = (next: unknown, title: string, url: string) => {
     // Happy-dom drops forward entries on a no-op replace while real browsers keep them.
     const candidate = new URL(url, window.location.href).href;
     if (candidate === window.location.href && next === window.history.state) return;
+
     return (originalReplace as (...replaceArgs: [unknown, string, string]) => void)(
       next,
       title,
       url,
     );
   };
+
   window.addEventListener("popstate", () => {
     const tab = (history.state as { panel?: string } | null)?.panel ?? null;
     harness.mode.showFullscreen(tab);
@@ -1047,6 +1157,7 @@ test("the owner and real panel keep history through Back and Forward", async (co
   await act(async () => {
     harness.mode.enter(scene, { time: null, entry: "replace" });
   });
+
   harness.data.resolve();
   harness.geometry.resolve(FEATURE);
   await settle();
@@ -1061,50 +1172,57 @@ test("the owner and real panel keep history through Back and Forward", async (co
   await act(async () => {
     badge.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   assert.deepEqual(history.state, { panel: "about" });
   assert.equal(dialog.open, true);
-  assert.equal(
-    dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
-    "About",
-  );
+  assert.equal(dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent, "About");
+
   const aboutTab = [...dialog.querySelectorAll('[role="tab"]')].find(
     (button) => button.textContent === "About",
   ) as HTMLButtonElement;
+
   assertSameNode(document.activeElement, aboutTab);
+
   const main = dialog.querySelector("main") as HTMLElement;
+
   assert.equal(main.scrollTop, 0);
   assert.equal(dialog.querySelector("#notices-heading")?.textContent, "Notices and Limits");
   assert.ok(scrolled.includes("notices-heading"));
 
   main.scrollTop = 123;
+
   const closed = waitForPopstate(window, "closing the dialog did not navigate");
   await act(async () => {
     const event = new window.Event("cancel", { bubbles: true, cancelable: true });
     dialog.dispatchEvent(event);
     assert.equal(event.defaultPrevented, true);
   });
+
   assert.deepEqual(backCalls, ["back"]);
+
   await closed;
   await act(async () => {});
+
   assert.equal(dialog.open, false);
   assertSameNode(document.activeElement, column.querySelector(".expand"));
 
   main.scrollTop = 123;
   scrolled.length = 0;
+
   const reopened = waitForPopstate(window, "forward did not reopen the dialog");
   await act(async () => {
     history.forward();
   });
+
   await reopened;
   await act(async () => {});
+
   assert.equal(dialog.open, true);
-  assert.equal(
-    dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
-    "About",
-  );
+  assert.equal(dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent, "About");
   assertSameNode(document.activeElement, aboutTab);
   assert.equal(main.scrollTop, 0);
   assert.deepEqual(scrolled, []);
+
   await act(async () => {
     harness.mode.exit();
   });
@@ -1130,6 +1248,7 @@ test("chart commits update the share link without clobbering display or history"
       back() {},
     },
   });
+
   harness.enter();
   replaced.length = 0;
   historyState = { panel: "charts" };
@@ -1145,6 +1264,7 @@ test("chart commits update the share link without clobbering display or history"
 test("oversized chart commits keep a safe URL and recover through the owner", () => {
   const harness = createHarness();
   (globalThis as Record<string, unknown>).location = new URL("https://example.test/a-path/");
+
   const replaced: string[] = [];
   Object.assign(globalThis, {
     history: {
@@ -1158,13 +1278,17 @@ test("oversized chart commits keep a safe URL and recover through the owner", ()
       back() {},
     },
   });
+
   harness.enter();
   replaced.length = 0;
 
   harness.onCharts!("token123");
+
   assert.equal(replaced.length, 1);
   assert.match(replaced[0], /charts=token123/);
+
   const fittingUrl = replaced[0];
+
   assert.ok(fittingUrl.length <= 8192);
   assert.equal(harness.syncNotices.at(-1), undefined);
 
@@ -1174,10 +1298,7 @@ test("oversized chart commits keep a safe URL and recover through the owner", ()
   assert.equal(replaced[1], fittingUrl);
   assert.ok(replaced[1].length <= 8192);
   assert.match(replaced[1], /charts=token123/);
-  assert.equal(
-    harness.syncNotices.at(-1),
-    "The share link is too long to include these charts.",
-  );
+  assert.equal(harness.syncNotices.at(-1), "The share link is too long to include these charts.");
 
   harness.onCharts!("token123");
 
@@ -1201,37 +1322,44 @@ test("a dirty editor holds the entry on browser back", () => {
       back() {},
     },
   });
+
   harness.enter();
   (globalThis.sceneModeTest as Record<string, unknown>).editorDirty = true;
+
   const recorded = harness as unknown as { confirmCalls?: string[] };
 
   harness.mode.showFullscreen(null);
 
   assert.deepEqual(recorded.confirmCalls, ["confirm"]);
-  assert.deepEqual(
-    (globalThis.sceneModeTest as Record<string, unknown>).pushed,
-    { panel: "charts" },
-  );
+  assert.deepEqual((globalThis.sceneModeTest as Record<string, unknown>).pushed, {
+    panel: "charts",
+  });
 });
 
 test("complete urls keep time display and panel at the exact boundary", async () => {
   const { isCompleteUrlOversized } = await import("./charts/state.ts");
   const { sceneUrl, withChartsToken } = await import("./scene-url.ts");
+
   const base = "https://example.test/a-long-application-path/?scene=test";
   const display = "&units=rain%3A%C2%B0F";
   const timeLabel = "2020-02";
   const relative = sceneUrl("test", timeLabel, display);
   const emptyAbsolute = new URL(withChartsToken(relative, ""), base).href;
   const tokenLength = 8192 - emptyAbsolute.length;
+
   assert.ok(tokenLength > 0);
+
   const token8192 = "a".repeat(tokenLength);
   const absolute8192 = new URL(withChartsToken(relative, token8192), base).href;
+
   assert.equal(absolute8192.length, 8192);
   assert.equal(isCompleteUrlOversized(absolute8192), false);
   assert.ok(absolute8192.includes("/a-long-application-path/"));
   assert.ok(absolute8192.includes("%C2%B0"));
   assert.ok(absolute8192.includes(timeLabel));
+
   const absolute8193 = new URL(withChartsToken(relative, `${token8192}a`), base).href;
+
   assert.equal(absolute8193.length, 8193);
   assert.equal(isCompleteUrlOversized(absolute8193), true);
 });
@@ -1241,10 +1369,13 @@ test("exact-boundary chart tokens keep display and time in controller history", 
   const { sceneUrl } = await import("./scene-url.ts");
   const page = "https://example.test/a-long-application-path/?scene=test";
   (globalThis as Record<string, unknown>).location = new URL(page);
+
   const display = "&units=rain%3A%C2%B0F";
   const emptyComplete = new URL(sceneUrl("test", "2020-02", display), page).href;
   const fittingLength = 8192 - emptyComplete.length - "&charts=".length;
+
   assert.ok(fittingLength > 0);
+
   const harness = createHarness();
   const replaced: { state: unknown; url: string }[] = [];
   let historyState: { panel?: string } | null = null;
@@ -1261,8 +1392,11 @@ test("exact-boundary chart tokens keep display and time in controller history", 
       back() {},
     },
   });
+
   harness.enter("2020-02");
+
   assert.deepEqual(harness.restoredTimes, ["2020-02-01"]);
+
   harness.onDisplay!(display);
   harness.onTime!("2020-02-01", "2020-02");
   historyState = { panel: "charts" };
@@ -1286,10 +1420,7 @@ test("exact-boundary chart tokens keep display and time in controller history", 
   assert.ok(replaced[1].url.length <= 8192);
   assert.match(replaced[1].url, /charts=c+/);
   assert.deepEqual(replaced[1].state, { panel: "charts" });
-  assert.equal(
-    harness.syncNotices.at(-1),
-    "The share link is too long to include these charts.",
-  );
+  assert.equal(harness.syncNotices.at(-1), "The share link is too long to include these charts.");
 
   harness.onDisplay!("");
 
@@ -1308,10 +1439,7 @@ test("exact-boundary chart tokens keep display and time in controller history", 
   assert.equal(replaced[3].url, replaced[2].url);
   assert.ok(replaced[3].url.length <= 8192);
   assert.deepEqual(replaced[3].state, { panel: "charts" });
-  assert.equal(
-    harness.syncNotices.at(-1),
-    "The share link is too long to include these charts.",
-  );
+  assert.equal(harness.syncNotices.at(-1), "The share link is too long to include these charts.");
 
   harness.onTime!(null as unknown as string, null as unknown as string);
 
@@ -1330,6 +1458,7 @@ test("exact-boundary chart tokens keep display and time in controller history", 
   assert.ok(replaced[5].url.length <= 8192);
   assert.match(replaced[5].url, /charts=c+/);
   assert.equal(harness.syncNotices.at(-1), null);
+
   for (const entry of replaced) assert.ok(entry.url.length <= 8192);
 });
 
@@ -1340,10 +1469,13 @@ test("a throwing renderer keeps charts while the working layer keeps colour", as
     await act(async () => {});
     window.happyDOM.abort();
   });
+
   installBrowser(context, window);
+
   const mountScene = await importViewWithStubs(THROWING_REGISTRY_STUB);
   const { defaultSlice, encodeSlice } = await import("./charts/state.ts");
   const { NO_TOKENS } = await import("./display-state.ts");
+
   const rain = {
     id: "rain",
     title: "Rainfall",
@@ -1373,8 +1505,10 @@ test("a throwing renderer keeps charts while the working layer keeps colour", as
     data: { href: "data.zarr" },
     period: { start: "2020-01-01", end: "2020-03-01", step: "P1M" },
   } as unknown as Scene;
+
   const slice = defaultSlice((scene as unknown as { layers: never[] }).layers as never[]);
   (slice.definitions[0] as { title: string }).title = "Custom retained source";
+
   const map = {
     addSource() {},
     addLayer() {},
@@ -1387,6 +1521,7 @@ test("a throwing renderer keeps charts while the working layer keeps colour", as
     removeLayer() {},
     removeSource() {},
   };
+
   const cards = document.createElement("div");
   const timeBar = document.createElement("div");
   const mounted = mountScene(map as never, scene, {
@@ -1397,14 +1532,16 @@ test("a throwing renderer keeps charts while the working layer keeps colour", as
     onCharts() {},
     onTime() {},
   });
+
   assert.ok(
-    mounted.store.getSnapshot().charts.definitions.some(
-      (entry) => entry.title === "Custom retained source",
-    ),
+    mounted.store
+      .getSnapshot()
+      .charts.definitions.some((entry) => entry.title === "Custom retained source"),
   );
   assert.equal(mounted.store.getSnapshot().charts.definitions.length, slice.definitions.length);
   assert.equal(mounted.store.getSnapshot().allocation.owner, "rain");
   assert.equal(mounted.store.getSnapshot().allocation.draws.get("rain"), "colour");
+
   mounted.unmount();
 });
 
@@ -1415,10 +1552,13 @@ test("a throwing geology mount adds no water copy while others still mount", asy
     await act(async () => {});
     window.happyDOM.abort();
   });
+
   installBrowser(context, window);
+
   const mountScene = await importViewWithStubs(THROWING_REGISTRY_STUB);
   const { NO_TOKENS } = await import("./display-state.ts");
   const { GEOLOGY_WATER_ID } = await import("./layers/geology-water.ts");
+
   const rain = {
     id: "rain",
     title: "Rainfall",
@@ -1447,6 +1587,7 @@ test("a throwing geology mount adds no water copy while others still mount", asy
     data: { href: "data.zarr" },
     period: { start: "2020-01-01", end: "2020-03-01", step: "P1M" },
   } as unknown as Scene;
+
   const cards = document.createElement("div");
   const timeBar = document.createElement("div");
   const failedMap = makeWaterMap();
@@ -1458,42 +1599,51 @@ test("a throwing geology mount adds no water copy while others still mount", asy
     onCharts() {},
     onTime() {},
   });
+
   assert.equal(failed.layerIds.includes("rain"), true);
   assert.equal(failed.layerIds.includes("geology"), false);
   assert.equal(failedMap.getLayer(GEOLOGY_WATER_ID), undefined);
   assert.match(cards.textContent ?? "", /renderer failed/);
+
   failed.unmount();
 
   const age = { ...(geology as unknown as Record<string, unknown>), id: "geology_age" };
   const wateredMap = makeWaterMap();
-  const watering = mountScene(wateredMap as never, {
-    ...(scene as unknown as Record<string, unknown>),
-    layers: [rain, age],
-  } as unknown as Scene, {
-    cards: document.createElement("div"),
-    timeBar: document.createElement("div"),
-    display: NO_TOKENS,
-    onDisplay() {},
-    onCharts() {},
-    onTime() {},
-  });
+  const watering = mountScene(
+    wateredMap as never,
+    { ...(scene as unknown as Record<string, unknown>), layers: [rain, age] } as unknown as Scene,
+    {
+      cards: document.createElement("div"),
+      timeBar: document.createElement("div"),
+      display: NO_TOKENS,
+      onDisplay() {},
+      onCharts() {},
+      onTime() {},
+    },
+  );
+
   assert.equal(watering.layerIds.includes("geology_age"), true);
   assert.ok(wateredMap.getLayer(GEOLOGY_WATER_ID));
+
   watering.unmount();
 });
 
 test("a denied storage write stays visible until the retry succeeds", async (context) => {
   const window = new Window({ url: "https://example.test/a/?scene=test" });
   installBrowser(context, window);
+
   const mountScene = await importViewWithStubs(FIELD_REGISTRY_STUB);
   const { NO_TOKENS } = await import("./display-state.ts");
   const { STORAGE_DENIED_NOTICE, encodeSlice } = await import("./charts/state.ts");
   const { formatDisplayParams } = await import("./display-state.ts");
   const { act } = await import("react");
   const { createScenePanel } = await import("./ui/scene-panel.tsx");
+
   const scene = makeChartableIntegrationScene();
   scene.id = "test-storage";
+
   const previousStorage = (globalThis as Record<string, unknown>).localStorage;
+
   const deniedStorage = {
     getItem: (() => null) as () => null,
     setItem: (() => {
@@ -1511,6 +1661,7 @@ test("a denied storage write stays visible until the retry succeeds", async (con
     configurable: true,
     writable: true,
   });
+
   const notices: (string | null)[] = [];
   let panel: ReturnType<typeof createScenePanel> | null = null;
   let mounted: ReturnType<typeof mountScene> | null = null;
@@ -1520,13 +1671,16 @@ test("a denied storage write stays visible until the retry succeeds", async (con
       panel?.destroy();
     });
     panel = null;
+
     await act(async () => {
       mounted?.unmount();
     });
     mounted = null;
+
     await act(async () => {});
     window.happyDOM.abort();
   });
+
   const map = {
     addSource() {},
     addLayer() {},
@@ -1539,6 +1693,7 @@ test("a denied storage write stays visible until the retry succeeds", async (con
     removeLayer() {},
     removeSource() {},
   };
+
   const cards = document.createElement("div");
   const timeBar = document.createElement("div");
   let lastCharts: string | null = null;
@@ -1559,11 +1714,10 @@ test("a denied storage write stays visible until the retry succeeds", async (con
       panel?.setSyncNotice(notice);
     },
   });
+
   assert.equal(lastCharts, encodeSlice(mounted.store.getSnapshot().charts));
-  assert.equal(
-    lastDisplay,
-    formatDisplayParams(mounted.store.getSnapshot().display, scene.layers),
-  );
+  assert.equal(lastDisplay, formatDisplayParams(mounted.store.getSnapshot().display, scene.layers));
+
   const dialog = makeIntegrationDialog();
   document.body.append(dialog);
   await act(async () => {
@@ -1575,6 +1729,7 @@ test("a denied storage write stays visible until the retry succeeds", async (con
     document.body.append(panel.element);
     panel.openFull("charts");
   });
+
   const definition = {
     id: "denied-chart",
     title: "Denied chart",
@@ -1585,22 +1740,23 @@ test("a denied storage write stays visible until the retry succeeds", async (con
   await act(async () => {
     mounted!.store.dispatch({ kind: "saveChart", definition });
   });
+
   assert.ok(notices.length >= 1);
   assert.equal(notices.at(-1), STORAGE_DENIED_NOTICE);
   assert.equal(lastCharts, encodeSlice(mounted!.store.getSnapshot().charts));
   assert.match(dialog.textContent ?? "", /kept for this visit/);
+
   const edit = [...dialog.querySelectorAll("button")].find(
     (button) => button.textContent === "Edit",
   )!;
   await act(async () => {
     edit.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   assert.ok(dialog.querySelector(".chart-editor"));
   assert.match(dialog.textContent ?? "", /kept for this visit/);
-  assert.equal(
-    [...dialog.textContent!.matchAll(/kept for this visit/g)].length,
-    1,
-  );
+  assert.equal([...dialog.textContent!.matchAll(/kept for this visit/g)].length, 1);
+
   await act(async () => {
     mounted!.store.dispatch({
       kind: "display",
@@ -1609,6 +1765,7 @@ test("a denied storage write stays visible until the retry succeeds", async (con
       },
     });
   });
+
   assert.equal(notices.at(-1), STORAGE_DENIED_NOTICE);
   assert.equal(
     lastDisplay,
@@ -1616,11 +1773,13 @@ test("a denied storage write stays visible until the retry succeeds", async (con
   );
   assert.ok(lastDisplay.includes("cividis"));
   assert.match(dialog.textContent ?? "", /kept for this visit/);
+
   Object.defineProperty(globalThis, "localStorage", {
     value: previousStorage,
     configurable: true,
     writable: true,
   });
+
   const recovery = {
     ...(definition as unknown as Record<string, unknown>),
     title: "Recovered chart",
@@ -1628,12 +1787,15 @@ test("a denied storage write stays visible until the retry succeeds", async (con
   await act(async () => {
     mounted!.store.dispatch({ kind: "saveChart", definition: recovery });
   });
+
   assert.equal(notices.at(-1), null);
   assert.equal(lastCharts, encodeSlice(mounted!.store.getSnapshot().charts));
   assert.equal((dialog.textContent ?? "").includes("kept for this visit"), false);
+
   await act(async () => {
     panel!.destroy();
   });
+
   mounted!.unmount();
   panel = null;
   mounted = null;
@@ -1648,25 +1810,31 @@ test("oversized charts keep the dirty Back entry through Keep editing", async (c
   await act(async () => {
     keep.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   assert.ok(dialog.querySelector(".chart-editor"));
   assert.equal(input.value, "Oversized draft");
   assert.ok(document.activeElement === input, "Keep editing restores focus to the invoker");
   assert.deepEqual(window.history.state, { panel: "charts" });
   assert.equal(window.history.length, 2);
   assert.match(dialog.textContent ?? "", /too long to include these charts/);
+
   for (const url of urls) assert.ok(url.length <= 8192);
+
   const retainedUrl = window.location.href;
 
   const secondPopped = waitForPopstate(window, "second Back did not navigate");
   await act(async () => {
     window.history.back();
   });
+
   await secondPopped;
   await act(async () => {});
+
   assert.deepEqual(window.history.state, { panel: "charts" });
   assert.equal(window.history.length, 2);
   assert.ok(dialog.querySelector(".chart-confirm"));
   assert.equal(window.location.href, retainedUrl);
+
   for (const url of urls) assert.ok(url.length <= 8192);
 
   const secondSave = [...dialog.querySelectorAll(".chart-confirm button")].find(
@@ -1676,23 +1844,30 @@ test("oversized charts keep the dirty Back entry through Keep editing", async (c
   await act(async () => {
     secondSave.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   await secondClosed;
   await act(async () => {});
+
   assert.equal(dialog.open, false);
   assert.equal(window.history.state, null);
   assert.equal(pending.pushedUrls.length, 3);
   assert.equal(window.location.href, pending.retainedUrl);
+
   const savedTitles = store.getSnapshot().charts.definitions.map((entry) => entry.title);
+
   assert.ok(savedTitles.includes("Oversized draft"));
   assert.ok(window.location.href.length <= 8192);
+
   for (const url of urls) assert.ok(url.length <= 8192);
 });
 
 test("oversized pending close completes through Discard", async (context) => {
   const pending = await openOversizedPendingClose(context, "Discarded draft");
   const { window, dialog, column, act, urls, store, before } = pending;
+
   assert.equal(window.history.length, 2);
   assert.deepEqual(window.history.state, { panel: "charts" });
+
   const discard = [...dialog.querySelectorAll(".chart-confirm button")].find(
     (button) => button.textContent === "Discard",
   )!;
@@ -1700,8 +1875,10 @@ test("oversized pending close completes through Discard", async (context) => {
   await act(async () => {
     discard.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   await closed;
   await act(async () => {});
+
   assert.equal(dialog.open, false);
   assert.ok(dialog.querySelector(".chart-gallery"));
   assert.equal(JSON.stringify(store.getSnapshot().charts), before);
@@ -1710,8 +1887,11 @@ test("oversized pending close completes through Discard", async (context) => {
   assert.equal(window.location.href, pending.retainedUrl);
   assert.ok(window.location.href.length <= 8192);
   assert.equal(window.location.href.includes("charts="), false);
+
   const expand = column.querySelector(".expand") as HTMLButtonElement;
+
   assert.ok(document.activeElement === expand, "closing returns focus to Expand");
+
   for (const url of urls) assert.ok(url.length <= 8192);
 });
 
@@ -1719,17 +1899,23 @@ test("oversized pending close completes through Save", async (context) => {
   const pending = await openOversizedPendingClose(context, "Pending save draft");
   const { window, dialog, column, act, urls, store } = pending;
   const save = pending.save;
+
   assert.equal(window.history.length, 2);
   assert.deepEqual(window.history.state, { panel: "charts" });
   assert.match(dialog.textContent ?? "", /too long to include these charts/);
+
   const closed = waitForPopstate(window, "save did not navigate back");
   await act(async () => {
     save.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   await closed;
   await act(async () => {});
+
   assert.equal(dialog.open, false);
+
   const savedTitles = store.getSnapshot().charts.definitions.map((entry) => entry.title);
+
   assert.ok(savedTitles.includes("Pending save draft"));
   assert.equal(store.getSnapshot().charts.definitions.length, 32);
   assert.equal(window.history.state, null);
@@ -1737,8 +1923,11 @@ test("oversized pending close completes through Save", async (context) => {
   assert.equal(window.location.href, pending.retainedUrl);
   assert.ok(window.location.href.length <= 8192);
   assert.equal(window.location.href.includes("charts="), false);
+
   const expand = column.querySelector(".expand") as HTMLButtonElement;
+
   assert.ok(document.activeElement === expand, "closing returns focus to Expand");
+
   for (const url of urls) assert.ok(url.length <= 8192);
 });
 
@@ -1747,14 +1936,17 @@ test("initial oversized entry clears its warning on a fitting edit", async (cont
   const oversized = await oversizedSlice(scene.layers);
   const { createSceneStore } = await import("./scene-store.ts");
   const { encodeSlice, STORAGE_DENIED_NOTICE } = await import("./charts/state.ts");
+
   const store = createSceneStore(
     scene.layers,
     { layers: {}, off: new Set(), showAs: {}, outline: { ...DEFAULT_OUTLINE } },
     oversized,
   );
+
   const huge = encodeSlice(oversized);
   const setup = await enterOwnerPanel(context, { chartsToken: huge, mountStore: store, scene });
   const { window, harness, dialog, column, act, urls } = setup;
+
   assert.equal(window.location.href.includes("charts="), false);
   assert.equal(window.history.length, 1);
   assert.equal(window.history.state, null);
@@ -1765,24 +1957,31 @@ test("initial oversized entry clears its warning on a fitting edit", async (cont
   await act(async () => {
     chartsTab.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   const expand = column.querySelector(".expand") as HTMLButtonElement;
   await act(async () => {
     expand.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   assert.deepEqual(window.history.state, { panel: "charts" });
   assert.equal(window.history.length, 2);
   assert.match(dialog.textContent ?? "", /too long to include these charts/);
+
   const entryUrl = window.location.href;
+
   assert.ok(entryUrl.length <= 8192);
   assert.equal(entryUrl.includes("charts="), false);
 
   await act(async () => {
     harness.onChartSync!(STORAGE_DENIED_NOTICE);
   });
+
   assert.match(dialog.textContent ?? "", /kept for this visit/);
+
   await act(async () => {
     harness.onChartSync!(null);
   });
+
   assert.match(dialog.textContent ?? "", /too long to include these charts/);
   assert.equal((dialog.textContent ?? "").includes("kept for this visit"), false);
 
@@ -1794,6 +1993,7 @@ test("initial oversized entry clears its warning on a fitting edit", async (cont
       },
     });
   });
+
   assert.equal(window.location.href, entryUrl);
   assert.deepEqual(window.history.state, { panel: "charts" });
   assert.equal(window.history.length, 2);
@@ -1805,6 +2005,7 @@ test("initial oversized entry clears its warning on a fitting edit", async (cont
       "2020-02",
     );
   });
+
   assert.equal(window.location.href, entryUrl);
   assert.deepEqual(window.history.state, { panel: "charts" });
   assert.equal(window.history.length, 2);
@@ -1812,23 +2013,23 @@ test("initial oversized entry clears its warning on a fitting edit", async (cont
   await act(async () => {
     store.dispatch({ kind: "resetCharts" });
   });
+
   assert.match(window.location.href, /charts=/);
   assert.ok(window.location.href.includes("cividis"));
   assert.ok(window.location.href.includes("t=2020-02"));
   assert.ok(window.location.href.length <= 8192);
-  assert.equal(
-    (dialog.textContent ?? "").includes("too long to include these charts"),
-    false,
-  );
+  assert.equal((dialog.textContent ?? "").includes("too long to include these charts"), false);
   assert.ok(dialog.querySelector(".chart-gallery"));
   assert.deepEqual(window.history.state, { panel: "charts" });
   assert.equal(window.history.length, 2);
+
   for (const url of urls) assert.ok(url.length <= 8192);
 });
 
 test("the flight waits for preparation but never for the warmer", async () => {
   const harness = phasedHarness();
   harness.enter();
+
   let release!: (blob: Blob | undefined) => void;
   const gate = new Promise<Blob | undefined>((resolve) => {
     release = resolve;
@@ -1860,13 +2061,13 @@ test("deeper preload levels do not hold the flight or the spinner", async () => 
     id: "deep",
     layer: "terrain",
     lanes: 1,
-    tasks: () => [{
-      key: "deep-tile",
-      zoom: 9,
-      run: () => new Promise<Blob | undefined>(() => {}),
-    }],
+    tasks: () => [
+      { key: "deep-tile", zoom: 9, run: () => new Promise<Blob | undefined>(() => {}) },
+    ],
   });
+
   assert.equal(harness.busyPanel, true);
+
   await finishPreparation(harness);
 
   assert.deepEqual(harness.events, ["fly"]);
@@ -1878,6 +2079,7 @@ test("closing while preparing clears the spinner with the status", async () => {
   harness.enter();
 
   assert.equal(harness.busyPanel, true);
+
   await exitActiveHarness();
 
   assert.equal(harness.busyPanel, false);
@@ -1887,16 +2089,14 @@ test("closing while preparing clears the spinner with the status", async () => {
 test("the basemap preload registers after the layer sources", async () => {
   const harness = createHarness();
   harness.map.sources.set("openmaptiles", { tiles: [BASEMAP_TEMPLATE], maxzoom: 14 });
+
   const registered: string[] = [];
   (harness as unknown as Record<string, unknown>).onMount = () => {
-    currentScenePreload()!.add({
-      id: "dem",
-      layer: "terrain",
-      lanes: 1,
-      tasks: () => [],
-    });
+    currentScenePreload()!.add({ id: "dem", layer: "terrain", lanes: 1, tasks: () => [] });
   };
+
   harness.enter();
+
   const sources = (currentScenePreload() as unknown as { sources: Map<string, unknown> }).sources;
   registered.push(...sources.keys());
 
@@ -1917,12 +2117,14 @@ test("entry waits, flies with the panel, then stages and reveals the UI together
   assertDataHidden(harness.map);
 
   await settle();
+
   assert.deepEqual(harness.events, []);
   assert.ok(!harness.bodyClasses.has("scene-flying"));
   assert.deepEqual(harness.statuses, [PREPARING]);
   assert.deepEqual(harness.styleWrites, []);
 
   await finishPreparation(harness);
+
   assert.deepEqual(harness.events, ["fly"]);
   assert.equal(harness.flight.holds, 0);
   // Only the build panel leaves with the flight; the scene UI stays hidden and inert.
@@ -1937,6 +2139,7 @@ test("entry waits, flies with the panel, then stages and reveals the UI together
 
   harness.land();
   await settle();
+
   assert.deepEqual(harness.events, ["fly", "land", "curtain"]);
   assertDataHidden(harness.map);
   assert.equal(maskFillOpacity(harness.map), 0);
@@ -1945,8 +2148,14 @@ test("entry waits, flies with the panel, then stages and reveals the UI together
   assertInputLocked(harness, true);
 
   harness.curtain!.cover();
+
   assert.deepEqual(harness.events, ["fly", "land", "curtain", "cover", "hold"]);
-  assertRanges(harness.map, [[0, 24], [6, 12], [0, 24], [1, 4]]);
+  assertRanges(harness.map, [
+    [0, 24],
+    [6, 12],
+    [0, 24],
+    [1, 4],
+  ]);
   assert.equal(maskFillOpacity(harness.map), 1);
   assert.equal(fadeFillOpacity(harness.map), FADE_OPACITY);
   assert.ok(harness.bodyClasses.has("scene-entering"));
@@ -1954,6 +2163,7 @@ test("entry waits, flies with the panel, then stages and reveals the UI together
   assertInputLocked(harness, true);
 
   harness.curtain!.fade();
+
   assert.ok(!harness.bodyClasses.has("scene-entering"));
   assert.ok(harness.bodyClasses.has("scene-flying"));
   assert.ok(harness.bodyClasses.has("scene-ui-sliding"));
@@ -1963,6 +2173,7 @@ test("entry waits, flies with the panel, then stages and reveals the UI together
   assert.deepEqual(harness.statuses, [PREPARING, ""]);
 
   harness.curtain!.finish();
+
   assert.ok(harness.bodyClasses.has("scene-flying"));
   assertInputLocked(harness, false);
   assert.deepEqual(harness.statuses, [PREPARING, ""]);
@@ -2003,14 +2214,20 @@ test("the panel phase scales to the flight duration but unlocks only at the reve
 
   harness.land();
   await settle();
+
   assert.ok(harness.events.includes("curtain"));
   assertInputLocked(harness, true);
 
   harness.curtain!.cover();
+
   assertInputLocked(harness, true);
+
   harness.curtain!.fade();
+
   assertInputLocked(harness, true);
+
   harness.curtain!.finish();
+
   assertInputLocked(harness, false);
 
   await exitActiveHarness();
@@ -2027,37 +2244,47 @@ test("the flight duration reaches the slides instead of the fixed default", () =
   // Body must not declare its own values, or the overrides could never reach the slides below.
   assert.ok(bodyBlocks.every((block) => !block.includes("--entry-flight-ms:")));
   assert.ok(bodyBlocks.every((block) => !block.includes("--entry-reveal-ms:")));
+
   // The panel scales with the flight while every scene slide scales with the shared reveal.
   const [panelTimes, panelOver] = timingFactors(bodyBlocks, "--entry-panel-out", "flight");
-  assert.ok(1700 * panelTimes / panelOver > 850 * panelTimes / panelOver);
+
+  assert.ok((1700 * panelTimes) / panelOver > (850 * panelTimes) / panelOver);
+
   for (const name of SCENE_TIMINGS) {
     const [times, over] = timingFactors(bodyBlocks, name, "reveal");
     assert.equal(over, REVEAL_MS);
     assert.ok(times >= 0);
   }
+
   // The reveal window holds the whole stagger, from the first slide to the last.
-  assert.ok(cssBlocks(sheet, "body.scene-ui-sliding").some((block) => {
-    return block.includes("animation: entry-slides-end var(--entry-reveal-ms) linear;");
-  }));
-  const factor = (name: string) => timingFactors(bodyBlocks, name, "reveal")[0];
-  assert.equal(factor("--entry-cards-start"), 0);
-  assert.equal(
-    factor("--entry-top-bar-start") + factor("--entry-top-bar-duration"),
-    REVEAL_MS,
+  assert.ok(
+    cssBlocks(sheet, "body.scene-ui-sliding").some((block) => {
+      return block.includes("animation: entry-slides-end var(--entry-reveal-ms) linear;");
+    }),
   );
+
+  const factor = (name: string) => timingFactors(bodyBlocks, name, "reveal")[0];
+
+  assert.equal(factor("--entry-cards-start"), 0);
+  assert.equal(factor("--entry-top-bar-start") + factor("--entry-top-bar-duration"), REVEAL_MS);
 });
 
 test("the sliding styles end with the slide animation and a later close clears them", async () => {
   const harness = phasedHarness();
   harness.enter();
   await finishPreparation(harness);
+
   assert.ok(!harness.bodyClasses.has("scene-ui-sliding"));
+
   harness.land();
   await settle();
   harness.curtain!.cover();
   harness.curtain!.fade();
+
   assert.ok(harness.bodyClasses.has("scene-ui-sliding"));
+
   harness.curtain!.finish();
+
   assertInputLocked(harness, false);
 
   const end = (animationName: string, target: object = document.body) => {
@@ -2067,14 +2294,17 @@ test("the sliding styles end with the slide animation and a later close clears t
   };
   end("another-animation");
   end("entry-slides-end", {});
+
   assert.ok(harness.bodyClasses.has("scene-ui-sliding"));
 
   end("entry-slides-end");
+
   assert.ok(!harness.bodyClasses.has("scene-ui-sliding"));
   assert.ok(harness.bodyClasses.has("scene-flying"));
   assert.equal(harness.bodyListeners.get("animationend")?.size, 0);
 
   await exitActiveHarness();
+
   assert.ok(!harness.bodyClasses.has("scene-flying"));
   assert.deepEqual(harness.styleWrites.at(-1), ["--entry-reveal-ms", ""]);
 });
@@ -2084,11 +2314,14 @@ test("the flight waits for preparation and the curtain waits for the landing", a
   early.landImmediately = true;
   early.enter();
   await settle();
+
   assert.deepEqual(early.events, []);
   assertDataHidden(early.map);
 
   await finishPreparation(early);
+
   assert.deepEqual(early.events, ["fly", "land", "curtain"]);
+
   await exitActiveHarness();
 
   const late = phasedHarness();
@@ -2096,6 +2329,7 @@ test("the flight waits for preparation and the curtain waits for the landing", a
   await settle();
   await finishPreparation(late);
   await new Promise((resolve) => setTimeout(resolve, 100));
+
   assert.deepEqual(late.events, ["fly"]);
 });
 
@@ -2105,10 +2339,14 @@ test("slow data and slow geometry each hold the curtain back", async () => {
   first.enter();
   first.geometry.resolve(FEATURE);
   await settle();
+
   assert.ok(!first.events.includes("curtain"));
+
   first.data.resolve();
   await settle();
+
   assert.ok(first.events.includes("curtain"));
+
   await exitActiveHarness();
 
   const second = phasedHarness();
@@ -2116,30 +2354,37 @@ test("slow data and slow geometry each hold the curtain back", async () => {
   second.enter();
   second.data.resolve();
   await settle();
+
   assert.ok(!second.events.includes("curtain"));
+
   second.geometry.resolve(FEATURE);
   await settle();
+
   assert.ok(second.events.includes("curtain"));
 });
 
 test("delayed geometry holds the curtain through resize", async () => {
   const harness = phasedHarness();
   harness.enter();
+
   const baseline = captureListeners(harness.map);
   await settle();
   harness.data.resolve();
   harness.resize();
+
   assertDataHidden(harness.map);
   assert.equal(harness.map.getLayer(MASK_ID), undefined);
 
   harness.geometry.resolve(FEATURE);
   await settle();
+
   assert.ok(harness.map.getLayer(MASK_ID));
   assert.ok(harness.map.getLayer(FADE_ID));
   assert.equal(harness.flight.refits, 1);
 
   harness.land();
   await settle();
+
   assert.ok(harness.events.includes("curtain"));
   assertListenersRemoved(harness.map, baseline);
 });
@@ -2159,6 +2404,7 @@ test("a scrub while preparing is caught before the curtain and prepared again", 
 
   harness.land();
   await settle();
+
   assert.ok(harness.events.includes("curtain"));
   assert.deepEqual(harness.restoredTimes, ["2020-01-01"]);
 });
@@ -2175,9 +2421,11 @@ test("a failure before the flight shows in the build panel and no scene UI", asy
   assertEntryClosed(harness);
   assertSceneUiNeverShown(harness);
   assert.ok(!harness.events.includes("fly"));
+
   harness.geometry.resolve(FEATURE);
   harness.land();
   await settle();
+
   assert.ok(!harness.events.includes("curtain"));
   assert.deepEqual(harness.statuses, [PREPARING, "data unavailable"]);
 });
@@ -2197,8 +2445,10 @@ test("a failure during the flight brings the build panel back with the error", a
       },
     },
   });
+
   harness.mode.enter(SCENE, { time: null, entry: "push", buildPanel: harness.buildPanel });
   await finishPreparation(harness);
+
   assert.ok(harness.bodyClasses.has("scene-flying"));
   assert.deepEqual(harness.statuses, [PREPARING, ""]);
 
@@ -2214,6 +2464,7 @@ test("a failure during the flight brings the build panel back with the error", a
 
   harness.land();
   await settle();
+
   assert.ok(!harness.events.includes("curtain"));
 });
 
@@ -2232,6 +2483,7 @@ test("a pushed-entry failure keeps the error for Back and shows no scene UI", as
       },
     },
   });
+
   harness.mode.enter(SCENE, { time: null, entry: "push", buildPanel: harness.buildPanel });
   await settle();
 
@@ -2257,6 +2509,7 @@ test("an abort the entry did not cause still fails it with a message", async () 
   const harness = phasedHarness();
   harness.enter();
   await settle();
+
   const error = new Error("Entry preparation was cancelled");
   error.name = "AbortError";
   harness.data.reject(error);
@@ -2336,16 +2589,15 @@ test("a synchronous mask setup failure closes the scene and removes listeners", 
 test("a required failure shows at once while optional work is stalled", async () => {
   const harness = phasedHarness();
   harness.enter();
+
   const preload = currentScenePreload()!;
   preload.add({
     id: "stalled",
     layer: "terrain",
     lanes: 1,
-    tasks: () => [{
-      key: "stalled-tile",
-      run: () => new Promise<Blob | undefined>(() => {}),
-    }],
+    tasks: () => [{ key: "stalled-tile", run: () => new Promise<Blob | undefined>(() => {}) }],
   });
+
   harness.data.resolve();
   await settle();
   harness.geometry.reject(new Error("mask unavailable"));
@@ -2360,7 +2612,9 @@ test("leaving during preparation clears the status and restores input", async ()
   const harness = phasedHarness();
   harness.enter();
   await settle();
+
   assert.ok(!harness.bodyClasses.has("scene-flying"));
+
   harness.mode.exit();
 
   assert.deepEqual(harness.statuses, [PREPARING, ""]);
@@ -2372,14 +2626,18 @@ test("leaving during the flight restores the page and starts nothing", async () 
   const harness = phasedHarness();
   harness.enter();
   await finishPreparation(harness);
+
   assert.ok(harness.bodyClasses.has("scene-flying"));
+
   harness.mode.exit();
 
   assert.deepEqual(harness.statuses, [PREPARING, ""]);
   assertEntryClosed(harness);
   assert.ok(!harness.bodyClasses.has("scene-flying"));
+
   harness.land();
   await settle();
+
   assert.ok(!harness.events.includes("curtain"));
 });
 
@@ -2404,6 +2662,7 @@ test("the picked outline hides at flight start with reduced motion", async () =>
   (globalThis as Record<string, unknown>).matchMedia = (query: string) => ({
     matches: String(query).includes("reduce"),
   });
+
   try {
     const harness = phasedHarness();
     harness.enter();
@@ -2485,6 +2744,7 @@ test("a replaced entry never reveals the scene it replaced", async () => {
   harness.enter();
   await settle();
   await finishPreparation(harness);
+
   const staleLand = harness.land;
   harness.enter();
   staleLand();
@@ -2509,6 +2769,7 @@ test("a context loss before landing closes the entry and releases input", async 
   const harness = phasedHarness();
   harness.enter();
   await finishPreparation(harness);
+
   assert.deepEqual(harness.events, ["fly"]);
 
   harness.map.loseContext();
@@ -2528,6 +2789,7 @@ test("a context loss after the curtain starts still releases input", async () =>
   await finishPreparation(harness);
   harness.land();
   await settle();
+
   assert.ok(harness.events.includes("curtain"));
   assert.ok(!harness.events.includes("cover"));
 
@@ -2541,6 +2803,7 @@ test("a context loss after the curtain starts still releases input", async () =>
   assert.equal(harness.map.canvasListeners.get("webglcontextlost")?.size ?? 0, 0);
 
   await exitActiveHarness();
+
   assertEntryClosed(harness);
 });
 
@@ -2548,16 +2811,19 @@ test("a resize after landing waits for the new fit before staging", async () => 
   const harness = phasedHarness();
   harness.enter();
   await finishPreparation(harness);
+
   assert.deepEqual(harness.events, ["fly"]);
 
   harness.land();
   harness.resize();
   await settle();
+
   assert.deepEqual(harness.events, ["fly", "land"]);
   assert.equal(harness.flight.refits, 1);
 
   harness.land();
   await settle();
+
   assert.ok(harness.events.includes("curtain"));
 
   await exitActiveHarness();
@@ -2602,13 +2868,20 @@ test("a refit after landing moves the relief base with the flight", async () => 
   await finishPreparation(harness);
   harness.land();
   await settle();
-  assert.deepEqual(harness.terrainBaseZooms.map(([, zoom]) => zoom), [5]);
+
+  assert.deepEqual(
+    harness.terrainBaseZooms.map(([, zoom]) => zoom),
+    [5],
+  );
 
   harness.flight.zoom = 7;
   harness.resize();
 
   assert.equal(harness.flight.refits, 1);
-  assert.deepEqual(harness.terrainBaseZooms.map(([, zoom]) => zoom), [5, 7]);
+  assert.deepEqual(
+    harness.terrainBaseZooms.map(([, zoom]) => zoom),
+    [5, 7],
+  );
 
   await exitActiveHarness();
 });
@@ -2621,26 +2894,31 @@ test("a change after the curtain starts reprepares instead of staging stale work
       { id: "label_city", type: "symbol" },
     ],
   });
+
   for (const id of ["background", "label_city"]) {
     harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
   }
+
   const writes: [string, unknown][] = [];
   const stub = harness.map as unknown as Record<string, unknown>;
   stub.getFilter = () => undefined;
   stub.setFilter = (id: string, filter: unknown) => {
     writes.push([id, filter]);
   };
+
   const moved: [string, string | undefined][] = [];
   const originalMove = harness.map.moveLayer.bind(harness.map);
   harness.map.moveLayer = ((id: string, beforeId?: string) => {
     moved.push([id, beforeId]);
     return originalMove(id, beforeId);
   }) as typeof harness.map.moveLayer;
+
   harness.enter("2020-01-01");
   await settle();
   await finishPreparation(harness);
   harness.land();
   await settle();
+
   assert.ok(harness.events.includes("curtain"));
   assert.equal(harness.flight.holds, 0);
 
@@ -2658,12 +2936,22 @@ test("a change after the curtain starts reprepares instead of staging stale work
 
   const fresh = harness.curtain!;
   fresh.cover();
+
   assert.equal(harness.flight.holds, 1);
-  assertRanges(harness.map, [[0, 24], [6, 12], [0, 24], [1, 4]]);
+  assertRanges(harness.map, [
+    [0, 24],
+    [6, 12],
+    [0, 24],
+    [1, 4],
+  ]);
   assert.ok(writes.length > 0);
+
   fresh.fade();
+
   assertInputLocked(harness, true);
+
   fresh.finish();
+
   assertInputLocked(harness, false);
 
   const curtains = harness.events.filter((event) => event === "curtain").length;
@@ -2682,7 +2970,9 @@ test("a change after the curtain starts reprepares instead of staging stale work
   await settle();
 
   assertEntryClosed(harness);
+
   const restored = new Map(writes);
+
   assert.equal(restored.get("background"), null);
   assert.equal(restored.get("label_city"), null);
   assert.ok(moved.some(([id, before]) => id === "background" && before === undefined));
@@ -2696,22 +2986,28 @@ test("reduced motion skips sliding and a later preference change starts nothing"
   (globalThis as Record<string, unknown>).matchMedia = (query: string) => ({
     matches: String(query).includes("reduce"),
   });
+
   try {
     const harness = phasedHarness();
     harness.enter();
     await settle();
+
     assert.ok(!harness.bodyClasses.has("scene-flying"));
+
     await finishPreparation(harness);
 
     assert.ok(harness.bodyClasses.has("scene-flying"));
     assert.ok(!harness.bodyClasses.has("scene-ui-sliding"));
     assert.deepEqual(harness.styleWrites, []);
     assertInputLocked(harness, true);
+
     harness.land();
     await settle();
     harness.curtain!.cover();
     harness.curtain!.fade();
+
     assertInputLocked(harness, true);
+
     harness.curtain!.finish();
 
     assert.ok(harness.bodyClasses.has("scene-flying"));
@@ -2721,9 +3017,11 @@ test("reduced motion skips sliding and a later preference change starts nothing"
     assert.deepEqual(harness.statuses, [PREPARING, ""]);
 
     (globalThis as Record<string, unknown>).matchMedia = () => ({ matches: false });
+
     for (const listener of [...(harness.bodyListeners.get("animationend") ?? [])]) {
       listener({ target: document.body, animationName: "entry-slides-end" });
     }
+
     assert.ok(!harness.bodyClasses.has("scene-ui-sliding"));
 
     await exitActiveHarness();
@@ -2742,7 +3040,9 @@ test("the outline waits for the stage and keeps the display choice it was given"
     layout: { visibility: "visible" },
   });
   harness.enter();
+
   const outline = harness.map.layers.get("soe-area-outline")!;
+
   assert.deepEqual([outline.minzoom, outline.maxzoom], [24, 24]);
 
   const store = harness.mountStore as {
@@ -2751,16 +3051,18 @@ test("the outline waits for the stage and keeps the display choice it was given"
   store.dispatch({
     kind: "display",
     update: (display) => {
-      const state = (display as { outline: { shown: boolean; color: string; widthPx: number } });
+      const state = display as { outline: { shown: boolean; color: string; widthPx: number } };
       state.outline.shown = false;
       state.outline.color = "#ff0000";
       state.outline.widthPx = 3;
     },
   });
+
   await settle();
   await finishPreparation(harness);
   harness.land();
   await settle();
+
   assert.deepEqual([outline.minzoom, outline.maxzoom], [24, 24]);
 
   harness.curtain!.cover();
@@ -2775,16 +3077,23 @@ test("the stage keeps each layer's own range and visibility", async () => {
   const harness = phasedHarness();
   harness.enter();
   harness.map.getLayer("relief")!.layout.visibility = "none";
+
   await settle();
   await finishPreparation(harness);
   harness.land();
   await settle();
+
   harness.map.emit("error", { sourceId: "rain", error: new Error("unrelated") });
   harness.curtain!.cover();
   harness.map.getLayer("rain")!.layout.visibility = "none";
   harness.resize();
 
-  assertRanges(harness.map, [[0, 24], [6, 12], [0, 24], [1, 4]]);
+  assertRanges(harness.map, [
+    [0, 24],
+    [6, 12],
+    [0, 24],
+    [1, 4],
+  ]);
   assert.equal(harness.map.getLayer("relief")!.layout.visibility, "none");
   assert.equal(harness.map.getLayer("rain")!.layout.visibility, "none");
 });
@@ -2797,26 +3106,35 @@ test("the stage hides basemap features and orders layers only inside the curtain
       { id: "label_city", type: "symbol" },
     ],
   });
+
   for (const id of ["background", "label_city"]) {
     harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
   }
+
   const writes: [string, unknown][] = [];
   const stub = harness.map as unknown as Record<string, unknown>;
   stub.getFilter = () => undefined;
   stub.setFilter = (id: string, filter: unknown) => {
     writes.push([id, filter]);
   };
+
   harness.enter();
   await settle();
   await finishPreparation(harness);
   harness.land();
   await settle();
+
   assert.equal(writes.length, 0);
 
   harness.curtain!.cover();
 
   assert.ok(writes.length > 0);
-  assertRanges(harness.map, [[0, 24], [6, 12], [0, 24], [1, 4]]);
+  assertRanges(harness.map, [
+    [0, 24],
+    [6, 12],
+    [0, 24],
+    [1, 4],
+  ]);
   assertFadeCovers(harness.map);
 });
 
@@ -2826,8 +3144,10 @@ test("the masks stay transparent until the stage and then draw at full strength"
   await settle();
   await finishPreparation(harness);
   harness.resize();
+
   assert.equal(maskFillOpacity(harness.map), 0);
   assert.equal(fadeFillOpacity(harness.map), 0);
+
   harness.land();
   await settle();
   harness.curtain!.cover();
@@ -2843,10 +3163,12 @@ test("a failed preload task never blocks the entry", async () => {
     id: "missing",
     layer: "terrain",
     lanes: 1,
-    tasks: () => [{
-      key: "missing-tile",
-      run: () => Promise.reject(new Error("Bad response: 404 for missing-tile")),
-    }],
+    tasks: () => [
+      {
+        key: "missing-tile",
+        run: () => Promise.reject(new Error("Bad response: 404 for missing-tile")),
+      },
+    ],
   });
   await settle();
   await finishPreparation(harness);
@@ -2859,19 +3181,24 @@ test("a failed preload task never blocks the entry", async () => {
 test("scene labels stay under the mask after a units change", async () => {
   const harness = createHarness();
   (harness.map.layers.get("contours") as unknown as Record<string, unknown>).type = "symbol";
+
   const order: string[] = [];
   const place = (id: string, beforeId?: string) => {
     const at = order.indexOf(id);
+
     if (at >= 0) order.splice(at, 1);
+
     const anchor = beforeId === undefined ? -1 : order.indexOf(beforeId);
     order.splice(anchor < 0 ? order.length : anchor, 0, id);
   };
   harness.map.moveLayer = place as typeof harness.map.moveLayer;
+
   const originalAdd = harness.map.addLayer.bind(harness.map);
   harness.map.addLayer = ((layer: { id: string }, beforeId?: string) => {
     place(layer.id, beforeId);
     return originalAdd(layer as never);
   }) as typeof harness.map.addLayer;
+
   harness.enter();
   harness.data.resolve();
   harness.geometry.resolve(FEATURE);
@@ -2897,6 +3224,7 @@ test("a units change after the stage keeps each layer's own range", async () => 
     moved.push([id, beforeId]);
     return originalMove(id, beforeId);
   }) as typeof harness.map.moveLayer;
+
   harness.map.layers.set("contours-ft", {
     id: "contours-ft",
     minzoom: 7,
@@ -2908,7 +3236,9 @@ test("a units change after the stage keeps each layer's own range", async () => 
   harness.onUnits!("ft", { terrain: "ft" }, ["relief", "contours-ft", "rain", "overview"]);
 
   assert.equal(harness.map.getLayer("contours-ft")!.minzoom, 7);
+
   harness.resize();
+
   assert.equal(harness.map.getLayer("contours-ft")!.minzoom, 7);
   assert.equal(harness.map.getLayer("contours"), undefined);
   assert.ok(harness.map.getLayer(FADE_ID));
@@ -2970,8 +3300,9 @@ function cssBlocks(sheet: string, selector: string): string[] {
 /** Read the scaling factors of one derived entry timing for the flight or reveal base. */
 function timingFactors(blocks: string[], name: string, base: string): [number, number] {
   for (const block of blocks) {
-    const match = new RegExp(`${name}: calc\\(var\\(--entry-${base}-ms\\) \\* (\\d+) / (\\d+)\\)`)
-      .exec(block);
+    const match = new RegExp(
+      `${name}: calc\\(var\\(--entry-${base}-ms\\) \\* (\\d+) / (\\d+)\\)`,
+    ).exec(block);
     if (match) return [Number(match[1]), Number(match[2])];
   }
   assert.fail(`expected ${name} to scale the ${base} duration`);
@@ -3031,13 +3362,11 @@ function captureListeners(map: TestMap) {
 
 function assertListenersRemoved(
   map: TestMap,
-  baseline?: {
-    sourcedata: Set<(event: object) => void>;
-    error: Set<(event: object) => void>;
-  },
+  baseline?: { sourcedata: Set<(event: object) => void>; error: Set<(event: object) => void> },
 ) {
   const expectedSourcedata = baseline?.sourcedata ?? new Set();
   const expectedError = baseline?.error ?? new Set();
+
   assert.deepEqual(map.listeners.get("sourcedata") ?? new Set(), expectedSourcedata);
   assert.deepEqual(map.listeners.get("error") ?? new Set(), expectedError);
 }
@@ -3068,6 +3397,7 @@ function installBrowser(context: { after(hook: () => void): void }, window: Wind
   context.after(async () => {
     const { act } = await import("react");
     await act(async () => {});
+
     const globals = globalThis as Record<string, unknown>;
     globals.Node = previous.node;
     globals.Element = previous.element;
@@ -3085,6 +3415,7 @@ function installBrowser(context: { after(hook: () => void): void }, window: Wind
     globals.localStorage = previous.storage;
     globals.IS_REACT_ACT_ENVIRONMENT = previous.actEnvironment;
   });
+
   const names = [
     "Node",
     "Element",
@@ -3097,7 +3428,9 @@ function installBrowser(context: { after(hook: () => void): void }, window: Wind
     "MouseEvent",
     "KeyboardEvent",
   ] as const;
+
   for (const name of names) defineGlobal(name, window[name]);
+
   defineGlobal("window", window);
   defineGlobal("document", window.document);
   defineGlobal("navigator", window.navigator);
@@ -3111,13 +3444,12 @@ function defineGlobal(name: string, value: unknown): void {
 
 function installScrollSpy(context: { after(hook: () => void): void }): string[] {
   const scrolled: string[] = [];
-  const prototype = globalThis.Element.prototype as unknown as {
-    scrollIntoView?: () => void;
-  };
+  const prototype = globalThis.Element.prototype as unknown as { scrollIntoView?: () => void };
   const original = prototype.scrollIntoView;
   prototype.scrollIntoView = function (this: Element) {
     scrolled.push((this as HTMLElement).id);
   };
+
   context.after(() => {
     prototype.scrollIntoView = original!;
   });
@@ -3127,12 +3459,10 @@ function installScrollSpy(context: { after(hook: () => void): void }): string[] 
 
 function makeIntegrationDialog(): HTMLDialogElement {
   const dialog = document.createElement("dialog") as HTMLDialogElement;
+
   if (typeof dialog.showModal !== "function") {
     let open = false;
-    Object.defineProperty(dialog, "open", {
-      get: () => open,
-      configurable: true,
-    });
+    Object.defineProperty(dialog, "open", { get: () => open, configurable: true });
     dialog.showModal = () => {
       open = true;
     };
@@ -3140,6 +3470,7 @@ function makeIntegrationDialog(): HTMLDialogElement {
       open = false;
     };
   }
+
   if (typeof dialog.scrollIntoView !== "function") {
     (dialog as unknown as Record<string, unknown>).scrollIntoView = () => {};
   }
@@ -3203,7 +3534,8 @@ function makeIntegrationScene(): Scene {
   } as unknown as Scene;
 }
 
-const THROWING_REGISTRY_STUB = "export const LAYER_KINDS=new Map(["
+const THROWING_REGISTRY_STUB =
+  "export const LAYER_KINDS=new Map(["
   + "['field',{stack:1,create:({layer})=>{if(layer.id==='temp')throw new Error('renderer failed');"
   + "return{parts:[{id:layer.id,label:layer.id,layerIds:[layer.id]}],"
   + "show(){},destroy(){},setTime(){},legend:()=>null};}}],"
@@ -3211,12 +3543,14 @@ const THROWING_REGISTRY_STUB = "export const LAYER_KINDS=new Map(["
   + "if(layer.id==='geology')throw new Error('renderer failed');"
   + "return{parts:[{id:layer.id,label:layer.id,layerIds:[layer.id]}],"
   + "show(){},destroy(){},setTime(){},legend:()=>null};}}]]);";
-const FIELD_REGISTRY_STUB = "export const LAYER_KINDS=new Map([['field',{stack:1,"
+const FIELD_REGISTRY_STUB =
+  "export const LAYER_KINDS=new Map([['field',{stack:1,"
   + "create:()=>({parts:[{id:'rain',label:'rain',layerIds:['rain']}],"
   + "show(){},destroy(){},setTime(){},legend:()=>null})}]]);";
 
 function makeWaterMap() {
   const order: string[] = [];
+
   return {
     getLayersOrder: () => [...order],
     addSource() {},
@@ -3258,13 +3592,11 @@ async function importViewWithStubs(registryStub: string) {
       }
       if (context?.parentURL === viewUrl) {
         if (specifier === "./map") {
-          const stub = "export const firstSymbolId=()=>undefined;"
+          const stub =
+            "export const firstSymbolId=()=>undefined;"
             + "export const removeLayerAndSource=()=>{};"
             + "export const showScaleBar=()=>()=>{};";
-          return {
-            url: `data:text/javascript,${stub}`,
-            shortCircuit: true,
-          };
+          return { url: `data:text/javascript,${stub}`, shortCircuit: true };
         }
         if (specifier === "./data") {
           return {
@@ -3279,12 +3611,9 @@ async function importViewWithStubs(registryStub: string) {
           };
         }
         if (specifier === "./layers/blend") {
-          const stub = "export const BLEND_TITLE='Blend';"
-            + "export const createBlendView=()=>null;";
-          return {
-            url: `data:text/javascript,${stub}`,
-            shortCircuit: true,
-          };
+          const stub =
+            "export const BLEND_TITLE='Blend';" + "export const createBlendView=()=>null;";
+          return { url: `data:text/javascript,${stub}`, shortCircuit: true };
         }
         if (specifier === "./layers/registry") {
           return { url: `data:text/javascript,${registryStub}`, shortCircuit: true };
@@ -3296,9 +3625,11 @@ async function importViewWithStubs(registryStub: string) {
           };
         }
       }
+
       return next(specifier, context);
     },
   });
+
   const { mountScene } = await import("./view.ts");
   viewHooks.deregister();
 
@@ -3314,29 +3645,36 @@ async function enterOwnerPanel(
     await exitActiveHarness();
     window.happyDOM.abort();
   });
+
   const harness = createHarness();
   installBrowser(context, window);
   (globalThis as Record<string, unknown>).location = window.location;
+
   const previousHistory = (globalThis as Record<string, unknown>).history;
   (globalThis as Record<string, unknown>).history = window.history;
   context.after(() => {
     (globalThis as Record<string, unknown>).history = previousHistory;
   });
+
   const { act } = await import("react");
   const { createScenePanel: realCreate } = await import("./ui/scene-panel.tsx");
   const testState = harness as unknown as Record<string, unknown>;
   testState.useRealPanel = true;
   testState.realCreateScenePanel = realCreate;
+
   if (options.chartsToken !== undefined) testState.initialCharts = options.chartsToken;
   if (options.mountStore !== undefined) testState.mountStore = options.mountStore;
+
   const column = document.createElement("div");
   const timeBar = document.createElement("div");
   const dialog = makeIntegrationDialog();
   document.body.append(column, timeBar, dialog);
+
   const roots = harness.roots as unknown as Record<string, unknown>;
   roots.column = column;
   roots.timeBar = timeBar;
   roots.dialog = dialog;
+
   const urls: string[] = [];
   // Count pushes because happy-dom truncates forward entries on replaceState after Back.
   const pushedUrls: string[] = [];
@@ -3344,12 +3682,9 @@ async function enterOwnerPanel(
   window.history.pushState = (next: unknown, title: string, url: string) => {
     urls.push(url);
     pushedUrls.push(url);
-    return (originalPush as (...pushArgs: [unknown, string, string]) => void)(
-      next,
-      title,
-      url,
-    );
+    return (originalPush as (...pushArgs: [unknown, string, string]) => void)(next, title, url);
   };
+
   const originalReplace = window.history.replaceState.bind(window.history);
   window.history.replaceState = (next: unknown, title: string, url: string) => {
     urls.push(url);
@@ -3359,24 +3694,29 @@ async function enterOwnerPanel(
       url,
     );
   };
+
   window.addEventListener("popstate", () => {
     const tab = (window.history.state as { panel?: string } | null)?.panel ?? null;
     // Browser popstate arrives async, so routing waits past the committing act.
     queueMicrotask(() => harness.mode.showFullscreen(tab));
   });
+
   const scene = options.scene ?? makeIntegrationScene();
   await act(async () => {
     harness.mode.enter(scene, { time: null, entry: "replace" });
   });
+
   harness.data.resolve();
   harness.geometry.resolve(FEATURE);
   await settle();
   await act(async () => {});
+
   // Committed store actions reach the owner like the real mount's subscription does.
   const wired = (options.mountStore ?? harness.mountStore) as {
     getSnapshot(): { charts: unknown; display: unknown };
     subscribe(listener: () => void): () => void;
   };
+
   if (wired && typeof wired.subscribe === "function") {
     const { encodeSlice } = await import("./charts/state.ts");
     const { formatDisplayParams } = await import("./display-state.ts");
@@ -3387,6 +3727,7 @@ async function enterOwnerPanel(
         charts: Parameters<typeof encodeSlice>[0];
         display: Parameters<typeof formatDisplayParams>[0];
       };
+
       if (snapshot.charts !== previousCharts) {
         previousCharts = snapshot.charts;
         harness.onCharts?.(encodeSlice(snapshot.charts));
@@ -3401,10 +3742,7 @@ async function enterOwnerPanel(
   return { window, harness, dialog, column, act, urls, pushedUrls, store: wired };
 }
 
-async function dirtyOwnerEditor(
-  setup: Awaited<ReturnType<typeof enterOwnerPanel>>,
-  title: string,
-) {
+async function dirtyOwnerEditor(setup: Awaited<ReturnType<typeof enterOwnerPanel>>, title: string) {
   const { window, dialog, act } = setup;
   const edit = [...dialog.querySelectorAll("button")].find(
     (button) => button.textContent === "Edit",
@@ -3412,9 +3750,11 @@ async function dirtyOwnerEditor(
   await act(async () => {
     edit.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   const input = dialog.querySelector('.chart-editor input[type="text"]') as HTMLInputElement;
   await act(async () => {
     input.focus();
+
     const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
     native?.set?.call(input, title);
     input.dispatchEvent(new window.Event("input", { bubbles: true }));
@@ -3431,17 +3771,21 @@ async function openOversizedPendingClose(
   const oversized = await oversizedSlice(scene.layers);
   const { createSceneStore } = await import("./scene-store.ts");
   const { encodeSlice } = await import("./charts/state.ts");
+
   const store = createSceneStore(
     scene.layers,
     { layers: {}, off: new Set(), showAs: {}, outline: { ...DEFAULT_OUTLINE } },
     oversized,
   );
   const before = JSON.stringify(store.getSnapshot().charts);
+
   const huge = encodeSlice(oversized);
   const setup = await enterOwnerPanel(context, { chartsToken: huge, mountStore: store, scene });
   const { window, dialog, column, act } = setup;
+
   assert.equal(window.history.state, null);
   assert.equal(window.location.href.includes("charts="), false);
+
   const retainedUrl = window.location.href;
 
   const chartsTab = [...column.querySelectorAll("button")].find(
@@ -3450,10 +3794,12 @@ async function openOversizedPendingClose(
   await act(async () => {
     chartsTab.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   const expand = column.querySelector(".expand") as HTMLButtonElement;
   await act(async () => {
     expand.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   assert.deepEqual(window.history.state, { panel: "charts" });
   assert.match(dialog.textContent ?? "", /too long to include these charts/);
 
@@ -3462,17 +3808,18 @@ async function openOversizedPendingClose(
   await act(async () => {
     window.history.back();
   });
+
   await popped;
   await act(async () => {});
+
   assert.deepEqual(window.history.state, { panel: "charts" });
   assert.ok(dialog.querySelector(".chart-confirm"));
+
   const save = [...dialog.querySelectorAll(".chart-confirm button")].find(
     (button) => button.textContent === "Save",
   ) as HTMLButtonElement;
-  assert.ok(
-    document.activeElement === save,
-    "outer confirmation moves focus to its Save control",
-  );
+
+  assert.ok(document.activeElement === save, "outer confirmation moves focus to its Save control");
 
   return { ...setup, store, before, input, save, retainedUrl };
 }
@@ -3487,6 +3834,7 @@ async function oversizedSlice(layers: unknown) {
     title: `Oversized ${String(index)} ${"T".repeat(100)}`.slice(0, 120),
   }));
   const slice = { version: 1 as const, definitions, mainChartId: "oversized-0" };
+
   assert.ok(isValidSlice(slice, layers as never[]));
 
   return slice;
@@ -3514,6 +3862,7 @@ function makeChartableIntegrationScene(): Scene {
     values: [10, 12],
     valid_fraction: [1, 1],
   };
+
   const terrain = layers[1] as Record<string, unknown>;
   terrain.distribution = {
     statistic: "quantiles",

@@ -99,11 +99,13 @@ function isValidSliceInner(slice: unknown, layers: readonly LayerDoc[]) {
 
     ids.add((definition as ChartDefinition).id);
   }
+
   if (definitions.length === 0) {
     if (mainChartId !== null) return false;
 
     return !creationAvailability(layers).allowed;
   }
+
   if (typeof mainChartId !== "string" || !ids.has(mainChartId)) return false;
 
   return true;
@@ -138,6 +140,7 @@ export function decodeToken(
   } catch {
     return { slice: null, notice: INVALID_CHARTS_NOTICE };
   }
+
   if (bytes.length > MAX_DECODED_BYTES) return { slice: null, notice: INVALID_CHARTS_NOTICE };
 
   let json: string;
@@ -153,6 +156,7 @@ export function decodeToken(
   } catch {
     return { slice: null, notice: INVALID_CHARTS_NOTICE };
   }
+
   if (!isValidSlice(parsed, layers)) return { slice: null, notice: INVALID_CHARTS_NOTICE };
 
   return { slice: parsed, notice: null };
@@ -170,6 +174,7 @@ export function loadStoredSlice(
   } catch {
     return { slice: fallback, notice: STORAGE_DENIED_NOTICE, stored: false };
   }
+
   if (!raw) return { slice: fallback, notice: null, stored: false };
 
   try {
@@ -186,6 +191,7 @@ export function loadStoredSlice(
   } catch {
     return { slice: fallback, notice: INVALID_CHARTS_NOTICE, stored: false };
   }
+
   if (!isValidSlice(parsed, layers)) {
     return { slice: fallback, notice: INVALID_CHARTS_NOTICE, stored: false };
   }
@@ -208,6 +214,7 @@ export function storeSlice(
     if (new TextEncoder().encode(serialized).length > MAX_DECODED_BYTES) {
       return { saved: false, notice: TOO_LARGE_CHARTS_NOTICE };
     }
+
     localStorage.setItem(storageKeyFor(sceneId), serialized);
 
     return { saved: true, notice: null };
@@ -229,6 +236,7 @@ export function resolveCharts(
   if (linked.slice) {
     return { slice: linked.slice, source: "link", notice: null, sessionOnly: true };
   }
+
   if (linkToken) {
     const fallback = stored && isValidSlice(stored, layers) ? stored : defaultSlice(layers);
 
@@ -239,6 +247,7 @@ export function resolveCharts(
       sessionOnly: true,
     };
   }
+
   if (stored && isValidSlice(stored, layers)) {
     return { slice: stored, source: "stored", notice: null, sessionOnly: false };
   }

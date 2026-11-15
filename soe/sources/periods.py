@@ -39,11 +39,7 @@ def add_duration(iso_date: str, duration: str, sign: int = 1) -> str:
 def is_request_label(value: object, step: str) -> bool:
     """Whether `value` names one request period of `step`, such as 'YYYY-MM' for P1M."""
     pattern = REQUEST_PATTERNS.get(step)
-    return (
-        pattern is not None
-        and isinstance(value, str)
-        and pattern.fullmatch(value) is not None
-    )
+    return pattern is not None and isinstance(value, str) and pattern.fullmatch(value) is not None
 
 
 def request_range(start: str, end: str, step: str) -> tuple[str, str]:
@@ -55,11 +51,11 @@ def request_range(start: str, end: str, step: str) -> tuple[str, str]:
 
 def request_label(iso_date: str, step: str) -> str:
     """The request period holding `iso_date`, such as '2015-06' for P1M."""
-    return iso_date[:len(REQUEST_FORMATS[step])]
+    return iso_date[: len(REQUEST_FORMATS[step])]
 
 
 def _period_start(label: str, step: str) -> str:
     if not is_request_label(label, step):
         raise ValueError(f"{label!r} does not name a {step} period")
 
-    return label + FIRST_DAY_TEMPLATE[len(label):]
+    return label + FIRST_DAY_TEMPLATE[len(label) :]

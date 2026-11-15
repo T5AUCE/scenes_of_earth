@@ -10,8 +10,6 @@ import {
   setPairOpacities,
   warmHiddenRaster,
 } from "../map";
-import type { StepReader } from "../step-reader";
-import { displayStops } from "../units";
 import {
   type BivariateAxis,
   lut2d,
@@ -20,8 +18,10 @@ import {
 } from "../render/colormap";
 import { crossSampleTable, type SampleTable, sampleTable } from "../render/mercator";
 import { RAIN_TEMPERATURE_GRID } from "../render/palettes";
+import type { StepReader } from "../step-reader";
 import { formatTime, latestOnly, stepAt } from "../timeline";
 import type { LayerContext, LayerDoc, LayerView, TimeDoc } from "../types";
+import { displayStops } from "../units";
 import { BLEND, type Draw, differingPeriodNote, missingStepNote } from "./allocate";
 import { ImageCrossfade } from "./crossfade";
 import { fieldReader } from "./field";
@@ -34,8 +34,10 @@ export const BLEND_TITLE = "Rainfall + Temperature (Blended)";
 const BLEND_COLORS = lut2d(RAIN_TEMPERATURE_GRID);
 
 /** What the blend needs from the scene beyond its two layers. */
-export interface BlendContext
-  extends Pick<LayerContext, "map" | "store" | "shift" | "slots" | "report"> {
+export interface BlendContext extends Pick<
+  LayerContext,
+  "map" | "store" | "shift" | "slots" | "report"
+> {
   /** The custom range set in a layer's menu, or null while its fitted range applies. */
   rangeOf(layerId: string): [number, number] | null;
   /** The display unit chosen in a layer's menu, or its native units. */
@@ -101,11 +103,13 @@ class Blend implements BlendView {
 
   constructor([rain, temperature]: readonly [LayerDoc, LayerDoc], context: BlendContext) {
     this.context = context;
+
     const { map, store, shift, slots } = context;
     this.fade = new ImageCrossfade(BLEND_OPACITY, {
       setImage: (slot, image) => setImage(map, this.fadeIds[slot], image),
       setOpacities: (opacities) => setPairOpacities(map, this.fadeIds, opacities),
     });
+
     const finer = rain.grid.res <= temperature.grid.res ? rain : temperature;
     const table = sampleTable(finer.grid, maxTextureSize(map), { preserveCoverage: true });
     this.width = table.width;
@@ -133,12 +137,7 @@ class Blend implements BlendView {
     this.noteBox.className = "option-note";
     this.noteBox.hidden = true;
     this.parts = [
-      {
-        id: BLEND,
-        label: BLEND_TITLE,
-        layerIds: [...this.fadeIds],
-        note: this.noteBox,
-      },
+      { id: BLEND, label: BLEND_TITLE, layerIds: [...this.fadeIds], note: this.noteBox },
     ];
     this.showLegend();
   }
@@ -158,7 +157,9 @@ class Blend implements BlendView {
 
     const nextKey = this.keyAt(next);
     this.fade.frame(this.keyAt(time), nextKey, mix);
+
     const dominant = mix < 0.5 ? time : next;
+
     if (dominant !== this.notedTime) this.showNotes(dominant);
     if (nextKey !== null) this.fade.prepare(nextKey, () => this.loadNext(next));
   }
@@ -188,10 +189,18 @@ class Blend implements BlendView {
     if (steps[0] < 0 || steps[1] < 0 || !this.alive) return;
 
     const values = await this.readSteps(steps, false);
+
     if (!this.alive || signal?.aborted || !this.isShown || requestTime !== this.shownTime) return;
-    if (!sameStops(stops, this.halves.map((half) => this.nativeStops(half)))) return;
+    if (
+      !sameStops(
+        stops,
+        this.halves.map((half) => this.nativeStops(half)),
+      )
+    )
+      return;
 
     const key = this.keyAt(requestTime)!;
+
     if (this.fade.holds(key)) {
       for (const id of this.fadeIds) await warmHiddenRaster(this.context.map, id, signal);
       return;
@@ -199,13 +208,23 @@ class Blend implements BlendView {
 
     this.activePaint?.abort();
     this.activePaint = null;
+
     const image = await this.paintStepImage(values, stops, signal);
+
     if (!this.alive || signal?.aborted || !this.isShown || requestTime !== this.shownTime) return;
-    if (!sameStops(stops, this.halves.map((half) => this.nativeStops(half)))) return;
+    if (
+      !sameStops(
+        stops,
+        this.halves.map((half) => this.nativeStops(half)),
+      )
+    )
+      return;
 
     this.fade.show(key, () => image);
+
     // The hidden sources prepare under the zoom gate, so the first visible render skips them.
     for (const id of this.fadeIds) await warmHiddenRaster(this.context.map, id, signal);
+
     if (!this.alive || signal?.aborted || !this.isShown || requestTime !== this.shownTime) return;
 
     await yieldEntryFrame(signal);
@@ -233,19 +252,16 @@ class Blend implements BlendView {
     this.activePaint?.abort();
     this.activePaint = null;
     this.fade.invalidate();
+
     if (this.values && this.shownKey !== null && this.shownTime !== null) {
       const stops = this.halves.map((half) => this.nativeStops(half));
       const controller = new AbortController();
       this.activePaint = controller;
-      void this.paint(
-        this.values,
-        this.shownKey,
-        stops,
-        this.shownTime,
-        controller.signal,
-      ).finally(() => {
-        if (this.activePaint === controller) this.activePaint = null;
-      });
+      void this.paint(this.values, this.shownKey, stops, this.shownTime, controller.signal).finally(
+        () => {
+          if (this.activePaint === controller) this.activePaint = null;
+        },
+      );
     }
   }
 
@@ -258,6 +274,7 @@ class Blend implements BlendView {
     this.activePaint?.abort();
     this.activePaint = null;
     this.fade.invalidate();
+
     for (const id of this.fadeIds) removeLayerAndSource(this.context.map, id);
   }
 
@@ -269,8 +286,10 @@ class Blend implements BlendView {
 
     // A painted image shows at once, so a pause never waits on the decoded values.
     const key = this.keyAt(this.shownTime);
+
     if (key !== null && this.fade.select(key)) this.values = null;
     else this.hide();
+
     this.drawLatest(this.shownTime);
   }
 
@@ -299,20 +318,30 @@ class Blend implements BlendView {
       const requestTime = time;
       const requestKey = this.keyAt(time)!;
       this.activePaint?.abort();
+
       const controller = new AbortController();
       this.activePaint = controller;
+
       let values: Float32Array[];
+
       try {
         values = await this.readSteps(steps);
       } catch (error) {
         if (this.activePaint === controller) this.activePaint = null;
         throw error;
       }
+
       if (!this.isCurrent(requestTime)) {
         if (this.activePaint === controller) this.activePaint = null;
         return;
       }
-      if (!sameStops(stops, this.halves.map((half) => this.nativeStops(half)))) {
+
+      if (
+        !sameStops(
+          stops,
+          this.halves.map((half) => this.nativeStops(half)),
+        )
+      ) {
         if (this.activePaint === controller) this.activePaint = null;
         return;
       }
@@ -322,6 +351,7 @@ class Blend implements BlendView {
       } finally {
         if (this.activePaint === controller) this.activePaint = null;
       }
+
       this.halves.forEach(({ reader, time: axis }, index) => {
         reader.prime(steps[index], axis.values.length - 1);
       });
@@ -338,12 +368,16 @@ class Blend implements BlendView {
   /** Sets the note for a time and returns whether a half has no step there. */
   private showNotes(time: string) {
     const steps = this.stepsAt(time);
-    const label = formatTime(time, this.halves.map(({ time: axis }) => axis.step));
+    const label = formatTime(
+      time,
+      this.halves.map(({ time: axis }) => axis.step),
+    );
     const missing = missingStepNote(
       this.halves.map(({ layer }, index) => ({ title: layer.title, step: steps[index] })),
       label,
     );
     const note = missing ?? differingPeriodNote(this.periodsAt(steps));
+
     this.notedTime = time;
     this.noteBox.textContent = note ?? "";
     this.noteBox.hidden = note === null;
@@ -371,7 +405,9 @@ class Blend implements BlendView {
   ) {
     this.values = values;
     this.shownKey = key;
+
     let image: ImageData;
+
     try {
       image = await this.paintStepImage(values, stops, signal);
     } catch (error) {
@@ -379,10 +415,17 @@ class Blend implements BlendView {
 
       throw error;
     }
+
     if (signal?.aborted) return;
     if (!this.alive || !this.isShown || this.shownTime !== requestTime) return;
     if (this.keyAt(this.shownTime) !== key) return;
-    if (!sameStops(stops, this.halves.map((half) => this.nativeStops(half)))) return;
+    if (
+      !sameStops(
+        stops,
+        this.halves.map((half) => this.nativeStops(half)),
+      )
+    )
+      return;
 
     this.fade.show(key, () => image);
   }
@@ -398,6 +441,7 @@ class Blend implements BlendView {
       table: half.table,
       stops: stops[index],
     }));
+
     return paintBivariateInSlices(rain, temperature, BLEND_COLORS, signal).then(
       (rgba) => new ImageData(rgba, this.width, this.height),
     );
@@ -451,6 +495,7 @@ class Blend implements BlendView {
 /** Wait a frame so the preparing note paints before heavy work continues. */
 function yieldEntryFrame(signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(cancelError());
+
   return new Promise((done, fail) => {
     const onFrame = () => {
       signal?.removeEventListener("abort", onAbort);
@@ -458,22 +503,30 @@ function yieldEntryFrame(signal?: AbortSignal): Promise<void> {
     };
     const onAbort = () => fail(cancelError());
     signal?.addEventListener("abort", onAbort, { once: true });
+
     if (typeof requestAnimationFrame === "function") {
       requestAnimationFrame(onFrame);
       return;
     }
+
     setTimeout(onFrame, 0);
   });
 }
 
 function sameStops(first: number[][], second: number[][]): boolean {
-  return first.length === second.length
-    && first.every((stops, index) => stops.length === second[index].length
-      && stops.every((stop, stopIndex) => stop === second[index][stopIndex]));
+  return (
+    first.length === second.length
+    && first.every(
+      (stops, index) =>
+        stops.length === second[index].length
+        && stops.every((stop, stopIndex) => stop === second[index][stopIndex]),
+    )
+  );
 }
 
 function cancelError(): Error {
   const error = new Error("Entry preparation was cancelled");
   error.name = "AbortError";
+
   return error;
 }

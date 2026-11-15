@@ -17,7 +17,7 @@ const LOG_TOLERANCE = 1e-9;
 const UNIT_OPTIONS: Record<string, readonly string[]> = {
   "mm/month": ["mm/month", "in/month"],
   "°C": ["°C", "°F"],
-  "m": ["m", "ft"],
+  m: ["m", "ft"],
 };
 
 /** The display choices for a bundle's native units, or null when the layer has none. */
@@ -32,9 +32,7 @@ export function isUnitFor(nativeUnits: string, unit: string): boolean {
 
 /** The stored or linked unit when it belongs to the layer, else the bundle's native units. */
 export function displayUnitFor(nativeUnits: string, unit: string | undefined | null): string {
-  return unit !== undefined && unit !== null && isUnitFor(nativeUnits, unit)
-    ? unit
-    : nativeUnits;
+  return unit !== undefined && unit !== null && isUnitFor(nativeUnits, unit) ? unit : nativeUnits;
 }
 
 /** Convert a value from one unit of a pair to the other, leaving unknown pairs unchanged. */
@@ -56,10 +54,7 @@ export function convertRange(
   fromUnit: string,
   toUnit: string,
 ): [number, number] {
-  return [
-    convertValue(range[0], fromUnit, toUnit),
-    convertValue(range[1], fromUnit, toUnit),
-  ];
+  return [convertValue(range[0], fromUnit, toUnit), convertValue(range[1], fromUnit, toUnit)];
 }
 
 /** The decimals that keep a display step as precise as a native one, capped for labels. */
@@ -88,8 +83,8 @@ export function displayStops(
 
   // A converted step keeps the precision of a native one, so labels match the editor.
   const decimals = displayDecimals(nativeDecimals, nativeUnits, displayUnit);
-  return stops.map(
-    (stop) => Number(convertValue(stop, nativeUnits, displayUnit).toFixed(decimals)),
+  return stops.map((stop) =>
+    Number(convertValue(stop, nativeUnits, displayUnit).toFixed(decimals)),
   );
 }
 

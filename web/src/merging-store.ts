@@ -60,6 +60,7 @@ export function mergingStore(
       return new Promise((resolve, reject) => {
         const wanted = { offset: range.offset, length: range.length, resolve, reject };
         const existing = waiting.get(key);
+
         if (existing) {
           existing.push(wanted);
           return;
@@ -76,10 +77,12 @@ export function mergingStore(
 function groupRanges(wanted: WantedRange[], maxBytes: number): RangeGroup[] {
   const groups: RangeGroup[] = [];
   const byOffset = [...wanted].sort((first, second) => first.offset - second.offset);
+
   for (const range of byOffset) {
     const end = range.offset + range.length;
     const group = groups.at(-1);
     const isNear = group !== undefined && range.offset - group.end <= REQUEST_GAP_BYTES;
+
     if (group && isNear && Math.max(end, group.end) - group.start <= maxBytes) {
       group.end = Math.max(end, group.end);
       group.wanted.push(range);
@@ -87,6 +90,7 @@ function groupRanges(wanted: WantedRange[], maxBytes: number): RangeGroup[] {
       groups.push({ start: range.offset, end, wanted: [range] });
     }
   }
+
   return groups;
 }
 
@@ -97,6 +101,7 @@ async function fetchGroup(
   options: FetchOptions,
 ) {
   const length = group.end - group.start;
+
   try {
     const bytes = await getRange(key, { offset: group.start, length }, options);
     noteFetch(bytes?.byteLength ?? 0);

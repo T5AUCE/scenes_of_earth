@@ -6,6 +6,7 @@ that is read over HTTP (none when the CHIRPS cube holds every month) and is cach
 component uses the on-disk monthly markers and is read fresh for each preparation. Both
 components contribute to scene identity so revised data gets a new scene.
 """
+
 import hashlib
 import json
 import logging
@@ -61,8 +62,10 @@ def prepare_scene(db_path: Path | str, registry: Registry, body: bytes | str) ->
     layers = _requested_layers(data, registry)
     title = _requested_title(data)
     area = resolve_area(db_path, data.get("area"))
+
     datasets = scene_datasets(area, [registry[layer_id] for layer_id in layers])
     start, end = _requested_period(data, datasets)
+
     # Planning refuses a bad request before any data is read.
     scene_plan = plan(area, datasets, start, end)
 
@@ -84,6 +87,7 @@ def prepare_scene(db_path: Path | str, registry: Registry, body: bytes | str) ->
         "local_revisions": {layer_id: local for layer_id, (_, local) in revisions.items()},
         "title": title or (area.boundary["name"] if area.named else DRAWN_AREA_TITLE),
     }
+
     return PreparedScene(scene_id, json.dumps(request))
 
 
@@ -92,6 +96,7 @@ def _parse_body(body: bytes | str) -> JsonObject:
         data = json.loads(body)
     except (ValueError, RecursionError):
         raise AreaError("body must be JSON")
+
     if not isinstance(data, dict):
         raise AreaError("body must be a JSON object")
 
@@ -152,6 +157,7 @@ def _requested_period(data: JsonObject, datasets: list[Dataset]) -> tuple[str | 
     start, end = data.get("start"), data.get("end")
     for dataset in series:
         check_period(start, end, dataset, f"{dataset.title}: ")
+
     return start, end
 
 
@@ -191,6 +197,7 @@ def _area_identity(area: Area) -> tuple[str, JsonObject]:
         boundary = area.boundary
         geometry_hash = hashlib.sha256(boundary["geom_geojson"].encode()).hexdigest()
         geometry_id = boundary["id"] + ":" + geometry_hash + mark
+
         return geometry_id, {"type": "boundary", "id": boundary["id"]}
 
     geometry_hash = hashlib.sha256(area.geom.wkb).hexdigest()
@@ -198,9 +205,7 @@ def _area_identity(area: Area) -> tuple[str, JsonObject]:
 
 
 def _current_revisions(
-    db_path: Path | str,
-    datasets: list[Dataset],
-    scene_plan: Plan,
+    db_path: Path | str, datasets: list[Dataset], scene_plan: Plan
 ) -> dict[str, tuple[str | None, str | None]]:
     """Return the (remote, local) revision of the planned periods of each time-varying dataset."""
     revisions = {}
@@ -211,6 +216,7 @@ def _current_revisions(
                 _remote_revision(db_path, dataset, steps),
                 dataset.local_revision(steps),
             )
+
     return revisions
 
 
@@ -246,6 +252,7 @@ def _remote_revision(db_path: Path | str, dataset: Dataset, steps: list[str]) ->
 
     if revision is not None:
         db.set_revision(db_path, cache_key, period, revision)
+
     return revision
 
 
@@ -286,6 +293,7 @@ def compute_scene_id(
         __version__,
         VERSION,
     ]
+
     return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:ID_CHARS]
 
 

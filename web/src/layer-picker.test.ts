@@ -35,10 +35,12 @@ test("moving From past To pulls To along, and back again", async (context) => {
 
   end.value = "2026-01";
   end.dispatchEvent(new Event("change"));
+
   assert.equal(start.value, "2026-01");
 
   start.value = "2026-04";
   start.dispatchEvent(new Event("change"));
+
   assert.equal(end.value, "2026-04");
 });
 
@@ -86,12 +88,15 @@ async function monthControls(
   const start = createMonthSelect("From month", "From year");
   const end = createMonthSelect("To month", "To year");
   await loadLayerChoices({ layerBox, start, end });
+
   return { layerBox, start, end };
 }
 
 function toggleLayer(layerBox: HTMLElement, id: string, checked: boolean): void {
   const box = layerBox.querySelector<HTMLInputElement>(`input[value="${id}"]`);
+
   assert.ok(box);
+
   box.checked = checked;
   box.dispatchEvent(new Event("change", { bubbles: true }));
 }

@@ -8,6 +8,7 @@ source maps its own age names to the periods below, so later sources share these
 Some historical names span eras, so their entries name both reaches. Colours follow the ICS
 chart via Macrostrat (CC BY 4.0); undivided classes take their era colour.
 """
+
 from collections.abc import Iterable
 
 GEOLOGY_AGE_FILE = "geology_age.tif"  # in the cubes folder
@@ -197,8 +198,7 @@ def smallest_containing_class(oldest: str, newest: str) -> int:
 
 
 def classify_age_ranges(
-    ranges: Iterable[tuple[str, str]],
-    names: AgeNames,
+    ranges: Iterable[tuple[str, str]], names: AgeNames
 ) -> dict[tuple[str, str], int]:
     """Return the class value of each (start name, end name) range, by the age names alone.
 
@@ -217,4 +217,5 @@ def _range_class(pair: tuple[str, str], names: AgeNames) -> int:
     reaches = [names[name] for name in pair]
     oldest = min((reach[0] for reach in reaches), key=TIMELINE.index)
     newest = max((reach[1] for reach in reaches), key=TIMELINE.index)
+
     return smallest_containing_class(oldest, newest)

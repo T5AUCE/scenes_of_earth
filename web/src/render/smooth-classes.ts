@@ -31,6 +31,7 @@ export function cellClassIds(values: Float32Array, classValues: number[]) {
   const indexByValue = buildClassIndex(classValues);
   const ids = new Uint8Array(values.length);
   writeClassIds(values, indexByValue, ids, 0, values.length);
+
   return ids;
 }
 
@@ -46,16 +47,21 @@ export async function cellClassIdsInSlices(
   const indexByValue = buildClassIndex(classValues);
   const ids = new Uint8Array(values.length);
   let sliceMs = performance.now();
+
   for (let start = 0; start < values.length; start += CLASS_CHECK_CELLS) {
     if (signal?.aborted) throw cancelError();
+
     const end = Math.min(values.length, start + CLASS_CHECK_CELLS);
     writeClassIds(values, indexByValue, ids, start, end);
+
     if (performance.now() - sliceMs < SLICE_BUDGET_MS) continue;
 
     await yieldToBrowser(signal);
     sliceMs = performance.now();
   }
+
   if (signal?.aborted) throw cancelError();
+
   return ids;
 }
 
@@ -64,6 +70,7 @@ function buildClassIndex(classValues: number[]) {
   classValues.forEach((value, index) => {
     indexByValue[value] = index + 1;
   });
+
   return indexByValue;
 }
 
@@ -80,6 +87,7 @@ function writeClassIds(
 function cancelError(): Error {
   const error = new Error("Entry preparation was cancelled");
   error.name = "AbortError";
+
   return error;
 }
 
@@ -108,12 +116,14 @@ export function smoothClassIds(
     Math.floor(MAX_SMOOTH_PIXELS_PX / width),
     Math.max(1, Math.floor(baseSize.height * scale)),
   );
+
   const columns = columnSamples(grid.nx, width);
   const rows = rowSamples(grid, height);
 
   const ids = new Uint8Array(width * height);
   const corner = new Uint8Array(CORNER_COUNT);
   const weight = new Float64Array(CORNER_COUNT);
+
   for (let row = 0; row < height; row++) {
     const upper = rows.first[row] * grid.nx;
     const lower = rows.second[row] * grid.nx;
@@ -123,10 +133,12 @@ export function smoothClassIds(
       const left = columns.first[column];
       const right = columns.second[column];
       const columnWeight = columns.weight[column];
+
       corner[0] = cellIds[upper + left];
       corner[1] = cellIds[upper + right];
       corner[2] = cellIds[lower + left];
       corner[3] = cellIds[lower + right];
+
       if (corner[0] === corner[1] && corner[0] === corner[2] && corner[0] === corner[3]) {
         ids[row * width + column] = corner[0];
         continue;
@@ -141,6 +153,7 @@ export function smoothClassIds(
       ids[row * width + column] = strongestClass(corner, weight, nearest);
     }
   }
+
   return { width, height, ids };
 }
 
@@ -163,6 +176,7 @@ export function classAt(
   const idAt = (columnIndex: number, rowIndex: number) => {
     const clampedColumn = Math.min(nx - 1, Math.max(0, columnIndex));
     const clampedRow = Math.min(ny - 1, Math.max(0, rowIndex));
+
     return cellIds[clampedRow * nx + clampedColumn];
   };
 
@@ -175,6 +189,7 @@ export function classAt(
   const columnWeights = kernelWeights(columnFraction, rounding);
   const rowWeights = kernelWeights(rowFraction, rounding);
   const weightByClass = new Map<number, number>();
+
   for (let offsetRow = 0; offsetRow < KERNEL_SIZE; offsetRow++) {
     for (let offsetColumn = 0; offsetColumn < KERNEL_SIZE; offsetColumn++) {
       const id = idAt(baseColumn + offsetColumn - 1, baseRow + offsetRow - 1);
@@ -185,6 +200,7 @@ export function classAt(
 
   let best = nearest;
   let bestWeight = weightByClass.get(nearest)!;
+
   for (const [id, weight] of weightByClass) {
     if (id === 0 || id === best) continue;
 
@@ -193,6 +209,7 @@ export function classAt(
       bestWeight = weight;
     }
   }
+
   return best;
 }
 
@@ -206,6 +223,7 @@ function kernelWeights(fraction: number, rounding: number) {
     (-3 * cube + 3 * square + 3 * fraction + 1) / 6,
     cube / 6,
   ];
+
   return bilinear.map((weight, index) => weight + rounding * (bSpline[index] - weight));
 }
 
@@ -214,6 +232,7 @@ function strongestClass(corner: Uint8Array, weight: Float64Array, nearest: numbe
 
   let best = corner[nearest];
   let bestWeight = classWeight(corner, weight, best);
+
   for (const id of corner) {
     if (id === 0 || id === best) continue;
 
@@ -223,6 +242,7 @@ function strongestClass(corner: Uint8Array, weight: Float64Array, nearest: numbe
       bestWeight = candidateWeight;
     }
   }
+
   return best;
 }
 
@@ -231,6 +251,7 @@ function classWeight(corner: Uint8Array, weight: Float64Array, id: number) {
   for (let index = 0; index < CORNER_COUNT; index++) {
     if (corner[index] === id) total += weight[index];
   }
+
   return total;
 }
 
@@ -268,6 +289,7 @@ function axisSamples(
     second: new Int32Array(pixelCount),
     weight: new Float64Array(pixelCount),
   };
+
   for (let pixel = 0; pixel < pixelCount; pixel++) {
     const position = Math.min(cellCount - 1, Math.max(0, cellPosition(pixel) - 0.5));
     const first = Math.min(cellCount - 2, Math.floor(position));
@@ -275,6 +297,7 @@ function axisSamples(
     samples.second[pixel] = Math.min(cellCount - 1, first + 1);
     samples.weight[pixel] = position - samples.first[pixel];
   }
+
   return samples;
 }
 

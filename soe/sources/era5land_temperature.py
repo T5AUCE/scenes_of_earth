@@ -5,6 +5,7 @@ that reach 84N for a scene beyond 60N or S. It marks preliminary months in those
 notice. It reads cells from the cubes that `soe.ingest.era5` writes, so a build makes no network
 calls for temperature.
 """
+
 from dataclasses import dataclass
 
 import numpy as np
@@ -30,9 +31,7 @@ ERA5_LAND_TEMPERATURE_CUBE = CubeSpec(
     units="degC",
 )
 ERA5_LAND_TEMPERATURE_84N_CUBE = ERA5_LAND_TEMPERATURE_CUBE._replace(
-    name="era5land_temperature_84n",
-    title="ERA5-Land temperature to 84N",
-    grid=ERA5_LAND_84N_GRID,
+    name="era5land_temperature_84n", title="ERA5-Land temperature to 84N", grid=ERA5_LAND_84N_GRID
 )
 
 
@@ -57,8 +56,7 @@ class Era5LandTemperatureDataset(HighLatitudeSeries):
         )
 
     def notices(self, bbox: Bbox, steps: list[str]) -> list[str]:
-        """Return one notice for each run of requested months that are preliminary in either cube.
-        """
+        """Return one notice for each run of requested months that are preliminary in either cube."""
         labels = [step[:MONTH_CHARS] for step in steps]
         runs = preliminary_runs(labels, self._land_months(), self.fallback_months())
         return [_preliminary_notice(run[0], run[-1]) for run in runs]
@@ -70,10 +68,9 @@ class Era5LandTemperatureDataset(HighLatitudeSeries):
         month = step[:MONTH_CHARS]
         cube = self._land_cube()
         temperature = read_wrapped(
-            cube.grid,
-            bbox,
-            lambda window: self.backend.read_cube(cube, month, window),
+            cube.grid, bbox, lambda window: self.backend.read_cube(cube, month, window)
         )
+
         return block_mean(temperature, factor)
 
     def _land_months(self) -> dict[str, str]:

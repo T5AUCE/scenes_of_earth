@@ -13,8 +13,10 @@ test("the collapsed panel keeps its label and switches its preview", async (cont
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeScene();
   const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -64,8 +66,10 @@ test("the notice badge asks for About while the footer asks for Credits", async 
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeScene();
   const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -101,8 +105,10 @@ test("the docked header renders compact collapse and expand symbols", async (con
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeScene();
   const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -123,6 +129,7 @@ test("the docked header renders compact collapse and expand symbols", async (con
   const expand = header.querySelector(
     'button[aria-label="Expand to full view"]',
   ) as HTMLButtonElement;
+
   assert.equal(collapse.textContent, "–");
   assert.equal(collapse.title, "Collapse");
   assert.equal(expand.textContent, "⤢");
@@ -137,8 +144,10 @@ test("setTime shows the dialog label and hides it without a time", async (contex
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeScene();
   const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -175,8 +184,10 @@ test("units through the store relabel the summary", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeScene();
   const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -191,6 +202,7 @@ test("units through the store relabel the summary", async (context) => {
   });
 
   assert.match(panel!.element.textContent ?? "", /km²/);
+
   await act(async () => {
     store.dispatch({
       kind: "display",
@@ -208,8 +220,10 @@ test("open, Escape and close keep focus on the collapsed entry point", async (co
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeScene();
   const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -230,6 +244,7 @@ test("open, Escape and close keep focus on the collapsed entry point", async (co
   });
   assert.equal(panel!.isOpen, true);
   assert.match(dialog.textContent ?? "", /Basemap/);
+
   const creditsTab = [...dialog.querySelectorAll('[role="tab"]')].find(
     (button) => button.textContent === "Credits",
   ) as HTMLButtonElement;
@@ -244,10 +259,7 @@ test("open, Escape and close keep focus on the collapsed entry point", async (co
     panel!.closeFull();
   });
   assert.equal(panel!.isOpen, false);
-  assertSameNode(
-    document.activeElement,
-    panel!.element.querySelector(".expand"),
-  );
+  assertSameNode(document.activeElement, panel!.element.querySelector(".expand"));
 
   await act(async () => panel!.destroy());
 });
@@ -256,8 +268,10 @@ test("destroy removes both roots and clears the dialog", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeScene();
   const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -287,8 +301,10 @@ test("an immediate Credits open wins before the first commit", async (context) =
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeScene();
   const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -307,13 +323,12 @@ test("an immediate Credits open wins before the first commit", async (context) =
 
   assert.equal(panel!.isOpen, true);
   assert.match(dialog.textContent ?? "", /Basemap/);
+
   const creditsTab = [...dialog.querySelectorAll('[role="tab"]')].find(
     (button) => button.textContent === "Credits",
   ) as HTMLButtonElement;
-  assert.equal(
-    dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
-    "Credits",
-  );
+
+  assert.equal(dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent, "Credits");
   assertSameNode(document.activeElement, creditsTab);
   assert.equal(dialog.querySelector(".mini-time span")?.textContent, "2020-02");
 
@@ -324,8 +339,10 @@ test("an immediate Charts open wins before the first commit", async (context) =>
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeScene();
   const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -344,13 +361,12 @@ test("an immediate Charts open wins before the first commit", async (context) =>
   assert.equal(panel!.isOpen, true);
   assert.match(dialog.textContent ?? "", /Charts/);
   assert.match(dialog.textContent ?? "", /No rainfall accumulation|No charts/);
+
   const chartsTab = [...dialog.querySelectorAll('[role="tab"]')].find(
     (button) => button.textContent === "Charts",
   ) as HTMLButtonElement;
-  assert.equal(
-    dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
-    "Charts",
-  );
+
+  assert.equal(dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent, "Charts");
   assertSameNode(document.activeElement, chartsTab);
 
   await act(async () => panel!.destroy());
@@ -360,8 +376,10 @@ test("reopening About after another tab focuses its tab and resets scroll", asyn
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeScene();
   const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -376,6 +394,7 @@ test("reopening About after another tab focuses its tab and resets scroll", asyn
     document.body.append(dialog);
     panel.openFull("credits");
   });
+
   await act(async () => panel!.closeFull());
 
   const main = dialog.querySelector("main") as HTMLElement;
@@ -387,10 +406,8 @@ test("reopening About after another tab focuses its tab and resets scroll", asyn
   const aboutTab = [...dialog.querySelectorAll('[role="tab"]')].find(
     (button) => button.textContent === "About",
   ) as HTMLButtonElement;
-  assert.equal(
-    dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
-    "About",
-  );
+
+  assert.equal(dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent, "About");
   assertSameNode(document.activeElement, aboutTab);
   assert.equal(main.scrollTop, 0);
   assert.match(dialog.textContent ?? "", /Test scene/);
@@ -402,8 +419,10 @@ test("a cold About open focuses its tab after the lazy load", async (context) =>
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeScene();
   const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -421,91 +440,90 @@ test("a cold About open focuses its tab after the lazy load", async (context) =>
 
   assert.equal(panel!.isOpen, true);
   assert.match(dialog.textContent ?? "", /Test scene/);
+
   const aboutTab = [...dialog.querySelectorAll('[role="tab"]')].find(
     (button) => button.textContent === "About",
   ) as HTMLButtonElement;
-  assert.equal(
-    dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
-    "About",
-  );
+
+  assert.equal(dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent, "About");
   assertSameNode(document.activeElement, aboutTab);
   assert.equal((dialog.querySelector("main") as HTMLElement).scrollTop, 0);
 
   await act(async () => panel!.destroy());
 });
 
-test(
-  "a failed full-dialog load keeps the panel usable and retries on the next open",
-  async (context) => {
-    const window = new Window({ url: "http://localhost" });
-    context.after(() => window.happyDOM.abort());
-    installBrowser(window);
-    const { act } = await import("react");
-    const {
-      createScenePanel,
-      panelChunkLoaders,
-      resetPanelChunkCacheForTest,
-    } = await import("./scene-panel.tsx");
-    resetPanelChunkCacheForTest();
-    const originalFull = panelChunkLoaders.full;
-    let attempts = 0;
-    panelChunkLoaders.full = () => {
-      attempts += 1;
-      if (attempts === 1) return Promise.reject(new Error("chunk failed"));
+test("a failed full-dialog load keeps the panel usable and retries on the next open", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
 
-      return originalFull();
-    };
-    context.after(() => {
-      panelChunkLoaders.full = originalFull;
+  const { act } = await import("react");
+  const { createScenePanel, panelChunkLoaders, resetPanelChunkCacheForTest } =
+    await import("./scene-panel.tsx");
+
+  resetPanelChunkCacheForTest();
+
+  const originalFull = panelChunkLoaders.full;
+  let attempts = 0;
+  panelChunkLoaders.full = () => {
+    attempts += 1;
+    if (attempts === 1) return Promise.reject(new Error("chunk failed"));
+
+    return originalFull();
+  };
+
+  context.after(() => {
+    panelChunkLoaders.full = originalFull;
+  });
+
+  const scene = makeScene();
+  const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
     });
-    const scene = makeScene();
-    const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
-    const dialog = makeDialog();
-    let panel: ReturnType<typeof createScenePanel> | null = null;
-    await act(async () => {
-      panel = createScenePanel(scene, dialog, store, {
-        requestOpen: () => {},
-        requestClose: () => {},
-        stepTime: () => {},
-      });
-      document.body.append(panel.element);
-      document.body.append(dialog);
-      panel.openFull("about");
-    });
+    document.body.append(panel.element);
+    document.body.append(dialog);
+    panel.openFull("about");
+  });
 
-    assert.equal(panel!.isOpen, true);
-    assert.match(dialog.textContent ?? "", /Could not load the full view/);
-    assert.ok(panel!.element.querySelector(".panel-header"));
-    assert.ok(panel!.element.querySelector(".panel-footer"));
-    assert.match(panel!.element.textContent ?? "", /km²/);
+  assert.equal(panel!.isOpen, true);
+  assert.match(dialog.textContent ?? "", /Could not load the full view/);
+  assert.ok(panel!.element.querySelector(".panel-header"));
+  assert.ok(panel!.element.querySelector(".panel-footer"));
+  assert.match(panel!.element.textContent ?? "", /km²/);
 
-    await act(async () => {
-      panel!.closeFull();
-    });
-    await act(async () => {
-      panel!.openFull("about");
-    });
+  await act(async () => {
+    panel!.closeFull();
+  });
+  await act(async () => {
+    panel!.openFull("about");
+  });
 
-    assert.match(dialog.textContent ?? "", /Test scene/);
-    const aboutTab = [...dialog.querySelectorAll('[role="tab"]')].find(
-      (button) => button.textContent === "About",
-    ) as HTMLButtonElement;
-    assert.equal(
-      dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
-      "About",
-    );
-    assertSameNode(document.activeElement, aboutTab);
+  assert.match(dialog.textContent ?? "", /Test scene/);
 
-    await act(async () => panel!.destroy());
-  },
-);
+  const aboutTab = [...dialog.querySelectorAll('[role="tab"]')].find(
+    (button) => button.textContent === "About",
+  ) as HTMLButtonElement;
+
+  assert.equal(dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent, "About");
+  assertSameNode(document.activeElement, aboutTab);
+
+  await act(async () => panel!.destroy());
+});
 
 test("reopening the same tab refocuses and resets scroll", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeScene();
   const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -527,10 +545,7 @@ test("reopening the same tab refocuses and resets scroll", async (context) => {
     panel!.closeFull();
   });
   assert.equal(panel!.isOpen, false);
-  assertSameNode(
-    document.activeElement,
-    panel!.element.querySelector(".expand"),
-  );
+  assertSameNode(document.activeElement, panel!.element.querySelector(".expand"));
 
   main.scrollTop = 123;
   await act(async () => {
@@ -550,14 +565,17 @@ test("a notice from Credits commits About before scrolling to notices", async (c
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const previousHistory = (globalThis as Record<string, unknown>).history;
   (globalThis as Record<string, unknown>).history = window.history;
   context.after(() => {
     (globalThis as Record<string, unknown>).history = previousHistory;
   });
+
   const scrolled = installScrollSpy(context);
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeScene();
   const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -571,20 +589,19 @@ test("a notice from Credits commits About before scrolling to notices", async (c
       requestClose: () => {},
       stepTime: () => {},
     });
+
     document.body.append(panel.element);
     document.body.append(dialog);
     panel.openFull("credits");
   });
 
-  assert.equal(
-    dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
-    "Credits",
-  );
+  assert.equal(dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent, "Credits");
   assertSameNode(dialog.querySelector("#notices-heading"), null);
   assert.deepEqual(scrolled, []);
 
   const main = dialog.querySelector("main") as HTMLElement;
   main.scrollTop = 77;
+
   const badge = [...panel!.element.querySelectorAll("button")].find((button) =>
     (button.textContent ?? "").includes("note"),
   )!;
@@ -594,10 +611,8 @@ test("a notice from Credits commits About before scrolling to notices", async (c
 
   assert.deepEqual(history.state, { panel: "about" });
   assert.equal(panel!.isOpen, true);
-  assert.equal(
-    dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
-    "About",
-  );
+  assert.equal(dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent, "About");
+
   const aboutTab = [...dialog.querySelectorAll('[role="tab"]')].find(
     (button) => button.textContent === "About",
   ) as HTMLButtonElement;
@@ -614,9 +629,11 @@ test("recording the notice request without opening leaves the dialog closed", as
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const scrolled = installScrollSpy(context);
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeScene();
   const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -651,9 +668,11 @@ test("a pending notice destroyed early leaves no stale scroll or focus", async (
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const scrolled = installScrollSpy(context);
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeScene();
   const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -692,11 +711,9 @@ test("a pending notice destroyed early leaves no stale scroll or focus", async (
     reopened.openFull("credits");
   });
 
-  assert.equal(
-    dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
-    "Credits",
-  );
+  assert.equal(dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent, "Credits");
   assert.deepEqual(scrolled, []);
+
   const creditsTab = [...dialog.querySelectorAll('[role="tab"]')].find(
     (button) => button.textContent === "Credits",
   ) as HTMLButtonElement;
@@ -710,8 +727,10 @@ test("cancel is prevented and delegated while close returns to Expand", async (c
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeScene();
   const store = createSceneStore(makeLayers(), { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -739,10 +758,7 @@ test("cancel is prevented and delegated while close returns to Expand", async (c
     panel!.closeFull();
   });
   assert.equal(panel!.isOpen, false);
-  assertSameNode(
-    document.activeElement,
-    panel!.element.querySelector(".expand"),
-  );
+  assertSameNode(document.activeElement, panel!.element.querySelector(".expand"));
 
   await act(async () => panel!.destroy());
 });
@@ -751,8 +767,10 @@ test("the chip previews the main chart and follows time and units", async (conte
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -765,6 +783,7 @@ test("the chip previews the main chart and follows time and units", async (conte
     });
     document.body.append(panel.element);
   });
+
   const chartsTab = [...panel!.element.querySelectorAll("button")].find(
     (button) => button.textContent === "Charts",
   )!;
@@ -792,71 +811,74 @@ test("the chip previews the main chart and follows time and units", async (conte
   await act(async () => panel!.destroy());
 });
 
-test(
-  "a failed chart chip load keeps the panel usable and retries on the next Charts click",
-  async (context) => {
-    const window = new Window({ url: "http://localhost" });
-    context.after(() => window.happyDOM.abort());
-    installBrowser(window);
-    const { act } = await import("react");
-    const {
-      createScenePanel,
-      panelChunkLoaders,
-      resetPanelChunkCacheForTest,
-    } = await import("./scene-panel.tsx");
+test("a failed chart chip load keeps the panel usable and retries on the next Charts click", async (context) => {
+  const window = new Window({ url: "http://localhost" });
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+
+  const { act } = await import("react");
+  const { createScenePanel, panelChunkLoaders, resetPanelChunkCacheForTest } =
+    await import("./scene-panel.tsx");
+
+  resetPanelChunkCacheForTest();
+
+  const originalChip = panelChunkLoaders.chip;
+  let attempts = 0;
+  panelChunkLoaders.chip = () => {
+    attempts += 1;
+    if (attempts === 1) return Promise.reject(new Error("chunk failed"));
+
+    return originalChip();
+  };
+
+  context.after(() => {
+    panelChunkLoaders.chip = originalChip;
     resetPanelChunkCacheForTest();
-    const originalChip = panelChunkLoaders.chip;
-    let attempts = 0;
-    panelChunkLoaders.chip = () => {
-      attempts += 1;
-      if (attempts === 1) return Promise.reject(new Error("chunk failed"));
+  });
 
-      return originalChip();
-    };
-    context.after(() => {
-      panelChunkLoaders.chip = originalChip;
-      resetPanelChunkCacheForTest();
+  const scene = makeChartableScene();
+  const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
+  const dialog = makeDialog();
+  let panel: ReturnType<typeof createScenePanel> | null = null;
+  await act(async () => {
+    panel = createScenePanel(scene, dialog, store, {
+      requestOpen: () => {},
+      requestClose: () => {},
+      stepTime: () => {},
     });
-    const scene = makeChartableScene();
-    const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
-    const dialog = makeDialog();
-    let panel: ReturnType<typeof createScenePanel> | null = null;
-    await act(async () => {
-      panel = createScenePanel(scene, dialog, store, {
-        requestOpen: () => {},
-        requestClose: () => {},
-        stepTime: () => {},
-      });
-      document.body.append(panel.element);
+    document.body.append(panel.element);
+  });
+
+  const tab = (label: string) =>
+    [...panel!.element.querySelectorAll("button")].find((button) => button.textContent === label)!;
+
+  const click = (button: HTMLElement) =>
+    act(async () => {
+      button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
     });
-    const tab = (label: string) =>
-      [...panel!.element.querySelectorAll("button")].find(
-        (button) => button.textContent === label,
-      )!;
-    const click = (button: HTMLElement) =>
-      act(async () => {
-        button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-      });
 
-    await click(tab("Charts"));
-    assert.match(panel!.element.textContent ?? "", /Could not load the chart preview/);
-    assert.ok(tab("About"));
-    assert.ok(panel!.element.querySelector(".expand"));
+  await click(tab("Charts"));
 
-    await click(tab("About"));
-    await click(tab("Charts"));
-    assert.ok(panel!.element.querySelector("svg"));
+  assert.match(panel!.element.textContent ?? "", /Could not load the chart preview/);
+  assert.ok(tab("About"));
+  assert.ok(panel!.element.querySelector(".expand"));
 
-    await act(async () => panel!.destroy());
-  },
-);
+  await click(tab("About"));
+  await click(tab("Charts"));
+
+  assert.ok(panel!.element.querySelector("svg"));
+
+  await act(async () => panel!.destroy());
+});
 
 test("gallery opens detail and edit with focus restoration", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -872,6 +894,7 @@ test("gallery opens detail and edit with focus restoration", async (context) => 
     panel.openFull("charts");
   });
   assert.ok(dialog.querySelector(".chart-gallery"));
+
   const open = [...dialog.querySelectorAll("button")].find(
     (button) => button.textContent === "Open",
   )!;
@@ -888,10 +911,7 @@ test("gallery opens detail and edit with focus restoration", async (context) => 
     back.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assert.ok(dialog.querySelector(".chart-gallery"));
-  assertSameNode(
-    document.activeElement,
-    dialog.querySelector('[data-chart-id] button'),
-  );
+  assertSameNode(document.activeElement, dialog.querySelector("[data-chart-id] button"));
 
   const edit = [...dialog.querySelectorAll("button")].find(
     (button) => button.textContent === "Edit",
@@ -901,6 +921,7 @@ test("gallery opens detail and edit with focus restoration", async (context) => 
   });
   assert.ok(dialog.querySelector(".chart-editor"));
   assert.ok(dialog.querySelector(".editor-preview svg"));
+
   const tabs = [...dialog.querySelectorAll('[role="tab"]')] as HTMLButtonElement[];
   assert.ok(tabs.every((tab) => tab.disabled || tab.getAttribute("aria-selected") === "true"));
 
@@ -911,8 +932,10 @@ test("new chart saves to its close-up while cancel keeps the store untouched", a
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   const before = JSON.stringify(store.getSnapshot().charts);
@@ -929,6 +952,7 @@ test("new chart saves to its close-up while cancel keeps the store untouched", a
     document.body.append(dialog);
     panel.openFull("charts");
   });
+
   const creation = [...dialog.querySelectorAll("button")].find(
     (button) => button.textContent === "+ New chart",
   )!;
@@ -953,6 +977,7 @@ test("new chart saves to its close-up while cancel keeps the store untouched", a
     )!;
     second.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   const save = [...dialog.querySelectorAll("button")].find(
     (button) => button.textContent === "Save",
   )!;
@@ -969,8 +994,10 @@ test("dirty editor back asks to save, discard or keep editing", async (context) 
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -986,12 +1013,14 @@ test("dirty editor back asks to save, discard or keep editing", async (context) 
     document.body.append(dialog);
     panel.openFull("charts");
   });
+
   const edit = [...dialog.querySelectorAll("button")].find(
     (button) => button.textContent === "Edit",
   )!;
   await act(async () => {
     edit.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   const title = dialog.querySelector('.chart-editor input[type="text"]') as HTMLInputElement;
   await act(async () => {
     const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
@@ -1021,6 +1050,7 @@ test("dirty editor back asks to save, discard or keep editing", async (context) 
   await act(async () => {
     back.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   const discard = [...dialog.querySelectorAll("button")].find(
     (button) => button.textContent === "Discard",
   )!;
@@ -1037,8 +1067,10 @@ test("escape with a dirty draft holds the dialog and restores focus", async (con
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -1054,12 +1086,14 @@ test("escape with a dirty draft holds the dialog and restores focus", async (con
     document.body.append(dialog);
     panel.openFull("charts");
   });
+
   const edit = [...dialog.querySelectorAll("button")].find(
     (button) => button.textContent === "Edit",
   )!;
   await act(async () => {
     edit.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   const title = dialog.querySelector('.chart-editor input[type="text"]') as HTMLInputElement;
   await act(async () => {
     const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
@@ -1090,8 +1124,10 @@ test("dirty tabs stay blocked while preserving the draft", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -1106,18 +1142,21 @@ test("dirty tabs stay blocked while preserving the draft", async (context) => {
     document.body.append(dialog);
     panel.openFull("charts");
   });
+
   const edit = [...dialog.querySelectorAll("button")].find(
     (button) => button.textContent === "Edit",
   )!;
   await act(async () => {
     edit.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   const title = dialog.querySelector('.chart-editor input[type="text"]') as HTMLInputElement;
   await act(async () => {
     const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
     native?.set?.call(title, "Unsaved keyboard draft");
     title.dispatchEvent(new window.Event("input", { bubbles: true }));
   });
+
   for (const key of ["ArrowRight", "ArrowLeft", "Home", "End"]) {
     const chartsTab = [...dialog.querySelectorAll('[role="tab"]')].find(
       (button) => button.textContent === "Charts",
@@ -1127,21 +1166,21 @@ test("dirty tabs stay blocked while preserving the draft", async (context) => {
       const event = new window.KeyboardEvent("keydown", { key, bubbles: true });
       chartsTab.dispatchEvent(event);
     });
-    assert.equal(
-      dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
-      "Charts",
-    );
+    assert.equal(dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent, "Charts");
     assert.ok(dialog.querySelector(".chart-editor"));
   }
+
   assert.equal(panel!.isEditorDirty(), true);
   assert.equal(
     (dialog.querySelector('.chart-editor input[type="text"]') as HTMLInputElement).value,
     "Unsaved keyboard draft",
   );
+
   const aboutTab = [...dialog.querySelectorAll('[role="tab"]')].find(
     (button) => button.textContent === "About",
   ) as HTMLButtonElement;
   assert.equal(aboutTab.disabled, true);
+
   await act(async () => panel!.destroy());
 });
 
@@ -1149,8 +1188,10 @@ test("clean editor tabs stay blocked for every navigation key", async (context) 
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -1165,6 +1206,7 @@ test("clean editor tabs stay blocked for every navigation key", async (context) 
     document.body.append(dialog);
     panel.openFull("charts");
   });
+
   const edit = [...dialog.querySelectorAll("button")].find(
     (button) => button.textContent === "Edit",
   )!;
@@ -1172,6 +1214,7 @@ test("clean editor tabs stay blocked for every navigation key", async (context) 
     edit.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assert.equal(panel!.isEditorDirty(), false);
+
   for (const key of ["ArrowRight", "ArrowLeft", "Home", "End"]) {
     const chartsTab = [...dialog.querySelectorAll('[role="tab"]')].find(
       (button) => button.textContent === "Charts",
@@ -1181,16 +1224,15 @@ test("clean editor tabs stay blocked for every navigation key", async (context) 
       const event = new window.KeyboardEvent("keydown", { key, bubbles: true });
       chartsTab.dispatchEvent(event);
     });
-    assert.equal(
-      dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
-      "Charts",
-    );
+    assert.equal(dialog.querySelector('[role="tab"][aria-selected="true"]')?.textContent, "Charts");
     assert.ok(dialog.querySelector(".chart-editor"));
   }
+
   const aboutTab = [...dialog.querySelectorAll('[role="tab"]')].find(
     (button) => button.textContent === "About",
   ) as HTMLButtonElement;
   assert.equal(aboutTab.disabled, true);
+
   await act(async () => panel!.destroy());
 });
 
@@ -1198,8 +1240,10 @@ test("close confirm save completes pending close and keep restores focus", async
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -1215,12 +1259,14 @@ test("close confirm save completes pending close and keep restores focus", async
     document.body.append(dialog);
     panel.openFull("charts");
   });
+
   const edit = [...dialog.querySelectorAll("button")].find(
     (button) => button.textContent === "Edit",
   )!;
   await act(async () => {
     edit.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   const title = dialog.querySelector('.chart-editor input[type="text"]') as HTMLInputElement;
   await act(async () => {
     const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
@@ -1231,6 +1277,7 @@ test("close confirm save completes pending close and keep restores focus", async
     const event = new window.Event("cancel", { bubbles: true, cancelable: true });
     dialog.dispatchEvent(event);
   });
+
   const save = [...dialog.querySelector(".chart-confirm")!.querySelectorAll("button")].find(
     (button) => button.textContent === "Save",
   )!;
@@ -1239,6 +1286,7 @@ test("close confirm save completes pending close and keep restores focus", async
   });
   assert.deepEqual(closings, ["close"]);
   assertSameNode(dialog.querySelector(".chart-detail"), null);
+
   await act(async () => panel!.destroy());
 });
 
@@ -1246,8 +1294,10 @@ test("gallery detail editor focus lands on exact controls", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -1262,6 +1312,7 @@ test("gallery detail editor focus lands on exact controls", async (context) => {
     document.body.append(dialog);
     panel.openFull("charts");
   });
+
   const open = [...dialog.querySelectorAll("button")].find(
     (button) => button.textContent === "Open",
   )! as HTMLButtonElement;
@@ -1270,15 +1321,14 @@ test("gallery detail editor focus lands on exact controls", async (context) => {
     open.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assertSameNode(document.activeElement, dialog.querySelector("[data-detail-back]"));
+
   const editDetail = dialog.querySelector("[data-detail-edit]") as HTMLButtonElement;
   await act(async () => {
     editDetail.focus();
     editDetail.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
-  assertSameNode(
-    document.activeElement,
-    dialog.querySelector(".chart-editor .editor-head button"),
-  );
+  assertSameNode(document.activeElement, dialog.querySelector(".chart-editor .editor-head button"));
+
   const cancel = [...dialog.querySelectorAll("button")].find(
     (button) => button.textContent === "Cancel",
   )! as HTMLButtonElement;
@@ -1287,13 +1337,16 @@ test("gallery detail editor focus lands on exact controls", async (context) => {
     cancel.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assertSameNode(document.activeElement, dialog.querySelector("[data-detail-back]"));
+
   const back = dialog.querySelector("[data-detail-back]") as HTMLButtonElement;
   await act(async () => {
     back.focus();
     back.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
-  const cardButton = dialog.querySelector('[data-chart-id] button') as HTMLButtonElement;
+
+  const cardButton = dialog.querySelector("[data-chart-id] button") as HTMLButtonElement;
   assertSameNode(document.activeElement, cardButton);
+
   await act(async () => panel!.destroy());
 });
 
@@ -1301,16 +1354,17 @@ test("arbitrary chart ids focus without selector failure", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createSceneStore } = await import("../scene-store.ts");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   const current = store.getSnapshot().charts.definitions[0];
-  store.dispatch({
-    kind: "saveChart",
-    definition: { ...current, id: 'a"b', title: "Quoted" },
-  });
+  store.dispatch({ kind: "saveChart", definition: { ...current, id: 'a"b', title: "Quoted" } });
+
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const dialog = makeDialog();
   let panel: ReturnType<typeof createScenePanel> | null = null;
   await act(async () => {
@@ -1323,10 +1377,12 @@ test("arbitrary chart ids focus without selector failure", async (context) => {
     document.body.append(dialog);
     panel.openFull("charts");
   });
+
   const quotedCard = [...dialog.querySelectorAll("[data-chart-id]")].find(
     (element) => (element as HTMLElement).dataset.chartId === 'a"b',
   ) as HTMLElement;
   assert.ok(quotedCard);
+
   const open = [...quotedCard.querySelectorAll("button")].find(
     (button) => button.textContent === "Open",
   )!;
@@ -1334,16 +1390,20 @@ test("arbitrary chart ids focus without selector failure", async (context) => {
     open.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assert.match(dialog.textContent ?? "", /Quoted/);
+
   const back = dialog.querySelector("[data-detail-back]") as HTMLButtonElement;
   await act(async () => {
     back.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   const currentCard = [...dialog.querySelectorAll("[data-chart-id]")].find(
     (element) => (element as HTMLElement).dataset.chartId === 'a"b',
   ) as HTMLElement;
   assert.ok(currentCard, "quoted card stays in the gallery after Back");
+
   const quotedButton = currentCard.querySelector("button") as HTMLButtonElement;
   assert.ok(document.activeElement === quotedButton, "focus returns to the quoted card button");
+
   await act(async () => panel!.destroy());
 });
 
@@ -1351,8 +1411,10 @@ test("chip uses one covering row and unavailable outside coverage", async (conte
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeDistinctScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -1365,6 +1427,7 @@ test("chip uses one covering row and unavailable outside coverage", async (conte
     });
     document.body.append(panel.element);
   });
+
   const chartsTab = [...panel!.element.querySelectorAll("button")].find(
     (button) => button.textContent === "Charts",
   )!;
@@ -1374,16 +1437,20 @@ test("chip uses one covering row and unavailable outside coverage", async (conte
   await act(async () => {
     panel!.setTime("2020-01-01", "2020-01");
   });
+
   const caption = panel!.element.querySelector("figcaption")?.textContent ?? "";
   const tooltip = panel!.element.querySelector(".chart-tooltip")?.textContent ?? "";
+
   assert.ok(caption.includes("1 mm/month"));
   assert.ok(tooltip.includes("1 mm/month"));
   assert.equal(panel!.element.querySelectorAll(".chart-cursor").length, 1);
+
   await act(async () => {
     panel!.setTime("2019-01-01", "2019-01");
   });
   assert.match(panel!.element.textContent ?? "", /unavailable/);
   assert.match(panel!.element.querySelector(".chart-tooltip")?.textContent ?? "", /No observation/);
+
   await act(async () => panel!.destroy());
 });
 
@@ -1391,8 +1458,10 @@ test("chip follows effective palette and collapse preserves preview", async (con
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -1405,12 +1474,14 @@ test("chip follows effective palette and collapse preserves preview", async (con
     });
     document.body.append(panel.element);
   });
+
   const chartsTab = [...panel!.element.querySelectorAll("button")].find(
     (button) => button.textContent === "Charts",
   )!;
   await act(async () => {
     chartsTab.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   const mark = () =>
     panel!.element.querySelector("rect")?.getAttribute("fill")
     ?? panel!.element.querySelector("polyline, polygon")?.getAttribute("stroke");
@@ -1423,8 +1494,10 @@ test("chip follows effective palette and collapse preserves preview", async (con
       },
     });
   });
+
   const after = mark();
   assert.notEqual(before, after);
+
   const collapse = panel!.element.querySelector(
     'button[aria-label="Collapse scene panel"]',
   )! as HTMLButtonElement;
@@ -1433,21 +1506,25 @@ test("chip follows effective palette and collapse preserves preview", async (con
     collapse.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assert.match(panel!.element.textContent ?? "", /Show details/);
+
   const shown = [...panel!.element.querySelectorAll("button")].find(
     (button) => button.textContent === "Show details",
   )! as HTMLButtonElement;
   assertSameNode(document.activeElement, shown);
   assert.match(panel!.element.textContent ?? "", /note/);
+
   await act(async () => {
     shown.focus();
     shown.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assert.ok(panel!.element.querySelector("svg"));
   assert.match(panel!.element.textContent ?? "", /Rain/);
+
   const restored = panel!.element.querySelector(
     'button[aria-label="Collapse scene panel"]',
   )! as HTMLButtonElement;
   assertSameNode(document.activeElement, restored);
+
   await act(async () => panel!.destroy());
 });
 
@@ -1455,8 +1532,10 @@ test("sync notice appears inside gallery and clears on recovery", async (context
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -1471,21 +1550,22 @@ test("sync notice appears inside gallery and clears on recovery", async (context
     document.body.append(dialog);
     panel.openFull("charts");
   });
+
   await act(async () => {
     panel!.setSyncNotice("Charts are kept for this visit only.");
   });
   assert.match(dialog.textContent ?? "", /kept for this visit/);
+
   await act(async () => {
     panel!.setSyncNotice("Charts are kept for this visit only.");
   });
-  assert.equal(
-    [...dialog.textContent!.matchAll(/kept for this visit/g)].length,
-    1,
-  );
+  assert.equal([...dialog.textContent!.matchAll(/kept for this visit/g)].length, 1);
+
   await act(async () => {
     panel!.setSyncNotice(null);
   });
   assert.equal((dialog.textContent ?? "").includes("kept for this visit"), false);
+
   await act(async () => panel!.destroy());
 });
 
@@ -1511,8 +1591,10 @@ test("sync notice stays visible while editing until recovery", async (context) =
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -1527,6 +1609,7 @@ test("sync notice stays visible while editing until recovery", async (context) =
     document.body.append(dialog);
     panel.openFull("charts");
   });
+
   await act(async () => {
     panel!.setSyncNotice("Charts are kept for this visit only.");
   });
@@ -1540,10 +1623,7 @@ test("sync notice stays visible while editing until recovery", async (context) =
   });
   assert.ok(dialog.querySelector(".chart-editor"));
   assert.match(dialog.textContent ?? "", /kept for this visit/);
-  assert.equal(
-    [...dialog.textContent!.matchAll(/kept for this visit/g)].length,
-    1,
-  );
+  assert.equal([...dialog.textContent!.matchAll(/kept for this visit/g)].length, 1);
 
   await act(async () => {
     panel!.setSyncNotice(null);
@@ -1580,6 +1660,7 @@ test("pending close Discard completes the close through history", async (context
   assert.deepEqual(backs, ["back"]);
   assert.ok(dialog.querySelector(".chart-gallery"));
   assert.equal(JSON.stringify(store.getSnapshot().charts), beforeDiscard);
+
   await act(async () => {
     panel.closeFull();
   });
@@ -1602,8 +1683,10 @@ test("pending close Save persists the draft and closes", async (context) => {
   });
   assert.deepEqual(backs, ["back"]);
   assert.ok(dialog.querySelector(".chart-gallery"));
+
   const savedTitles = store.getSnapshot().charts.definitions.map((entry) => entry.title);
   assert.ok(savedTitles.includes("Pending save draft"));
+
   await act(async () => {
     panel.closeFull();
   });
@@ -1615,13 +1698,14 @@ test("pending close Save persists the draft and closes", async (context) => {
 test("invalid pending Save keeps the draft, decision focus and history", async (context) => {
   const pending = await openDirtyEditor(context, "Invalid draft");
   const { window, dialog, panel, store, act } = pending;
-  const rangeFieldset = [...dialog.querySelectorAll("fieldset")].find(
-    (fieldset) => (fieldset.querySelector("legend")?.textContent ?? "").includes("Y range"),
+  const rangeFieldset = [...dialog.querySelectorAll("fieldset")].find((fieldset) =>
+    (fieldset.querySelector("legend")?.textContent ?? "").includes("Y range"),
   )!;
   const autoBox = rangeFieldset.querySelector('input[type="checkbox"]') as HTMLInputElement;
   await act(async () => {
     autoBox.click();
   });
+
   const numbers = [...dialog.querySelectorAll('input[type="number"]')] as HTMLInputElement[];
   await act(async () => {
     const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
@@ -1635,15 +1719,12 @@ test("invalid pending Save keeps the draft, decision focus and history", async (
     numbers[1].dispatchEvent(new window.Event("input", { bubbles: true }));
     numbers[1].dispatchEvent(new window.Event("change", { bubbles: true }));
   });
+
   const beforeInvalid = JSON.stringify(store.getSnapshot().charts);
   const buttons = await openOuterConfirm(pending);
-  const invalidSave = buttons.find(
-    (button) => button.textContent === "Save",
-  ) as HTMLButtonElement;
-  assert.ok(
-    document.activeElement === invalidSave,
-    "outer confirmation focuses its Save control",
-  );
+  const invalidSave = buttons.find((button) => button.textContent === "Save") as HTMLButtonElement;
+  assert.ok(document.activeElement === invalidSave, "outer confirmation focuses its Save control");
+
   await act(async () => {
     invalidSave.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
@@ -1668,8 +1749,10 @@ test("the charts gallery shows its download section below it", async (context) =
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -1687,12 +1770,14 @@ test("the charts gallery shows its download section below it", async (context) =
 
   const gallery = dialog.querySelector(".chart-gallery");
   const downloads = dialog.querySelector(".chart-downloads");
+
   assert.ok(gallery);
   assert.ok(downloads);
   assert.equal(
     gallery!.compareDocumentPosition(downloads!) & Node.DOCUMENT_POSITION_FOLLOWING,
     Node.DOCUMENT_POSITION_FOLLOWING,
   );
+
   const labels = [...downloads!.querySelectorAll("button")].map((button) => button.textContent);
   assert.ok(labels.includes("Area means (CSV)"));
   assert.ok(labels.includes("Elevation distribution (CSV)"));
@@ -1704,9 +1789,11 @@ test("the gallery download writes attribution and cleans up its object url", asy
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const downloads = installDownloadCapture(context);
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -1729,6 +1816,7 @@ test("the gallery download writes attribution and cleans up its object url", asy
     button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assert.equal(downloads.blobs.length, 1);
+
   const content = await downloads.blobs[0].text();
   assert.ok(content.includes("rain_mean [mm/month]"));
   assert.ok(content.includes("Rain credit"));
@@ -1743,8 +1831,10 @@ test("detail downloads follow the selected shape from the gallery", async (conte
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -1767,8 +1857,10 @@ test("detail downloads follow the selected shape from the gallery", async (conte
     open.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assert.ok(dialog.querySelector(".chart-detail"));
-  const detailLabels = [...dialog.querySelectorAll(".detail-downloads button")]
-    .map((button) => button.textContent);
+
+  const detailLabels = [...dialog.querySelectorAll(".detail-downloads button")].map(
+    (button) => button.textContent,
+  );
   assert.ok(detailLabels.includes("Area means (CSV)"));
   assert.equal(detailLabels.includes("By month (CSV)"), false);
 
@@ -1788,8 +1880,10 @@ test("main switches keep type fidelity while About and collapse stay put", async
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
@@ -1804,6 +1898,7 @@ test("main switches keep type fidelity while About and collapse stay put", async
     document.body.append(dialog);
     panel.openFull("charts");
   });
+
   const chartsTab = [...panel!.element.querySelectorAll("button")].find(
     (button) => button.textContent === "Charts",
   )!;
@@ -1839,11 +1934,12 @@ test("main switches keep type fidelity while About and collapse stay put", async
     buttonNamed(galleryCardFor(dialog, "rain:time_series"), "Use as main").click();
   });
   await act(async () => {
-    panel!.element.querySelector("svg")!.dispatchEvent(
-      new window.KeyboardEvent("keydown", { key: "Home", bubbles: true }),
-    );
+    panel!.element
+      .querySelector("svg")!
+      .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Home", bubbles: true }));
   });
   assert.match(panel!.element.querySelector(".chart-tooltip")?.textContent ?? "", /2019-01-01/);
+
   const lineCard = [...dialog.querySelectorAll(".gallery-card")].find(
     (card) => (card as HTMLElement).dataset.chartId === "rain-line",
   )!;
@@ -1864,10 +1960,12 @@ test("main switches keep type fidelity while About and collapse stay put", async
     aboutTab.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assert.equal(aboutTab.getAttribute("aria-pressed"), "true");
+
   const summary = panel!.element.querySelector(".panel-body")?.textContent ?? "";
   assert.match(summary, /km²/);
   assert.match(summary, /2019.*2021/);
   assert.match(summary, /2 layers/);
+
   await act(async () => {
     buttonNamed(galleryCardFor(dialog, "terrain:distribution"), "Use as main").click();
   });
@@ -1875,30 +1973,33 @@ test("main switches keep type fidelity while About and collapse stay put", async
   assert.equal(aboutTab.getAttribute("aria-pressed"), "true");
   assert.equal(panel!.element.querySelector(".panel-body")?.textContent, summary);
   assertSameNode(panel!.element.querySelector("svg"), null);
-  const collapse = panel!.element.querySelector(
-    'button[aria-label="Collapse scene panel"]',
-  )!;
+
+  const collapse = panel!.element.querySelector('button[aria-label="Collapse scene panel"]')!;
   await act(async () => {
     collapse.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assertSameNode(panel!.element.querySelector("svg"), null);
   assert.match(panel!.element.textContent ?? "", /Show details/);
+
   await act(async () => {
     buttonNamed(galleryCardFor(dialog, "rain-line"), "Use as main").click();
   });
   assert.equal(store.getSnapshot().charts.mainChartId, "rain-line");
   assertSameNode(panel!.element.querySelector("svg"), null);
   assert.match(panel!.element.textContent ?? "", /Show details/);
+
   await act(async () => {
     buttonNamed(panel!.element, "Show details").click();
   });
   assert.equal(buttonNamed(panel!.element, "About").getAttribute("aria-pressed"), "true");
   assert.equal(panel!.element.querySelector(".panel-body")?.textContent, summary);
+
   await act(async () => {
     buttonNamed(panel!.element, "Charts").click();
   });
   assert.match(panel!.element.textContent ?? "", /Rain over time · Over time · Line/);
   assert.ok(panel!.element.querySelector("polyline"));
+
   await act(async () => panel!.destroy());
 });
 
@@ -1906,8 +2007,10 @@ test("detail main edits and delete or reset update both panel roots", async (con
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   store.dispatch({
@@ -1920,6 +2023,7 @@ test("detail main edits and delete or reset update both panel roots", async (con
       options: {},
     },
   });
+
   const dialog = makeDialog();
   let panel: ReturnType<typeof createScenePanel> | null = null;
   await act(async () => {
@@ -1931,6 +2035,7 @@ test("detail main edits and delete or reset update both panel roots", async (con
     document.body.append(panel.element, dialog);
     panel.openFull("charts");
   });
+
   await act(async () => {
     buttonNamed(panel!.element, "Charts").click();
   });
@@ -1946,12 +2051,14 @@ test("detail main edits and delete or reset update both panel roots", async (con
   assert.match(dialog.querySelector('.chart-detail > p[role="status"]')?.textContent ?? "", /main/);
   assert.match(panel!.element.textContent ?? "", /Custom rain · Over time · Line/);
   assert.ok(panel!.element.querySelector("polyline"));
+
   await act(async () => {
     buttonNamed(dialog.querySelector(".chart-detail")!, "Edit").click();
   });
-  const type = [...dialog.querySelectorAll("label")].find(
-    (label) => label.textContent?.startsWith("Type"),
-  )!.querySelector("select") as HTMLSelectElement;
+
+  const type = [...dialog.querySelectorAll("label")]
+    .find((label) => label.textContent?.startsWith("Type"))!
+    .querySelector("select") as HTMLSelectElement;
   await act(async () => {
     const native = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value")!;
     native.set!.call(type, "area");
@@ -1969,6 +2076,7 @@ test("detail main edits and delete or reset update both panel roots", async (con
   assert.ok(dialog.querySelector(".chart-detail polygon"));
   assert.match(panel!.element.textContent ?? "", /Custom rain · Over time · Area/);
   assert.ok(panel!.element.querySelector("polygon"));
+
   await act(async () => {
     buttonNamed(dialog.querySelector(".chart-detail")!, "Delete").click();
   });
@@ -1976,10 +2084,12 @@ test("detail main edits and delete or reset update both panel roots", async (con
   assert.equal(store.getSnapshot().charts.mainChartId, "rain:time_series");
   assert.match(panel!.element.textContent ?? "", /Rain over time · Over time · Bar/);
   assert.ok(panel!.element.querySelector("rect"));
+
   await act(async () => {
     buttonNamed(galleryCardFor(dialog, "terrain:distribution"), "Use as main").click();
   });
   assert.ok(panel!.element.querySelector("polygon"));
+
   await act(async () => {
     buttonNamed(dialog, "Reset charts").click();
   });
@@ -1987,6 +2097,7 @@ test("detail main edits and delete or reset update both panel roots", async (con
   assert.match(panel!.element.textContent ?? "", /Rain over time · Over time · Bar/);
   assert.ok(panel!.element.querySelector("rect"));
   assert.ok(galleryCardFor(dialog, "rain:time_series").querySelector(".chart-main-badge"));
+
   await act(async () => panel!.destroy());
 });
 
@@ -1994,9 +2105,11 @@ test("notes focus the detail heading and back restores the notes action", async 
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const scrolled = installScrollSpy(context);
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   await act(async () => {
@@ -2012,6 +2125,7 @@ test("notes focus the detail heading and back restores the notes action", async 
       makeMain: false,
     });
   });
+
   const dialog = makeDialog();
   let panel: ReturnType<typeof createScenePanel> | null = null;
   await act(async () => {
@@ -2024,6 +2138,7 @@ test("notes focus the detail heading and back restores the notes action", async 
     document.body.append(dialog);
     panel.openFull("charts");
   });
+
   const quotedCard = [...dialog.querySelectorAll(".gallery-card")].find(
     (card) => (card as HTMLElement).dataset.chartId === 'we"ird',
   )!;
@@ -2032,24 +2147,29 @@ test("notes focus the detail heading and back restores the notes action", async 
     notesButton.getAttribute("aria-label"),
     "Notes for Quoted chart; opens chart detail",
   );
+
   await act(async () => {
     notesButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assert.ok(dialog.querySelector(".chart-detail"));
+
   const heading = dialog.querySelector("[data-chart-notes-heading]") as HTMLElement;
   assert.equal(heading.textContent, "Notes");
   assertSameNode(document.activeElement, heading);
   assert.equal(scrolled.length, 1);
   assert.equal(scrolled[0], heading.id);
+
   const back = dialog.querySelector("[data-detail-back]") as HTMLButtonElement;
   await act(async () => {
     back.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
   assert.ok(dialog.querySelector(".chart-gallery"));
+
   const remountedCard = galleryCardFor(dialog, 'we"ird');
   const remountedNotes = remountedCard.querySelector(".chart-notes-button");
   assert.ok(remountedNotes);
   assertSameNode(document.activeElement, remountedNotes);
+
   await act(async () => panel!.destroy());
 });
 
@@ -2090,6 +2210,7 @@ function installDownloadCapture(context: { after: (hook: () => void) => void }) 
   (URL as unknown as Record<string, unknown>).revokeObjectURL = (url: string) => {
     revoked.push(url);
   };
+
   context.after(() => {
     (document as unknown as Record<string, unknown>).createElement = originalCreate;
     URL.createObjectURL = originalObjectUrl;
@@ -2101,13 +2222,12 @@ function installDownloadCapture(context: { after: (hook: () => void) => void }) 
 
 function installScrollSpy(context: { after: (hook: () => void) => void }): string[] {
   const scrolled: string[] = [];
-  const prototype = globalThis.Element.prototype as unknown as {
-    scrollIntoView?: () => void;
-  };
+  const prototype = globalThis.Element.prototype as unknown as { scrollIntoView?: () => void };
   const original = prototype.scrollIntoView;
   prototype.scrollIntoView = function (this: Element) {
     scrolled.push((this as HTMLElement).id);
   };
+
   context.after(() => {
     prototype.scrollIntoView = original!;
   });
@@ -2119,10 +2239,7 @@ function makeDialog(): HTMLDialogElement {
   const dialog = document.createElement("dialog") as HTMLDialogElement;
   if (typeof dialog.showModal !== "function") {
     let open = false;
-    Object.defineProperty(dialog, "open", {
-      get: () => open,
-      configurable: true,
-    });
+    Object.defineProperty(dialog, "open", { get: () => open, configurable: true });
     dialog.showModal = () => {
       open = true;
     };
@@ -2130,9 +2247,11 @@ function makeDialog(): HTMLDialogElement {
       open = false;
     };
   }
+
   if (typeof dialog.scrollIntoView !== "function") {
     (dialog as unknown as Record<string, unknown>).scrollIntoView = () => {};
   }
+
   return dialog;
 }
 
@@ -2313,6 +2432,7 @@ function installBrowser(window: Window): void {
     "KeyboardEvent",
   ] as const;
   for (const name of names) defineGlobal(name, window[name]);
+
   defineGlobal("window", window);
   defineGlobal("document", window.document);
   defineGlobal("navigator", window.navigator);
@@ -2320,24 +2440,25 @@ function installBrowser(window: Window): void {
   defineGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 }
 
-async function openDirtyEditor(
-  context: { after(hook: () => void): void },
-  title: string,
-) {
+async function openDirtyEditor(context: { after(hook: () => void): void }, title: string) {
   const window = new Window({ url: "https://example.test/a/?scene=test" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const previousHistory = (globalThis as Record<string, unknown>).history;
   (globalThis as Record<string, unknown>).history = window.history;
   context.after(() => {
     (globalThis as Record<string, unknown>).history = previousHistory;
   });
+
   const { act } = await import("react");
   const { createScenePanel } = await import("./scene-panel.tsx");
+
   const scene = makeChartableScene();
   const store = createSceneStore(scene.layers, { layers: {}, off: new Set(), showAs: {} });
   const dialog = makeDialog();
   document.body.append(dialog);
+
   const backs: string[] = [];
   let panel: ReturnType<typeof createScenePanel> | null = null;
   await act(async () => {
@@ -2356,21 +2477,26 @@ async function openDirtyEditor(
       },
       stepTime() {},
     });
+
     document.body.append(panel.element);
     panel.openFull("charts");
   });
+
   await act(async () => {
     window.history.pushState({ panel: "charts" }, "", "/a/?scene=test");
   });
+
   const edit = [...dialog.querySelectorAll("button")].find(
     (button) => button.textContent === "Edit",
   )!;
   await act(async () => {
     edit.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   });
+
   const input = dialog.querySelector('.chart-editor input[type="text"]') as HTMLInputElement;
   await act(async () => {
     input.focus();
+
     const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
     native?.set?.call(input, title);
     input.dispatchEvent(new window.Event("input", { bubbles: true }));

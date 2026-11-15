@@ -27,15 +27,7 @@ export async function startServers() {
     "backend",
     backendPort,
     "python",
-    [
-      "-m",
-      "uvicorn",
-      "main:app",
-      "--host",
-      HOST,
-      "--port",
-      String(backendPort),
-    ],
+    ["-m", "uvicorn", "main:app", "--host", HOST, "--port", String(backendPort)],
     REPO_DIR,
     {},
   );
@@ -55,6 +47,7 @@ export async function startServers() {
   );
 
   await waitUntilReady(`${backendUrl}/api/health`);
+
   const appUrl = `http://${HOST}:${vitePort}`;
   await waitUntilReady(appUrl);
 
@@ -70,6 +63,7 @@ export function stopServers() {
 async function stopStartedServers() {
   const started = children.splice(0);
   await Promise.all(started.map(stopChild));
+
   for (const { name, port } of started) {
     const stillOpen = await isOpen(port);
     console.error(`${name} port ${port} ${stillOpen ? "STILL OPEN" : "free"}`);
@@ -85,6 +79,7 @@ function launch(name, port, command, args, cwd, extraEnv) {
   const lines = [];
   child.stderr.on("data", (chunk) => lines.push(String(chunk)));
   child.on("error", (error) => lines.push(String(error)));
+
   children.push({ name, port, child, lines });
   console.error(`started ${name} pid ${child.pid} on port ${port}`);
 }
@@ -94,6 +89,7 @@ async function stopChild({ name, child }) {
 
   const exited = new Promise((resolve) => child.once("exit", resolve));
   child.kill("SIGTERM");
+
   const timer = setTimeout(() => child.kill("SIGKILL"), STOP_GRACE_MS);
   await exited;
   clearTimeout(timer);
@@ -102,19 +98,23 @@ async function stopChild({ name, child }) {
 
 async function waitUntilReady(url) {
   const deadline = Date.now() + READY_TIMEOUT_MS;
+
   while (Date.now() < deadline) {
     const crashed = children.find(({ child }) => child.exitCode !== null);
     if (crashed) {
       throw new Error(`${crashed.name} exited early:\n${crashed.lines.join("").slice(-2000)}`);
     }
+
     try {
       const response = await fetch(url);
       if (response.ok) return;
     } catch {
       // Connection failures are expected while the server starts listening.
     }
+
     await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS));
   }
+
   throw new Error(`${url} was not ready within ${READY_TIMEOUT_MS / 1000} s`);
 }
 
@@ -138,6 +138,7 @@ export function isOpen(port) {
       socket.destroy();
       resolve(true);
     });
+
     socket.once("error", () => resolve(false));
     socket.once("timeout", () => {
       socket.destroy();

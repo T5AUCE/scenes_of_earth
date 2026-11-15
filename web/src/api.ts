@@ -67,11 +67,7 @@ export const loadAreaFeature = (href: string) => request<AreaFeature>(href);
 export const postScene = (body: SceneRequest) =>
   request<SceneStatus>(
     "/api/scenes",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    },
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
     BUILD_REQUEST_TIMEOUT_MS,
   );
 
@@ -87,9 +83,11 @@ export async function loadScene(bundleUrl: string): Promise<Scene> {
 
   scene.area.geometry_href = new URL(scene.area.geometry_href, base).href;
   scene.data.href = new URL(scene.data.href, base).href;
+
   for (const layer of scene.layers) {
     if (layer.tiles) layer.tiles.url = resolveTileUrl(layer.tiles.url, base);
   }
+
   return scene;
 }
 

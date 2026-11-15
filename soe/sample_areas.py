@@ -1,4 +1,5 @@
 """Sample boundary outlines that seed the database in synthetic (offline) mode."""
+
 import json
 from pathlib import Path
 

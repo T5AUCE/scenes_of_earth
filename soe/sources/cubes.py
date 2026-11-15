@@ -4,6 +4,7 @@ A cube holds one variable on a fixed grid with one slice per month. `soe.ingest`
 cubes, and a build only reads them, so it makes no network calls for cube data. Each month carries
 a marker that changes whenever its data is replaced, which lets scene ids follow revisions.
 """
+
 from itertools import groupby
 from pathlib import Path
 from typing import NamedTuple
@@ -77,13 +78,15 @@ class MonthlyCube:
         col, row, width, height = window
         array = zarr.open_group(self._cube_path, mode="r")[self._spec.array]
         stored_height = max(0, min(height, self._spec.grid.rows - row))
-        stored = array[month_index(month), row:row + stored_height, col:col + width]
+        stored = array[month_index(month), row : row + stored_height, col : col + width]
+
         if self._modified() != stamp:
             raise SourceUnavailable(self._updating)
 
         values = np.full((height, width), np.nan, "float32")
         decoded = stored.astype("float32") * np.float32(self._spec.scale)
         values[:stored_height] = np.where(stored == self._spec.fill, np.nan, decoded)
+
         return values
 
     @property
@@ -98,10 +101,12 @@ class MonthlyCube:
         """Return the published months while the cube still has `stamp`, read once per stamp."""
         if self._months_read is None or self._months_read[0] != stamp:
             months = self._load_months()
+
             if self._modified() != stamp:
                 raise SourceUnavailable(self._updating)
 
             self._months_read = (stamp, months)
+
         if not self._months_read[1]:
             raise SourceUnavailable(self._not_ingested)
 
@@ -189,8 +194,7 @@ def preliminary_runs(labels: list[str], *cube_months: dict[str, str]) -> list[li
     return [
         list(run)
         for preliminary, run in groupby(
-            labels,
-            lambda label: any(is_preliminary(months[label]) for months in cube_months),
+            labels, lambda label: any(is_preliminary(months[label]) for months in cube_months)
         )
         if preliminary
     ]

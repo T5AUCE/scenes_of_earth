@@ -1,7 +1,6 @@
 /** Draw nested field dots and no-data hatching from tiled grid textures. */
 import type { CustomLayerInterface, Map as MapLibreMap } from "maplibre-gl";
 
-import type { InkPaint } from "../render/palettes";
 import { addressSearch, gestureFlags, subscribeGesture } from "../gesture-quality";
 import { prefersReducedMotion, watchReducedMotion } from "../reduced-motion";
 import {
@@ -16,6 +15,7 @@ import {
   writeContinuousLattice,
   type DotLattice,
 } from "../render/lattice";
+import type { InkPaint } from "../render/palettes";
 import { FIELD_MARKS_FRAGMENT, FIELD_MARKS_VERTEX } from "./field-marks-shaders";
 import { deleteResources } from "./gl";
 import {
@@ -103,6 +103,7 @@ const DENSITY_TRANSITION_MS = 180;
  */
 export function createFieldMarksLayer(options: FieldMarksOptions) {
   const layer = new FieldMarksLayer(options);
+
   return {
     layer: layer as CustomLayerInterface,
     setMask: (mask: ArrayLike<number>) => layer.setMask(mask),
@@ -174,6 +175,7 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
       fragment: FIELD_MARKS_FRAGMENT,
       uniformNames: UNIFORM_NAMES,
     });
+
     const [west, south, east, north] = options.grid.bbox;
     this.cellDegrees = {
       width: (east - west) / options.grid.nx,
@@ -233,16 +235,20 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
 
   private retargetDensity() {
     const map = this.map;
+
     if (!map) {
       // The first render snaps to the fitted target, so seed the preview near the request.
       this.shownDensity = this.density;
       return;
     }
+
     const target = this.fittedDensity(map.getZoom(), map.getPixelRatio(), this.density);
+
     if (!this.hasInitialized || this.reducedMotion || !this.isDots) {
       this.snapDensity(target);
       return;
     }
+
     const targetLog = Math.log2(target);
     if (targetLog === this.tweenTargetLog) return;
 
@@ -262,6 +268,7 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
       this.snapDensity(2 ** targetLog);
       return;
     }
+
     this.tweenStartLog = startLog;
     this.tweenTargetLog = targetLog;
     this.tweenStartMs = nowMs();
@@ -278,6 +285,7 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
     ) {
       return this.fittedEffective;
     }
+
     this.fittedZoom = zoom;
     this.fittedRatio = pixelRatio;
     this.fittedRequested = requested;
@@ -295,6 +303,7 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
   private tweenLogAt(now: number) {
     const progress = (now - this.tweenStartMs) / DENSITY_TRANSITION_MS;
     const eased = easeTransition(progress);
+
     return this.tweenStartLog + (this.tweenTargetLog - this.tweenStartLog) * eased;
   }
 
@@ -306,16 +315,19 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
   setDots(isOn: boolean) {
     const wasHidden = !this.isDots && isOn;
     this.isDots = isOn;
+
     if (!isOn && this.tweenActive) {
       // A hidden layer draws no dots, so it finishes at once instead of animating unseen frames.
       this.snapDensity(2 ** this.tweenTargetLog);
     }
+
     if (wasHidden && this.map) {
       // Showing again settles at the selected target rather than flying in from the old value.
       this.snapDensity(
         this.fittedDensity(this.map.getZoom(), this.map.getPixelRatio(), this.density),
       );
     }
+
     this.map?.triggerRepaint();
   }
 
@@ -328,7 +340,9 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
     super.onAdd(map, gl);
     this.reducedMotion = prefersReducedMotion();
     this.stopReducedMotion ??= watchReducedMotion((reduced) => this.setReducedMotion(reduced));
+
     if (!this.fastHatchAllowed || this.stopGesture) return;
+
     this.stopGesture = subscribeGesture(map, {
       onStart: () => this.setGestureHatchOff(true),
       onEnd: () => this.setGestureHatchOff(false),
@@ -342,6 +356,7 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
     this.stopReducedMotion = null;
     // The requested target survives for restoration while the unseen tween stops.
     this.tweenActive = false;
+
     super.onRemove();
   }
 
@@ -350,6 +365,7 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
     if (reduced === this.reducedMotion) return;
 
     this.reducedMotion = reduced;
+
     if (!reduced || !this.map) return;
 
     this.snapDensity(
@@ -364,6 +380,7 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
    */
   private setGestureHatchOff(isOff: boolean) {
     if (isOff === this.isGestureHatchOff) return;
+
     this.isGestureHatchOff = isOff;
     this.map?.triggerRepaint();
   }
@@ -373,9 +390,11 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
   }
 
   protected hasData() {
-    return (this.from !== null || this.to !== null)
+    return (
+      (this.from !== null || this.to !== null)
       && this.mask !== null
-      && (this.isDots || this.hasEffectiveHatch());
+      && (this.isDots || this.hasEffectiveHatch())
+    );
   }
 
   protected extendGpu(base: TiledGpu): MarksGpu {
@@ -402,11 +421,13 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
       this.shownDensity,
       pixelRatio,
     );
+
     const drawnLevel = this.frame.fade > 0 ? this.frame.level + 1 : this.frame.level;
     const factor = 2 ** Math.max(-drawnLevel, 0);
     const parentFactor = this.frame.fade > 0 && drawnLevel <= 0 ? 2 * factor : 0;
     const { from, to, uploaded } = this;
     const isSameBlocks = uploaded?.factor === factor && uploaded.parentFactor === parentFactor;
+
     if (isSameBlocks && uploaded.from === from && uploaded.to === to) {
       if (this.tweenActive) this.map?.triggerRepaint();
       return;
@@ -414,40 +435,50 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
 
     // At a step boundary the entering step already sits in the second set, so it uploads once.
     const factors = { factor, parentFactor };
+
     if (isSameBlocks && from !== null && uploaded.to === from) {
       this.promoteNextTiles(gl, gpu);
     } else if (!isSameBlocks || from === null || uploaded.from !== from) {
       this.uploadFirstTiles(gl, gpu, factors);
     }
+
     this.uploadNextTiles(gl, gpu, factors);
     this.uploaded = { ...factors, from, to };
+
     if (this.tweenActive) this.map?.triggerRepaint();
   }
 
   // Advance or retarget the density tween at the live camera, snapping when nothing eases.
   private updateShownDensity(zoom: number, pixelRatio: number) {
     const target = this.fittedDensity(zoom, pixelRatio, this.density);
+
     if (!this.hasInitialized || this.reducedMotion || !this.isDots) {
       this.snapDensity(target);
       return;
     }
+
     if (!this.tweenActive) {
       // A camera move shifts the fitted endpoint at once while a density change eases.
       this.snapDensity(target);
       return;
     }
+
     const now = nowMs();
     const targetLog = Math.log2(target);
+
     if (targetLog !== this.tweenTargetLog) {
       // Containment moved the endpoint mid-tween, so restart from the displayed value.
       this.tweenStartLog = this.tweenLogAt(now);
       this.tweenStartMs = now;
       this.tweenTargetLog = targetLog;
     }
+
     const progress = (now - this.tweenStartMs) / DENSITY_TRANSITION_MS;
-    this.shownDensity = 2
+    this.shownDensity =
+      2
       ** (this.tweenStartLog
         + (this.tweenTargetLog - this.tweenStartLog) * easeTransition(progress));
+
     if (progress >= 1) {
       // Assign the exact target so a log round-trip never leaves a residue.
       this.snapDensity(target);
@@ -474,9 +505,11 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
   private uploadNextTiles(gl: WebGL2RenderingContext, gpu: MarksGpu, factors: BlockFactors) {
     deleteResources(gl, { textures: this.extraTextures(gpu) });
     gpu.nextTiles = [];
+
     if (!this.from || !this.to) return;
 
     const { grid, cells, parentCells } = this.pyramidOf(this.to).textureCells(factors);
+
     try {
       for (const { tile } of gpu.tiles) {
         const nextTile: NextTile = {
@@ -486,6 +519,7 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
         gpu.nextTiles.push(nextTile);
         nextTile.companion = this.uploadWindow(gl, grid, tile.window, parentCells);
       }
+
       this.throwIfUploadFailed(gl);
     } catch (error) {
       deleteResources(gl, { textures: this.extraTextures(gpu) });
@@ -500,6 +534,7 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
 
     const pyramid = new StepPyramid(this.options.grid, positions, this.mask!);
     this.pyramids.set(positions, pyramid);
+
     return pyramid;
   }
 
@@ -511,6 +546,7 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
     const pixelRatio = this.map!.getPixelRatio();
     const dotOpacity = highZoomDotOpacity(zoom, pixelRatio);
     if (dotOpacity === 0 && !this.hasEffectiveHatch()) return;
+
     // The display cap bounds close-zoom radii before device pixels, matching the preview.
     const sizeScale = highZoomDotSizeScale(zoom, pixelRatio);
     const cellPx = Math.sqrt(sidesPx.width * sidesPx.height);
@@ -523,20 +559,24 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
     this.beginDraw(gl, gpu);
     gl.bindSampler(NEXT_IDS_UNIT, null);
     gl.bindSampler(NEXT_PARENT_IDS_UNIT, null);
+
     gl.uniform1i(uniform("uIds"), CURRENT_IDS_UNIT);
     gl.uniform1i(uniform("uParentIds"), PARENT_IDS_UNIT);
     gl.uniform1i(uniform("uNextIds"), NEXT_IDS_UNIT);
     gl.uniform1i(uniform("uNextParentIds"), NEXT_PARENT_IDS_UNIT);
+
     gl.uniform2f(uniform("uGridSize"), grid.nx, grid.ny);
     gl.uniform2f(uniform("uExtentCells"), original.nx, original.ny);
     gl.uniform1f(uniform("uSlots"), 2 ** Math.max(drawnLevel, 0));
     gl.uniform1f(uniform("uParentSlots"), 2 ** Math.max(drawnLevel - 1, -1));
     gl.uniform1f(uniform("uBlockCells"), 2 ** Math.max(-drawnLevel, 0));
+
     gl.uniform1f(uniform("uRadiusPx"), radiusPx(drawnLevel));
     gl.uniform1f(uniform("uParentRadiusPx"), radiusPx(level));
     gl.uniform1i(uniform("uFading"), fade > 0 ? 1 : 0);
     gl.uniform1f(uniform("uFade"), fade);
     gl.uniform1f(uniform("uStepMix"), this.stepMix);
+
     gl.uniform1i(uniform("uHasFrom"), this.from ? 1 : 0);
     gl.uniform1i(uniform("uHasTo"), this.to ? 1 : 0);
     gl.uniform3f(uniform("uInk"), ...this.inkChannels);
@@ -549,11 +589,13 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
     gl.uniform1f(uniform("uSizeScale"), sizeScale);
 
     let tileIndex = 0;
-    timedGpuDraw(gl, this.id, () => this.drawTiles(gl, gpu, mainMatrix, (tile) => {
-      this.bindNextTile(gl, gpu, tileIndex++);
-      gl.uniform2i(uniform("uIdsSize"), tile.window.width, tile.window.height);
-      gl.uniform2f(uniform("uWindow"), tile.window.column, tile.window.row);
-    }));
+    timedGpuDraw(gl, this.id, () =>
+      this.drawTiles(gl, gpu, mainMatrix, (tile) => {
+        this.bindNextTile(gl, gpu, tileIndex++);
+        gl.uniform2i(uniform("uIdsSize"), tile.window.width, tile.window.height);
+        gl.uniform2f(uniform("uWindow"), tile.window.column, tile.window.row);
+      }),
+    );
   }
 
   // The block grid for a drawn level, cached because the grid never changes with density.
@@ -571,6 +613,7 @@ class FieldMarksLayer extends TiledGpuLayer<MarksGpu> {
   private bindNextTile(gl: WebGL2RenderingContext, gpu: MarksGpu, index: number) {
     const { texture, companion } = gpu.tiles[index];
     const next = gpu.nextTiles[index];
+
     gl.activeTexture(gl.TEXTURE0 + NEXT_IDS_UNIT);
     gl.bindTexture(gl.TEXTURE_2D, next?.texture ?? texture);
     gl.activeTexture(gl.TEXTURE0 + NEXT_PARENT_IDS_UNIT);
@@ -598,6 +641,7 @@ class StepPyramid {
   textureCells({ factor, parentFactor }: BlockFactors) {
     const { grid, cells } = this.blocks(factor);
     const parentCells = parentFactor ? this.parentCells(factor) : cells;
+
     return { grid, cells, parentCells };
   }
 
@@ -609,6 +653,7 @@ class StepPyramid {
     const { means } = blockMeans(this.markedCells(), nx, ny, factor);
     const data = { grid: blockGrid(this.grid, factor), cells: means };
     this.blockByFactor.set(factor, data);
+
     return data;
   }
 
@@ -616,12 +661,14 @@ class StepPyramid {
     const { grid } = this.blocks(factor);
     const parent = this.blocks(2 * factor);
     const cells = new Uint8Array(grid.nx * grid.ny);
+
     for (let row = 0; row < grid.ny; row++) {
       for (let column = 0; column < grid.nx; column++) {
         const parentCell = (row >> 1) * parent.grid.nx + (column >> 1);
         cells[row * grid.nx + column] = parent.cells[parentCell];
       }
     }
+
     return cells;
   }
 
@@ -660,6 +707,7 @@ function blockGrid(grid: TiledGrid, factor: number): TiledGrid {
   const width = Math.ceil(grid.nx / factor);
   const height = Math.ceil(grid.ny / factor);
   const [west, south, east, north] = grid.bbox;
+
   return {
     bbox: [
       west,

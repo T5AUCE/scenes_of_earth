@@ -26,10 +26,7 @@ const MAP_DETAILS_TITLE = "Map details";
 const LAST_FIELD = "field";
 
 /** Which card's editor the panel shows; outline and details share its shell for now. */
-type SelectedTarget =
-  | { kind: "unit"; unit: string }
-  | { kind: "outline" }
-  | { kind: "details" };
+type SelectedTarget = { kind: "unit"; unit: string } | { kind: "outline" } | { kind: "details" };
 
 interface SceneColumnProps {
   mounted: MountedLayer[];
@@ -38,21 +35,14 @@ interface SceneColumnProps {
 }
 
 /** Mount the React scene column into a container and return its teardown. */
-export function mountSceneColumn(
-  host: HTMLElement,
-  props: SceneColumnProps,
-): { unmount(): void } {
+export function mountSceneColumn(host: HTMLElement, props: SceneColumnProps): { unmount(): void } {
   const root = createRoot(host);
   root.render(<SceneColumn {...props} />);
 
   return { unmount: () => root.unmount() };
 }
 
-function SceneColumn({
-  mounted,
-  blend,
-  store,
-}: SceneColumnProps): React.ReactElement {
+function SceneColumn({ mounted, blend, store }: SceneColumnProps): React.ReactElement {
   const { display, allocation } = useSceneStore(store);
   const [selected, setSelected] = useState<SelectedTarget | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -67,14 +57,17 @@ function SceneColumn({
     setSelected(target);
     setNotice(null);
   };
+
   const toggleLayer = (entry: MountedLayer, on: boolean) => {
     toggleLayerUnits(entry, on, display.off, remembered.current, store);
     setNotice(null);
   };
+
   const toggleBlend = (on: boolean) => {
     toggleBlendUnit(store, on);
     setNotice(null);
   };
+
   const toggleOutline = (on: boolean) => {
     store.dispatch({
       kind: "display",
@@ -83,6 +76,7 @@ function SceneColumn({
       },
     });
   };
+
   const changeOutline = (outline: OutlineState) => {
     store.dispatch({
       kind: "display",
@@ -91,10 +85,12 @@ function SceneColumn({
       },
     });
   };
+
   const toggleDetails = (on: boolean) => {
     setDetailsOn(on);
     storeMapDetailsShown(on);
   };
+
   const optionChange = (unit: string, index: number, on: boolean) => {
     setOptionStates((current) => {
       const states = [...(current[unit] ?? initialOptions(mounted, blend, unit))];
@@ -115,6 +111,7 @@ function SceneColumn({
   );
   const blendIndex = mounted.map(({ layer }) => layer.style.kind).lastIndexOf(LAST_FIELD);
   const target = editorTarget(mounted, blend, selected);
+
   const toggleTarget = (on: boolean) => {
     if (selected?.kind !== "unit") return;
     if (selected.unit === BLEND) {
@@ -122,22 +119,17 @@ function SceneColumn({
 
       return;
     }
+
     const entry = mounted.find(({ layer }) => layer.id === selected.unit);
     if (!entry) return;
+
     toggleLayer(entry, on);
   };
 
   return (
     <>
       {ordinary.slice(0, blendIndex + 1)}
-      {blend && blendCard(
-        blend,
-        allocation,
-        optionStates,
-        selected,
-        toggleBlend,
-        select,
-      )}
+      {blend && blendCard(blend, allocation, optionStates, selected, toggleBlend, select)}
       {ordinary.slice(blendIndex + 1)}
       {outlineCard(display.outline.shown, selected?.kind === "outline", toggleOutline, select)}
       {detailsCard(detailsOn, selected?.kind === "details", toggleDetails, select)}
@@ -156,20 +148,12 @@ function SceneColumn({
         />
       )}
       {selected?.kind === "outline" && (
-        <EditorPanel
-          key="outline"
-          title={OUTLINE_TITLE}
-          onClose={() => setSelected(null)}
-        >
+        <EditorPanel key="outline" title={OUTLINE_TITLE} onClose={() => setSelected(null)}>
           <OutlineEditor outline={display.outline} onChange={changeOutline} />
         </EditorPanel>
       )}
       {selected?.kind === "details" && (
-        <EditorPanel
-          key="details"
-          title={MAP_DETAILS_TITLE}
-          onClose={() => setSelected(null)}
-        />
+        <EditorPanel key="details" title={MAP_DETAILS_TITLE} onClose={() => setSelected(null)} />
       )}
     </>
   );
@@ -183,7 +167,9 @@ function useEditFocus(
   useEffect(() => {
     const closed = previous.current !== null && selected === null;
     previous.current = selected;
+
     if (!closed) return;
+
     const button = editButton.current;
     // The button may belong to a layer that has since left the scene.
     if (button?.isConnected) button.focus();
@@ -202,20 +188,13 @@ function toggleLayerUnits(
   if (on) remembered.delete(entry.layer.id);
   else if (changed.length > 0) remembered.set(entry.layer.id, changed);
   if (changed.length === 0) return;
+
   // One dispatch keeps subscribers to a single drawing pass.
-  store.dispatch({
-    kind: "toggleMany",
-    units: changed,
-    on,
-  });
+  store.dispatch({ kind: "toggleMany", units: changed, on });
 }
 
 function toggleBlendUnit(store: SceneStore, on: boolean): void {
-  store.dispatch({
-    kind: "toggle",
-    unit: BLEND,
-    on,
-  });
+  store.dispatch({ kind: "toggle", unit: BLEND, on });
   // The blend has no Show as radios, so the switch itself remembers the choice.
   storeShowAs(BLEND, on ? "colour" : null);
 }
@@ -229,15 +208,9 @@ function ordinaryCards(
   onToggle: (entry: MountedLayer, on: boolean) => void,
   onEdit: (target: SelectedTarget, button: HTMLButtonElement) => void,
 ): React.ReactElement[] {
-  return mounted.map((entry) => ordinaryCard(
-    entry,
-    display,
-    allocation,
-    optionStates,
-    selected,
-    onToggle,
-    onEdit,
-  ));
+  return mounted.map((entry) =>
+    ordinaryCard(entry, display, allocation, optionStates, selected, onToggle, onEdit),
+  );
 }
 
 function ordinaryCard(
@@ -280,13 +253,10 @@ function layerCardTitle(
       parts: onPartTitles(layer, display, allocation),
     });
   }
+
   const draw = allocation.draws.get(layer.id) ?? activePartDraw(layer, display, allocation);
 
-  return cardTitle(layer, {
-    draw,
-    off: !isMasterOn(layer, display.off),
-    smoothed,
-  });
+  return cardTitle(layer, { draw, off: !isMasterOn(layer, display.off), smoothed });
 }
 
 function onPartTitles(
@@ -337,11 +307,10 @@ function blendCard(
 ): React.ReactElement {
   const smoothed = smoothedFor(blend.options, optionStates[BLEND]);
   const blendOn = allocation.as.get(BLEND) === "colour";
-  const title = cardTitle({ title: BLEND_TITLE, units: "" }, {
-    draw: allocation.draws.get(BLEND),
-    off: !blendOn,
-    smoothed,
-  });
+  const title = cardTitle(
+    { title: BLEND_TITLE, units: "" },
+    { draw: allocation.draws.get(BLEND), off: !blendOn, smoothed },
+  );
 
   return (
     <LayerCard
@@ -394,14 +363,8 @@ function detailsCard(
   );
 }
 
-function initialOptions(
-  mounted: MountedLayer[],
-  blend: BlendView | null,
-  unit: string,
-): boolean[] {
-  const view = unit === BLEND
-    ? blend
-    : mounted.find(({ layer }) => layer.id === unit)?.view;
+function initialOptions(mounted: MountedLayer[], blend: BlendView | null, unit: string): boolean[] {
+  const view = unit === BLEND ? blend : mounted.find(({ layer }) => layer.id === unit)?.view;
 
   return (view?.options ?? []).map(({ initial }) => initial ?? false);
 }
@@ -417,6 +380,7 @@ function editorTarget(
   }
 
   const entry = mounted.find(({ layer }) => layer.id === selected.unit);
+
   return entry ? { unit: entry.layer.id, title: entry.layer.title, view: entry.view } : null;
 }
 

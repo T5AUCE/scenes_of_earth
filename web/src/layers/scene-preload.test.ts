@@ -2,9 +2,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { acquireDemPool, releaseDemPool } from "../gpu/dem-pool.ts";
 import { BASEMAP_SOURCE_ID, scenePyramidTiles } from "../render/tile-viewport.ts";
 import type { Bbox } from "../types.ts";
-import { acquireDemPool, releaseDemPool } from "../gpu/dem-pool.ts";
 import {
   BASEMAP_PRELOAD_MAX_ZOOM,
   BASEMAP_PRELOAD_TILES,
@@ -20,10 +20,7 @@ const SMALL_SCENE: Bbox = [36.5, -1.5, 37.5, -0.5];
 const COUNTRY_SCENE: Bbox = [33.9, -4.7, 41.9, 5.5];
 
 test("tile URLs fill the template without scene identity", () => {
-  assert.equal(
-    tileUrl(TEMPLATE, { z: 9, x: 1, y: 2 }),
-    "https://tiles.example.test/9/1/2.webp",
-  );
+  assert.equal(tileUrl(TEMPLATE, { z: 9, x: 1, y: 2 }), "https://tiles.example.test/9/1/2.webp");
 });
 
 test("a small scene preloads every DEM level from the contour parents down to the cap", () => {
@@ -32,7 +29,10 @@ test("a small scene preloads every DEM level from the contour parents down to th
 
   assert.deepEqual([...new Set(zooms)], [8, 9, 10, 11]);
   assert.ok(tasks.length <= DEM_PRELOAD_TILES);
-  assert.deepEqual(zooms, [...zooms].sort((first, second) => first - second));
+  assert.deepEqual(
+    zooms,
+    [...zooms].sort((first, second) => first - second),
+  );
   assert.ok(tasks.every((task) => task.key.startsWith("https://tiles.example.test/")));
 });
 
@@ -42,7 +42,9 @@ test("a country scene stops at the last whole level inside the budget", () => {
 
   assert.ok(tasks.length <= DEM_PRELOAD_TILES);
   assert.ok(deepest >= 7 && deepest <= 9);
+
   const nextLevel = scenePyramidTiles(COUNTRY_SCENE, deepest + 1, deepest + 1, 100_000);
+
   assert.ok(tasks.length + nextLevel.length > DEM_PRELOAD_TILES);
 });
 
@@ -53,7 +55,8 @@ test("a scene fitted deeper than the DEM cap still gets the deepest level", () =
 });
 
 test("a scene across the antimeridian wraps its tile columns", () => {
-  const tasks = demSource([171, 50, 231, 55]).tasks(5)
+  const tasks = demSource([171, 50, 231, 55])
+    .tasks(5)
     .filter((task) => zoomOf(task.key) === 4);
   const columns = new Set(tasks.map((task) => zxy(task.key)[1]));
 
@@ -68,9 +71,11 @@ test("a DEM download uses a low-priority fetch", async (t) => {
     requests.push({ url, priority: init.priority });
     return new Response("bytes", { status: url.endsWith("0.webp") ? 404 : 200 });
   }) as typeof fetch;
+
   t.after(() => {
     globalThis.fetch = original;
   });
+
   const [task] = demSource(SMALL_SCENE).tasks(11);
 
   const blob = await task.run(new AbortController());
@@ -85,6 +90,7 @@ test("a failed download reports its status so a missing tile can be remembered",
   t.after(() => {
     globalThis.fetch = original;
   });
+
   const [task] = demSource(SMALL_SCENE).tasks(11);
 
   await assert.rejects(task.run(new AbortController()), /Bad response: 404/);
@@ -107,19 +113,26 @@ test("a DEM plan skips tiles the pool already holds", async () => {
     createWorker: () => ({ post: () => {}, onResponse: () => {}, terminate: () => {} }),
   };
   const pool = acquireDemPool(options);
+
   try {
     const [first] = demSource(SMALL_SCENE).tasks(9.3);
     const [z, x, y] = zxy(first.key);
     pool.update([{ z, x, y, tier: "view" }]);
 
-    const keys = new Set(demSource(SMALL_SCENE).tasks(9.3).map((task) => task.key));
+    const keys = new Set(
+      demSource(SMALL_SCENE)
+        .tasks(9.3)
+        .map((task) => task.key),
+    );
 
     assert.equal(keys.has(first.key), false);
+
     const dwell = demSource(SMALL_SCENE).dwell!(
       { west: 36, south: -2, east: 38, north: 0 },
       5,
       9.3,
     );
+
     assert.ok(dwell.every((task) => task.key !== first.key));
   } finally {
     releaseDemPool(map, TEMPLATE);
@@ -134,16 +147,20 @@ test("basemap preload stops at the preload zoom and the source ceiling", () => {
   assert.ok(tasks.length <= BASEMAP_PRELOAD_TILES);
   assert.ok(Math.max(...zooms) <= BASEMAP_PRELOAD_MAX_ZOOM);
   assert.ok(tasks.every((task) => task.key.startsWith("https://tiles.openfreemap.org/planet/")));
+
   const lower = basemapPreloadSource(basemapMap(LIBERTY, 10), SMALL_SCENE).tasks(9.3);
+
   assert.ok(Math.max(...lower.map((task) => basemapZoom(task.key))) <= 10);
 });
 
 test("basemap preload waits for a resolved source", () => {
   const empty = basemapPreloadSource(basemapMap(null, 14), SMALL_SCENE);
+
   assert.deepEqual(empty.tasks(9), []);
 
   const source = basemapPreloadSource(basemapMap(LIBERTY, 14), SMALL_SCENE);
   const tasks = source.tasks(9);
+
   assert.ok(tasks.length > 0);
   assert.ok(tasks.every((task) => task.key.startsWith("https://tiles.openfreemap.org/planet/")));
 });
@@ -198,30 +215,27 @@ test("a basemap dwell without a resolved source warms nothing", () => {
 
 test("preload tasks carry their tile zoom for gate ordering", () => {
   const dem = demSource(SMALL_SCENE).tasks(9.3);
+
   assert.ok(dem.length > 0);
   assert.ok(dem.every((task) => typeof task.zoom === "number"));
   assert.ok(dem.some((task) => task.zoom === 9));
   assert.ok(dem.some((task) => (task.zoom ?? 0) > 9));
 
   const basemap = basemapPreloadSource(basemapMap(LIBERTY, 14), SMALL_SCENE).tasks(9.3);
+
   assert.ok(basemap.length > 0);
   assert.ok(basemap.every((task) => typeof task.zoom === "number"));
   assert.ok(basemap.some((task) => task.zoom === 9));
 });
 
 function demSource(bbox: Bbox) {
-  return demPreloadSource({
-    template: TEMPLATE,
-    maxzoom: 11,
-    bbox,
-  });
+  return demPreloadSource({ template: TEMPLATE, maxzoom: 11, bbox });
 }
 
 function basemapMap(template: string | null, maxzoom: number) {
   return {
-    getSource: (id: string) => id === BASEMAP_SOURCE_ID && template
-      ? { tiles: [template], maxzoom }
-      : null,
+    getSource: (id: string) =>
+      id === BASEMAP_SOURCE_ID && template ? { tiles: [template], maxzoom } : null,
   };
 }
 

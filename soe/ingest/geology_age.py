@@ -5,6 +5,7 @@ the build needs only five small members. They are fetched by HTTP range reads, o
 zip that is already on disk. Each map unit gets the class of its age range (see
 `soe.geology_age`) and the polygons are rasterised onto the 1/120° grid between 60°S and 84°N.
 """
+
 import io
 import logging
 import os
@@ -29,8 +30,8 @@ from ..geology_age import (
     classify_age_ranges,
 )
 from ..sources.grid import Bbox
-from .cubes import DOWNLOADS_DIR
 from .cog import publish_cog, write_tiled_raster
+from .cubes import DOWNLOADS_DIR
 
 if TYPE_CHECKING:
     import geopandas as gpd
@@ -61,12 +62,14 @@ def ingest_geology_age(cubes_dir: Path | str, archive_path: Path | str | None = 
     if not all((folder / name).exists() for name in GSC_MEMBERS.values()):
         folder.mkdir(parents=True, exist_ok=True)
         log.info("Fetching the GSC map members")
+
         with _open_archive(archive_path) as archive:
             _extract_members(archive, folder)
 
     published = Path(cubes_dir) / GEOLOGY_AGE_FILE
     log.info("Building the rock-age COG")
     build_geology_age_cog(folder / POLYGONS_FILE, folder / AGES_FILE, published)
+
     return published
 
 
@@ -123,13 +126,13 @@ class _RangeReader(io.RawIOBase):
             return 0
 
         request = urllib.request.Request(
-            self._url,
-            headers={"Range": f"bytes={self._position}-{end - 1}"},
+            self._url, headers={"Range": f"bytes={self._position}-{end - 1}"}
         )
         with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECS) as response:
             _check_range_response(response, self._position, end, self._size)
             data = response.read(end - self._position)
-        buffer[:len(data)] = data
+
+        buffer[: len(data)] = data
         self._position += len(data)
         return len(data)
 
@@ -141,15 +144,14 @@ def _check_range_response(response: Any, first: int, end: int, size: int) -> Non
     """
     if response.status != 206:
         raise OSError(f"Range read failed with HTTP status {response.status}")
+
     expected = f"bytes {first}-{end - 1}/{size}"
     if response.headers.get("Content-Range") != expected:
         raise OSError(f"Range reply Content-Range is not {expected}")
 
 
 def build_geology_age_cog(
-    polygons_path: Path | str,
-    ages_path: Path | str,
-    cog_path: Path | str,
+    polygons_path: Path | str, ages_path: Path | str, cog_path: Path | str
 ) -> None:
     """Write the COG of age classes, replacing cog_path only when complete.
 
@@ -158,9 +160,7 @@ def build_geology_age_cog(
     polygons = _read_classified_polygons(polygons_path, ages_path)
     publish_cog(
         lambda raster: write_tiled_raster(
-            raster,
-            GEOLOGY_AGE_RES_DEG,
-            partial(_rasterize_tile, polygons),
+            raster, GEOLOGY_AGE_RES_DEG, partial(_rasterize_tile, polygons)
         ),
         GSC_SOURCE,
         Path(cog_path),
@@ -168,8 +168,7 @@ def build_geology_age_cog(
 
 
 def _read_classified_polygons(
-    polygons_path: Path | str,
-    ages_path: Path | str,
+    polygons_path: Path | str, ages_path: Path | str
 ) -> "gpd.GeoDataFrame":
     """Read the map units with the class value of their age range in `value`.
 
@@ -179,23 +178,19 @@ def _read_classified_polygons(
 
     polygons = pyogrio.read_dataframe(polygons_path, columns=["RUNO_ID2"])
     ages = pyogrio.read_dataframe(
-        ages_path,
-        columns=["RUNO_ID2", "STARTCAT", "ENDCAT"],
-        read_geometry=False,
+        ages_path, columns=["RUNO_ID2", "STARTCAT", "ENDCAT"], read_geometry=False
     ).dropna(subset=["STARTCAT"])
     # A few units name only their start, so their range is that one name.
     ages["ENDCAT"] = ages["ENDCAT"].fillna(ages["STARTCAT"])
     ranges = list(zip(ages["STARTCAT"], ages["ENDCAT"]))
     values = classify_age_ranges(ranges, GSC_AGE_NAMES)
     ages["value"] = [values[pair] for pair in ranges]
+
     return polygons.merge(ages[["RUNO_ID2", "value"]], on="RUNO_ID2")
 
 
 def _rasterize_tile(
-    polygons: "gpd.GeoDataFrame",
-    bounds: Bbox,
-    transform: Affine,
-    shape: tuple[int, int],
+    polygons: "gpd.GeoDataFrame", bounds: Bbox, transform: Affine, shape: tuple[int, int]
 ) -> np.ndarray:
     """Return the class of each cell of the tile, 0 where no unit covers it."""
     nearby = polygons.iloc[polygons.sindex.query(box(*bounds), predicate="intersects")]
@@ -203,8 +198,5 @@ def _rasterize_tile(
         return np.zeros(shape, "uint8")
 
     return rasterize(
-        zip(nearby.geometry, nearby["value"]),
-        out_shape=shape,
-        transform=transform,
-        dtype="uint8",
+        zip(nearby.geometry, nearby["value"]), out_shape=shape, transform=transform, dtype="uint8"
     )

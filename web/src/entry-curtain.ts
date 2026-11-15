@@ -61,11 +61,16 @@ export function revealUnderCurtain(
   // The copy only works inside the render event, because the drawing buffer is cleared after it.
   function cover() {
     picture = copyMap(map);
+
     if (picture) map.getCanvasContainer().append(picture);
+
     stage();
+
     // A retired curtain stops here, so a replaced entry never stages twice.
     if (step === "done") return;
+
     step = "staged";
+
     if (!picture) return fade();
 
     map.once("idle", fade);
@@ -79,6 +84,7 @@ export function revealUnderCurtain(
     clearTimeout(settleTimer);
     map.off("idle", fade);
     onFadeStart();
+
     if (!picture) return finish(true);
 
     picture.classList.add(FADING_CLASS);
@@ -91,6 +97,7 @@ export function revealUnderCurtain(
 
     const faded = completed && step === "fading";
     step = "done";
+
     clearTimeout(settleTimer);
     clearTimeout(fadeTimer);
     map.off("render", cover);
@@ -99,6 +106,7 @@ export function revealUnderCurtain(
     map.getCanvas().removeEventListener("webglcontextlost", cancel);
     picture?.remove();
     finishDone();
+
     if (faded) onFadeEnd();
   }
 
@@ -108,6 +116,7 @@ export function revealUnderCurtain(
     if (step === "waiting") stage();
     if (isFinished()) return;
     if (step !== "fading") onFadeStart();
+
     step = "fading";
     finish(true);
   }
@@ -139,6 +148,7 @@ function copyMap(map: MapLibreMap): HTMLCanvasElement | null {
   const copy = document.createElement("canvas");
   copy.width = source.width;
   copy.height = source.height;
+
   const context = copy.getContext("2d");
   if (!context) return null;
 

@@ -16,9 +16,11 @@ test("useSceneStore re-renders when a Show as choice is dispatched", async (cont
   const window = new Window();
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { useSceneStore } = await import("./use-scene-store.ts");
+
   const store = createSceneStore(LAYERS, { layers: {}, off: new Set(), showAs: {} });
 
   function Label(): React.ReactElement {
@@ -56,6 +58,7 @@ function installBrowser(window: Window): void {
   for (const name of names) {
     defineGlobal(name, window[name]);
   }
+
   defineGlobal("window", window);
   defineGlobal("document", window.document);
   defineGlobal("navigator", window.navigator);
@@ -67,8 +70,5 @@ function defineGlobal(name: string, value: unknown): void {
 }
 
 function layer(id: string, encodings: string[]): LayerDoc {
-  return {
-    id,
-    style: { kind: "field", encodings },
-  } as unknown as LayerDoc;
+  return { id, style: { kind: "field", encodings } } as unknown as LayerDoc;
 }

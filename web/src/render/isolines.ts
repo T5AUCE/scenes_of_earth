@@ -59,10 +59,22 @@ const CASE_EDGES: Record<number, [Edge, Edge][]> = {
   14: [["left", "top"]],
 };
 
-const SADDLE_5_HIGH: [Edge, Edge][] = [["top", "right"], ["bottom", "left"]];
-const SADDLE_5_LOW: [Edge, Edge][] = [["left", "top"], ["right", "bottom"]];
-const SADDLE_10_HIGH: [Edge, Edge][] = [["left", "top"], ["right", "bottom"]];
-const SADDLE_10_LOW: [Edge, Edge][] = [["top", "right"], ["bottom", "left"]];
+const SADDLE_5_HIGH: [Edge, Edge][] = [
+  ["top", "right"],
+  ["bottom", "left"],
+];
+const SADDLE_5_LOW: [Edge, Edge][] = [
+  ["left", "top"],
+  ["right", "bottom"],
+];
+const SADDLE_10_HIGH: [Edge, Edge][] = [
+  ["left", "top"],
+  ["right", "bottom"],
+];
+const SADDLE_10_LOW: [Edge, Edge][] = [
+  ["top", "right"],
+  ["bottom", "left"],
+];
 const NO_EDGES: [Edge, Edge][] = [];
 
 /** The smallest fixed interval that keeps the scene at twelve isotherm levels or fewer. */
@@ -70,9 +82,11 @@ export function isolineInterval(stops: readonly number[]): number {
   const low = stops[0];
   const high = stops[stops.length - 1];
   let interval = FIRST_ISOTHERM_INTERVAL_DEG;
+
   while (isolineLevels(low, high, interval).length > MAX_ISOTHERM_LEVELS) {
     interval = nextNiceInterval(interval);
   }
+
   return interval;
 }
 
@@ -81,6 +95,7 @@ function nextNiceInterval(interval: number): number {
   const decade = 10 ** Math.floor(Math.log10(interval));
   const multiplier = interval / decade;
   const next = INTERVAL_MULTIPLIERS.find((candidate) => candidate > multiplier);
+
   return next === undefined ? 10 * decade : next * decade;
 }
 
@@ -89,9 +104,11 @@ export function isolineLevels(low: number, high: number, interval: number): numb
   const first = Math.ceil(low / interval);
   const last = Math.floor(high / interval);
   const levels: number[] = [];
+
   for (let multiple = first; multiple <= last; multiple++) {
     levels.push(Number((multiple * interval).toPrecision(LEVEL_DIGITS)));
   }
+
   return levels;
 }
 
@@ -115,8 +132,10 @@ export function traceIsolines(
   }
 
   const field = refineField(values, nx, ny);
-  return traceLevels(field, levels, 1 / REFINEMENT_FACTOR, true)
-    .filter((line) => keepsLine(line.coordinates));
+
+  return traceLevels(field, levels, 1 / REFINEMENT_FACTOR, true).filter((line) =>
+    keepsLine(line.coordinates),
+  );
 }
 
 function traceLevels(
@@ -128,6 +147,7 @@ function traceLevels(
   const { values, nx, ny } = field;
   const graphs = levels.map(() => new SegmentGraph());
   const corners: Corners = [0, 0, 0, 0];
+
   for (let row = 0; row + 1 < ny; row++) {
     for (let column = 0; column + 1 < nx; column++) {
       const top = row * nx + column;
@@ -135,18 +155,26 @@ function traceLevels(
       const topRight = values[top + 1];
       const bottomRight = values[top + nx + 1];
       const bottomLeft = values[top + nx];
-      if (!Number.isFinite(topLeft) || !Number.isFinite(topRight)
-        || !Number.isFinite(bottomRight) || !Number.isFinite(bottomLeft)) continue;
+      if (
+        !Number.isFinite(topLeft)
+        || !Number.isFinite(topRight)
+        || !Number.isFinite(bottomRight)
+        || !Number.isFinite(bottomLeft)
+      )
+        continue;
 
       corners[0] = topLeft;
       corners[1] = topRight;
       corners[2] = bottomRight;
       corners[3] = bottomLeft;
+
       const low = Math.min(topLeft, topRight, bottomRight, bottomLeft);
       const high = Math.max(topLeft, topRight, bottomRight, bottomLeft);
+
       for (let index = 0; index < levels.length; index++) {
         const level = levels[index];
         if (level <= low || level > high) continue;
+
         for (const [from, to] of cellEdges(corners, level)) {
           graphs[index].add(
             edgeCrossing(from, column, row, corners, level),
@@ -162,10 +190,12 @@ function traceLevels(
 
 function cellEdges(corners: Corners, level: number): [Edge, Edge][] {
   const [topLeft, topRight, bottomRight, bottomLeft] = corners;
-  const cellCase = (topLeft >= level ? 1 : 0)
+  const cellCase =
+    (topLeft >= level ? 1 : 0)
     + (topRight >= level ? 2 : 0)
     + (bottomRight >= level ? 4 : 0)
     + (bottomLeft >= level ? 8 : 0);
+
   if (cellCase === 5 || cellCase === 10) {
     // The cell centre picks the pairing, and an exact tie counts as high.
     const centre = (topLeft + topRight + bottomRight + bottomLeft) / 4;
@@ -173,6 +203,7 @@ function cellEdges(corners: Corners, level: number): [Edge, Edge][] {
 
     return centre >= level ? SADDLE_10_HIGH : SADDLE_10_LOW;
   }
+
   return CASE_EDGES[cellCase] ?? NO_EDGES;
 }
 
@@ -206,10 +237,12 @@ class SegmentGraph {
 
     const adjacent = this.byEndpoint.get(start) ?? [];
     if (adjacent.some((index) => this.segments[index].includes(end))) return;
+
     const index = this.segments.length;
     this.segments.push([start, end]);
     adjacent.push(index);
     this.byEndpoint.set(start, adjacent);
+
     const incoming = this.byEndpoint.get(end) ?? [];
     incoming.push(index);
     this.byEndpoint.set(end, incoming);
@@ -221,28 +254,35 @@ class SegmentGraph {
     if (existing) return existing;
 
     this.points.set(key, point);
+
     return point;
   }
 
   chain(value: number, scale: number, smooth: boolean): Isoline[] {
     const used = new Array<boolean>(this.segments.length).fill(false);
     const lines: Isoline[] = [];
+
     for (const [index, [start, end]] of this.segments.entries()) {
       if (used[index]) continue;
+
       used[index] = true;
+
       const coordinates: Point[] = [start, end];
       coordinates.push(...this.extend(end, used, smooth));
       coordinates.unshift(...this.extend(start, used, smooth).reverse());
+
       const wraps = isClosed(coordinates) && !this.isAnchor(coordinates[0]);
       const rounded = smooth ? roundCoordinates(coordinates, wraps) : coordinates;
       lines.push({ value, coordinates: rounded.map((point) => scalePoint(point, scale)) });
     }
+
     return lines;
   }
 
   private extend(start: Point, used: boolean[], smooth: boolean): Point[] {
     const points: Point[] = [];
     let current = start;
+
     while (true) {
       if (smooth && this.isAnchor(current)) return points;
 
@@ -250,6 +290,7 @@ class SegmentGraph {
       if (index === undefined) return points;
 
       used[index] = true;
+
       const [nextStart, nextEnd] = this.segments[index];
       current = nextStart === current ? nextEnd : nextStart;
       points.push(current);
@@ -274,6 +315,7 @@ function roundCoordinates(coordinates: Point[], closed: boolean): Point[] {
   for (let pass = 0; pass < CHAIKIN_PASSES; pass++) {
     points = chaikinPass(points, closed);
   }
+
   return points;
 }
 
@@ -283,6 +325,7 @@ function chaikinPass(points: Point[], closed: boolean): Point[] {
 
   const rounded: Point[] = closed ? [] : [ring[0]];
   const last = closed ? ring.length : ring.length - 1;
+
   for (let index = 0; index < last; index++) {
     const start = ring[index];
     const end = ring[(index + 1) % ring.length];
@@ -291,8 +334,10 @@ function chaikinPass(points: Point[], closed: boolean): Point[] {
       mixPoints(start, end, CHAIKIN_SECOND_POINT),
     );
   }
+
   if (closed) rounded.push(rounded[0]);
   else rounded.push(ring[ring.length - 1]);
+
   return rounded;
 }
 
@@ -303,8 +348,10 @@ function withoutClosingPoint(points: readonly Point[]): Point[] {
 
 function isClosed(coordinates: readonly Point[]): boolean {
   if (coordinates.length < 4) return false;
+
   const first = coordinates[0];
   const last = coordinates[coordinates.length - 1];
+
   return first[0] === last[0] && first[1] === last[1];
 }
 
@@ -315,20 +362,19 @@ function keepsLine(coordinates: readonly Point[]): boolean {
   let maxColumn = minColumn;
   let minRow = coordinates[0][1];
   let maxRow = minRow;
+
   for (const [column, row] of coordinates) {
     minColumn = Math.min(minColumn, column);
     maxColumn = Math.max(maxColumn, column);
     minRow = Math.min(minRow, row);
     maxRow = Math.max(maxRow, row);
   }
+
   return Math.max(maxColumn - minColumn, maxRow - minRow) >= MIN_CLOSED_LOOP_SPAN_CELLS;
 }
 
 function mixPoints(start: Point, end: Point, along: number): Point {
-  return [
-    start[0] + (end[0] - start[0]) * along,
-    start[1] + (end[1] - start[1]) * along,
-  ];
+  return [start[0] + (end[0] - start[0]) * along, start[1] + (end[1] - start[1]) * along];
 }
 
 function refineField(values: ArrayLike<number>, nx: number, ny: number): ScalarField {
@@ -337,6 +383,7 @@ function refineField(values: ArrayLike<number>, nx: number, ny: number): ScalarF
   const refined = new Float64Array(refinedNx * refinedNy);
   const support = supportMap(values, nx, ny);
   const range = finiteRange(values);
+
   for (let row = 0; row < refinedNy; row++) {
     for (let column = 0; column < refinedNx; column++) {
       refined[row * refinedNx + column] = sampleField(
@@ -350,6 +397,7 @@ function refineField(values: ArrayLike<number>, nx: number, ny: number): ScalarF
       );
     }
   }
+
   return { values: refined, nx: refinedNx, ny: refinedNy };
 }
 
@@ -368,6 +416,7 @@ export function sampleSmoothField(
 ): number {
   const support = supportMap(values, nx, ny);
   const range = finiteRange(values);
+
   return sampleField(values, nx, ny, support, range, x, y);
 }
 
@@ -384,26 +433,36 @@ function sampleField(
   const row = Math.max(0, Math.min(Math.floor(y), ny - 2));
   const across = x - column;
   const down = y - row;
+
   const top = row * nx + column;
   const topLeft = values[top];
   const topRight = values[top + 1];
   const bottomLeft = values[top + nx];
   const bottomRight = values[top + nx + 1];
+
   if (Number.isInteger(x) && Number.isInteger(y)) return values[y * nx + x];
-  if (!Number.isFinite(topLeft) || !Number.isFinite(topRight)
-    || !Number.isFinite(bottomLeft) || !Number.isFinite(bottomRight)) {
+
+  if (
+    !Number.isFinite(topLeft)
+    || !Number.isFinite(topRight)
+    || !Number.isFinite(bottomLeft)
+    || !Number.isFinite(bottomRight)
+  ) {
     if (Number.isInteger(y)) {
       const left = down === 0 ? topLeft : bottomLeft;
       const right = down === 0 ? topRight : bottomRight;
       return left + (right - left) * across;
     }
+
     if (Number.isInteger(x)) {
       const above = across === 0 ? topLeft : topRight;
       const below = across === 0 ? bottomLeft : bottomRight;
       return above + (below - above) * down;
     }
+
     return NaN;
   }
+
   if (!support[row * (nx - 1) + column]) {
     const above = topLeft + (topRight - topLeft) * across;
     const below = bottomLeft + (bottomRight - bottomLeft) * across;
@@ -415,6 +474,7 @@ function sampleField(
 
 function supportMap(values: ArrayLike<number>, nx: number, ny: number): Uint8Array {
   const support = new Uint8Array((nx - 1) * (ny - 1));
+
   for (let row = 0; row + 1 < ny; row++) {
     for (let column = 0; column + 1 < nx; column++) {
       if (hasFullSupport(values, nx, ny, column, row)) {
@@ -422,6 +482,7 @@ function supportMap(values: ArrayLike<number>, nx: number, ny: number): Uint8Arr
       }
     }
   }
+
   return support;
 }
 
@@ -440,18 +501,22 @@ function hasFullSupport(
       if (!Number.isFinite(values[start + localColumn])) return false;
     }
   }
+
   return true;
 }
 
 function finiteRange(values: ArrayLike<number>): ScalarRange {
   let low = Infinity;
   let high = -Infinity;
+
   for (let index = 0; index < values.length; index++) {
     const value = values[index];
     if (!Number.isFinite(value)) continue;
+
     low = Math.min(low, value);
     high = Math.max(high, value);
   }
+
   return { low, high };
 }
 
@@ -467,6 +532,7 @@ function bicubicValue(
 ): number {
   const top = row * nx + column;
   const quad = row * (nx - 1) + column;
+
   const p00 = values[top - nx - 1];
   const p01 = values[top - nx];
   const p02 = values[top - nx + 1];
@@ -492,18 +558,22 @@ function bicubicValue(
 
   // Adjacent bilinear quads share a linear edge, so taper the difference from that edge.
   const stride = nx - 1;
+
   if (!support[quad - stride]) {
     const linear = p11 + (p12 - p11) * across;
     value += (1 - down) * (linear - second);
   }
+
   if (!support[quad + stride]) {
     const linear = p21 + (p22 - p21) * across;
     value += down * (linear - third);
   }
+
   if (!support[quad - 1]) {
     const linear = p11 + (p21 - p11) * down;
     value += (1 - across) * (linear - cubicValue(p01, p11, p21, p31, down));
   }
+
   if (!support[quad + 1]) {
     const linear = p12 + (p22 - p12) * down;
     value += across * (linear - cubicValue(p02, p12, p22, p32, down));
@@ -515,11 +585,13 @@ function bicubicValue(
 function cubicValue(p0: number, p1: number, p2: number, p3: number, along: number): number {
   const squared = along * along;
   const cubed = squared * along;
-  return 0.5 * (
-    2 * p1
-    + (p2 - p0) * along
-    + (2 * p0 - 5 * p1 + 4 * p2 - p3) * squared
-    + (3 * p1 - 3 * p2 + p3 - p0) * cubed
+
+  return (
+    0.5
+    * (2 * p1
+      + (p2 - p0) * along
+      + (2 * p0 - 5 * p1 + 4 * p2 - p3) * squared
+      + (3 * p1 - 3 * p2 + p3 - p0) * cubed)
   );
 }
 

@@ -101,6 +101,7 @@ export function startDevStatsWhenEnabled(
 
     return () => stopActiveLoop(running);
   }
+
   const loop = new DevStatsLoop(element, map);
   activeLoop = loop;
   loop.start();
@@ -132,6 +133,7 @@ export class DevStatsLoop {
 
   start(): void {
     if (this.isRunning) return;
+
     this.isRunning = true;
     this.element.hidden = false;
     document.body.classList.add(DEV_STATS_CLASS);
@@ -142,6 +144,7 @@ export class DevStatsLoop {
 
   stop(): void {
     if (!this.isRunning) return;
+
     this.isRunning = false;
     cancelAnimationFrame(this.frameId);
     this.stopLongtasks();
@@ -152,19 +155,24 @@ export class DevStatsLoop {
 
   private readonly tick = (nowMs: number): void => {
     if (!this.isRunning) return;
+
     recordFrame(this.stamps, nowMs);
+
     if (nowMs - this.renderedMs >= REFRESH_MS) {
       this.renderedMs = nowMs;
+
       const base = snapshot(this.stamps, nowMs, this.map, this.longtasks);
       const text = formatDevStats({ ...base, tiles: this.settle.snapshot() });
       renderDevStats(this.element, text);
     }
+
     this.frameId = requestAnimationFrame(this.tick);
   };
 
   private startLongtasks(): void {
     try {
       if (typeof PerformanceObserver === "undefined") return;
+
       const observer = new PerformanceObserver((entries) => {
         this.longtasks += entries.getEntries().length;
       });
@@ -214,16 +222,20 @@ export class TileSettleTracker {
 
   start(): void {
     if (typeof this.map.on !== "function" || typeof this.map.off !== "function") return;
+
     const gestureStart = (): void => this.beginStep(this.clock());
+
     const zoomStart = (): void => {
       // A programmatic zoom opens a step only outside a gesture, so mid-gesture zooms keep counts.
       if (this.stepStartMs === null) this.beginStep(this.clock());
     };
+
     // Each source load reaches the map as both dataloading and sourcedataloading.
     const loading = (event: unknown): void => this.noteRequest(event);
     const loaded = (event: unknown): void => this.noteLoaded(event);
     const drained = (): void => this.settleLoaded(this.clock());
     const rendered = (): void => this.settlePool(this.clock());
+
     this.map.on("movestart", gestureStart);
     this.map.on("zoomstart", zoomStart);
     this.map.on("sourcedataloading", loading);
@@ -231,6 +243,7 @@ export class TileSettleTracker {
     this.map.on("moveend", drained);
     this.map.on("idle", drained);
     this.map.on("render", rendered);
+
     this.stopListening = (): void => {
       this.map.off?.("movestart", gestureStart);
       this.map.off?.("zoomstart", zoomStart);
@@ -258,10 +271,12 @@ export class TileSettleTracker {
 
   private beginStep(nowMs: number): void {
     this.stepStartMs = nowMs;
+
     for (const key of ["terrain", "basemap", "contours"] as const) {
       this.layers[key] = { settleMs: null, requests: 0 };
       this.seenSources[key].clear();
     }
+
     this.seedSeenSources();
     this.poolRequestsAtStart = poolSettleState(this.poolProbe)?.requests ?? null;
     // Held tiles settle at once instead of waiting for the next render or moveend.
@@ -278,24 +293,30 @@ export class TileSettleTracker {
 
   private noteRequest(event: unknown): void {
     if (this.stepStartMs === null) return;
+
     const sourceId = sourceIdOf(event);
     const layer = layerForSource(sourceId);
     if (!layer || !sourceId) return;
+
     this.layers[layer].requests += 1;
     this.seenSources[layer].add(sourceId);
+
     // A later load reopens the layer so the second wave times its own settle.
     if (this.layers[layer].settleMs !== null) this.layers[layer].settleMs = null;
   }
 
   private noteLoaded(event: unknown): void {
     if (this.stepStartMs === null) return;
+
     const sourceId = sourceIdOf(event);
     const layer = layerForSource(sourceId);
     if (!layer || this.layers[layer].settleMs !== null) return;
+
     const eventSourceId = eventLoaded(event) ? sourceId : undefined;
     if (eventSourceId === undefined && !sourceLoaded(this.map, sourceId)) return;
     // One sibling may settle while another still loads, so wait for every tracked source.
     if (!allSourcesLoaded(this.map, this.seenSources[layer], eventSourceId)) return;
+
     this.layers[layer].settleMs = this.clock() - this.stepStartMs;
   }
 
@@ -307,6 +328,7 @@ export class TileSettleTracker {
   private settleLoaded(nowMs: number): void {
     const startMs = this.stepStartMs;
     if (startMs === null) return;
+
     for (const key of ["terrain", "basemap", "contours"] as const) {
       if (this.layers[key].settleMs !== null) continue;
       if (key !== "basemap") continue;
@@ -318,12 +340,14 @@ export class TileSettleTracker {
         this.layers[key].settleMs = nowMs - startMs;
       }
     }
+
     this.settlePool(nowMs);
   }
 
   private settlePool(nowMs: number): void {
     const startMs = this.stepStartMs;
     if (startMs === null) return;
+
     const state = poolSettleState(this.poolProbe);
     if (!state) return;
     if (nowMs - startMs >= SETTLE_TIMEOUT_MS) {
@@ -334,6 +358,7 @@ export class TileSettleTracker {
       this.reopenGesturePool();
       return;
     }
+
     this.settleGesturePool(nowMs, state.requests);
   }
 
@@ -347,6 +372,7 @@ export class TileSettleTracker {
   private settleGesturePool(nowMs: number, requests: number): void {
     const startMs = this.stepStartMs;
     if (startMs === null) return;
+
     for (const key of ["terrain", "contours"] as const) {
       if (this.layers[key].settleMs !== null) continue;
       this.layers[key].settleMs = nowMs - startMs;
@@ -438,6 +464,7 @@ function sourceLoaded(map: DevStatsMap, sourceId: string | undefined): boolean {
   if (!sourceId || typeof map.isSourceLoaded !== "function") return false;
   // A removed source counts as loaded because querying it would fire a Map error.
   if (!sourceExists(map, sourceId)) return true;
+
   try {
     return map.isSourceLoaded(sourceId);
   } catch {
@@ -462,11 +489,7 @@ function retireRemovedSources(map: DevStatsMap, sourceIds: Set<string>): void {
   }
 }
 
-function allSourcesLoaded(
-  map: DevStatsMap,
-  sourceIds: Set<string>,
-  loadedId?: string,
-): boolean {
+function allSourcesLoaded(map: DevStatsMap, sourceIds: Set<string>, loadedId?: string): boolean {
   retireRemovedSources(map, sourceIds);
   for (const sourceId of sourceIds) {
     if (sourceId === loadedId) continue;
@@ -495,6 +518,7 @@ export function startDevStats(element: HTMLElement, map: DevStatsMap): () => voi
 
 function recordFrame(stamps: number[], nowMs: number): void {
   stamps.push(nowMs);
+
   const kept = pruneStamps(stamps, nowMs);
   stamps.length = 0;
   stamps.push(...kept);
@@ -507,6 +531,7 @@ function snapshot(
   longtasks: number,
 ): DevStatsSnapshot {
   const gpu = readGpuSnapshot();
+
   return {
     fps: framesPerSecond(stamps, nowMs),
     worstMs: worstFrameMs(stamps),
@@ -534,9 +559,11 @@ export function pruneStamps(stamps: readonly number[], nowMs: number): number[] 
 export function framesPerSecond(stamps: readonly number[], nowMs: number): number {
   const cutoffMs = nowMs - FPS_WINDOW_MS;
   let count = 0;
+
   for (const stamp of stamps) {
     if (stamp >= cutoffMs) count += 1;
   }
+
   return count;
 }
 
@@ -606,11 +633,13 @@ export interface BakeStats {
 /** Build the two badge lines from one snapshot, frame and request costs above loading detail. */
 export function formatDevStats(snapshot: DevStatsSnapshot): string {
   const load = snapshot.loadMs === null ? "—" : `${Math.round(snapshot.loadMs)} ms`;
-  const frame = `${snapshot.fps} fps · worst ${snapshot.worstMs.toFixed(0)} ms`
+  const frame =
+    `${snapshot.fps} fps · worst ${snapshot.worstMs.toFixed(0)} ms`
     + ` · z ${snapshot.zoom.toFixed(1)} · load ${load}`
     + ` · ${snapshot.requests} req ${formatBytes(snapshot.bytes)}`
     + ` · ${formatGpuPart(snapshot.gpuMs, snapshot.gpuUnavailable)}`;
-  const loading = formatEntrySuffix(snapshot.entry)
+  const loading =
+    formatEntrySuffix(snapshot.entry)
     + formatBakeSuffix(snapshot.bake)
     + formatTileSuffix(snapshot.tiles)
     + formatPreloadSuffix()
@@ -640,10 +669,13 @@ export function formatGpuPart(msByLayer: Record<string, number>, unavailable: bo
 export function formatBakePart(bake?: Record<string, BakeStats>): string {
   const names = Object.keys(bake ?? {}).sort();
   if (names.length === 0) return "bake n/a";
-  return `bake ${names.map((name) => {
-    const stats = bake![name];
-    return `${name} ${stats.ms.toFixed(1)} ms ${formatBytes(stats.cpuBytes + stats.gpuBytes)}`;
-  }).join(" ")}`;
+
+  return `bake ${names
+    .map((name) => {
+      const stats = bake![name];
+      return `${name} ${stats.ms.toFixed(1)} ms ${formatBytes(stats.cpuBytes + stats.gpuBytes)}`;
+    })
+    .join(" ")}`;
 }
 
 /** The bake suffix for the badge line, empty when no layer baked a band. */
@@ -654,9 +686,11 @@ function formatBakeSuffix(bake?: Record<string, BakeStats>): string {
 
 /** Build the badge's tile-settle part from the last zoom step. */
 export function formatTileSettlePart(tiles: TileSettleSnapshot): string {
-  return `tiles ${formatTileLayer("terrain", tiles.terrain)}`
+  return (
+    `tiles ${formatTileLayer("terrain", tiles.terrain)}`
     + ` ${formatTileLayer("basemap", tiles.basemap)}`
-    + ` ${formatTileLayer("contours", tiles.contours)}`;
+    + ` ${formatTileLayer("contours", tiles.contours)}`
+  );
 }
 
 /** The tile suffix for the badge line. It stays empty until the first zoom step settles. */
@@ -685,7 +719,8 @@ function formatWarmerSuffix(warmer?: WarmerSnapshot): string {
 
 /** Build the badge's pool part from its counts, with GPU ms when the timer kept them. */
 export function formatPoolPart(pool: GpuPoolSnapshot): string {
-  const base = `pool ${pool.textures} tex ${pool.textureMB.toFixed(1)} MB`
+  const base =
+    `pool ${pool.textures} tex ${pool.textureMB.toFixed(1)} MB`
     + ` inflight ${pool.inflight} queued ${pool.queued}`
     + ` req ${pool.requests} decode ${pool.decodeMs.toFixed(1)} ms`;
   return base + formatPoolGpuSuffix(pool);
@@ -727,6 +762,7 @@ function readGpuSnapshot(): { msByLayer: Record<string, number>; unavailable: bo
 function readPoolSnapshot(msByLayer: Record<string, number>): GpuPoolSnapshot | undefined {
   const stats = readHookPoolStats();
   if (!stats) return undefined;
+
   return {
     textures: stats.textures,
     textureMB: stats.textureBytes / BYTES_PER_MB,
@@ -750,18 +786,16 @@ interface PoolHookStats {
 }
 
 /** Read the pool settle state through an explicit probe or the window hook. */
-function poolSettleState(
-  probe?: () => PoolSettleState | null,
-): PoolSettleState | null {
+function poolSettleState(probe?: () => PoolSettleState | null): PoolSettleState | null {
   if (probe) return probe();
+
   const stats = readHookPoolStats();
   if (!stats) return null;
+
   const viewReady = readHookPoolReady();
   if (viewReady === null) return null;
-  return {
-    requests: stats.requests,
-    viewReady,
-  };
+
+  return { requests: stats.requests, viewReady };
 }
 
 /** Read the pool stats through the window hook the pool module publishes. */
@@ -801,9 +835,7 @@ function gpuMsFor(msByLayer: Record<string, number>, suffix: string): number | u
 /** Read the band-bake costs without creating work when the bake never ran. */
 function readBakeSnapshot(): Record<string, BakeStats> | undefined {
   try {
-    const scope = globalThis as unknown as {
-      __bakeStats?: Record<string, BakeStats>;
-    };
+    const scope = globalThis as unknown as { __bakeStats?: Record<string, BakeStats> };
     if (!scope.__bakeStats || Object.keys(scope.__bakeStats).length === 0) return undefined;
     return { ...scope.__bakeStats };
   } catch {

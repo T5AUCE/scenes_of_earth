@@ -3,15 +3,14 @@ import { test } from "node:test";
 
 import { latest } from "@maplibre/maplibre-gl-style-spec/dist/index.mjs";
 import type { Map as MapLibreMap } from "maplibre-gl";
+
+import { EvaluationParameters } from "../../node_modules/maplibre-gl/src/style/evaluation_parameters.ts";
 import {
   DataDrivenProperty,
   Properties,
   Transitionable,
 } from "../../node_modules/maplibre-gl/src/style/properties.ts";
-import {
-  EvaluationParameters,
-} from "../../node_modules/maplibre-gl/src/style/evaluation_parameters.ts";
-
+import { LABEL_FADE_MS } from "../reduced-motion.ts";
 import type { LayerContext, TerrainStats, TerrainTiles } from "../types.ts";
 import {
   cappedDemMaxZoom,
@@ -19,7 +18,6 @@ import {
   MAX_MISSING_DEM_TILES,
   memoizeMissingDemTiles,
 } from "./contour-overlay.ts";
-import { LABEL_FADE_MS } from "../reduced-motion.ts";
 
 Object.assign(globalThis, {
   document: { createElement: () => ({}), documentElement: {} },
@@ -48,70 +46,61 @@ const LABEL_SOURCE_ID = "terrain-labels-contours";
 
 test("a camera gesture hides the contour labels and restores them on moveend", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(
-    layerContext(map),
-    fakeDem(),
-    TILES,
-    STATS,
-  );
+  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
+
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), undefined);
 
   map.emit("movestart");
+
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), "none");
 
   map.emit("moveend");
+
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), "visible");
+
   overlay.destroy();
 });
 
 test("a disabled freeze flag leaves the contour labels alone", () => {
   withSearch("?freezeLabels=0", () => {
     const map = fakeMap();
-    const overlay = new ContourOverlay(
-    layerContext(map),
-    fakeDem(),
-    TILES,
-    STATS,
-  );
+    const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
 
     map.emit("movestart");
+
     assert.equal(map.layoutOf(LABEL_ID, "visibility"), undefined);
 
     map.emit("moveend");
+
     assert.equal(map.layoutOf(LABEL_ID, "visibility"), undefined);
+
     overlay.destroy();
   });
 });
 
 test("leaving mid-gesture restores the contour labels", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(
-    layerContext(map),
-    fakeDem(),
-    TILES,
-    STATS,
-  );
+  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
 
   map.emit("movestart");
+
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), "none");
 
   overlay.destroy();
+
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), "visible");
 });
 
 test("a measurement cap lowers the contour tiling zoom and nothing else", () => {
   withSearch("?contourMaxZoom=9", () => {
     assert.equal(cappedDemMaxZoom(12), 9);
+
     const map = fakeMap();
-    const overlay = new ContourOverlay(
-    layerContext(map),
-    fakeDem(),
-    TILES,
-    STATS,
-  );
+    const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
     const labelSource = map.sources.get("terrain-labels-contours") as { maxzoom: number };
 
     assert.equal(labelSource.maxzoom, 9);
+
     overlay.destroy();
   });
 });
@@ -119,16 +108,13 @@ test("a measurement cap lowers the contour tiling zoom and nothing else", () => 
 test("without a cap the contour tiling keeps its crisp ceiling", () => {
   assert.equal(cappedDemMaxZoom(12), 12);
   assert.equal(cappedDemMaxZoom(14), 12);
+
   const map = fakeMap();
-  const overlay = new ContourOverlay(
-    layerContext(map),
-    fakeDem(),
-    TILES,
-    STATS,
-  );
+  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
   const labelSource = map.sources.get("terrain-labels-contours") as { maxzoom: number };
 
   assert.equal(labelSource.maxzoom, 12);
+
   overlay.destroy();
 });
 
@@ -144,6 +130,7 @@ test("a memoized 404 contour tile fails without another fetch", async () => {
     },
   };
   memoizeMissingDemTiles(dem as never);
+
   const options = { thresholds: [10, 20], overzoom: 1 };
 
   await assert.rejects(dem.manager.fetchContourTile(8, 1, 2, options));
@@ -163,6 +150,7 @@ test("other failures keep retrying without memoizing", async () => {
     },
   };
   memoizeMissingDemTiles(dem as never);
+
   const options = { thresholds: [10, 20], overzoom: 1 };
 
   await assert.rejects(dem.manager.fetchContourTile(9, 4, 4, options));
@@ -203,6 +191,7 @@ test("the 404 memo drops its oldest tile past its cap", async () => {
   for (let tile = 0; tile <= MAX_MISSING_DEM_TILES; tile++) {
     await assert.rejects(dem.manager.fetchTile(10, tile, 4));
   }
+
   assert.equal(fetches, MAX_MISSING_DEM_TILES + 1);
 
   // The first tile fell out of the full memo, so it fetches again while a fresh tile does not.
@@ -214,20 +203,17 @@ test("the 404 memo drops its oldest tile past its cap", async () => {
 
 test("the contour labels fade back after a gesture instead of popping", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(
-    layerContext(map),
-    fakeDem(),
-    TILES,
-    STATS,
-  );
+  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
 
   map.emit("movestart");
+
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), "none");
   assert.equal(map.paintOf(LABEL_ID, "text-color"), "rgba(91, 70, 54, 0)");
   assert.equal(map.paintOf(LABEL_ID, "text-halo-color"), "rgba(250, 248, 243, 0)");
   assert.deepEqual(map.paintOf(LABEL_ID, "text-color-transition"), { duration: 0 });
 
   map.emit("moveend");
+
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), "visible");
   assert.deepEqual(map.paintOf(LABEL_ID, "text-color-transition"), { duration: LABEL_FADE_MS });
   assert.deepEqual(map.paintOf(LABEL_ID, "text-halo-color-transition"), {
@@ -236,26 +222,25 @@ test("the contour labels fade back after a gesture instead of popping", () => {
   assert.equal(map.paintOf(LABEL_ID, "text-color"), "#5b4636");
   assert.equal(map.paintOf(LABEL_ID, "text-halo-color"), "#faf8f3");
   assert.ok(Array.isArray(map.paintOf(LABEL_ID, "text-opacity")));
+
   overlay.destroy();
 });
 
 test("the label fade passes through a translucent midpoint", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(
-    layerContext(map),
-    fakeDem(),
-    TILES,
-    STATS,
-  );
+  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
 
   map.emit("movestart");
+
   const hidden = map.paintOf(LABEL_ID, "text-color");
   map.emit("moveend");
+
   const shown = map.paintOf(LABEL_ID, "text-color");
 
   assert.ok(fadedColorAlpha(hidden, shown, 150) > 0);
   assert.ok(fadedColorAlpha(hidden, shown, 150) < 1);
   assert.equal(fadedColorAlpha(hidden, shown, 400), 1);
+
   overlay.destroy();
 });
 
@@ -269,106 +254,88 @@ test("a data-driven opacity snaps instead of fading, so the fade runs on colour"
     12,
     ["case", ["==", ["get", "ele"], 100], 1, 0],
   ];
+
   assert.equal(snappedOpacityAt(tierLike, 150), 1);
   assert.equal(snappedOpacityAt(tierLike, 400), 1);
 });
 
 test("low-zoom contour labels keep the resting 350 px spacing", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(
-    layerContext(map),
-    fakeDem(),
-    TILES,
-    STATS,
-  );
+  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
 
   assert.equal(map.layoutProp(LABEL_ID, "symbol-spacing"), 350);
+
   overlay.destroy();
 });
 
 test("reduced motion restores the contour labels instantly", () => {
   withReducedMotion(true, () => {
     const map = fakeMap();
-    const overlay = new ContourOverlay(
-    layerContext(map),
-    fakeDem(),
-    TILES,
-    STATS,
-  );
+    const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
 
     map.emit("movestart");
     map.emit("moveend");
+
     assert.equal(map.layoutOf(LABEL_ID, "visibility"), "visible");
     assert.deepEqual(map.paintOf(LABEL_ID, "text-color-transition"), { duration: 0 });
     assert.equal(map.paintOf(LABEL_ID, "text-color"), "#5b4636");
+
     overlay.destroy();
   });
 });
 
 test("a hidden contour toggle stays hidden through the gesture fade", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(
-    layerContext(map),
-    fakeDem(),
-    TILES,
-    STATS,
-  );
+  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
 
   map.emit("movestart");
   overlay.part.onToggle?.(false);
   map.emit("moveend");
+
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), "none");
+
   overlay.destroy();
 });
 
 test("zooming keeps the label source so stretched parents cover late children", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(
-    layerContext(map),
-    fakeDem(),
-    TILES,
-    STATS,
-  );
+  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
   const source = map.sources.get("terrain-labels-contours") as {
     maxzoom?: number;
     minzoom?: unknown;
   };
+
   assert.equal(source.maxzoom, 12);
   assert.equal(source.minzoom, undefined);
 
   map.state.zoom = 8.5;
   map.emit("zoom");
   map.emit("zoomend");
+
   assert.ok(map.sources.has("terrain-labels-contours"));
   assert.ok(overlay.part.layerIds.every((id) => map.layers.has(id)));
+
   overlay.destroy();
 });
 
 test("switching contours off hides the labels and back on shows them again", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(
-    layerContext(map),
-    fakeDem(),
-    TILES,
-    STATS,
-  );
+  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
 
   overlay.part.onToggle?.(false);
+
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), "none");
 
   overlay.part.onToggle?.(true);
+
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), "visible");
+
   overlay.destroy();
 });
 
 test("destroying the overlay removes its label source and layer", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(
-    layerContext(map),
-    fakeDem(),
-    TILES,
-    STATS,
-  );
+  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
 
   overlay.destroy();
 
@@ -391,6 +358,7 @@ test("the overlay adds only the label source and layer", () => {
   assert.deepEqual([...map.layers.keys()], [LABEL_ID]);
   assert.deepEqual(overlay.contourSourceIds, [LABEL_SOURCE_ID]);
   assert.deepEqual(overlay.part.layerIds, [LABEL_ID]);
+
   overlay.destroy();
 });
 
@@ -402,16 +370,13 @@ test("the overlay traces each label height from the zoom its labels enter", () =
       return "dem-contour://terrain/{z}/{x}/{y}";
     },
   };
-  const overlay = new ContourOverlay(
-    layerContext(fakeMap()),
-    dem as never,
-    TILES,
-    STATS,
+  const overlay = new ContourOverlay(layerContext(fakeMap()), dem as never, TILES, STATS);
+
+  assert.deepEqual(
+    requests.map((request) => request.thresholds),
+    [{ 5: 2000, 6: 1000, 7: 500, 9: 100, 12: 50 }],
   );
 
-  assert.deepEqual(requests.map((request) => request.thresholds), [
-    { 5: 2000, 6: 1000, 7: 500, 9: 100, 12: 50 },
-  ]);
   overlay.destroy();
 });
 
@@ -432,26 +397,25 @@ test("a unit change rebuilds the labels and the ladder the GPU lines read", () =
   assert.equal(requests.length, 2);
   assert.deepEqual([...map.sources.keys()], [LABEL_SOURCE_ID]);
   assert.deepEqual([...map.layers.keys()], [LABEL_ID]);
+
   overlay.destroy();
 });
 
 test("toggling contours on mid-gesture keeps the labels frozen until moveend", () => {
   const map = fakeMap();
-  const overlay = new ContourOverlay(
-    layerContext(map),
-    fakeDem(),
-    TILES,
-    STATS,
-  );
+  const overlay = new ContourOverlay(layerContext(map), fakeDem(), TILES, STATS);
 
   map.emit("movestart");
   // drawView shows every part layer before it notifies the toggle.
   map.setLayoutProperty(LABEL_ID, "visibility", "visible");
   overlay.part.onToggle?.(true);
+
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), "none");
 
   map.emit("moveend");
+
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), "visible");
+
   overlay.destroy();
 });
 
@@ -462,21 +426,22 @@ test("a gesture hides only the labels while the source stays put", () => {
   const labelSource = map.sources.get("terrain-labels-contours");
 
   map.emit("movestart");
+
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), "none");
   assert.equal(map.sources.get("terrain-labels-contours"), labelSource);
   assert.ok(map.layers.has(LABEL_ID));
 
   map.emit("moveend");
+
   assert.equal(map.layoutOf(LABEL_ID, "visibility"), "visible");
   assert.equal(map.sources.get("terrain-labels-contours"), labelSource);
   assert.ok(map.layers.has(LABEL_ID));
+
   overlay.destroy();
 });
 
 function fakeDem() {
-  return {
-    contourProtocolUrl: () => "dem-contour://terrain/{z}/{x}/{y}",
-  };
+  return { contourProtocolUrl: () => "dem-contour://terrain/{z}/{x}/{y}" };
 }
 
 /** Build an overlay without a scene preload, as outside a scene. */
@@ -491,6 +456,7 @@ function withReducedMotion(matches: boolean, run: () => void): void {
   const target = globalThis as Record<string, unknown>;
   const previous = target.matchMedia;
   target.matchMedia = () => ({ matches, addEventListener() {}, removeEventListener() {} });
+
   try {
     run();
   } finally {
@@ -508,16 +474,20 @@ function fadedColorAlpha(from: unknown, to: unknown, atMs: number): number {
     {},
   );
   transitionable.setValue("text-color", from);
+
   const prior = transitionable.untransitioned();
   transitionable.setTransition("text-color", { duration: LABEL_FADE_MS, delay: 0 });
   transitionable.setValue("text-color", to);
+
   const transitioning = transitionable.transitioned(
     new EvaluationParameters(9, { now: 1000 }),
     prior,
   );
   const color = transitioning
     .possiblyEvaluate(new EvaluationParameters(9, { now: 1000 + atMs }))
-    .get("text-color").evaluate({}, {});
+    .get("text-color")
+    .evaluate({}, {});
+
   return color.a;
 }
 
@@ -530,16 +500,20 @@ function snappedOpacityAt(expression: unknown, atMs: number): number {
     {},
   );
   transitionable.setValue("text-opacity", 0);
+
   const prior = transitionable.untransitioned();
   transitionable.setTransition("text-opacity", { duration: LABEL_FADE_MS, delay: 0 });
   transitionable.setValue("text-opacity", expression);
+
   const transitioning = transitionable.transitioned(
     new EvaluationParameters(9, { now: 1000 }),
     prior,
   );
+
   return transitioning
     .possiblyEvaluate(new EvaluationParameters(9, { now: 1000 + atMs }))
-    .get("text-opacity").evaluate({ properties: { ele: 100 } }, {});
+    .get("text-opacity")
+    .evaluate({ properties: { ele: 100 } }, {});
 }
 
 function layerContext(map: FakeMap): LayerContext {
@@ -578,6 +552,7 @@ function fakeMap() {
     loaded: true,
     bounds: { west: -0.5, south: -0.5, east: 0.5, north: 0.5 },
   };
+
   const map = {
     getStyle: () => ({ layers: [] }),
     getZoom: () => state.zoom,
@@ -601,11 +576,7 @@ function fakeMap() {
       layout?: Record<string, unknown>;
       paint?: Record<string, unknown>;
     }) => {
-      layers.set(layer.id, {
-        id: layer.id,
-        paint: layer.paint ?? {},
-        layout: layer.layout ?? {},
-      });
+      layers.set(layer.id, { id: layer.id, paint: layer.paint ?? {}, layout: layer.layout ?? {} });
     },
     removeLayer: (id: string) => void layers.delete(id),
     removeSource: (id: string) => void sources.delete(id),
@@ -648,6 +619,7 @@ function fakeMap() {
 function withSearch(search: string, run: () => void) {
   const previous = (globalThis as Record<string, unknown>).location;
   (globalThis as Record<string, unknown>).location = { search };
+
   try {
     run();
   } finally {

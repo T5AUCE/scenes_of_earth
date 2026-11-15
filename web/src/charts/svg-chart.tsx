@@ -1,17 +1,12 @@
 /** Render chart tables as accessible SVG without changing their stored values. */
 import { useEffect, useMemo, useState } from "react";
 
-import { domainFor, xSpan } from "./chart-domain";
 import { chartTable } from "./chart-data-table";
+import { domainFor, xSpan } from "./chart-domain";
 import { chartPaintFor } from "./paint";
-import {
-  dedupeNumericTicks,
-  formatPlanValue,
-  tickLabelsFor,
-  type TickPlan,
-} from "./svg-labels";
-import { formatPresentationValue, ticksForDomain } from "./ticks";
+import { dedupeNumericTicks, formatPlanValue, tickLabelsFor, type TickPlan } from "./svg-labels";
 import { finiteValues, type ChartTable, type ChartType } from "./table";
+import { formatPresentationValue, ticksForDomain } from "./ticks";
 import { useElementWidth } from "./use-element-width";
 
 /** Base heights keep chip, series and distribution previews consistent. */
@@ -209,16 +204,17 @@ export function SvgChart({
             {!compact && plan && yTicks(ticks, plan, geometry)}
             {!compact && xTicks(table, span, geometry)}
             {axisTitles(table, geometry, compact, disclosure, xTitleLines)}
-            {plan && referenceLines(
-              table,
-              references,
-              geometry,
-              compact,
-              resolutionNote,
-              resolutionValue,
-              plan,
-              disclosure,
-            )}
+            {plan
+              && referenceLines(
+                table,
+                references,
+                geometry,
+                compact,
+                resolutionNote,
+                resolutionValue,
+                plan,
+                disclosure,
+              )}
             {marksFor(
               table,
               type,
@@ -237,7 +233,9 @@ export function SvgChart({
         ) : (
           <>
             {axisTitles(table, geometry, compact, null, xTitleLines)}
-            <text x={geometry.left} y={height / 2}>{"No data to draw."}</text>
+            <text x={geometry.left} y={height / 2}>
+              {"No data to draw."}
+            </text>
           </>
         )}
       </svg>
@@ -279,10 +277,7 @@ function convertedBaseline(
   return Math.min(0, minimum);
 }
 
-function visibleReferences(
-  table: ChartTable,
-  show: boolean,
-): { id: string; value: number }[] {
+function visibleReferences(table: ChartTable, show: boolean): { id: string; value: number }[] {
   if (!show || table.shape !== "distribution") return [];
   const references = [
     { id: "mean", value: table.mean },
@@ -419,14 +414,17 @@ function seasonalDetail(row: RowCoverage) {
 function summaryFor(table: ChartTable, chartType: ChartType) {
   const count = table.rows.length;
   const finite = finiteValues(table).length;
-  const shape = table.shape === "distribution"
-    ? "hypsometry"
-    : table.shape === "seasonal_cycle"
-      ? "By month"
-      : "time series";
+  const shape =
+    table.shape === "distribution"
+      ? "hypsometry"
+      : table.shape === "seasonal_cycle"
+        ? "By month"
+        : "time series";
 
-  return `${table.yTitle} as ${chartType}, ${shape} with ${String(finite)} of `
-    + `${String(count)} values.`;
+  return (
+    `${table.yTitle} as ${chartType}, ${shape} with ${String(finite)} of `
+    + `${String(count)} values.`
+  );
 }
 
 interface ChartGeometry {
@@ -493,13 +491,7 @@ function xTitleLinesFor(title: string, plotWidthPx: number): string[] {
 }
 
 // A finite positive span maps across the plot, while a degenerate domain stays centered.
-function xPositionFor(
-  x: number,
-  low: number,
-  high: number,
-  left: number,
-  plotWidth: number,
-) {
+function xPositionFor(x: number, low: number, high: number, left: number, plotWidth: number) {
   if (!(high > low) || !Number.isFinite(low) || !Number.isFinite(high)) {
     return left + plotWidth / 2;
   }
@@ -589,11 +581,7 @@ function yTicks(ticks: number[], plan: TickPlan, geometry: ChartGeometry) {
   );
 }
 
-function xTicks(
-  table: ChartTable,
-  span: [number, number],
-  geometry: ChartGeometry,
-) {
+function xTicks(table: ChartTable, span: [number, number], geometry: ChartGeometry) {
   const marks = xTickMarks(table, span, geometry);
   if (!marks) return null;
   const edgeAnchors = table.shape === "time_series" && marks.length > 1;
@@ -632,10 +620,7 @@ function xTickMarks(
   if (table.shape === "time_series") return timeMarksFor(span, geometry);
   if (table.shape === "seasonal_cycle") return seasonalMarksFor(table, geometry);
   if (table.shape === "distribution") {
-    return ticksForDomain([0, 100], 5).map((tick) => ({
-      x: tick,
-      label: `${String(tick)}%`,
-    }));
+    return ticksForDomain([0, 100], 5).map((tick) => ({ x: tick, label: `${String(tick)}%` }));
   }
 
   return null;
@@ -647,10 +632,9 @@ function timeMarksFor(
   geometry: ChartGeometry,
 ): { x: number; label: string }[] {
   for (const count of [4, 3, 2]) {
-    const marks = dedupeMarks(ticksForDomain(span, count).map((tick) => ({
-      x: tick,
-      label: dateLabel(tick),
-    })));
+    const marks = dedupeMarks(
+      ticksForDomain(span, count).map((tick) => ({ x: tick, label: dateLabel(tick) })),
+    );
     if (marks.length <= 1) return marks;
     if (xMarksFit(marks, geometry, true)) return marks;
   }
@@ -705,13 +689,7 @@ function edgeRightFor(index: number, x: number, width: number, edges: boolean) {
   return x + width / 2;
 }
 
-function edgeLeftFor(
-  index: number,
-  x: number,
-  width: number,
-  edges: boolean,
-  count: number,
-) {
+function edgeLeftFor(index: number, x: number, width: number, edges: boolean, count: number) {
   if (edges && index === count - 1) return x - width;
 
   return x - width / 2;
@@ -912,14 +890,10 @@ function endpointMarkers(
   const displayNumber = displayResolutionNumber(resolutionValue, resolutionNote);
   const lowLabel = endpointLabelFor("Lowest cell", displayNumber, geometry.plotWidth);
   const highLabel = endpointLabelFor("Highest cell", displayNumber, geometry.plotWidth);
-  const firstY = endpointY[0] ?? clampAnnotation(
-    geometry.yOf(table.min) + ENDPOINT_OFFSET_PX,
-    bounds,
-  );
-  const secondY = endpointY[1] ?? clampAnnotation(
-    geometry.yOf(table.max) + ENDPOINT_OFFSET_PX,
-    bounds,
-  );
+  const firstY =
+    endpointY[0] ?? clampAnnotation(geometry.yOf(table.min) + ENDPOINT_OFFSET_PX, bounds);
+  const secondY =
+    endpointY[1] ?? clampAnnotation(geometry.yOf(table.max) + ENDPOINT_OFFSET_PX, bounds);
 
   return (
     <g className="chart-endpoints">
@@ -931,13 +905,7 @@ function endpointMarkers(
       >
         <title>{`Lowest cell ${formatPresentationValue(table.min)}${exactNote}`}</title>
       </circle>
-      <text
-        x={lowX}
-        y={firstY}
-        textAnchor="end"
-        fontSize={11}
-        fill="var(--chart-axis, #444)"
-      >
+      <text x={lowX} y={firstY} textAnchor="end" fontSize={11} fill="var(--chart-axis, #444)">
         {lowLabel}
       </text>
       <circle
@@ -948,13 +916,7 @@ function endpointMarkers(
       >
         <title>{`Highest cell ${formatPresentationValue(table.max)}${exactNote}`}</title>
       </circle>
-      <text
-        x={highX}
-        y={secondY}
-        textAnchor="start"
-        fontSize={11}
-        fill="var(--chart-axis, #444)"
-      >
+      <text x={highX} y={secondY} textAnchor="start" fontSize={11} fill="var(--chart-axis, #444)">
         {highLabel}
       </text>
     </g>
@@ -962,10 +924,7 @@ function endpointMarkers(
 }
 
 // Exact titles keep the stored resolution while visible labels use concise values.
-function displayResolutionNumber(
-  value: number | null,
-  note: string | null,
-): string | null {
+function displayResolutionNumber(value: number | null, note: string | null): string | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return formatPresentationValue(value);
   }
@@ -985,11 +944,7 @@ function parseResolutionValue(note: string | null): number | null {
 }
 
 // Short suffixes fit narrow plots while the table keeps the full analysis wording.
-function endpointLabelFor(
-  cell: string,
-  displayNumber: string | null,
-  plotWidthPx: number,
-): string {
+function endpointLabelFor(cell: string, displayNumber: string | null, plotWidthPx: number): string {
   if (displayNumber === null) return cell;
   const full = `${cell} (${displayNumber}${FULL_GRID_SUFFIX})`;
   if (fitsPlot(full, plotWidthPx)) return full;
@@ -1010,15 +965,9 @@ function annotationLow(hasDisclosure: boolean, lineCount = 1) {
 }
 
 // Reference text stays below the disclosure and above the x ticks with its own descent.
-function annotationBounds(
-  geometry: ChartGeometry,
-  disclosure: string[] | null,
-) {
+function annotationBounds(geometry: ChartGeometry, disclosure: string[] | null) {
   const lines = disclosure?.length ?? 0;
-  const low = Math.max(
-    annotationLow(lines > 0, Math.max(1, lines)),
-    ANNOTATION_ASCENT_PX + 3,
-  );
+  const low = Math.max(annotationLow(lines > 0, Math.max(1, lines)), ANNOTATION_ASCENT_PX + 3);
   const plotBottom = geometry.plotBottom;
   const high = Math.max(low, plotBottom - ANNOTATION_DESCENT_PX);
 
@@ -1315,16 +1264,17 @@ function areaFor(
           strokeWidth={edge ? AREA_EDGE_PX : 1}
         />
       ))}
-      {edge && segments.map((segment, index) => (
-        <polyline
-          key={`edge-${index}`}
-          points={linePoints(segment, geometry)}
-          fill="none"
-          stroke={edge}
-          strokeWidth={AREA_EDGE_PX}
-          aria-hidden={true}
-        />
-      ))}
+      {edge
+        && segments.map((segment, index) => (
+          <polyline
+            key={`edge-${index}`}
+            points={linePoints(segment, geometry)}
+            fill="none"
+            stroke={edge}
+            strokeWidth={AREA_EDGE_PX}
+            aria-hidden={true}
+          />
+        ))}
       {circlesFor(
         table,
         geometry,
@@ -1361,16 +1311,17 @@ function linesFor(
 
   return (
     <g className="chart-lines">
-      {edge && segments.map((segment, index) => (
-        <polyline
-          key={`under-${index}`}
-          points={linePoints(segment, geometry)}
-          fill="none"
-          stroke={edge}
-          strokeWidth={under}
-          aria-hidden={true}
-        />
-      ))}
+      {edge
+        && segments.map((segment, index) => (
+          <polyline
+            key={`under-${index}`}
+            points={linePoints(segment, geometry)}
+            fill="none"
+            stroke={edge}
+            strokeWidth={under}
+            aria-hidden={true}
+          />
+        ))}
       {segments.map((segment, index) => (
         <polyline
           key={index}
@@ -1464,8 +1415,10 @@ function areaPoints(segment: [number, number][], geometry: ChartGeometry, baseY:
   const first = segment[0][0];
   const last = segment[segment.length - 1][0];
 
-  return `${String(geometry.xOf(first))},${String(baseY)} ${top} `
-    + `${String(geometry.xOf(last))},${String(baseY)}`;
+  return (
+    `${String(geometry.xOf(first))},${String(baseY)} ${top} `
+    + `${String(geometry.xOf(last))},${String(baseY)}`
+  );
 }
 
 function segmentsFor(table: ChartTable) {
@@ -1485,10 +1438,7 @@ function segmentsFor(table: ChartTable) {
   return segments;
 }
 
-function xPosition(
-  table: ChartTable,
-  row: { x: number },
-) {
+function xPosition(table: ChartTable, row: { x: number }) {
   if (table.shape === "distribution") return 100 - row.x;
 
   return row.x;
@@ -1496,8 +1446,9 @@ function xPosition(
 
 function barWidths(table: ChartTable, geometry: ChartGeometry) {
   if (table.shape === "categorical_shares") return table.rows.map(() => 8);
-  if (table.shape === "seasonal_cycle") return table.rows.map(() => geometry.plotWidth / 12 * 0.7);
-  if (table.shape === "distribution") return table.rows.map(() => geometry.plotWidth / 101 * 0.8);
+  if (table.shape === "seasonal_cycle")
+    return table.rows.map(() => (geometry.plotWidth / 12) * 0.7);
+  if (table.shape === "distribution") return table.rows.map(() => (geometry.plotWidth / 101) * 0.8);
   const positions = table.rows.map((row) => geometry.xOf(xPosition(table, row)));
   const sorted = [...positions].sort((first, second) => first - second);
   const gaps = sorted.slice(1).map((value, index) => value - sorted[index]);
@@ -1537,10 +1488,7 @@ function cursorLine(
 }
 
 function clampY(y: number, height: number, low = MIN_ANNOTATION_Y_PX) {
-  return Math.min(
-    Math.max(y, low),
-    Math.max(low, height - BOTTOM_ANNOTATION_MARGIN_PX),
-  );
+  return Math.min(Math.max(y, low), Math.max(low, height - BOTTOM_ANNOTATION_MARGIN_PX));
 }
 
 function clampX(x: number, width: number) {

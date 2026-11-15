@@ -58,8 +58,11 @@ class WarmerKeySet {
   add(key: string): void {
     this.keys.delete(key);
     this.keys.add(key);
+
     if (this.keys.size <= this.limit) return;
+
     const oldest = this.keys.values().next();
+
     if (!oldest.done) this.keys.delete(oldest.value);
   }
 
@@ -102,6 +105,7 @@ export class TileWarmer {
   constructor(private readonly map: WarmerMap) {
     setWarmerEnabled(true);
     beginWarmer();
+
     map.on("idle", this.onDwellIdle);
     map.on("moveend", this.onDwellMoveEnd);
     map.on("movestart", this.onDwellMoveStart);
@@ -115,7 +119,9 @@ export class TileWarmer {
   /** Register a source, replacing and aborting an earlier one with the same id. */
   add(source: PreloadSource): void {
     if (this.destroyed) return;
+
     this.remove(source.id);
+
     const state: WarmerSourceState = {
       source,
       queue: [],
@@ -126,7 +132,9 @@ export class TileWarmer {
       entryDone: 0,
     };
     this.sources.set(source.id, state);
+
     if (this.fittedZoom === null) return;
+
     this.plan(state);
     this.pump();
   }
@@ -135,30 +143,40 @@ export class TileWarmer {
   remove(id: string): void {
     const state = this.sources.get(id);
     if (!state) return;
+
     this.sources.delete(id);
+
     for (const [key, job] of [...this.active]) {
       if (job.sourceId === id) this.cancelJob(key, job);
     }
+
     this.report();
   }
 
   /** Begin warming for a scene that the camera fits at this zoom. */
   start(fittedZoom: number): void {
     if (this.destroyed || this.fittedZoom !== null) return;
+
     this.fittedZoom = fittedZoom;
+
     for (const state of this.sources.values()) this.plan(state);
+
     this.pump();
   }
 
   /** Abort everything and stop listening, handing loading back to MapLibre alone. */
   destroy(): void {
     if (this.destroyed) return;
+
     this.destroyed = true;
     this.cancelDwell();
+
     for (const [key, job] of [...this.active]) this.cancelJob(key, job);
+
     this.sources.clear();
     this.warmed.clear();
     this.missing.clear();
+
     this.stopListening();
     setWarmerEntryProgress(0, 0);
     setWarmerEnabled(false);
@@ -169,10 +187,12 @@ export class TileWarmer {
   progress(): { done: number; total: number; bytes: number } {
     let done = 0;
     let total = 0;
+
     for (const state of this.sources.values()) {
       done += state.done;
       total += state.total;
     }
+
     return { done, total, bytes: 0 };
   }
 
@@ -187,6 +207,7 @@ export class TileWarmer {
     while (true) {
       if (this.destroyed || signal?.aborted) throw new DOMException("Aborted", "AbortError");
       if (this.isSettled()) return;
+
       await this.waitForWake(signal);
     }
   }
@@ -200,6 +221,7 @@ export class TileWarmer {
   /** Arm one dwell run on the first idle or the fallback delay after landing. */
   private armDwell(): void {
     if (this.destroyed || !this.isLanded) return;
+
     this.cancelDwell();
     this.dwellArmed = true;
     this.dwellTimer = setTimeout(() => this.fireDwell(), DWELL_IDLE_FALLBACK_MS);
@@ -208,6 +230,7 @@ export class TileWarmer {
   /** Run the armed dwell once, so a late idle cannot launch it twice. */
   private fireDwell(): void {
     if (!this.dwellArmed) return;
+
     this.cancelDwell();
     this.warmDwell();
   }
@@ -219,18 +242,22 @@ export class TileWarmer {
       clearTimeout(this.dwellTimer);
       this.dwellTimer = null;
     }
+
     this.clearQueuedDwell();
   }
 
   /** Drop the queued dwell work that a new gesture superseded, keeping entry work. */
   private clearQueuedDwell(): void {
     let dropped = false;
+
     for (const state of this.sources.values()) {
       if (state.dwellQueue.length === 0) continue;
+
       state.total -= state.dwellQueue.length;
       state.dwellQueue = [];
       dropped = true;
     }
+
     if (dropped) this.report();
   }
 
@@ -258,26 +285,35 @@ export class TileWarmer {
     state.done = tasks.length - state.queue.length;
     state.entryTotal = tasks.length;
     state.entryDone = tasks.length - state.queue.length;
+
     this.report();
   }
 
   /** Start queued tasks round-robin, one per source per pass, while lanes allow. */
   private pump(): void {
     if (this.destroyed || this.fittedZoom === null) return;
+
     while (this.active.size < WARMER_LANES) {
       let progressed = false;
+
       for (const state of this.sources.values()) {
         if (!this.canLaunch(state)) continue;
+
         const next = this.nextLaunchable(state);
         if (next === null) continue;
+
         if (next.dwell) state.dwellQueue.shift();
         else state.queue.shift();
+
         this.launch(state, next.task, next.dwell);
         progressed = true;
+
         if (this.active.size >= WARMER_LANES) break;
       }
+
       if (!progressed) break;
     }
+
     this.report();
   }
 
@@ -291,6 +327,7 @@ export class TileWarmer {
     for (const job of this.active.values()) {
       if (job.sourceId === sourceId) running += 1;
     }
+
     return running;
   }
 
@@ -298,40 +335,46 @@ export class TileWarmer {
     return Math.min(state.source.lanes, WARMER_LANES);
   }
 
-  private nextLaunchable(
-    state: WarmerSourceState,
-  ): { task: PreloadTask; dwell: boolean } | null {
+  private nextLaunchable(state: WarmerSourceState): { task: PreloadTask; dwell: boolean } | null {
     const entry = this.headTask(state, false);
     if (entry === "gated") return null;
     if (entry !== null) return { task: entry, dwell: false };
+
     const dwell = this.headTask(state, true);
     if (dwell === "gated") return null;
     if (dwell !== null) return { task: dwell, dwell: true };
+
     return null;
   }
 
-  private headTask(
-    state: WarmerSourceState,
-    dwell: boolean,
-  ): PreloadTask | "gated" | null {
+  private headTask(state: WarmerSourceState, dwell: boolean): PreloadTask | "gated" | null {
     const queue = dwell ? state.dwellQueue : state.queue;
+
     while (queue.length > 0) {
       const task = queue[0];
       if (this.isGated(state, task)) return "gated";
+
       if (this.isSkipped(task.key)) {
         queue.shift();
         state.done += 1;
+
         if (!dwell) state.entryDone += 1;
+
         continue;
       }
+
       if (task.needs !== undefined && !this.areParentsReady(task.needs)) {
         queue.shift();
         state.total -= 1;
+
         if (!dwell) state.entryTotal -= 1;
+
         continue;
       }
+
       return task;
     }
+
     return null;
   }
 
@@ -342,9 +385,11 @@ export class TileWarmer {
   private isGated(state: WarmerSourceState, task: PreloadTask): boolean {
     const gate = this.sources.get(state.source.after ?? "");
     if (gate === undefined) return false;
+
     const zoom = task.zoom ?? Infinity;
     if (gate.queue.some((queued) => isThroughZoom(queued.zoom, zoom))) return true;
     if (gate.dwellQueue.some((queued) => isThroughZoom(queued.zoom, zoom))) return true;
+
     return [...this.active.values()].some((job) => {
       return job.sourceId === gate.source.id && isThroughZoom(job.zoom, zoom);
     });
@@ -364,7 +409,9 @@ export class TileWarmer {
       dwell,
     };
     this.active.set(task.key, job);
+
     if (dwell) noteDwellWarmerRequest();
+
     Promise.resolve()
       .then(() => task.run(abort))
       .then(
@@ -381,21 +428,27 @@ export class TileWarmer {
   ): void {
     if (this.active.get(key) !== job) return;
     if (job.settled) return;
+
     job.settled = true;
     this.active.delete(key);
+
     if (this.destroyed) return;
     if (this.sources.get(state.source.id) !== state) return;
+
     state.done += 1;
+
     if (!job.dwell) state.entryDone += 1;
     if (failure === null) {
       this.warmed.add(key);
     } else if (isMissingResponse(failure.error)) this.missing.add(key);
+
     this.report();
     this.pump();
   }
 
   private cancelJob(key: string, job: WarmerActive): void {
     if (job.settled) return;
+
     job.settled = true;
     this.active.delete(key);
     job.abort.abort();
@@ -404,20 +457,26 @@ export class TileWarmer {
   /** Warm the resting viewport once per dwell, replacing the previous dwell. */
   private warmDwell(): void {
     if (this.destroyed || !this.isLanded || this.fittedZoom === null) return;
+
     const viewport = restingViewport(this.map);
     const currentZoom = this.map.getZoom?.();
     if (!viewport || typeof currentZoom !== "number") return;
+
     const candidates = this.dwellCandidates(viewport, this.fittedZoom, currentZoom);
     this.abortStaleDwell(candidates);
+
     const planned = this.capDwell(candidates);
+
     for (const state of this.sources.values()) {
       state.total -= state.dwellQueue.length;
       state.dwellQueue = [];
     }
+
     for (const { state, task } of planned) {
       state.dwellQueue.push(task);
       state.total += 1;
     }
+
     this.pump();
   }
 
@@ -427,6 +486,7 @@ export class TileWarmer {
     currentZoom: number,
   ): Map<WarmerSourceState, PreloadTask[]> {
     const candidates = new Map<WarmerSourceState, PreloadTask[]>();
+
     for (const state of this.sources.values()) {
       const tasks = state.source.dwell?.(viewport, fittedZoom, currentZoom) ?? [];
       candidates.set(
@@ -434,17 +494,18 @@ export class TileWarmer {
         tasks.filter((task) => !this.warmed.has(task.key) && !this.missing.has(task.key)),
       );
     }
+
     return candidates;
   }
 
-  private abortStaleDwell(
-    candidates: Map<WarmerSourceState, PreloadTask[]>,
-  ): void {
+  private abortStaleDwell(candidates: Map<WarmerSourceState, PreloadTask[]>): void {
     for (const [state, tasks] of candidates) {
       const wanted = new Set(tasks.map((task) => task.key));
+
       for (const [key, job] of [...this.active]) {
         if (job.sourceId !== state.source.id || !job.dwell) continue;
         if (wanted.has(key)) continue;
+
         this.cancelJob(key, job);
         state.total -= 1;
       }
@@ -458,17 +519,24 @@ export class TileWarmer {
     const queueable = this.queueableDwell(candidates);
     const planned: { state: WarmerSourceState; task: PreloadTask }[] = [];
     let index = 0;
+
     while (planned.length < budget) {
       let progressed = false;
+
       for (const [state, tasks] of queueable) {
         if (index >= tasks.length) continue;
+
         planned.push({ state, task: tasks[index] });
         progressed = true;
+
         if (planned.length >= budget) break;
       }
+
       if (!progressed) break;
+
       index += 1;
     }
+
     return planned;
   }
 
@@ -477,6 +545,7 @@ export class TileWarmer {
     for (const job of this.active.values()) {
       if (job.dwell) activeDwell += 1;
     }
+
     return activeDwell;
   }
 
@@ -484,12 +553,14 @@ export class TileWarmer {
     candidates: Map<WarmerSourceState, PreloadTask[]>,
   ): Map<WarmerSourceState, PreloadTask[]> {
     const queueable = new Map<WarmerSourceState, PreloadTask[]>();
+
     for (const [state, tasks] of candidates) {
       queueable.set(
         state,
         tasks.filter((task) => !this.active.has(task.key) && !this.isEntryQueued(task.key)),
       );
     }
+
     return queueable;
   }
 
@@ -497,16 +568,19 @@ export class TileWarmer {
     for (const state of this.sources.values()) {
       if (state.queue.some((task) => task.key === key)) return true;
     }
+
     return false;
   }
 
   private report(): void {
     let done = 0;
     let total = 0;
+
     for (const state of this.sources.values()) {
       done += state.entryDone;
       total += state.entryTotal;
     }
+
     setWarmerEntryProgress(done, total);
     this.wake();
   }
@@ -514,6 +588,7 @@ export class TileWarmer {
   private wake(): void {
     const listeners = [...this.wakeListeners];
     this.wakeListeners.clear();
+
     for (const listener of listeners) listener();
   }
 }
@@ -534,6 +609,7 @@ function restingViewport(map: WarmerMap): DwellViewport | null {
   try {
     const bounds = map.getBounds?.();
     if (!bounds) return null;
+
     return {
       west: bounds.getWest(),
       south: bounds.getSouth(),

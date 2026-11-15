@@ -1,4 +1,5 @@
 """Official long names of countries, so area search matches words beyond the short name."""
+
 OFFICIAL_NAMES: dict[str, str] = {
     "AFG": "Islamic Republic of Afghanistan",
     "ALB": "Republic of Albania",

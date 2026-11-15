@@ -1,4 +1,5 @@
 """Write and atomically publish categorical geology COGs with mode overviews."""
+
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -25,8 +26,10 @@ def publish_cog(write_raster: Callable[[Path], None], source_id: str, cog_path: 
     partial = cog_path.with_suffix(".partial.tif")
     try:
         write_raster(cleaned)
+
         with rasterio.open(cleaned, "r+") as raster:
             raster.update_tags(**{LITHOLOGY_SOURCE_TAG: source_id})
+
         copy_raster(
             cleaned,
             partial,

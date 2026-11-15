@@ -8,9 +8,9 @@ import { runInNewContext } from "node:vm";
 import { Window } from "happy-dom";
 import type { Map as MapLibreMap } from "maplibre-gl";
 
-import type { AreaHit } from "./types.ts";
-import { assertSameNode } from "./testing/dom-assert.ts";
 import { routeFor } from "./scene-url.ts";
+import { assertSameNode } from "./testing/dom-assert.ts";
+import type { AreaHit } from "./types.ts";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -28,6 +28,7 @@ const hooks = registerHooks({
     ) {
       return next(new URL(`${specifier}.ts`, context.parentURL).href, context);
     }
+
     return next(specifier, context);
   },
 });
@@ -68,6 +69,7 @@ test("search results preserve an unfamiliar level", async (context) => {
 test("the level dropdown shows official admin levels and preserves API values", async (context) => {
   const root = await panelWithHits(context, []);
   const level = root.querySelector<HTMLSelectElement>("select");
+
   assert.ok(level);
 
   assert.deepEqual(
@@ -86,6 +88,7 @@ test("search works before the layer list arrives", async (context) => {
   const window = new Window();
   context.after(() => window.happyDOM.abort());
   installBrowser(context, window);
+
   const previousStyle = (globalThis as { getComputedStyle?: unknown }).getComputedStyle;
   (globalThis as { getComputedStyle: unknown }).getComputedStyle = () => ({
     getPropertyValue: () => "",
@@ -97,13 +100,16 @@ test("search works before the layer list arrives", async (context) => {
       delete (globalThis as { getComputedStyle?: unknown }).getComputedStyle;
     }
   });
+
   let resolveLayers!: (response: Response) => void;
   const layersGate = new Promise<Response>((resolve) => {
     resolveLayers = resolve;
   });
+
   context.after(() => {
     resolveLayers(Response.json({ request_step: "P1M", default: [], layers: [] }));
   });
+
   const searched: string[] = [];
   context.mock.method(globalThis, "fetch", async (url: string) => {
     if (url === "/api/layers") return layersGate;
@@ -114,8 +120,10 @@ test("search works before the layer list arrives", async (context) => {
     if (url === "/api/areas/cgaz%3AADM1%3ANAKURU") {
       return Response.json({ ...areaHit(), geometry: bboxFeature() });
     }
+
     assert.fail(`Unexpected request: ${url}`);
   });
+
   const map = {
     fitBounds() {},
     getLayer() {
@@ -127,14 +135,17 @@ test("search works before the layer list arrives", async (context) => {
     addSource() {},
     addLayer() {},
   } as unknown as MapLibreMap;
+
   const root = document.createElement("div");
   document.body.append(root);
+
   const panelPromise = createPanel(root, map, { enter() {} });
   await new Promise((resolve) => setImmediate(resolve));
 
   const search = root.querySelector<HTMLInputElement>("[role=combobox]");
   const level = root.querySelector<HTMLSelectElement>("select");
   const status = root.querySelector(".status");
+
   assert.ok(search);
   assert.ok(level);
   assert.ok(status);
@@ -156,32 +167,39 @@ test("search works before the layer list arrives", async (context) => {
   );
 
   const option = root.querySelector("[role=option]");
+
   assert.ok(option);
+
   option.dispatchEvent(
     new search.ownerDocument.defaultView!.Event("mousedown", { bubbles: true, cancelable: true }),
   );
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
+
   assert.equal(root.querySelector(".chosen")?.textContent, "Currently selected - Nakuru");
 
   const build = [...root.querySelectorAll("button")].find(
     (button) => button.textContent === "Build scene",
   );
+
   assert.ok(build);
+
   build.click();
+
   assertSameNode(status, root.querySelector(".status"));
   assert.equal(status.textContent, "Select at least one layer.");
 
-  resolveLayers(Response.json({
-    request_step: "P1M",
-    default: ["terrain"],
-    layers: [
-      { id: "terrain", title: "Terrain", time_varying: false, time: null },
-    ],
-  }));
+  resolveLayers(
+    Response.json({
+      request_step: "P1M",
+      default: ["terrain"],
+      layers: [{ id: "terrain", title: "Terrain", time_varying: false, time: null }],
+    }),
+  );
   await panelPromise;
 
   const terrain = root.querySelector<HTMLInputElement>("input[value='terrain']");
+
   assert.ok(terrain);
   assertSameNode(terrain, root.querySelector("input[value='terrain']"));
   assert.equal(terrain.checked, true);
@@ -191,6 +209,7 @@ test("build shows Starting build… before the POST resolves", async (context) =
   const window = new Window();
   context.after(() => window.happyDOM.abort());
   installBrowser(context, window);
+
   const previousStyle = (globalThis as { getComputedStyle?: unknown }).getComputedStyle;
   (globalThis as { getComputedStyle: unknown }).getComputedStyle = () => ({
     getPropertyValue: () => "",
@@ -202,10 +221,12 @@ test("build shows Starting build… before the POST resolves", async (context) =
       delete (globalThis as { getComputedStyle?: unknown }).getComputedStyle;
     }
   });
+
   let resolvePost!: (response: Response) => void;
   const postGate = new Promise<Response>((resolve) => {
     resolvePost = resolve;
   });
+
   context.after(() => resolvePost(Response.json({ id: "a", status: "failed", error: "aborted" })));
   context.mock.method(globalThis, "fetch", async (url: string, init?: RequestInit) => {
     if (url === "/api/layers") {
@@ -223,15 +244,25 @@ test("build shows Starting build… before the POST resolves", async (context) =
         ...areaHit(),
         geometry: {
           type: "Polygon",
-          coordinates: [[[35, -1], [36, -1], [36, 1], [35, 1], [35, -1]]],
+          coordinates: [
+            [
+              [35, -1],
+              [36, -1],
+              [36, 1],
+              [35, 1],
+              [35, -1],
+            ],
+          ],
         },
       });
     }
     if (url === "/api/scenes" && init?.method === "POST") {
       return postGate;
     }
+
     assert.fail(`Unexpected request: ${url} ${init?.method ?? "GET"}`);
   });
+
   const map = {
     fitBounds() {},
     getLayer() {
@@ -243,19 +274,25 @@ test("build shows Starting build… before the POST resolves", async (context) =
     addSource() {},
     addLayer() {},
   } as unknown as MapLibreMap;
+
   const root = document.createElement("div");
   document.body.append(root);
   await createPanel(root, map, { enter() {} });
 
   const search = root.querySelector<HTMLInputElement>("[role=combobox]");
+
   assert.ok(search);
+
   context.mock.timers.enable({ apis: ["setTimeout"] });
   search.value = "Nakuru";
   search.dispatchEvent(new search.ownerDocument.defaultView!.Event("input"));
   context.mock.timers.tick(SEARCH_DEBOUNCE_MS);
   await new Promise((resolve) => setImmediate(resolve));
+
   const option = root.querySelector("[role=option]");
+
   assert.ok(option);
+
   option.dispatchEvent(
     new search.ownerDocument.defaultView!.Event("mousedown", { bubbles: true, cancelable: true }),
   );
@@ -264,8 +301,11 @@ test("build shows Starting build… before the POST resolves", async (context) =
   const build = [...root.querySelectorAll("button")].find(
     (button) => button.textContent === "Build scene",
   );
+
   assert.ok(build);
+
   const status = root.querySelector(".status");
+
   assert.ok(status);
   assertSameNode(status, root.querySelector(".status"));
 
@@ -278,6 +318,7 @@ test("a finished build shows Preparing scene… until the scene reports back", a
   const window = new Window();
   context.after(() => window.happyDOM.abort());
   installBrowser(context, window);
+
   const previousStyle = (globalThis as { getComputedStyle?: unknown }).getComputedStyle;
   (globalThis as { getComputedStyle: unknown }).getComputedStyle = () => ({
     getPropertyValue: () => "",
@@ -289,6 +330,7 @@ test("a finished build shows Preparing scene… until the scene reports back", a
       delete (globalThis as { getComputedStyle?: unknown }).getComputedStyle;
     }
   });
+
   context.mock.method(globalThis, "fetch", async (url: string, init?: RequestInit) => {
     if (url === "/api/layers") {
       return Response.json({
@@ -304,6 +346,7 @@ test("a finished build shows Preparing scene… until the scene reports back", a
     if (url === "/api/scenes" && init?.method === "POST") {
       return Response.json({ id: "s", status: "done", bundle_url: "https://bundles.test/s" });
     }
+
     return Response.json({
       id: "s",
       version: "0.7",
@@ -312,25 +355,29 @@ test("a finished build shows Preparing scene… until the scene reports back", a
       layers: [],
     });
   });
+
   const map = { fitBounds() {}, getLayer() {}, getSource() {}, addSource() {}, addLayer() {} };
   const root = document.createElement("div");
   document.body.append(root);
   await createPanel(root, map as unknown as MapLibreMap, { enter() {} });
+
   const search = root.querySelector<HTMLInputElement>("[role=combobox]")!;
   context.mock.timers.enable({ apis: ["setTimeout"] });
   search.value = "Nakuru";
   search.dispatchEvent(new window.Event("input"));
   context.mock.timers.tick(SEARCH_DEBOUNCE_MS);
   await new Promise((resolve) => setImmediate(resolve));
-  root.querySelector("[role=option]")!.dispatchEvent(
-    new window.Event("mousedown", { bubbles: true, cancelable: true }),
-  );
+  root
+    .querySelector("[role=option]")!
+    .dispatchEvent(new window.Event("mousedown", { bubbles: true, cancelable: true }));
   await new Promise((resolve) => setImmediate(resolve));
+
   const build = [...root.querySelectorAll("button")].find(
     (button) => button.textContent === "Build scene",
   )!;
 
   build.click();
+
   for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(root.querySelector(".status")!.textContent, "Preparing scene…");
@@ -352,6 +399,7 @@ test("the picked outline survives Build until the scene hides it and returns whe
   context.after(() => {
     delete (globalThis as { getComputedStyle?: unknown }).getComputedStyle;
   });
+
   context.mock.method(globalThis, "fetch", async (url: string, init?: RequestInit) => {
     if (url === "/api/layers") {
       return Response.json({
@@ -367,6 +415,7 @@ test("the picked outline survives Build until the scene hides it and returns whe
     if (url === "/api/scenes" && init?.method === "POST") {
       return Response.json({ id: "s", status: "done", bundle_url: "https://bundles.test/s" });
     }
+
     return Response.json({
       id: "s",
       version: "0.7",
@@ -375,6 +424,7 @@ test("the picked outline survives Build until the scene hides it and returns whe
       layers: [],
     });
   });
+
   const mapIds = new Set<string>();
   const map = {
     fitBounds() {},
@@ -385,36 +435,45 @@ test("the picked outline survives Build until the scene hides it and returns whe
     removeLayer: (id: string) => mapIds.delete(id),
     removeSource: (id: string) => mapIds.delete(id),
   };
+
   const root = document.createElement("div");
   document.body.append(root);
+
   let received: { hideAreaOutline(): void; showAreaOutline(): void } | undefined;
   await createPanel(root, map as unknown as MapLibreMap, {
     enter: (_scene, options) => {
       received = options.buildPanel;
     },
   });
+
   const search = root.querySelector<HTMLInputElement>("[role=combobox]")!;
   context.mock.timers.enable({ apis: ["setTimeout"] });
   search.value = "Nakuru";
   search.dispatchEvent(new window.Event("input"));
   context.mock.timers.tick(SEARCH_DEBOUNCE_MS);
   await new Promise((resolve) => setImmediate(resolve));
-  root.querySelector("[role=option]")!.dispatchEvent(
-    new window.Event("mousedown", { bubbles: true, cancelable: true }),
-  );
+  root
+    .querySelector("[role=option]")!
+    .dispatchEvent(new window.Event("mousedown", { bubbles: true, cancelable: true }));
   await new Promise((resolve) => setImmediate(resolve));
+
   const build = [...root.querySelectorAll("button")].find(
     (button) => button.textContent === "Build scene",
   )!;
 
   build.click();
+
   for (let turn = 0; turn < 20; turn += 1) await new Promise((resolve) => setImmediate(resolve));
 
   assert.ok(received);
   assert.equal(mapIds.has("soe-picked-area"), true);
+
   received.hideAreaOutline();
+
   assert.equal(mapIds.has("soe-picked-area"), false);
+
   received.showAreaOutline();
+
   assert.equal(mapIds.has("soe-picked-area"), true);
 });
 
@@ -422,6 +481,7 @@ test("repick clears a build and a stale 503 never overwrites a newer run", async
   const window = new Window();
   context.after(() => window.happyDOM.abort());
   installBrowser(context, window);
+
   const previousStyle = (globalThis as { getComputedStyle?: unknown }).getComputedStyle;
   (globalThis as { getComputedStyle: unknown }).getComputedStyle = () => ({
     getPropertyValue: () => "",
@@ -433,18 +493,22 @@ test("repick clears a build and a stale 503 never overwrites a newer run", async
       delete (globalThis as { getComputedStyle?: unknown }).getComputedStyle;
     }
   });
+
   let resolveFirst!: (response: Response) => void;
   let resolveSecond!: (response: Response) => void;
   const firstGate = new Promise<Response>((resolve) => {
     resolveFirst = resolve;
   });
+
   const secondGate = new Promise<Response>((resolve) => {
     resolveSecond = resolve;
   });
+
   context.after(() => {
     resolveFirst(Response.json({ id: "a", status: "failed", error: "aborted" }));
     resolveSecond(Response.json({ id: "b", status: "failed", error: "aborted" }));
   });
+
   let postCalls = 0;
   context.mock.method(globalThis, "fetch", async (url: string, init?: RequestInit) => {
     if (url === "/api/layers") {
@@ -462,7 +526,15 @@ test("repick clears a build and a stale 503 never overwrites a newer run", async
         ...areaHit(),
         geometry: {
           type: "Polygon",
-          coordinates: [[[35, -1], [36, -1], [36, 1], [35, 1], [35, -1]]],
+          coordinates: [
+            [
+              [35, -1],
+              [36, -1],
+              [36, 1],
+              [35, 1],
+              [35, -1],
+            ],
+          ],
         },
       });
     }
@@ -471,8 +543,10 @@ test("repick clears a build and a stale 503 never overwrites a newer run", async
       if (postCalls === 1) return firstGate;
       if (postCalls === 2) return secondGate;
     }
+
     assert.fail(`Unexpected request: ${url} ${init?.method ?? "GET"}`);
   });
+
   const map = {
     fitBounds() {},
     getLayer() {
@@ -484,25 +558,29 @@ test("repick clears a build and a stale 503 never overwrites a newer run", async
     addSource() {},
     addLayer() {},
   } as unknown as MapLibreMap;
+
   const root = document.createElement("div");
   document.body.append(root);
   await createPanel(root, map, { enter() {} });
 
   const search = root.querySelector<HTMLInputElement>("[role=combobox]");
+
   assert.ok(search);
+
   context.mock.timers.enable({ apis: ["setTimeout"] });
+
   const pickFirstHit = async () => {
     search.value = "Nakuru";
     search.dispatchEvent(new search.ownerDocument.defaultView!.Event("input"));
     context.mock.timers.tick(SEARCH_DEBOUNCE_MS);
     await new Promise((resolve) => setImmediate(resolve));
+
     const option = root.querySelector("[role=option]");
+
     assert.ok(option);
+
     option.dispatchEvent(
-      new search.ownerDocument.defaultView!.Event("mousedown", {
-        bubbles: true,
-        cancelable: true,
-      }),
+      new search.ownerDocument.defaultView!.Event("mousedown", { bubbles: true, cancelable: true }),
     );
     await new Promise((resolve) => setImmediate(resolve));
   };
@@ -511,22 +589,28 @@ test("repick clears a build and a stale 503 never overwrites a newer run", async
   const build = [...root.querySelectorAll("button")].find(
     (button) => button.textContent === "Build scene",
   );
+
   assert.ok(build);
+
   const status = root.querySelector(".status");
+
   assert.ok(status);
   assertSameNode(status, root.querySelector(".status"));
 
   build.click();
+
   assert.equal(status.textContent, "Starting build…");
   assert.equal(status.classList.contains("busy"), true);
 
   await pickFirstHit();
+
   assertSameNode(status, root.querySelector(".status"));
   assert.equal(status.textContent, "");
   assert.equal(status.classList.contains("busy"), false);
   assert.equal(build.disabled, false);
 
   build.click();
+
   assert.equal(status.textContent, "Starting build…");
   assert.equal(status.classList.contains("busy"), true);
 
@@ -540,14 +624,14 @@ test("repick clears a build and a stale 503 never overwrites a newer run", async
   await new Promise((resolve) => setImmediate(resolve));
   context.mock.timers.tick(1000);
   await new Promise((resolve) => setImmediate(resolve));
+
   assertSameNode(status, root.querySelector(".status"));
   assert.equal(status.textContent, "Starting build…");
 
-  resolveSecond(
-    new Response(JSON.stringify({ detail: "new error" }), { status: 422 }),
-  );
+  resolveSecond(new Response(JSON.stringify({ detail: "new error" }), { status: 422 }));
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
+
   assertSameNode(status, root.querySelector(".status"));
   assert.equal(status.textContent, "Error 422: new error");
   assert.equal(build.disabled, false);
@@ -575,6 +659,7 @@ async function assertDeferredSceneEntries(context: TestContext): Promise<void> {
         bundle_url: `https://bundles.test/${url.split("/").at(-1)}`,
       });
     }
+
     assert.ok(url.startsWith("https://bundles.test/"));
 
     return Response.json({
@@ -585,10 +670,12 @@ async function assertDeferredSceneEntries(context: TestContext): Promise<void> {
       layers: [],
     });
   });
+
   for (const action of ["repick", "cancel", "supersede", "failure", "stale failure"]) {
     const gate = deferred<{ enter(scene: { id: string }): void }>();
     const entered: string[] = [];
     const root = document.createElement("div");
+
     const map = {
       fitBounds() {},
       getLayer() {},
@@ -596,26 +683,34 @@ async function assertDeferredSceneEntries(context: TestContext): Promise<void> {
       addSource() {},
       addLayer() {},
     } as unknown as MapLibreMap;
+
     let loads = 0;
     const panel = await createPanel(root, map, () => {
       loads++;
 
       return gate.promise;
     });
+
     assert.equal(loads, 0);
+
     const first = panel.openScene("first", { time: "2020-02", entry: "replace" });
     await new Promise((resolve) => setImmediate(resolve));
+
     assert.equal(loads, 1);
+
     let next: Promise<void> | undefined;
+
     if (action === "repick") {
       const search = root.querySelector<HTMLInputElement>("[role=combobox]")!;
       search.value = "Nakuru";
       search.dispatchEvent(new document.defaultView!.Event("input"));
       context.mock.timers.tick(SEARCH_DEBOUNCE_MS);
       await new Promise((resolve) => setImmediate(resolve));
-      root.querySelector("[role=option]")!.dispatchEvent(
-        new document.defaultView!.Event("mousedown", { bubbles: true, cancelable: true }),
-      );
+      root
+        .querySelector("[role=option]")!
+        .dispatchEvent(
+          new document.defaultView!.Event("mousedown", { bubbles: true, cancelable: true }),
+        );
     }
     if (action === "cancel" || action === "stale failure") panel.cancelOpen();
     if (action === "supersede") {
@@ -624,6 +719,7 @@ async function assertDeferredSceneEntries(context: TestContext): Promise<void> {
     }
     if (action.endsWith("failure")) gate.reject(new Error("module unavailable"));
     else gate.resolve({ enter: (scene) => entered.push(scene.id) });
+
     await Promise.all([first, next]);
 
     assert.deepEqual(entered, action === "supersede" ? ["second"] : []);
@@ -651,12 +747,15 @@ async function assertSceneEntryHooks(context: TestContext): Promise<void> {
       layers: [],
     });
   });
+
   const root = document.createElement("div");
-  let received: {
-    showStatus(text: string): void;
-    setBusy(isBusy: boolean): void;
-    setInert(isInert: boolean): void;
-  } | undefined;
+  let received:
+    | {
+        showStatus(text: string): void;
+        setBusy(isBusy: boolean): void;
+        setInert(isInert: boolean): void;
+      }
+    | undefined;
   const map = { fitBounds() {}, getLayer() {}, getSource() {}, addSource() {}, addLayer() {} };
   const panel = await createPanel(root, map as unknown as MapLibreMap, {
     enter: (_scene, options) => {
@@ -667,22 +766,40 @@ async function assertSceneEntryHooks(context: TestContext): Promise<void> {
   await panel.openScene("s", { time: null, entry: "push" });
 
   assert.ok(received);
+
   received.showStatus("Preparing scene…");
+
   assert.equal(root.querySelector(".status")!.textContent, "Preparing scene…");
+
   received.setBusy(true);
+
   assert.equal(root.querySelector(".status")!.classList.contains("busy"), true);
+
   received.setBusy(false);
+
   assert.equal(root.querySelector(".status")!.classList.contains("busy"), false);
+
   received.setInert(true);
+
   assert.equal(root.inert, true);
+
   received.setInert(false);
+
   assert.equal(root.inert, false);
 }
 
 function bboxFeature(): { type: "Polygon"; coordinates: number[][][] } {
   return {
     type: "Polygon",
-    coordinates: [[[35, -1], [36, -1], [36, 1], [35, 1], [35, -1]]],
+    coordinates: [
+      [
+        [35, -1],
+        [36, -1],
+        [36, 1],
+        [35, 1],
+        [35, -1],
+      ],
+    ],
   };
 }
 
@@ -695,9 +812,11 @@ function lazySceneSource(): string {
 async function assertLazySceneRetry(): Promise<void> {
   const window = new Window({ url: "https://app.test/" });
   const controller = { sceneId: () => "shared" };
-  const imports = [Promise.reject(new Error("chunk failed")), Promise.resolve({
-    createSceneMode: () => controller,
-  })];
+  const imports = [
+    Promise.reject(new Error("chunk failed")),
+    Promise.resolve({ createSceneMode: () => controller }),
+  ];
+
   const application = runInNewContext(`${lazySceneSource()}\n({ loadSceneMode });`, {
     document: { getElementById: () => window.document.createElement("div") },
     window: { addEventListener() {} },
@@ -712,17 +831,22 @@ async function assertLazySceneRetry(): Promise<void> {
     loadModule: () => imports.shift(),
   }) as { loadSceneMode(): Promise<typeof controller> };
   const failing = application.loadSceneMode();
+
   assert.equal(application.loadSceneMode(), failing);
   await assert.rejects(failing, /chunk failed/);
+
   const retry = application.loadSceneMode();
+
   assert.notEqual(retry, failing);
   assert.equal(await retry, controller);
   assert.equal(application.loadSceneMode(), retry);
+
   await window.happyDOM.abort();
 }
 
 async function assertLazySceneBoundary(): Promise<void> {
   const source = lazySceneSource();
+
   for (const route of ["world", "stale", "shared"]) {
     const window = new Window({
       url: route === "world" ? "https://app.test/" : "https://app.test/?scene=shared&t=2020-02",
@@ -736,12 +860,14 @@ async function assertLazySceneBoundary(): Promise<void> {
     let cancelled = 0;
     let exited = 0;
     let followHistory = () => {};
+
     const controller = {
       sceneId: () => "shared",
       enter() {},
       exit: () => exited++,
       showFullscreen: (tab: string | null) => shown.push(tab),
     };
+
     const application = runInNewContext(`${source}\n({ loadSceneMode });`, {
       document: { getElementById: () => window.document.createElement("div") },
       window: {
@@ -763,28 +889,39 @@ async function assertLazySceneBoundary(): Promise<void> {
         return moduleGate.promise;
       },
     }) as { loadSceneMode(): Promise<typeof controller> };
+
     assert.equal(imports, 0);
+
     if (route === "stale") {
       window.history.replaceState(null, "", "/");
       followHistory();
     }
+
     panelGate.resolve({
       openScene: (...args: unknown[]) => opened.push(args),
       showStatus() {},
       cancelOpen: () => cancelled++,
     });
+
     await new Promise((resolve) => setImmediate(resolve));
+
     assert.equal(opened.length, route === "shared" ? 1 : 0);
+
     if (route === "shared") {
       assert.equal(opened[0][0], "shared");
+
       const options = opened[0][1] as { time: string; entry: string };
+
       assert.equal(options.time, "2020-02");
       assert.equal(options.entry, "replace");
     }
+
     const first = application.loadSceneMode();
     const second = application.loadSceneMode();
+
     assert.equal(first, second);
     assert.equal(imports, 1);
+
     moduleGate.resolve({
       createSceneMode: () => {
         created++;
@@ -792,16 +929,23 @@ async function assertLazySceneBoundary(): Promise<void> {
         return controller;
       },
     });
+
     await first;
+
     assert.equal(created, 1);
+
     window.history.replaceState({ panel: "charts" }, "", "?scene=shared");
     followHistory();
+
     assert.deepEqual(shown, ["charts"]);
+
     window.history.replaceState(null, "", "/");
     followHistory();
+
     assert.equal(exited, 1);
     assert.equal(cancelled, 2);
     assert.equal(imports, 1);
+
     await window.happyDOM.abort();
   }
 }
@@ -832,15 +976,18 @@ async function panelWithHits(context: TestContext, hits: AreaHit[]): Promise<HTM
     assert.ok(url.startsWith("/api/areas/search?"), `Unexpected request: ${url}`);
     return Response.json(hits);
   });
+
   const root = document.createElement("div");
   document.body.append(root);
   await createPanel(root, {} as MapLibreMap, { enter() {} });
+
   return root;
 }
 
 function installBrowser(context: TestContext, window: Window): void {
   // Happy DOM has option elements but does not implement the browser's Option constructor.
   const globals = { document: window.document, location: window.location, Option: createOption };
+
   for (const [name, value] of Object.entries(globals)) {
     const previous = Object.getOwnPropertyDescriptor(globalThis, name);
     Object.defineProperty(globalThis, name, { value, configurable: true });
@@ -855,17 +1002,21 @@ function createOption(text: string, value: string): HTMLOptionElement {
   const option = document.createElement("option");
   option.textContent = text;
   option.value = value;
+
   return option;
 }
 
 async function resultTexts(context: TestContext, root: HTMLElement): Promise<(string | null)[]> {
   const search = root.querySelector<HTMLInputElement>("[role=combobox]");
+
   assert.ok(search);
+
   context.mock.timers.enable({ apis: ["setTimeout"] });
   search.value = "Nakuru";
   search.dispatchEvent(new search.ownerDocument.defaultView!.Event("input"));
   context.mock.timers.tick(SEARCH_DEBOUNCE_MS);
   await new Promise((resolve) => setImmediate(resolve));
+
   return [...root.querySelectorAll("[role=option]")].map((item) => item.textContent);
 }
 

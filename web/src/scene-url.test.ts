@@ -146,9 +146,7 @@ test("repeated display parameters are joined in order", () => {
   const route = routeFor(
     `?scene=${id}&pal=a:x&pal=b:y&off=u&as=temp:colour&as=temp:isolines,rain:colour`,
     null,
-  ) as {
-    display: { pal: string; off: string; as: string };
-  };
+  ) as { display: { pal: string; off: string; as: string } };
 
   assert.equal(route.display.pal, "a:x,b:y");
   assert.equal(route.display.off, "u");
@@ -185,10 +183,12 @@ test("chart helpers preserve the other params and remove the token on request", 
   assert.equal(chartsTokenFor("?scene=abc&charts="), null);
 
   const added = withChartsToken(`?scene=${id}&t=2019-03`, "abc-_123");
+
   assert.ok(added.includes("t=2019-03"));
   assert.ok(added.includes("charts=abc-_123"));
 
   const removed = withChartsToken(added, null);
+
   assert.ok(!removed.includes("charts"));
   assert.ok(removed.includes(`scene=${id}`));
 });

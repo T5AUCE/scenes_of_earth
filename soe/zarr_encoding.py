@@ -1,4 +1,5 @@
 """Share deterministic gzip compression and integer packing for scenes and ingested cubes."""
+
 import gzip
 import io
 from functools import cached_property
@@ -26,12 +27,10 @@ class _DeterministicGZip(GZip):
         normalized = ensure_contiguous_ndarray(buf)
         compressed = io.BytesIO()
         with gzip.GzipFile(
-            fileobj=compressed,
-            mode="wb",
-            compresslevel=self.level,
-            mtime=0,
+            fileobj=compressed, mode="wb", compresslevel=self.level, mtime=0
         ) as member:
             member.write(normalized)
+
         return compressed.getvalue()
 
 
@@ -39,11 +38,7 @@ COMPRESSION = DeterministicGzipCodec(level=5)
 
 
 def encode_values(
-    values: np.ndarray,
-    dtype: str,
-    scale: float,
-    offset: float,
-    fill_value: int,
+    values: np.ndarray, dtype: str, scale: float, offset: float, fill_value: int
 ) -> np.ndarray:
     """Quantize floats to integers, using fill_value for NaN values.
 
@@ -54,4 +49,5 @@ def encode_values(
     highest = limits.max - (fill_value == limits.max)
     quantized = np.rint((values - offset) / scale).clip(lowest, highest)
     encoded = np.where(np.isnan(values), fill_value, quantized)
+
     return encoded.astype(dtype)

@@ -37,12 +37,15 @@ export interface MonthSelect extends HTMLSpanElement {
 export function createMonthSelect(monthLabel: string, yearLabel: string): MonthSelect {
   const wrapper = document.createElement("span") as MonthSelect;
   wrapper.className = "month-select";
+
   const month = document.createElement("select");
   month.setAttribute("aria-label", monthLabel);
   month.append(...MONTH_LABELS.map((label, index) => makeMonthOption(label, padMonth(index + 1))));
+
   const year = document.createElement("select");
   year.setAttribute("aria-label", yearLabel);
   wrapper.append(month, year);
+
   const control = new MonthSelectControl(month, year);
   Object.defineProperties(wrapper, {
     value: {
@@ -74,7 +77,9 @@ export function createMonthSelect(monthLabel: string, yearLabel: string): MonthS
       },
     },
   });
+
   year.onchange = () => control.yearChanged();
+
   return wrapper;
 }
 
@@ -96,6 +101,7 @@ class MonthSelectControl {
 
   set value(text: string) {
     const parsed = parseYearMonth(text);
+
     if (!parsed || !this.hasYear(parsed.year)) {
       // Like a native month input, an empty or unrepresentable write clears the field.
       this.year.selectedIndex = -1;
@@ -150,12 +156,16 @@ class MonthSelectControl {
     const first = parseYearMonth(this.minText);
     const last = parseYearMonth(this.maxText);
     this.year.replaceChildren();
+
     if (!first || !last) return;
+
     for (let current = first.year; current <= last.year; current += 1) {
       this.year.append(makeMonthOption(String(current), String(current)));
     }
+
     if (previous && this.hasYear(Number(previous))) this.year.value = previous;
     else this.year.selectedIndex = previous ? 0 : -1;
+
     this.refreshMonths();
   }
 
@@ -166,13 +176,16 @@ class MonthSelectControl {
     const picked = Number(this.year.value);
     let lowest = FIRST_MONTH;
     let highest = MONTHS_PER_YEAR;
+
     if (first && picked === first.year) lowest = first.month;
     if (last && picked === last.year) highest = last.month;
+
     for (let index = 0; index < this.month.options.length; index += 1) {
       const option = this.month.options[index];
       const number = index + 1;
       option.disabled = number < lowest || number > highest;
     }
+
     if (this.month.value < padMonth(lowest)) this.month.value = padMonth(lowest);
     else if (this.month.value > padMonth(highest)) this.month.value = padMonth(highest);
   }
@@ -196,5 +209,6 @@ function makeMonthOption(label: string, value: string): HTMLOptionElement {
   const option = document.createElement("option");
   option.textContent = label;
   option.value = value;
+
   return option;
 }

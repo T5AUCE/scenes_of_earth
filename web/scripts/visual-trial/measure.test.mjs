@@ -123,10 +123,7 @@ test("frame_stats_report_median_and_p95", () => {
   const deltas = Array.from({ length: 100 }, (_, index) => 100 - index);
 
   assert.deepEqual(frameStats(deltas), { frame_ms_p50: 50, frame_ms_p95: 95 });
-  assert.deepEqual(frameStats([NaN, 0, -1, Infinity]), {
-    frame_ms_p50: null,
-    frame_ms_p95: null,
-  });
+  assert.deepEqual(frameStats([NaN, 0, -1, Infinity]), { frame_ms_p50: null, frame_ms_p95: null });
   assert.deepEqual(frameStats([8.126]), { frame_ms_p50: 8.13, frame_ms_p95: 8.13 });
 });
 
@@ -201,16 +198,14 @@ test("the first view keeps failures emitted before the outline is ready", async 
   const page = {
     on: (event, handler) => handlers.set(event, handler),
     goto: async () => {
-      handlers.get("response")({
-        status: () => 500,
-        url: () => "https://example.test/startup",
-      });
+      handlers.get("response")({ status: () => 500, url: () => "https://example.test/startup" });
       handlers.get("pageerror")(new Error("early JavaScript error"));
     },
     waitForFunction: async () => {},
     evaluate: async (callback) => {
       if (callback.name === "waitForIdle") return true;
       if (callback.name === "takeSample") return sample;
+
       return mapErrors.splice(0);
     },
     close: async () => {},
@@ -272,6 +267,7 @@ test("categorical records include only the class labels shown in each view", asy
         if (callback.name !== "takeSample") return [];
 
         const sample = runInNewContext(`(${callback})(patterns)`, { ...sandbox, patterns });
+
         return JSON.parse(JSON.stringify(sample));
       },
       close: async () => {},
@@ -313,6 +309,7 @@ test("a colour spot sets the pick through the scene link", async () => {
       if (callback.name === "waitForIdle") return true;
       if (callback.name === "takeSample") return sample;
       if (callback.name === "panFrames") return [6, 8, 10];
+
       return [];
     },
     close: async () => {},
@@ -325,13 +322,17 @@ test("a colour spot sets the pick through the scene link", async () => {
     { screens: false },
   );
 
-  assert.equal(url, "https://example.test/?scene=8db2b3434ee7cf729daf&as=era5land_temperature:colour");
+  assert.equal(
+    url,
+    "https://example.test/?scene=8db2b3434ee7cf729daf&as=era5land_temperature:colour",
+  );
   assert.equal(records[0].colour_owner, "era5land_temperature");
   assert.equal(records[0].marks_frame_ms_p95, 10);
 });
 
 test("an encoded colour link still names its owner", async () => {
-  const search = "?scene=8db2b3434ee7cf729daf"
+  const search =
+    "?scene=8db2b3434ee7cf729daf"
     + "&as=chirps_monthly%3Acolour%2Cera5land_temperature%3Aisolines"
     + "&charts=eyJ9";
   const sandbox = {
@@ -356,7 +357,9 @@ test("an encoded colour link still names its owner", async () => {
       if (callback.name === "waitForIdle") return true;
       if (callback.name === "panFrames") return [6, 8, 10];
       if (callback.name !== "takeSample") return [];
+
       const sample = runInNewContext(`(${callback})(patterns)`, { ...sandbox, patterns });
+
       return JSON.parse(JSON.stringify(sample));
     },
     close: async () => {},
@@ -468,10 +471,7 @@ test("viewRecord leaves pool fields null without a pool", () => {
 
 test("sameSample ignores pool counts while settling", () => {
   assert.equal(
-    sameSample(
-      { ready: true, pool: { textures: 1 } },
-      { ready: true, pool: { textures: 2 } },
-    ),
+    sameSample({ ready: true, pool: { textures: 1 } }, { ready: true, pool: { textures: 2 } }),
     true,
   );
   assert.equal(sameSample({ ready: true }, { ready: false }), false);
@@ -540,17 +540,16 @@ test("immutable cache entries still respect expiration and upstream age", () => 
 
 test("cache freshness honours expires, no-cache and uncacheable responses", () => {
   const entry = makeCacheEntry({ date: new Date(1000).toUTCString() });
-  const makeEntryWithControl = (control) => ({
-    ...entry,
-    headers: { "cache-control": control },
-  });
+  const makeEntryWithControl = (control) => ({ ...entry, headers: { "cache-control": control } });
 
   assert.equal(isFresh(entry, 2000, 0), false);
   assert.equal(isFresh({ ...entry, status: 404 }, 2000, 0), false);
   assert.equal(isFresh(makeEntryWithControl("no-store, max-age=60"), 2000, 0), false);
   assert.equal(isFresh(makeEntryWithControl("private, max-age=60"), 2000, 0), false);
   assert.equal(isFresh(makeEntryWithControl("no-cache, max-age=60"), 2000, 0), false);
+
   entry.headers.expires = new Date(3000).toUTCString();
+
   assert.equal(isFresh(entry, 2000, 0), true);
   assert.equal(isFresh(entry, 3000, 0), false);
 });
@@ -560,12 +559,14 @@ test("atomic cache replacement keeps the old entry readable until publication", 
   const file = path.join(directory, "entry.json");
   const original = makeCacheEntry();
   writeEntry(file, original);
+
   const rename = fs.renameSync;
   context.mock.method(fs, "renameSync", (temporary, destination) => {
     assert.deepEqual(readEntry(destination), original);
     assert.equal(readEntry(temporary).body.toString(), "replacement");
     rename(temporary, destination);
   });
+
   writeEntry(file, { ...original, body: Buffer.from("replacement") });
 
   assert.equal(readEntry(file).body.toString(), "replacement");
@@ -575,6 +576,7 @@ test("atomic cache replacement keeps the old entry readable until publication", 
 function createTemporaryCache(context) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "soe-visual-trial-test-"));
   context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
   return directory;
 }
 
@@ -596,14 +598,21 @@ test("missing, malformed and mismatched cache entries are misses", (context) => 
   const file = path.join(createTemporaryCache(context), "entry.json");
 
   assert.equal(readEntry(file), null);
+
   fs.writeFileSync(file, "{");
+
   assert.equal(readEntry(file), null);
+
   fs.writeFileSync(file, "null");
+
   assert.equal(readEntry(file), null);
+
   writeEntry(file, makeCacheEntry());
+
   const serialized = JSON.parse(fs.readFileSync(file, "utf8"));
   const corrupted = { ...serialized, body: Buffer.from("bad").toString("base64") };
   fs.writeFileSync(file, JSON.stringify(corrupted));
+
   assert.equal(readEntry(file), null);
 });
 
@@ -613,6 +622,7 @@ test("cache revalidation sends validators and retains a body on 304", async (con
     { status: 304, headers: { "cache-control": "max-age=60" } },
   ]);
   await cache.request();
+
   const response = await cache.request();
 
   assert.equal(cache.fetches[1].headers["if-none-match"], '"version-1"');
@@ -624,30 +634,42 @@ async function createCacheHarness(context, responses) {
   const directory = createTemporaryCache(context);
   const fetches = [];
   let handler;
-  await installCache({ route: async (_pattern, callback) => { handler = callback; } }, directory);
+  await installCache(
+    {
+      route: async (_pattern, callback) => {
+        handler = callback;
+      },
+    },
+    directory,
+  );
 
   return {
     directory,
     fetches,
-    request: async () => handler({
-      request: () => ({
-        method: () => "GET",
-        url: () => "https://tiles.openfreemap.org/style",
-        headers: () => ({}),
+    request: async () =>
+      handler({
+        request: () => ({
+          method: () => "GET",
+          url: () => "https://tiles.openfreemap.org/style",
+          headers: () => ({}),
+        }),
+        fetch: async (options) => {
+          fetches.push(options);
+
+          const response = responses.shift();
+
+          assert.ok(response, "unexpected upstream request");
+
+          if (response.error) throw new Error(response.error);
+
+          return {
+            status: () => response.status,
+            headers: () => response.headers ?? {},
+            body: async () => Buffer.from(response.body ?? ""),
+          };
+        },
+        fulfill: async (entry) => entry,
       }),
-      fetch: async (options) => {
-        fetches.push(options);
-        const response = responses.shift();
-        assert.ok(response, "unexpected upstream request");
-        if (response.error) throw new Error(response.error);
-        return {
-          status: () => response.status,
-          headers: () => response.headers ?? {},
-          body: async () => Buffer.from(response.body ?? ""),
-        };
-      },
-      fulfill: async (entry) => entry,
-    }),
   };
 }
 
@@ -715,9 +737,11 @@ test("repeated POST 503 responses stop at the shared deadline", async (context) 
     nowMs += delayMs;
     queueMicrotask(callback);
   });
+
   context.mock.method(globalThis, "fetch", async (_url, options) => {
     requests += 1;
     assert.ok(options.signal instanceof AbortSignal);
+
     return new Response(null, { status: 503, headers: { "Retry-After": "1" } });
   });
 
@@ -741,12 +765,13 @@ test("a stalled POST is aborted by its request budget", async (context) => {
       signal.addEventListener("abort", () => reject(signal.reason), { once: true });
     });
   });
+
   const keepAlive = setInterval(() => {}, 1000);
+
   try {
-    await assert.rejects(
-      postScene("https://example.test", {}, Date.now() + 20),
-      { name: "TimeoutError" },
-    );
+    await assert.rejects(postScene("https://example.test", {}, Date.now() + 20), {
+      name: "TimeoutError",
+    });
   } finally {
     clearInterval(keepAlive);
   }
@@ -759,13 +784,16 @@ test("readiness instrumentation matches the current app modules without editing 
     route: async (pattern, handler) => routes.push({ pattern, handler }),
   };
   await newContext({ newContext: async () => context });
+
   for (const { pattern, handler } of routes) {
     const module = /\/src\/([^*]+)/.exec(pattern)[1];
     const source = fs.readFileSync(new URL(`../../src/${module}`, import.meta.url), "utf8");
     let instrumented;
     await handler({
       fetch: async () => ({ text: async () => source }),
-      fulfill: async ({ body }) => { instrumented = body; },
+      fulfill: async ({ body }) => {
+        instrumented = body;
+      },
     });
 
     assert.notEqual(instrumented, source);
@@ -784,12 +812,17 @@ test("port probes resolve even when destroy returns the socket", async (context)
 
 function createFakeSocket(context) {
   const socket = new EventEmitter();
-  socket.setTimeout = (timeoutMs) => { socket.timeoutMs = timeoutMs; };
+  socket.setTimeout = (timeoutMs) => {
+    socket.timeoutMs = timeoutMs;
+  };
+
   socket.destroy = () => {
     socket.destroyed = true;
     return socket;
   };
+
   context.mock.method(net, "connect", () => socket);
+
   return socket;
 }
 
@@ -798,7 +831,9 @@ test("port probes are bounded and conservatively report timeout as occupied", as
   const probe = isOpen(12345);
 
   assert.ok(socket.timeoutMs > 0);
+
   socket.emit("timeout");
+
   assert.equal(await probe, true);
   assert.equal(socket.destroyed, true);
 });
@@ -816,5 +851,6 @@ test("repeated shutdown calls share one cleanup promise", async () => {
   const second = stopServers();
 
   assert.equal(first, second);
+
   await first;
 });

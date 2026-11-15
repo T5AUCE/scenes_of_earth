@@ -10,10 +10,7 @@ interface RangeSectionProps {
 }
 
 /** Low and High inputs that share the menu's validation. Reset returns to the fitted range. */
-export function RangeSection({
-  range,
-  onChange,
-}: RangeSectionProps): React.ReactElement {
+export function RangeSection({ range, onChange }: RangeSectionProps): React.ReactElement {
   const low = useRef<HTMLInputElement>(null);
   const high = useRef<HTMLInputElement>(null);
   const dirty = useRef(false);
@@ -35,6 +32,7 @@ export function RangeSection({
     const mark = () => {
       dirty.current = true;
     };
+
     const lowInput = low.current;
     const highInput = high.current;
     lowInput?.addEventListener("input", mark);
@@ -53,7 +51,9 @@ export function RangeSection({
 
   const commit = () => {
     if (!dirty.current) return;
+
     dirty.current = false;
+
     const next = typedRange(
       low.current?.value ?? "",
       high.current?.value ?? "",
@@ -97,8 +97,7 @@ export function RangeSection({
       </legend>
       <div className="range-row">
         <label>
-          Low
-          {" "}
+          Low{" "}
           <input
             ref={low}
             type="number"
@@ -112,8 +111,7 @@ export function RangeSection({
           />
         </label>
         <label>
-          High
-          {" "}
+          High{" "}
           <input
             ref={high}
             type="number"
@@ -172,10 +170,7 @@ function shownRange(
   if (nativeUnits === displayUnit) return converted;
 
   // Inputs show rounded conversions, so long floats never reach the box.
-  return [
-    roundedDisplay(converted[0], shownDecimals),
-    roundedDisplay(converted[1], shownDecimals),
-  ];
+  return [roundedDisplay(converted[0], shownDecimals), roundedDisplay(converted[1], shownDecimals)];
 }
 
 function roundedDisplay(value: number, shownDecimals: number): number {

@@ -9,8 +9,8 @@ import {
   type CreditEntry,
 } from "./scene-info";
 import { formatTime, scrubberTimes } from "./timeline";
-import { formatArea, formatLength } from "./units";
 import type { Scene } from "./types";
+import { formatArea, formatLength } from "./units";
 
 /** Id of the notices heading; the docked panel scrolls the About tab to it. */
 export const NOTICES_HEADING_ID = "notices-heading";
@@ -86,7 +86,9 @@ function periodText(scene: Scene) {
 
 /** The credited source names on one line. */
 export const creditsLine = (scene: Scene) =>
-  creditEntries(scene).map((entry) => entry.name).join(" · ");
+  creditEntries(scene)
+    .map((entry) => entry.name)
+    .join(" · ");
 
 /** Render the About tab with scene metadata and explanations of the display. */
 export function renderAbout(
@@ -107,7 +109,9 @@ export function renderAbout(
   );
 
   makeHtmlElement("h4", "Layers", root);
+
   const layers = makeHtmlElement("ul", "", root);
+
   for (const layer of scene.layers) {
     const units = displayUnits[layer.id] ?? layer.units;
     const cell = formatCellSize(layer.grid.res, elevationUnit);
@@ -129,15 +133,21 @@ function appendNotices(root: HTMLElement, scene: Scene) {
 
   const heading = makeHtmlElement("h4", "Notices and Limits", root);
   heading.id = NOTICES_HEADING_ID;
+
   const list = makeHtmlElement("ul", "", root);
+
   if (scene.area.clipped_to_coverage) makeHtmlElement("li", CLIPPED_NOTICE, list);
+
   for (const limit of scene.notices.limits) makeHtmlElement("li", limit, list);
 }
 
 function appendDisplay(root: HTMLElement, scene: Scene) {
   makeHtmlElement("h4", "What the Map Draws", root);
+
   for (const line of DISPLAY_LINES) makeHtmlElement("p", line, root);
+
   const geology = scene.layers.find((layer) => layer.id === "geology");
+
   if (geology) {
     const isGlim = geology.source.name.startsWith("GLiM");
     makeHtmlElement("p", isGlim ? GLIM_DISPLAY_LINE : OPENLANDMAP_DISPLAY_LINE, root);
@@ -159,16 +169,19 @@ function smoothingLines(elevationUnit: string) {
   // The source resolutions stay readable because they use the scene's length choice.
   const fine = formatLength(30, elevationUnit);
   const coarse = formatLength(90, elevationUnit);
-  const storage = `The values in the files are the cell values of the stored grid, `
+  const storage =
+    `The values in the files are the cell values of the stored grid, `
     + `never the smoothed picture; terrain statistics may come from coarser cells `
     + `than their ${fine} or ${coarse} source. Bundles keep every cell touched by the area.`;
-  const weighting = `Area means weight each valid cell by its area inside the outline, `
+  const weighting =
+    `Area means weight each valid cell by its area inside the outline, `
     + `adjusted for latitude, so partly covered edge cells count only partly. `
     + `The valid share is the weighted share of the outline with data and the fallback share `
     + `is the weighted share filled from a credited fallback, while the one-cell support ring `
     + `around the area carries zero weight. The shares describe the build analysis grid at its `
     + `stored resolution and cannot recover variation within one coarse cell.`;
-  const terrain = `Terrain summaries and the distribution are weighted reductions of the stored `
+  const terrain =
+    `Terrain summaries and the distribution are weighted reductions of the stored `
     + `analysis grid at its stored resolution, never a summit survey or the live display tiles. `
     + `The stored 1% quantiles approximate the curve between knots, while the mean comes from `
     + `the weighted cells directly.`;
@@ -206,10 +219,12 @@ function versionRows(scene: Scene): [string, string][] {
     ["Scenes of Earth", scene.generator.version],
     ["Bundle format", scene.version],
   ];
+
   for (const layer of scene.layers) {
     const { name, version } = layer.source;
     if (version) rows.push([name, version]);
   }
+
   return rows;
 }
 
@@ -234,6 +249,7 @@ export function renderCredits(scene: Scene) {
   makeHtmlElement("p", NO_FALLBACK_NOTE, basemap);
 
   const terms = makeHtmlElement("section", "", root);
+
   for (const line of extraCreditLines(scene)) makeHtmlElement("p", line, terms);
 
   makeHtmlElement("p", scene.credits.endorsement, terms);

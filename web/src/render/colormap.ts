@@ -45,6 +45,7 @@ function byPosition(first: PositionedStop, second: PositionedStop) {
 /** A lookup table blended through evenly spaced RGB stops. */
 function evenLut(stops: number[][]) {
   const table = new Uint8ClampedArray(LUT_ENTRIES * RGBA_CHANNELS);
+
   for (let entry = 0; entry < LUT_ENTRIES; entry++) {
     const position = (entry / LAST_ENTRY) * (stops.length - 1);
     const lowStop = Math.min(Math.floor(position), stops.length - 2);
@@ -58,12 +59,14 @@ function evenLut(stops: number[][]) {
 
     table[entry * RGBA_CHANNELS + COLOR_CHANNELS] = OPAQUE;
   }
+
   return table;
 }
 
 /** A lookup table interpolated by stop position, flat beyond the outer stops. */
 function positionedLut(stops: PositionedStop[]) {
   const table = new Uint8ClampedArray(LUT_ENTRIES * RGBA_CHANNELS);
+
   for (let entry = 0; entry < LUT_ENTRIES; entry++) {
     const rgb = colorAtPosition(stops, entry / LAST_ENTRY);
     for (let channel = 0; channel < COLOR_CHANNELS; channel++) {
@@ -72,6 +75,7 @@ function positionedLut(stops: PositionedStop[]) {
 
     table[entry * RGBA_CHANNELS + COLOR_CHANNELS] = OPAQUE;
   }
+
   return table;
 }
 
@@ -80,16 +84,22 @@ function colorAtPosition(stops: PositionedStop[], position: number) {
   // Exact hits fall through, so the first of a coincident pair still loses to the last.
   if (position < stops[0].at) return stops[0].rgb;
   if (position > stops[stops.length - 1].at) return stops[stops.length - 1].rgb;
+
   let lower = 0;
+
   for (let index = 0; index < stops.length; index++) {
     if (stops[index].at <= position) lower = index;
   }
+
   let upper = stops.length - 1;
+
   for (let index = stops.length - 1; index >= 0; index--) {
     if (stops[index].at >= position) upper = index;
   }
+
   // An exact hit on coincident stops takes the last one, so the edge stays sharp.
   if (lower >= upper) return stops[lower].rgb;
+
   const low = stops[lower];
   const high = stops[upper];
   const fraction = (position - low.at) / (high.at - low.at);
@@ -113,6 +123,7 @@ export function lut2d(grid: number[][][]) {
 
   for (let row = 0; row < LUT2D_SIZE; row++) {
     const rowCell = cellOf((row / (LUT2D_SIZE - 1)) * cellCount, cellCount);
+
     for (let column = 0; column < LUT2D_SIZE; column++) {
       const columnCell = cellOf((column / (LUT2D_SIZE - 1)) * cellCount, cellCount);
       const lab = Array.from({ length: COLOR_CHANNELS }, (_, axis) =>
@@ -123,6 +134,7 @@ export function lut2d(grid: number[][][]) {
       table[start + COLOR_CHANNELS] = OPAQUE;
     }
   }
+
   return table;
 }
 
@@ -140,9 +152,11 @@ function bilinear(
   const along = (rowIndex: number) => {
     const first = labs[rowIndex][column.low][axis];
     const second = labs[rowIndex][column.low + 1][axis];
+
     return first + (second - first) * column.fraction;
   };
   const low = along(row.low);
+
   return low + (along(row.low + 1) - low) * row.fraction;
 }
 
@@ -225,6 +239,7 @@ export function paintBivariate(
   for (let pixel = 0; pixel < rows.table.src.length; pixel++) {
     writeBivariatePixel(rgba, pixel, rows, columns, colors);
   }
+
   return rgba;
 }
 
@@ -257,8 +272,10 @@ export async function paintBivariateInSlices(
 ) {
   const rgba = new Uint8ClampedArray(rows.table.src.length * RGBA_CHANNELS);
   let sliceMs = performance.now();
+
   for (let pixel = 0; pixel < rows.table.src.length; pixel++) {
     writeBivariatePixel(rgba, pixel, rows, columns, colors);
+
     if ((pixel + 1) % PAINT_CHECK_PIXELS !== 0) continue;
     if (signal?.aborted) throw cancelError();
     if (performance.now() - sliceMs < SLICE_BUDGET_MS) continue;
@@ -266,13 +283,16 @@ export async function paintBivariateInSlices(
     await yieldToBrowser(signal);
     sliceMs = performance.now();
   }
+
   if (signal?.aborted) throw cancelError();
+
   return rgba;
 }
 
 function valueAt({ values, table }: BivariateAxis, pixel: number) {
   const cell = table.src[pixel];
   const nearest = cell < 0 ? NaN : values[cell];
+
   return Number.isNaN(nearest) ? overlappingValue(values, table, pixel) : nearest;
 }
 
@@ -286,6 +306,7 @@ export function paintClassIds(ids: Uint8Array, colorsById: number[][]) {
     0,
     ...colorsById.flatMap((color) => [...color, OPAQUE]),
   );
+
   for (let pixel = 0; pixel < ids.length; pixel++) {
     const entry = ids[pixel] * RGBA_CHANNELS;
     const start = pixel * RGBA_CHANNELS;
@@ -294,19 +315,23 @@ export function paintClassIds(ids: Uint8Array, colorsById: number[][]) {
     rgba[start + 2] = palette[entry + 2];
     rgba[start + 3] = palette[entry + 3];
   }
+
   return rgba;
 }
 
 /** Where a value falls on the palette from 0 to 1, with the stops evenly spaced along it. */
 export function stopPosition(value: number, stops: number[]) {
   const last = stops.length - 1;
+
   if (value <= stops[0]) return 0;
   if (value >= stops[last]) return 1;
 
   let upper = 1;
+
   while (stops[upper] < value) upper++;
 
   const lower = upper - 1;
+
   return (lower + (value - stops[lower]) / (stops[upper] - stops[lower])) / last;
 }
 
@@ -340,6 +365,7 @@ export function paintColormap(
   for (let pixel = 0; pixel < table.src.length; pixel++) {
     writeColormapPixel(rgba, pixel, values, table, colors, stops);
   }
+
   return rgba;
 }
 
@@ -374,8 +400,10 @@ export async function paintColormapInSlices(
 ) {
   const rgba = new Uint8ClampedArray(table.src.length * RGBA_CHANNELS);
   let sliceMs = performance.now();
+
   for (let pixel = 0; pixel < table.src.length; pixel++) {
     writeColormapPixel(rgba, pixel, values, table, colors, stops);
+
     if ((pixel + 1) % PAINT_CHECK_PIXELS !== 0) continue;
     if (signal?.aborted) throw cancelError();
     if (performance.now() - sliceMs < SLICE_BUDGET_MS) continue;
@@ -383,13 +411,16 @@ export async function paintColormapInSlices(
     await yieldToBrowser(signal);
     sliceMs = performance.now();
   }
+
   if (signal?.aborted) throw cancelError();
+
   return rgba;
 }
 
 function cancelError(): Error {
   const error = new Error("Entry preparation was cancelled");
   error.name = "AbortError";
+
   return error;
 }
 
@@ -403,8 +434,10 @@ function overlappingValue(values: Float32Array, table: SampleTable, pixel: numbe
   const columnEnd = columnEdges[pixelColumn + 1];
   const centerColumn = columnCenters[pixelColumn];
   const centerRow = rowCenters[pixelRow];
+
   let nearestDistance = Infinity;
   let nearestValue = NaN;
+
   for (let row = Math.floor(rowEdges[pixelRow]); row < Math.ceil(rowEdges[pixelRow + 1]); row++) {
     for (let column = Math.floor(columnStart); column < Math.ceil(columnEnd); column++) {
       const value = values[row * sourceWidth + column];
@@ -413,11 +446,13 @@ function overlappingValue(values: Float32Array, table: SampleTable, pixel: numbe
       const rowDistance = row + 0.5 - centerRow;
       const columnDistance = column + 0.5 - centerColumn;
       const distance = rowDistance ** 2 + columnDistance ** 2;
+
       if (distance < nearestDistance) {
         nearestDistance = distance;
         nearestValue = value;
       }
     }
   }
+
   return nearestValue;
 }

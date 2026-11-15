@@ -1,4 +1,5 @@
 """Read categorical geology COGs from disk without owning taxonomy or compositing."""
+
 from collections.abc import Callable
 from pathlib import Path
 
@@ -68,13 +69,14 @@ class LithologyReader:
         try:
             with rasterio.open(path) as full:
                 native_res = full.res[0]
+
             level = overview_level(overview_factor(res, native_res))
             with rasterio.open(path, overview_level=level) as source:
                 for part_west, part_east, file_shift in _split_at_antimeridian(west, east):
                     column = round((part_west - west) / res)
                     part = np.zeros((height, round((part_east - part_west) / res)), "uint8")
                     warp_modes(source, part, part_west + file_shift, north, res)
-                    classes[:, column:column + part.shape[1]] = part
+                    classes[:, column : column + part.shape[1]] = part
         except (RasterioIOError, WarpOperationError) as error:
             raise SourceUnavailable("The lithology map could not be read") from error
 
@@ -87,7 +89,4 @@ def _split_at_antimeridian(west: float, east: float) -> list[tuple[float, float,
     if east <= ANTIMERIDIAN_DEG:
         return [(west, east, 0)]
 
-    return [
-        (west, ANTIMERIDIAN_DEG, 0),
-        (ANTIMERIDIAN_DEG, east, -WORLD_WIDTH_DEG),
-    ]
+    return [(west, ANTIMERIDIAN_DEG, 0), (ANTIMERIDIAN_DEG, east, -WORLD_WIDTH_DEG)]

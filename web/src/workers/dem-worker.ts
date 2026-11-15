@@ -27,20 +27,22 @@ onmessage = (event: MessageEvent<DemWorkerRequest>) => {
 async function load(id: number, url: string): Promise<void> {
   const controller = new AbortController();
   controllers.set(id, controller);
+
   try {
     const tile = await loadDemTile(url, controller.signal);
+
     // A cancel during decode leaves a stale tile that the pool no longer wants.
     if (controller.signal.aborted) return;
+
     if (!tile) {
       postMessage({ kind: "missing", id } satisfies DemWorkerResponse);
       return;
     }
 
     const { heights, strips, decodeMs } = tile;
-    postMessage(
-      { kind: "tile", id, heights, strips, decodeMs } satisfies DemWorkerResponse,
-      { transfer: [heights.buffer, strips.buffer] },
-    );
+    postMessage({ kind: "tile", id, heights, strips, decodeMs } satisfies DemWorkerResponse, {
+      transfer: [heights.buffer, strips.buffer],
+    });
   } catch (error) {
     // The pool already dropped a cancelled request, so it needs no answer.
     if (controller.signal.aborted) return;

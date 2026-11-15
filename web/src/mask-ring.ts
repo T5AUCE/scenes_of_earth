@@ -30,12 +30,14 @@ export function maskRing(islands: Ring[]): Ring {
 function worldRing(islands: Ring[]): Ring {
   let westmost = Infinity;
   let eastmost = -Infinity;
+
   for (const ring of islands) {
     for (const [longitude] of ring) {
       if (longitude < westmost) westmost = longitude;
       if (longitude > eastmost) eastmost = longitude;
     }
   }
+
   const centre = westmost <= eastmost ? (westmost + eastmost) / 2 : EMPTY_CENTRE_DEG;
   const west = centre - HALF_WORLD_DEG;
   const east = centre + HALF_WORLD_DEG;
@@ -51,13 +53,16 @@ function worldRing(islands: Ring[]): Ring {
 
 function keyholeRing(outer: Ring, inners: Ring[], canonical: number): Ring {
   const outerPoints = openRing(outer);
+
   if (Math.sign(signedArea(outerPoints)) !== canonical) outerPoints.reverse();
+
   const ordered = inners
     .map((ring) => openRing(ring))
     .map((points) => (Math.sign(signedArea(points)) === canonical ? points.reverse() : points))
     .map((points) => startAtNorth(points))
     .sort((a, b) => b[0][1] - a[0][1]);
   let ring = outerPoints;
+
   for (const island of ordered) ring = joinIsland(ring, island);
 
   return [...ring, ring[0]];
@@ -79,29 +84,26 @@ function joinIsland(ring: Ring, island: Ring): Ring {
   const start = island[0];
   let slitY = Infinity;
   let edge = -1;
+
   for (let i = 0; i < ring.length; i++) {
     const a = ring[i];
     const b = ring[(i + 1) % ring.length];
     if (a[0] === b[0]) continue;
     if (start[0] < Math.min(a[0], b[0]) || start[0] >= Math.max(a[0], b[0])) continue;
+
     const y = a[1] + ((start[0] - a[0]) / (b[0] - a[0])) * (b[1] - a[1]);
+
     if (y > start[1] && y < slitY) {
       slitY = y;
       edge = i;
     }
   }
+
   if (edge < 0) throw new Error("Mask island has no ring above it");
 
   const top = [start[0], slitY];
 
-  return [
-    ...ring.slice(0, edge + 1),
-    top,
-    ...island,
-    start,
-    top,
-    ...ring.slice(edge + 1),
-  ];
+  return [...ring.slice(0, edge + 1), top, ...island, start, top, ...ring.slice(edge + 1)];
 }
 
 function signedArea(points: Ring): number {

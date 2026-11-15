@@ -27,20 +27,27 @@ test("handles expose slider semantics in position order with a hint", async (con
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { GradientStops } = await import("./gradient-stops.tsx");
+
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <GradientStops
-      stops={stopsOf([["#000000", 0], ["#ffffff", 100]])}
-      onPreview={() => {}}
-      onCommit={() => {}}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <GradientStops
+        stops={stopsOf([
+          ["#000000", 0],
+          ["#ffffff", 100],
+        ])}
+        onPreview={() => {}}
+        onCommit={() => {}}
+      />,
+    ),
+  );
 
   const handles = [...container.querySelectorAll(".gradient-stop")] as HTMLElement[];
   assert.equal(handles.length, 2);
@@ -57,21 +64,28 @@ test("keyboard-only entry opens the detail row on the focused handle", async (co
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { GradientStops } = await import("./gradient-stops.tsx");
+
   const committed: number[] = [];
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <GradientStops
-      stops={stopsOf([["#000000", 0], ["#ffffff", 100]])}
-      onPreview={() => {}}
-      onCommit={(next) => committed.push(next.length)}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <GradientStops
+        stops={stopsOf([
+          ["#000000", 0],
+          ["#ffffff", 100],
+        ])}
+        onPreview={() => {}}
+        onCommit={(next) => committed.push(next.length)}
+      />,
+    ),
+  );
 
   await act(async () => handleByLabel(container, "Colour 1 of 2").focus());
   await act(async () => {
@@ -92,9 +106,7 @@ test("keyboard-only entry opens the detail row on the focused handle", async (co
     );
   });
 
-  const hex = container.querySelector(
-    '.stop-detail input[type="text"]',
-  ) as HTMLInputElement;
+  const hex = container.querySelector('.stop-detail input[type="text"]') as HTMLInputElement;
   assert.equal(hex.getAttribute("aria-label"), "Hex colour 2 of 2");
   assert.equal(document.activeElement, well);
   assert.equal(well.value, "#ffffff");
@@ -106,23 +118,32 @@ test("a native well edit after a position edit keeps the new position", async (c
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { GradientStops } = await import("./gradient-stops.tsx");
+
   const committed: Array<Array<{ at: number; rgb: number[] }>> = [];
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <GradientStops
-      stops={stopsOf([["#000000", 0], ["#888888", 40], ["#ffffff", 100]])}
-      onPreview={() => {}}
-      onCommit={(next) => committed.push(next)}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <GradientStops
+        stops={stopsOf([
+          ["#000000", 0],
+          ["#888888", 40],
+          ["#ffffff", 100],
+        ])}
+        onPreview={() => {}}
+        onCommit={(next) => committed.push(next)}
+      />,
+    ),
+  );
 
   await act(async () => handleByLabel(container, "Colour 2 of 3").focus());
+
   for (let step = 0; step < 20; step++) {
     await act(async () => {
       document.activeElement!.dispatchEvent(
@@ -131,9 +152,7 @@ test("a native well edit after a position edit keeps the new position", async (c
     });
   }
 
-  const well = container.querySelector(
-    '.stop-detail input[type="color"]',
-  ) as HTMLInputElement;
+  const well = container.querySelector('.stop-detail input[type="color"]') as HTMLInputElement;
   await act(async () => {
     well.value = "#112233";
     well.dispatchEvent(new window.Event("input", { bubbles: true }));
@@ -143,7 +162,10 @@ test("a native well edit after a position edit keeps the new position", async (c
   });
 
   const last = committed.at(-1)!;
-  assert.deepEqual(last.map(({ at }) => Math.round(at * 100)), [0, 60, 100]);
+  assert.deepEqual(
+    last.map(({ at }) => Math.round(at * 100)),
+    [0, 60, 100],
+  );
   assert.deepEqual(last[1].rgb, [0x11, 0x22, 0x33]);
 
   await act(async () => root.unmount());
@@ -153,21 +175,28 @@ test("a hex commit followed by a native change does not revert on blur", async (
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { GradientStops } = await import("./gradient-stops.tsx");
+
   const committed: string[] = [];
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <GradientStops
-      stops={stopsOf([["#000000", 0], ["#ffffff", 100]])}
-      onPreview={() => {}}
-      onCommit={(next) => committed.push(next.map(({ rgb }) => rgb.join(",")).join("|"))}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <GradientStops
+        stops={stopsOf([
+          ["#000000", 0],
+          ["#ffffff", 100],
+        ])}
+        onPreview={() => {}}
+        onCommit={(next) => committed.push(next.map(({ rgb }) => rgb.join(",")).join("|"))}
+      />,
+    ),
+  );
 
   await act(async () => {
     const first = handleByLabel(container, "Colour 1 of 2");
@@ -175,18 +204,14 @@ test("a hex commit followed by a native change does not revert on blur", async (
     first.dispatchEvent(pointerUp(window, 10, 10));
   });
 
-  const hex = () => container.querySelector(
-    '.stop-detail input[type="text"]',
-  ) as HTMLInputElement;
+  const hex = () => container.querySelector('.stop-detail input[type="text"]') as HTMLInputElement;
   await act(async () => {
     hex().value = "#112233";
     hex().dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   });
   assert.equal(committed.length, 1);
 
-  const well = container.querySelector(
-    '.stop-detail input[type="color"]',
-  ) as HTMLInputElement;
+  const well = container.querySelector('.stop-detail input[type="color"]') as HTMLInputElement;
   await act(async () => {
     well.value = "#445566";
     well.dispatchEvent(new window.Event("change", { bubbles: true }));
@@ -206,22 +231,31 @@ test("a pulled pin stretches, then fades in place past the removal point", async
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { GradientStops } = await import("./gradient-stops.tsx");
+
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <GradientStops
-      stops={stopsOf([["#000000", 0], ["#888888", 40], ["#ffffff", 100]])}
-      onPreview={() => {}}
-      onCommit={() => {}}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <GradientStops
+        stops={stopsOf([
+          ["#000000", 0],
+          ["#888888", 40],
+          ["#ffffff", 100],
+        ])}
+        onPreview={() => {}}
+        onCommit={() => {}}
+      />,
+    ),
+  );
 
   mockBarRect(container, { left: 0, width: 200, bottom: 24 });
+
   const handle = handleByLabel(container, "Colour 2 of 3");
   await act(async () => {
     handle.dispatchEvent(pointerDown(window, 80, 10));
@@ -229,6 +263,7 @@ test("a pulled pin stretches, then fades in place past the removal point", async
   await act(async () => {
     handle.dispatchEvent(pointerMove(window, 80, 40));
   });
+
   const stretch = Number.parseFloat(handle.style.getPropertyValue("--pull"));
   assert.ok(stretch > 0 && stretch < 30, `stretch ${stretch} should ease below the 30 px pull`);
   assert.equal(handle.style.transform, "");
@@ -254,24 +289,33 @@ test("a pull-to-remove released before its frame never previews the old stops", 
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { GradientStops } = await import("./gradient-stops.tsx");
+
   const previews: number[] = [];
   const commits: number[] = [];
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <GradientStops
-      stops={stopsOf([["#000000", 0], ["#888888", 40], ["#ffffff", 100]])}
-      onPreview={() => previews.push(1)}
-      onCommit={() => commits.push(1)}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <GradientStops
+        stops={stopsOf([
+          ["#000000", 0],
+          ["#888888", 40],
+          ["#ffffff", 100],
+        ])}
+        onPreview={() => previews.push(1)}
+        onCommit={() => commits.push(1)}
+      />,
+    ),
+  );
 
   mockBarRect(container, { left: 0, width: 200, bottom: 24 });
+
   const handle = handleByLabel(container, "Colour 2 of 3");
   await act(async () => {
     handle.dispatchEvent(pointerDown(window, 80, 10));
@@ -298,23 +342,33 @@ test("crossing a neighbour then releasing off the handle still commits", async (
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { GradientStops } = await import("./gradient-stops.tsx");
+
   const committed: Array<Array<{ at: number }>> = [];
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <GradientStops
-      stops={stopsOf([["#000000", 0], ["#888888", 30], ["#ff0000", 60], ["#ffffff", 100]])}
-      onPreview={() => {}}
-      onCommit={(next) => committed.push(next)}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <GradientStops
+        stops={stopsOf([
+          ["#000000", 0],
+          ["#888888", 30],
+          ["#ff0000", 60],
+          ["#ffffff", 100],
+        ])}
+        onPreview={() => {}}
+        onCommit={(next) => committed.push(next)}
+      />,
+    ),
+  );
 
   mockBarRect(container, { left: 0, width: 200, bottom: 24 });
+
   const handle = handleByLabel(container, "Colour 2 of 4");
   await act(async () => {
     handle.dispatchEvent(pointerDown(window, 60, 10));
@@ -329,7 +383,10 @@ test("crossing a neighbour then releasing off the handle still commits", async (
   });
 
   assert.equal(committed.length, 1);
-  assert.deepEqual(committed[0].map(({ at }) => Math.round(at * 100)), [0, 60, 75, 100]);
+  assert.deepEqual(
+    committed[0].map(({ at }) => Math.round(at * 100)),
+    [0, 60, 75, 100],
+  );
   assert.equal(handleByLabel(container, "Colour 3 of 4").getAttribute("aria-valuenow"), "75");
 
   await act(async () => root.unmount());
@@ -339,27 +396,36 @@ test("arrow keys move and reorder while focus follows the pin by id", async (con
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { GradientStops } = await import("./gradient-stops.tsx");
+
   const committed: Array<Array<{ at: number }>> = [];
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <GradientStops
-      stops={stopsOf([["#000000", 0], ["#888888", 40], ["#ffffff", 60]])}
-      onPreview={() => {}}
-      onCommit={(next) => committed.push(next)}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <GradientStops
+        stops={stopsOf([
+          ["#000000", 0],
+          ["#888888", 40],
+          ["#ffffff", 60],
+        ])}
+        onPreview={() => {}}
+        onCommit={(next) => committed.push(next)}
+      />,
+    ),
+  );
 
   const second = handleByLabel(container, "Colour 2 of 3");
   await act(async () => second.focus());
   await act(async () => {
     second.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
   });
+
   for (let step = 0; step < 30; step++) {
     await act(async () => {
       document.activeElement!.dispatchEvent(
@@ -369,9 +435,14 @@ test("arrow keys move and reorder while focus follows the pin by id", async (con
   }
 
   assert.equal(committed.length > 0, true);
+
   const last = committed.at(-1)!;
-  assert.deepEqual(last.map(({ at }) => Math.round(at * 100)), [0, 60, 71]);
+  assert.deepEqual(
+    last.map(({ at }) => Math.round(at * 100)),
+    [0, 60, 71],
+  );
   assert.equal(document.activeElement?.getAttribute("aria-label"), "Colour 3 of 3");
+
   const focused = document.activeElement as HTMLElement;
   assert.equal(focused.getAttribute("aria-valuetext"), "#888888 at 71 %");
 
@@ -382,21 +453,29 @@ test("Delete removes a stop and focuses its neighbour above the minimum", async 
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { GradientStops } = await import("./gradient-stops.tsx");
+
   const committed: number[] = [];
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <GradientStops
-      stops={stopsOf([["#000000", 0], ["#888888", 50], ["#ffffff", 100]])}
-      onPreview={() => {}}
-      onCommit={(next) => committed.push(next.length)}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <GradientStops
+        stops={stopsOf([
+          ["#000000", 0],
+          ["#888888", 50],
+          ["#ffffff", 100],
+        ])}
+        onPreview={() => {}}
+        onCommit={(next) => committed.push(next.length)}
+      />,
+    ),
+  );
 
   await act(async () => handleByLabel(container, "Colour 2 of 3").focus());
   await act(async () => {
@@ -416,27 +495,35 @@ test("the detail row keeps two stops from removal and validates hex", async (con
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { GradientStops } = await import("./gradient-stops.tsx");
+
   let commits = 0;
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <GradientStops
-      stops={stopsOf([["#000000", 0], ["#ffffff", 100]])}
-      onPreview={() => {}}
-      onCommit={() => commits++}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <GradientStops
+        stops={stopsOf([
+          ["#000000", 0],
+          ["#ffffff", 100],
+        ])}
+        onPreview={() => {}}
+        onCommit={() => commits++}
+      />,
+    ),
+  );
 
   await act(async () => {
     const first = handleByLabel(container, "Colour 1 of 2");
     first.dispatchEvent(pointerDown(window, 10, 10));
     first.dispatchEvent(pointerUp(window, 10, 10));
   });
+
   const remove = buttonWithText(container, "Remove") as HTMLButtonElement;
   assert.equal(remove.disabled, true);
   assert.match(container.textContent ?? "", /at least two colours/);
@@ -464,21 +551,28 @@ test("a valid hex Enter commit keeps focus in the hex box", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { GradientStops } = await import("./gradient-stops.tsx");
+
   let commits = 0;
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <GradientStops
-      stops={stopsOf([["#000000", 0], ["#ffffff", 100]])}
-      onPreview={() => {}}
-      onCommit={() => commits++}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <GradientStops
+        stops={stopsOf([
+          ["#000000", 0],
+          ["#ffffff", 100],
+        ])}
+        onPreview={() => {}}
+        onCommit={() => commits++}
+      />,
+    ),
+  );
 
   await act(async () => {
     const first = handleByLabel(container, "Colour 1 of 2");
@@ -505,26 +599,34 @@ test("Escape in the detail row returns to the handle without closing", async (co
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { GradientStops } = await import("./gradient-stops.tsx");
+
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <GradientStops
-      stops={stopsOf([["#000000", 0], ["#ffffff", 100]])}
-      onPreview={() => {}}
-      onCommit={() => {}}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <GradientStops
+        stops={stopsOf([
+          ["#000000", 0],
+          ["#ffffff", 100],
+        ])}
+        onPreview={() => {}}
+        onCommit={() => {}}
+      />,
+    ),
+  );
 
   await act(async () => {
     const first = handleByLabel(container, "Colour 1 of 2");
     first.dispatchEvent(pointerDown(window, 10, 10));
     first.dispatchEvent(pointerUp(window, 10, 10));
   });
+
   const hex = container.querySelector('.stop-detail input[type="text"]') as HTMLInputElement;
   await act(async () => hex.focus());
 
@@ -549,21 +651,28 @@ test("clicking the bar adds a stop and announces it", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { GradientStops } = await import("./gradient-stops.tsx");
+
   const committed: Array<Array<{ at: number }>> = [];
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <GradientStops
-      stops={stopsOf([["#000000", 0], ["#ffffff", 100]])}
-      onPreview={() => {}}
-      onCommit={(next) => committed.push(next)}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <GradientStops
+        stops={stopsOf([
+          ["#000000", 0],
+          ["#ffffff", 100],
+        ])}
+        onPreview={() => {}}
+        onCommit={(next) => committed.push(next)}
+      />,
+    ),
+  );
 
   mockBarRect(container, { left: 0, width: 200, bottom: 24 });
   await act(async () => {
@@ -572,7 +681,10 @@ test("clicking the bar adds a stop and announces it", async (context) => {
   });
 
   assert.equal(committed.length, 1);
-  assert.deepEqual(committed[0].map(({ at }) => Math.round(at * 100)), [0, 40, 100]);
+  assert.deepEqual(
+    committed[0].map(({ at }) => Math.round(at * 100)),
+    [0, 40, 100],
+  );
   assert.match(liveRegion(container), /Colour added at 40 %/);
   assert.equal(document.activeElement?.getAttribute("aria-valuenow"), "40");
 
@@ -583,9 +695,11 @@ test("eight stops refuse a ninth with the limit announcement", async (context) =
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { GradientStops } = await import("./gradient-stops.tsx");
+
   let commits = 0;
   const container = document.createElement("div");
   document.body.append(container);
@@ -595,9 +709,9 @@ test("eight stops refuse a ninth with the limit announcement", async (context) =
     rgb: [position * 2, position, 255 - position],
   }));
 
-  await act(async () => root.render(
-    <GradientStops stops={eight} onPreview={() => {}} onCommit={() => commits++} />,
-  ));
+  await act(async () =>
+    root.render(<GradientStops stops={eight} onPreview={() => {}} onCommit={() => commits++} />),
+  );
 
   mockBarRect(container, { left: 0, width: 200, bottom: 24 });
   await act(async () => {
@@ -615,24 +729,33 @@ test("a drag previews once per frame and commits only on release", async (contex
   const window = new Window({ url: "http://localhost" });
   context.after(() => window.happyDOM.abort());
   installBrowser(window);
+
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { GradientStops } = await import("./gradient-stops.tsx");
+
   const previews: number[] = [];
   const commits: number[] = [];
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
 
-  await act(async () => root.render(
-    <GradientStops
-      stops={stopsOf([["#000000", 0], ["#888888", 40], ["#ffffff", 100]])}
-      onPreview={() => previews.push(1)}
-      onCommit={() => commits.push(1)}
-    />,
-  ));
+  await act(async () =>
+    root.render(
+      <GradientStops
+        stops={stopsOf([
+          ["#000000", 0],
+          ["#888888", 40],
+          ["#ffffff", 100],
+        ])}
+        onPreview={() => previews.push(1)}
+        onCommit={() => commits.push(1)}
+      />,
+    ),
+  );
 
   mockBarRect(container, { left: 0, width: 200, bottom: 24 });
+
   const handle = handleByLabel(container, "Colour 2 of 3");
   await act(async () => {
     handle.dispatchEvent(pointerDown(window, 80, 10));
@@ -668,8 +791,9 @@ function liveRegion(container: HTMLElement): string {
 }
 
 function buttonWithText(container: HTMLElement, text: string): HTMLButtonElement {
-  return [...container.querySelectorAll("button")]
-    .find((button) => button.textContent?.trim() === text) as HTMLButtonElement;
+  return [...container.querySelectorAll("button")].find(
+    (button) => button.textContent?.trim() === text,
+  ) as HTMLButtonElement;
 }
 
 function mockBarRect(
@@ -723,6 +847,7 @@ function installBrowser(window: Window): void {
   for (const name of names) {
     defineGlobal(name, window[name]);
   }
+
   defineGlobal("window", window);
   defineGlobal("document", window.document);
   defineGlobal("navigator", window.navigator);

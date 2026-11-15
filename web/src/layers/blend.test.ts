@@ -11,10 +11,12 @@ const hooks = registerHooks({
     if (source && context.parentURL?.endsWith("/src/layers/blend.ts")) {
       return { url: `data:text/javascript,${encodeURIComponent(source)}`, shortCircuit: true };
     }
+
     if (context.parentURL?.includes("/web/src/") && specifier.startsWith(".")) {
       const extension = specifier.endsWith(".ts") ? "" : ".ts";
       return next(new URL(`${specifier}${extension}`, context.parentURL).href, context);
     }
+
     return next(specifier, context);
   },
 });
@@ -126,6 +128,7 @@ test("halves showing the same period need no note", () => {
 test("a queued missing-step note stays hidden once the blend is switched off", async () => {
   const pendingReads: (() => void)[] = [];
   Object.assign(globalThis, { pendingReads, ImageData: class {} });
+
   const view = createBlendView(
     [
       layerOf("rain", ["2026-08-01", "2026-09-01"], "2026-10-01"),
@@ -146,6 +149,7 @@ test("a queued missing-step note stays hidden once the blend is switched off", a
   view.setTime("2026-08-01");
   view.setTime("2026-09-01");
   view.show(null);
+
   pendingReads.forEach((resolve) => resolve());
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -155,6 +159,7 @@ test("a queued missing-step note stays hidden once the blend is switched off", a
 test("prepare decodes both halves without drawing", async () => {
   const pendingReads: (() => void)[] = [];
   Object.assign(globalThis, { pendingReads, ImageData: class {} });
+
   const view = createBlendView(
     [
       layerOf("rain", ["2026-08-01", "2026-09-01"], "2026-10-01"),
@@ -172,7 +177,9 @@ test("prepare decodes both halves without drawing", async () => {
   );
 
   const warming = view.prepare!("2026-09-01");
+
   assert.equal(pendingReads.length, 2);
+
   pendingReads.forEach((resolve) => resolve());
   await warming;
   await new Promise((resolve) => setImmediate(resolve));
@@ -181,6 +188,7 @@ test("prepare decodes both halves without drawing", async () => {
 test("prepare outside both axes reads nothing", async () => {
   const pendingReads: (() => void)[] = [];
   Object.assign(globalThis, { pendingReads, ImageData: class {} });
+
   const view = createBlendView(
     [
       layerOf("rain", ["2026-08-01"], "2026-09-01"),
@@ -204,6 +212,7 @@ test("prepare outside both axes reads nothing", async () => {
 
 test("the blend legend converts stops and units to the chosen display units", () => {
   Object.assign(globalThis, { ImageData: class {} });
+
   const rain = {
     ...layerOf("rain", ["2026-08-01"], "2026-09-01"),
     title: "Rainfall",
@@ -246,6 +255,7 @@ test("switching display units keeps the painted colours while the legend follows
     capturedImages: [],
     pendingReads: [],
   });
+
   const rain = {
     ...layerOf("rain", ["2026-08-01"], "2026-09-01"),
     title: "Rainfall",
@@ -273,19 +283,25 @@ test("switching display units keeps the painted colours while the legend follows
   view.setTime("2026-08-01");
   (globalThis as { pendingReads: (() => void)[] }).pendingReads.forEach((resolve) => resolve());
   await new Promise((resolve) => setImmediate(resolve));
-  const before = (globalThis as { capturedImages: { data: Uint8ClampedArray }[] })
-    .capturedImages.map(({ data }) => Array.from(data));
+
+  const before = (
+    globalThis as { capturedImages: { data: Uint8ClampedArray }[] }
+  ).capturedImages.map(({ data }) => Array.from(data));
 
   displayUnits.rain = "in/month";
   displayUnits.temperature = "°F";
   view.restyle();
-  const after = (globalThis as { capturedImages: { data: Uint8ClampedArray }[] })
-    .capturedImages.map(({ data }) => Array.from(data));
+
+  const after = (
+    globalThis as { capturedImages: { data: Uint8ClampedArray }[] }
+  ).capturedImages.map(({ data }) => Array.from(data));
 
   assert.ok(before.length > 0);
   assert.deepEqual(after.at(-1), before.at(-1));
+
   const [, rainAxis, temperatureAxis] = (globalThis as { capturedLegend: unknown[] })
     .capturedLegend as [{}, { units: string; stops: number[] }, { units: string; stops: number[] }];
+
   assert.equal(rainAxis.units, "in/month");
   assert.deepEqual(rainAxis.stops, [0, 10]);
   assert.equal(temperatureAxis.units, "°F");
@@ -297,20 +313,25 @@ const FADE_TIMES = ["2026-08-01", "2026-09-01", "2026-10-01"];
 test("a fade drives both layers and the incoming image takes over after it", async () => {
   const { view, opacities, images, flush } = mountFadingBlend();
   await showFirstStep(view, flush);
+
   assert.equal(images().length, 2);
 
   view.setFrame!(FADE_TIMES[0], FADE_TIMES[1], 0.5);
+
   const [outgoing, incoming] = opacities().at(-1)!;
+
   assert.ok(Math.abs(incoming - 0.4) < 1e-12);
   assert.ok(Math.abs((1 - outgoing) * (1 - incoming) - 0.2) < 1e-12);
 
   view.setFrame!(FADE_TIMES[1], FADE_TIMES[2], 0);
   await flush();
+
   assert.deepEqual(opacities().at(-1), [0, 0.8]);
   assert.equal(images().length, 2);
 
   view.setFrame!(FADE_TIMES[1], FADE_TIMES[2], 0);
   await flush();
+
   assert.equal(images().length, 3);
 });
 
@@ -319,6 +340,7 @@ test("a fade waits until the next blend image is painted", async () => {
   view.show("colour");
   view.setFrame!(FADE_TIMES[0], FADE_TIMES[1], 0);
   await flush();
+
   assert.equal(view.isFrameReady!(FADE_TIMES[0], FADE_TIMES[1]), false);
 
   view.setFrame!(FADE_TIMES[0], FADE_TIMES[1], 0);
@@ -331,6 +353,7 @@ test("setting a time during a fade shows one image at full opacity", async () =>
   const { view, opacities, images, flush } = mountFadingBlend();
   await showFirstStep(view, flush);
   view.setFrame!(FADE_TIMES[0], FADE_TIMES[1], 0.5);
+
   const painted = images().length;
 
   view.setTime(FADE_TIMES[0]);
@@ -344,6 +367,7 @@ test("a range change during a fade repaints one image and drops the other", asyn
   const { view, opacities, images, flush } = mountFadingBlend();
   await showFirstStep(view, flush);
   view.setFrame!(FADE_TIMES[0], FADE_TIMES[1], 0.5);
+
   const painted = images().length;
 
   view.restyle();
@@ -361,14 +385,17 @@ test("a failing incoming read lets the fade move on and the draw reports it", as
 
   view.setFrame!(FADE_TIMES[0], FADE_TIMES[1], 0);
   await flush();
+
   assert.equal(view.isFrameReady!(FADE_TIMES[0], FADE_TIMES[1]), true);
   assert.equal(reports.length, 0);
 
   view.setFrame!(FADE_TIMES[0], FADE_TIMES[1], 0.5);
+
   assert.deepEqual(opacities().at(-1), [0.8, 0]);
 
   view.setFrame!(FADE_TIMES[1], FADE_TIMES[2], 0);
   await flush();
+
   assert.equal(reports.length, 1);
   assert.deepEqual(opacities().at(-1), [0, 0]);
 });
@@ -376,16 +403,20 @@ test("a failing incoming read lets the fade move on and the draw reports it", as
 test("after a failed step reports, the next good step fades in from nothing", async () => {
   const { view, opacities, flush, reports } = mountFadingBlend();
   await showFirstStep(view, flush, false);
+
   failedSteps.add(1);
   view.setFrame!(FADE_TIMES[0], FADE_TIMES[1], 0);
   await flush();
   view.setFrame!(FADE_TIMES[1], FADE_TIMES[2], 0);
   await flush();
+
   assert.equal(reports.length, 1);
 
   view.setFrame!(FADE_TIMES[1], FADE_TIMES[2], 0);
   await flush();
+
   assert.equal(view.isFrameReady!(FADE_TIMES[1], FADE_TIMES[2]), true);
+
   view.setFrame!(FADE_TIMES[1], FADE_TIMES[2], 0.5);
 
   assert.deepEqual(opacities().at(-1)!.toSorted(), [0, 0.4]);
@@ -394,6 +425,7 @@ test("after a failed step reports, the next good step fades in from nothing", as
 test("repeated frames never paint the image themselves", async () => {
   const { view, images, flush } = mountFadingBlend();
   await showFirstStep(view, flush);
+
   const painted = images().length;
   const created = imageDataCount;
 
@@ -411,6 +443,7 @@ test("a pause shows the painted image before its decoded read returns", async ()
   view.setTime(FADE_TIMES[1]);
 
   assert.deepEqual(opacities().at(-1), [0, 0.8]);
+
   await flush();
 });
 
@@ -420,25 +453,35 @@ test("the period note follows the step that shows more", async () => {
     ["2026-08-01", "2026-09-15"],
   );
   await showFirstStep(view, flush);
+
   const note = view.parts[0].note;
+
   assert.equal(note.hidden, true);
 
   view.setFrame!("2026-08-01", "2026-09-01", 0.25);
+
   assert.equal(note.hidden, true);
+
   view.setFrame!("2026-08-01", "2026-09-01", 0.75);
+
   assert.equal(note.hidden, false);
   assert.match(note.textContent, /^The blend pairs rain for/);
+
   view.setFrame!("2026-08-01", "2026-09-01", 0.25);
+
   assert.equal(note.hidden, true);
 });
 
 test("the missing-step note appears at the midpoint when a half ends", async () => {
   const { view, flush } = mountFadingBlend(FADE_TIMES, FADE_TIMES, "2026-10-01");
   await showFirstStep(view, flush);
+
   const note = view.parts[0].note;
 
   view.setFrame!("2026-09-01", "2026-10-01", 0.25);
+
   assert.equal(note.hidden, true);
+
   view.setFrame!("2026-09-01", "2026-10-01", 0.75);
 
   assert.match(note.textContent, /^No temperature for/);
@@ -448,6 +491,7 @@ test("entry warms the real source even when the image is already held", async ()
   const { view, flush } = mountFadingBlend();
   await showFirstStep(view, flush);
   Object.assign(globalThis, { warmedIds: [] });
+
   const warming = view.prepareEntry!(FADE_TIMES[0]);
   await flush();
   await warming;
@@ -477,6 +521,7 @@ async function showFirstStep(
   view.show("colour");
   view.setFrame!(FADE_TIMES[0], FADE_TIMES[1], 0);
   await flush();
+
   if (!armNext) return;
 
   view.setFrame!(FADE_TIMES[0], FADE_TIMES[1], 0);
@@ -503,6 +548,7 @@ function mountFadingBlend(
       }
     },
   });
+
   const view = createBlendView(
     [
       layerOf("rain", rainTimes, "2026-11-01"),
@@ -533,6 +579,7 @@ function mountFadingBlend(
         await new Promise((resolve) => setTimeout(resolve, 5));
         pendingReads.splice(0).forEach((resolve) => resolve());
       }
+
       await new Promise((resolve) => setTimeout(resolve, 5));
     },
   };

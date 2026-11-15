@@ -4,6 +4,7 @@ A cube is written in a way that lets readers see new data only together with its
 The month helpers pick which months a run fetches and group them into yearly batches that keep the
 stored months contiguous.
 """
+
 import hashlib
 from collections.abc import Iterable
 from datetime import datetime, timezone
@@ -57,22 +58,15 @@ def write_months(
     pending = sorted({*stored.get("pending", []), *staged_months})
     _begin_update(group, pending)
     _store_run(group[cube.array], staged)
+
     for month, _, marker in staged:
         markers[month] = marker
 
-    _publish(
-        group,
-        markers,
-        [month for month in pending if month not in staged_months],
-        attrs,
-    )
+    _publish(group, markers, [month for month in pending if month not in staged_months], attrs)
 
 
 def _stage_months(
-    months: Iterable[MonthField],
-    stored: dict[str, str],
-    cube: CubeSpec,
-    complete: bool,
+    months: Iterable[MonthField], stored: dict[str, str], cube: CubeSpec, complete: bool
 ) -> list[tuple[str, np.ndarray, str]]:
     """Check that each month fits the cube, then return it with its encoded values and marker."""
     markers = dict(stored)
@@ -132,8 +126,9 @@ def _open_cube(cube_dir: Path, cube: CubeSpec) -> zarr.Group:
                 ],
                 "months": {},
                 "pending": [],
-            },
+            }
         )
+
     if cube.array not in group:
         group.create_array(
             cube.array,
@@ -146,6 +141,7 @@ def _open_cube(cube_dir: Path, cube: CubeSpec) -> zarr.Group:
             dimension_names=["time", "lat", "lon"],
             attributes={"units": cube.units, "scale_factor": cube.scale, "add_offset": 0},
         )
+
     return group
 
 
@@ -161,7 +157,7 @@ def _store_run(array: zarr.Array, staged: list[tuple[str, np.ndarray, str]]) -> 
         if last + 1 > array.shape[0]:
             array.resize((last + 1, *array.shape[1:]))
 
-        array[first:last + 1] = np.stack([encoded for _, encoded, _ in run])
+        array[first : last + 1] = np.stack([encoded for _, encoded, _ in run])
 
 
 def _consecutive_runs(
@@ -187,11 +183,7 @@ def _publish(
 ) -> None:
     """Publish markers, pending and extra attributes together so they cannot disagree."""
     group.attrs.update(
-        {
-            "months": dict(sorted(markers.items())),
-            "pending": pending,
-            **(attrs or {}),
-        },
+        {"months": dict(sorted(markers.items())), "pending": pending, **(attrs or {})}
     )
 
 
@@ -213,6 +205,7 @@ def months_between(first: str, last: str) -> list[str]:
     while month <= last:
         months.append(month)
         month = next_month(month)
+
     return months
 
 
@@ -227,9 +220,7 @@ def previous_month(month: str) -> str:
 
 
 def year_batches(
-    months: list[str],
-    newest: str,
-    first_stored: str | None = None,
+    months: list[str], newest: str, first_stored: str | None = None
 ) -> list[list[str]]:
     """Group requested months by year in an order that keeps stored months contiguous.
 
@@ -240,5 +231,6 @@ def year_batches(
     batches = [list(year_months) for _, year_months in groupby(older, lambda month: month[:4])]
     if first_stored is not None:
         earlier = [batch for batch in batches if batch[0] < first_stored]
-        batches = [*reversed(earlier), *batches[len(earlier):]]
+        batches = [*reversed(earlier), *batches[len(earlier) :]]
+
     return [*batches, [newest]] if newest in months else batches

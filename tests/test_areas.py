@@ -1,4 +1,5 @@
 """Test offline how drawn shapes are validated, unwrapped across 180 degrees and planned."""
+
 from dataclasses import replace
 
 import numpy as np
@@ -47,7 +48,7 @@ def test_dedupe_shape_is_canonical():
 
 def test_clean_polygon_malformed_inputs():
     malformed_coordinates = (
-        [[[0, 0], [10 ** 400, 0], [1, 1], [0, 0]]],
+        [[[0, 0], [10**400, 0], [1, 1], [0, 0]]],
         [[["a", 0], [1, 0], [1, 1], [0, 0]]],
         [[[[[[[0, 0]]]]]]],  # too deeply nested
     )
@@ -156,12 +157,7 @@ def test_plan_rejections(tmp_path):
     with pytest.raises(AreaError, match="source tiles"):  # 8190 existing tiles > 2500
         plan_months(Area(box(-100, -50, 70, 60)), [TERRAIN], 1)
 
-    assert plan_months(Area(box(0, 0, 11, 11)), [TERRAIN], 1).bbox == [
-        -0.05,
-        -0.05,
-        11.05,
-        11.05,
-    ]
+    assert plan_months(Area(box(0, 0, 11, 11)), [TERRAIN], 1).bbox == [-0.05, -0.05, 11.05, 11.05]
 
 
 def test_plan_aggregates_and_snaps():
@@ -345,9 +341,7 @@ def test_output_budget_is_summed_across_layers():
 
 @pytest.mark.parametrize(("budget_bytes", "factor"), [(2904, 1), (2903, 2)])
 def test_output_budget_reserves_the_provenance_array_of_a_layer_with_a_fallback(
-    monkeypatch,
-    budget_bytes,
-    factor,
+    monkeypatch, budget_bytes, factor
 ):
     # The threshold includes two uint16 steps plus mask and provenance bytes per cell.
     monkeypatch.setattr("soe.plan.MAX_OUTPUT_BYTES", budget_bytes)

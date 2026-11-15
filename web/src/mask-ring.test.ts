@@ -35,9 +35,12 @@ test("mask ring is closed and its slits run opposite to the world winding", () =
   const ring = maskRing([island]);
 
   const [west, south] = [ring[0][0], ring[0][1]];
+
   assert.deepEqual(ring[ring.length - 1], [west, south]);
+
   const winding = Math.sign(signedArea(ring));
   const withoutIsland = Math.sign(signedArea(ring.slice(0, 4).concat([ring[0]])));
+
   assert.equal(winding, withoutIsland);
 });
 
@@ -49,6 +52,7 @@ test("mask ring joins islands by slits that enclose no area", () => {
   const worldArea = Math.abs(signedArea(ring)) / 2;
   const cutArea = islands.reduce((sum, island) => sum + Math.abs(signedArea(island)) / 2, 0);
   const world = 360 * 2 * 85.051129;
+
   assert.ok(Math.abs(worldArea - (world - cutArea)) < 1e-6);
 });
 
@@ -57,9 +61,19 @@ test("mask ring is centred on the islands and spans the map's latitudes", () => 
 
   const longitudes = ring.map(([x]) => x);
   const latitudes = ring.map(([, y]) => y);
-  assert.equal(longitudes.reduce((a, b) => Math.min(a, b)), -70);
-  assert.equal(longitudes.reduce((a, b) => Math.max(a, b)), 290);
-  assert.equal(latitudes.reduce((a, b) => Math.max(a, b)), 85.051129);
+
+  assert.equal(
+    longitudes.reduce((a, b) => Math.min(a, b)),
+    -70,
+  );
+  assert.equal(
+    longitudes.reduce((a, b) => Math.max(a, b)),
+    290,
+  );
+  assert.equal(
+    latitudes.reduce((a, b) => Math.max(a, b)),
+    85.051129,
+  );
 });
 
 test("mask ring handles a country with many thousands of vertices", () => {
@@ -107,12 +121,19 @@ const square = (west: number, south: number, size: number): Ring => [
 
 function slivers(count: number, seed: number, centre: number[], distance: number): Ring[] {
   const next = random(seed);
+
   return Array.from({ length: count }, () => {
     const length = 10 ** (-4 + 3 * next());
     const angle = 2 * Math.PI * next();
     const x = centre[0] + (distance + 2 * next()) * Math.cos(angle);
     const y = centre[1] + (distance + 2 * next()) * Math.sin(angle);
-    return [[x, y], [x + length, y + length * 0.4], [x + length * 0.7, y + length * 0.3], [x, y]];
+
+    return [
+      [x, y],
+      [x + length, y + length * 0.4],
+      [x + length * 0.7, y + length * 0.3],
+      [x, y],
+    ];
   });
 }
 
@@ -152,6 +173,7 @@ function assertNoOverfilledTiles(areaRings: Ring[]) {
   });
 
   const wrong: string[] = [];
+
   for (let zoom = 0; zoom <= MAX_TILE_ZOOM; zoom++) {
     for (const [x, y] of tilesOverArea(areaRings, zoom)) {
       const fraction = wrongFraction(tiler, areaRings, zoom, x, y);
@@ -168,6 +190,7 @@ function* tilesOverArea(rings: Ring[], zoom: number) {
   const worldY = rings.flat().map(([, latitude]) => mercatorY(latitude));
   const first = (values: number[]) => Math.floor(values.reduce((a, b) => Math.min(a, b)) * size);
   const last = (values: number[]) => Math.floor(values.reduce((a, b) => Math.max(a, b)) * size);
+
   for (let x = first(worldX); x <= last(worldX); x++) {
     for (let y = first(worldY); y <= last(worldY); y++) {
       yield [((x % size) + size) % size, y];
@@ -180,6 +203,7 @@ function wrongFraction(tiler: GeoJSONVT, areaRings: Ring[], zoom: number, x: num
   const painted = paintSamples(tile ? triangulate(tile.features) : []);
   const size = 2 ** zoom;
   let wrong = 0;
+
   for (let row = 0; row < SAMPLES_PER_SIDE; row++) {
     for (let column = 0; column < SAMPLES_PER_SIDE; column++) {
       const longitude = ((x + (column + 0.5) / SAMPLES_PER_SIDE) / size) * 360 - 180;
@@ -187,6 +211,7 @@ function wrongFraction(tiler: GeoJSONVT, areaRings: Ring[], zoom: number, x: num
       const isPainted = painted[row * SAMPLES_PER_SIDE + column] === 1;
       const isArea =
         isInside(areaRings, longitude, latitude) || isInside(areaRings, longitude + 360, latitude);
+
       if (isPainted === isArea) wrong++;
     }
   }
@@ -197,21 +222,26 @@ function wrongFraction(tiler: GeoJSONVT, areaRings: Ring[], zoom: number, x: num
 // This follows MapLibre's fill bucket, which rounds to the tile grid and splits rings by winding.
 function triangulate(features: { type: number; geometry: number[][][] }[]) {
   const triangles: number[][][] = [];
+
   for (const feature of features) {
     if (feature.type !== 3) continue;
 
     const rings = feature.geometry.map((ring) =>
       ring.map(([x, y]) => [clampToGrid(Math.round(x)), clampToGrid(Math.round(y))]),
     );
+
     for (const polygon of splitByWinding(rings)) {
       const flat = polygon.flat(2);
       const holeStarts: number[] = [];
       let vertices = polygon[0].length;
+
       for (const hole of polygon.slice(1)) {
         holeStarts.push(vertices);
         vertices += hole.length;
       }
+
       const indices = earcut(flat, holeStarts);
+
       for (let i = 0; i < indices.length; i += 3) {
         triangles.push(
           [0, 1, 2].map((k) => [flat[indices[i + k] * 2], flat[indices[i + k] * 2 + 1]]),
@@ -226,11 +256,13 @@ function triangulate(features: { type: number; geometry: number[][][] }[]) {
 function splitByWinding(rings: Ring[]): Ring[][] {
   const polygons: Ring[][] = [];
   let firstWinding = 0;
+
   for (const ring of rings) {
     const winding = Math.sign(signedArea(ring));
     if (winding === 0) continue;
 
     firstWinding ||= winding;
+
     if (winding === firstWinding) polygons.push([ring]);
     else polygons[polygons.length - 1].push(ring);
   }
@@ -241,6 +273,7 @@ function splitByWinding(rings: Ring[]): Ring[][] {
 function paintSamples(triangles: number[][][]) {
   const painted = new Uint8Array(SAMPLES_PER_SIDE ** 2);
   const scale = SAMPLES_PER_SIDE / EXTENT_UNITS;
+
   for (const [a, b, c] of triangles) {
     const area = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
     if (area === 0) continue;
@@ -250,6 +283,7 @@ function paintSamples(triangles: number[][][]) {
     const columns = [Math.floor(Math.min(...xs)), Math.ceil(Math.max(...xs))];
     const rows = [Math.floor(Math.min(...ys)), Math.ceil(Math.max(...ys))];
     const lastSample = SAMPLES_PER_SIDE - 1;
+
     for (let row = Math.max(0, rows[0]); row <= Math.min(lastSample, rows[1]); row++) {
       for (let col = Math.max(0, columns[0]); col <= Math.min(lastSample, columns[1]); col++) {
         const point = [(col + 0.5) / scale, (row + 0.5) / scale];
@@ -279,6 +313,7 @@ const signedArea = (ring: Ring) => {
 
 function isInside(rings: Ring[], longitude: number, latitude: number) {
   let inside = false;
+
   for (const ring of rings) {
     for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
       const [x1, y1] = ring[i];
@@ -286,6 +321,7 @@ function isInside(rings: Ring[], longitude: number, latitude: number) {
       if (y1 > latitude === y2 > latitude) continue;
 
       const crossing = x1 + ((latitude - y1) / (y2 - y1)) * (x2 - x1);
+
       if (crossing > longitude) inside = !inside;
     }
   }

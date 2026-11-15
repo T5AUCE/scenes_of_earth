@@ -77,10 +77,9 @@ test("gpu display checks require the smoothing edge controls", () => {
     displayFailures({ ...painted, edges_available: false, edges_repaint: null }, "gpu"),
     ["land cover edges check did not repaint"],
   );
-  assert.deepEqual(
-    displayFailures({ ...painted, edges_repaint: false }, "gpu"),
-    ["land cover edges check did not repaint"],
-  );
+  assert.deepEqual(displayFailures({ ...painted, edges_repaint: false }, "gpu"), [
+    "land cover edges check did not repaint",
+  ]);
 });
 
 test("zoom variants differ from the baseline only as named", () => {
@@ -147,6 +146,7 @@ test("a blend baseline swaps colour without keeping the halves off", () => {
 test("the zoom sweep labels its variants with the details-on difference", () => {
   assert.ok(ZOOM_VARIANTS.includes("labels-on"));
   assert.ok(!ZOOM_VARIANTS.includes("no-labels"));
+
   for (const variant of [
     "freeze-off",
     "fast-class-on",
@@ -169,8 +169,11 @@ test("withoutClipFilter lifts the scene clip back to the previous filter", () =>
   assert.equal(withoutClipFilter(undefined), undefined);
 
   const plain = ["==", ["get", "class"], "major"];
+
   assert.equal(withoutClipFilter(plain), plain);
+
   const blended = ["all", previous, ["==", ["get", "other"], 1]];
+
   assert.equal(withoutClipFilter(blended), blended);
 });
 
@@ -179,10 +182,7 @@ test("a sampled zoom must equal its requested zoom while fitted views skip the c
   assert.equal(sampledZoomMismatch({ zoom: 5.59 }, "fitted"), null);
   assert.equal(sampledZoomMismatch({ zoom: 9 }, 9), null);
   assert.equal(sampledZoomMismatch({ zoom: 9.04 }, 9), null);
-  assert.equal(
-    sampledZoomMismatch({ zoom: 5.59 }, 9),
-    "sampled zoom 5.59 is not the requested 9",
-  );
+  assert.equal(sampledZoomMismatch({ zoom: 5.59 }, 9), "sampled zoom 5.59 is not the requested 9");
 });
 
 test("entry readiness needs the mask, the layers and a landed flight", () => {
@@ -192,6 +192,7 @@ test("entry readiness needs the mask, the layers and a landed flight", () => {
     __trialFlightLanded: true,
     __map: { isMoving: () => false },
   };
+
   assert.equal(runInNewContext(`(${isEntryReady})()`, { window: ready }), true);
 
   const flying = {
@@ -200,6 +201,7 @@ test("entry readiness needs the mask, the layers and a landed flight", () => {
     __trialFlightLanded: true,
     __map: { isMoving: () => true },
   };
+
   assert.equal(runInNewContext(`(${isEntryReady})()`, { window: flying }), false);
 
   const loading = {
@@ -208,6 +210,7 @@ test("entry readiness needs the mask, the layers and a landed flight", () => {
     __trialFlightLanded: false,
     __map: { isMoving: () => false },
   };
+
   assert.equal(runInNewContext(`(${isEntryReady})()`, { window: loading }), false);
 
   // Preparation can settle the mask and layers while the flight has not started yet.
@@ -217,6 +220,7 @@ test("entry readiness needs the mask, the layers and a landed flight", () => {
     __trialFlightLanded: false,
     __map: { isMoving: () => false },
   };
+
   assert.equal(runInNewContext(`(${isEntryReady})()`, { window: preflight }), false);
 });
 
@@ -269,6 +273,7 @@ test("entry waiting uses the readiness predicate", async () => {
 
 test("a zoom sweep records band medians with deltas against the baseline", async (context) => {
   silenceTrial(context);
+
   const urls = [];
   const sweeps = [];
   const page = {
@@ -287,6 +292,7 @@ test("a zoom sweep records band medians with deltas against the baseline", async
     evaluate: async (callback, argument) => {
       if (callback.name === "zoomSweep") {
         sweeps.push(argument);
+
         return {
           frames: [
             { zoom: argument[0], deltaMs: 0, renderMs: 5, tilesLoaded: true },
@@ -296,6 +302,7 @@ test("a zoom sweep records band medians with deltas against the baseline", async
           longtasks: [{ zoom: argument[0] + 0.5, durationMs: 60 }],
         };
       }
+
       if (callback.name === "waitForIdle") return true;
       if (callback.name === "takeSample") {
         return {
@@ -309,6 +316,7 @@ test("a zoom sweep records band medians with deltas against the baseline", async
           classLabels: [],
         };
       }
+
       return undefined;
     },
     close: async () => {},
@@ -332,15 +340,19 @@ test("a zoom sweep records band medians with deltas against the baseline", async
   assert.ok(urls.some((url) => url.includes("&off=terrain")));
   assert.ok(urls.some((url) => url.includes("&pixelRatio=2")));
   assert.equal(records.length, ZOOM_VARIANTS.length * 2);
+
   const baseline = records.find((record) => record.variant === "all" && record.band === "+0-1");
+
   assert.equal(baseline.frame_ms_p50, 16.7);
   assert.equal(baseline.longtasks, 1);
   assert.equal(baseline.requests_during_sweep, 0);
   assert.equal(baseline.repeats, 3);
   assert.ok(!("frame_ms_p50_delta" in baseline));
+
   const swapped = records.find(
     (record) => record.variant === "colour-swap" && record.band === "+0-1",
   );
+
   assert.equal(swapped.frame_ms_p50_delta, 0);
   assert.equal(swapped.requests_during_sweep, 0);
 });
@@ -348,6 +360,7 @@ test("a zoom sweep records band medians with deltas against the baseline", async
 test("a successful contour run returns exit code 0 and writes its records", async (context) => {
   const out = temporaryDir(context);
   silenceTrial(context);
+
   const { calls, system } = trialSystem({
     Layout: [{ spot: "Nairobi", scene: "x", zoom: "fitted", timed_out: false }],
   });
@@ -363,16 +376,19 @@ test("a successful contour run returns exit code 0 and writes its records", asyn
 test("passing layout records return exit code 0", async (context) => {
   const out = temporaryDir(context);
   silenceTrial(context);
+
   const { system } = trialSystem({
-    Layout: [{
-      viewport: "320x800",
-      editor: "closed",
-      role: "button",
-      name: "Play",
-      present: true,
-      pass: true,
-      hit: null,
-    }],
+    Layout: [
+      {
+        viewport: "320x800",
+        editor: "closed",
+        role: "button",
+        name: "Play",
+        present: true,
+        pass: true,
+        hit: null,
+      },
+    ],
   });
 
   assert.equal(await runTrial(trialOptions(out), system), 0);
@@ -381,16 +397,19 @@ test("passing layout records return exit code 0", async (context) => {
 test("a failing layout record returns exit code 1", async (context) => {
   const out = temporaryDir(context);
   silenceTrial(context);
+
   const { calls, system } = trialSystem({
-    Layout: [{
-      viewport: "320x800",
-      editor: "closed",
-      role: "button",
-      name: "Play",
-      present: false,
-      pass: false,
-      hit: null,
-    }],
+    Layout: [
+      {
+        viewport: "320x800",
+        editor: "closed",
+        role: "button",
+        name: "Play",
+        present: false,
+        pass: false,
+        hit: null,
+      },
+    ],
   });
 
   assert.equal(await runTrial(trialOptions(out), system), 1);
@@ -401,6 +420,7 @@ test("a failing layout record returns exit code 1", async (context) => {
 test("a throwing spot still closes the browser", async (context) => {
   const out = temporaryDir(context);
   silenceTrial(context);
+
   const { calls, system } = trialSystem({}, { throwSpot: true });
 
   await assert.rejects(runTrial(trialOptions(out), system), /spot failed/);
@@ -414,28 +434,38 @@ test("a missing Edit button keeps closed failures and tries later viewports", as
     if (previousViewports === undefined) delete process.env.SOE_LAYOUT_VIEWPORTS;
     else process.env.SOE_LAYOUT_VIEWPORTS = previousViewports;
   });
+
   const out = temporaryDir(context);
   silenceTrial(context);
+
   const attempts = [];
   const { system } = trialSystem({}, { layoutSystem: viewportFakes(attempts) });
 
   const code = await runTrial(trialOptions(out), system);
 
   assert.equal(code, 1);
-  assert.deepEqual(attempts, [{ width: 320, height: 800 }, { width: 320, height: 560 }]);
+  assert.deepEqual(attempts, [
+    { width: 320, height: 800 },
+    { width: 320, height: 560 },
+  ]);
+
   const records = readResults(out);
   const edit = controlDisplay(LAYOUT_EDITOR);
+
   for (const viewport of ["320x800", "320x560"]) {
-    const missingEdit = records.some((record) =>
-      record.viewport === viewport
-      && record.editor === "closed"
-      && record.name === edit
-      && record.present === false
-      && record.pass === false,
+    const missingEdit = records.some(
+      (record) =>
+        record.viewport === viewport
+        && record.editor === "closed"
+        && record.name === edit
+        && record.present === false
+        && record.pass === false,
     );
-    const failedEditorOpen = records.some((record) =>
-      record.viewport === viewport && record.name === "editor opens" && record.pass === false,
+    const failedEditorOpen = records.some(
+      (record) =>
+        record.viewport === viewport && record.name === "editor opens" && record.pass === false,
     );
+
     assert.ok(missingEdit);
     assert.ok(failedEditorOpen);
   }
@@ -444,6 +474,7 @@ test("a missing Edit button keeps closed failures and tries later viewports", as
 test("a failing preflight blocks servers and scene builds", async (context) => {
   const out = temporaryDir(context);
   silenceTrial(context);
+
   const { system } = trialSystem({});
   let serversStarted = false;
   let built = false;
@@ -451,10 +482,12 @@ test("a failing preflight blocks servers and scene builds", async (context) => {
     serversStarted = true;
     return "http://example.test";
   };
+
   system.ensureScenes = async () => {
     built = true;
     return ["scene-id"];
   };
+
   system.preflightWebGL = async () => {
     throw new Error("WebGL2 unavailable in /fake (Chromium 1); reinstall");
   };
@@ -467,55 +500,16 @@ test("a failing preflight blocks servers and scene builds", async (context) => {
   assert.equal(built, false);
 });
 
-test(
-  "existing-only resolution matches an inclusive monthly end to its half-open bundle",
-  async (context) => {
-    const directory = temporaryDir(context);
-    writeExistingScene(
-      directory,
-      {
-        id: "aaaaaaaaaaaaaaaaaaaa",
-        area: "sample:kenya",
-        layers: ["terrain", "chirps_monthly"],
-        start: "2026-04-01",
-        end: "2026-09-01",
-      },
-    );
-    const previousOnly = process.env.SOE_TRIAL_EXISTING_ONLY;
-    const previousDir = process.env.SOE_SCENES_DIR;
-    process.env.SOE_TRIAL_EXISTING_ONLY = "1";
-    process.env.SOE_SCENES_DIR = directory;
-    context.after(() => {
-      if (previousOnly === undefined) delete process.env.SOE_TRIAL_EXISTING_ONLY;
-      else process.env.SOE_TRIAL_EXISTING_ONLY = previousOnly;
-      if (previousDir === undefined) delete process.env.SOE_SCENES_DIR;
-      else process.env.SOE_SCENES_DIR = previousDir;
-    });
-    const spot = {
-      area: "sample:kenya",
-      layers: ["terrain", "chirps_monthly"],
-      start: "2026-04",
-      end: "2026-08",
-    };
-
-    const ids = await ensureScenes("http://example.test", [spot]);
-
-    assert.deepEqual(ids, ["aaaaaaaaaaaaaaaaaaaa"]);
-  },
-);
-
-test("existing-only resolution rejects a genuinely mismatched period", async (context) => {
+test("existing-only resolution matches an inclusive monthly end to its half-open bundle", async (context) => {
   const directory = temporaryDir(context);
-  writeExistingScene(
-    directory,
-    {
-      id: "aaaaaaaaaaaaaaaaaaaa",
-      area: "sample:kenya",
-      layers: ["terrain", "chirps_monthly"],
-      start: "2026-04-01",
-      end: "2026-09-01",
-    },
-  );
+  writeExistingScene(directory, {
+    id: "aaaaaaaaaaaaaaaaaaaa",
+    area: "sample:kenya",
+    layers: ["terrain", "chirps_monthly"],
+    start: "2026-04-01",
+    end: "2026-09-01",
+  });
+
   const previousOnly = process.env.SOE_TRIAL_EXISTING_ONLY;
   const previousDir = process.env.SOE_SCENES_DIR;
   process.env.SOE_TRIAL_EXISTING_ONLY = "1";
@@ -523,9 +517,45 @@ test("existing-only resolution rejects a genuinely mismatched period", async (co
   context.after(() => {
     if (previousOnly === undefined) delete process.env.SOE_TRIAL_EXISTING_ONLY;
     else process.env.SOE_TRIAL_EXISTING_ONLY = previousOnly;
+
     if (previousDir === undefined) delete process.env.SOE_SCENES_DIR;
     else process.env.SOE_SCENES_DIR = previousDir;
   });
+
+  const spot = {
+    area: "sample:kenya",
+    layers: ["terrain", "chirps_monthly"],
+    start: "2026-04",
+    end: "2026-08",
+  };
+
+  const ids = await ensureScenes("http://example.test", [spot]);
+
+  assert.deepEqual(ids, ["aaaaaaaaaaaaaaaaaaaa"]);
+});
+
+test("existing-only resolution rejects a genuinely mismatched period", async (context) => {
+  const directory = temporaryDir(context);
+  writeExistingScene(directory, {
+    id: "aaaaaaaaaaaaaaaaaaaa",
+    area: "sample:kenya",
+    layers: ["terrain", "chirps_monthly"],
+    start: "2026-04-01",
+    end: "2026-09-01",
+  });
+
+  const previousOnly = process.env.SOE_TRIAL_EXISTING_ONLY;
+  const previousDir = process.env.SOE_SCENES_DIR;
+  process.env.SOE_TRIAL_EXISTING_ONLY = "1";
+  process.env.SOE_SCENES_DIR = directory;
+  context.after(() => {
+    if (previousOnly === undefined) delete process.env.SOE_TRIAL_EXISTING_ONLY;
+    else process.env.SOE_TRIAL_EXISTING_ONLY = previousOnly;
+
+    if (previousDir === undefined) delete process.env.SOE_SCENES_DIR;
+    else process.env.SOE_SCENES_DIR = previousDir;
+  });
+
   const lateStart = {
     area: "sample:kenya",
     layers: ["terrain", "chirps_monthly"],
@@ -539,18 +569,13 @@ test("existing-only resolution rejects a genuinely mismatched period", async (co
     end: "2026-07",
   };
 
-  await assert.rejects(
-    ensureScenes("http://example.test", [lateStart]),
-    /no local built scene/,
-  );
-  await assert.rejects(
-    ensureScenes("http://example.test", [earlyEnd]),
-    /no local built scene/,
-  );
+  await assert.rejects(ensureScenes("http://example.test", [lateStart]), /no local built scene/);
+  await assert.rejects(ensureScenes("http://example.test", [earlyEnd]), /no local built scene/);
 });
 
 test("a blank-page probe reports the browser and fails clearly without WebGL2", async (context) => {
   silenceTrial(context);
+
   const { calls, system } = probeFakes(false);
 
   await assert.rejects(
@@ -579,18 +604,19 @@ test("a layout setup failure keeps request and console diagnostics", async (cont
     if (previousViewports === undefined) delete process.env.SOE_LAYOUT_VIEWPORTS;
     else process.env.SOE_LAYOUT_VIEWPORTS = previousViewports;
   });
+
   silenceTrial(context);
+
   const system = {
-    isolateViewport: async () => ({
-      newPage: async () => diagnosticPage(),
-      close: async () => {},
-    }),
+    isolateViewport: async () => ({ newPage: async () => diagnosticPage(), close: async () => {} }),
     warmViewport: async () => {},
     watchViewport: async () => ({
       failures: [{ kind: "other", url: "https://example.test/x", status: 500 }],
       messages: ["pageerror: WebGL2 is required"],
     }),
-    loadViewport: async () => { throw new Error("Timeout 90000ms exceeded"); },
+    loadViewport: async () => {
+      throw new Error("Timeout 90000ms exceeded");
+    },
     settleViewport: async () => {},
   };
 
@@ -602,6 +628,7 @@ test("a layout setup failure keeps request and console diagnostics", async (cont
     {},
     system,
   ).catch((failure) => failure);
+
   assert.match(error.message, /failed to open/);
   assert.match(error.message, /example.test\/x/);
   assert.match(error.message, /WebGL2 is required/);
@@ -615,7 +642,9 @@ test("a layout setup failure keeps transport-level request diagnostics", async (
     if (previousViewports === undefined) delete process.env.SOE_LAYOUT_VIEWPORTS;
     else process.env.SOE_LAYOUT_VIEWPORTS = previousViewports;
   });
+
   silenceTrial(context);
+
   const system = {
     isolateViewport: async () => ({
       newPage: async () => networkErrorPage(),
@@ -638,6 +667,7 @@ test("a layout setup failure keeps transport-level request diagnostics", async (
     {},
     system,
   ).catch((failure) => failure);
+
   assert.match(error.message, /failed-resource\.example\/style\.json/);
   assert.match(error.message, /ERR_CONNECTION_REFUSED/);
   assert.match(error.message, /example\.test\/scene\.json/);
@@ -656,6 +686,7 @@ test("setup probes the canonical override for a relative override", (context) =>
 
 test("setup preflights the legacy cache instead of returning early", (context) => {
   if (!useLegacyBrowsers(context)) return;
+
   const sandbox = setupSandbox(context, { withBrowser: false });
   const result = runSetup(sandbox, path.join(sandbox.root, "empty-cache"));
 
@@ -666,6 +697,7 @@ test("setup preflights the legacy cache instead of returning early", (context) =
 
 test("a failing legacy probe fails setup", (context) => {
   if (!useLegacyBrowsers(context)) return;
+
   const sandbox = setupSandbox(context, { withBrowser: false, probeExit: 1 });
   const result = runSetup(sandbox, path.join(sandbox.root, "empty-cache"));
 
@@ -683,7 +715,7 @@ test("hit-testing passes when the point hits the control itself", async () => {
 
   assert.equal(record.present, true);
   assert.equal(record.pass, true);
-  assert.equal(record.hit, "button \"Play\"");
+  assert.equal(record.hit, 'button "Play"');
 });
 
 test("a covering element fails the hit-test with its selector", async () => {
@@ -696,7 +728,7 @@ test("a covering element fails the hit-test with its selector", async () => {
   );
 
   assert.equal(record.pass, false);
-  assert.equal(record.hit, "a.time-bar \"OpenFreeMap\"");
+  assert.equal(record.hit, 'a.time-bar "OpenFreeMap"');
 });
 
 test("a card control scrolls its container before the hit-test", async () => {
@@ -706,9 +738,11 @@ test("a card control scrolls its container before the hit-test", async () => {
     getBoundingClientRect: () => ({ top: 453 }),
   };
   const element = {
-    closest: (selector) => selector === "#scene-column .cards" ? container : null,
+    closest: (selector) => (selector === "#scene-column .cards" ? container : null),
     getBoundingClientRect: () => ({ top: 644, height: 18 }),
-    scrollIntoView: () => { throw new Error("must not scroll the page"); },
+    scrollIntoView: () => {
+      throw new Error("must not scroll the page");
+    },
     contains: (found) => found.tagName === "INPUT",
   };
   const seen = [];
@@ -743,9 +777,12 @@ test("an in-flow editor control scrolls the cards instead", async () => {
   const element = {
     closest: () => editor,
     getBoundingClientRect: () => ({ top: 400, height: 21 }),
-    scrollIntoView: () => { throw new Error("must not scroll the page"); },
+    scrollIntoView: () => {
+      throw new Error("must not scroll the page");
+    },
     contains: (found) => found.tagName === "INPUT",
   };
+
   const seen = [];
   const control = LAYOUT_CONTROLS.find((entry) => entry.name === "mm/month");
   const record = await hitTestControl(
@@ -785,7 +822,7 @@ test("a sampled slider passes when every point hits itself", async () => {
 
   assert.equal(record.present, true);
   assert.equal(record.pass, true);
-  assert.equal(record.hit, "input \"input\"");
+  assert.equal(record.hit, 'input "input"');
   assert.deepEqual(seen, []);
 });
 
@@ -801,7 +838,7 @@ test("a sampled slider fails on its covered end with the interceptor", async () 
 
   assert.equal(record.present, true);
   assert.equal(record.pass, false);
-  assert.equal(record.hit, "aside.layer-editor \"Cover\"");
+  assert.equal(record.hit, 'aside.layer-editor "Cover"');
   assert.deepEqual(seen, []);
 });
 
@@ -852,11 +889,22 @@ test("opening the editor clicks the first Edit match and waits for Close", async
   const calls = [];
   const page = {
     getByRole: (role, { name } = {}) => ({
-      first: () => (name === "Close"
-        ? { waitFor: async () => { calls.push("wait"); } }
-        : { click: async () => { calls.push("click"); } }),
+      first: () =>
+        name === "Close"
+          ? {
+              waitFor: async () => {
+                calls.push("wait");
+              },
+            }
+          : {
+              click: async () => {
+                calls.push("click");
+              },
+            },
     }),
-    locator: () => { throw new Error("no scoped lookup here"); },
+    locator: () => {
+      throw new Error("no scoped lookup here");
+    },
   };
 
   await openLayoutEditor(page);
@@ -897,7 +945,9 @@ test("a short viewport opens tall and resizes down for its open checks", async (
     watchViewport: async () => ({ failures: [], messages: [] }),
     loadViewport: async () => {},
     settleViewport: async () => {},
-    openEditor: async () => { opened.push("editor"); },
+    openEditor: async () => {
+      opened.push("editor");
+    },
   };
 
   const records = await layoutViewport(
@@ -910,7 +960,10 @@ test("a short viewport opens tall and resizes down for its open checks", async (
     system,
   );
 
-  assert.deepEqual(sizes, [{ width: 320, height: 560 }, { width: 320, height: 320 }]);
+  assert.deepEqual(sizes, [
+    { width: 320, height: 560 },
+    { width: 320, height: 320 },
+  ]);
   assert.deepEqual(opened, ["editor"]);
   assert.ok(records.length > 0);
   assert.ok(records.every((record) => record.viewport === "320x320"));
@@ -932,7 +985,7 @@ test("a wrapped link probes its first rendered line", async () => {
 
   assert.equal(record.present, true);
   assert.equal(record.pass, true);
-  assert.equal(record.hit, "a \"© OpenMapTiles\"");
+  assert.equal(record.hit, 'a "© OpenMapTiles"');
 });
 
 test("a covered first line fails the link with its interceptor", async () => {
@@ -941,7 +994,7 @@ test("a covered first line fails the link with its interceptor", async () => {
 
   assert.equal(record.present, true);
   assert.equal(record.pass, false);
-  assert.equal(record.hit, "div.maplibregl-ctrl-attrib-inner \"Terrain\"");
+  assert.equal(record.hit, 'div.maplibregl-ctrl-attrib-inner "Terrain"');
 });
 
 test("an empty attribution bar fails the trial", async () => {
@@ -955,10 +1008,18 @@ test("opening the gallery clicks Charts then Expand and waits for it", async () 
   const calls = [];
   const page = {
     getByRole: (role, { name } = {}) => ({
-      first: () => ({ click: async () => { calls.push(`${role}:${String(name)}`); } }),
+      first: () => ({
+        click: async () => {
+          calls.push(`${role}:${String(name)}`);
+        },
+      }),
     }),
     locator: (selector) => ({
-      first: () => ({ waitFor: async () => { calls.push(`wait:${selector}`); } }),
+      first: () => ({
+        waitFor: async () => {
+          calls.push(`wait:${selector}`);
+        },
+      }),
     }),
   };
 
@@ -968,9 +1029,15 @@ test("opening the gallery clicks Charts then Expand and waits for it", async () 
 });
 
 test("a missing gallery fails only its opening check", async () => {
-  const records = await chartWorkflowState({}, { width: 1024, height: 768 }, {
-    openGallery: async () => { throw new Error("no gallery"); },
-  });
+  const records = await chartWorkflowState(
+    {},
+    { width: 1024, height: 768 },
+    {
+      openGallery: async () => {
+        throw new Error("no gallery");
+      },
+    },
+  );
 
   assert.equal(records.length, 1);
   assert.equal(records[0].viewport, "1024x768");
@@ -980,15 +1047,18 @@ test("a missing gallery fails only its opening check", async () => {
 });
 
 test("a missing draft keeps gallery records and fails the editor step", async () => {
-  const page = {
-    ...missingPage(),
-    evaluate: async () => ({ present: false, pass: false }),
-  };
-  const records = await chartWorkflowState(page, { width: 1280, height: 800 }, {
-    openGallery: async () => {},
-    openDraft: async () => { throw new Error("no draft"); },
-    closeDialog: async () => {},
-  });
+  const page = { ...missingPage(), evaluate: async () => ({ present: false, pass: false }) };
+  const records = await chartWorkflowState(
+    page,
+    { width: 1280, height: 800 },
+    {
+      openGallery: async () => {},
+      openDraft: async () => {
+        throw new Error("no draft");
+      },
+      closeDialog: async () => {},
+    },
+  );
   const names = records.map((record) => record.name);
 
   assert.ok(names.includes("+ New chart"));
@@ -1003,6 +1073,7 @@ test("gallery bounds fail on tick collision while editor passes", async () => {
       if (probe.name === "chartGalleryTickBounds") return { present: true, pass: false };
       if (probe.name === "chartGalleryReferenceBounds") return { present: true, pass: true };
       if (probe.name === "chartGalleryBarBounds") return { present: true, pass: true };
+
       throw new Error(`unexpected probe ${probe.name}`);
     },
   };
@@ -1065,9 +1136,7 @@ test("gallery bars inside the plot pass clear of y ticks", () => {
 });
 
 test("gallery endpoints outside the plot fail inside the card", () => {
-  const sandbox = galleryReferenceSandbox([
-    { left: 280, right: 360, top: 30, bottom: 41 },
-  ]);
+  const sandbox = galleryReferenceSandbox([{ left: 280, right: 360, top: 30, bottom: 41 }]);
   const result = runInNewContext(`(${chartGalleryReferenceBounds})()`, sandbox);
 
   assert.equal(result.present, true);
@@ -1088,10 +1157,7 @@ test("gallery second card tick collision fails every card", () => {
     galleryCard({ id: EXPECTED_GALLERY_IDS[1], xBoxes: colliding }),
     galleryCard({ id: EXPECTED_GALLERY_IDS[2], xBoxes: separated }),
   ];
-  const result = runInNewContext(
-    `(${chartGalleryTickBounds})()`,
-    gallerySandbox(cards),
-  );
+  const result = runInNewContext(`(${chartGalleryTickBounds})()`, gallerySandbox(cards));
 
   assert.equal(result.present, true);
   assert.equal(result.pass, false);
@@ -1099,14 +1165,10 @@ test("gallery second card tick collision fails every card", () => {
 
 test("gallery x title outside names its card and predicate", () => {
   const outside = { left: 280, right: 340, top: 168, bottom: 178 };
-  const cards = EXPECTED_GALLERY_IDS.map((id) => galleryCard({
-    id,
-    xTitleBoxes: id === "terrain:distribution" ? [outside] : undefined,
-  }));
-  const result = runInNewContext(
-    `(${chartGalleryTickBounds})()`,
-    gallerySandbox(cards),
+  const cards = EXPECTED_GALLERY_IDS.map((id) =>
+    galleryCard({ id, xTitleBoxes: id === "terrain:distribution" ? [outside] : undefined }),
   );
+  const result = runInNewContext(`(${chartGalleryTickBounds})()`, gallerySandbox(cards));
 
   assert.equal(result.present, true);
   assert.equal(result.pass, false);
@@ -1123,14 +1185,8 @@ test("gallery wrapped x titles pass when both lines fit", () => {
     { left: 90, right: 210, top: 164, bottom: 172 },
     { left: 120, right: 180, top: 172, bottom: 180 },
   ];
-  const cards = EXPECTED_GALLERY_IDS.map((id) => galleryCard({
-    id,
-    xTitleBoxes: lines,
-  }));
-  const result = runInNewContext(
-    `(${chartGalleryTickBounds})()`,
-    gallerySandbox(cards),
-  );
+  const cards = EXPECTED_GALLERY_IDS.map((id) => galleryCard({ id, xTitleBoxes: lines }));
+  const result = runInNewContext(`(${chartGalleryTickBounds})()`, gallerySandbox(cards));
 
   assert.equal(result.present, true);
   assert.equal(result.pass, true);
@@ -1148,12 +1204,10 @@ test("gallery missing SVG fails every expected card", () => {
     galleryCard({ id: EXPECTED_GALLERY_IDS[1], hasSvg: false }),
     galleryCard({ id: EXPECTED_GALLERY_IDS[2], references }),
   ];
+
   const sandbox = gallerySandbox(cards);
   const tick = runInNewContext(`(${chartGalleryTickBounds})()`, sandbox);
-  const reference = runInNewContext(
-    `(${chartGalleryReferenceBounds})()`,
-    sandbox,
-  );
+  const reference = runInNewContext(`(${chartGalleryReferenceBounds})()`, sandbox);
   const barBounds = runInNewContext(`(${chartGalleryBarBounds})()`, sandbox);
 
   assert.equal(tick.present, true);
@@ -1170,12 +1224,10 @@ test("gallery missing expected card fails", () => {
     galleryCard({ id: EXPECTED_GALLERY_IDS[0], bars }),
     galleryCard({ id: EXPECTED_GALLERY_IDS[1] }),
   ];
+
   const sandbox = gallerySandbox(cards);
   const tick = runInNewContext(`(${chartGalleryTickBounds})()`, sandbox);
-  const reference = runInNewContext(
-    `(${chartGalleryReferenceBounds})()`,
-    sandbox,
-  );
+  const reference = runInNewContext(`(${chartGalleryReferenceBounds})()`, sandbox);
   const barBounds = runInNewContext(`(${chartGalleryBarBounds})()`, sandbox);
 
   assert.equal(tick.present, true);
@@ -1188,10 +1240,7 @@ test("gallery missing expected card fails", () => {
 
 test("gallery bar group is required on its card", () => {
   const cards = EXPECTED_GALLERY_IDS.map((id) => galleryCard({ id }));
-  const result = runInNewContext(
-    `(${chartGalleryBarBounds})()`,
-    gallerySandbox(cards),
-  );
+  const result = runInNewContext(`(${chartGalleryBarBounds})()`, gallerySandbox(cards));
 
   assert.equal(result.present, true);
   assert.equal(result.pass, false);
@@ -1199,10 +1248,7 @@ test("gallery bar group is required on its card", () => {
 
 test("gallery reference group is required on its card", () => {
   const cards = EXPECTED_GALLERY_IDS.map((id) => galleryCard({ id }));
-  const result = runInNewContext(
-    `(${chartGalleryReferenceBounds})()`,
-    gallerySandbox(cards),
-  );
+  const result = runInNewContext(`(${chartGalleryReferenceBounds})()`, gallerySandbox(cards));
 
   assert.equal(result.present, true);
   assert.equal(result.pass, false);
@@ -1233,19 +1279,11 @@ test("gallery unknown unavailable title fails the trial", () => {
     galleryCard({ id: EXPECTED_GALLERY_IDS[1] }),
     galleryCard({ id: EXPECTED_GALLERY_IDS[2], references }),
   ];
-  const known = gallerySandbox(cards, [
-    unavailableTile("No rainfall accumulation"),
-  ]);
+  const known = gallerySandbox(cards, [unavailableTile("No rainfall accumulation")]);
   const unknown = gallerySandbox(cards, [unavailableTile("Something else")]);
 
-  assert.equal(
-    runInNewContext(`(${chartGalleryTickBounds})()`, known).pass,
-    true,
-  );
-  assert.equal(
-    runInNewContext(`(${chartGalleryTickBounds})()`, unknown).pass,
-    false,
-  );
+  assert.equal(runInNewContext(`(${chartGalleryTickBounds})()`, known).pass, true);
+  assert.equal(runInNewContext(`(${chartGalleryTickBounds})()`, unknown).pass, false);
 });
 
 test("clipped tick labels fail the bounds check while rendering passes", async () => {
@@ -1256,6 +1294,7 @@ test("clipped tick labels fail the bounds check while rendering passes", async (
       if (probe.name === "chartReferenceBounds") return { present: true, pass: true };
       if (probe.name === "chartAttributionVisible") return true;
       if (probe.name === "chartEditorOverflow") return true;
+
       throw new Error(`unexpected probe ${probe.name}`);
     },
   };
@@ -1404,7 +1443,9 @@ test("wrapped disclosure lines all stay inside the svg", () => {
       { left: 48, right: 210, top: 14, bottom: 26, width: 162, height: 12 },
     ],
   });
+
   assert.equal(runInNewContext(`(${chartTickBounds})()`, inside).pass, true);
+
   const outside = tickSandbox({
     yBoxes: [
       { left: 20, right: 44, top: 18, bottom: 29 },
@@ -1492,9 +1533,11 @@ test("an in-frame reference and tick overlap fails the cross-group check", () =>
 
   assert.equal(result.present, true);
   assert.equal(result.pass, false);
+
   const withoutTick = referenceSandbox({
     rects: [{ left: 200, right: 290, top: 138, bottom: 148 }],
   });
+
   assert.equal(runInNewContext(`(${chartReferenceBounds})()`, withoutTick).pass, true);
 });
 
@@ -1600,17 +1643,20 @@ test("attribution uses text fragments rather than the element box", () => {
     lines: fragments,
     elementBox,
     style: { display: "block", visibility: "visible", opacity: "1" },
-    hitFor: (x, y) => (
-      x >= 150 && x <= 190 && y >= 718 && y <= 728 ? { inside: false } : { inside: true }
-    ),
+    hitFor: (x, y) =>
+      x >= 150 && x <= 190 && y >= 718 && y <= 728 ? { inside: false } : { inside: true },
   });
   const note = sandbox.document.querySelector("#scene-full .chart-editor .editor-attribution");
+
   assert.equal(note.childNodes.length, 1);
   assert.equal(note.childNodes[0].nodeType, 3);
   assert.equal(note.getClientRects().length, 1);
+
   const range = sandbox.document.createRange();
   range.selectNodeContents(note.childNodes[0]);
+
   assert.equal(range.getClientRects().length, 2);
+
   const result = runInNewContext(`(${chartAttributionVisible})()`, sandbox);
 
   assert.equal(result, false);
@@ -1633,15 +1679,17 @@ test("a covered Save fails with its interceptor in the dialog", async () => {
   };
   const byRole = () => ({ first: () => target });
   const page = { getByRole: byRole, locator: () => ({ getByRole: byRole }) };
+
   const record = await hitTestControl(page, VIEWPORT_PX, "charts", save);
 
   assert.equal(record.present, true);
   assert.equal(record.pass, false);
-  assert.equal(record.hit, "aside.chart-editor \"Cover\"");
+  assert.equal(record.hit, 'aside.chart-editor "Cover"');
 });
 
 test("the layout pass labels chart records with its viewport", async (context) => {
   silenceTrial(context);
+
   const system = {
     isolateViewport: async () => ({
       newPage: async () => missingEditPage(),
@@ -1703,13 +1751,18 @@ test("layout screenshots capture each state while it stays open", async () => {
     system,
   );
 
-  assert.deepEqual(screenshots.map((file) => path.basename(file)), [
-    "layout-1024x768-closed.png",
-    "layout-1024x768-charts-gallery.png",
-    "layout-1024x768-chart-editor.png",
-    "layout-1024x768-open.png",
-  ]);
+  assert.deepEqual(
+    screenshots.map((file) => path.basename(file)),
+    [
+      "layout-1024x768-closed.png",
+      "layout-1024x768-charts-gallery.png",
+      "layout-1024x768-chart-editor.png",
+      "layout-1024x768-open.png",
+    ],
+  );
+
   const order = (name) => events.indexOf(name);
+
   assert.ok(order("screenshot:layout-1024x768-closed.png") < order("gallery"));
   assert.ok(order("gallery") < order("screenshot:layout-1024x768-charts-gallery.png"));
   assert.ok(order("screenshot:layout-1024x768-charts-gallery.png") < order("draft"));
@@ -1728,7 +1781,9 @@ test("trialLayout threads screenshot options to each desktop viewport", async (c
     if (previous === undefined) delete process.env.SOE_LAYOUT_VIEWPORTS;
     else process.env.SOE_LAYOUT_VIEWPORTS = previous;
   });
+
   silenceTrial(context);
+
   const screenshots = [];
   const events = [];
   const seen = [];
@@ -1745,11 +1800,13 @@ test("trialLayout threads screenshot options to each desktop viewport", async (c
 
   assert.deepEqual(seen, ["1024x768", "1280x800"]);
   assert.equal(screenshots.length, 8);
+
   for (const viewport of ["1024x768", "1280x800"]) {
     for (const state of ["closed", "charts-gallery", "chart-editor", "open"]) {
       assert.ok(screenshots.some((file) => file.endsWith(`layout-${viewport}-${state}.png`)));
     }
   }
+
   assert.equal(new Set(screenshots).size, 8);
 });
 
@@ -1758,25 +1815,27 @@ function wrappedLink(name, reachable) {
   const hit = reachable
     ? { tagName: "A", id: "", classList: [], textContent: name }
     : {
-      tagName: "DIV",
-      id: "",
-      classList: ["maplibregl-ctrl-attrib-inner"],
-      textContent: "Terrain",
-    };
+        tagName: "DIV",
+        id: "",
+        classList: ["maplibregl-ctrl-attrib-inner"],
+        textContent: "Terrain",
+      };
+
   return {
     boundingBox: async () => ({ x: 90, y: 520, width: 120, height: 28 }),
     textContent: async () => name,
-    evaluate: async (source, args) => runInNewContext(`(${source})(control, args)`, {
-      control: {
-        getClientRects: () => [
-          { x: 90, y: 520, width: 100, height: 14 },
-          { x: 5, y: 534, width: 20, height: 14 },
-        ],
-        contains: () => reachable,
-      },
-      args,
-      document: { elementFromPoint: () => hit },
-    }),
+    evaluate: async (source, args) =>
+      runInNewContext(`(${source})(control, args)`, {
+        control: {
+          getClientRects: () => [
+            { x: 90, y: 520, width: 100, height: 14 },
+            { x: 5, y: 534, width: 20, height: 14 },
+          ],
+          contains: () => reachable,
+        },
+        args,
+        document: { elementFromPoint: () => hit },
+      }),
   };
 }
 
@@ -1787,22 +1846,32 @@ const LEGACY_BROWSERS = "/tmp/opencode/m5-visual-tools";
 
 function trialSystem(recordsBySpot, behaviour = {}) {
   const calls = { closed: 0, measured: 0, preflight: 0 };
+
   return {
     calls,
     system: {
       loadPlaces: () => [{ name: "Layout", layout: true }],
-      preflightWebGL: async () => { calls.preflight += 1; },
+      preflightWebGL: async () => {
+        calls.preflight += 1;
+      },
       ensureScenes: async () => ["scene-id"],
-      launchBrowser: async () => ({ close: async () => { calls.closed += 1; } }),
+      launchBrowser: async () => ({
+        close: async () => {
+          calls.closed += 1;
+        },
+      }),
       newContext: async () => (behaviour.layoutSystem ? { browser: () => ({}) } : {}),
       installCache: async () => {},
       trialSpot: async (context, appUrl, spot, sceneId, runOptions) => {
         calls.measured += 1;
+
         assert.equal(sceneId, "scene-id");
+
         if (behaviour.throwSpot) throw new Error("spot failed");
         if (behaviour.layoutSystem) {
           return trialLayout(context, appUrl, spot, sceneId, runOptions, behaviour.layoutSystem);
         }
+
         return recordsBySpot[spot.name] ?? [];
       },
     },
@@ -1823,6 +1892,7 @@ function trialOptions(out) {
 function temporaryDir(context) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "soe-runner-test-"));
   context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
   return directory;
 }
 
@@ -1853,8 +1923,10 @@ function readResults(out) {
 function setupSandbox(context, { stockDefault = false, withBrowser = true, probeExit = 0 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "soe-setup-test-"));
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
   const bin = path.join(root, "bin");
   fs.mkdirSync(bin);
+
   const probed = path.join(root, "probed");
   // The stub records the probed directory instead of launching a browser.
   const stub = [
@@ -1865,10 +1937,14 @@ function setupSandbox(context, { stockDefault = false, withBrowser = true, probe
   ].join("\n");
   fs.writeFileSync(path.join(bin, "node"), stub);
   fs.chmodSync(path.join(bin, "node"), 0o755);
+
   const cache = path.join(root, "cache");
+
   if (withBrowser) fakeBrowser(cache);
+
   const home = path.join(root, "home");
   fs.mkdirSync(home, { recursive: true });
+
   if (stockDefault) fakeBrowser(path.join(home, ".cache/soe-visual-trial"));
 
   return { root, bin, cache, home };
@@ -1905,6 +1981,7 @@ function probedDir(sandbox) {
 // A pre-existing legacy install must never be removed by a test run.
 function useLegacyBrowsers(context) {
   if (fs.existsSync(LEGACY_BROWSERS)) return false;
+
   fakeBrowser(LEGACY_BROWSERS);
   context.after(() => fs.rmSync(LEGACY_BROWSERS, { recursive: true, force: true }));
 
@@ -1927,9 +2004,12 @@ function viewportFakes(attempts) {
 function missingEditPage() {
   const missing = {
     count: async () => 0,
-    click: async () => { throw new Error("locator.click: Edit Rainfall is missing"); },
+    click: async () => {
+      throw new Error("locator.click: Edit Rainfall is missing");
+    },
   };
   const first = () => missing;
+
   return {
     close: async () => {},
     getByRole: () => ({ first }),
@@ -1948,25 +2028,38 @@ function screenshotSystem(screenshots, events, seen = null) {
       if (seen) seen.push(`${viewport.width}x${viewport.height}`);
       return {
         newPage: async () => screenshotTrialPage(screenshots, events),
-        close: async () => { events.push("close-context"); },
+        close: async () => {
+          events.push("close-context");
+        },
       };
     },
     warmViewport: async () => {},
     watchViewport: async () => ({ failures: [], messages: [] }),
     loadViewport: async () => {},
     settleViewport: async () => {},
-    openGallery: async () => { events.push("gallery"); },
-    openDraft: async () => { events.push("draft"); },
-    closeDialog: async () => { events.push("close-dialog"); },
-    openEditor: async () => { events.push("editor"); },
+    openGallery: async () => {
+      events.push("gallery");
+    },
+    openDraft: async () => {
+      events.push("draft");
+    },
+    closeDialog: async () => {
+      events.push("close-dialog");
+    },
+    openEditor: async () => {
+      events.push("editor");
+    },
   };
 }
 
 function screenshotTrialPage(screenshots, events) {
   const missing = { count: async () => 0 };
+
   return {
     setViewportSize: async () => {},
-    close: async () => { events.push("close-page"); },
+    close: async () => {
+      events.push("close-page");
+    },
     getByRole: () => ({ first: () => missing }),
     locator: () => ({ count: async () => 0, getByRole: () => ({ first: () => missing }) }),
     evaluate: async (probe) => screenshotProbe(probe),
@@ -1997,15 +2090,18 @@ function probeFakes(webglOk) {
   const calls = { closedBrowser: 0, closedContext: 0, closedPage: 0 };
   const page = {
     goto: async () => {},
-    evaluate: async () => (
-      webglOk ? { ok: true, version: "WebGL 2.0" } : { ok: false }
-    ),
-    close: async () => { calls.closedPage += 1; },
+    evaluate: async () => (webglOk ? { ok: true, version: "WebGL 2.0" } : { ok: false }),
+    close: async () => {
+      calls.closedPage += 1;
+    },
   };
   const browser = {
     version: () => "156.0.8078.4",
-    close: async () => { calls.closedBrowser += 1; },
+    close: async () => {
+      calls.closedBrowser += 1;
+    },
   };
+
   return {
     calls,
     system: {
@@ -2013,7 +2109,9 @@ function probeFakes(webglOk) {
       openBrowser: async () => browser,
       openBlank: async () => ({
         newPage: async () => page,
-        close: async () => { calls.closedContext += 1; },
+        close: async () => {
+          calls.closedContext += 1;
+        },
       }),
     },
   };
@@ -2037,6 +2135,7 @@ function networkErrorPage() {
       handler(payload);
     }
   };
+
   return {
     on: (event, handler) => {
       listeners[event] ??= [];
@@ -2079,6 +2178,7 @@ function pageSampling(tags, seen) {
 
           return undefined;
         }
+
         const tag = queue.shift() ?? "input";
         const hit = {
           tagName: tag.toUpperCase(),
@@ -2086,6 +2186,7 @@ function pageSampling(tags, seen) {
           classList: tag === "input" ? [] : ["layer-editor"],
           textContent: tag === "input" ? "input" : "Cover",
         };
+
         return runInNewContext(`(${source})(control, args)`, {
           control: { contains: (found) => found.tagName === "INPUT" },
           args,
@@ -2094,6 +2195,7 @@ function pageSampling(tags, seen) {
       },
     }),
   });
+
   return { getByRole: byRole, locator: () => ({ getByRole: byRole }) };
 }
 
@@ -2112,6 +2214,7 @@ function pageWithScroll(element, seen, sandboxDocument = undefined) {
             document: sandboxDocument,
           });
         }
+
         return runInNewContext(`(${source})(control, args)`, {
           control: { contains: (found) => element.contains(found) },
           args,
@@ -2120,37 +2223,45 @@ function pageWithScroll(element, seen, sandboxDocument = undefined) {
       },
     }),
   });
+
   return { getByRole: byRole, locator: () => ({ getByRole: byRole }) };
 }
 
 // Runs the real page probes against a fake scale box in a fixed viewport.
 function scalePage(box) {
   return {
-    evaluate: async (source, args) => runInNewContext(`(${source})(args)`, {
-      args,
-      document: {
-        querySelector: () => (box === null ? null : {
-          getBoundingClientRect: () => ({
-            x: box.x,
-            y: box.y,
-            width: box.w,
-            height: box.h,
-            right: box.x + box.w,
-            bottom: box.y + box.h,
-          }),
-        }),
-        documentElement: { scrollWidth: 320 },
-      },
-      window: { innerWidth: 320, innerHeight: 800 },
-    }),
+    evaluate: async (source, args) =>
+      runInNewContext(`(${source})(args)`, {
+        args,
+        document: {
+          querySelector: () =>
+            box === null
+              ? null
+              : {
+                  getBoundingClientRect: () => ({
+                    x: box.x,
+                    y: box.y,
+                    width: box.w,
+                    height: box.h,
+                    right: box.x + box.w,
+                    bottom: box.y + box.h,
+                  }),
+                },
+          documentElement: { scrollWidth: 320 },
+        },
+        window: { innerWidth: 320, innerHeight: 800 },
+      }),
   };
 }
 
 // Records resizes while every control stays absent, isolating the resize wiring.
 function resizePage(sizes) {
   const missing = { count: async () => 0 };
+
   return {
-    setViewportSize: async (size) => { sizes.push(size); },
+    setViewportSize: async (size) => {
+      sizes.push(size);
+    },
     close: async () => {},
     getByRole: () => ({ first: () => missing }),
     locator: () => ({ count: async () => 0, getByRole: () => ({ first: () => missing }) }),
@@ -2169,14 +2280,12 @@ function missingPage() {
 
 // Runs the real page probe from its source in a sandbox, so the orchestration stays honest.
 function pageProbe(hit, inside) {
-  return async (source, args) => runInNewContext(
-    `(${source})(control, args)`,
-    {
+  return async (source, args) =>
+    runInNewContext(`(${source})(control, args)`, {
       control: { contains: (element) => inside(element) },
       args,
       document: { elementFromPoint: () => hit },
-    },
-  );
+    });
 }
 
 function controlNamed(name) {
@@ -2194,7 +2303,9 @@ function shownTarget(hit, inside) {
 function attributionPage(links) {
   return {
     locator: () => ({ count: async () => links.length, nth: (index) => links[index] }),
-    getByRole: () => { throw new Error("unused"); },
+    getByRole: () => {
+      throw new Error("unused");
+    },
   };
 }
 
@@ -2215,6 +2326,7 @@ function tickSandbox({
     { left: 48, right: 296, top: 20, bottom: 21 },
     { left: 48, right: 296, top: 148, bottom: 149 },
   ];
+
   const boxed = (box) => ({ getBoundingClientRect: () => box });
   const titled = (box, rotated, offset = false) => ({
     getAttribute: () => (rotated ? "rotate(-90 12 84)" : ""),
@@ -2230,21 +2342,25 @@ function tickSandbox({
         if (selector.includes("chart-plot-frame")) return boxed(plotFrame);
         if (selector.includes("chart-offset")) return disclosureBoxes[0] ?? null;
         if (selector.includes("svg")) return boxed(svgBox);
+
         return null;
       },
       querySelectorAll: (selector) => {
         if (selector.includes("chart-grid")) return gridBoxes.map(boxed);
+
         if (selector.includes("chart-axes")) {
           const axes = [titled(yTitleBox, true), titled(xTitleBox, false), ...disclosureBoxes];
 
           return axes;
         }
+
         if (selector.includes("chart-offset")) return disclosureBoxes;
         if (selector.includes("chart-y-ticks")) return yBoxes.map(boxed);
         if (selector.includes("chart-x-ticks")) return xBoxes.map(boxed);
         if (selector.includes("chart-references") || selector.includes("chart-endpoints")) {
           return references.map(boxed);
         }
+
         return [];
       },
     },
@@ -2257,11 +2373,12 @@ function referenceSandbox(rectsOrOptions, maybeOptions = {}) {
   const normalized = Array.isArray(rectsOrOptions)
     ? { rects: rectsOrOptions, ...maybeOptions }
     : rectsOrOptions;
+
   const rects = normalized.rects ?? [];
   const resolvedY = normalized.yBoxes ?? [];
   const resolvedX = normalized.xBoxes ?? [];
-  const resolvedList = normalized.disclosures
-    ?? (normalized.disclosure ? [normalized.disclosure] : []);
+  const resolvedList =
+    normalized.disclosures ?? (normalized.disclosure ? [normalized.disclosure] : []);
   const resolvedYTitle = normalized.yTitleBox ?? { left: 6, right: 18, top: 45, bottom: 123 };
   const resolvedXTitle = normalized.xTitleBox ?? { left: 112, right: 232, top: 168, bottom: 178 };
   const resolvedFrame = normalized.plotFrame ?? { left: 48, right: 296, top: 20, bottom: 148 };
@@ -2269,6 +2386,7 @@ function referenceSandbox(rectsOrOptions, maybeOptions = {}) {
     { left: 48, right: 296, top: 20, bottom: 21 },
     { left: 48, right: 296, top: 148, bottom: 149 },
   ];
+
   const svgBox = { left: 0, top: 0, right: 320, bottom: 180, width: 320, height: 180 };
   const boxed = (box) => ({ getBoundingClientRect: () => box });
   const titled = (box, rotated, offset = false) => ({
@@ -2284,20 +2402,24 @@ function referenceSandbox(rectsOrOptions, maybeOptions = {}) {
         if (selector.includes("chart-plot-frame")) return boxed(resolvedFrame);
         if (selector.includes("chart-offset")) return disclosureBoxes[0] ?? null;
         if (selector.includes("svg")) return boxed(svgBox);
+
         return null;
       },
       querySelectorAll: (selector) => {
         if (selector.includes("chart-grid")) return resolvedGrid.map(boxed);
+
         if (selector.includes("chart-axes")) {
           const axes = [titled(resolvedYTitle, true), titled(resolvedXTitle, false)];
           for (const box of disclosureBoxes) axes.push(box);
 
           return axes;
         }
+
         if (selector.includes("chart-offset")) return disclosureBoxes;
         if (selector.includes("chart-y-ticks")) return resolvedY.map(boxed);
         if (selector.includes("chart-x-ticks")) return resolvedX.map(boxed);
         if (selector.includes("chart-references")) return rects.map(boxed);
+
         return [];
       },
     },
@@ -2336,6 +2458,7 @@ function galleryCard({
   const yTitleBox = { left: 6, right: 18, top: 45, bottom: 123 };
   const singleTitle = { left: 112, right: 232, top: 168, bottom: 178 };
   const titles = xTitleBoxes ?? [singleTitle];
+
   const boxed = (box) => ({ getBoundingClientRect: () => box });
   const titled = (box, rotated) => ({
     getAttribute: () => (rotated ? "rotate(-90 12 84)" : ""),
@@ -2349,34 +2472,31 @@ function galleryCard({
       if (selector === "svg") return hasSvg ? boxed(svgBox) : null;
       if (selector.includes("svg")) return hasSvg ? boxed(svgBox) : null;
       if (selector.includes("chart-plot-frame")) return boxed(plotFrame);
+
       return null;
     },
     querySelectorAll: (selector) => {
       if (selector.includes("chart-grid")) return grid.map(boxed);
       if (selector.includes("chart-axes")) {
-        return [
-          titled(yTitleBox, true),
-          ...titles.map((box) => titled(box, false)),
-        ];
+        return [titled(yTitleBox, true), ...titles.map((box) => titled(box, false))];
       }
+
       if (selector.includes("chart-offset")) return [];
       if (selector.includes("chart-y-ticks")) return yBoxes.map(boxed);
       if (selector.includes("chart-x-ticks")) return xBoxes.map(boxed);
       if (selector.includes("chart-references") || selector.includes("chart-endpoints")) {
         return references.map(boxed);
       }
+
       if (selector.includes("chart-bars")) return bars.map(boxed);
+
       return [];
     },
   };
 }
 
 function unavailableTile(title) {
-  return {
-    querySelector: (selector) => (
-      selector.includes("h4") ? { textContent: title } : null
-    ),
-  };
+  return { querySelector: (selector) => (selector.includes("h4") ? { textContent: title } : null) };
 }
 
 function gallerySandbox(cards, unavailable = []) {
@@ -2386,6 +2506,7 @@ function gallerySandbox(cards, unavailable = []) {
       querySelectorAll: (selector) => {
         if (selector.includes(".gallery-card")) return cards;
         if (selector.includes(".chart-unavailable")) return unavailable;
+
         return [];
       },
     },
@@ -2394,31 +2515,24 @@ function gallerySandbox(cards, unavailable = []) {
 }
 
 function galleryTickSandbox({ yBoxes, xBoxes }) {
-  const cards = EXPECTED_GALLERY_IDS.map((id) => galleryCard({
-    id,
-    yBoxes,
-    xBoxes,
-  }));
+  const cards = EXPECTED_GALLERY_IDS.map((id) => galleryCard({ id, yBoxes, xBoxes }));
 
   return gallerySandbox(cards);
 }
 
 function galleryReferenceSandbox(rects) {
   const list = Array.isArray(rects) ? rects : [];
-  const cards = EXPECTED_GALLERY_IDS.map((id) => galleryCard({
-    id,
-    references: id === "terrain:distribution" ? list : [],
-  }));
+  const cards = EXPECTED_GALLERY_IDS.map((id) =>
+    galleryCard({ id, references: id === "terrain:distribution" ? list : [] }),
+  );
 
   return gallerySandbox(cards);
 }
 
 function galleryBarSandbox({ bars, yBoxes }) {
-  const cards = EXPECTED_GALLERY_IDS.map((id) => galleryCard({
-    id,
-    bars: id === "chirps_monthly:time_series" ? bars : [],
-    yBoxes,
-  }));
+  const cards = EXPECTED_GALLERY_IDS.map((id) =>
+    galleryCard({ id, bars: id === "chirps_monthly:time_series" ? bars : [], yBoxes }),
+  );
 
   return gallerySandbox(cards);
 }
@@ -2448,6 +2562,7 @@ function attributionSandbox({
       querySelector: (selector) => {
         if (selector.includes("editor-attribution")) return note;
         if (selector.includes("#scene-full main")) return { getBoundingClientRect: () => mainBox };
+
         return null;
       },
       createRange: () => {

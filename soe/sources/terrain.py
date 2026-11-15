@@ -1,4 +1,5 @@
 """Read Copernicus elevation for area statistics and describe the viewer's terrain tiles."""
+
 import math
 import os
 import warnings
@@ -21,13 +22,7 @@ from shapely.geometry.base import BaseGeometry
 from ..areas import WORLD_WIDTH_DEG
 from ..statistics import weighted_distribution
 from .datasets import StaticDataset, expanded_tile, touch_target
-from .grid import (
-    MAX_STATIC_DIVISIONS,
-    MAX_STATIC_SIDE_PX,
-    STATIC_BUDGET_PX,
-    Bbox,
-    budget_res,
-)
+from .grid import MAX_STATIC_DIVISIONS, MAX_STATIC_SIDE_PX, STATIC_BUDGET_PX, Bbox, budget_res
 from .licences import SOURCES
 from .remote import GDAL_OPTS, read_with_retries
 
@@ -101,9 +96,7 @@ class PlacedTile(NamedTuple):
 
 
 def terrain_tiles(
-    bounds: Bbox,
-    product: str,
-    geometry: BaseGeometry | None = None,
+    bounds: Bbox, product: str, geometry: BaseGeometry | None = None
 ) -> list[tuple[str, str]]:
     """(product, name) of the existing tiles covering bounds (W, S, E, N).
 
@@ -115,10 +108,7 @@ def terrain_tiles(
 
 
 def placed_terrain_tiles(
-    bounds: Bbox,
-    product: str,
-    geometry: BaseGeometry | None = None,
-    res: float | None = None,
+    bounds: Bbox, product: str, geometry: BaseGeometry | None = None, res: float | None = None
 ) -> list[PlacedTile]:
     """The tiles of terrain_tiles with their position in the frame of the bounds.
 
@@ -131,8 +121,10 @@ def placed_terrain_tiles(
     last_lat = min(math.ceil(north - TILE_EDGE_TOLERANCE_DEG), TILE_ROW_OFFSET_DEG)
     first_lon = math.floor(west + TILE_EDGE_TOLERANCE_DEG)
     last_lon = math.ceil(east - TILE_EDGE_TOLERANCE_DEG)
+
     target = touch_target(geometry)
     ring_res = terrain_res(bounds) if res is None else res
+
     tiles = []
     for lat in range(first_lat, last_lat):
         for lon in range(first_lon, last_lon):
@@ -142,6 +134,7 @@ def placed_terrain_tiles(
 
             if target is None or target.intersects(expanded_tile(tile.lon, tile.lat, 1, ring_res)):
                 tiles.append(tile)
+
     return tiles
 
 
@@ -152,6 +145,7 @@ def _placed_tile(candidates: list[str], lat: int, lon: int) -> PlacedTile | None
     for candidate in candidates:
         if _tile_index(candidate)[row, column]:
             return PlacedTile(candidate, _tile_name(candidate, lat, wrapped_lon), lon, lat)
+
     return None
 
 
@@ -198,11 +192,9 @@ def slope_degrees(elevation: np.ndarray, res_deg: float, lat_top: float) -> np.n
     latitude = lat_top - (np.arange(height) + 0.5) * res_deg
 
     # Gradients need cell sizes in metres to match elevation units.
-    cell_width = (
-        res_deg
-        * LONGITUDE_DEGREE_AT_EQUATOR_M
-        * np.cos(np.radians(latitude))
-    )[:, None].clip(min=1)
+    cell_width = (res_deg * LONGITUDE_DEGREE_AT_EQUATOR_M * np.cos(np.radians(latitude)))[
+        :, None
+    ].clip(min=1)
     cell_height = res_deg * LATITUDE_DEGREE_M
 
     northwest = elevation[:-2, :-2]
@@ -214,15 +206,13 @@ def slope_degrees(elevation: np.ndarray, res_deg: float, lat_top: float) -> np.n
     south = elevation[2:, 1:-1]
     southeast = elevation[2:, 2:]
 
-    gradient_east = (
-        (northeast + 2 * east + southeast)
-        - (northwest + 2 * west + southwest)
-    ) / (8 * cell_width)
+    gradient_east = ((northeast + 2 * east + southeast) - (northwest + 2 * west + southwest)) / (
+        8 * cell_width
+    )
 
-    gradient_north = (
-        (northwest + 2 * north + northeast)
-        - (southwest + 2 * south + southeast)
-    ) / (8 * cell_height)
+    gradient_north = ((northwest + 2 * north + northeast) - (southwest + 2 * south + southeast)) / (
+        8 * cell_height
+    )
 
     return np.degrees(np.arctan(np.hypot(gradient_east, gradient_north)))
 
@@ -262,13 +252,15 @@ def terrain_by_blocks(
         for future in as_completed(futures):
             future.result()
             on_block()
+
     parts = [future.result() for future in futures]
 
     elevation = np.full((height, width), np.nan, "float64")
     for (x0, y0, _, y1), part in zip(blocks, parts):
         if part is not None:
             row, col = round((north - y1) / res), round((x0 - west) / res)
-            elevation[row:row + part.shape[0], col:col + part.shape[1]] = part
+            elevation[row : row + part.shape[0], col : col + part.shape[1]] = part
+
     return elevation, from_origin(west, north, res, res)
 
 
@@ -328,9 +320,7 @@ class CopernicusDemReader:
 
 
 def _warp_block(
-    bounds: Bbox,
-    res: float,
-    geometry: BaseGeometry | None = None,
+    bounds: Bbox, res: float, geometry: BaseGeometry | None = None
 ) -> np.ndarray | None:
     """One block of float64 elevation with NaN for gaps, or None with no tile."""
     product = terrain_product(res)
@@ -343,16 +333,12 @@ def _warp_block(
     canvas_tiles = placed_terrain_tiles(margin_bounds, product, None, res) if geometry else tiles
     mosaic = _mosaic_xml(tiles, bounds, product, canvas_tiles)
     return read_with_retries(
-        lambda: _average_onto_grid(mosaic, bounds, res),
-        "Copernicus DEM tiles did not answer",
+        lambda: _average_onto_grid(mosaic, bounds, res), "Copernicus DEM tiles did not answer"
     )
 
 
 def _mosaic_xml(
-    tiles: list[PlacedTile],
-    bounds: Bbox,
-    product: str,
-    canvas_tiles: list[PlacedTile],
+    tiles: list[PlacedTile], bounds: Bbox, product: str, canvas_tiles: list[PlacedTile]
 ) -> str:
     """VRT that lays the tiles side by side at their true footprints, in the frame of bounds.
 
@@ -363,15 +349,18 @@ def _mosaic_xml(
     west, south, east, north = bounds
     pixel_height = TERRAIN_PRODUCTS[product].res_deg
     pixel_width, origin_shift = _canvas_pixel(canvas_tiles, pixel_height)
+
     left = math.floor(west) - CANVAS_MARGIN_DEG - origin_shift
     top = math.ceil(north) + CANVAS_MARGIN_DEG + pixel_height / 2
     width_deg = math.ceil(east) - math.floor(west) + 2 * CANVAS_MARGIN_DEG
     height_deg = math.ceil(north) - math.floor(south) + 2 * CANVAS_MARGIN_DEG
     width = round(width_deg / pixel_width) + 1
     height = round(height_deg / pixel_height) + 1
+
     sources = "".join(
         _tile_source_xml(tile, left, top, pixel_width, pixel_height) for tile in tiles
     )
+
     # Gaps have no tile, so they stay missing instead of becoming zero.
     return (
         f'<VRTDataset rasterXSize="{width}" rasterYSize="{height}">'
@@ -405,11 +394,7 @@ def _pixel_width_ratio(tile: PlacedTile) -> float:
 
 
 def _tile_source_xml(
-    tile: PlacedTile,
-    left: float,
-    top: float,
-    pixel_width: float,
-    pixel_height: float,
+    tile: PlacedTile, left: float, top: float, pixel_width: float, pixel_height: float
 ) -> str:
     """VRT ComplexSource that draws one tile at its footprint on the canvas."""
     tile_px = TERRAIN_PRODUCTS[tile.product].tile_px
@@ -417,6 +402,7 @@ def _tile_source_xml(
     url = "/vsicurl/" + TERRAIN_PRODUCTS[tile.product].url.format(n=tile.name)
     column = (tile.lon - 0.5 / width_px - left) / pixel_width
     row = (top - (tile.lat + 1 + 0.5 / tile_px)) / pixel_height
+
     # SimpleSource ignores the source mask so masked heights would leak into the average.
     return (
         f'<ComplexSource><SourceFilename relativeToVRT="0">{url}</SourceFilename>'
@@ -442,6 +428,7 @@ def _average_onto_grid(mosaic: str, bounds: Bbox, res: float) -> np.ndarray:
             src_nodata=np.nan,
             dst_nodata=np.nan,
         )
+
     return elevation
 
 
@@ -466,11 +453,7 @@ class TerrainDataset(StaticDataset):
         """Number of blocks a read of bbox makes; with geometry, only those with a touched tile."""
         return terrain_block_count(tuple(bbox), geometry)
 
-    def _tiles(
-        self,
-        bbox: Bbox,
-        geometry: BaseGeometry | None = None,
-    ) -> list[tuple[str, str]]:
+    def _tiles(self, bbox: Bbox, geometry: BaseGeometry | None = None) -> list[tuple[str, str]]:
         return terrain_tiles(bbox, terrain_product(terrain_res(bbox)), geometry)
 
     def read(
@@ -488,18 +471,12 @@ class TerrainDataset(StaticDataset):
             return self._read_without_geometry(bbox, res, on_block)
 
         elevation, transform = self.backend.terrain(
-            tuple(bbox),
-            res,
-            on_block or (lambda: None),
-            geometry,
+            tuple(bbox), res, on_block or (lambda: None), geometry
         )
         return {"elevation": elevation}, transform
 
     def _read_without_geometry(
-        self,
-        bbox: Bbox,
-        res: float,
-        on_block: Callable[[], None] | None,
+        self, bbox: Bbox, res: float, on_block: Callable[[], None] | None
     ) -> tuple[dict[str, np.ndarray], Affine]:
         """Return float64 elevation over bbox, reading every tile the bounds cover."""
         if on_block is None:
@@ -518,29 +495,32 @@ class TerrainDataset(StaticDataset):
         """Return weighted elevation statistics and their distribution."""
         elevation = arrays["elevation"]
         res_deg = abs(transform.a)
+
         references = _sea_level_references(elevation, weights, geometry)
         distribution = weighted_distribution(elevation, weights, references)
+
         slopes = _weighted_slope_hints(elevation, weights, res_deg, transform.f)
         cell_m = _cell_size_m(elevation.shape[0], res_deg, transform.f)
         stats = _terrain_stats(distribution, slopes, cell_m)
+
         return {"stats": stats, "distribution": distribution}
 
 
 def _sea_level_references(
-    elevation: np.ndarray,
-    weights: np.ndarray,
-    geometry: BaseGeometry,
+    elevation: np.ndarray, weights: np.ndarray, geometry: BaseGeometry
 ) -> list[dict]:
     """Return a sea-level marker when valid heights span zero or meet ocean squares."""
     valid = np.isfinite(elevation) & (weights > 0)
     if not valid.any():
         return []
+
     lowest = float(np.min(elevation[valid]))
     highest = float(np.max(elevation[valid]))
     if lowest <= 0 <= highest:
         return [{"id": "sea_level", "value": 0}]
     if _overlaps_ocean_square(geometry):
         return [{"id": "sea_level", "value": 0}]
+
     return []
 
 
@@ -548,20 +528,24 @@ def _overlaps_ocean_square(geometry: BaseGeometry) -> bool:
     """Return whether the outline overlaps a square missing from both indexes."""
     if geometry.is_empty:
         return False
+
     west, south, east, north = geometry.bounds
     for lat in range(math.floor(south), math.ceil(north)):
         for lon in range(math.floor(west), math.ceil(east)):
             if _is_missing_ocean_square(lat, lon):
                 if _square_overlaps(geometry, lon, lat):
                     return True
+
     return False
 
 
 def _is_missing_ocean_square(lat: int, lon: int) -> bool:
     """Return whether a degree square has no tile in either product, so it is likely ocean."""
     wrapped = (lon + TILE_COL_OFFSET_DEG) % WORLD_WIDTH_DEG - TILE_COL_OFFSET_DEG
+
     if not -TILE_ROW_OFFSET_DEG <= lat < TILE_ROW_OFFSET_DEG:
         return False
+
     row = lat + TILE_ROW_OFFSET_DEG
     column = wrapped + TILE_COL_OFFSET_DEG
     return not _tile_index("glo30")[row, column] and not _tile_index("glo90")[row, column]
@@ -573,10 +557,7 @@ def _square_overlaps(geometry: BaseGeometry, lon: int, lat: int) -> bool:
 
 
 def _weighted_slope_hints(
-    elevation: np.ndarray,
-    weights: np.ndarray,
-    res_deg: float,
-    lat_top: float,
+    elevation: np.ndarray, weights: np.ndarray, res_deg: float, lat_top: float
 ) -> tuple[float, float]:
     """Return the median and steep slope percentiles weighted by centre area.
 
@@ -587,32 +568,30 @@ def _weighted_slope_hints(
     if not valid.any():
         # No complete stencil exists, so keep a legacy spacing hint, not flatness.
         return 0.0, 0.0
+
     retained_slopes = slopes[valid]
     retained_weights = weights[valid]
     return _weighted_percentiles(
-        retained_slopes,
-        retained_weights,
-        MEDIAN_PERCENTILE,
-        STEEP_PERCENTILE,
+        retained_slopes, retained_weights, MEDIAN_PERCENTILE, STEEP_PERCENTILE
     )
 
 
 def _weighted_percentiles(
-    values: np.ndarray,
-    sample_weights: np.ndarray,
-    first_percent: float,
-    second_percent: float,
+    values: np.ndarray, sample_weights: np.ndarray, first_percent: float, second_percent: float
 ) -> tuple[float, float]:
     """Return two inverse-ECDF percentiles from one stable ordering of the samples."""
     order = np.argsort(values, kind="stable")
     ordered = values[order]
     cumulative = np.cumsum(sample_weights[order], dtype="float64")
     total = float(np.sum(sample_weights, dtype="float64"))
+
     first_threshold = first_percent / 100 * total
     second_threshold = second_percent / 100 * total
+
     last = ordered.size - 1
     first_index = int(np.searchsorted(cumulative, first_threshold, side="left"))
     second_index = int(np.searchsorted(cumulative, second_threshold, side="left"))
+
     return float(ordered[min(first_index, last)]), float(ordered[min(second_index, last)])
 
 
@@ -623,9 +602,7 @@ def _cell_size_m(height: int, res_deg: float, lat_top: float) -> float:
 
 
 def _terrain_stats(
-    distribution: dict,
-    slopes: tuple[float, float],
-    cell_m: float,
+    distribution: dict, slopes: tuple[float, float], cell_m: float
 ) -> dict[str, float]:
     """Return legacy contour stats built from the distribution result."""
     median_slope, steep_slope = slopes

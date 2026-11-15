@@ -59,9 +59,11 @@ const hooks = registerHooks({
       const source = mockModules[specifier as keyof typeof mockModules];
       return { url: `data:text/javascript,${encodeURIComponent(source)}`, shortCircuit: true };
     }
+
     if (specifier.startsWith(".") && !specifier.endsWith(".ts")) {
       return next(new URL(`${specifier}.ts`, context.parentURL).href, context);
     }
+
     return next(specifier, context);
   },
 });
@@ -76,11 +78,14 @@ hooks.deregister();
 
 test("a terrain view warms its elevation tiles with the HTTP-cache warmer", (t) => {
   t.mock.method(globalThis, "fetch", () => new Promise(() => {}));
+
   const { map } = terrainMap();
   const preload = openScenePreload(map as never);
+
   try {
     const view = createTestTerrainView(map);
     preload.start(9.5);
+
     assert.ok(preload.progress().total > 0);
     assert.equal(preload.progress().bytes, 0);
 
@@ -129,8 +134,10 @@ test("worker-forwarded cancellations and missing tiles are ignored", (context) =
 test("a repeated missing tile warns once per session", (context) => {
   const warnings: unknown[][] = [];
   context.mock.method(console, "warn", (...args: unknown[]) => void warnings.push(args));
+
   const { map, emit } = fakeMap();
   watchTerrainTiles(map as unknown as MapLibreMap, TERRAIN_SOURCES, () => () => {});
+
   const missing = {
     name: "Error",
     message: "Bad response: 404 for https://example.test/7/3/5.webp",
@@ -146,30 +153,32 @@ test("a repeated missing tile warns once per session", (context) => {
 test("the missing tile memo drops its oldest tile past its cap", (context) => {
   const warnings: unknown[][] = [];
   context.mock.method(console, "warn", (...args: unknown[]) => void warnings.push(args));
+
   const { map, emit } = fakeMap();
   watchTerrainTiles(map as unknown as MapLibreMap, TERRAIN_SOURCES, () => () => {});
+
   const missing = {
     name: "Error",
     message: "Bad response: 404 for https://example.test/tile.webp",
   };
 
   for (let tileX = 0; tileX <= MAX_MISSING_TILES; tileX++) {
-    emit("error", {
-      sourceId: TERRAIN_SOURCES[0],
-      tile: tile(9, tileX, 1),
-      error: missing,
-    });
+    emit("error", { sourceId: TERRAIN_SOURCES[0], tile: tile(9, tileX, 1), error: missing });
   }
+
   assert.equal(warnings.length, MAX_MISSING_TILES + 1);
 
   // The first tile fell out of the full memo, so it warns again while a fresh tile does not.
   emit("error", { sourceId: TERRAIN_SOURCES[0], tile: tile(9, 0, 1), error: missing });
+
   assert.equal(warnings.length, MAX_MISSING_TILES + 2);
+
   emit("error", {
     sourceId: TERRAIN_SOURCES[0],
     tile: tile(9, MAX_MISSING_TILES, 1),
     error: missing,
   });
+
   assert.equal(warnings.length, MAX_MISSING_TILES + 2);
 });
 
@@ -198,6 +207,7 @@ test("persistent failures without a loaded tile give a warning", (context) => {
   assert.deepEqual(reporter.notes, [WARNING]);
 
   emit("error", { sourceId: TERRAIN_SOURCES[0], tile: tile(), error: failure() });
+
   assert.deepEqual(reporter.notes, [WARNING]);
 });
 
@@ -268,10 +278,13 @@ test("the terrain view watches its label source for failures", (context) => {
   const emit = (type: string, event: object) => {
     for (const listener of [...(listeners.get(type) ?? [])]) listener(event);
   };
+
   for (let failureCount = 0; failureCount < 3; failureCount += 1) {
     emit("error", { sourceId: "terrain-labels-contours", tile: tile(), error: failure() });
   }
+
   assert.deepEqual(reporter.notes, [WARNING]);
+
   view.destroy();
 });
 
@@ -283,12 +296,15 @@ test("a successful tile clears the warning", (context) => {
   for (let failureCount = 0; failureCount < 3; failureCount += 1) {
     emit("error", { sourceId: TERRAIN_SOURCES[0], tile: tile(), error: failure() });
   }
+
   assert.deepEqual(reporter.notes, [WARNING]);
 
   emit("sourcedata", { sourceId: TERRAIN_SOURCES[0], tile: tile() });
+
   assert.deepEqual(reporter.notes, []);
 
   emit("error", { sourceId: TERRAIN_SOURCES[0], tile: tile(), error: failure() });
+
   assert.deepEqual(reporter.notes, []);
 });
 
@@ -326,9 +342,11 @@ test("a source's success clears its warning", (context) => {
   for (let failureCount = 0; failureCount < 3; failureCount += 1) {
     emit("error", { sourceId: TERRAIN_SOURCES[0], tile: tile(), error: failure() });
   }
+
   assert.deepEqual(reporter.notes, [WARNING]);
 
   emit("sourcedata", { sourceId: TERRAIN_SOURCES[0], tile: tile() });
+
   assert.deepEqual(reporter.notes, []);
 });
 
@@ -379,15 +397,18 @@ test("a failed contour setup rolls back its shading registration", (t) => {
       destroy() {},
     },
   };
+
   const globals = globalThis as { gpuHandles?: unknown };
   const previous = globals.gpuHandles;
   globals.gpuHandles = handles;
   t.after(() => {
     globals.gpuHandles = previous;
   });
+
   const { map, removed } = terrainMap();
   const flag = globalThis as { contourOverlayShouldThrow?: boolean };
   flag.contourOverlayShouldThrow = true;
+
   try {
     assert.throws(() => createTestTerrainView(map), /Contour setup failed/);
   } finally {
@@ -395,6 +416,7 @@ test("a failed contour setup rolls back its shading registration", (t) => {
   }
 
   assert.ok(removed.includes("terrain-credit"));
+
   setTerrainBaseZoom(map as unknown as MapLibreMap, 5);
 
   assert.deepEqual(zooms, []);
@@ -430,11 +452,13 @@ function fakeMap() {
 
 function makeReporter(context: TestContext) {
   context.mock.method(console, "warn", () => {});
+
   const notes: string[] = [];
 
   const report = (error: unknown) => {
     const message = (error as Error).message;
     notes.push(message);
+
     return () => {
       const index = notes.indexOf(message);
       if (index >= 0) notes.splice(index, 1);
@@ -502,9 +526,11 @@ test("terrain offers metres and feet and forwards the choice to contours", () =>
   assert.equal(view.menu?.units?.value, "m");
 
   view.menu?.units?.set("ft");
+
   assert.equal(view.menu?.units?.value, "ft");
 
   view.menu?.units?.set("m");
+
   assert.equal(view.menu?.units?.value, "m");
 
   view.destroy();
@@ -534,6 +560,7 @@ function terrainMap() {
     setPaintProperty() {},
     getZoom: () => 8,
   };
+
   return { map, sources, layers, removed };
 }
 
@@ -589,15 +616,21 @@ test("entry steps both GPU layers on every render until neither has a tile left"
   const done = gpu.view.prepareEntry!(null).then(() => {
     isDone = true;
   });
+
   assert.equal(calls, 1);
+
   gpu.emit("render", {});
   await Promise.resolve();
+
   assert.equal(isDone, false);
+
   gpu.emit("render", {});
   await done;
 
   assert.equal(calls, 3);
+
   gpu.emit("render", {});
+
   assert.equal(calls, 3);
 });
 
@@ -622,6 +655,7 @@ test("entry steps the contour layer even while relief still has tiles to load", 
 test("entry proceeds without error when the cap passes with tiles still loading", async (t) => {
   const gpu = gpuTerrain(t, { relief: () => false, lines: () => false });
   t.mock.timers.enable({ apis: ["setTimeout"] });
+
   let isDone = false;
 
   const done = gpu.view.prepareEntry!(null).then(() => {
@@ -629,7 +663,9 @@ test("entry proceeds without error when the cap passes with tiles still loading"
   });
   t.mock.timers.tick(GPU_ENTRY_CAP_MS - 1);
   await Promise.resolve();
+
   assert.equal(isDone, false);
+
   t.mock.timers.tick(1);
   await done;
 
@@ -659,6 +695,7 @@ test("an already aborted entry does not wait", async (t) => {
 
 test("a failing step ends the wait with a warning instead of failing entry", async (t) => {
   t.mock.method(console, "warn", () => {});
+
   const gpu = gpuTerrain(t, {
     relief: () => {
       throw new Error("GL error");
@@ -669,6 +706,7 @@ test("a failing step ends the wait with a warning instead of failing entry", asy
   await gpu.view.prepareEntry!(null);
 
   const calls = (console.warn as unknown as { mock: { callCount(): number } }).mock.callCount();
+
   assert.equal(calls, 1);
 });
 
@@ -679,18 +717,11 @@ type GpuHandles = {
     prepare(): boolean;
     destroy(): void;
   };
-  lines: {
-    setBaseZoom(zoom: number): void;
-    prepare(): boolean;
-    destroy(): void;
-  };
+  lines: { setBaseZoom(zoom: number): void; prepare(): boolean; destroy(): void };
 };
 
 /** A GPU terrain view over fake layers whose steps are scripted, on a map that emits events. */
-function gpuTerrain(
-  t: TestContext,
-  steps: { relief: () => boolean; lines: () => boolean },
-) {
+function gpuTerrain(t: TestContext, steps: { relief: () => boolean; lines: () => boolean }) {
   const zooms: number[] = [];
   const handles: GpuHandles & {
     relief: { setStrength(): void };
@@ -713,13 +744,16 @@ function gpuTerrain(
   const globals = globalThis as { gpuHandles?: unknown };
   const previousHandles = globals.gpuHandles;
   globals.gpuHandles = handles;
+
   const { map, ...rest } = terrainMap();
   const { map: events, emit } = fakeMap();
   Object.assign(map, { on: events.on, off: events.off, getZoom: () => 8 });
+
   const view = createTestTerrainView(map);
   t.after(() => {
     view.destroy();
     globals.gpuHandles = previousHandles;
   });
+
   return { ...rest, map, view, zooms, emit };
 }

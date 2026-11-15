@@ -44,9 +44,8 @@ export async function readSteps(store: Store, path: string, first: number, count
   const values = chunk.data as unknown as StepSlices;
   const size = values.length / count;
 
-  return Array.from(
-    { length: count },
-    (_, offset) => values.subarray(offset * size, (offset + 1) * size),
+  return Array.from({ length: count }, (_, offset) =>
+    values.subarray(offset * size, (offset + 1) * size),
   );
 }
 
@@ -54,8 +53,10 @@ export async function readSteps(store: Store, path: string, first: number, count
 export async function readMask(store: Store, layer: LayerDoc) {
   const raw = await readArray(store, layer.mask.path, [null, null]);
   const mask = new Uint8Array(raw.length);
+
   // A plain loop avoids the per-element callback cost of Uint8Array.from.
   for (let index = 0; index < raw.length; index++) mask[index] = raw[index] === 1 ? 1 : 0;
+
   return mask;
 }
 
@@ -78,15 +79,13 @@ export function decode(raw: ArrayLike<number>, doc: Encoding) {
  * Decode in bounded slices so the preparing note paints while entry reads.
  * The output matches decode exactly.
  */
-export async function decodeInSlices(
-  raw: ArrayLike<number>,
-  doc: Encoding,
-  signal?: AbortSignal,
-) {
+export async function decodeInSlices(raw: ArrayLike<number>, doc: Encoding, signal?: AbortSignal) {
   const values = new Float32Array(raw.length);
   let sliceMs = performance.now();
+
   for (let index = 0; index < raw.length; index++) {
     values[index] = decodeOne(raw[index], doc);
+
     if ((index + 1) % DECODE_CHECK_CELLS !== 0) continue;
     if (signal?.aborted) throw cancelError();
     if (performance.now() - sliceMs < SLICE_BUDGET_MS) continue;
@@ -94,18 +93,22 @@ export async function decodeInSlices(
     await yieldToBrowser(signal);
     sliceMs = performance.now();
   }
+
   if (signal?.aborted) throw cancelError();
+
   return values;
 }
 
 /** Yield to the browser so the preparing note paints and input stays responsive. */
 export function yieldToBrowser(signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(cancelError());
+
   return new Promise((done, fail) => {
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
       done();
     }, 0);
+
     const onAbort = () => {
       clearTimeout(timer);
       fail(cancelError());
@@ -149,6 +152,7 @@ function openedArray(store: Store, path: string) {
     opening.catch(() => arrays.delete(path));
     arrays.set(path, opening);
   }
+
   return arrays.get(path)!;
 }
 

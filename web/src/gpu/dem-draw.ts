@@ -6,11 +6,7 @@
 import type { Map as MapLibreMap } from "maplibre-gl";
 
 import { prefersReducedMotion } from "../reduced-motion";
-import {
-  inverseMercatorY,
-  mercatorY,
-  WEB_MERCATOR_MAX_LAT_DEG,
-} from "../render/tile-viewport";
+import { inverseMercatorY, mercatorY, WEB_MERCATOR_MAX_LAT_DEG } from "../render/tile-viewport";
 import type { Bbox } from "../types";
 import { DEM_TILE_SIZE_PX, STRIP_WIDTH_PX } from "../workers/dem-decode";
 import {
@@ -119,13 +115,15 @@ export function resolveSources(quad: PlacedTile, fadeOf: FadeOf): DrawSource[] {
   const sources: DrawSource[] = [];
   addChainWeight(sources, chain, 0, quad.selfWeight, fadeOf);
   addChainWeight(sources, chain, 1, quad.parentWeight, fadeOf);
+
   const heaviest = sources
     .filter((source) => source.weight > 0)
     .sort((left, right) => right.weight - left.weight)
     .slice(0, 2);
   const total = sources.reduce((sum, source) => sum + source.weight, 0);
   const kept = heaviest.reduce((sum, source) => sum + source.weight, 0);
-  return heaviest.map((source) => ({ ...source, weight: source.weight * total / kept }));
+
+  return heaviest.map((source) => ({ ...source, weight: (source.weight * total) / kept }));
 }
 
 function addChainWeight(
@@ -136,6 +134,7 @@ function addChainWeight(
   fadeOf: FadeOf,
 ): void {
   let remaining = weight;
+
   for (let index = start; index < chain.length && remaining > 0; index++) {
     const fade = fadeOf(chain[index]);
     if (fade === null) continue;
@@ -146,8 +145,9 @@ function addChainWeight(
 }
 
 function addWeight(sources: DrawSource[], tile: TileId, weight: number): void {
-  const same = sources.find(({ tile: other }) =>
-    other.z === tile.z && other.x === tile.x && other.y === tile.y);
+  const same = sources.find(
+    ({ tile: other }) => other.z === tile.z && other.x === tile.x && other.y === tile.y,
+  );
   if (same) same.weight += weight;
   else sources.push({ tile, weight });
 }
@@ -181,7 +181,9 @@ export class ArrivalFades {
     if (drawableMs === null) return null;
 
     const fade = this.fadeMs === 0 ? 1 : Math.min(drawableMs / this.fadeMs, 1);
+
     if (fade < 1) this.isFading = true;
+
     return fade;
   };
 }
@@ -195,13 +197,16 @@ class HeadingTracker {
 
   update(view: ViewBounds): { x: number; y: number } {
     const centre = { x: (view.west + view.east) / 2, y: (view.north + view.south) / 2 };
+
     if (this.previous) {
-      this.heading.x = this.heading.x * HEADING_SMOOTHING
-        + (centre.x - this.previous.x) * (1 - HEADING_SMOOTHING);
-      this.heading.y = this.heading.y * HEADING_SMOOTHING
-        + (centre.y - this.previous.y) * (1 - HEADING_SMOOTHING);
+      this.heading.x =
+        this.heading.x * HEADING_SMOOTHING + (centre.x - this.previous.x) * (1 - HEADING_SMOOTHING);
+      this.heading.y =
+        this.heading.y * HEADING_SMOOTHING + (centre.y - this.previous.y) * (1 - HEADING_SMOOTHING);
     }
+
     this.previous = centre;
+
     return this.heading;
   }
 }
@@ -267,10 +272,12 @@ export class DemDraw {
     gl.bindVertexArray(vertexArray);
     gl.bindBuffer(gl.ARRAY_BUFFER, corners);
     gl.bufferData(gl.ARRAY_BUFFER, CORNERS, gl.STATIC_DRAW);
+
     const location = gl.getAttribLocation(program, "aCorner");
     gl.enableVertexAttribArray(location);
     gl.vertexAttribPointer(location, 2, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
+
     const pool = this.acquirePool(gl, vertexArray, corners);
     this.gpu = {
       pool,
@@ -289,6 +296,7 @@ export class DemDraw {
     corners: WebGLBuffer,
   ): DemPool {
     const { map, tileUrl, poolOptions } = this.options;
+
     try {
       return acquireDemPool({ map, gl, tileUrl, ...poolOptions });
     } catch (error) {
@@ -303,6 +311,7 @@ export class DemDraw {
     const { gpu } = this;
     this.gpu = null;
     this.isWarm = false;
+
     if (!gpu) return;
 
     gl.deleteVertexArray(gpu.vertexArray);
@@ -335,10 +344,12 @@ export class DemDraw {
       gl.enable(gl.SCISSOR_TEST);
       gl.scissor(0, 0, 1, 1);
       gl.colorMask(false, false, false, false);
+
       for (const unit of SAMPLER_UNITS) {
         gl.activeTexture(gl.TEXTURE0 + unit);
         gl.bindTexture(gl.TEXTURE_2D, null);
       }
+
       gl.bindVertexArray(gpu.vertexArray);
       gl.uniform1i(this.uniform("uHeightsA"), 0);
       gl.uniform1i(this.uniform("uHeightsB"), 1);
@@ -359,10 +370,13 @@ export class DemDraw {
       // Preparation shares the pool's per-frame upload budget with visible drawing.
       gpu.pool.syncFrame(this.base.tiles);
     });
+
     const { inflight, queueDepth, awaitingUpload } = gpu.pool.stats();
+
     // Uploads stop at the per-frame budget and a hidden layer gets no other frame,
     // so ask for the one that finishes them.
     if (awaitingUpload > 0) this.options.map.triggerRepaint();
+
     return inflight + queueDepth + awaitingUpload === 0;
   }
 
@@ -382,12 +396,15 @@ export class DemDraw {
     const plan = this.plan();
     // The pool's uploads bind textures, so the draw binds its own afterwards.
     gpu.pool.syncFrame(plan.wanted);
+
     gl.bindVertexArray(gpu.vertexArray);
     gl.bindSampler(0, null);
     gl.bindSampler(1, null);
     gl.uniform1i(this.uniform("uHeightsA"), 0);
     gl.uniform1i(this.uniform("uHeightsB"), 1);
+
     gpu.fades.startFrame();
+
     for (const quad of plan.quads) {
       const sources = resolveSources(quad, gpu.fades.fadeOf);
       if (sources.length === 0) continue;
@@ -396,12 +413,14 @@ export class DemDraw {
       drawQuad?.(sources);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, CORNERS.length / 2);
     }
+
     return gpu.fades.isFading || gpu.pool.needsRepaint();
   }
 
   private plan(): DemPlan {
     const { map, bbox, maxZoom } = this.options;
     const view = viewBoundsOf(map);
+
     return planDemTiles({
       zoom: map.getZoom(),
       view,
@@ -440,9 +459,11 @@ export class DemDraw {
       radiansOf(inverseMercatorY(quad.y / count)),
       radiansOf(inverseMercatorY((quad.y + 1) / count)),
     );
+
     const [first, second] = sources;
     gl.uniform2f(this.uniform("uWeights"), first.weight, second?.weight ?? 0);
     this.bindSource(gl, "uSourceA", 0, quad, first.tile);
+
     if (second) this.bindSource(gl, "uSourceB", 1, quad, second.tile);
   }
 
@@ -495,6 +516,7 @@ function saveGlState(gl: WebGL2RenderingContext): SavedGlState {
     return { unit, texture: gl.getParameter(gl.TEXTURE_BINDING_2D) as WebGLTexture | null };
   });
   gl.activeTexture(gl.TEXTURE0 + activeUnit);
+
   return {
     program: gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram | null,
     vertexArray: gl.getParameter(gl.VERTEX_ARRAY_BINDING) as WebGLVertexArrayObject | null,
@@ -506,27 +528,28 @@ function saveGlState(gl: WebGL2RenderingContext): SavedGlState {
     })),
     scissor: gl.getParameter(gl.SCISSOR_BOX) as Int32Array,
     colorMask: gl.getParameter(gl.COLOR_WRITEMASK) as boolean[],
-    blend: [
-      gl.BLEND_SRC_RGB,
-      gl.BLEND_DST_RGB,
-      gl.BLEND_SRC_ALPHA,
-      gl.BLEND_DST_ALPHA,
-    ].map((name) => gl.getParameter(name) as number),
+    blend: [gl.BLEND_SRC_RGB, gl.BLEND_DST_RGB, gl.BLEND_SRC_ALPHA, gl.BLEND_DST_ALPHA].map(
+      (name) => gl.getParameter(name) as number,
+    ),
   };
 }
 
 function restoreGlState(gl: WebGL2RenderingContext, saved: SavedGlState): void {
   gl.useProgram(saved.program);
   gl.bindVertexArray(saved.vertexArray);
+
   for (const { unit, texture } of saved.textureUnits) {
     gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, texture);
   }
+
   gl.activeTexture(gl.TEXTURE0 + saved.activeUnit);
+
   for (const { capability, isOn } of saved.switches) {
     if (isOn) gl.enable(capability);
     else gl.disable(capability);
   }
+
   gl.scissor(saved.scissor[0], saved.scissor[1], saved.scissor[2], saved.scissor[3]);
   gl.colorMask(saved.colorMask[0], saved.colorMask[1], saved.colorMask[2], saved.colorMask[3]);
   gl.blendFuncSeparate(saved.blend[0], saved.blend[1], saved.blend[2], saved.blend[3]);
@@ -543,5 +566,5 @@ function viewBoundsOf(map: MapLibreMap): ViewBounds {
 }
 
 function radiansOf(degrees: number): number {
-  return degrees * Math.PI / 180;
+  return (degrees * Math.PI) / 180;
 }

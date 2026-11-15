@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
+import type { LayerDoc } from "../types.ts";
+import { defaultOptionsFor } from "./definitions.ts";
 import {
   CHARTS_PARAM,
   CHARTS_VERSION,
@@ -26,8 +28,6 @@ import {
   UNSYNCED_CHARTS_NOTICE,
   type ChartSlice,
 } from "./state.ts";
-import { defaultOptionsFor } from "./definitions.ts";
-import type { LayerDoc } from "../types.ts";
 
 const LAYERS = [rainLayer(), terrainLayer()];
 
@@ -80,38 +80,45 @@ test("every option round trips through the token", () => {
 
 test("the codec rejects versions, duplicates, shapes, types and bad options", () => {
   const valid = defaultSlice(LAYERS);
+
   assert.equal(isValidSlice(valid, LAYERS), true);
 
   const badVersion = { ...valid, version: 2 };
+
   assert.equal(isValidSlice(badVersion, LAYERS), false);
 
   const duplicate = { ...valid, definitions: [valid.definitions[0], valid.definitions[0]] };
+
   assert.equal(isValidSlice(duplicate, LAYERS), false);
 
   const badShape = {
     ...valid,
     definitions: [{ ...valid.definitions[0], source: { layerId: "rain", shape: "pie" } }],
   };
+
   assert.equal(isValidSlice(badShape, LAYERS), false);
 
   const badType = { ...valid, definitions: [{ ...valid.definitions[0], chartType: "pie" }] };
+
   assert.equal(isValidSlice(badType, LAYERS), false);
 
   const badUnit = {
     ...valid,
-    definitions: [
-      { ...valid.definitions[0], options: { displayUnit: "kelvin" } },
-    ],
+    definitions: [{ ...valid.definitions[0], options: { displayUnit: "kelvin" } }],
   };
+
   assert.equal(isValidSlice(badUnit, LAYERS), false);
 
   const badMain = { ...valid, mainChartId: "missing" };
+
   assert.equal(isValidSlice(badMain, LAYERS), false);
 
   const nullMain = { ...valid, mainChartId: null };
+
   assert.equal(isValidSlice(nullMain, LAYERS), false);
 
   const emptyForAvailable = { version: 1 as const, definitions: [], mainChartId: null };
+
   assert.equal(isValidSlice(emptyForAvailable, LAYERS), false);
   assert.equal(isValidSlice(emptyForAvailable, []), true);
 
@@ -119,18 +126,15 @@ test("the codec rejects versions, duplicates, shapes, types and bad options", ()
     ...valid,
     definitions: [{ ...valid.definitions[0], options: undefined }],
   };
+
   assert.equal(isValidSlice(missingOptions, LAYERS), false);
 
-  const nullOptions = {
-    ...valid,
-    definitions: [{ ...valid.definitions[0], options: null }],
-  };
+  const nullOptions = { ...valid, definitions: [{ ...valid.definitions[0], options: null }] };
+
   assert.equal(isValidSlice(nullOptions, LAYERS), false);
 
-  const arrayOptions = {
-    ...valid,
-    definitions: [{ ...valid.definitions[0], options: [] }],
-  };
+  const arrayOptions = { ...valid, definitions: [{ ...valid.definitions[0], options: [] }] };
+
   assert.equal(isValidSlice(arrayOptions, LAYERS), false);
 
   const arrayInk = {
@@ -139,6 +143,7 @@ test("the codec rejects versions, duplicates, shapes, types and bad options", ()
       { ...valid.definitions[0], options: { ...valid.definitions[0].options, ink: ["#123456"] } },
     ],
   };
+
   assert.equal(isValidSlice(arrayInk, LAYERS), false);
 
   const hostileInk = {
@@ -150,6 +155,7 @@ test("the codec rejects versions, duplicates, shapes, types and bad options", ()
       },
     ],
   };
+
   assert.equal(isValidSlice(hostileInk, LAYERS), false);
 
   const tooMany = {
@@ -159,6 +165,7 @@ test("the codec rejects versions, duplicates, shapes, types and bad options", ()
       id: `id-${index}`,
     })),
   };
+
   assert.equal(isValidSlice(tooMany, LAYERS), false);
 
   assert.equal(decodeToken(encodeSlice(badVersion as ChartSlice), LAYERS).slice, null);
@@ -178,16 +185,20 @@ test("malformed options fail closed through link and storage paths", () => {
 
   for (const definition of cases) {
     const slice = { version: 1 as const, definitions: [definition], mainChartId: definition.id };
+
     assert.equal(isValidSlice(slice, LAYERS), false);
 
     const token = encodeSlice(slice as unknown as ChartSlice);
     const decoded = decodeToken(token, LAYERS);
+
     assert.equal(decoded.slice, null);
     assert.equal(decoded.notice, INVALID_CHARTS_NOTICE);
 
     const items = useStorage();
     items.set(storageKeyFor("scene-a"), JSON.stringify(slice));
+
     const loaded = loadStoredSlice("scene-a", LAYERS);
+
     assert.deepEqual(loaded.slice, defaultSlice(LAYERS));
     assert.equal(loaded.notice, INVALID_CHARTS_NOTICE);
   }
@@ -202,17 +213,23 @@ test("titles beyond 120 characters never enter a slice", () => {
 
 test("scenes stay isolated in storage and denied storage keeps a working slice", () => {
   useStorage();
+
   const slice = defaultSlice(LAYERS);
 
   assert.deepEqual(storeSlice("scene-a", slice), { saved: true, notice: null });
+
   const loaded = loadStoredSlice("scene-a", LAYERS);
+
   assert.deepEqual(loaded.slice, slice);
   assert.equal(loaded.stored, true);
   assert.equal(loadStoredSlice("scene-b", LAYERS).stored, false);
 
   useBlockedStorage();
+
   assert.deepEqual(storeSlice("scene-a", slice), { saved: false, notice: STORAGE_DENIED_NOTICE });
+
   const denied = loadStoredSlice("scene-a", LAYERS);
+
   assert.equal(denied.stored, false);
   assert.equal(denied.notice, STORAGE_DENIED_NOTICE);
   assert.deepEqual(denied.slice, defaultSlice(LAYERS));
@@ -229,7 +246,9 @@ test("throwing getters and failed writes return nonblocking notices", () => {
       removeItem: () => {},
     },
   });
+
   const readDenied = loadStoredSlice("scene-a", LAYERS);
+
   assert.equal(readDenied.stored, false);
   assert.equal(readDenied.notice, STORAGE_DENIED_NOTICE);
 
@@ -242,7 +261,9 @@ test("throwing getters and failed writes return nonblocking notices", () => {
       removeItem: () => {},
     },
   });
+
   const writeDenied = storeSlice("scene-a", defaultSlice(LAYERS));
+
   assert.equal(writeDenied.saved, false);
   assert.equal(writeDenied.notice, STORAGE_DENIED_NOTICE);
 });
@@ -271,6 +292,7 @@ test("links beat storage which beats defaults without merging deleted charts", (
   assert.equal(resolveCharts(LAYERS, linked, defaults).sessionOnly, true);
 
   const invalid = resolveCharts(LAYERS, "!!!", stored);
+
   assert.deepEqual(invalid.slice, stored);
   assert.equal(invalid.notice, INVALID_CHARTS_NOTICE);
   assert.equal(invalid.sessionOnly, true);
@@ -286,6 +308,7 @@ test("invalid links stay session-only so later saves never touch storage", () =>
   items.set(storageKeyFor("scene-a"), JSON.stringify(stored));
 
   const resolved = resolveCharts(LAYERS, "!!!", stored);
+
   assert.equal(resolved.sessionOnly, true);
   assert.equal(resolved.source, "stored");
 
@@ -298,12 +321,14 @@ test("invalid links stay session-only so later saves never touch storage", () =>
     writes++;
     originalSet(key, value);
   };
+
   try {
     if (!resolved.sessionOnly) storeSlice("scene-a", resolved.slice);
   } finally {
     (globalThis.localStorage as { setItem: (key: string, value: string) => void }).setItem =
       originalSet;
   }
+
   assert.equal(writes, 0);
 });
 
@@ -313,7 +338,9 @@ test("chart params serialize with URLSearchParams and parse back", () => {
 
   assert.ok(param.startsWith("&charts="));
   assert.ok(!param.includes("%3A"));
+
   const token = chartsTokenFor(`?scene=abc${param}`);
+
   assert.equal(typeof token, "string");
   assert.deepEqual(decodeToken(token, LAYERS).slice, slice);
   assert.equal(formatChartsParam(null), "");
@@ -322,16 +349,20 @@ test("chart params serialize with URLSearchParams and parse back", () => {
 
 test("oversized complete URLs use a persistence-neutral notice", () => {
   useStorage();
+
   const slice = defaultSlice(LAYERS);
+
   assert.deepEqual(storeSlice("scene-a", slice), { saved: true, notice: null });
   assert.equal(loadStoredSlice("scene-a", LAYERS).stored, true);
 
   const token = encodeSlice(slice);
   const typical = `?scene=0123456789abcdef0123&t=2019-03&pal=rain:batlow&charts=${token}`;
+
   assert.equal(isCompleteUrlOversized(typical), false);
   assert.ok(typical.length < MAX_COMPLETE_URL_CHARS);
 
   const oversized = `?scene=0123456789abcdef0123&charts=${"a".repeat(MAX_COMPLETE_URL_CHARS)}`;
+
   assert.equal(isCompleteUrlOversized(oversized), true);
   assert.equal(UNSYNCED_CHARTS_NOTICE, "The share link is too long to include these charts.");
   assert.equal(UNSYNCED_CHARTS_NOTICE.includes("visit"), false);
@@ -340,10 +371,8 @@ test("oversized complete URLs use a persistence-neutral notice", () => {
   assert.equal(loadStoredSlice("scene-a", LAYERS).stored, true);
 
   useBlockedStorage();
-  assert.deepEqual(storeSlice("scene-a", slice), {
-    saved: false,
-    notice: STORAGE_DENIED_NOTICE,
-  });
+
+  assert.deepEqual(storeSlice("scene-a", slice), { saved: false, notice: STORAGE_DENIED_NOTICE });
   assert.equal(loadStoredSlice("scene-a", LAYERS).notice, STORAGE_DENIED_NOTICE);
   assert.equal(resolveCharts(LAYERS, "!!!", slice).sessionOnly, true);
 });
@@ -368,25 +397,26 @@ test("valid slices save and reload at the exact byte limit", () => {
   const remaining = MAX_DECODED_BYTES - emptySize;
   const idLength = Math.floor(remaining / 2);
   const extraTitleChars = remaining - idLength * 2;
+
   const id = "a".repeat(idLength);
   const title = `T${"b".repeat(extraTitleChars)}`;
   const exact = makeSlice(id, title);
+
   assert.equal(new TextEncoder().encode(JSON.stringify(exact)).length, MAX_DECODED_BYTES);
   assert.equal(isValidSlice(exact, LAYERS), true);
   assert.deepEqual(storeSlice("scene-a", exact), { saved: true, notice: null });
 
   const reloaded = loadStoredSlice("scene-a", LAYERS);
+
   assert.equal(reloaded.stored, true);
   assert.equal(reloaded.notice, null);
   assert.deepEqual(reloaded.slice, exact);
 
   const over = makeSlice(id, `${title}x`);
+
   assert.equal(new TextEncoder().encode(JSON.stringify(over)).length, MAX_DECODED_BYTES + 1);
   assert.equal(isValidSlice(over, LAYERS), true);
-  assert.deepEqual(storeSlice("scene-a", over), {
-    saved: false,
-    notice: TOO_LARGE_CHARTS_NOTICE,
-  });
+  assert.deepEqual(storeSlice("scene-a", over), { saved: false, notice: TOO_LARGE_CHARTS_NOTICE });
   assert.equal(items.get(storageKeyFor("scene-a")), JSON.stringify(exact));
   assert.deepEqual(loadStoredSlice("scene-a", LAYERS).slice, exact);
 });
@@ -407,11 +437,13 @@ test("malformed UTF-8 bytes reject before parsing while valid Unicode round trip
   };
   const token = encodeSlice(unicodeSlice);
   const roundTrip = decodeToken(token, LAYERS);
+
   assert.equal(roundTrip.notice, null);
   assert.deepEqual(roundTrip.slice, unicodeSlice);
 
   const bytes = Buffer.from(token, "base64url");
   bytes[0] = 0xff;
+
   const corrupt = bytes.toString("base64url");
   const originalParse = JSON.parse;
   let calls = 0;
@@ -419,8 +451,10 @@ test("malformed UTF-8 bytes reject before parsing while valid Unicode round trip
     calls++;
     return originalParse(...args);
   }) as typeof JSON.parse;
+
   try {
     const rejected = decodeToken(corrupt, LAYERS);
+
     assert.equal(calls, 0);
     assert.equal(rejected.slice, null);
     assert.equal(rejected.notice, INVALID_CHARTS_NOTICE);
@@ -436,35 +470,48 @@ test("decoded limits use UTF-8 bytes with exact link boundaries", () => {
     calls++;
     return originalParse(...args);
   }) as typeof JSON.parse;
+
   try {
     const exactJson = `{"data":"${"a".repeat(MAX_DECODED_BYTES - 11)}"}`;
+
     assert.equal(new TextEncoder().encode(exactJson).length, MAX_DECODED_BYTES);
+
     const exactToken = Buffer.from(exactJson, "utf8").toString("base64url");
 
     calls = 0;
+
     const exact = decodeToken(exactToken, LAYERS);
+
     assert.equal(calls, 1);
     assert.equal(exact.slice, null);
     assert.equal(exact.notice, INVALID_CHARTS_NOTICE);
 
     const overJson = `{"data":"${"a".repeat(MAX_DECODED_BYTES - 10)}"}`;
+
     assert.equal(new TextEncoder().encode(overJson).length, MAX_DECODED_BYTES + 1);
+
     const overToken = Buffer.from(overJson, "utf8").toString("base64url");
 
     calls = 0;
+
     const over = decodeToken(overToken, LAYERS);
+
     assert.equal(calls, 0);
     assert.equal(over.slice, null);
     assert.equal(over.notice, INVALID_CHARTS_NOTICE);
 
     const multibyteJson = `{"data":"${"é".repeat(17000)}"}`;
     const multibyteBytes = new TextEncoder().encode(multibyteJson).length;
+
     assert.ok(multibyteBytes > MAX_DECODED_BYTES);
     assert.ok(multibyteJson.length < MAX_DECODED_BYTES);
+
     const multibyteToken = Buffer.from(multibyteJson, "utf8").toString("base64url");
 
     calls = 0;
+
     const multibyte = decodeToken(multibyteToken, LAYERS);
+
     assert.equal(calls, 0);
     assert.equal(multibyte.slice, null);
     assert.equal(multibyte.notice, INVALID_CHARTS_NOTICE);
@@ -480,33 +527,46 @@ test("stored limits use UTF-8 bytes with exact boundaries", () => {
     calls++;
     return originalParse(...args);
   }) as typeof JSON.parse;
+
   try {
     const items = useStorage();
     const exactRaw = `{"data":"${"a".repeat(MAX_DECODED_BYTES - 11)}"}`;
+
     assert.equal(new TextEncoder().encode(exactRaw).length, MAX_DECODED_BYTES);
+
     items.set(storageKeyFor("scene-a"), exactRaw);
 
     calls = 0;
+
     const exact = loadStoredSlice("scene-a", LAYERS);
+
     assert.equal(calls, 1);
     assert.equal(exact.notice, INVALID_CHARTS_NOTICE);
 
     const overRaw = `{"data":"${"a".repeat(MAX_DECODED_BYTES - 10)}"}`;
+
     assert.equal(new TextEncoder().encode(overRaw).length, MAX_DECODED_BYTES + 1);
+
     items.set(storageKeyFor("scene-a"), overRaw);
 
     calls = 0;
+
     const over = loadStoredSlice("scene-a", LAYERS);
+
     assert.equal(calls, 0);
     assert.equal(over.notice, INVALID_CHARTS_NOTICE);
 
     const multibyteRaw = `{"data":"${"é".repeat(17000)}"}`;
+
     assert.ok(new TextEncoder().encode(multibyteRaw).length > MAX_DECODED_BYTES);
     assert.ok(multibyteRaw.length < MAX_DECODED_BYTES);
+
     items.set(storageKeyFor("scene-a"), multibyteRaw);
 
     calls = 0;
+
     const multibyte = loadStoredSlice("scene-a", LAYERS);
+
     assert.equal(calls, 0);
     assert.equal(multibyte.notice, INVALID_CHARTS_NOTICE);
   } finally {
@@ -566,6 +626,7 @@ function useStorage() {
       removeItem: (key: string) => items.delete(key),
     },
   });
+
   return items;
 }
 

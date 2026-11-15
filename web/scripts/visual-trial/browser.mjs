@@ -100,16 +100,16 @@ function selectedBrowser() {
     const executablePath = findExecutable(path.join(directory, "browsers"));
     if (executablePath) return { executablePath, directory };
   }
+
   throw new Error("no Chromium found; run web/scripts/visual-trial/setup.sh");
 }
 
 function launchEnv(libraries) {
   const env = { ...process.env };
+
   for (const name of DISPLAY_ENV_VARS) delete env[name];
-  const libraryPath = [
-    fs.existsSync(libraries) ? libraries : null,
-    process.env.LD_LIBRARY_PATH,
-  ];
+
+  const libraryPath = [fs.existsSync(libraries) ? libraries : null, process.env.LD_LIBRARY_PATH];
   env.LD_LIBRARY_PATH = libraryPath.filter(Boolean).join(":");
 
   return env;
@@ -133,20 +133,21 @@ export async function preflightWebGL(system = {}) {
   } = system;
   const executablePath = find();
   const browser = await open();
+
   try {
     const context = await openBlank(browser);
+
     try {
       const page = await context.newPage();
+
       try {
         await page.goto("about:blank");
+
         const probe = await page.evaluate(checkWebGL2);
         const version = browserVersion(browser);
         const probeLabel = probe.ok ? "ok" : "missing";
-        console.error(
-          "trial browser",
-          executablePath,
-          `Chromium ${version} WebGL2 ${probeLabel}`,
-        );
+        console.error("trial browser", executablePath, `Chromium ${version} WebGL2 ${probeLabel}`);
+
         if (probe.ok) return { executablePath, version };
 
         const hint = "reinstall with web/scripts/visual-trial/setup.sh";
@@ -207,6 +208,7 @@ async function exposeSceneReadiness(context) {
       "window.__trialMaskReady = true;\nthis.isShown = true;",
     );
     if (masked === source) throw new Error("scene mask readiness hook no longer matches");
+
     // The flight starts after preparation settles, so its landing is a separate signal.
     const exposed = masked.replace(
       /flight\.hold\(\);/,
@@ -270,42 +272,48 @@ const FADE_LAYER_ID = "soe-scene-fade";
 export async function trialZoomSpot(context, appUrl, spot, sceneId, options) {
   const page = await context.newPage();
   const requests = trackRequests(page);
+
   try {
     const medians = {};
     const counts = {};
+
     for (const variant of ZOOM_VARIANTS) {
       try {
         await openZoomScene(page, appUrl, sceneId, spot, variant);
+
         const { sample, timedOut } = await settledSample(page);
+
         if (!sample || timedOut) {
           medians[variant] = null;
           counts[variant] = zoomFailedRecord(spot, sceneId, variant, "never settled");
           continue;
         }
+
         await setupZoomVariant(page, variant);
+
         const repeats = [];
         const requestCounts = [];
+
         for (let repeat = 0; repeat < zoomRepeats(); repeat += 1) {
           requests.take();
-          const sweep = await page.evaluate(
-            zoomSweep,
-            [sample.zoom + ZOOM_START_OFFSET, sample.zoom + ZOOM_END_OFFSET, ZOOM_STEP],
-          );
+
+          const sweep = await page.evaluate(zoomSweep, [
+            sample.zoom + ZOOM_START_OFFSET,
+            sample.zoom + ZOOM_END_OFFSET,
+            ZOOM_STEP,
+          ]);
           requestCounts.push(requests.take());
           repeats.push(summarizeZoomSweep({ ...sweep, fittedZoom: sample.zoom }));
         }
+
         medians[variant] = medianZoomBands(repeats);
         counts[variant] = medianCounts(requestCounts, repeats.length);
       } catch (error) {
         medians[variant] = null;
-        counts[variant] = zoomFailedRecord(
-          spot,
-          sceneId,
-          variant,
-          error.message.split("\n")[0],
-        );
+        counts[variant] = zoomFailedRecord(spot, sceneId, variant, error.message.split("\n")[0]);
       }
     }
+
     return zoomVariantRecords(spot, sceneId, medians, counts);
   } finally {
     requests.stop();
@@ -323,11 +331,13 @@ function trackRequests(page) {
       // A stubbed request without a URL must not break the sweep.
     }
   };
+
   try {
     page.on("request", handler);
   } catch {
     // Fake pages in tests may not observe requests.
   }
+
   return {
     take: () => urls.splice(0).length,
     stop: () => {
@@ -342,27 +352,29 @@ function trackRequests(page) {
 
 function medianCounts(requestCounts, repeats) {
   if (!requestCounts.length) return { requests: null, repeats };
+
   const sorted = [...requestCounts].sort((first, second) => first - second);
   const middle = Math.floor(sorted.length / 2);
-  const requests = sorted.length % 2 === 1
-    ? sorted[middle]
-    : Number(((sorted[middle - 1] + sorted[middle]) / 2).toFixed(2));
+  const requests =
+    sorted.length % 2 === 1
+      ? sorted[middle]
+      : Number(((sorted[middle - 1] + sorted[middle]) / 2).toFixed(2));
+
   return { requests, repeats };
 }
 
 /** Opens a scene with the variant's link differences, keeping the same bundle. */
 async function openZoomScene(page, appUrl, sceneId, spot, variant) {
   await page.goto(zoomSceneUrl(appUrl, sceneId, spot, variant));
-  await page.waitForFunction(
-    (layerId) => window.__map?.getLayer(layerId),
-    OUTLINE_LAYER_ID,
-    { timeout: SCENE_READY_TIMEOUT_MS },
-  );
+  await page.waitForFunction((layerId) => window.__map?.getLayer(layerId), OUTLINE_LAYER_ID, {
+    timeout: SCENE_READY_TIMEOUT_MS,
+  });
 }
 
 /** Builds the scene link of a zoom variant, differing from the baseline only as named. */
 export function zoomSceneUrl(appUrl, sceneId, spot, variant) {
   let query = allocationQuery(spot);
+
   if (variant === "no-terrain") query = withOff(query, "terrain");
   if (variant === "colour-swap") query = withSwappedColour(query, spot);
   if (variant === "pixel-ratio-2") query += "&pixelRatio=2";
@@ -379,6 +391,7 @@ export function zoomSceneUrl(appUrl, sceneId, spot, variant) {
 function withOff(query, unit) {
   const found = /&off=([^&]*)/.exec(query);
   if (!found) return `${query}&off=${unit}`;
+
   const units = new Set([...found[1].split(",").filter(Boolean), unit]);
 
   return query.replace(/&off=[^&]*/, `&off=${[...units].join(",")}`);
@@ -388,6 +401,7 @@ function withSwappedColour(query, spot) {
   // A blend already switches its halves off, which would also switch the swap off.
   const cleaned = query.replace(/&off=[^&]*/, "");
   const swapped = swappedZoomColour(spot);
+
   if (/&as=[^&]*:colour/.test(cleaned)) {
     return cleaned.replace(/&as=[^&]*:colour/, `&as=${swapped}:colour`);
   }
@@ -410,60 +424,78 @@ async function setupZoomVariant(page, variant) {
 
 async function ensureMapDetails(page, shown) {
   const toggle = page.getByRole("switch", { name: MAP_DETAILS_SWITCH, exact: true });
-  if (await toggle.count() !== 1) throw new Error("Map details switch not found");
-  if (await toggle.isChecked() === shown) return;
+  if ((await toggle.count()) !== 1) throw new Error("Map details switch not found");
+  if ((await toggle.isChecked()) === shown) return;
+
   if (shown) await toggle.check();
   else await toggle.uncheck();
+
   await page.evaluate(nextFrame);
 }
 
 async function hideMask(page) {
-  await page.evaluate(([maskId, fadeId]) => {
-    const map = window.__map;
-    for (const id of [maskId, fadeId]) {
-      if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "none");
-    }
-    if (typeof map.getFilter !== "function" || typeof map.setFilter !== "function") return;
-    let layers = [];
-    try {
-      layers = (map.getStyle?.()?.layers ?? []).map((layer) => layer.id);
-    } catch {
-      return;
-    }
-    for (const id of layers) {
-      let filter;
-      try {
-        filter = map.getFilter(id);
-      } catch {
-        continue;
+  await page.evaluate(
+    ([maskId, fadeId]) => {
+      const map = window.__map;
+
+      for (const id of [maskId, fadeId]) {
+        if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "none");
       }
-      const lifted = liftClipFilter(filter);
-      if (lifted !== filter) {
+
+      if (typeof map.getFilter !== "function" || typeof map.setFilter !== "function") return;
+
+      let layers = [];
+
+      try {
+        layers = (map.getStyle?.()?.layers ?? []).map((layer) => layer.id);
+      } catch {
+        return;
+      }
+
+      for (const id of layers) {
+        let filter;
+
         try {
-          map.setFilter(id, lifted ?? null);
+          filter = map.getFilter(id);
         } catch {
-          // A layer without a filter setter must not block the rest.
+          continue;
+        }
+
+        const lifted = liftClipFilter(filter);
+
+        if (lifted !== filter) {
+          try {
+            map.setFilter(id, lifted ?? null);
+          } catch {
+            // A layer without a filter setter must not block the rest.
+          }
         }
       }
-    }
-    function liftClipFilter(filter) {
-      if (!Array.isArray(filter)) return filter;
-      if (isClipKeep(filter)) return null;
-      if (filter[0] !== "all") return filter;
-      const kept = filter.slice(1).filter((part) => !isClipKeep(part));
-      if (kept.length === filter.length - 1) return filter;
-      if (kept.length === 0) return null;
-      if (kept.length === 1) return kept[0];
-      return ["all", ...kept];
-    }
-    function isClipKeep(part) {
-      return Array.isArray(part)
-        && part.length === 2
-        && part[0] === "!"
-        && Array.isArray(part[1])
-        && part[1][0] === "within";
-    }
-  }, [MASK_LAYER_ID, FADE_LAYER_ID]);
+
+      function liftClipFilter(filter) {
+        if (!Array.isArray(filter)) return filter;
+        if (isClipKeep(filter)) return null;
+        if (filter[0] !== "all") return filter;
+
+        const kept = filter.slice(1).filter((part) => !isClipKeep(part));
+        if (kept.length === filter.length - 1) return filter;
+        if (kept.length === 0) return null;
+        if (kept.length === 1) return kept[0];
+
+        return ["all", ...kept];
+      }
+      function isClipKeep(part) {
+        return (
+          Array.isArray(part)
+          && part.length === 2
+          && part[0] === "!"
+          && Array.isArray(part[1])
+          && part[1][0] === "within"
+        );
+      }
+    },
+    [MASK_LAYER_ID, FADE_LAYER_ID],
+  );
 }
 
 /**
@@ -474,6 +506,7 @@ export function withoutClipFilter(filter) {
   if (!Array.isArray(filter)) return filter;
   if (isClipKeepFilter(filter)) return null;
   if (filter[0] !== "all") return filter;
+
   const kept = filter.slice(1).filter((part) => !isClipKeepFilter(part));
   if (kept.length === filter.length - 1) return filter;
   if (kept.length === 0) return null;
@@ -483,38 +516,47 @@ export function withoutClipFilter(filter) {
 }
 
 function isClipKeepFilter(part) {
-  return Array.isArray(part)
+  return (
+    Array.isArray(part)
     && part.length === 2
     && part[0] === "!"
     && Array.isArray(part[1])
-    && part[1][0] === "within";
+    && part[1][0] === "within"
+  );
 }
 
 /** Merges variant medians into band records with deltas against the baseline. */
 function zoomVariantRecords(spot, sceneId, medians, counts) {
   const records = [];
   const baseline = medians[ZOOM_BASELINE] ?? {};
+
   for (const variant of ZOOM_VARIANTS) {
     const summary = medians[variant];
     const count = counts[variant];
+
     if (!summary) {
       records.push(count);
       continue;
     }
+
     const deltas = variant === ZOOM_BASELINE ? {} : deltaZoomBands(baseline, summary);
+
     for (const [band, stats] of Object.entries(summary)) {
-      records.push(zoomBandRecord({
-        spot: spot.name,
-        scene: sceneId,
-        variant,
-        band,
-        stats,
-        deltas: deltas[band],
-        requests: count.requests,
-        repeats: count.repeats,
-      }));
+      records.push(
+        zoomBandRecord({
+          spot: spot.name,
+          scene: sceneId,
+          variant,
+          band,
+          stats,
+          deltas: deltas[band],
+          requests: count.requests,
+          repeats: count.repeats,
+        }),
+      );
     }
   }
+
   return records;
 }
 
@@ -544,22 +586,23 @@ function zoomRepeats() {
 
 async function trialLandcover(context, appUrl, spot, sceneId, options) {
   const records = [];
+
   for (const renderer of ["gpu", "image"]) {
     const isolated = await newContext(context.browser());
+
     try {
       await installCache(isolated, HTTP_CACHE_DIR);
       await isolated.addInitScript((mode) => {
         localStorage.setItem("soe.debug.gpu", mode === "image" ? "off" : "on");
         localStorage.removeItem("soe.edges.v1");
       }, renderer);
-      records.push(...await trialPage(isolated, appUrl, spot, sceneId, {
-        ...options,
-        renderer,
-      }));
+
+      records.push(...(await trialPage(isolated, appUrl, spot, sceneId, { ...options, renderer })));
     } finally {
       await isolated.close();
     }
   }
+
   return records;
 }
 
@@ -567,11 +610,13 @@ async function trialLandcover(context, appUrl, spot, sceneId, options) {
 export async function trialLayout(context, appUrl, spot, sceneId, options, system = {}) {
   const browser = context.browser();
   const records = [];
+
   for (const viewport of layoutViewports()) {
     records.push(
-      ...await layoutViewport(browser, appUrl, spot, sceneId, viewport, options, system),
+      ...(await layoutViewport(browser, appUrl, spot, sceneId, viewport, options, system)),
     );
   }
+
   return records;
 }
 
@@ -593,25 +638,33 @@ export async function layoutViewport(
     openEditor: edit = (page) => openLayoutEditor(page),
   } = system;
   const isolated = await isolate(browser, viewport);
+
   try {
     await warm(isolated);
+
     const page = await isolated.newPage();
     const watcher = await watch(page);
+
     try {
       await load(page);
       await settle(page);
+
       const closed = await layoutState(page, viewport, "closed");
       await layoutScreenshot(page, spot, viewport, "closed", options);
+
       let charts = [];
+
       try {
         charts = await chartWorkflowState(page, viewport, system, options, spot);
       } catch {
         charts = [chartOpeningRecord(viewport, "workflow")];
       }
+
       // The shortest viewport opens tall and resizes down, modelling open-then-resize.
       if (viewport.openHeight !== undefined) {
         await page.setViewportSize({ width: viewport.width, height: viewport.openHeight });
       }
+
       try {
         await edit(page);
       } catch (error) {
@@ -619,11 +672,14 @@ export async function layoutViewport(
         console.error(`layout ${viewportLabel(viewport)} editor failed to open: ${reason}`);
         return [...closed, ...charts, editorOpeningRecord(viewport)];
       }
+
       if (viewport.openHeight !== undefined) {
         await page.setViewportSize({ width: viewport.width, height: viewport.height });
       }
+
       const open = await layoutState(page, viewport, "open");
       await layoutScreenshot(page, spot, viewport, "open", options);
+
       return [...closed, ...charts, ...open];
     } catch (error) {
       throw await layoutSetupError(page, watcher, viewport, error);
@@ -670,11 +726,13 @@ function readViewportState(limit) {
 
 async function layoutState(page, viewport, editor) {
   const records = [];
+
   for (const control of LAYOUT_CONTROLS) {
     records.push(await hitTestControl(page, viewport, editor, control));
   }
-  records.push(...await hitTestAttribution(page, viewport, editor));
-  records.push(...await layoutPageChecks(page, viewport, editor));
+
+  records.push(...(await hitTestAttribution(page, viewport, editor)));
+  records.push(...(await layoutPageChecks(page, viewport, editor)));
 
   return records;
 }
@@ -690,14 +748,18 @@ export async function chartWorkflowState(page, viewport, system = {}, options = 
     openDraft: draft = openChartDraft,
     closeDialog: close = closeChartsWorkflow,
   } = system;
+
   try {
     await open(page);
   } catch {
     return [chartOpeningRecord(viewport, "gallery")];
   }
+
   await layoutScreenshot(page, spot, viewport, "charts-gallery", options);
+
   const records = await chartControlState(page, viewport, CHART_GALLERY_CONTROLS);
-  records.push(...await chartGalleryBoundsState(page, viewport));
+  records.push(...(await chartGalleryBoundsState(page, viewport)));
+
   try {
     await draft(page);
   } catch {
@@ -705,9 +767,11 @@ export async function chartWorkflowState(page, viewport, system = {}, options = 
 
     return records;
   }
-  records.push(...await chartControlState(page, viewport, CHART_EDITOR_CONTROLS));
-  records.push(...await chartBoundsState(page, viewport));
+
+  records.push(...(await chartControlState(page, viewport, CHART_EDITOR_CONTROLS)));
+  records.push(...(await chartBoundsState(page, viewport)));
   await layoutScreenshot(page, spot, viewport, "chart-editor", options);
+
   try {
     await close(page);
   } catch {
@@ -720,6 +784,7 @@ export async function chartWorkflowState(page, viewport, system = {}, options = 
 // Screenshots stay inside each state because closing the dialog would lose the footer.
 async function layoutScreenshot(page, spot, viewport, state, options) {
   if (!options?.screens || !spot) return;
+
   const file = `${slug(spot.name)}-${slug(viewportLabel(viewport))}-${state}.png`;
   await page.screenshot({ path: path.join(options.out, file) });
 }
@@ -854,81 +919,113 @@ export function chartTickBounds() {
   const tolerance = 1;
   const svg = document.querySelector("#scene-full .chart-editor svg");
   if (!svg) return { present: false, pass: false };
+
   const svgBox = svg.getBoundingClientRect();
   const frame = document.querySelector("#scene-full .chart-editor .chart-plot-frame");
   if (!frame) return { present: false, pass: false };
+
   const frameBox = frame.getBoundingClientRect();
   const plotLeft = frameBox.left;
   const plotRight = frameBox.right;
   const plotTop = frameBox.top;
   const plotBottom = frameBox.bottom;
   const plotBox = { left: plotLeft, right: plotRight, top: plotTop, bottom: plotBottom };
+
   const lines = [...document.querySelectorAll("#scene-full .chart-editor .chart-grid line")];
   if (lines.length === 0) return { present: false, pass: false };
+
   const axes = [...document.querySelectorAll("#scene-full .chart-axes text")];
   let yTitle = null;
   let xTitle = null;
+
   for (const axis of axes) {
     if (axis.classList && axis.classList.contains("chart-offset")) continue;
+
     const transform = axis.getAttribute("transform") || "";
     if (transform.indexOf("rotate") !== -1) yTitle = axis.getBoundingClientRect();
     else xTitle = axis.getBoundingClientRect();
   }
+
   const disclosureEls = [...document.querySelectorAll("#scene-full .chart-editor .chart-offset")];
   const disclosures = disclosureEls.map((entry) => entry.getBoundingClientRect());
   const yTicks = [...document.querySelectorAll("#scene-full .chart-editor .chart-y-ticks text")];
   const xTicks = [...document.querySelectorAll("#scene-full .chart-editor .chart-x-ticks text")];
-  const references = [...document.querySelectorAll(
-    "#scene-full .chart-editor .chart-references text,"
-    + " #scene-full .chart-editor .chart-endpoints text",
-  )];
+  const references = [
+    ...document.querySelectorAll(
+      "#scene-full .chart-editor .chart-references text,"
+        + " #scene-full .chart-editor .chart-endpoints text",
+    ),
+  ];
+
   if (yTicks.length === 0 || xTicks.length === 0) return { present: false, pass: false };
+
   function insideSvg(rect) {
-    return rect.left >= svgBox.left - tolerance && rect.right <= svgBox.right + tolerance
-      && rect.top >= svgBox.top - tolerance && rect.bottom <= svgBox.bottom + tolerance;
+    return (
+      rect.left >= svgBox.left - tolerance
+      && rect.right <= svgBox.right + tolerance
+      && rect.top >= svgBox.top - tolerance
+      && rect.bottom <= svgBox.bottom + tolerance
+    );
   }
   function overlaps(first, second) {
-    return first.left < second.right - tolerance && second.left < first.right - tolerance
-      && first.top < second.bottom - tolerance && second.top < first.bottom - tolerance;
+    return (
+      first.left < second.right - tolerance
+      && second.left < first.right - tolerance
+      && first.top < second.bottom - tolerance
+      && second.top < first.bottom - tolerance
+    );
   }
+
   const titles = [yTitle, xTitle, ...disclosures].filter(Boolean);
+
   for (const rect of titles) {
     if (!insideSvg(rect)) return { present: true, pass: false };
   }
+
   const yBoxes = yTicks.map((tick) => tick.getBoundingClientRect());
   const xBoxes = xTicks.map((tick) => tick.getBoundingClientRect());
   const referenceBoxes = references.map((text) => text.getBoundingClientRect());
+
   for (const rect of yBoxes) {
     if (!insideSvg(rect)) return { present: true, pass: false };
     if (rect.right > plotLeft + tolerance) return { present: true, pass: false };
     if (yTitle && overlaps(rect, yTitle)) return { present: true, pass: false };
     if (xTitle && overlaps(rect, xTitle)) return { present: true, pass: false };
+
     for (const disclosure of disclosures) {
       if (overlaps(rect, disclosure)) return { present: true, pass: false };
     }
+
     if (overlaps(rect, plotBox)) return { present: true, pass: false };
+
     for (const other of referenceBoxes) {
       if (overlaps(rect, other)) return { present: true, pass: false };
     }
   }
+
   for (let first = 0; first < yBoxes.length; first += 1) {
     for (let second = first + 1; second < yBoxes.length; second += 1) {
       if (overlaps(yBoxes[first], yBoxes[second])) return { present: true, pass: false };
     }
   }
+
   for (const rect of xBoxes) {
     if (!insideSvg(rect)) return { present: true, pass: false };
     if (rect.top < plotBottom - tolerance) return { present: true, pass: false };
     if (xTitle && overlaps(rect, xTitle)) return { present: true, pass: false };
     if (yTitle && overlaps(rect, yTitle)) return { present: true, pass: false };
+
     for (const disclosure of disclosures) {
       if (overlaps(rect, disclosure)) return { present: true, pass: false };
     }
+
     if (overlaps(rect, plotBox)) return { present: true, pass: false };
+
     for (const other of referenceBoxes) {
       if (overlaps(rect, other)) return { present: true, pass: false };
     }
   }
+
   for (let first = 0; first < xBoxes.length; first += 1) {
     for (let second = first + 1; second < xBoxes.length; second += 1) {
       if (overlaps(xBoxes[first], xBoxes[second])) return { present: true, pass: false };
@@ -943,48 +1040,69 @@ export function chartReferenceBounds() {
   const tolerance = 1;
   const svg = document.querySelector("#scene-full .chart-editor svg");
   if (!svg) return { present: false, pass: false };
+
   const svgBox = svg.getBoundingClientRect();
   const frame = document.querySelector("#scene-full .chart-editor .chart-plot-frame");
   if (!frame) return { present: false, pass: false };
+
   const frameBox = frame.getBoundingClientRect();
   const plotLeft = frameBox.left;
   const plotRight = frameBox.right;
   const plotBottom = frameBox.bottom;
   const lines = [...document.querySelectorAll("#scene-full .chart-editor .chart-grid line")];
   if (lines.length === 0) return { present: false, pass: false };
+
   const axes = [...document.querySelectorAll("#scene-full .chart-axes text")];
   let yTitle = null;
   let xTitle = null;
+
   for (const axis of axes) {
     if (axis.classList && axis.classList.contains("chart-offset")) continue;
+
     const transform = axis.getAttribute("transform") || "";
     if (transform.indexOf("rotate") !== -1) yTitle = axis.getBoundingClientRect();
     else xTitle = axis.getBoundingClientRect();
   }
+
   const disclosureEls = [...document.querySelectorAll("#scene-full .chart-editor .chart-offset")];
   const disclosures = disclosureEls.map((entry) => entry.getBoundingClientRect());
-  const texts = [...document.querySelectorAll(
-    "#scene-full .chart-editor .chart-references text,"
-    + " #scene-full .chart-editor .chart-endpoints text",
-  )];
+  const texts = [
+    ...document.querySelectorAll(
+      "#scene-full .chart-editor .chart-references text,"
+        + " #scene-full .chart-editor .chart-endpoints text",
+    ),
+  ];
   if (texts.length === 0) return { present: false, pass: false };
+
   const yTicks = [...document.querySelectorAll("#scene-full .chart-editor .chart-y-ticks text")];
   const xTicks = [...document.querySelectorAll("#scene-full .chart-editor .chart-x-ticks text")];
   function insideSvg(rect) {
-    return rect.left >= svgBox.left - tolerance && rect.right <= svgBox.right + tolerance
-      && rect.top >= svgBox.top - tolerance && rect.bottom <= svgBox.bottom + tolerance;
+    return (
+      rect.left >= svgBox.left - tolerance
+      && rect.right <= svgBox.right + tolerance
+      && rect.top >= svgBox.top - tolerance
+      && rect.bottom <= svgBox.bottom + tolerance
+    );
   }
   function overlaps(first, second) {
-    return first.left < second.right - tolerance && second.left < first.right - tolerance
-      && first.top < second.bottom - tolerance && second.top < first.bottom - tolerance;
+    return (
+      first.left < second.right - tolerance
+      && second.left < first.right - tolerance
+      && first.top < second.bottom - tolerance
+      && second.top < first.bottom - tolerance
+    );
   }
+
   const titles = [yTitle, xTitle, ...disclosures].filter(Boolean);
+
   for (const rect of titles) {
     if (!insideSvg(rect)) return { present: true, pass: false };
   }
+
   const yBoxes = yTicks.map((tick) => tick.getBoundingClientRect());
   const xBoxes = xTicks.map((tick) => tick.getBoundingClientRect());
   const rects = texts.map((text) => text.getBoundingClientRect());
+
   for (const rect of rects) {
     if (!insideSvg(rect)) return { present: true, pass: false };
     if (rect.left < plotLeft - tolerance) return { present: true, pass: false };
@@ -992,16 +1110,20 @@ export function chartReferenceBounds() {
     if (rect.bottom > plotBottom + tolerance) return { present: true, pass: false };
     if (yTitle && overlaps(rect, yTitle)) return { present: true, pass: false };
     if (xTitle && overlaps(rect, xTitle)) return { present: true, pass: false };
+
     for (const disclosure of disclosures) {
       if (overlaps(rect, disclosure)) return { present: true, pass: false };
     }
+
     for (const other of yBoxes) {
       if (overlaps(rect, other)) return { present: true, pass: false };
     }
+
     for (const other of xBoxes) {
       if (overlaps(rect, other)) return { present: true, pass: false };
     }
   }
+
   for (let first = 0; first < rects.length; first += 1) {
     for (let second = first + 1; second < rects.length; second += 1) {
       if (overlaps(rects[first], rects[second])) return { present: true, pass: false };
@@ -1026,12 +1148,15 @@ export function chartGalleryTickBounds() {
   ];
   const cards = [...document.querySelectorAll("#scene-full .chart-gallery .gallery-card")];
   const byId = new Map(cards.map((card) => [card.getAttribute("data-chart-id"), card]));
+
   for (const id of expected) {
     if (!byId.has(id)) return fail(id, "missing-card", null, null);
   }
+
   const unavailable = [
     ...document.querySelectorAll("#scene-full .chart-gallery .chart-unavailable"),
   ];
+
   for (const tile of unavailable) {
     const heading = tile.querySelector("h4");
     const title = heading ? heading.textContent : "";
@@ -1039,45 +1164,47 @@ export function chartGalleryTickBounds() {
       return fail("gallery", "unknown-unavailable", null, null);
     }
   }
+
   function insideSvg(rect, svgBox) {
-    return rect.left >= svgBox.left - tolerance && rect.right <= svgBox.right + tolerance
-      && rect.top >= svgBox.top - tolerance && rect.bottom <= svgBox.bottom + tolerance;
+    return (
+      rect.left >= svgBox.left - tolerance
+      && rect.right <= svgBox.right + tolerance
+      && rect.top >= svgBox.top - tolerance
+      && rect.bottom <= svgBox.bottom + tolerance
+    );
   }
   function overlaps(first, second) {
-    return first.left < second.right - tolerance && second.left < first.right - tolerance
-      && first.top < second.bottom - tolerance && second.top < first.bottom - tolerance;
+    return (
+      first.left < second.right - tolerance
+      && second.left < first.right - tolerance
+      && first.top < second.bottom - tolerance
+      && second.top < first.bottom - tolerance
+    );
   }
   // DOM rects do not survive JSON, so the record keeps plain coordinates instead.
   function boxOf(rect) {
     if (!rect) return null;
 
-    return {
-      left: rect.left,
-      right: rect.right,
-      top: rect.top,
-      bottom: rect.bottom,
-    };
+    return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
   }
   // A failing tick names its card and predicate so the record shows the rectangle.
   function fail(card, predicate, rect, peer) {
     return {
       present: true,
       pass: false,
-      detail: {
-        card,
-        predicate,
-        rect: boxOf(rect),
-        peer: boxOf(peer),
-      },
+      detail: { card, predicate, rect: boxOf(rect), peer: boxOf(peer) },
     };
   }
+
   for (const id of expected) {
     const card = byId.get(id);
     const svg = card.querySelector("svg");
     if (!svg) return fail(id, "missing-svg", null, null);
+
     const svgBox = svg.getBoundingClientRect();
     const frame = card.querySelector(".chart-plot-frame");
     if (!frame) return fail(id, "missing-frame", null, svgBox);
+
     const frameBox = frame.getBoundingClientRect();
     const plotBox = {
       left: frameBox.left,
@@ -1087,62 +1214,78 @@ export function chartGalleryTickBounds() {
     };
     const lines = [...card.querySelectorAll(".chart-grid line")];
     if (lines.length === 0) return fail(id, "missing-grid", null, svgBox);
+
     const axes = [...card.querySelectorAll(".chart-axes text")];
     let yTitle = null;
     const xTitles = [];
+
     for (const axis of axes) {
       if (axis.classList && axis.classList.contains("chart-offset")) continue;
+
       const transform = axis.getAttribute("transform") || "";
       const rect = axis.getBoundingClientRect();
+
       if (transform.indexOf("rotate") !== -1) yTitle = rect;
       else xTitles.push(rect);
     }
+
     const disclosureEls = [...card.querySelectorAll(".chart-offset")];
     const disclosures = disclosureEls.map((entry) => entry.getBoundingClientRect());
     const yTicks = [...card.querySelectorAll(".chart-y-ticks text")];
     const xTicks = [...card.querySelectorAll(".chart-x-ticks text")];
-    const references = [...card.querySelectorAll(
-      ".chart-references text,"
-      + " .chart-endpoints text",
-    )];
+    const references = [
+      ...card.querySelectorAll(".chart-references text," + " .chart-endpoints text"),
+    ];
+
     if (yTicks.length === 0 || xTicks.length === 0) {
       return fail(id, "missing-ticks", null, svgBox);
     }
+
     if (yTitle && !insideSvg(yTitle, svgBox)) {
       return fail(id, "y-title-outside-svg", yTitle, svgBox);
     }
+
     for (const title of xTitles) {
       if (!insideSvg(title, svgBox)) return fail(id, "x-title-outside-svg", title, svgBox);
     }
+
     for (const disclosure of disclosures) {
       if (!insideSvg(disclosure, svgBox)) {
         return fail(id, "disclosure-outside-svg", disclosure, svgBox);
       }
     }
+
     const yBoxes = yTicks.map((tick) => tick.getBoundingClientRect());
     const xBoxes = xTicks.map((tick) => tick.getBoundingClientRect());
     const referenceBoxes = references.map((text) => text.getBoundingClientRect());
+
     for (const rect of yBoxes) {
       if (!insideSvg(rect, svgBox)) return fail(id, "y-tick-outside-svg", rect, svgBox);
       if (rect.right > frameBox.left + tolerance) {
         return fail(id, "y-tick-enters-plot", rect, frameBox);
       }
+
       if (yTitle && overlaps(rect, yTitle)) {
         return fail(id, "y-tick-overlaps-y-title", rect, yTitle);
       }
+
       for (const title of xTitles) {
         if (overlaps(rect, title)) return fail(id, "y-tick-overlaps-x-title", rect, title);
       }
+
       for (const disclosure of disclosures) {
         if (overlaps(rect, disclosure)) {
           return fail(id, "y-tick-overlaps-disclosure", rect, disclosure);
         }
       }
+
       if (overlaps(rect, plotBox)) return fail(id, "y-tick-overlaps-plot", rect, plotBox);
+
       for (const other of referenceBoxes) {
         if (overlaps(rect, other)) return fail(id, "y-tick-overlaps-reference", rect, other);
       }
     }
+
     for (let first = 0; first < yBoxes.length; first += 1) {
       for (let second = first + 1; second < yBoxes.length; second += 1) {
         if (overlaps(yBoxes[first], yBoxes[second])) {
@@ -1150,27 +1293,34 @@ export function chartGalleryTickBounds() {
         }
       }
     }
+
     for (const rect of xBoxes) {
       if (!insideSvg(rect, svgBox)) return fail(id, "x-tick-outside-svg", rect, svgBox);
       if (rect.top < frameBox.bottom - tolerance) {
         return fail(id, "x-tick-enters-plot", rect, frameBox);
       }
+
       for (const title of xTitles) {
         if (overlaps(rect, title)) return fail(id, "x-tick-overlaps-x-title", rect, title);
       }
+
       if (yTitle && overlaps(rect, yTitle)) {
         return fail(id, "x-tick-overlaps-y-title", rect, yTitle);
       }
+
       for (const disclosure of disclosures) {
         if (overlaps(rect, disclosure)) {
           return fail(id, "x-tick-overlaps-disclosure", rect, disclosure);
         }
       }
+
       if (overlaps(rect, plotBox)) return fail(id, "x-tick-overlaps-plot", rect, plotBox);
+
       for (const other of referenceBoxes) {
         if (overlaps(rect, other)) return fail(id, "x-tick-overlaps-reference", rect, other);
       }
     }
+
     for (let first = 0; first < xBoxes.length; first += 1) {
       for (let second = first + 1; second < xBoxes.length; second += 1) {
         if (overlaps(xBoxes[first], xBoxes[second])) {
@@ -1196,64 +1346,87 @@ export function chartGalleryReferenceBounds() {
     "No temperature series",
     "No elevation distribution",
   ];
+
   const cards = [...document.querySelectorAll("#scene-full .chart-gallery .gallery-card")];
   const byId = new Map(cards.map((card) => [card.getAttribute("data-chart-id"), card]));
+
   for (const id of expected) {
     if (!byId.has(id)) return { present: true, pass: false };
   }
+
   const unavailable = [
     ...document.querySelectorAll("#scene-full .chart-gallery .chart-unavailable"),
   ];
+
   for (const tile of unavailable) {
     const heading = tile.querySelector("h4");
     const title = heading ? heading.textContent : "";
     if (knownUnavailable.indexOf(title) === -1) return { present: true, pass: false };
   }
+
   function insideSvg(rect, svgBox) {
-    return rect.left >= svgBox.left - tolerance && rect.right <= svgBox.right + tolerance
-      && rect.top >= svgBox.top - tolerance && rect.bottom <= svgBox.bottom + tolerance;
+    return (
+      rect.left >= svgBox.left - tolerance
+      && rect.right <= svgBox.right + tolerance
+      && rect.top >= svgBox.top - tolerance
+      && rect.bottom <= svgBox.bottom + tolerance
+    );
   }
   function overlaps(first, second) {
-    return first.left < second.right - tolerance && second.left < first.right - tolerance
-      && first.top < second.bottom - tolerance && second.top < first.bottom - tolerance;
+    return (
+      first.left < second.right - tolerance
+      && second.left < first.right - tolerance
+      && first.top < second.bottom - tolerance
+      && second.top < first.bottom - tolerance
+    );
   }
+
   for (const id of expected) {
     const card = byId.get(id);
     const svg = card.querySelector("svg");
     if (!svg) return { present: true, pass: false };
+
     const svgBox = svg.getBoundingClientRect();
     const frame = card.querySelector(".chart-plot-frame");
     if (!frame) return { present: true, pass: false };
+
     const frameBox = frame.getBoundingClientRect();
     const lines = [...card.querySelectorAll(".chart-grid line")];
     if (lines.length === 0) return { present: true, pass: false };
+
     const axes = [...card.querySelectorAll(".chart-axes text")];
     let yTitle = null;
     let xTitle = null;
+
     for (const axis of axes) {
       if (axis.classList && axis.classList.contains("chart-offset")) continue;
+
       const transform = axis.getAttribute("transform") || "";
       if (transform.indexOf("rotate") !== -1) yTitle = axis.getBoundingClientRect();
       else xTitle = axis.getBoundingClientRect();
     }
+
     const disclosureEls = [...card.querySelectorAll(".chart-offset")];
     const disclosures = disclosureEls.map((entry) => entry.getBoundingClientRect());
     const yTicks = [...card.querySelectorAll(".chart-y-ticks text")];
     const xTicks = [...card.querySelectorAll(".chart-x-ticks text")];
     if (yTicks.length === 0 || xTicks.length === 0) return { present: true, pass: false };
+
     const titles = [yTitle, xTitle, ...disclosures].filter(Boolean);
+
     for (const rect of titles) {
       if (!insideSvg(rect, svgBox)) return { present: true, pass: false };
     }
+
     if (referenceCards.indexOf(id) === -1) continue;
-    const texts = [...card.querySelectorAll(
-      ".chart-references text,"
-      + " .chart-endpoints text",
-    )];
+
+    const texts = [...card.querySelectorAll(".chart-references text," + " .chart-endpoints text")];
     if (texts.length === 0) return { present: true, pass: false };
+
     const yBoxes = yTicks.map((tick) => tick.getBoundingClientRect());
     const xBoxes = xTicks.map((tick) => tick.getBoundingClientRect());
     const rects = texts.map((text) => text.getBoundingClientRect());
+
     for (const rect of rects) {
       if (!insideSvg(rect, svgBox)) return { present: true, pass: false };
       if (rect.left < frameBox.left - tolerance) return { present: true, pass: false };
@@ -1261,16 +1434,20 @@ export function chartGalleryReferenceBounds() {
       if (rect.bottom > frameBox.bottom + tolerance) return { present: true, pass: false };
       if (yTitle && overlaps(rect, yTitle)) return { present: true, pass: false };
       if (xTitle && overlaps(rect, xTitle)) return { present: true, pass: false };
+
       for (const disclosure of disclosures) {
         if (overlaps(rect, disclosure)) return { present: true, pass: false };
       }
+
       for (const other of yBoxes) {
         if (overlaps(rect, other)) return { present: true, pass: false };
       }
+
       for (const other of xBoxes) {
         if (overlaps(rect, other)) return { present: true, pass: false };
       }
     }
+
     for (let first = 0; first < rects.length; first += 1) {
       for (let second = first + 1; second < rects.length; second += 1) {
         if (overlaps(rects[first], rects[second])) return { present: true, pass: false };
@@ -1294,47 +1471,64 @@ export function chartGalleryBarBounds() {
     "No temperature series",
     "No elevation distribution",
   ];
+
   const cards = [...document.querySelectorAll("#scene-full .chart-gallery .gallery-card")];
   const byId = new Map(cards.map((card) => [card.getAttribute("data-chart-id"), card]));
+
   for (const id of expected) {
     if (!byId.has(id)) return { present: true, pass: false };
   }
+
   const unavailable = [
     ...document.querySelectorAll("#scene-full .chart-gallery .chart-unavailable"),
   ];
+
   for (const tile of unavailable) {
     const heading = tile.querySelector("h4");
     const title = heading ? heading.textContent : "";
     if (knownUnavailable.indexOf(title) === -1) return { present: true, pass: false };
   }
+
   function overlaps(first, second) {
-    return first.left < second.right - tolerance && second.left < first.right - tolerance
-      && first.top < second.bottom - tolerance && second.top < first.bottom - tolerance;
+    return (
+      first.left < second.right - tolerance
+      && second.left < first.right - tolerance
+      && first.top < second.bottom - tolerance
+      && second.top < first.bottom - tolerance
+    );
   }
+
   for (const id of expected) {
     const card = byId.get(id);
     const svg = card.querySelector("svg");
     if (!svg) return { present: true, pass: false };
+
     const frame = card.querySelector(".chart-plot-frame");
     if (!frame) return { present: true, pass: false };
+
     const frameBox = frame.getBoundingClientRect();
     const yTicks = [...card.querySelectorAll(".chart-y-ticks text")];
     const xTicks = [...card.querySelectorAll(".chart-x-ticks text")];
     if (yTicks.length === 0 || xTicks.length === 0) return { present: true, pass: false };
     if (barCards.indexOf(id) === -1) continue;
+
     const bars = [...card.querySelectorAll(".chart-bars rect")];
     if (bars.length === 0) return { present: true, pass: false };
+
     const yBoxes = yTicks.map((tick) => tick.getBoundingClientRect());
     const barBoxes = bars.map((bar) => bar.getBoundingClientRect());
+
     for (const box of barBoxes) {
       if (box.left < frameBox.left - tolerance) return { present: true, pass: false };
       if (box.right > frameBox.right + tolerance) return { present: true, pass: false };
       if (box.top < frameBox.top - tolerance) return { present: true, pass: false };
       if (box.bottom > frameBox.bottom + tolerance) return { present: true, pass: false };
+
       for (const other of yBoxes) {
         if (overlaps(box, other)) return { present: true, pass: false };
       }
     }
+
     for (let first = 0; first < barBoxes.length; first += 1) {
       for (let second = first + 1; second < barBoxes.length; second += 1) {
         if (overlaps(barBoxes[first], barBoxes[second])) {
@@ -1352,15 +1546,19 @@ export function chartAttributionVisible() {
   const tolerance = 1;
   const note = document.querySelector("#scene-full .chart-editor .editor-attribution");
   if (!note) return false;
+
   const style = window.getComputedStyle(note);
   if (style.display === "none") return false;
   if (style.visibility === "hidden" || style.visibility === "collapse") return false;
   if (Number(style.opacity) === 0) return false;
+
   if (typeof note.checkVisibility === "function") {
     if (!note.checkVisibility({ visibilityProperty: true })) return false;
   }
+
   const main = document.querySelector("#scene-full main");
   if (!main) return false;
+
   const mainBox = main.getBoundingClientRect();
   const visible = {
     left: Math.max(mainBox.left, 0),
@@ -1369,12 +1567,15 @@ export function chartAttributionVisible() {
     bottom: Math.min(mainBox.bottom, window.innerHeight),
   };
   if (!(visible.right > visible.left && visible.bottom > visible.top)) return false;
+
   function collectNodes(root) {
     const nodes = [];
     const stack = [root];
+
     while (stack.length > 0) {
       const current = stack.pop();
       if (!current) continue;
+
       if (current.nodeType === 3) nodes.push(current);
       else if (current.childNodes) {
         for (let index = current.childNodes.length - 1; index >= 0; index -= 1) {
@@ -1389,6 +1590,7 @@ export function chartAttributionVisible() {
     try {
       const range = document.createRange();
       range.selectNodeContents(textNode);
+
       const rects = range.getClientRects();
 
       return [...rects];
@@ -1405,13 +1607,22 @@ export function chartAttributionVisible() {
     const top = Math.min(Math.max(rect.top + inset, rect.top), rect.bottom);
     const bottom = Math.max(Math.min(rect.bottom - inset, rect.bottom), rect.top);
 
-    return [[middleX, middleY], [left, top], [right, top], [left, bottom], [right, bottom]];
+    return [
+      [middleX, middleY],
+      [left, top],
+      [right, top],
+      [left, bottom],
+      [right, bottom],
+    ];
   }
+
   const textNodes = collectNodes(note).filter((node) => (node.textContent ?? "").trim() !== "");
   let fragments = [];
+
   for (const textNode of textNodes) {
     fragments = fragments.concat(fragmentsFor(textNode));
   }
+
   if (fragments.length === 0) {
     try {
       fragments = [...note.getClientRects()];
@@ -1419,13 +1630,16 @@ export function chartAttributionVisible() {
       return false;
     }
   }
+
   if (fragments.length === 0) return false;
+
   for (const fragment of fragments) {
     if (!(fragment.width > 0 && fragment.height > 0)) return false;
     if (fragment.left < visible.left - tolerance) return false;
     if (fragment.right > visible.right + tolerance) return false;
     if (fragment.top < visible.top - tolerance) return false;
     if (fragment.bottom > visible.bottom + tolerance) return false;
+
     for (const point of representativePoints(fragment)) {
       const hit = document.elementFromPoint(point[0], point[1]);
       if (!hit) return false;
@@ -1447,15 +1661,18 @@ export function chartEditorOverflow() {
 export async function hitTestControl(page, viewport, editor, control) {
   const target = controlLocator(page, control).first();
   const required = requiredInState(control, editor);
-  if (await target.count() === 0) return absentRecord(viewport, editor, control, required);
+
+  if ((await target.count()) === 0) return absentRecord(viewport, editor, control, required);
 
   if (control.scroll) await target.evaluate(scrollCentre, control.scroll);
+
   const box = await target.boundingBox();
   if (!box) return absentRecord(viewport, editor, control, required);
 
   if (control.samples !== undefined) return sampleHitTest(target, viewport, editor, control, box);
 
   const { pass, hit } = await target.evaluate(containsPoint, [centreOf(box), HIT_TEXT_CHARS]);
+
   return layoutRecord({
     viewport,
     editor,
@@ -1470,21 +1687,16 @@ export async function hitTestControl(page, viewport, editor, control) {
 // One covered endpoint fails the control even while its center stays clickable.
 async function sampleHitTest(target, viewport, editor, control, box) {
   const name = controlDisplay(control);
+
   for (const point of spreadPoints(box, control.samples)) {
     const { pass, hit } = await target.evaluate(containsPoint, [point, HIT_TEXT_CHARS]);
     if (!pass) {
-      return layoutRecord({
-        viewport,
-        editor,
-        role: control.role,
-        name,
-        present: true,
-        pass,
-        hit,
-      });
+      return layoutRecord({ viewport, editor, role: control.role, name, present: true, pass, hit });
     }
   }
+
   const { hit } = await target.evaluate(containsPoint, [centreOf(box), HIT_TEXT_CHARS]);
+
   return layoutRecord({
     viewport,
     editor,
@@ -1512,7 +1724,9 @@ export async function hitTestAttribution(page, viewport, editor) {
       }),
     ];
   }
+
   const records = [];
+
   for (let index = 0; index < count; index += 1) {
     records.push(await hitTestLink(viewport, editor, links.nth(index)));
   }
@@ -1523,6 +1737,7 @@ export async function hitTestAttribution(page, viewport, editor) {
 async function hitTestLink(viewport, editor, link) {
   const box = await link.boundingBox();
   const name = ((await link.textContent()) ?? "").trim().replace(/\s+/g, " ");
+
   if (!box) {
     return layoutRecord({
       viewport,
@@ -1541,6 +1756,7 @@ async function hitTestLink(viewport, editor, link) {
     firstLine ?? centreOf(box),
     HIT_TEXT_CHARS,
   ]);
+
   return layoutRecord({ viewport, editor, role: "link", name, present: true, pass, hit });
 }
 
@@ -1601,16 +1817,19 @@ function centreOf(box) {
 // Scrolling only the owning container preserves fixed-region collision checks.
 function scrollCentre(control, selector) {
   let container = control.closest(selector);
+
   // An in-flow editor does not scroll itself, so the scroll goes to the cards instead.
   while (container && container.scrollHeight <= container.clientHeight) {
     const parent = container.parentElement;
     container = parent === document.documentElement ? null : parent;
   }
+
   if (!container) {
     control.scrollIntoView({ block: "center" });
 
     return;
   }
+
   const outer = container.getBoundingClientRect();
   const inner = control.getBoundingClientRect();
   const middle = inner.top + inner.height / 2 - outer.top;
@@ -1651,9 +1870,12 @@ export async function openLayoutEditor(page) {
 async function trialPage(context, appUrl, spot, sceneId, options) {
   const page = await context.newPage();
   const watcher = watchPage(page);
+
   try {
     await openScene(page, appUrl, sceneId, spot);
+
     const records = [];
+
     for (const [index, zoom] of spot.zooms.entries()) {
       const { record, hasFailed } = await trialView(page, watcher, spot, sceneId, zoom, {
         ...options,
@@ -1663,6 +1885,7 @@ async function trialPage(context, appUrl, spot, sceneId, options) {
       // A failed entry never recovers, so every later zoom would only wait out its timeout.
       if (hasFailed) break;
     }
+
     return records;
   } catch (error) {
     const mapErrors = await page.evaluate(() => window.__trialErrors ?? []).catch(() => []);
@@ -1679,12 +1902,15 @@ function exposeMap() {
   window.__trialLayersReady = false;
   window.__trialFlightLanded = false;
   window.__trialGlErrors = [];
+
   const getError = WebGL2RenderingContext.prototype.getError;
   WebGL2RenderingContext.prototype.getError = function () {
     const error = getError.call(this);
     if (error !== this.NO_ERROR) window.__trialGlErrors.push(error);
+
     return error;
   };
+
   let map;
   Object.defineProperty(window, "__map", {
     configurable: true,
@@ -1704,17 +1930,20 @@ function watchPage(page) {
     const url = response.url();
     watcher.failures.push({ kind: classifyFailure(url), url, status: response.status() });
   });
+
   page.on("console", (message) => {
     const ignored = /Failed to load resource/.test(message.text());
     if (["error", "warning"].includes(message.type()) && !ignored) {
       watcher.messages.push(`${message.type()}: ${message.text()}`);
     }
   });
+
   // Transport failures never produce a response, so the network reason is kept instead.
   page.on("requestfailed", (request) => {
     const url = request.url();
     watcher.failures.push({ kind: classifyFailure(url), url, error: requestError(request) });
   });
+
   page.on("pageerror", (error) => watcher.messages.push(`pageerror: ${error.message}`));
 
   return watcher;
@@ -1727,11 +1956,10 @@ function requestError(request) {
 // The link carries the supported allocation, because the removed colour= never chose an owner.
 async function openScene(page, appUrl, sceneId, spot) {
   await page.goto(`${appUrl}/?scene=${sceneId}${allocationQuery(spot)}`);
-  await page.waitForFunction(
-    (layerId) => window.__map?.getLayer(layerId),
-    OUTLINE_LAYER_ID,
-    { timeout: SCENE_READY_TIMEOUT_MS },
-  );
+  await page.waitForFunction((layerId) => window.__map?.getLayer(layerId), OUTLINE_LAYER_ID, {
+    timeout: SCENE_READY_TIMEOUT_MS,
+  });
+
   for (const entry of spot.enable) await enableOption(page, entry);
 }
 
@@ -1759,11 +1987,13 @@ async function enableOption(page, entry) {
     await checkEditorOption(page, target.layer, target.option);
     return;
   }
+
   await checkFirstOption(page, target.option);
 }
 
 async function checkEditorOption(page, layer, option) {
   await page.getByRole("button", { name: editButtonName(layer) }).click();
+
   const menu = page.getByRole("complementary", { name: `Edit ${layer}`, exact: true });
   await menu.getByRole("checkbox", { name: option, exact: true }).check();
   await menu.getByRole("button", { name: "Close", exact: true }).click();
@@ -1772,17 +2002,22 @@ async function checkEditorOption(page, layer, option) {
 async function checkFirstOption(page, option) {
   const edits = page.getByRole("button", { name: /^Edit / });
   const count = await edits.count();
+
   for (let index = 0; index < count; index += 1) {
     await edits.nth(index).click();
+
     const menu = page.getByRole("complementary", { name: /^Edit / });
     const box = menu.getByRole("checkbox", { name: option, exact: true });
-    if (await box.count() > 0) {
+
+    if ((await box.count()) > 0) {
       await box.check();
       await menu.getByRole("button", { name: "Close", exact: true }).click();
       return;
     }
+
     await menu.getByRole("button", { name: "Close", exact: true }).click();
   }
+
   throw new Error(`no checkbox labelled "${option}"`);
 }
 
@@ -1796,11 +2031,13 @@ function escapeRegExp(text) {
 
 // The scene entry is done once the mask, the layers and the flight have all landed.
 export function isEntryReady() {
-  return window.__trialMaskReady === true
+  return (
+    window.__trialMaskReady === true
     && window.__trialLayersReady === true
     && window.__trialFlightLanded === true
     && window.__map != null
-    && window.__map.isMoving() === false;
+    && window.__map.isMoving() === false
+  );
 }
 
 export async function waitForEntry(page) {
@@ -1819,17 +2056,24 @@ async function trialView(page, watcher, spot, sceneId, zoom, options) {
   let timedOut = false;
   let hasFailed = false;
   let sample = null;
+
   try {
     // The entry flight lands on the fitted view, so it would overwrite an early jump.
     await waitForEntry(page);
+
     if (zoom !== "fitted") await page.evaluate(jumpTo, [spot.centre, zoom]);
+
     ({ sample, timedOut } = await settledSample(page));
+
     const zoomFailure = sampledZoomMismatch(sample, zoom);
+
     if (zoomFailure !== null) {
       watcher.messages.push(zoomFailure);
       timedOut = true;
     }
+
     const ownerFailure = ownerMismatch(spot, sample);
+
     if (ownerFailure !== null) {
       watcher.messages.push(ownerFailure);
       timedOut = true;
@@ -1837,6 +2081,7 @@ async function trialView(page, watcher, spot, sceneId, zoom, options) {
 
     if (spot.landcover && sample) {
       await landcoverScreens(page, spot, zoom, options);
+
       const frameDeltas = await page.evaluate(panFrames, [PAN_DURATION_MS, PAN_DISTANCE_PX]);
       const displayChecks = await checkDisplay(page, options.renderer);
       const contextRestored = options.checkContext ? await checkContextRestore(page) : null;
@@ -1848,18 +2093,25 @@ async function trialView(page, watcher, spot, sceneId, zoom, options) {
         };
       });
       sample = { ...sample, ...diagnostics, frameDeltas, displayChecks, contextRestored };
+
       const failures = displayFailures(displayChecks, options.renderer);
+
       if (failures.length > 0) timedOut = true;
+
       watcher.messages.push(...failures);
     }
+
     if (spot.colour && sample) {
       const marksFrameDeltas = await page.evaluate(panFrames, [PAN_DURATION_MS, PAN_DISTANCE_PX]);
       sample = { ...sample, marksFrameDeltas };
     }
   } catch (error) {
     watcher.messages.push(`view failed: ${error.message.split("\n")[0]}`);
+
     const status = await panelStatus(page);
+
     if (status) watcher.messages.push(`build panel: ${status}`);
+
     timedOut = true;
     hasFailed = true;
   }
@@ -1874,6 +2126,7 @@ async function trialView(page, watcher, spot, sceneId, zoom, options) {
     messages: [...watcher.messages.splice(0), ...mapErrors],
     timedOut,
   });
+
   if (options.screens && !spot.landcover) {
     const file = `${slug(spot.name)}-${slug(zoomLabel(zoom))}.png`;
     await page.screenshot({ path: path.join(options.out, file) });
@@ -1904,11 +2157,13 @@ function ownerMismatch(spot, sample) {
 // False repaint readings fail the record, because a hidden layer repaints nothing.
 export function displayFailures(checks, renderer) {
   const failures = [];
+
   if (!checks.visibility) failures.push("land cover visibility check did not repaint");
   if (!checks.palette_repaints) failures.push("land cover palette check did not repaint");
   if (renderer === "gpu" && (!checks.edges_available || !checks.edges_repaint)) {
     failures.push("land cover edges check did not repaint");
   }
+
   if (renderer === "image" && !checks.fallback_note) {
     failures.push("land cover image fallback note is missing");
   }
@@ -1921,18 +2176,23 @@ async function landcoverScreens(page, spot, zoom, options) {
 
   const prefix = `${slug(spot.name)}-${slug(zoomLabel(zoom))}`;
   await page.screenshot({ path: path.join(options.out, `${prefix}-${options.renderer}.png`) });
+
   if (options.renderer !== "gpu") return;
 
   await page.getByRole("button", { name: LANDCOVER_EDIT_BUTTON }).click();
+
   const smoothing = page.getByRole("slider", { name: "Smoothing", exact: true });
+
   if (await smoothing.count()) {
     await smoothing.fill("0");
     await page.getByRole("button", { name: "Close", exact: true }).click();
     await page.evaluate(nextFrame);
     await page.screenshot({ path: path.join(options.out, `${prefix}-gpu-smoothing-0.png`) });
+
     await page.getByRole("button", { name: LANDCOVER_EDIT_BUTTON }).click();
     await smoothing.fill("0.25");
   }
+
   await page.getByRole("button", { name: "Close", exact: true }).click();
 }
 
@@ -1941,30 +2201,39 @@ async function checkDisplay(page, renderer) {
   const master = card.getByRole("switch", { name: LANDCOVER_SHOW_SWITCH });
   const before = await page.evaluate(frameHash);
   await master.uncheck();
+
   const hidden = await page.evaluate(frameHash);
   await master.check();
+
   const shown = await page.evaluate(frameHash);
   await page.getByRole("button", { name: LANDCOVER_EDIT_BUTTON }).click();
+
   const menu = page.getByRole("complementary", { name: LANDCOVER_EDIT_MENU });
   const original = await menu.locator(".palette-choice input[type=radio]:checked").inputValue();
   await menu.getByRole("radio", { name: "ESA", exact: false }).check();
+
   const recoloured = await page.evaluate(frameHash);
   await menu.locator(`.palette-choice input[type=radio][value="${original}"]`).check();
+
   const smoothing = menu.getByRole("slider", { name: "Smoothing", exact: true });
-  const hasEdges = await smoothing.count() > 0;
+  const hasEdges = (await smoothing.count()) > 0;
   let edgesRepaint = null;
+
   if (hasEdges) {
     await smoothing.fill("0.6");
     await menu.getByRole("slider", { name: "Softness", exact: true }).fill("1");
     await menu.getByRole("checkbox", { name: "Faint outline" }).check();
-    edgesRepaint = await page.evaluate(frameHash) !== shown;
+
+    edgesRepaint = (await page.evaluate(frameHash)) !== shown;
+
     await smoothing.fill("0.25");
     await menu.getByRole("slider", { name: "Softness", exact: true }).fill("0");
     await menu.getByRole("checkbox", { name: "Faint outline" }).uncheck();
   }
-  const fallbackNote = await menu.getByText("Edge options need WebGL drawing.", {
-    exact: true,
-  }).count();
+
+  const fallbackNote = await menu
+    .getByText("Edge options need WebGL drawing.", { exact: true })
+    .count();
   await menu.getByRole("button", { name: "Close", exact: true }).click();
 
   return {
@@ -1982,11 +2251,14 @@ async function checkContextRestore(page) {
   if (!supported) return "unsupported";
 
   await settledSample(page);
+
   const after = await page.evaluate(frameHash);
-  const mounted = await page.evaluate(() =>
-    document.body.dataset.landcoverRenderer === "gpu"
-    && Boolean(window.__map.getLayer("esa_worldcover-classes")),
+  const mounted = await page.evaluate(
+    () =>
+      document.body.dataset.landcoverRenderer === "gpu"
+      && Boolean(window.__map.getLayer("esa_worldcover-classes")),
   );
+
   return mounted && before === after;
 }
 
@@ -1997,7 +2269,9 @@ async function settledSample(page) {
     null,
     { timeout: VIEW_TIMEOUT_MS },
   );
+
   let previous = null;
+
   while (Date.now() < deadline) {
     const idle = await page.evaluate(waitForIdle, deadline - Date.now());
     const patterns = [CONTOUR_LABEL_PATTERN.source];
@@ -2005,6 +2279,7 @@ async function settledSample(page) {
     if (isSettled(previous, sample, idle)) {
       return { sample, timedOut: false };
     }
+
     previous = sample;
   }
 
@@ -2018,11 +2293,7 @@ function failedRecord(spot, sceneId, error, watcher, mapErrors) {
     zoom: "fitted",
     sample: null,
     failures: watcher.failures,
-    messages: [
-      ...watcher.messages,
-      ...mapErrors,
-      `spot failed: ${error.message.split("\n")[0]}`,
-    ],
+    messages: [...watcher.messages, ...mapErrors, `spot failed: ${error.message.split("\n")[0]}`],
     timedOut: true,
   });
 }
@@ -2041,19 +2312,23 @@ function zoomSweep([startZoom, endZoom, stepZoom]) {
   const tasks = [];
   const marks = [];
   let observer = null;
+
   try {
     observer = new PerformanceObserver((entries) => {
       for (const entry of entries.getEntries()) {
         tasks.push({ startTime: entry.startTime, duration: entry.duration });
       }
     });
+
     observer.observe({ entryTypes: ["longtask"] });
   } catch {
     observer = null;
   }
+
   map.jumpTo({ center, zoom: startZoom });
   // jumpTo gestures fire synchronously, so the outer pair keeps the shared hub active.
   map.fire("movestart");
+
   return new Promise((resolve) => {
     let previous;
     let zoom = startZoom;
@@ -2070,19 +2345,24 @@ function zoomSweep([startZoom, endZoom, stepZoom]) {
           tilesLoaded: map.areTilesLoaded(),
         });
         zoom += stepZoom;
+
         if (zoom > endZoom + 1e-9) {
           try {
             observer?.disconnect();
           } catch {
             // A missing observer leaves the task list as it is.
           }
+
           map.fire("moveend");
           resolve({ frames, longtasks: tasksWithZoom(tasks, marks) });
+
           return;
         }
+
         map.jumpTo({ center, zoom });
         requestAnimationFrame(frame);
       });
+
       map.triggerRepaint();
     };
     requestAnimationFrame(frame);
@@ -2095,6 +2375,7 @@ function zoomSweep([startZoom, endZoom, stepZoom]) {
         if (mark.time > task.startTime) break;
         at = mark.zoom;
       }
+
       return { zoom: at, durationMs: task.duration };
     });
   }
@@ -2109,16 +2390,21 @@ function nextFrame() {
 
 function frameHash() {
   const map = window.__map;
+
   return new Promise((resolve) => {
     map.once("render", () => {
       const canvas = map.getCanvas();
       const gl = canvas.getContext("webgl2");
       const pixels = new Uint8Array(canvas.width * canvas.height * 4);
       gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
       let hash = 2166136261;
+
       for (const byte of pixels) hash = Math.imul(hash ^ byte, 16777619);
+
       resolve(hash >>> 0);
     });
+
     map.triggerRepaint();
   });
 }
@@ -2130,16 +2416,21 @@ function panFrames([durationMs, distancePx]) {
   const end = map.unproject([start.x + distancePx, start.y]);
   const longitudeSpan = end.lng - centre.lng;
   const deltas = [];
+
   return new Promise((resolve) => {
     let started;
     let previous;
     const frame = (now) => {
       started ??= now;
+
       if (previous !== undefined) deltas.push(now - previous);
+
       previous = now;
+
       const progress = Math.min(1, (now - started) / durationMs);
       const offset = Math.sin(progress * Math.PI * 2) * longitudeSpan;
       map.setCenter([centre.lng + offset, centre.lat]);
+
       if (progress < 1) return requestAnimationFrame(frame);
 
       map.setCenter(centre);
@@ -2157,14 +2448,24 @@ function restoreContext() {
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("context restore timed out")), 10 * 1000);
-    canvas.addEventListener("webglcontextlost", () => {
-      // Restoration must happen in a later task after all lost-context listeners have run.
-      setTimeout(() => extension.restoreContext(), 0);
-    }, { once: true });
-    canvas.addEventListener("webglcontextrestored", () => {
-      clearTimeout(timer);
-      resolve(true);
-    }, { once: true });
+    canvas.addEventListener(
+      "webglcontextlost",
+      () => {
+        // Restoration must happen in a later task after all lost-context listeners have run.
+        setTimeout(() => extension.restoreContext(), 0);
+      },
+      { once: true },
+    );
+
+    canvas.addEventListener(
+      "webglcontextrestored",
+      () => {
+        clearTimeout(timer);
+        resolve(true);
+      },
+      { once: true },
+    );
+
     extension.loseContext();
   });
 }
@@ -2175,6 +2476,7 @@ function jumpTo([centre, zoom]) {
 
 function waitForIdle(timeoutMs) {
   const map = window.__map;
+
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       map.off("idle", onIdle);
@@ -2182,6 +2484,7 @@ function waitForIdle(timeoutMs) {
     }, timeoutMs);
     const onIdle = () => {
       if (map.isMoving()) return;
+
       clearTimeout(timer);
       map.off("idle", onIdle);
       resolve(true);
@@ -2201,15 +2504,18 @@ function takeSample([labelPattern]) {
   const rendered = (ids) => {
     const unique = new Map();
     const features = ids.length ? map.queryRenderedFeatures({ layers: ids }) : [];
+
     for (const feature of features) {
       const start = feature.geometry.coordinates[0];
       unique.set(JSON.stringify([feature.layer.id, feature.properties, start]), feature);
     }
+
     return [...unique.values()];
   };
   const toPixels = ({ geometry }) => {
     const isMulti = geometry.type === "MultiLineString";
     const lines = isMulti ? geometry.coordinates : [geometry.coordinates];
+
     return lines.map((line) =>
       line.map((point) => {
         const pixel = map.project(point);
@@ -2217,9 +2523,11 @@ function takeSample([labelPattern]) {
       }),
     );
   };
+
   const labels = rendered(idsOf("symbol", labelPattern));
   const canvas = map.getCanvas();
   const cards = [...document.querySelectorAll("section.card")];
+
   // The link carries the normalized allocation, so its as entries name the colour owner.
   const search = window.location?.search ?? "";
   // URLSearchParams is missing from the trial's sandbox, so the query is read by hand.
@@ -2235,8 +2543,10 @@ function takeSample([labelPattern]) {
       return value;
     }
   };
+
   const off = new Set(queryParam("off").split(",").filter(Boolean));
   let colourOwner = null;
+
   for (const entry of queryParam("as").split(",").filter(Boolean)) {
     const [unit, draw] = entry.split(":");
     if (draw === "colour" && !off.has(unit)) colourOwner = unit;
@@ -2261,11 +2571,12 @@ function takeSample([labelPattern]) {
   };
 
   function poolRecord() {
-    const stats = typeof window.__getDemPoolStats === "function"
-      ? window.__getDemPoolStats()
-      : null;
+    const stats =
+      typeof window.__getDemPoolStats === "function" ? window.__getDemPoolStats() : null;
     if (!stats) return null;
+
     const timings = window.__gpuMs ?? {};
+
     return {
       textures: stats.textures,
       textureMB: stats.textureBytes / (1024 * 1024),
@@ -2282,6 +2593,7 @@ function takeSample([labelPattern]) {
     for (const name of Object.keys(timings ?? {})) {
       if (name.endsWith(suffix)) return timings[name];
     }
+
     return undefined;
   }
 }
@@ -2292,14 +2604,10 @@ function containsPoint(control, [point, limit]) {
   if (!hit) return { pass: false, hit: null };
 
   const text = (hit.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, limit);
+
   return {
     pass: control.contains(hit),
-    hit: {
-      tag: hit.tagName.toLowerCase(),
-      id: hit.id || null,
-      classes: [...hit.classList],
-      text,
-    },
+    hit: { tag: hit.tagName.toLowerCase(), id: hit.id || null, classes: [...hit.classList], text },
   };
 }
 
@@ -2312,14 +2620,17 @@ function seesAttribution(scope) {
   if (!bar) return false;
 
   const box = bar.getBoundingClientRect();
+
   return box.width > 0 && box.height > 0 && box.bottom > 0 && box.top < window.innerHeight;
 }
 
 function scaleInsideViewport(scope) {
   const scale = document.querySelector(scope);
   if (!scale) return null;
+
   const box = scale.getBoundingClientRect();
 
-  return box.x >= 0 && box.y >= 0 && box.right <= window.innerWidth
-    && box.bottom <= window.innerHeight;
+  return (
+    box.x >= 0 && box.y >= 0 && box.right <= window.innerWidth && box.bottom <= window.innerHeight
+  );
 }

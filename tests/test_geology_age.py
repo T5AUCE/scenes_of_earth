@@ -1,4 +1,5 @@
 """Test the rock-age classes, the GSC ingest and the Geology age layer."""
+
 import io
 import json
 import subprocess
@@ -97,12 +98,13 @@ def age_cubes_dir(tmp_path):
     cubes = tmp_path / "cubes"
     cubes.mkdir()
     build_geology_age_cog(source / POLYGONS_FILE, source / AGES_FILE, cubes / GEOLOGY_AGE_FILE)
+
     return cubes
 
 
 def test_a_range_inside_one_period_takes_that_period():
     assert classify_age_ranges([("LATE JURASSIC", "JURASSIC")], GSC_AGE_NAMES) == {
-        ("LATE JURASSIC", "JURASSIC"): AGE_VALUES["Jurassic"],
+        ("LATE JURASSIC", "JURASSIC"): AGE_VALUES["Jurassic"]
     }
 
 
@@ -114,12 +116,18 @@ def test_a_range_over_several_periods_of_one_era_is_that_era_undivided():
 
 def test_ranges_over_several_eras_take_the_smallest_wider_class():
     assert smallest_containing_class("Permian", "Triassic") == AGE_VALUES["Phanerozoic undivided"]
-    assert smallest_containing_class("Mesoproterozoic", "Neoproterozoic") \
+    assert (
+        smallest_containing_class("Mesoproterozoic", "Neoproterozoic")
         == AGE_VALUES["Proterozoic undivided"]
-    assert smallest_containing_class("Archean", "Mesoproterozoic") \
+    )
+    assert (
+        smallest_containing_class("Archean", "Mesoproterozoic")
         == AGE_VALUES["Precambrian undivided"]
-    assert smallest_containing_class("Neoproterozoic", "Cambrian") \
+    )
+    assert (
+        smallest_containing_class("Neoproterozoic", "Cambrian")
         == AGE_VALUES["Precambrian to Phanerozoic"]
+    )
 
 
 def test_cambrian_stays_cambrian_and_vendian_stays_below_it():
@@ -142,8 +150,7 @@ def test_the_start_and_end_names_may_come_in_either_order():
 
 def test_tertiary_is_cenozoic_undivided_and_its_halves_are_periods():
     classes = classify_age_ranges(
-        [("TERTIARY", "TERTIARY"), ("EARLY TERTIARY", "EARLY TERTIARY")],
-        GSC_AGE_NAMES,
+        [("TERTIARY", "TERTIARY"), ("EARLY TERTIARY", "EARLY TERTIARY")], GSC_AGE_NAMES
     )
 
     assert classes[("TERTIARY", "TERTIARY")] == AGE_VALUES["Cenozoic undivided"]
@@ -206,6 +213,7 @@ def test_cog_holds_the_class_of_each_unit_and_zero_where_no_unit_has_an_age(tmp_
         values = [raster.read(1)[row, raster.index(x, 2.5)[1]] for x in (2, 7, 12, 17, 30)]
         assert raster.tags()[LITHOLOGY_SOURCE_TAG] == GSC_SOURCE
         assert raster.bounds.bottom == -60 and raster.bounds.top == 84
+
     assert values == [
         AGE_VALUES["Cambrian"],
         AGE_VALUES["Phanerozoic undivided"],
@@ -263,16 +271,9 @@ class FakeResponse(io.BytesIO):
 
 
 def test_cli_help_works_without_the_pyogrio_extra():
-    script = (
-        "import sys; sys.modules['pyogrio'] = None;"
-        " from soe.cli import main; main(['--help'])"
-    )
+    script = "import sys; sys.modules['pyogrio'] = None; from soe.cli import main; main(['--help'])"
     completed = subprocess.run(
-        [sys.executable, "-c", script],
-        capture_output=True,
-        text=True,
-        cwd=ROOT,
-        check=False,
+        [sys.executable, "-c", script], capture_output=True, text=True, cwd=ROOT, check=False
     )
 
     assert completed.returncode == 0
@@ -293,7 +294,7 @@ def test_ingest_fetches_the_members_by_range_reads_and_not_the_whole_file(tmp_pa
 
         first, last = request.get_header("Range").removeprefix("bytes=").split("-")
         fetched.append(int(last) - int(first) + 1)
-        return FakeResponse(content[int(first):int(last) + 1], len(content), int(first))
+        return FakeResponse(content[int(first) : int(last) + 1], len(content), int(first))
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(ingest, "READ_BUFFER_BYTES", SMALL_READ_BYTES)
@@ -311,6 +312,7 @@ def test_range_reader_rejects_a_server_that_ignores_range_requests(monkeypatch):
         response = FakeResponse(bytes(100), 100)
         response.status = 200
         del response.headers["Content-Range"]
+
         return response
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
@@ -354,10 +356,7 @@ def test_range_reader_fetches_only_the_requested_bytes(monkeypatch):
     assert wanted == [(0, 9)]
 
 
-def test_ingest_publishes_nothing_when_the_server_ignores_range_requests(
-    tmp_path,
-    monkeypatch,
-):
+def test_ingest_publishes_nothing_when_the_server_ignores_range_requests(tmp_path, monkeypatch):
     source = tmp_path / "gsc"
     write_gsc_files(source)
     archive = tmp_path / "of_5529.zip"
@@ -371,6 +370,7 @@ def test_ingest_publishes_nothing_when_the_server_ignores_range_requests(
         response = FakeResponse(content, len(content))
         response.status = 200
         del response.headers["Content-Range"]
+
         return response
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)

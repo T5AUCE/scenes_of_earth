@@ -4,8 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { INK_COLORS } from "../render/palettes";
 import type { SceneStore } from "../scene-store";
 import type { LayerDoc, Scene } from "../types";
-import { isUnitFor, unitOptions } from "../units";
 import { useSceneStore } from "../ui/use-scene-store";
+import { isUnitFor, unitOptions } from "../units";
+import { ChartPreview } from "./chart-preview";
 import {
   allowedTypesFor,
   canonicalTableFor,
@@ -20,10 +21,9 @@ import {
   type ChartOptions,
   type SupportedShape,
 } from "./definitions";
-import { ChartPreview } from "./chart-preview";
 import { isSeasonalEligible, shapesForLayer } from "./series";
-import { validateYRange } from "./ticks";
 import { isChartType, type ChartType } from "./table";
+import { validateYRange } from "./ticks";
 
 /** A draft the editor edits; saving copies it atomically into the store. */
 export interface ChartDraft {
@@ -111,9 +111,9 @@ export function ChartEditor({
   useEffect(() => {
     if (confirming) confirmSaveRef.current?.focus();
   }, [confirming]);
-  const viewerUnit = layer ? display.layers[layer.id]?.units ?? null : null;
-  const effectivePalette = layer ? display.layers[layer.id]?.palette ?? null : null;
-  const effectiveInk = layer ? display.layers[layer.id]?.ink ?? null : null;
+  const viewerUnit = layer ? (display.layers[layer.id]?.units ?? null) : null;
+  const effectivePalette = layer ? (display.layers[layer.id]?.palette ?? null) : null;
+  const effectiveInk = layer ? (display.layers[layer.id]?.ink ?? null) : null;
 
   const update = (next: ChartDraft, note: string | null = null) => {
     setDraft(next);
@@ -216,7 +216,9 @@ export function ChartEditor({
               effectivePalette={effectivePalette}
               effectiveInk={effectiveInk}
             />
-          ) : <p>{"Choose a layer to preview the chart."}</p>}
+          ) : (
+            <p>{"Choose a layer to preview the chart."}</p>
+          )}
         </div>
       </div>
       {confirming && (
@@ -300,9 +302,10 @@ function withLayer(draft: ChartDraft, layers: readonly LayerDoc[], layerId: stri
   const next: ChartDraft = {
     ...draft,
     source: { layerId, shape },
-    chartType: draft.source.shape === shape
-      ? draft.chartType
-      : defaultChartTypeFor(shape, layer.time?.method ?? null),
+    chartType:
+      draft.source.shape === shape
+        ? draft.chartType
+        : defaultChartTypeFor(shape, layer.time?.method ?? null),
     options: { ...draft.options },
   };
 
@@ -430,7 +433,8 @@ function inkField(draft: ChartDraft, onChange: (next: ChartDraft) => void) {
           value={ink}
           pattern="#[0-9a-f]{6}"
           onChange={(event) =>
-            onChange({ ...draft, options: { ...draft.options, ink: event.target.value } })}
+            onChange({ ...draft, options: { ...draft.options, ink: event.target.value } })
+          }
         />
       )}
     </label>
@@ -486,7 +490,8 @@ function axisFields(draft: ChartDraft, onChange: (next: ChartDraft) => void) {
             onChange({
               ...draft,
               options: { ...draft.options, xTitle: event.target.value || undefined },
-            })}
+            })
+          }
         />
       </label>
       <label>
@@ -500,7 +505,8 @@ function axisFields(draft: ChartDraft, onChange: (next: ChartDraft) => void) {
             onChange({
               ...draft,
               options: { ...draft.options, yTitle: event.target.value || undefined },
-            })}
+            })
+          }
         />
       </label>
     </>
@@ -527,7 +533,8 @@ function rangeFields(
             onChange({
               ...draft,
               options: { ...draft.options, yRange: event.target.checked ? null : [0, 1] },
-            })}
+            })
+          }
         />
         <span className="checkbox-text">{"Automatic"}</span>
       </label>
@@ -585,7 +592,8 @@ function toggleFields(
           type="checkbox"
           checked={draft.options.showGrid ?? true}
           onChange={(event) =>
-            onChange({ ...draft, options: { ...draft.options, showGrid: event.target.checked } })}
+            onChange({ ...draft, options: { ...draft.options, showGrid: event.target.checked } })
+          }
         />
         <span className="checkbox-text">{"Grid"}</span>
       </label>
@@ -594,10 +602,8 @@ function toggleFields(
           type="checkbox"
           checked={draft.options.showPoints ?? false}
           onChange={(event) =>
-            onChange({
-              ...draft,
-              options: { ...draft.options, showPoints: event.target.checked },
-            })}
+            onChange({ ...draft, options: { ...draft.options, showPoints: event.target.checked } })
+          }
         />
         <span className="checkbox-text">{"Point marks"}</span>
       </label>
@@ -610,7 +616,8 @@ function toggleFields(
               onChange({
                 ...draft,
                 options: { ...draft.options, showCurrentTime: event.target.checked },
-              })}
+              })
+            }
           />
           <span className="checkbox-text">
             {seasonal || draft.source.shape === "seasonal_cycle" ? "Current month" : "Current time"}
@@ -625,7 +632,8 @@ function toggleFields(
             onChange({
               ...draft,
               options: { ...draft.options, showReferences: event.target.checked },
-            })}
+            })
+          }
         />
         <span className="checkbox-text">{"Reference lines"}</span>
       </label>

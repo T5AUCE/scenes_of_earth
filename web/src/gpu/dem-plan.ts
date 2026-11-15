@@ -108,12 +108,14 @@ export function planDemTiles(request: DemPlanRequest): DemPlan {
   const levels = demLevels(zoom, fitLevel, maxZoom, blendWindow);
   const base = request.base ?? pinnedBase(bbox, fitLevel);
   const centre = { x: (view.west + view.east) / 2, y: (view.north + view.south) / 2 };
+
   const viewTilesAt = (level: number) => tilesOf(level, rectOf(level, view), bbox, centre);
   const viewTiles = viewTilesAt(levels.sharp);
   const partnerLevel = blendPartnerLevel(levels);
   const partnerTiles = partnerLevel === null ? [] : viewTilesAt(partnerLevel);
   const parentTiles = levels.sharp > fitLevel ? viewTilesAt(levels.sharp - 1) : [];
   const ringTiles = ringTilesOf(levels.sharp, view, bbox, centre, heading);
+
   const wanted = withoutRepeats([
     ...base.tiles,
     ...viewTiles.map((tile) => wantedOf(tile, "view")),
@@ -121,11 +123,13 @@ export function planDemTiles(request: DemPlanRequest): DemPlan {
     ...parentTiles.map((tile) => wantedOf(tile, "parent")),
     ...ringTiles.map((tile) => wantedOf(tile, "ring")),
   ]);
+
   const isBlending = partnerLevel !== null;
   const drawLevel = isBlending ? levels.fine : levels.sharp;
   const drawTiles = drawLevel === levels.sharp ? viewTiles : partnerTiles;
   const selfWeight = isBlending ? levels.fineShare : 1;
   const quads = drawTiles.map((tile) => placedOf(tile, selfWeight, base.zoom));
+
   return { levels, baseZoom: base.zoom, wanted, quads };
 }
 
@@ -147,19 +151,20 @@ export function demLevels(
   const lower = clampLevel(whole);
   const fine = clampLevel(whole + 1);
   const sharp = clampLevel(Math.round(zoom));
+
   if (fine === lower) return { sharp, lower, fine, fineShare: 1 };
 
   const fraction = zoom - whole;
   const window = Math.min(blendWindow, MAX_BLEND_WINDOW);
-  const share = window > 0
-    ? (fraction - 0.5) / (2 * window) + 0.5
-    : (fraction >= 0.5 ? 1 : 0);
+  const share = window > 0 ? (fraction - 0.5) / (2 * window) + 0.5 : fraction >= 0.5 ? 1 : 0;
+
   return { sharp, lower, fine, fineShare: snapShare(Math.min(Math.max(share, 0), 1)) };
 }
 
 function snapShare(share: number): number {
   if (share < SHARE_SNAP) return 0;
   if (share > 1 - SHARE_SNAP) return 1;
+
   return share;
 }
 
@@ -179,9 +184,12 @@ export function pinnedBase(bbox: Bbox, fitLevel: number): PinnedBase {
     y: (sceneBounds.north + sceneBounds.south) / 2,
   };
   // A scene as wide as the world lists its edge tile twice, so the repeats go before counting.
-  const tilesAt = (zoom: number) => withoutRepeats(
-    tilesOf(zoom, rectOf(zoom, sceneBounds), bbox, centre).map((tile) => wantedOf(tile, "pinned")),
-  );
+  const tilesAt = (zoom: number) =>
+    withoutRepeats(
+      tilesOf(zoom, rectOf(zoom, sceneBounds), bbox, centre).map((tile) =>
+        wantedOf(tile, "pinned"),
+      ),
+    );
   const fitTiles = tilesAt(fitLevel);
   if (fitTiles.length <= PINNED_TILE_LIMIT || fitLevel === 0) {
     return { zoom: fitLevel, tiles: fitTiles };
@@ -200,10 +208,8 @@ function ringTilesOf(
   const count = 2 ** zoom;
   const length = Math.hypot(heading?.x ?? 0, heading?.y ?? 0);
   const lead = length > 0 ? RING_LEAD_TILES / length / count : 0;
-  const ahead = {
-    x: centre.x + (heading?.x ?? 0) * lead,
-    y: centre.y + (heading?.y ?? 0) * lead,
-  };
+  const ahead = { x: centre.x + (heading?.x ?? 0) * lead, y: centre.y + (heading?.y ?? 0) * lead };
+
   const inner = rectOf(zoom, view);
   const outer: TileRect = {
     x0: inner.x0 - 1,
@@ -211,12 +217,14 @@ function ringTilesOf(
     y0: Math.max(inner.y0 - 1, 0),
     y1: Math.min(inner.y1 + 1, count - 1),
   };
+
   return tilesOf(zoom, outer, bbox, ahead, inner);
 }
 
 function rectOf(zoom: number, bounds: ViewBounds): TileRect {
   const count = 2 ** zoom;
   const clampRow = (row: number) => Math.min(Math.max(row, 0), count - 1);
+
   return {
     x0: Math.floor(bounds.west * count),
     x1: Math.floor(bounds.east * count),
@@ -247,18 +255,21 @@ function tilesOf(
 ): TileId[] {
   const tiles: TileId[] = [];
   const rows = sceneRows(zoom, rect, bbox);
+
   for (const x of sceneColumns(zoom, rect, bbox)) {
     for (let y = rows.y0; y <= rows.y1; y += 1) {
-      const isHole = hole !== undefined
-        && x >= hole.x0 && x <= hole.x1 && y >= hole.y0 && y <= hole.y1;
+      const isHole =
+        hole !== undefined && x >= hole.x0 && x <= hole.x1 && y >= hole.y0 && y <= hole.y1;
       if (!isHole && tileInScene({ z: zoom, x: wrapX(x, zoom), y }, bbox)) {
         tiles.push({ z: zoom, x, y });
       }
     }
   }
+
   const count = 2 ** zoom;
   const distance = (tile: TileId) =>
     (tile.x + 0.5 - focus.x * count) ** 2 + (tile.y + 0.5 - focus.y * count) ** 2;
+
   return tiles.sort((left, right) => distance(left) - distance(right));
 }
 
@@ -269,11 +280,13 @@ function sceneColumns(zoom: number, rect: TileRect, bbox: Bbox): number[] {
   const columns = new Set<number>();
   const firstCopy = Math.floor(rect.x0 / count - scene.east);
   const lastCopy = Math.ceil((rect.x1 + 1) / count - scene.west);
+
   for (let copy = firstCopy; copy <= lastCopy; copy += 1) {
     const first = Math.max(rect.x0, Math.floor((scene.west + copy) * count));
     const last = Math.min(rect.x1, Math.floor((scene.east + copy) * count));
     for (let x = first; x <= last; x += 1) columns.add(x);
   }
+
   return [...columns];
 }
 
@@ -288,10 +301,13 @@ function wantedOf(tile: TileId, tier: WantedTile["tier"]): WantedTile {
 
 function withoutRepeats(tiles: WantedTile[]): WantedTile[] {
   const seen = new Set<string>();
+
   return tiles.filter((tile) => {
     const key = `${tile.z}/${tile.x}/${tile.y}`;
     if (seen.has(key)) return false;
+
     seen.add(key);
+
     return true;
   });
 }
@@ -299,10 +315,12 @@ function withoutRepeats(tiles: WantedTile[]): WantedTile[] {
 function placedOf(tile: TileId, selfWeight: number, baseZoom: number): PlacedTile {
   const wrappedX = wrapX(tile.x, tile.z);
   const ancestors: TileId[] = [];
+
   for (let z = tile.z - 1; z >= baseZoom; z -= 1) {
     const up = tile.z - z;
     ancestors.push({ z, x: wrappedX >> up, y: tile.y >> up });
   }
+
   return {
     z: tile.z,
     x: tile.x,

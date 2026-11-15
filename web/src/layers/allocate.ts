@@ -67,6 +67,7 @@ export function layerDraws({ style }: LayerDoc): LayerDraws {
 export function drawOptions(layer: LayerDoc): Draw[] {
   const { colour, fallback } = layerDraws(layer);
   const options: Draw[] = [];
+
   if (colour) options.push("colour");
   if (fallback) options.push(fallback);
 
@@ -96,10 +97,7 @@ export function blendPair(layers: readonly LayerDoc[]): BlendPair | null {
  * The note for a scrubber step where a half of the blend has no data, or null when both halves
  * have a step. `time` is the step as the scrubber labels it.
  */
-export function missingStepNote(
-  halves: readonly { title: string; step: number }[],
-  time: string,
-) {
+export function missingStepNote(halves: readonly { title: string; step: number }[], time: string) {
   const missing = halves.filter(({ step }) => step < 0).map(({ title }) => title.toLowerCase());
   if (missing.length === 0) return null;
 
@@ -132,6 +130,7 @@ export function allocate(
   const pair = blendPair(layers);
   const mains = layers.map(layerUnit);
   const parts = layers.flatMap(partUnits);
+
   const visible = [...mains, ...parts].filter((unit) => on.has(unit.id));
   const blendOn = pair !== null && (on.has(BLEND) || showAs[BLEND] === "colour");
   const blend = blendOn ? [blendUnit()] : [];
@@ -144,6 +143,7 @@ export function allocate(
 
   for (const unit of visible) {
     const draw = unit.id === owner ? "colour" : intendedDraw(unit, showAs);
+
     if (draw === null) {
       if (unit.colour) draws.set(unit.id, { hidden: ONLY_IN_COLOUR });
       continue;
@@ -152,6 +152,7 @@ export function allocate(
     as.set(unit.id, draw);
     drawUnit(unit, draw, draws, claimed, blocked);
   }
+
   if (owner === BLEND) {
     as.set(BLEND, "colour");
     draws.set(BLEND, claim("colour", claimed));
@@ -196,20 +197,10 @@ function partUnits(layer: LayerDoc): Unit[] {
 }
 
 function blendUnit(): Unit {
-  return {
-    id: BLEND,
-    kind: "blend",
-    encodings: ["ramp"],
-    colour: true,
-    fallback: null,
-    order: 0,
-  };
+  return { id: BLEND, kind: "blend", encodings: ["ramp"], colour: true, fallback: null, order: 0 };
 }
 
-function colourOwner(
-  candidates: Unit[],
-  showAs: Readonly<Record<string, Draw>>,
-): string | null {
+function colourOwner(candidates: Unit[], showAs: Readonly<Record<string, Draw>>): string | null {
   const explicit = candidates.find(({ id }) => showAs[id] === "colour");
   if (explicit) return explicit.id;
 
@@ -229,10 +220,7 @@ function rank(unit: Unit): number {
   return 2;
 }
 
-function intendedDraw(
-  unit: Unit,
-  showAs: Readonly<Record<string, Draw>>,
-): Draw | null {
+function intendedDraw(unit: Unit, showAs: Readonly<Record<string, Draw>>): Draw | null {
   const fixed = FIXED_DRAWS.find((draw) => unit.encodings.includes(draw));
   if (fixed) return fixed;
 
@@ -266,6 +254,7 @@ function claim(draw: Draw, claimed: Map<Claim, string>): Draw | Hidden {
   if (!free) return { hidden: hiddenReason(draw, claimed) };
 
   claimed.set(free, CLAIM_LABELS[draw] ?? draw);
+
   return draw;
 }
 

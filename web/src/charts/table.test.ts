@@ -52,7 +52,10 @@ test("conversions keep canonical values untouched and use the exact offset", () 
   const converted = toDisplayTable(table, "in/month") as TimeSeriesTable;
 
   assert.deepEqual(before, [10.123456789012345, null, 0, -3.75]);
-  assert.deepEqual(table.rows.map((row) => row.value), before);
+  assert.deepEqual(
+    table.rows.map((row) => row.value),
+    before,
+  );
   assert.equal(converted.units, "in/month");
   assert.equal(converted.rows[0].value, 10.123456789012345 / 25.4);
   assert.equal(converted.rows[1].value, null);
@@ -63,6 +66,7 @@ test("conversions keep canonical values untouched and use the exact offset", () 
   assert.equal(table.yTitle, "Rain (mm/month)");
 
   converted.rows[0].interval.start = "mutated";
+
   assert.equal(table.rows[0].interval.start, "2015-01-01");
 });
 
@@ -105,6 +109,7 @@ test("distribution conversion moves mean, median, extremes and sea level togethe
 
   converted.referenceValues[1].value = -1;
   converted.rows[1].value = -1;
+
   assert.equal(table.referenceValues[1].value, 250.678901234);
   assert.equal(table.rows[1].value, 500.123456789);
 });
@@ -121,6 +126,7 @@ test("seasonal conversion keeps counts and year ranges while converting means", 
   assert.equal(table.yTitle, "Rain by month (mm/month)");
 
   converted.rows[0].yearRange![0] = 1999;
+
   assert.deepEqual(table.rows[0].yearRange, [2019, 2020]);
 });
 
@@ -128,17 +134,20 @@ test("same-unit copies isolate nested intervals, ranges and references", () => {
   const timeSource = timeTable();
   const time = toDisplayTable(timeSource, "mm/month") as TimeSeriesTable;
   time.rows[0].interval.start = "mutated";
+
   assert.equal(timeSource.rows[0].interval.start, "2015-01-01");
 
   const seasonalSource = seasonalTable();
   const seasonal = toDisplayTable(seasonalSource, "mm/month") as SeasonalCycleTable;
   seasonal.rows[0].yearRange![0] = 1999;
+
   assert.deepEqual(seasonalSource.rows[0].yearRange, [2019, 2020]);
 
   const distributionSource = distributionTable();
   const distribution = toDisplayTable(distributionSource, "m") as DistributionTable;
   distribution.referenceValues[1].value = -1;
   distribution.rows[1].value = -1;
+
   assert.equal(distributionSource.referenceValues[1].value, 250.678901234);
   assert.equal(distributionSource.rows[1].value, 500.123456789);
 });
@@ -147,28 +156,35 @@ test("explicit y-axis titles stay verbatim while generated titles relabel", () =
   const custom = "Custom threshold (mm/month)";
 
   const time = toDisplayTable(timeTable(), "in/month", custom) as TimeSeriesTable;
+
   assert.equal(time.yTitle, custom);
   assert.equal(time.rows[0].value, 10.123456789012345 / 25.4);
 
   const seasonal = toDisplayTable(seasonalTable(), "in/month", custom) as SeasonalCycleTable;
+
   assert.equal(seasonal.yTitle, custom);
   assert.equal(seasonal.rows[0].value, 10 / 25.4);
 
   const distribution = toDisplayTable(distributionTable(), "ft", custom) as DistributionTable;
+
   assert.equal(distribution.yTitle, custom);
   assert.equal(distribution.rows[0].value, 0.123456789 / 0.3048);
 
   const sameUnit = toDisplayTable(timeTable(), "mm/month", custom) as TimeSeriesTable;
+
   assert.equal(sameUnit.yTitle, custom);
   assert.equal(sameUnit.rows[0].value, 10.123456789012345);
 
   const generatedTime = toDisplayTable(timeTable(), "in/month") as TimeSeriesTable;
+
   assert.equal(generatedTime.yTitle, "Rain (in/month)");
 
   const generatedSeasonal = toDisplayTable(seasonalTable(), "in/month") as SeasonalCycleTable;
+
   assert.equal(generatedSeasonal.yTitle, "Rain by month (in/month)");
 
   const generatedDistribution = toDisplayTable(distributionTable(), "ft") as DistributionTable;
+
   assert.equal(generatedDistribution.yTitle, "Elevation (ft)");
 });
 

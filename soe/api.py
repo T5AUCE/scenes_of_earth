@@ -6,6 +6,7 @@ SOE_LATEST applies only without the CHIRPS cube, and SOE_CUBES_DIR holds the ERA
 SOE_TERRAIN_TILES defaults to hosted Mapterhorn tiles. With SOE_SYNTHETIC=1 an empty
 boundaries table is seeded from soe/data/sample_areas.geojson.
 """
+
 import json
 import logging
 import os
@@ -85,17 +86,20 @@ def create_app(
     public = os.environ.get("SOE_PUBLIC_BASE", "/scenes").rstrip("/")
     max_builds = max_builds or int(os.environ.get("SOE_MAX_BUILDS", DEFAULT_MAX_BUILDS))
     max_queue = max_queue or int(os.environ.get("SOE_MAX_QUEUE", DEFAULT_MAX_QUEUE))
-    
+
     if registry is None:
         registry = _default_registry()
+
     jobs = SceneJobs(db_path, scenes_dir, registry, max_builds, max_queue)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         scenes_dir.mkdir(parents=True, exist_ok=True)
         db.init(db_path)
+
         if os.environ.get("SOE_SYNTHETIC") == "1":
             seed_sample_areas(db_path)
+
         threading.Thread(target=_warm_latest_months, args=(registry,), daemon=True).start()
         yield
         jobs.shutdown()
@@ -103,9 +107,7 @@ def create_app(
     app = FastAPI(title="Scenes of Earth", version=__version__, lifespan=lifespan)
     bundles = public if public.startswith("/") else "/scenes"
     app.add_middleware(
-        ApiGzipMiddleware,
-        bundles_path=bundles,
-        minimum_size=GZIP_MINIMUM_SIZE_BYTES,
+        ApiGzipMiddleware, bundles_path=bundles, minimum_size=GZIP_MINIMUM_SIZE_BYTES
     )
 
     @app.get("/api/health", response_model=None)
@@ -128,7 +130,7 @@ def create_app(
         query = q.strip()
         if not query:
             return []
-        
+
         clamped_limit = max(1, min(limit, MAX_SEARCH_LIMIT))
         rows = db.search(db_path, query, level, clamped_limit)
         return [_area_out(row) for row in rows]
@@ -188,14 +190,10 @@ def create_app(
         row = db.get_scene(db_path, scene_id) if ID_RE.fullmatch(scene_id) else None
         if row is None:
             raise HTTPException(404, "unknown scene")
-        
+
         return scene_out(row)
 
-    app.mount(
-        bundles,
-        SceneFiles(directory=scenes_dir, check_dir=False),
-        name="scenes",
-    )
+    app.mount(bundles, SceneFiles(directory=scenes_dir, check_dir=False), name="scenes")
 
     return app
 
@@ -203,6 +201,7 @@ def create_app(
 def _default_registry() -> Registry:
     if os.environ.get("SOE_SYNTHETIC") == "1":
         return make_registry(SyntheticSource())
+
     cubes_dir = os.environ.get("SOE_CUBES_DIR", DEFAULT_CUBES_DIR)
     return make_registry(RealSource(os.environ.get("SOE_LATEST"), cubes_dir))
 
@@ -227,6 +226,7 @@ def _available_layers(registry: Registry) -> list[JsonObject]:
             layers.append(_layer_out(dataset))
         except SourceUnavailable:
             log.warning("%s is unavailable, left out of the layer list", dataset.id)
+
     return layers
 
 
@@ -278,17 +278,22 @@ def _area_geometry(row: db.Record, db_path: Path | str) -> JsonObject:
         full = db.get_boundary(db_path, row["id"])
         if full is None:
             raise HTTPException(404, "unknown area")
+
         preview = _simplify_geometry(full)
         new_digest = _digest_of_full(full)
         _remember_preview(db_path, full["id"], preview, full["geom_digest"], new_digest)
         key = (full["id"], new_digest, _bbox_of(full))
+
     with _geometry_cache_lock:
         if key in _geometry_cache:
             _geometry_cache.move_to_end(key)
             return _geometry_cache[key]
+
         if len(_geometry_cache) >= GEOMETRY_CACHE_SIZE:
             _geometry_cache.popitem(last=False)
+
         _geometry_cache[key] = preview
+
     return preview
 
 
@@ -312,11 +317,7 @@ def _remember_preview(
     """Write a computed preview back, keeping the response when the write fails."""
     try:
         db.set_boundary_preview(
-            db_path,
-            boundary_id,
-            json.dumps(preview),
-            expected_digest,
-            new_digest,
+            db_path, boundary_id, json.dumps(preview), expected_digest, new_digest
         )
     except Exception:
         log.warning("could not store the preview of %s", boundary_id, exc_info=True)
@@ -353,6 +354,7 @@ def _simplify_geometry(row: db.Record) -> JsonObject:
         geometry = shape(json.loads(row["geom_geojson"]))
     except Exception:
         return json.loads(row["geom_geojson"])
+
     bbox = (row["bbox_w"], row["bbox_s"], row["bbox_e"], row["bbox_n"])
     return display_preview(geometry, bbox)
 
@@ -363,6 +365,7 @@ async def read_body(request: Request) -> bytes:
         declared = int(request.headers.get("content-length") or 0)
     except ValueError:
         raise HTTPException(400, "invalid Content-Length header")
+
     if declared > MAX_BODY_BYTES:
         raise HTTPException(413, "request body too large")
 
@@ -371,6 +374,7 @@ async def read_body(request: Request) -> bytes:
         body += chunk
         if len(body) > MAX_BODY_BYTES:
             raise HTTPException(413, "request body too large")
+
     return body
 
 
@@ -404,6 +408,7 @@ class SceneFiles(StaticFiles):
         response = await super().get_response(path, scope)
         if response.status_code in (200, 304):
             response.headers["Cache-Control"] = IMMUTABLE
+
         return response
 
 

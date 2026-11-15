@@ -137,10 +137,12 @@ export function oklchGrid({ dry, wet, hues, warmLift }: OklchGridOptions) {
   const wetChromas = hues.map((hue, column) =>
     Math.min(wet.chroma, gamutShare * gamutChroma(wet.lightness + lifts[column], hue)),
   );
+
   return Array.from({ length: GRID_ROWS }, (_, row) => {
     const wetness = row / (GRID_ROWS - 1);
     const lightness = dry.lightness + (wet.lightness - dry.lightness) * wetness;
     const chromaPosition = wetness ** CHROMA_CURVE;
+
     return hues.map((hue, column) =>
       oklchRgb(
         lightness + lifts[column],
@@ -369,6 +371,7 @@ export function inkToLink(ink: string) {
 export function inkPaint(ink: string): InkPaint {
   const rgb = hexToRgb(inkColor(ink)!);
   const isLight = rgbToOklch(rgb).lightness > LIGHT_INK_LIGHTNESS;
+
   return { ink: rgb, halo: isLight ? HALO_DARK_RGB : HALO_LIGHT_RGB };
 }
 
@@ -393,15 +396,22 @@ export function customPalette(stops: GradientStop[]) {
   });
   const even = evenPercents(ordered.length);
   const positioned = percents.some((percent, index) => percent !== even[index]);
-  return CUSTOM_PREFIX + ordered.map(({ rgb }, index) => {
-    const hex = rgbToHex(rgb).slice(1);
-    return positioned ? `-${hex}_${percents[index]}` : `-${hex}`;
-  }).join("");
+
+  return (
+    CUSTOM_PREFIX
+    + ordered
+      .map(({ rgb }, index) => {
+        const hex = rgbToHex(rgb).slice(1);
+        return positioned ? `-${hex}_${percents[index]}` : `-${hex}`;
+      })
+      .join("")
+  );
 }
 
 /** The positioned stops of a custom palette name, or null when it breaks the grammar. */
 export function customStops(name: string) {
   if (!CUSTOM_PATTERN.test(name)) return null;
+
   const parts = name.split("-").slice(1);
   const parsed = parts.map((part) => {
     const [hex, positionText] = part.split("_");
@@ -415,6 +425,7 @@ export function customStops(name: string) {
   if (positioned.length === 0) {
     return parsed.map(({ rgb }, index) => ({ at: index / (parsed.length - 1), rgb }));
   }
+
   for (let index = 1; index < parsed.length; index++) {
     if (parsed[index].at < parsed[index - 1].at) return null;
   }
@@ -446,6 +457,7 @@ export function classPalette(layerId: string, name?: string) {
 export function classColors(layerId: string, classes: ClassDoc[], palette?: string) {
   const named = classPalette(layerId, palette);
   const families = classFamilies(layerId, palette);
+
   return new Map(
     classes.map((entry) => {
       const { value, color, parent, variant } = entry;
@@ -465,8 +477,10 @@ function classFamilies(layerId: string, palette?: string) {
 
 function shadedRgb(base: number[], variant: number) {
   if (variant === 0) return [...base];
+
   const { lightness, chroma, hue } = rgbToOklch(base);
   const direction = lightness > LIGHT_FAMILY_LIGHTNESS ? -1 : 1;
+
   return oklchRgb(
     lightness + direction * VARIANT_LIGHTNESS_STEP * variant,
     chroma + VARIANT_CHROMA_STEP * variant,
@@ -478,6 +492,7 @@ function shadedRgb(base: number[], variant: number) {
 function variantHueOffsetDeg(variant: number) {
   const rank = Math.ceil(variant / 2);
   const side = variant % 2 === 1 ? 1 : -1;
+
   return side * Math.min(rank * VARIANT_HUE_STEP_DEG, VARIANT_HUE_LIMIT_DEG);
 }
 
@@ -516,10 +531,12 @@ function oklchRgb(lightness: number, chroma: number, hue: number) {
 function gamutChroma(lightness: number, hue: number) {
   let lowChroma = 0;
   let highChroma = MAX_CHROMA;
+
   for (let step = 0; step < CHROMA_SEARCH_STEPS; step++) {
     const middle = (lowChroma + highChroma) / 2;
     if (inSrgbGamut(lightness, middle, hue)) lowChroma = middle;
     else highChroma = middle;
   }
+
   return lowChroma;
 }

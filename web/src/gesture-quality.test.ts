@@ -80,12 +80,16 @@ test("nested gestures notify once and a stray moveend is ignored", () => {
   map.emit("moveend");
   map.emit("movestart");
   map.emit("movestart");
+
   assert.deepEqual(calls, ["start"]);
   assert.equal(isGestureActive(map), true);
 
   map.emit("moveend");
+
   assert.deepEqual(calls, ["start"]);
+
   map.emit("moveend");
+
   assert.deepEqual(calls, ["start", "end"]);
   assert.equal(isGestureActive(map), false);
 });
@@ -99,17 +103,22 @@ test("a late subscriber starts at once and leaving mid-gesture restores it", () 
   });
 
   map.emit("movestart");
+
   const stopLate = subscribeGesture(map, {
     onStart: () => calls.push("late start"),
     onEnd: () => calls.push("late end"),
   });
+
   assert.deepEqual(calls, ["first start", "late start"]);
 
   stopLate();
+
   assert.deepEqual(calls, ["first start", "late start", "late end"]);
 
   map.emit("moveend");
+
   assert.deepEqual(calls, ["first start", "late start", "late end", "first end"]);
+
   stopFirst();
 });
 
@@ -119,6 +128,7 @@ test("the last unsubscribe removes the shared listeners", () => {
 
   assert.equal(map.listenerCount("movestart"), 1);
   assert.equal(map.listenerCount("moveend"), 1);
+
   stop();
 
   assert.equal(map.listenerCount("movestart"), 0);

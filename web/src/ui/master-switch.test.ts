@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { isMasterOn, masterChangedUnits } from "./master-switch.ts";
 import type { LayerDoc } from "../types.ts";
+import { isMasterOn, masterChangedUnits } from "./master-switch.ts";
 
 const TERRAIN = layer("terrain", ["shade"], ["contours"]);
 
@@ -36,15 +36,9 @@ test("turning on restores the remembered parts or the main part", () => {
     ),
     ["terrain.contours"],
   );
-  assert.deepEqual(
-    masterChangedUnits(TERRAIN, new Set(["terrain"]), undefined, true),
-    ["terrain"],
-  );
+  assert.deepEqual(masterChangedUnits(TERRAIN, new Set(["terrain"]), undefined, true), ["terrain"]);
 });
 
 function layer(id: string, encodings: string[], parts: string[] = []): LayerDoc {
-  return {
-    id,
-    style: { kind: "terrain", encodings, parts },
-  } as unknown as LayerDoc;
+  return { id, style: { kind: "terrain", encodings, parts } } as unknown as LayerDoc;
 }

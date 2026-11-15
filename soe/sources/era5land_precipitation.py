@@ -4,6 +4,7 @@ CHIRPS keeps every cell it covers. North of 60N the layer takes ERA5-Land precip
 cube that `soe.ingest.era5` writes, and ERA5 still fills the cells where ERA5-Land has no land
 value. The layer sits on the world grid so that it reaches 84N, while CHIRPS stays on its own grid.
 """
+
 from dataclasses import dataclass
 
 import numpy as np
@@ -81,6 +82,7 @@ class HighLatitudeRainDataset(RainDataset, HighLatitudeSeries):
         """The sources a read of bbox uses, with ERA5-Land added when it reaches north of CHIRPS."""
         has_north = bool(self._land_height(self.grid.window(bbox)))
         self._remember_north(has_north)
+
         if not has_north:
             return [self.source]
 
@@ -97,6 +99,7 @@ class HighLatitudeRainDataset(RainDataset, HighLatitudeSeries):
             for months in (self._land_months(), self.fallback_months())
         ]
         runs = preliminary_runs(labels, *used)
+
         return [_preliminary_notice(run[0], run[-1]) for run in runs]
 
     def read_step_filled(self, step: str, bbox: Bbox, factor: int = 1) -> FilledStep:
@@ -115,10 +118,12 @@ class HighLatitudeRainDataset(RainDataset, HighLatitudeSeries):
         parts = []
         if land_height:
             parts.append(self._read_land(month, (col, row, width, land_height)))
+
         if land_height < height:
             chirps_row = row + land_height - CHIRPS_ROW_OFFSET
             chirps_window = (col, chirps_row, width, height - land_height)
             parts.append(super()._read_window(month, chirps_window))
+
         return np.vstack(parts)
 
     def _read_land(self, month: str, window: CellWindow) -> np.ndarray:
@@ -135,12 +140,14 @@ class HighLatitudeRainDataset(RainDataset, HighLatitudeSeries):
         window = self.grid.window(bbox)
         _, _, width, height = window
         cells = np.zeros((height, width), "float32")
-        cells[:self._land_height(window)] = 1
+        cells[: self._land_height(window)] = 1
+
         return cells
 
     def _land_height(self, window: CellWindow) -> int:
         """Return the rows of the window that lie north of the CHIRPS grid, none unless north."""
         _, row, _, height = window
+
         if not self.reads_north:
             return 0
 
@@ -154,15 +161,14 @@ class HighLatitudeRainDataset(RainDataset, HighLatitudeSeries):
         self._has_north = has_north
         if not self.reads_north or self.fallback is None:
             return
+
         notice = NORTH_FILL_NOTICE if has_north else ERA5_PRECIPITATION_FALLBACK.notice
         if self.fallback.notice != notice:
             self.fallback = self.fallback._replace(notice=notice)
 
 
 def _markers_of_filled_months(
-    labels: list[str],
-    months: dict[str, str],
-    filled: list[bool],
+    labels: list[str], months: dict[str, str], filled: list[bool]
 ) -> dict[str, str]:
     """Map each label to its marker, or to an empty one, which is never preliminary, if unfilled."""
     return {label: months[label] if was_filled else "" for label, was_filled in zip(labels, filled)}

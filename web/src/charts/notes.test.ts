@@ -2,20 +2,22 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { LayerDoc } from "../types.ts";
-import type { ChartTable } from "./table.ts";
 import { chartNotesFor } from "./notes.ts";
+import type { ChartTable } from "./table.ts";
 
 test("terrain keeps sea-level branches without proving a coastline", () => {
   const layer = terrainLayer([]);
   const withSea = distributionTable([{ id: "sea_level", value: 0 }]);
   const before = JSON.stringify(withSea);
   const seaNotes = chartNotesFor(layer, withSea, "area");
+
   assert.ok(seaNotes.some((note) => note.includes("Valid terrain covers")));
   assert.ok(seaNotes.some((note) => note.includes("Sea level marks 0 m")));
   assert.equal(JSON.stringify(withSea), before);
 
   const withoutSea = distributionTable([]);
   const plainNotes = chartNotesFor(layer, withoutSea, "area");
+
   assert.ok(plainNotes.some((note) => note.includes("No sea-level reference")));
   assert.ok(plainNotes.some((note) => note.includes("proves nothing about a coastline")));
   assert.ok(!plainNotes.some((note) => note.includes("Sea level marks")));
@@ -25,17 +27,17 @@ test("seasonal and coverage notes preserve counts while staying concise", () => 
   const layer = timeLayer();
   const seasonal = seasonalTable([2, 9]);
   const notes = chartNotesFor(layer, seasonal, "line");
+
   assert.ok(notes.some((note) => note.includes("2-9")));
   assert.ok(notes.some((note) => note.includes("Sample count")));
 
   const hollow = timeTable([{ validFraction: 0.5, fallbackFraction: null }]);
-  assert.ok(
-    chartNotesFor(layer, hollow, "line").some((note) => note.includes("Hollow marks")),
-  );
+
+  assert.ok(chartNotesFor(layer, hollow, "line").some((note) => note.includes("Hollow marks")));
+
   const full = timeTable([{ validFraction: 1, fallbackFraction: null }]);
-  assert.ok(
-    !chartNotesFor(layer, full, "line").some((note) => note.includes("Hollow marks")),
-  );
+
+  assert.ok(!chartNotesFor(layer, full, "line").some((note) => note.includes("Hollow marks")));
 });
 
 test("fallback names its source while zero and absent shares stay quiet", () => {
@@ -43,35 +45,44 @@ test("fallback names its source while zero and absent shares stay quiet", () => 
   const table = timeTable([{ validFraction: 1, fallbackFraction: 0.2 }]);
   const notes = chartNotesFor(layer, table, "line");
   const fallback = notes.find((note) => note.includes("ERA5"))!;
+
   assert.ok(fallback.includes("area-weighted fractions"));
   assert.ok(fallback.includes("inspection or Table"));
 
   const zero = timeTable([{ validFraction: 1, fallbackFraction: 0 }]);
+
   assert.ok(!chartNotesFor(layer, zero, "line").some((note) => note.includes("ERA5")));
+
   const absent = timeTable([{ validFraction: 1, fallbackFraction: null }]);
+
   assert.ok(!chartNotesFor(layer, absent, "line").some((note) => note.includes("filled from")));
 });
 
 test("type hints stay in notes without changing source values", () => {
   const terrain = terrainLayer([]);
   const quantile = distributionTable([]);
-  assert.ok(
-    chartNotesFor(terrain, quantile, "bar").some((note) => note.includes("quantile")),
-  );
+
+  assert.ok(chartNotesFor(terrain, quantile, "bar").some((note) => note.includes("quantile")));
+
   const warm = timeLayer([]);
   warm.units = "°C";
+
   const offset = timeTable([{ validFraction: 1, fallbackFraction: null }]);
+
   assert.ok(chartNotesFor(warm, offset, "area").some((note) => note.includes("zero")));
 
   const denseLayer = timeLayer([]);
   const dense = denseTable(61);
+
   assert.ok(chartNotesFor(denseLayer, dense, "bar").some((note) => note.includes("line")));
 
   const precise = distributionTable([{ id: "sea_level", value: 0 }]);
   precise.validFraction = 1 / 3;
   precise.mean = 500.123456789;
+
   const before = JSON.stringify(precise);
   const notes = chartNotesFor(terrain, precise, "area");
+
   assert.equal(JSON.stringify(precise), before);
   assert.ok(!notes.join("\n").includes("33.3333333"));
   assert.ok(!notes.join("\n").includes("500.123456789"));
@@ -97,9 +108,7 @@ function terrainLayer(sources: { name: string }[] = []): LayerDoc {
   } as LayerDoc;
 }
 
-function timeTable(
-  rows: { validFraction: number; fallbackFraction: number | null }[],
-): ChartTable {
+function timeTable(rows: { validFraction: number; fallbackFraction: number | null }[]): ChartTable {
   return {
     shape: "time_series",
     layerId: "rain",

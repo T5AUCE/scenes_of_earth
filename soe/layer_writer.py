@@ -1,4 +1,5 @@
 """Validate and write scene raster layers with their statistics and provenance."""
+
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
@@ -73,21 +74,22 @@ def _write_layers(
         layer_plan = scene_plan.layers[dataset.id]
         layer_group = root.create_group(dataset.id)
         _write_coordinates_and_mask(layer_group, layer_plan)
+
         if dataset.id in prefetched:
             arrays, result = prefetched[dataset.id]
+
             if not isinstance(dataset, StaticDataset):
                 raise TypeError(f"{dataset.id}: prefetched a non-static layer")
+
             _write_static_arrays(layer_group, dataset, layer_plan, arrays, result)
             metadata[dataset.id] = result
         elif isinstance(dataset, SeriesDataset):
             metadata[dataset.id] = _write_time_series(
-                layer_group,
-                dataset,
-                layer_plan,
-                shares.for_layer(dataset.id),
+                layer_group, dataset, layer_plan, shares.for_layer(dataset.id)
             )
         else:
             raise TypeError(f"{dataset.id}: unknown dataset kind {type(dataset).__name__}")
+
     return metadata, root
 
 
@@ -110,21 +112,20 @@ class _ProgressShares:
         total_cost = sum(costs.values()) or 1.0
         self._progress = progress
         self._shares = {
-            layer_id: LAYERS_PROGRESS_SHARE * cost / total_cost
-            for layer_id, cost in costs.items()
+            layer_id: LAYERS_PROGRESS_SHARE * cost / total_cost for layer_id, cost in costs.items()
         }
         self._starts = {}
         start = 0.0
         for layer_id, share in self._shares.items():
             self._starts[layer_id] = start
             start += share
+
         self._reported = 0.0
 
     def for_layer(self, layer_id: str) -> LayerProgress:
         def report(fraction: float, stage: str) -> None:
             self._reported = max(
-                self._reported,
-                self._starts[layer_id] + self._shares[layer_id] * fraction,
+                self._reported, self._starts[layer_id] + self._shares[layer_id] * fraction
             )
             self._progress(self._reported, stage)
 
@@ -132,31 +133,24 @@ class _ProgressShares:
 
 
 def _prefetch_statics(
-    ordered: list[Dataset],
-    scene_plan: Plan,
-    cache_dir: Path,
-    shares: _ProgressShares,
+    ordered: list[Dataset], scene_plan: Plan, cache_dir: Path, shares: _ProgressShares
 ) -> dict[str, tuple[dict[str, np.ndarray], JsonObject]]:
     """Read static rasters and validate their summaries before any bundle writer runs."""
     prefetched = {}
     for dataset in ordered:
         if not isinstance(dataset, StaticDataset):
             continue
+
         layer_plan = scene_plan.layers[dataset.id]
         prefetched[dataset.id] = _read_static_dataset(
-            dataset,
-            layer_plan,
-            cache_dir,
-            shares.for_layer(dataset.id),
+            dataset, layer_plan, cache_dir, shares.for_layer(dataset.id)
         )
+
     return prefetched
 
 
 def _read_static_dataset(
-    dataset: StaticDataset,
-    layer_plan: LayerPlan,
-    cache_dir: Path,
-    progress: LayerProgress,
+    dataset: StaticDataset, layer_plan: LayerPlan, cache_dir: Path, progress: LayerProgress
 ) -> tuple[dict[str, np.ndarray], JsonObject]:
     """Return the cached static read with its validated summary result."""
     read_geometry = _read_geometry(dataset, layer_plan)
@@ -170,23 +164,16 @@ def _read_static_dataset(
 
     if not is_cached(dataset, layer_plan.bbox, layer_plan.res, cache_dir, read_geometry):
         progress(0, f"{dataset.title} 0/{block_count}")
+
     arrays, transform = read_cached(
-        dataset,
-        layer_plan.bbox,
-        layer_plan.res,
-        cache_dir,
-        block_read,
-        read_geometry,
+        dataset, layer_plan.bbox, layer_plan.res, cache_dir, block_read, read_geometry
     )
     progress(1, f"{dataset.title} {block_count}/{block_count}")
+
     if "provenance" in arrays:
         arrays = {**arrays, "provenance": _kept_provenance(arrays["provenance"], layer_plan)}
-    result = dataset.summary(
-        arrays,
-        layer_plan.area_weights,
-        transform,
-        layer_plan.geometry,
-    )
+
+    result = dataset.summary(arrays, layer_plan.area_weights, transform, layer_plan.geometry)
     return arrays, result
 
 
@@ -205,20 +192,8 @@ def _write_coordinates_and_mask(layer_group: zarr.Group, layer_plan: LayerPlan) 
     height, width = layer_plan.shape
     longitude, latitude = _coordinates(layer_plan.transform, height, width)
 
-    _write_array(
-        layer_group,
-        "lon",
-        longitude,
-        ["lon"],
-        {"units": "degrees_east"},
-    )
-    _write_array(
-        layer_group,
-        "lat",
-        latitude,
-        ["lat"],
-        {"units": "degrees_north"},
-    )
+    _write_array(layer_group, "lon", longitude, ["lon"], {"units": "degrees_east"})
+    _write_array(layer_group, "lat", latitude, ["lat"], {"units": "degrees_north"})
     _write_array(
         layer_group,
         "mask",
@@ -293,10 +268,7 @@ def _attributes(spec: Role) -> JsonObject:
 
 
 def _write_time_series(
-    layer_group: zarr.Group,
-    dataset: SeriesDataset,
-    layer_plan: LayerPlan,
-    progress: LayerProgress,
+    layer_group: zarr.Group, dataset: SeriesDataset, layer_plan: LayerPlan, progress: LayerProgress
 ) -> JsonObject:
     """Write a time series in batches and return its display and area statistics."""
     steps = layer_plan.steps
@@ -308,26 +280,20 @@ def _write_time_series(
     _write_time_coordinate(layer_group, steps)
     series = _create_time_array(layer_group, dataset, spec, layer_plan)
     statistics = _StatisticsAccumulator()
-    area_accumulator = AreaSeriesAccumulator(
-        layer_plan.area_weights,
-        dataset.fallback is not None,
-    )
+    area_accumulator = AreaSeriesAccumulator(layer_plan.area_weights, dataset.fallback is not None)
     provenance = _Provenance(area_mask, stored_mask, step_count)
     worker_count = _choose_worker_count(layer_plan)
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         for batch_start in range(0, step_count, BATCH_SIZE):
-            batch_steps = steps[batch_start:batch_start + BATCH_SIZE]
-            raster_batch, filled_batch = _read_batch(
-                executor,
-                dataset,
-                layer_plan,
-                batch_steps,
-            )
+            batch_steps = steps[batch_start : batch_start + BATCH_SIZE]
+            raster_batch, filled_batch = _read_batch(executor, dataset, layer_plan, batch_steps)
+
             statistics.add(raster_batch, area_mask)
             # Area means use decoded values before packing, so quantizing never shapes them.
             area_accumulator.add(raster_batch, filled_batch)
             provenance.add(batch_start, raster_batch, filled_batch)
+
             encoded_batch = encode_values(
                 np.where(stored_mask, raster_batch, np.nan),
                 spec.dtype,
@@ -337,6 +303,7 @@ def _write_time_series(
             )
             batch_end = batch_start + len(batch_steps)
             series[batch_start:batch_end] = encoded_batch
+
             last_month = steps[batch_end - 1][:MONTH_LABEL_CHARS]
             progress(batch_end / step_count, f"{dataset.title} {last_month}")
 
@@ -350,10 +317,7 @@ def _write_time_series(
 
 
 def _write_provenance(
-    layer_group: zarr.Group,
-    dataset: SeriesDataset,
-    steps: list[str],
-    provenance: "_Provenance",
+    layer_group: zarr.Group, dataset: SeriesDataset, steps: list[str], provenance: "_Provenance"
 ) -> JsonObject:
     """Write the `source` array when the fallback gave a value, and return the layer's notes."""
     if dataset.fallback is None:
@@ -382,12 +346,7 @@ def _write_provenance(
 class _Provenance:
     """Track area provenance while crediting fallback data stored in the hidden ring too."""
 
-    def __init__(
-        self,
-        area_mask: np.ndarray,
-        stored_mask: np.ndarray,
-        step_count: int,
-    ) -> None:
+    def __init__(self, area_mask: np.ndarray, stored_mask: np.ndarray, step_count: int) -> None:
         self._area_mask = area_mask
         self._stored_mask = stored_mask
         self._step_filled = np.zeros(step_count, bool)
@@ -406,16 +365,15 @@ class _Provenance:
         return int((self._from_fallback & self._area_mask).sum())
 
     def add(
-        self,
-        batch_start: int,
-        raster_batch: np.ndarray,
-        filled_batch: np.ndarray | None,
+        self, batch_start: int, raster_batch: np.ndarray, filled_batch: np.ndarray | None
     ) -> None:
         """Account for the steps from `batch_start`; `filled_batch` is None without a fallback."""
         present = np.isfinite(raster_batch)
         filled = np.zeros_like(present) if filled_batch is None else filled_batch
+
         self._from_main |= (present & ~filled).any(axis=0)
         self._from_fallback |= filled.any(axis=0)
+
         batch_end = batch_start + len(filled)
         self._step_filled[batch_start:batch_end] = (filled & self._area_mask).any(axis=(1, 2))
         self._missing |= (~present).any(axis=0)
@@ -434,54 +392,43 @@ class _Provenance:
             notice = dataset.fallback.notice
             notices.append(notice.format(filled=self.fallback_cells, inside=inside))
             notices += dataset.fallback_notices(steps, self._step_filled.tolist())
+
         if missing:
             notices.append(
                 f"{dataset.title} has no value from either source in {missing} of {inside} cells "
-                "in some months.",
+                "in some months."
             )
+
         return notices
 
 
 def _write_time_coordinate(layer_group: zarr.Group, steps: list[str]) -> None:
     """Write dates as integer days since the Unix epoch."""
     days_since_epoch = np.array(
-        [(date.fromisoformat(step) - UNIX_EPOCH).days for step in steps],
-        dtype="int32",
+        [(date.fromisoformat(step) - UNIX_EPOCH).days for step in steps], dtype="int32"
     )
     _write_array(
         layer_group,
         "time",
         days_since_epoch,
         ["time"],
-        {
-            "units": "days since 1970-01-01",
-            "calendar": "standard",
-        },
+        {"units": "days since 1970-01-01", "calendar": "standard"},
     )
 
 
 def _create_time_array(
-    layer_group: zarr.Group,
-    dataset: SeriesDataset,
-    spec: Role,
-    layer_plan: LayerPlan,
+    layer_group: zarr.Group, dataset: SeriesDataset, spec: Role, layer_plan: LayerPlan
 ) -> zarr.Array:
     """Create the chunked and sharded Zarr array for a time series."""
     step_count = len(layer_plan.steps)
     height, width = layer_plan.shape
-    spatial_chunks = (
-        min(height, TILE_SIZE_CELLS),
-        min(width, TILE_SIZE_CELLS),
-    )
+    spatial_chunks = (min(height, TILE_SIZE_CELLS), min(width, TILE_SIZE_CELLS))
 
     return layer_group.create_array(
         spec.name,
         shape=(step_count, height, width),
         chunks=(1, *spatial_chunks),
-        shards=(
-            min(step_count, BATCH_SIZE),
-            *spatial_chunks,
-        ),
+        shards=(min(step_count, BATCH_SIZE), *spatial_chunks),
         dtype=spec.dtype,
         fill_value=spec.fill,
         compressors=COMPRESSION,
@@ -525,9 +472,7 @@ class _StatisticsAccumulator:
         # Per-batch sampling bounds memory but slightly overweights a short last batch.
         self._samples.append(
             self._random.choice(
-                values,
-                min(values.size, PERCENTILE_SAMPLES_PER_BATCH),
-                replace=False,
+                values, min(values.size, PERCENTILE_SAMPLES_PER_BATCH), replace=False
             )
         )
 
@@ -555,30 +500,18 @@ class _StatisticsAccumulator:
 def _choose_worker_count(layer_plan: LayerPlan) -> int:
     """Limit concurrent raster reads using the estimated memory budget."""
     height, width = layer_plan.shape
-    estimated_bytes_per_step = (
-        height
-        * width
-        * layer_plan.factor**2
-        * ESTIMATED_BYTES_PER_CELL
-    )
+    estimated_bytes_per_step = height * width * layer_plan.factor**2 * ESTIMATED_BYTES_PER_CELL
     workers_allowed_by_memory = MEMORY_BUDGET_BYTES // max(1, estimated_bytes_per_step)
+
     return max(1, min(MAX_WORKERS, workers_allowed_by_memory))
 
 
 def _read_batch(
-    executor: ThreadPoolExecutor,
-    dataset: SeriesDataset,
-    layer_plan: LayerPlan,
-    steps: list[str],
+    executor: ThreadPoolExecutor, dataset: SeriesDataset, layer_plan: LayerPlan, steps: list[str]
 ) -> FilledStep:
     rasters = list(
         executor.map(
-            lambda step: dataset.read_step_filled(
-                step,
-                layer_plan.bbox,
-                layer_plan.factor,
-            ),
-            steps,
+            lambda step: dataset.read_step_filled(step, layer_plan.bbox, layer_plan.factor), steps
         )
     )
     values = np.stack([raster.values for raster in rasters])

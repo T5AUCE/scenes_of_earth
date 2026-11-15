@@ -54,6 +54,7 @@ export async function createPanel(
     status.textContent = `Could not load layers: ${(error as Error).message}`;
     build.disabled = true;
   }
+
   updateMonths();
 
   return { openScene, showStatus, cancelOpen };
@@ -92,12 +93,14 @@ export async function createPanel(
 
     try {
       const sceneStatus = await getSceneStatus(id);
+
       if (sceneStatus.status !== "done") {
         status.textContent = `Scene ${id} is ${sceneStatus.status}.`;
         return;
       }
 
       const scene = await loadScene(sceneStatus.bundle_url!);
+
       if (thisRun === run) await enterScene(scene, options, thisRun);
     } catch (error) {
       if (thisRun === run) {
@@ -120,15 +123,12 @@ export async function createPanel(
     build.disabled = true;
     status.textContent = "Starting build…";
     status.classList.add("busy");
+
     const thisRun = ++run;
     let enteredScene = false;
 
     try {
-      const finished = await submitAndPoll(
-        captureRequest,
-        () => thisRun === run,
-        showStatus,
-      );
+      const finished = await submitAndPoll(captureRequest, () => thisRun === run, showStatus);
       if (!finished) return;
 
       if (finished.status === "failed") {
@@ -137,7 +137,9 @@ export async function createPanel(
       }
 
       status.textContent = PREPARING_STATUS;
+
       const scene = await loadScene(finished.bundle_url!);
+
       if (thisRun === run) {
         await enterScene(scene, { time: null, entry: "push" }, thisRun);
         enteredScene = true;
@@ -145,9 +147,10 @@ export async function createPanel(
     } catch (error) {
       if (thisRun !== run) return;
 
-      status.textContent = error instanceof ApiError
-        ? `Error ${error.status}: ${error.message}`
-        : `Error: ${(error as Error).message}`;
+      status.textContent =
+        error instanceof ApiError
+          ? `Error ${error.status}: ${error.message}`
+          : `Error: ${(error as Error).message}`;
     } finally {
       if (thisRun === run && !enteredScene) {
         build.disabled = false;
@@ -170,7 +173,9 @@ export async function createPanel(
   // The scene draws its own outline, and reports its progress and failures back through the status.
   async function enterScene(scene: Scene, options: EnterOptions, thisRun: number) {
     const ready = typeof sceneMode === "function" ? await sceneMode() : sceneMode;
+
     if (thisRun !== run) return;
+
     ready.enter(scene, {
       ...options,
       buildPanel: {
@@ -203,6 +208,7 @@ function createControls(root: HTMLElement) {
 function createMonthInputs(root: HTMLElement) {
   const months = makeHtmlElement("div", "", root);
   months.className = "months";
+
   const start = createMonthSelect("From month", "From year");
   const end = createMonthSelect("To month", "To year");
   months.append("From ", start, " to ", end);

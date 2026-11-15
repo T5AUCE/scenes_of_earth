@@ -794,6 +794,7 @@ export function edgeCoverage(
   const distanceCells = gap / gradientCells;
   const cellsPerPixel = gradientPx / gradientCells;
   const blendCells = Math.max(softnessCells, MIN_EDGE_WIDTH_PX * cellsPerPixel);
+
   return {
     distanceCells,
     distancePx: gap / gradientPx,
@@ -899,18 +900,22 @@ export function sampleClassField(
   if (nearest === CLASS_HATCH_ID) {
     return { discarded: false, nearest, weights: [], outline: 0 };
   }
+
   if (!options.smooth) {
     return { discarded: false, nearest, weights: [{ id: nearest, weight: 1 }], outline: 0 };
   }
+
   const radiusCells = options.smoothRadiusCells ?? 0;
+
   // Uniform interiors skip the gather because the wide result equals the nearest colour.
   if (radiusCells > 0 && fragment.homogeneous) {
     return { discarded: false, nearest, weights: [{ id: nearest, weight: 1 }], outline: 0 };
   }
 
   // Remaining hatch stays out of the mix so its edge stays crisp while classes smooth around it.
-  const classes = gatherFieldClasses(fragment, options)
-    .filter(({ id }) => id !== 0 && id !== CLASS_HATCH_ID);
+  const classes = gatherFieldClasses(fragment, options).filter(
+    ({ id }) => id !== 0 && id !== CLASS_HATCH_ID,
+  );
   const influences = classInfluences(classes, fragment, options.softnessCells);
   const total = Math.max(
     influences.reduce((sum, influence) => sum + influence, 0),
@@ -944,12 +949,14 @@ export function gatherFieldClasses(
   options: EdgeOptions,
 ): FieldClass[] {
   const radiusCells = options.smoothRadiusCells ?? 0;
-  const wide = radiusCells > 0
-    ? bakedWideClasses(fragment, radiusCells) ?? wideClasses(fragment, radiusCells)
-    : null;
+  const wide =
+    radiusCells > 0
+      ? (bakedWideClasses(fragment, radiusCells) ?? wideClasses(fragment, radiusCells))
+      : null;
   if (wide) return repairThinCells(wide, fragment);
 
   const [fractionX, fractionY] = fragment.fraction;
+
   return gatherClasses(
     fragment.ids,
     axisWeights(fractionX, options.rounding),
@@ -977,6 +984,7 @@ function repairThinCells(classes: FieldClass[], fragment: ClassFieldFragment): F
     const shareY = row === 1 ? blendY : 1 - blendY;
     const signX = column === 1 ? slopeX : -slopeX;
     const signY = row === 1 ? slopeY : -slopeY;
+
     return {
       id: fragment.ids[1 + row][1 + column],
       isThin: thin[row][column],
@@ -986,10 +994,12 @@ function repairThinCells(classes: FieldClass[], fragment: ClassFieldFragment): F
   });
   const seen = new Set<number>();
   const lifts: FieldClass[] = [];
+
   for (const corner of corners) {
     if (!corner.isThin || seen.has(corner.id)) continue;
 
     seen.add(corner.id);
+
     const same = corners.filter((other) => other.isThin && other.id === corner.id);
     const presence = same.reduce((sum, other) => sum + other.share, 0);
     const presenceGradient: [number, number] = [
@@ -997,8 +1007,10 @@ function repairThinCells(classes: FieldClass[], fragment: ClassFieldFragment): F
       same.reduce((sum, other) => sum + other.slope[1], 0),
     ];
     const lift = liftOf(classes, corner.id, presence, presenceGradient);
+
     if (lift) lifts.push(lift);
   }
+
   // Every lift reads the unlifted weights so the corner order cannot change the result.
   for (const lift of lifts) {
     const current = classes.find((entry) => entry.id === lift.id);
@@ -1009,6 +1021,7 @@ function repairThinCells(classes: FieldClass[], fragment: ClassFieldFragment): F
       classes.push(lift);
     }
   }
+
   return classes;
 }
 
@@ -1022,26 +1035,29 @@ function liftOf(
   const current = classes.find((entry) => entry.id === id);
   const weight = current?.weight ?? 0;
   const gradient = current?.gradient ?? [0, 0];
+
   const rival = smoothRivalOf(classes, id);
   const rivalWeight = rival.weight;
   const gateFraction = Math.min(1, Math.max(0, (rivalWeight - weight) / THIN_DEFICIT_FULL_WEIGHT));
   const gate = smoothstep(gateFraction);
   const gateSlope = (6 * gateFraction * (1 - gateFraction)) / THIN_DEFICIT_FULL_WEIGHT;
+
   const aim = rivalWeight + THIN_LEAD_WEIGHT;
   const lift = presence * gate * aim - weight;
   if (lift <= 0) return null;
 
-  const softened = lift < THIN_SOFT_WEIGHT
-    ? (lift * lift) / (2 * THIN_SOFT_WEIGHT)
-    : lift - THIN_SOFT_WEIGHT / 2;
+  const softened =
+    lift < THIN_SOFT_WEIGHT ? (lift * lift) / (2 * THIN_SOFT_WEIGHT) : lift - THIN_SOFT_WEIGHT / 2;
   const softenedSlope = Math.min(lift / THIN_SOFT_WEIGHT, 1);
   const rivalGradient = rival.gradient;
-  const targetGradient = [0, 1].map((axis) => (
-    aim * (
-      gate * presenceGradient[axis]
-      + presence * gateSlope * (rivalGradient[axis] - gradient[axis])
-    ) + presence * gate * rivalGradient[axis]
-  ));
+  const targetGradient = [0, 1].map(
+    (axis) =>
+      aim
+        * (gate * presenceGradient[axis]
+          + presence * gateSlope * (rivalGradient[axis] - gradient[axis]))
+      + presence * gate * rivalGradient[axis],
+  );
+
   return {
     id,
     weight: weight + softened,
@@ -1061,32 +1077,35 @@ function smoothRivalOf(
   classes: readonly FieldClass[],
   id: number,
 ): { weight: number; gradient: [number, number] } {
-  const rivals = classes.filter((entry) => (
-    entry.id !== id && entry.id !== 0 && entry.id !== CLASS_HATCH_ID
-  ));
+  const rivals = classes.filter(
+    (entry) => entry.id !== id && entry.id !== 0 && entry.id !== CLASS_HATCH_ID,
+  );
   if (rivals.length === 0) return { weight: 0, gradient: [0, 0] };
 
   const peak = rivals.reduce((highest, entry) => Math.max(highest, entry.weight), 0);
   let supportTotal = 0;
   let weightedTotal = 0;
+
   for (const entry of rivals) {
     const support = classSupport(entry.weight);
     supportTotal += support;
     weightedTotal += support * Math.exp((entry.weight - peak) / THIN_DEFICIT_FULL_WEIGHT);
   }
+
   const peakExp = Math.exp(peak / THIN_DEFICIT_FULL_WEIGHT);
   const shifted = Math.max(1 - supportTotal + peakExp * weightedTotal, 1);
   const gradient: [number, number] = [0, 0];
+
   for (const entry of rivals) {
     const support = classSupport(entry.weight);
     const slope = rivalSupportSlope(entry.weight);
     const weightExp = peakExp * Math.exp((entry.weight - peak) / THIN_DEFICIT_FULL_WEIGHT);
-    const share = (
-      THIN_DEFICIT_FULL_WEIGHT * slope * (weightExp - 1) + support * weightExp
-    ) / shifted;
+    const share =
+      (THIN_DEFICIT_FULL_WEIGHT * slope * (weightExp - 1) + support * weightExp) / shifted;
     gradient[0] += share * entry.gradient[0];
     gradient[1] += share * entry.gradient[1];
   }
+
   return { weight: THIN_DEFICIT_FULL_WEIGHT * Math.log(shifted), gradient };
 }
 
@@ -1113,6 +1132,7 @@ function axisWeights(fraction: number, rounding: number): number[] {
     -3 * cube + 3 * square + 3 * fraction + 1,
     cube,
   ].map((value) => value / 6);
+
   return bilinear.map((value, index) => value + (bSpline[index] - value) * rounding);
 }
 
@@ -1125,6 +1145,7 @@ function axisSlopes(fraction: number, rounding: number): number[] {
     -1.5 * square + fraction + 0.5,
     0.5 * square,
   ];
+
   return bilinear.map((value, index) => value + (bSpline[index] - value) * rounding);
 }
 
@@ -1136,19 +1157,23 @@ function gatherClasses(
   rowSlopes: number[],
 ): FieldClass[] {
   const classes: FieldClass[] = [];
+
   for (let row = 0; row < KERNEL_SIZE; row++) {
     for (let column = 0; column < KERNEL_SIZE; column++) {
       const id = ids[row][column];
       let current = classes.find((entry) => entry.id === id);
+
       if (!current) {
         current = { id, weight: 0, gradient: [0, 0] };
         classes.push(current);
       }
+
       current.weight += columnWeights[column] * rowWeights[row];
       current.gradient[0] += rowWeights[row] * columnSlopes[column];
       current.gradient[1] += rowSlopes[row] * columnWeights[column];
     }
   }
+
   return classes;
 }
 
@@ -1156,10 +1181,7 @@ function gatherClasses(
  * Replace the kernel sums with a wide B-spline so staircases become smooth curves. Outside and
  * hatch taps stay in the denominator so the mask edge does not move.
  */
-function wideClasses(
-  fragment: ClassFieldFragment,
-  radiusCells: number,
-): FieldClass[] | null {
+function wideClasses(fragment: ClassFieldFragment, radiusCells: number): FieldClass[] | null {
   const position = fragment.position;
   const sample = fragment.sampleId;
   if (!position || !sample) return null;
@@ -1168,14 +1190,13 @@ function wideClasses(
   // Radii above 2 sample every second cell over a 16 x 16 window so the cost stays 64 taps.
   // The taps align to globally even cells so the sampled set slides without popping.
   const { firstX, firstY, stride } = wideFirst(base[0], base[1], radiusCells);
-  const columns = Array.from(
-    { length: WIDE_SPAN },
-    (_, tap) => wideAxis(position[0] - (base[0] + firstX + tap * stride), radiusCells),
+  const columns = Array.from({ length: WIDE_SPAN }, (_, tap) =>
+    wideAxis(position[0] - (base[0] + firstX + tap * stride), radiusCells),
   );
-  const rows = Array.from(
-    { length: WIDE_SPAN },
-    (_, tap) => wideAxis(position[1] - (base[1] + firstY + tap * stride), radiusCells),
+  const rows = Array.from({ length: WIDE_SPAN }, (_, tap) =>
+    wideAxis(position[1] - (base[1] + firstY + tap * stride), radiusCells),
   );
+
   const classes: FieldClass[] = [];
   let totalWeight = 0;
   const totalGradient: [number, number] = [0, 0];
@@ -1189,24 +1210,30 @@ function wideClasses(
       totalWeight += weight;
       totalGradient[0] += gradient[0];
       totalGradient[1] += gradient[1];
+
       const id = sample(base[0] + firstX + column * stride, base[1] + firstY + row * stride);
       let current = classes.find((entry) => entry.id === id);
+
       if (!current) {
         if (classes.length >= MAX_CLASS_COUNT) {
           overflowed = true;
           return;
         }
+
         current = { id, weight: 0, gradient: [0, 0] };
         classes.push(current);
       }
+
       current.weight += weight;
       current.gradient[0] += gradient[0];
       current.gradient[1] += gradient[1];
     });
   });
+
   if (overflowed || classes.length === 0) return null;
 
   const totalSquared = totalWeight * totalWeight;
+
   for (const current of classes) {
     current.gradient = [
       (current.gradient[0] * totalWeight - current.weight * totalGradient[0]) / totalSquared,
@@ -1214,6 +1241,7 @@ function wideClasses(
     ];
     current.weight /= totalWeight;
   }
+
   return classes;
 }
 
@@ -1229,6 +1257,7 @@ function wideAxis(offset: number, radiusCells: number): [number, number] {
 
   const weight = x < 1 ? (4 - 6 * x * x + 3 * x ** 3) / 6 : (2 - x) ** 3 / 6;
   const slope = x < 1 ? (-12 * x + 9 * x * x) / 6 : -0.5 * (2 - x) * (2 - x);
+
   return [weight, (slope * Math.sign(offset)) / radiusCells];
 }
 
@@ -1240,6 +1269,7 @@ function classInfluences(
 ): number[] {
   return classes.map((current) => {
     let influence = classSupport(current.weight);
+
     for (const other of classes) {
       if (other === current) continue;
 
@@ -1247,6 +1277,7 @@ function classInfluences(
       const coverage = edgeCoverage(gap, cellGradient, screenGradient, softnessCells).coverage;
       influence *= 1 - classSupport(other.weight) * (1 - coverage);
     }
+
     return influence;
   });
 }
@@ -1264,16 +1295,14 @@ function pairGradients(current: FieldClass, other: FieldClass, fragment: ClassFi
     cellGradient[0] * fragment.positionDx[0] + cellGradient[1] * fragment.positionDx[1],
     cellGradient[0] * fragment.positionDy[0] + cellGradient[1] * fragment.positionDy[1],
   ];
+
   return { gap: current.weight - other.weight, cellGradient, screenGradient };
 }
 
 // Each pair is weighted by how far both its classes lead the rest so the ink is continuous.
-function outlineInk(
-  classes: FieldClass[],
-  shares: number[],
-  fragment: ClassFieldFragment,
-): number {
+function outlineInk(classes: FieldClass[], shares: number[], fragment: ClassFieldFragment): number {
   let ink = 0;
+
   for (let index = 0; index < classes.length; index++) {
     for (let other = index + 1; other < classes.length; other++) {
       const gapPx = Math.abs(distancePx(classes[index], classes[other], fragment));
@@ -1289,9 +1318,11 @@ function outlineInk(
         const dominance = smoothstep(0.5 + leadPx / (2 * OUTLINE_WIDTH_PX));
         leading *= 1 - classSupport(rival.weight) * (1 - dominance);
       });
+
       ink += (1 - smoothstep(gapPx / OUTLINE_WIDTH_PX)) * presence * leading;
     }
   }
+
   return Math.min(ink, 1);
 }
 
@@ -1319,30 +1350,29 @@ export function homogeneousFlags(
   smoothRadiusCells?: number,
 ): Uint8Array {
   const flags = new Uint8Array(nx * ny);
+
   if (nx <= 0 || ny <= 0) {
     return flags;
   }
+
   const horizontal = summedHorizontal(cells, nx, ny);
   const vertical = summedVertical(cells, nx, ny);
   const { first, span } = homogeneousWindow(smoothRadiusCells);
   const lastOffset = first + span - 1;
+
   for (let row = 0; row < ny; row++) {
     const top = Math.max(0, row + first);
     const bottom = Math.min(ny - 1, row + lastOffset);
+
     for (let column = 0; column < nx; column++) {
       const left = Math.max(0, column + first);
       const right = Math.min(nx - 1, column + lastOffset);
-      flags[row * nx + column] = isUniformWindow(
-        horizontal,
-        vertical,
-        nx,
-        top,
-        bottom,
-        left,
-        right,
-      ) ? 1 : 0;
+      flags[row * nx + column] = isUniformWindow(horizontal, vertical, nx, top, bottom, left, right)
+        ? 1
+        : 0;
     }
   }
+
   return flags;
 }
 
@@ -1358,11 +1388,13 @@ export function markThinCells(
   flags: Uint8Array,
 ): void {
   const centres = uniformBlockCentres(cells, nx, ny, flags);
+
   for (let row = 0; row < ny; row++) {
     for (let column = 0; column < nx; column++) {
       const index = row * nx + column;
       const id = cells[index];
       if (flags[index] === 1 || id === 0 || id === CLASS_HATCH_ID) continue;
+
       if (!hasBlockCentreNearby(centres, nx, ny, column, row)) flags[index] = THIN_CELL_FLAG;
     }
   }
@@ -1376,25 +1408,30 @@ function uniformBlockCentres(
   flags: Uint8Array,
 ): Uint8Array {
   const centres = new Uint8Array(nx * ny);
+
   for (let row = 1; row < ny - 1; row++) {
     for (let column = 1; column < nx - 1; column++) {
       const index = row * nx + column;
       if (flags[index] === 1 || isUniformBlock(cells, nx, index)) centres[index] = 1;
     }
   }
+
   return centres;
 }
 
 function isUniformBlock(cells: Uint8Array | readonly number[], nx: number, index: number): boolean {
   const id = cells[index];
-  return cells[index - 1] === id
+
+  return (
+    cells[index - 1] === id
     && cells[index + 1] === id
     && cells[index - nx - 1] === id
     && cells[index - nx] === id
     && cells[index - nx + 1] === id
     && cells[index + nx - 1] === id
     && cells[index + nx] === id
-    && cells[index + nx + 1] === id;
+    && cells[index + nx + 1] === id
+  );
 }
 
 function hasBlockCentreNearby(
@@ -1408,11 +1445,13 @@ function hasBlockCentreNearby(
   const lastRow = Math.min(ny - 1, row + 1);
   const firstColumn = Math.max(0, column - 1);
   const lastColumn = Math.min(nx - 1, column + 1);
+
   for (let nearRow = firstRow; nearRow <= lastRow; nearRow++) {
     for (let nearColumn = firstColumn; nearColumn <= lastColumn; nearColumn++) {
       if (centres[nearRow * nx + nearColumn] === 1) return true;
     }
   }
+
   return false;
 }
 
@@ -1424,6 +1463,7 @@ export function homogeneousWindow(smoothRadiusCells?: number): { first: number; 
   if (smoothRadiusCells !== undefined && smoothRadiusCells > 0 && smoothRadiusCells <= 2) {
     return { first: WIDE_FIRST_OFFSET, span: WIDE_SPAN };
   }
+
   return { first: WIDE_LARGE_FIRST, span: WIDE_LARGE_SPAN };
 }
 
@@ -1439,6 +1479,7 @@ function isUniformWindow(
   if (left < right && rectangleSum(horizontal, nx, top, bottom, left, right - 1) > 0) {
     return false;
   }
+
   return !(top < bottom && rectangleSum(vertical, nx, top, bottom - 1, left, right) > 0);
 }
 
@@ -1448,37 +1489,37 @@ function summedHorizontal(
   ny: number,
 ): Int32Array {
   const table = new Int32Array(nx * ny);
+
   for (let row = 0; row < ny; row++) {
     for (let column = 0; column < nx; column++) {
-      const differs = column + 1 < nx && cells[row * nx + column] !== cells[row * nx + column + 1]
-        ? 1
-        : 0;
-      table[row * nx + column] = differs
+      const differs =
+        column + 1 < nx && cells[row * nx + column] !== cells[row * nx + column + 1] ? 1 : 0;
+      table[row * nx + column] =
+        differs
         + (row > 0 ? table[(row - 1) * nx + column] : 0)
         + (column > 0 ? table[row * nx + column - 1] : 0)
         - (row > 0 && column > 0 ? table[(row - 1) * nx + column - 1] : 0);
     }
   }
+
   return table;
 }
 
-function summedVertical(
-  cells: Uint8Array | readonly number[],
-  nx: number,
-  ny: number,
-): Int32Array {
+function summedVertical(cells: Uint8Array | readonly number[], nx: number, ny: number): Int32Array {
   const table = new Int32Array(nx * ny);
+
   for (let row = 0; row < ny; row++) {
     for (let column = 0; column < nx; column++) {
-      const differs = row + 1 < ny && cells[row * nx + column] !== cells[(row + 1) * nx + column]
-        ? 1
-        : 0;
-      table[row * nx + column] = differs
+      const differs =
+        row + 1 < ny && cells[row * nx + column] !== cells[(row + 1) * nx + column] ? 1 : 0;
+      table[row * nx + column] =
+        differs
         + (row > 0 ? table[(row - 1) * nx + column] : 0)
         + (column > 0 ? table[row * nx + column - 1] : 0)
         - (row > 0 && column > 0 ? table[(row - 1) * nx + column - 1] : 0);
     }
   }
+
   return table;
 }
 
@@ -1490,10 +1531,12 @@ function rectangleSum(
   left: number,
   right: number,
 ): number {
-  return table[bottom * nx + right]
+  return (
+    table[bottom * nx + right]
     - (top > 0 ? table[(top - 1) * nx + right] : 0)
     - (left > 0 ? table[bottom * nx + left - 1] : 0)
-    + (top > 0 && left > 0 ? table[(top - 1) * nx + left - 1] : 0);
+    + (top > 0 && left > 0 ? table[(top - 1) * nx + left - 1] : 0)
+  );
 }
 
 /**
@@ -1501,10 +1544,12 @@ function rectangleSum(
  * Uniform windows never reach the band path because the homogeneous flag skips them first.
  */
 export function isComplexBand(band: BandTexel): boolean {
-  return band.id0 === 0
+  return (
+    band.id0 === 0
     && band.id1 === 0
     && band.low === BAND_COMPLEX_WORD
-    && band.high === BAND_COMPLEX_WORD;
+    && band.high === BAND_COMPLEX_WORD
+  );
 }
 
 /**
@@ -1539,10 +1584,13 @@ export function bakeBand(
   const ids = new Uint8Array(count * 2);
   const low = new Uint32Array(count);
   const high = new Uint32Array(count);
+
   if (nx <= 0 || ny <= 0) {
     return { ids, low, high };
   }
+
   bakeBandInto(cells, nx, ny, smoothRadiusCells, homogeneous ?? null, ids, low, high, 0, ny);
+
   return { ids, low, high };
 }
 
@@ -1565,6 +1613,7 @@ export function bakeBandInto(
   const radius = smoothRadiusCells ?? 0;
   const first = Math.max(0, startRow);
   const last = Math.min(ny, endRow);
+
   for (let row = first; row < last; row++) {
     for (let column = 0; column < nx; column++) {
       if (homogeneous && homogeneous[row * nx + column] === 1) {
@@ -1573,6 +1622,7 @@ export function bakeBandInto(
         ids[(row * nx + column) * 2 + 1] = cell;
         continue;
       }
+
       bakeOneBand(cells, nx, ny, column, row, radius, ids, low, high);
     }
   }
@@ -1594,43 +1644,54 @@ function bakeOneBand(
   let id1 = -1;
   let lowBits = 0;
   let highBits = 0;
+
   for (let tapRow = 0; tapRow < WIDE_SPAN; tapRow++) {
     for (let tapColumn = 0; tapColumn < WIDE_SPAN; tapColumn++) {
       const cellX = clampBand(column + firstX + tapColumn * stride, nx);
       const cellY = clampBand(row + firstY + tapRow * stride, ny);
       const id = cells[cellY * nx + cellX];
       const tap = tapRow * WIDE_SPAN + tapColumn;
+
       if (id === id0) {
         continue;
       }
+
       if (id === id1) {
         const updated = withBandBit(lowBits, highBits, tap);
         lowBits = updated.lowBits;
         highBits = updated.highBits;
         continue;
       }
+
       if (id0 < 0) {
         id0 = id;
         continue;
       }
+
       if (id1 < 0) {
         id1 = id;
+
         const updated = withBandBit(lowBits, highBits, tap);
         lowBits = updated.lowBits;
         highBits = updated.highBits;
         continue;
       }
+
       writeComplexBand(column, row, nx, ids, low, high);
+
       return;
     }
   }
+
   if (id0 < 0) {
     writeComplexBand(column, row, nx, ids, low, high);
     return;
   }
+
   if (id1 < 0) {
     id1 = id0;
   }
+
   ids[(row * nx + column) * 2] = id0;
   ids[(row * nx + column) * 2 + 1] = id1;
   low[row * nx + column] = lowBits >>> 0;
@@ -1645,6 +1706,7 @@ function withBandBit(
   if (tap < 32) {
     return { lowBits: lowBits | (1 << tap), highBits };
   }
+
   return { lowBits, highBits: highBits | (1 << (tap - 32)) };
 }
 
@@ -1675,6 +1737,7 @@ function wideFirst(
   const stride = large ? 2 : 1;
   const firstX = large ? WIDE_LARGE_FIRST_OFFSET - parity(baseX) : WIDE_FIRST_OFFSET;
   const firstY = large ? WIDE_LARGE_FIRST_OFFSET - parity(baseY) : WIDE_FIRST_OFFSET;
+
   return { firstX, firstY, stride };
 }
 
@@ -1683,41 +1746,42 @@ function wideFirst(
  * matches the full gather tap for tap, so simple windows render pixel-identical output with
  * three fetches. Complex windows and missing bands return null for the full gather.
  */
-function bakedWideClasses(
-  fragment: ClassFieldFragment,
-  radiusCells: number,
-): FieldClass[] | null {
+function bakedWideClasses(fragment: ClassFieldFragment, radiusCells: number): FieldClass[] | null {
   const band = fragment.band;
   const position = fragment.position;
   if (!band || !position || isComplexBand(band) || band.id0 === band.id1) {
     return null;
   }
+
   const base = [Math.floor(position[0]), Math.floor(position[1])];
   const { firstX, firstY, stride } = wideFirst(base[0], base[1], radiusCells);
-  const columns = Array.from(
-    { length: WIDE_SPAN },
-    (_, tap) => wideAxis(position[0] - (base[0] + firstX + tap * stride), radiusCells),
+  const columns = Array.from({ length: WIDE_SPAN }, (_, tap) =>
+    wideAxis(position[0] - (base[0] + firstX + tap * stride), radiusCells),
   );
-  const rows = Array.from(
-    { length: WIDE_SPAN },
-    (_, tap) => wideAxis(position[1] - (base[1] + firstY + tap * stride), radiusCells),
+  const rows = Array.from({ length: WIDE_SPAN }, (_, tap) =>
+    wideAxis(position[1] - (base[1] + firstY + tap * stride), radiusCells),
   );
+
   const sums = new Map<number, FieldClass>();
   let totalWeight = 0;
   const totalGradient: [number, number] = [0, 0];
+
   for (let tapRow = 0; tapRow < WIDE_SPAN; tapRow++) {
     for (let tapColumn = 0; tapColumn < WIDE_SPAN; tapColumn++) {
       const weight = columns[tapColumn][0] * rows[tapRow][0];
       if (weight <= 0) {
         continue;
       }
+
       const tap = tapRow * WIDE_SPAN + tapColumn;
       const id = bandBit(band.low, band.high, tap) ? band.id1 : band.id0;
       let current = sums.get(id);
+
       if (!current) {
         current = { id, weight: 0, gradient: [0, 0] };
         sums.set(id, current);
       }
+
       const gradient: [number, number] = [
         columns[tapColumn][1] * rows[tapRow][0],
         columns[tapColumn][0] * rows[tapRow][1],
@@ -1725,16 +1789,20 @@ function bakedWideClasses(
       totalWeight += weight;
       totalGradient[0] += gradient[0];
       totalGradient[1] += gradient[1];
+
       current.weight += weight;
       current.gradient[0] += gradient[0];
       current.gradient[1] += gradient[1];
     }
   }
+
   if (sums.size === 0) {
     return null;
   }
+
   const classes = [...sums.values()];
   const totalSquared = totalWeight * totalWeight;
+
   for (const current of classes) {
     current.gradient = [
       (current.gradient[0] * totalWeight - current.weight * totalGradient[0]) / totalSquared,
@@ -1742,6 +1810,7 @@ function bakedWideClasses(
     ];
     current.weight /= totalWeight;
   }
+
   return classes;
 }
 
@@ -1749,5 +1818,6 @@ function bandBit(low: number, high: number, tap: number): boolean {
   if (tap < 32) {
     return ((low >>> tap) & 1) === 1;
   }
+
   return ((high >>> (tap - 32)) & 1) === 1;
 }

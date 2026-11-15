@@ -51,6 +51,7 @@ function openSharedScene(entry: SceneEntry) {
 function followHistory() {
   navigation++;
   cancelOpen();
+
   const route = routeFor(location.search, history.state);
   if (route.kind === "world") return sceneMode?.exit();
   if (route.id === sceneMode?.sceneId()) return sceneMode.showFullscreen(route.panel);
@@ -68,9 +69,11 @@ function loadSceneMode(): Promise<ReturnType<typeof createSceneMode>> {
 
     return sceneMode;
   });
+
   sceneModeReady.catch(() => {
     sceneModeReady = null;
   });
+
   return sceneModeReady;
 }
 

@@ -540,11 +540,7 @@ test("choosing main in the close-up confirms politely", async (context) => {
 });
 
 function makeScene(layers: LayerDoc[]): Scene {
-  return {
-    id: "test",
-    title: "Test scene",
-    layers,
-  } as unknown as Scene;
+  return { id: "test", title: "Test scene", layers } as unknown as Scene;
 }
 
 function rainLayer(): LayerDoc {

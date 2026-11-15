@@ -25,12 +25,8 @@ const {
   toggle,
 } = await import("./show-as.ts");
 const { allocate, BLEND } = await import("./layers/allocate.ts");
-const {
-  DEFAULT_OUTLINE,
-  formatDisplayParams,
-  NO_TOKENS,
-  resolveDisplay,
-} = await import("./display-state.ts").finally(() => hooks.deregister());
+const { DEFAULT_OUTLINE, formatDisplayParams, NO_TOKENS, resolveDisplay } =
+  await import("./display-state.ts").finally(() => hooks.deregister());
 
 const RAIN = layer("rain", ["ramp", "dots", "isolines", "chroma"]);
 const TEMP = layer("temp", ["ramp", "isolines", "warmth"]);
@@ -106,29 +102,14 @@ test("displacedOwner names the old owner only for a colour choice", () => {
   const after = allocate([RAIN, TEMP], on("rain", "temp"), { temp: "colour" });
 
   assert.equal(
-    displacedOwner(
-      before,
-      after,
-      { kind: "choose", unit: "temp", draw: "colour" },
-    ),
+    displacedOwner(before, after, { kind: "choose", unit: "temp", draw: "colour" }),
     "rain",
   );
   assert.equal(
-    displacedOwner(
-      before,
-      after,
-      { kind: "choose", unit: "temp", draw: "isolines" },
-    ),
+    displacedOwner(before, after, { kind: "choose", unit: "temp", draw: "isolines" }),
     null,
   );
-  assert.equal(
-    displacedOwner(
-      before,
-      before,
-      { kind: "toggle", unit: "temp", on: true },
-    ),
-    null,
-  );
+  assert.equal(displacedOwner(before, before, { kind: "toggle", unit: "temp", on: true }), null);
 });
 
 test("displacedOwner ignores blend halves switched off by choosing blend", () => {
@@ -136,19 +117,11 @@ test("displacedOwner ignores blend halves switched off by choosing blend", () =>
   const blended = allocate([RAIN, TEMP], on(), { blend: "colour" });
 
   assert.equal(
-    displacedOwner(
-      chosen,
-      blended,
-      { kind: "choose", unit: BLEND, draw: "colour" },
-    ),
+    displacedOwner(chosen, blended, { kind: "choose", unit: BLEND, draw: "colour" }),
     null,
   );
   assert.equal(
-    displacedOwner(
-      blended,
-      chosen,
-      { kind: "choose", unit: "temp", draw: "colour" },
-    ),
+    displacedOwner(blended, chosen, { kind: "choose", unit: "temp", draw: "colour" }),
     BLEND,
   );
 });
@@ -161,20 +134,17 @@ test("displacedOwner keeps a still-on owner displaced by the blend", () => {
   assert.equal(before.owner, "land");
   assert.equal(blended.owner, BLEND);
   assert.equal(
-    displacedOwner(
-      before,
-      blended,
-      { kind: "choose", unit: BLEND, draw: "colour" },
-    ),
+    displacedOwner(before, blended, { kind: "choose", unit: BLEND, draw: "colour" }),
     "land",
   );
 });
 
 test("parse drops unknown units and draws outside the options", () => {
-  const parsed = parseShowAs(
-    "nowhere:dots,rain:shade,terrain:contours,temp:isolines",
-    [RAIN, TEMP, TERRAIN],
-  );
+  const parsed = parseShowAs("nowhere:dots,rain:shade,terrain:contours,temp:isolines", [
+    RAIN,
+    TEMP,
+    TERRAIN,
+  ]);
 
   assert.deepEqual(parsed.showAs, { temp: "isolines" });
   assert.equal(parsed.dropped, true);
@@ -208,19 +178,20 @@ test("format writes every on unit's effective draw and the blend owner", () => {
   const land = state({ rain: "dots", temp: "isolines" });
   const landAllocation = allocate([RAIN, TEMP, LAND], on("rain", "temp", "land"), land.showAs);
 
-  assert.deepEqual(formatShowAs(plain, [RAIN, TEMP], allocation), [
-    "rain:dots",
-    "temp:colour",
-  ]);
+  assert.deepEqual(formatShowAs(plain, [RAIN, TEMP], allocation), ["rain:dots", "temp:colour"]);
   assert.deepEqual(formatShowAs(blended, [RAIN, TEMP], blendAllocation), ["blend:colour"]);
-  assert.deepEqual(
-    formatShowAs(land, [RAIN, TEMP, LAND], landAllocation),
-    ["rain:dots", "temp:isolines", "land:colour"],
-  );
+  assert.deepEqual(formatShowAs(land, [RAIN, TEMP, LAND], landAllocation), [
+    "rain:dots",
+    "temp:isolines",
+    "land:colour",
+  ]);
 });
 
 test("an off sticky colour round trips in either layer order", () => {
-  for (const layers of [[RAIN, TEMP], [TEMP, RAIN]]) {
+  for (const layers of [
+    [RAIN, TEMP],
+    [TEMP, RAIN],
+  ]) {
     const sender = state({ rain: "colour" }, ["rain"]);
     const senderAllocation = allocate(layers, on("temp"), sender.showAs);
     const params = new URLSearchParams(
@@ -236,21 +207,12 @@ test("an off sticky colour round trips in either layer order", () => {
     );
     const { display } = resolveDisplay(
       layers,
-      {
-        ...NO_TOKENS,
-        as: params.get("as") ?? "",
-        off: params.get("off") ?? "",
-      },
+      { ...NO_TOKENS, as: params.get("as") ?? "", off: params.get("off") ?? "" },
       {},
       { blend: "colour", temp: "dots" },
     );
     const receiverAllocation = allocate(layers, on("temp"), display.showAs);
-    const toggled = toggle(
-      { showAs: display.showAs, off: display.off },
-      "rain",
-      true,
-      layers,
-    );
+    const toggled = toggle({ showAs: display.showAs, off: display.off }, "rain", true, layers);
     const toggledAllocation = allocate(layers, on("rain", "temp"), toggled.showAs);
 
     assert.deepEqual(display.showAs, { rain: "colour", temp: "colour" });
@@ -268,19 +230,14 @@ test("a linked snapshot ignores stored choices, including a stored blend", () =>
   const senderAllocation = allocate(layers, on("rain", "temp", "land"), sender.showAs);
   const params = new URLSearchParams(
     formatDisplayParams(
-      {
-        layers: {},
-        off: new Set(),
-        showAs: sender.showAs,
-        outline: { ...DEFAULT_OUTLINE },
-      },
+      { layers: {}, off: new Set(), showAs: sender.showAs, outline: { ...DEFAULT_OUTLINE } },
       layers,
     ),
   );
-  const storedCases = [
-    { blend: "colour" },
-    { temp: "colour", blend: "colour" },
-  ] as Record<string, "colour">[];
+  const storedCases = [{ blend: "colour" }, { temp: "colour", blend: "colour" }] as Record<
+    string,
+    "colour"
+  >[];
 
   assert.equal(senderAllocation.owner, "land");
   assert.ok(params.get("as")?.includes("land:colour"));
@@ -294,11 +251,7 @@ test("a linked snapshot ignores stored choices, including a stored blend", () =>
     );
     const allocation = allocate(layers, on("rain", "temp", "land"), display.showAs);
 
-    assert.deepEqual(display.showAs, {
-      rain: "dots",
-      temp: "isolines",
-      land: "colour",
-    });
+    assert.deepEqual(display.showAs, { rain: "dots", temp: "isolines", land: "colour" });
     assert.equal(allocation.owner, "land");
     assert.deepEqual(allocation.draws.get("rain"), "dots");
     assert.deepEqual(allocation.draws.get("temp"), "isolines");
@@ -319,6 +272,7 @@ test("stored choices follow recency and the latest colour wins", () => {
   storeShowAs("temp", "colour");
 
   assert.deepEqual(Object.keys(loadStoredShowAs()), ["rain", "temp"]);
+
   const { display } = resolveDisplay([RAIN, TEMP], NO_TOKENS, {}, loadStoredShowAs());
 
   assert.deepEqual(display.showAs, { temp: "colour" });
@@ -348,6 +302,7 @@ test("a failed write keeps the previous stored record", () => {
       throw new Error("quota");
     },
   });
+
   const previous = JSON.stringify({ rain: "dots" });
   items.set("soe.showas.v1", previous);
 
@@ -362,7 +317,9 @@ test("blocked storage falls back to Auto", () => {
 
   assert.deepEqual(loadStoredShowAs(), {});
   assert.doesNotThrow(() => storeShowAs("rain", "colour"));
+
   const { display } = resolveDisplay([RAIN, TEMP], NO_TOKENS, {}, loadStoredShowAs());
+
   assert.deepEqual(display.showAs, {});
 });
 
@@ -371,10 +328,7 @@ function state(showAs: Record<string, "colour" | "dots" | "isolines"> = {}, off:
 }
 
 function layer(id: string, encodings: string[], kind = "field", parts?: string[]) {
-  return {
-    id,
-    style: { kind, encodings, ...(parts && { parts }) },
-  } as unknown as LayerDoc;
+  return { id, style: { kind, encodings, ...(parts && { parts }) } } as unknown as LayerDoc;
 }
 
 function on(...units: string[]) {
@@ -398,5 +352,6 @@ function useStorage(overrides: object = {}) {
       ...overrides,
     },
   });
+
   return items;
 }

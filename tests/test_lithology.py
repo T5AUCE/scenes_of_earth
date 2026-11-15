@@ -1,4 +1,5 @@
 """Test lithology COG preparation and reads, registry behaviour and Geology bundles offline."""
+
 import io
 import json
 import time
@@ -30,8 +31,8 @@ from soe.geology_type import (
     WATER_CLASS,
 )
 from soe.ingest import cog
-from soe.ingest.cubes import DOWNLOADS_DIR
 from soe.ingest import lithology as ingest
+from soe.ingest.cubes import DOWNLOADS_DIR
 from soe.ingest.lithology import (
     GLIM_DIR,
     GLIM_FILE,
@@ -41,8 +42,14 @@ from soe.ingest.lithology import (
     ingest_lithology,
 )
 from soe.scene_request import compute_scene_id
-from soe.sources import RealSource, Registry, SourceUnavailable, SyntheticSource, make_registry
-from soe.sources import lithology
+from soe.sources import (
+    RealSource,
+    Registry,
+    SourceUnavailable,
+    SyntheticSource,
+    lithology,
+    make_registry,
+)
 from soe.sources.geology import GeologyDataset
 from soe.sources.licences import SOURCES
 from tests.helpers import BOUNDARY, FIJI, HASH_A, NAIROBI, write_cube
@@ -88,6 +95,7 @@ def cubes_dir(tmp_path):
     folder.mkdir()
     write_source_map(tmp_path / "source.tif")
     build_lithology_cog(tmp_path / "source.tif", folder / LITHOLOGY_FILE)
+
     return folder
 
 
@@ -116,6 +124,7 @@ def glim_cubes_dir(tmp_path):
     folder.mkdir()
     write_glim_source(tmp_path / "glim.gpkg")
     build_glim_cog(tmp_path / "glim.gpkg", folder / LITHOLOGY_FILE)
+
     return folder
 
 
@@ -144,6 +153,7 @@ def write_edge_source(path: Path) -> np.ndarray:
         nodata=WATER_CLASS,
     ) as dataset:
         dataset.write(values, 1)
+
     return values
 
 
@@ -161,9 +171,11 @@ def test_cog_covers_60_south_to_84_north_and_has_no_water_or_undefined_class(cub
 def test_edge_columns_are_replaced_by_their_inner_neighbours(tmp_path):
     write_edge_source(tmp_path / "edge.tif")
     build_lithology_cog(tmp_path / "edge.tif", tmp_path / "cleaned.tif")
+
     with rasterio.open(tmp_path / "edge.tif") as source:
         skipped_rows = round((source.bounds.top - NORTH_EDGE_DEG) / SOURCE_RES_DEG)
         source_values = source.read(1)
+
     with rasterio.open(tmp_path / "cleaned.tif") as dataset:
         cleaned = dataset.read(1)
 
@@ -266,6 +278,7 @@ class _InterruptedBody(io.BytesIO):
         chunk = super().read(size)
         if chunk:
             return chunk
+
         raise OSError("interrupted")
 
 
@@ -276,8 +289,10 @@ def test_interrupted_download_leaves_no_source_and_rerun_downloads_again(tmp_pat
 
     def fake_urlopen(url, timeout=None):
         attempts.append(url)
+
         if len(attempts) == 1:
             return _InterruptedBody()
+
         return io.BytesIO(payload)
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
@@ -432,7 +447,20 @@ def test_glim_classes_have_unique_values_a_family_and_a_level_one_parent():
         "Ice/other",
     }
     assert {entry["parent"] for entry in GEOLOGY_CLASSES} == {
-        "su", "ss", "sm", "sc", "ev", "py", "va", "vi", "vb", "pa", "pi", "pb", "mt", "ig",
+        "su",
+        "ss",
+        "sm",
+        "sc",
+        "ev",
+        "py",
+        "va",
+        "vi",
+        "vb",
+        "pa",
+        "pi",
+        "pb",
+        "mt",
+        "ig",
     }
     assert len(GLIM_VALUES) == len(GEOLOGY_CLASSES)
     assert "wb__" not in GLIM_VALUES and "nd__" not in GLIM_VALUES
@@ -613,7 +641,9 @@ def test_geology_builds_offline_and_is_not_a_default_layer(tmp_path):
             status = client.get(f"/api/scenes/{scene_id}").json()["status"]
             if status in ("done", "failed"):
                 break
+
             time.sleep(POLL_INTERVAL_SECS)
+
         layers = client.get("/api/layers").json()
 
     assert status == "done"
@@ -641,15 +671,12 @@ def test_geology_over_open_sea_is_refused_before_any_read(tmp_path):
 
     sea = mapping(box(-150, 0, -148, 2))
     app = create_app(
-        tmp_path / "soe.db",
-        tmp_path / "scenes",
-        make_registry(NoReads(lithology=True)),
+        tmp_path / "soe.db", tmp_path / "scenes", make_registry(NoReads(lithology=True))
     )
 
     with TestClient(app) as client:
         response = client.post(
-            "/api/scenes",
-            json=request_body(area={"type": "polygon", "geometry": sea}),
+            "/api/scenes", json=request_body(area={"type": "polygon", "geometry": sea})
         )
 
     assert response.status_code == 422
