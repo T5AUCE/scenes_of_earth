@@ -115,7 +115,7 @@ export function buildSeasonalCycle(layer: LayerDoc): SeasonalCycleTable {
   const starts = layer.time!.values;
   const series = layer.area_series!;
   const hasFallback = series.fallback_fraction !== undefined;
-  const rows = MONTH_LABELS.map((label, position) => {
+  const rows = MONTH_LABELS.map((label, position): SeasonalRow => {
     const month = position + JANUARY_INDEX;
     const contributing = starts.flatMap((start, index) => {
       if (monthOf(start) !== month) return [];
@@ -135,7 +135,7 @@ export function buildSeasonalCycle(layer: LayerDoc): SeasonalCycleTable {
         fallbackFraction: hasFallback ? 0 : null,
         sampleCount: 0,
         yearRange: null,
-      } as SeasonalRow;
+      };
     }
 
     const values = contributing.map(({ value }) => value);
@@ -153,7 +153,7 @@ export function buildSeasonalCycle(layer: LayerDoc): SeasonalCycleTable {
       fallbackFraction: hasFallback ? average(fallbackShares) : null,
       sampleCount: contributing.length,
       yearRange: [Math.min(...years), Math.max(...years)],
-    } as SeasonalRow;
+    };
   });
 
   return {

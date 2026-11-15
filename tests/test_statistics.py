@@ -1,5 +1,6 @@
 """Exact area-weighted means, shares and quantiles for chart blocks."""
 
+import itertools
 import json
 
 import numpy as np
@@ -55,7 +56,7 @@ def test_tied_values_combine_their_weights():
     assert block["values"][25] == 1.0
     assert block["values"][75] == 2.0
     ordered = block["values"]
-    assert all(later >= earlier for earlier, later in zip(ordered, ordered[1:]))
+    assert all(later >= earlier for earlier, later in itertools.pairwise(ordered))
 
 
 def test_negative_and_fractional_values_reduce_exactly():

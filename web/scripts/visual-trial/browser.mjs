@@ -129,7 +129,7 @@ export async function preflightWebGL(system = {}) {
   const {
     findPath: find = browserExecutable,
     openBrowser: open = launchBrowser,
-    openBlank: openBlank = (browser) => browser.newContext(),
+    openBlank = (browser) => browser.newContext(),
   } = system;
   const executablePath = find();
   const browser = await open();
@@ -269,7 +269,7 @@ const MASK_LAYER_ID = "soe-scene-mask";
 const FADE_LAYER_ID = "soe-scene-fade";
 
 /** Sweeps one spot through every zoom variant; returns one record per band and variant. */
-export async function trialZoomSpot(context, appUrl, spot, sceneId, options) {
+export async function trialZoomSpot(context, appUrl, spot, sceneId) {
   const page = await context.newPage();
   const requests = trackRequests(page);
 
@@ -1233,9 +1233,7 @@ export function chartGalleryTickBounds() {
     const disclosures = disclosureEls.map((entry) => entry.getBoundingClientRect());
     const yTicks = [...card.querySelectorAll(".chart-y-ticks text")];
     const xTicks = [...card.querySelectorAll(".chart-x-ticks text")];
-    const references = [
-      ...card.querySelectorAll(".chart-references text," + " .chart-endpoints text"),
-    ];
+    const references = [...card.querySelectorAll(".chart-references text, .chart-endpoints text")];
 
     if (yTicks.length === 0 || xTicks.length === 0) {
       return fail(id, "missing-ticks", null, svgBox);
@@ -1420,7 +1418,7 @@ export function chartGalleryReferenceBounds() {
 
     if (referenceCards.indexOf(id) === -1) continue;
 
-    const texts = [...card.querySelectorAll(".chart-references text," + " .chart-endpoints text")];
+    const texts = [...card.querySelectorAll(".chart-references text, .chart-endpoints text")];
     if (texts.length === 0) return { present: true, pass: false };
 
     const yBoxes = yTicks.map((tick) => tick.getBoundingClientRect());
@@ -1552,8 +1550,11 @@ export function chartAttributionVisible() {
   if (style.visibility === "hidden" || style.visibility === "collapse") return false;
   if (Number(style.opacity) === 0) return false;
 
-  if (typeof note.checkVisibility === "function") {
-    if (!note.checkVisibility({ visibilityProperty: true })) return false;
+  if (
+    typeof note.checkVisibility === "function"
+    && !note.checkVisibility({ visibilityProperty: true })
+  ) {
+    return false;
   }
 
   const main = document.querySelector("#scene-full main");

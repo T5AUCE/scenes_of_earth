@@ -970,12 +970,12 @@ export function createGlTextureStore(gl: WebGL2RenderingContext): DemTextureStor
       return texture;
     },
     patch(texture, x, y, width, height, data) {
-      gl.bindTexture(gl.TEXTURE_2D, texture as WebGLTexture);
+      gl.bindTexture(gl.TEXTURE_2D, texture);
       withPlainUnpack(gl, () => {
         gl.texSubImage2D(gl.TEXTURE_2D, 0, x, y, width, height, gl.RED, gl.FLOAT, data);
       });
     },
-    remove: (texture) => gl.deleteTexture(texture as WebGLTexture),
+    remove: (texture) => gl.deleteTexture(texture),
   };
 }
 

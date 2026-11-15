@@ -81,7 +81,7 @@ test("a layer at zero opacity builds its programs and target but draws nothing",
   const { gl, calls } = fakeGl();
   const [{ layer }] = createMaskLayers(options(), IDS);
 
-  layer.prerender!(gl, input());
+  layer.prerender(gl, input());
   layer.render(gl, input());
 
   assert.equal(names(calls, "linkProgram").length, 2);
@@ -97,7 +97,7 @@ test("a hidden layer reports a failure before it is ever shown", async () => {
     IDS,
   );
 
-  layer.prerender!(gl, input());
+  layer.prerender(gl, input());
   await Promise.resolve();
 
   assert.equal(failures.length, 1);
@@ -112,7 +112,7 @@ test("a frame on a lost context draws nothing and reports nothing", async () => 
   );
   setOpacity(1);
 
-  layer.prerender!(gl, input());
+  layer.prerender(gl, input());
   layer.render(gl, input());
   await Promise.resolve();
 
@@ -127,7 +127,7 @@ test("layers share one target that is filled once while the camera stays put", (
   mask.setOpacity(1);
   fade.setOpacity(0.6);
 
-  for (const { layer } of [mask, fade]) layer.prerender!(gl, input());
+  for (const { layer } of [mask, fade]) layer.prerender(gl, input());
 
   assert.equal(names(calls, "renderbufferStorage").length, 1);
   assert.equal(names(calls, "clear").length, 1);
@@ -138,9 +138,9 @@ test("the target is filled again when the camera moves", () => {
   const { gl, calls } = fakeGl();
   const [{ layer, setOpacity }] = createMaskLayers(options(), IDS);
   setOpacity(1);
-  layer.prerender!(gl, input());
+  layer.prerender(gl, input());
 
-  layer.prerender!(gl, input([...MAIN_MATRIX.slice(0, 12), 0.5, 0, 0, 1]));
+  layer.prerender(gl, input([...MAIN_MATRIX.slice(0, 12), 0.5, 0, 0, 1]));
 
   assert.equal(names(calls, "clear").length, 2);
 });
@@ -154,8 +154,8 @@ test("a target that fails at 2x is rebuilt at the canvas size without failing", 
   );
   setOpacity(1);
 
-  layer.prerender!(gl, input());
-  layer.prerender!(gl, input());
+  layer.prerender(gl, input());
+  layer.prerender(gl, input());
   await Promise.resolve();
 
   assert.deepEqual(failures, []);
@@ -171,7 +171,7 @@ test("the covered pixels are filled by stencil parity into a supersampled target
   const [{ layer, setOpacity }] = createMaskLayers(options(), IDS);
   setOpacity(1);
 
-  layer.prerender!(gl, input());
+  layer.prerender(gl, input());
 
   assert.deepEqual(find("renderbufferStorage")!.slice(2), [
     CANVAS_WIDTH_PX * 2,
@@ -195,7 +195,7 @@ test("the page colour paints the covered pixels", () => {
   const [{ layer, setOpacity }] = createMaskLayers({ ...options(), color: "#336699" }, IDS);
   setOpacity(1);
 
-  layer.prerender!(gl, input());
+  layer.prerender(gl, input());
 
   assert.deepEqual(channels(find("uniform3fv")![1]), [0.2, 0.4, 0.6]);
 });
@@ -205,7 +205,7 @@ test("a short hex colour reads as its doubled digits", () => {
   const [{ layer, setOpacity }] = createMaskLayers({ ...options(), color: "#fff" }, IDS);
   setOpacity(1);
 
-  layer.prerender!(gl, input());
+  layer.prerender(gl, input());
 
   assert.deepEqual(channels(find("uniform3fv")![1]), [1, 1, 1]);
 });
@@ -220,7 +220,7 @@ test("the target is composited premultiplied at the layer opacity", () => {
   const { gl, calls, find } = fakeGl();
   const [{ layer, setOpacity }] = createMaskLayers(options(), IDS);
   setOpacity(0.6);
-  layer.prerender!(gl, input());
+  layer.prerender(gl, input());
   calls.length = 0;
 
   layer.render(gl, input());
@@ -235,9 +235,9 @@ test("a frame without an offscreen draw composites nothing", () => {
   const [{ layer, setOpacity }] = createMaskLayers(options(), IDS);
 
   setOpacity(1);
-  layer.prerender!(gl, input());
+  layer.prerender(gl, input());
   setOpacity(0);
-  layer.prerender!(gl, input());
+  layer.prerender(gl, input());
 
   calls.length = 0;
 
@@ -251,7 +251,7 @@ test("map state is restored after the offscreen draw", () => {
   const [{ layer, setOpacity }] = createMaskLayers(options(), IDS);
   setOpacity(1);
 
-  layer.prerender!(gl, input());
+  layer.prerender(gl, input());
 
   const binds = names(calls, "bindFramebuffer");
 
@@ -265,10 +265,10 @@ test("the target follows the canvas size and frees the old one", () => {
   const fake = fakeGl();
   const [{ layer, setOpacity }] = createMaskLayers(options(), IDS);
   setOpacity(1);
-  layer.prerender!(fake.gl, input());
+  layer.prerender(fake.gl, input());
 
   fake.size.width = 400;
-  layer.prerender!(fake.gl, input());
+  layer.prerender(fake.gl, input());
 
   assert.equal(names(fake.calls, "renderbufferStorage").length, 2);
   assert.equal(names(fake.calls, "deleteFramebuffer").length, 1);
@@ -280,7 +280,7 @@ test("a target bigger than the GPU allows is scaled down to fit", () => {
   const [{ layer, setOpacity }] = createMaskLayers(options(), IDS);
   setOpacity(1);
 
-  layer.prerender!(gl, input());
+  layer.prerender(gl, input());
 
   assert.deepEqual(find("renderbufferStorage")!.slice(2), [1000, 750]);
 });
@@ -290,8 +290,8 @@ test("a repeated frame reuses the compiled programs and the target", () => {
   const [{ layer, setOpacity }] = createMaskLayers(options(), IDS);
   setOpacity(1);
 
-  layer.prerender!(gl, input());
-  layer.prerender!(gl, input());
+  layer.prerender(gl, input());
+  layer.prerender(gl, input());
 
   assert.equal(names(calls, "linkProgram").length, 2);
   assert.equal(names(calls, "renderbufferStorage").length, 1);
@@ -306,8 +306,8 @@ test("a shader that fails to link reports once and the layer stays quiet", async
   );
   setOpacity(1);
 
-  layer.prerender!(gl, input());
-  layer.prerender!(gl, input());
+  layer.prerender(gl, input());
+  layer.prerender(gl, input());
   layer.render(gl, input());
   await Promise.resolve();
 
@@ -326,7 +326,7 @@ test("a framebuffer incomplete at both sizes reports a failure and frees both", 
   );
   setOpacity(1);
 
-  layer.prerender!(gl, input());
+  layer.prerender(gl, input());
   await Promise.resolve();
 
   assert.equal(failures.length, 1);
@@ -340,11 +340,11 @@ test("removing the layer frees every resource and a later add draws again", () =
   const map = { triggerRepaint() {} } as unknown as MapLibreMap;
   const [{ layer, setOpacity }] = createMaskLayers(options(), IDS);
 
-  layer.onAdd!(map, gl);
+  layer.onAdd(map, gl);
   setOpacity(1);
-  layer.prerender!(gl, input());
+  layer.prerender(gl, input());
 
-  layer.onRemove!(map, gl);
+  layer.onRemove(map, gl);
 
   assert.equal(names(calls, "deleteProgram").length, 2);
   assert.equal(names(calls, "deleteBuffer").length, 1);
@@ -353,8 +353,8 @@ test("removing the layer frees every resource and a later add draws again", () =
   assert.equal(names(calls, "deleteRenderbuffer").length, 1);
   assert.equal(names(calls, "deleteTexture").length, 1);
 
-  layer.onAdd!(map, gl);
-  layer.prerender!(gl, input());
+  layer.onAdd(map, gl);
+  layer.prerender(gl, input());
 
   assert.equal(names(calls, "linkProgram").length, 4);
 });
@@ -365,23 +365,23 @@ test("removing one of two layers keeps the shared resources until the last is re
   const [mask, fade] = createMaskLayers(options(), ["mask", "fade"]);
 
   for (const { layer, setOpacity } of [mask, fade]) {
-    layer.onAdd!(map, gl);
+    layer.onAdd(map, gl);
     setOpacity(1);
   }
 
-  mask.layer.prerender!(gl, input());
+  mask.layer.prerender(gl, input());
 
-  mask.layer.onRemove!(map, gl);
+  mask.layer.onRemove(map, gl);
 
   const drawsBefore = names(calls, "drawArrays").length;
-  fade.layer.prerender!(gl, input());
+  fade.layer.prerender(gl, input());
   fade.layer.render(gl, input());
 
   assert.equal(names(calls, "deleteProgram").length, 0);
   assert.equal(names(calls, "deleteTexture").length, 0);
   assert.equal(names(calls, "drawArrays").length, drawsBefore + 1);
 
-  fade.layer.onRemove!(map, gl);
+  fade.layer.onRemove(map, gl);
 
   assert.equal(names(calls, "deleteProgram").length, 2);
   assert.equal(names(calls, "deleteBuffer").length, 1);
@@ -395,7 +395,7 @@ test("changing the opacity asks the map for another frame", () => {
   let repaints = 0;
   const map = { triggerRepaint: () => repaints++ } as unknown as MapLibreMap;
   const [{ layer, setOpacity }] = createMaskLayers(options(), IDS);
-  layer.onAdd!(map, fakeGl().gl);
+  layer.onAdd(map, fakeGl().gl);
 
   setOpacity(1);
 
@@ -514,20 +514,23 @@ function fakeGl(config: FakeGlConfig = {}) {
     getUniformLocation: (_program, name) => name,
   };
 
-  const gl = new Proxy({} as Record<string, unknown>, {
-    get(_target, property: string) {
-      if (property === "drawingBufferWidth") return size.width;
-      if (property === "drawingBufferHeight") return size.height;
-      if (/^[A-Z0-9_]+$/.test(property)) return constant(property);
-      if (property.startsWith("create")) return () => ({ name: property });
+  const gl = new Proxy(
+    {},
+    {
+      get(_target, property: string) {
+        if (property === "drawingBufferWidth") return size.width;
+        if (property === "drawingBufferHeight") return size.height;
+        if (/^[A-Z0-9_]+$/.test(property)) return constant(property);
+        if (property.startsWith("create")) return () => ({ name: property });
 
-      return (...args: unknown[]) => {
-        calls.push([property, args.map(label)]);
+        return (...args: unknown[]) => {
+          calls.push([property, args.map(label)]);
 
-        return returns[property]?.(...args);
-      };
+          return returns[property]?.(...args);
+        };
+      },
     },
-  }) as unknown as WebGL2RenderingContext;
+  ) as unknown as WebGL2RenderingContext;
 
   const find = (name: string) => calls.find(([call]) => call === name)?.[1];
 

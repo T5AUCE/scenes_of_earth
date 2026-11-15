@@ -166,7 +166,7 @@ function pairwiseDistances(rgbs: number[][]) {
 
 test("siliciclastic coarse, fine and mixed grains differ by a minimum colour distance", () => {
   const rgbs = [...classColors("geology", SILICICLASTIC_VARIANTS, "painted").values()].map(
-    (rgb) => rgb!,
+    (rgb) => rgb,
   );
 
   assert.equal(new Set(rgbs.map((rgb) => rgb.join(","))).size, rgbs.length);
@@ -178,7 +178,7 @@ test("siliciclastic coarse, fine and mixed grains differ by a minimum colour dis
 
 test("unconsolidated mixed, coarse, fine, alluvial and loess differ by a minimum distance", () => {
   const rgbs = [...classColors("geology", UNCONSOLIDATED_VARIANTS, "painted").values()].map(
-    (rgb) => rgb!,
+    (rgb) => rgb,
   );
 
   assert.equal(new Set(rgbs.map((rgb) => rgb.join(","))).size, rgbs.length);

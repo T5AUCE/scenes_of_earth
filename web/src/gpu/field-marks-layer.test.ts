@@ -492,6 +492,8 @@ function areaMixFromShader() {
   const mix = (first: number, second: number, amount: number) => {
     return first * (1 - amount) + second * amount;
   };
+  // The GLSL maths is translated to JavaScript text, so only a runtime function can run it.
+  // oxlint-disable-next-line typescript/no-implied-eval
   const evaluate = new Function("sqrt", "mix", "from", "to", "amount", body) as (
     ...args: unknown[]
   ) => number;

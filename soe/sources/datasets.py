@@ -94,7 +94,7 @@ class Dataset(ABC):
     fallback: Fallback | None = None  # series layers only
     tiles: dict | None = None  # where the viewer gets display tiles: url, encoding, source, ...
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # noqa: B027 - the hook is optional, so it stays concrete.
         """Runs after construction; subclasses check their invariants here."""
 
     def for_scene(self, beyond_legacy_extent: bool) -> "Dataset":

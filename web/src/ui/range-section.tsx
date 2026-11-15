@@ -22,9 +22,11 @@ export function RangeSection({ range, onChange }: RangeSectionProps): React.Reac
     ? shownRange(range.value, range.units, displayUnit, shownDecimals)
     : null;
 
+  // The shown ranges are rebuilt every render, so depending on them would reset typed edits.
   useEffect(() => {
     show(shownValue ?? shownFitted);
     dirty.current = false;
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [range, range.fitted, range.value, range.displayUnit]);
 
   // A native listener marks edits, so typing always arms the next blur or Enter.

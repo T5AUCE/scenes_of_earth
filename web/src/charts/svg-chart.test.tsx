@@ -407,7 +407,7 @@ test("isolated points around nulls stay visible including zero and negative", as
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
-    const table = gapTable(values as (number | null)[]);
+    const table = gapTable(values);
     await act(async () => {
       root.render(<SvgChart table={table} chartType="line" />);
     });

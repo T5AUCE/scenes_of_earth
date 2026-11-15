@@ -116,8 +116,8 @@ class MonthlyCube:
         """Return the change stamp of the published state, which every ingest step updates."""
         try:
             return (self._cube_path / "zarr.json").stat().st_mtime_ns
-        except FileNotFoundError:
-            raise SourceUnavailable(self._not_ingested)
+        except FileNotFoundError as err:
+            raise SourceUnavailable(self._not_ingested) from err
 
     def _load_months(self) -> dict[str, str]:
         try:
@@ -127,8 +127,8 @@ class MonthlyCube:
 
             months = dict(group.attrs["months"])
             pending = group.attrs.get("pending", [])
-        except (OSError, KeyError, ValueError, zarr.errors.BaseZarrError):
-            raise SourceUnavailable(self._not_ingested)
+        except (OSError, KeyError, ValueError, zarr.errors.BaseZarrError) as err:
+            raise SourceUnavailable(self._not_ingested) from err
 
         if pending:
             raise SourceUnavailable(self._updating)

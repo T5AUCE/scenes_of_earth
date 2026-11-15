@@ -108,7 +108,7 @@ export function basemapDescriptor(map: {
       | undefined;
     if (Array.isArray(live?.tiles) && typeof live.tiles[0] === "string") {
       return {
-        template: live.tiles[0] as string,
+        template: live.tiles[0],
         maxzoom: typeof live.maxzoom === "number" ? live.maxzoom : BASEMAP_MAXZOOM,
       };
     }
@@ -119,7 +119,7 @@ export function basemapDescriptor(map: {
     const styled = sources?.[BASEMAP_SOURCE_ID];
     if (Array.isArray(styled?.tiles) && typeof styled.tiles[0] === "string") {
       return {
-        template: styled.tiles[0] as string,
+        template: styled.tiles[0],
         maxzoom: typeof styled.maxzoom === "number" ? styled.maxzoom : BASEMAP_MAXZOOM,
       };
     }

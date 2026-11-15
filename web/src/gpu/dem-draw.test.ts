@@ -97,7 +97,10 @@ test("a fade and a blend at once keep the two largest weights and sum to one", (
   const sources = resolveSources(quadOf(0.5), fades({ 7: 0.5, 6: 0.5, 5: 1 }));
 
   assert.equal(sources.length, 2);
-  assert.deepEqual(sources.map((source) => source.tile.z).sort(), [5, 6]);
+  assert.deepEqual(
+    sources.map((source) => source.tile.z).sort((a, b) => a - b),
+    [5, 6],
+  );
   assert.ok(Math.abs(sources[0].weight - 0.5) < 1e-12);
   assert.ok(Math.abs(sources[1].weight - 0.5) < 1e-12);
 });

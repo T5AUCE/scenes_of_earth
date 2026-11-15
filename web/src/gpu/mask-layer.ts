@@ -143,10 +143,7 @@ export function createMaskLayers(options: MaskOptions, ids: string[]) {
   return ids.map((id) => {
     const layer = new MaskLayer(id, fill, options.opacity);
 
-    return {
-      layer: layer as CustomLayerInterface,
-      setOpacity: (opacity: number) => layer.setOpacity(opacity),
-    };
+    return { layer, setOpacity: (opacity: number) => layer.setOpacity(opacity) };
   });
 }
 
@@ -540,7 +537,12 @@ function colorChannels(hex: string): [number, number, number] {
   if (!digits) throw new Error(`The mask needs a hex colour, not "${hex}"`);
 
   const isShort = digits.length === HEX_SHORT_DIGITS;
-  const full = isShort ? [...digits].map((digit) => digit + digit).join("") : digits;
+  const full = isShort
+    ? digits
+        .split("")
+        .map((digit) => digit + digit)
+        .join("")
+    : digits;
   const [red, green, blue] = [0, 2, 4].map((start) => parseInt(full.slice(start, start + 2), 16));
 
   return [red / COLOR_MAX, green / COLOR_MAX, blue / COLOR_MAX];

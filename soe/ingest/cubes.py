@@ -7,8 +7,8 @@ stored months contiguous.
 
 import hashlib
 from collections.abc import Iterable
-from datetime import datetime, timezone
-from itertools import groupby
+from datetime import UTC, datetime
+from itertools import groupby, pairwise
 from pathlib import Path
 
 import numpy as np
@@ -106,7 +106,7 @@ def _check_in_range(month: str, values: np.ndarray, cube: CubeSpec) -> None:
 def _check_not_a_gap(markers: dict[str, str]) -> None:
     """Reject months that are not consecutive, whatever order the batch had them in."""
     ordered = sorted(markers)
-    for before, after in zip(ordered, ordered[1:]):
+    for before, after in pairwise(ordered):
         if month_index(after) != month_index(before) + 1:
             raise ValueError(f"{after} would leave a gap after {before}")
 
@@ -195,7 +195,7 @@ def cube_attrs(cube_dir: Path, cube: CubeSpec) -> dict:
 
 def newest_month() -> str:
     """The month before the current one, the newest that can be complete."""
-    return previous_month(datetime.now(timezone.utc).strftime("%Y-%m"))
+    return previous_month(datetime.now(UTC).strftime("%Y-%m"))
 
 
 def months_between(first: str, last: str) -> list[str]:

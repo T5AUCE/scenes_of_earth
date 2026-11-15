@@ -152,10 +152,10 @@ test("basemap geometry stays below scene data with the mask above both", async (
   };
 
   const originalAdd = harness.map.addLayer.bind(harness.map);
-  harness.map.addLayer = ((layer: { id: string }, beforeId?: string) => {
+  harness.map.addLayer = (layer: { id: string }, beforeId?: string) => {
     place(layer.id, beforeId);
     return originalAdd(layer as never);
-  }) as typeof harness.map.addLayer;
+  };
 
   const originalMove = harness.map.moveLayer.bind(harness.map);
   harness.map.moveLayer = ((id: string, beforeId?: string) => {
@@ -164,11 +164,11 @@ test("basemap geometry stays below scene data with the mask above both", async (
   }) as typeof harness.map.moveLayer;
 
   const originalRemove = harness.map.removeLayer.bind(harness.map);
-  harness.map.removeLayer = ((id: string) => {
+  harness.map.removeLayer = (id: string) => {
     const at = order.indexOf(id);
     if (at >= 0) order.splice(at, 1);
     return originalRemove(id);
-  }) as typeof harness.map.removeLayer;
+  };
 
   harness.enter();
   harness.data.resolve();
@@ -830,7 +830,7 @@ test("scene symbols stay out of the details toggle", async () => {
 
 test("the Map details toggle defaults off and persists per browser", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(context, window);
   window.localStorage.clear();
 
@@ -1098,7 +1098,7 @@ test("the owner and real panel keep history through Back and Forward", async (co
   const window = new Window({ url: "http://localhost/?scene=test" });
   context.after(async () => {
     await exitActiveHarness();
-    window.happyDOM.abort();
+    void window.happyDOM.abort();
   });
 
   const harness = createHarness();
@@ -1257,8 +1257,8 @@ test("chart commits update the share link without clobbering display or history"
 
   assert.equal(replaced.length, 1);
   assert.equal(replaced[0][0], historyState);
-  assert.match(replaced[0][1] as string, /charts=token123/);
-  assert.match(replaced[0][1] as string, /scene=test/);
+  assert.match(replaced[0][1], /charts=token123/);
+  assert.match(replaced[0][1], /scene=test/);
 });
 
 test("oversized chart commits keep a safe URL and recover through the owner", () => {
@@ -1467,7 +1467,7 @@ test("a throwing renderer keeps charts while the working layer keeps colour", as
   context.after(async () => {
     const { act } = await import("react");
     await act(async () => {});
-    window.happyDOM.abort();
+    void window.happyDOM.abort();
   });
 
   installBrowser(context, window);
@@ -1506,7 +1506,7 @@ test("a throwing renderer keeps charts while the working layer keeps colour", as
     period: { start: "2020-01-01", end: "2020-03-01", step: "P1M" },
   } as unknown as Scene;
 
-  const slice = defaultSlice((scene as unknown as { layers: never[] }).layers as never[]);
+  const slice = defaultSlice((scene as unknown as { layers: never[] }).layers);
   (slice.definitions[0] as { title: string }).title = "Custom retained source";
 
   const map = {
@@ -1550,7 +1550,7 @@ test("a throwing geology mount adds no water copy while others still mount", asy
   context.after(async () => {
     const { act } = await import("react");
     await act(async () => {});
-    window.happyDOM.abort();
+    void window.happyDOM.abort();
   });
 
   installBrowser(context, window);
@@ -1678,7 +1678,7 @@ test("a denied storage write stays visible until the retry succeeds", async (con
     mounted = null;
 
     await act(async () => {});
-    window.happyDOM.abort();
+    void window.happyDOM.abort();
   });
 
   const map = {
@@ -1743,7 +1743,7 @@ test("a denied storage write stays visible until the retry succeeds", async (con
 
   assert.ok(notices.length >= 1);
   assert.equal(notices.at(-1), STORAGE_DENIED_NOTICE);
-  assert.equal(lastCharts, encodeSlice(mounted!.store.getSnapshot().charts));
+  assert.equal(lastCharts, encodeSlice(mounted.store.getSnapshot().charts));
   assert.match(dialog.textContent ?? "", /kept for this visit/);
 
   const edit = [...dialog.querySelectorAll("button")].find(
@@ -1755,7 +1755,7 @@ test("a denied storage write stays visible until the retry succeeds", async (con
 
   assert.ok(dialog.querySelector(".chart-editor"));
   assert.match(dialog.textContent ?? "", /kept for this visit/);
-  assert.equal([...dialog.textContent!.matchAll(/kept for this visit/g)].length, 1);
+  assert.equal([...dialog.textContent.matchAll(/kept for this visit/g)].length, 1);
 
   await act(async () => {
     mounted!.store.dispatch({
@@ -1767,10 +1767,7 @@ test("a denied storage write stays visible until the retry succeeds", async (con
   });
 
   assert.equal(notices.at(-1), STORAGE_DENIED_NOTICE);
-  assert.equal(
-    lastDisplay,
-    formatDisplayParams(mounted!.store.getSnapshot().display, scene.layers),
-  );
+  assert.equal(lastDisplay, formatDisplayParams(mounted.store.getSnapshot().display, scene.layers));
   assert.ok(lastDisplay.includes("cividis"));
   assert.match(dialog.textContent ?? "", /kept for this visit/);
 
@@ -1789,14 +1786,14 @@ test("a denied storage write stays visible until the retry succeeds", async (con
   });
 
   assert.equal(notices.at(-1), null);
-  assert.equal(lastCharts, encodeSlice(mounted!.store.getSnapshot().charts));
+  assert.equal(lastCharts, encodeSlice(mounted.store.getSnapshot().charts));
   assert.equal((dialog.textContent ?? "").includes("kept for this visit"), false);
 
   await act(async () => {
     panel!.destroy();
   });
 
-  mounted!.unmount();
+  mounted.unmount();
   panel = null;
   mounted = null;
 });
@@ -2660,7 +2657,7 @@ test("the picked outline stays during Preparing and hides at flight start", asyn
 test("the picked outline hides at flight start with reduced motion", async () => {
   const previous = (globalThis as Record<string, unknown>).matchMedia;
   (globalThis as Record<string, unknown>).matchMedia = (query: string) => ({
-    matches: String(query).includes("reduce"),
+    matches: query.includes("reduce"),
   });
 
   try {
@@ -2984,7 +2981,7 @@ test("a change after the curtain starts reprepares instead of staging stale work
 test("reduced motion skips sliding and a later preference change starts nothing", async () => {
   const previous = (globalThis as Record<string, unknown>).matchMedia;
   (globalThis as Record<string, unknown>).matchMedia = (query: string) => ({
-    matches: String(query).includes("reduce"),
+    matches: query.includes("reduce"),
   });
 
   try {
@@ -3194,10 +3191,10 @@ test("scene labels stay under the mask after a units change", async () => {
   harness.map.moveLayer = place as typeof harness.map.moveLayer;
 
   const originalAdd = harness.map.addLayer.bind(harness.map);
-  harness.map.addLayer = ((layer: { id: string }, beforeId?: string) => {
+  harness.map.addLayer = (layer: { id: string }, beforeId?: string) => {
     place(layer.id, beforeId);
     return originalAdd(layer as never);
-  }) as typeof harness.map.addLayer;
+  };
 
   harness.enter();
   harness.data.resolve();
@@ -3266,11 +3263,6 @@ function phasedHarness() {
   harness.autoReveal = false;
 
   return harness;
-}
-
-/** Flush promise turns without timers, so tests with mocked timers can still advance. */
-async function turns() {
-  for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setImmediate(resolve));
 }
 
 /** Prove the scene UI never started, since a failure leaves only the build panel visible. */
@@ -3376,7 +3368,10 @@ async function settle() {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
-function installBrowser(context: { after(hook: () => void): void }, window: Window): void {
+function installBrowser(
+  context: { after(hook: () => void | Promise<void>): void },
+  window: Window,
+): void {
   const previous = {
     node: (globalThis as Record<string, unknown>).Node,
     element: (globalThis as Record<string, unknown>).Element,
@@ -3458,7 +3453,7 @@ function installScrollSpy(context: { after(hook: () => void): void }): string[] 
 }
 
 function makeIntegrationDialog(): HTMLDialogElement {
-  const dialog = document.createElement("dialog") as HTMLDialogElement;
+  const dialog = document.createElement("dialog");
 
   if (typeof dialog.showModal !== "function") {
     let open = false;
@@ -3611,8 +3606,7 @@ async function importViewWithStubs(registryStub: string) {
           };
         }
         if (specifier === "./layers/blend") {
-          const stub =
-            "export const BLEND_TITLE='Blend';" + "export const createBlendView=()=>null;";
+          const stub = "export const BLEND_TITLE='Blend';export const createBlendView=()=>null;";
           return { url: `data:text/javascript,${stub}`, shortCircuit: true };
         }
         if (specifier === "./layers/registry") {
@@ -3643,7 +3637,7 @@ async function enterOwnerPanel(
   const window = new Window({ url: "https://example.test/a/?scene=test" });
   context.after(async () => {
     await exitActiveHarness();
-    window.happyDOM.abort();
+    void window.happyDOM.abort();
   });
 
   const harness = createHarness();
@@ -3696,7 +3690,7 @@ async function enterOwnerPanel(
   };
 
   window.addEventListener("popstate", () => {
-    const tab = (window.history.state as { panel?: string } | null)?.panel ?? null;
+    const tab = window.history.state?.panel ?? null;
     // Browser popstate arrives async, so routing waits past the committing act.
     queueMicrotask(() => harness.mode.showFullscreen(tab));
   });
@@ -3838,12 +3832,6 @@ async function oversizedSlice(layers: unknown) {
   assert.ok(isValidSlice(slice, layers as never[]));
 
   return slice;
-}
-
-async function oversizedSliceToken(layers: unknown) {
-  const { encodeSlice } = await import("./charts/state.ts");
-
-  return encodeSlice(await oversizedSlice(layers));
 }
 
 function makeChartableIntegrationScene(): Scene {

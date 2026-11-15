@@ -15,7 +15,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+from urllib.response import addinfourl
 
 import numpy as np
 from rasterio.features import rasterize
@@ -80,9 +81,11 @@ def _open_archive(archive_path: Path | str | None) -> Iterator[zipfile.ZipFile]:
             yield archive
         return
 
-    with io.BufferedReader(_RangeReader(GSC_URL), READ_BUFFER_BYTES) as remote:
-        with zipfile.ZipFile(remote) as archive:
-            yield archive
+    with (
+        io.BufferedReader(_RangeReader(GSC_URL), READ_BUFFER_BYTES) as remote,
+        zipfile.ZipFile(remote) as archive,
+    ):
+        yield archive
 
 
 def _extract_members(archive: zipfile.ZipFile, folder: Path) -> None:
@@ -137,7 +140,7 @@ class _RangeReader(io.RawIOBase):
         return len(data)
 
 
-def _check_range_response(response: Any, first: int, end: int, size: int) -> None:
+def _check_range_response(response: addinfourl, first: int, end: int, size: int) -> None:
     """Raise OSError unless the response carries exactly the requested bytes.
 
     A server that ignores Range would otherwise have its whole archive read into memory.
@@ -182,7 +185,7 @@ def _read_classified_polygons(
     ).dropna(subset=["STARTCAT"])
     # A few units name only their start, so their range is that one name.
     ages["ENDCAT"] = ages["ENDCAT"].fillna(ages["STARTCAT"])
-    ranges = list(zip(ages["STARTCAT"], ages["ENDCAT"]))
+    ranges = list(zip(ages["STARTCAT"], ages["ENDCAT"], strict=True))
     values = classify_age_ranges(ranges, GSC_AGE_NAMES)
     ages["value"] = [values[pair] for pair in ranges]
 
@@ -198,5 +201,8 @@ def _rasterize_tile(
         return np.zeros(shape, "uint8")
 
     return rasterize(
-        zip(nearby.geometry, nearby["value"]), out_shape=shape, transform=transform, dtype="uint8"
+        zip(nearby.geometry, nearby["value"], strict=True),
+        out_shape=shape,
+        transform=transform,
+        dtype="uint8",
     )

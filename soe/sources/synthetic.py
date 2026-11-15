@@ -84,7 +84,7 @@ class SyntheticSource:
         if spec.name != CHIRPS_CUBE.name or not self._chirps_cube:
             return {}
 
-        return {month: f"{FINAL_EXPVER}:synthetic" for month in self.cube_months(spec)}
+        return dict.fromkeys(self.cube_months(spec), f"{FINAL_EXPVER}:synthetic")
 
     def cube_months(self, spec: CubeSpec) -> dict[str, str]:
         """Return monthly markers from 1981-01 and mark the latest two months preliminary."""
@@ -95,7 +95,7 @@ class SyntheticSource:
             month_start = add_duration(month_start, "P1M")
 
         expvers = [FINAL_EXPVER] * (len(months) - 2) + [PRELIMINARY_EXPVER] * 2
-        return {month: f"{expver}:synthetic" for month, expver in zip(months, expvers)}
+        return {month: f"{expver}:synthetic" for month, expver in zip(months, expvers, strict=True)}
 
     def read_cube(self, spec: CubeSpec, month: str, window: CellWindow) -> np.ndarray:
         """Return fake values of one month in the cube's units, with NaN for rows past the grid."""

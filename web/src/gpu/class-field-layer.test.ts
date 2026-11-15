@@ -1053,7 +1053,7 @@ function trackBandSamplers(harness: ReturnType<typeof createHarness>): {
       const hasBands = sampledUnits.every((unit) => unit !== undefined);
 
       if (hasBands) {
-        const unitList = sampledUnits as number[];
+        const unitList = sampledUnits;
         records.push({
           units: [...unitList],
           integer: unitList.map((unit) => integerTextures.has(units[unit])),
@@ -1109,7 +1109,7 @@ function installContaminatedUnpack(harness: ReturnType<typeof createHarness>): {
     rowLength: 7,
     skipRows: 2,
     skipPixels: 3,
-    unpackBuffer: foreign as unknown | null,
+    unpackBuffer: foreign,
   };
   const state = { ...contaminated };
 
@@ -1214,7 +1214,7 @@ function installContaminatedUnpack(harness: ReturnType<typeof createHarness>): {
 
 function installBandSubuploads(harness: ReturnType<typeof createHarness>): unknown[][] {
   const gl = harness.gl as unknown as { texSubImage2D: (...args: unknown[]) => void };
-  const uploads = harness.uploads as unknown[][];
+  const uploads = harness.uploads;
   const bandRows: unknown[][] = [];
   gl.texSubImage2D = (...args: unknown[]) => {
     uploads.push(args);

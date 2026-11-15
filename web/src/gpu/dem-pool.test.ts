@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 
-import { DEM_TILE_SIZE_PX, edgeStrips, stripOf } from "../workers/dem-decode.ts";
+import { DEM_TILE_SIZE_PX, edgeStrips } from "../workers/dem-decode.ts";
 import type { DemWorkerRequest, DemWorkerResponse } from "../workers/dem-worker.ts";
 import type { WantedTile } from "./dem-plan.ts";
 import {

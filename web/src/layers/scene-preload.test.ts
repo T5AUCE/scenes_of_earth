@@ -86,7 +86,7 @@ test("a DEM download uses a low-priority fetch", async (t) => {
 
 test("a failed download reports its status so a missing tile can be remembered", async (t) => {
   const original = globalThis.fetch;
-  globalThis.fetch = (async () => new Response("", { status: 404 })) as typeof fetch;
+  globalThis.fetch = async () => new Response("", { status: 404 });
   t.after(() => {
     globalThis.fetch = original;
   });

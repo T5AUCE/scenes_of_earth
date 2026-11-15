@@ -109,7 +109,7 @@ test("capped footprints span every overlapping source row and column east of 180
   assert.equal(table.width, 2);
   assert.equal(table.height, 2);
   assert.equal(table.footprint?.sourceWidth, 6);
-  assert.deepEqual([...table.footprint!.rowEdges], [0, 3, 6]);
+  assert.deepEqual([...table.footprint.rowEdges], [0, 3, 6]);
   assert.deepEqual([...table.src], [7, 10, 25, 28]);
   assert.deepEqual(imageCorners(grid.bbox, 0)[1], [186, 3]);
 });

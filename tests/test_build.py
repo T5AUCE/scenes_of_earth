@@ -1,6 +1,7 @@
 """Test offline terrain statistics, build progress and synthetic end-to-end builds."""
 
 import hashlib
+import itertools
 import json
 import shutil
 from collections.abc import Callable
@@ -36,7 +37,6 @@ from soe.sources import (
     terrain_res,
 )
 from soe.sources import terrain as terrain_module
-from soe.sources.licences import SOURCES
 from soe.sources.synthetic import _synthetic_classes
 from soe.sources.terrain import CopernicusDemReader
 from soe.sources.terrain import PlacedTile as TerrainTile
@@ -78,8 +78,11 @@ def array_bytes(scene_dir: Path) -> dict[str, bytes]:
     }
 
 
-def record_progress(tmp_path: Path, area: Area = Area(NAIROBI, BOUNDARY)) -> list[ProgressEvent]:
+def record_progress(tmp_path: Path, area: Area | None = None) -> list[ProgressEvent]:
     """Build a 6-month Nairobi scene and return every progress call it made."""
+    if area is None:
+        area = Area(NAIROBI, BOUNDARY)
+
     seen = []
     build_scene(
         HASH_A,
@@ -170,7 +173,7 @@ def test_terrain_reports_every_block_of_a_multi_block_area(tmp_path):
     every_block = [f"{done}/{block_count}" for done in range(block_count + 1)]
 
     assert block_count > 1
-    assert counts == every_block + [f"{block_count}/{block_count}"]
+    assert counts == [*every_block, f"{block_count}/{block_count}"]
 
 
 def test_terrain_cache_hit_has_almost_no_progress_share_and_no_zero_block_stage(tmp_path):
@@ -371,7 +374,7 @@ def test_series_at_different_factors_keep_grid_and_array_shapes_consistent(tmp_p
     assert layers["chirps_monthly"]["grid"]["aggregation"] == 2
     assert layers["coarse_monthly"]["grid"]["aggregation"] == 1
 
-    for layer_id, layer in layers.items():
+    for layer in layers.values():
         grid = layer["grid"]
         for block in layer["arrays"].values():
             assert store[block["path"]].shape[-2:] == (grid["ny"], grid["nx"])
@@ -917,7 +920,7 @@ def test_terrain_distribution_mirrors_stats_with_101_quantiles(nairobi_bundle):
     assert distribution["weights"] == "cell_area_inside_outline"
     assert distribution["percent"] == 1
     assert len(values) == 101
-    assert all(later >= earlier for earlier, later in zip(values, values[1:]))
+    assert all(later >= earlier for earlier, later in itertools.pairwise(values))
     assert distribution["min"] == values[0]
     assert distribution["max"] == values[-1]
     assert distribution["min"] <= distribution["mean"] <= distribution["max"]
@@ -1530,7 +1533,6 @@ def test_area_series_leaves_packed_arrays_unchanged(tmp_path):
 
     document = json.loads((tmp_path / HASH_A / "scene.json").read_text(encoding="utf-8"))
     root = zarr.open_group(tmp_path / HASH_A / "data.zarr", mode="r")
-    layer = document["layers"][0]
     scene_plan = plan(area, [rain], "2015-01", "2015-02")
     layer_plan = scene_plan.layers["chirps_monthly"]
     stored = root["chirps_monthly/mask"][...] != 0
@@ -1569,7 +1571,7 @@ def test_all_missing_step_yields_null_and_zero_shares(tmp_path):
     probe = rain_with_gaps(lambda step: [], EmptyFallbackSource())
     inside = plan(area, [probe], "2015-01", "2015-02").layers["chirps_monthly"].mask == 1
     rows, columns = np.where(inside)
-    missing = list(zip(rows.tolist(), columns.tolist()))
+    missing = list(zip(rows.tolist(), columns.tolist(), strict=True))
     rain = rain_with_gaps(
         lambda step: missing if step == "2015-01-01" else [(3, 4)], EmptyFallbackSource()
     )
@@ -1854,7 +1856,7 @@ def test_build_reading_only_touched_tiles_matches_a_full_bbox_read(
             datasets,
             "Test",
             tmp_path / mode,
-            lambda fraction, stage: progress.append((fraction, stage)),
+            lambda fraction, stage, collected=progress: collected.append((fraction, stage)),
         )
 
         terrain_tiles = {name for block in terrain_blocks for name in block}
@@ -1882,9 +1884,10 @@ def test_build_reading_only_touched_tiles_matches_a_full_bbox_read(
 
 
 def test_real_warp_bundle_across_50_north_is_identical_with_filtered_tiles(
-    tmp_path, monkeypatch, fake_terrain
+    tmp_path, monkeypatch, request
 ):
-    add_tile, _ = fake_terrain
+    # The fixture keeps its import for discovery, so it is fetched by name here.
+    add_tile, _ = request.getfixturevalue("fake_terrain")
     for lon in (10, 11, 12):
         for lat in (49, 50):
             add_tile(lon, lat)

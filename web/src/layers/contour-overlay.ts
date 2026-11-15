@@ -88,15 +88,15 @@ export function memoizeMissingDemTiles(dem: DemSource): void {
 
   if (typeof manager.fetchTile === "function") {
     const fetchTile = manager.fetchTile.bind(manager);
-    manager.fetchTile = ((z: number, x: number, y: number, ...rest: unknown[]) => {
+    manager.fetchTile = (z: number, x: number, y: number, ...rest: unknown[]) => {
       const key = `dem:${z}/${x}/${y}`;
       if (missingTiles.has(key)) return Promise.reject(missingTileError(key));
 
-      return (fetchTile(z, x, y, ...rest) as Promise<unknown>).catch((error: unknown) => {
+      return fetchTile(z, x, y, ...rest).catch((error: unknown) => {
         if (isDem404(error)) rememberMissingTile(missingTiles, key);
         throw error;
       });
-    }) as DemManager["fetchTile"];
+    };
   }
 
   if (typeof manager.fetchContourTile === "function") {
@@ -111,14 +111,12 @@ export function memoizeMissingDemTiles(dem: DemSource): void {
       const key = `contours:${z}/${x}/${y}`;
       if (missingTiles.has(key)) return Promise.reject(missingTileError(key));
 
-      return (fetchContourTile(z, x, y, options, ...rest) as Promise<unknown>).catch(
-        (error: unknown) => {
-          if (isDem404(error)) rememberMissingTile(missingTiles, key);
-          throw error;
-        },
-      );
+      return fetchContourTile(z, x, y, options, ...rest).catch((error: unknown) => {
+        if (isDem404(error)) rememberMissingTile(missingTiles, key);
+        throw error;
+      });
     };
-    manager.fetchContourTile = fetchWithMemo as DemManager["fetchContourTile"];
+    manager.fetchContourTile = fetchWithMemo;
   }
 }
 
@@ -434,7 +432,12 @@ function transparentColor(color: string): string {
 
 function transparentHex(digits: string): string {
   const expanded =
-    digits.length === 3 ? [...digits].map((digit) => digit + digit).join("") : digits;
+    digits.length === 3
+      ? digits
+          .split("")
+          .map((digit) => digit + digit)
+          .join("")
+      : digits;
   const red = parseInt(expanded.slice(0, 2), 16);
   const green = parseInt(expanded.slice(2, 4), 16);
   const blue = parseInt(expanded.slice(4, 6), 16);

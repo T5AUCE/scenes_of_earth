@@ -222,7 +222,7 @@ test("prepare warms the program with one draw that writes no pixel and keeps the
   glState.program = { foreign: "program" };
   glState.vertexArray = { foreign: "array" };
   gl.activeTexture(gl.TEXTURE0 + 2);
-  gl.bindTexture(gl.TEXTURE_2D, sentinel as unknown as WebGLTexture);
+  gl.bindTexture(gl.TEXTURE_2D, sentinel);
 
   const before = structuredClone({ ...glState, switches: [...glState.switches] });
 

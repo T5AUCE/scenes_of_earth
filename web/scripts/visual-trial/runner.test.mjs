@@ -2199,7 +2199,7 @@ function pageSampling(tags, seen) {
   return { getByRole: byRole, locator: () => ({ getByRole: byRole }) };
 }
 
-function pageWithScroll(element, seen, sandboxDocument = undefined) {
+function pageWithScroll(element, seen, sandboxDocument) {
   const hit = { tagName: "INPUT", id: "", classList: [], textContent: "" };
   const byRole = () => ({
     first: () => ({

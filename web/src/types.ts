@@ -1,4 +1,6 @@
 /** Describe API responses and bundle metadata alongside the viewer's renderer contracts. */
+// Loads the global GeoJSON namespace; tsconfig "types" does not list it.
+// oxlint-disable-next-line import/no-empty-named-blocks, unicorn/require-module-specifiers
 import type {} from "geojson";
 import type { Map as MapLibreMap } from "maplibre-gl";
 

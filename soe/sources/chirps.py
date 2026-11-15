@@ -9,7 +9,7 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
 import rasterio
@@ -103,7 +103,8 @@ class RainDataset(SeriesDataset):
         markers = self.fallback_months()
         # An empty marker is never preliminary, so months the fallback did not fill drop out.
         used = {
-            label: markers[label] if was_filled else "" for label, was_filled in zip(labels, filled)
+            label: markers[label] if was_filled else ""
+            for label, was_filled in zip(labels, filled, strict=True)
         }
         runs = preliminary_runs(labels, used)
 
@@ -151,7 +152,7 @@ class ChirpsReader:
             if self._probed and time.time() < self._probed[1]:
                 return self._probed[0]
 
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             found, complete = self._probe_latest_month(now)
             if found is None:
                 # When offline, assume the usual two-month lag and probe again soon.

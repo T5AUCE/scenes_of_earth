@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { LayerDoc } from "../types.ts";
-import { allocate, BLEND, blendPair, drawOptions, layerDraws } from "./allocate.ts";
+import { allocate, blendPair, drawOptions, layerDraws } from "./allocate.ts";
 
 const RAIN = layer("rain", ["ramp", "dots", "isolines", "chroma"]);
 const TEMP = layer("temp", ["ramp", "isolines", "warmth"]);

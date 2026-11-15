@@ -6,7 +6,6 @@ import type { Map as MapLibreMap } from "maplibre-gl";
 
 import { DEFAULT_OUTLINE } from "./display-state.ts";
 import type { BlendView } from "./layers/blend.ts";
-import type { MountedLayer } from "./scene-cards.ts";
 import { createSceneStore } from "./scene-store.ts";
 import type { LayerDoc, LayerView } from "./types.ts";
 

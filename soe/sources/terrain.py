@@ -1,5 +1,6 @@
 """Read Copernicus elevation for area statistics and describe the viewer's terrain tiles."""
 
+import itertools
 import math
 import os
 import warnings
@@ -26,7 +27,8 @@ from .grid import MAX_STATIC_DIVISIONS, MAX_STATIC_SIDE_PX, STATIC_BUDGET_PX, Bb
 from .licences import SOURCES
 from .remote import GDAL_OPTS, read_with_retries
 
-# The warp target is a plain array, so only a module filter helps as catch_warnings is not thread-safe.
+# The warp target is a plain array, so only a module filter helps because
+# catch_warnings is not thread-safe.
 warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
 
 GLO30_RES_DEG = 1 / 3600
@@ -256,7 +258,7 @@ def terrain_by_blocks(
     parts = [future.result() for future in futures]
 
     elevation = np.full((height, width), np.nan, "float64")
-    for (x0, y0, _, y1), part in zip(blocks, parts):
+    for (x0, _y0, _, y1), part in zip(blocks, parts, strict=True):
         if part is not None:
             row, col = round((north - y1) / res), round((x0 - west) / res)
             elevation[row : row + part.shape[0], col : col + part.shape[1]] = part
@@ -275,8 +277,8 @@ def _terrain_blocks(bounds: Bbox, res: float, geometry: BaseGeometry | None) -> 
     y_edges = _block_edges(south, north)
     blocks = [
         (x0, y0, x1, y1)
-        for x0, x1 in zip(x_edges, x_edges[1:])
-        for y0, y1 in zip(y_edges, y_edges[1:])
+        for x0, x1 in itertools.pairwise(x_edges)
+        for y0, y1 in itertools.pairwise(y_edges)
     ]
     if geometry is None:
         return blocks
@@ -292,7 +294,7 @@ def _terrain_blocks(bounds: Bbox, res: float, geometry: BaseGeometry | None) -> 
 def _block_edges(low: float, high: float) -> list[float]:
     """low, every multiple of BLOCK_DEG strictly between, then high."""
     first_multiple = math.floor(low / BLOCK_DEG) * BLOCK_DEG + BLOCK_DEG
-    return [low] + list(range(first_multiple, math.ceil(high), BLOCK_DEG)) + [high]
+    return [low, *range(first_multiple, math.ceil(high), BLOCK_DEG), high]
 
 
 class CopernicusDemReader:
@@ -532,9 +534,8 @@ def _overlaps_ocean_square(geometry: BaseGeometry) -> bool:
     west, south, east, north = geometry.bounds
     for lat in range(math.floor(south), math.ceil(north)):
         for lon in range(math.floor(west), math.ceil(east)):
-            if _is_missing_ocean_square(lat, lon):
-                if _square_overlaps(geometry, lon, lat):
-                    return True
+            if _is_missing_ocean_square(lat, lon) and _square_overlaps(geometry, lon, lat):
+                return True
 
     return False
 

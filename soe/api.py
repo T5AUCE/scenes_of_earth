@@ -45,7 +45,7 @@ from .sources import (
     make_registry,
 )
 
-ID_RE = re.compile(r"[0-9a-f]{%d}" % ID_CHARS)
+ID_RE = re.compile(f"[0-9a-f]{{{ID_CHARS}}}")
 IMMUTABLE_MAX_AGE_SECS = 365 * 24 * 60 * 60
 IMMUTABLE = f"public, max-age={IMMUTABLE_MAX_AGE_SECS}, immutable"
 
@@ -155,19 +155,19 @@ def create_app(
         try:
             row = await run_in_threadpool(jobs.submit, body)
         except AreaError as error:
-            raise HTTPException(422, str(error))
-        except SourceUnavailable:
+            raise HTTPException(422, str(error)) from error
+        except SourceUnavailable as unavailable:
             raise HTTPException(
                 503,
                 "data source unavailable, retry shortly",
                 headers={"Retry-After": str(SOURCE_RETRY_AFTER_SECS)},
-            )
-        except db.Busy:
+            ) from unavailable
+        except db.Busy as busy:
             raise HTTPException(
                 503,
                 "too many scenes are being built, retry later",
                 headers={"Retry-After": str(QUEUE_RETRY_AFTER_SECS)},
-            )
+            ) from busy
 
         status_code = 202 if row["status"] in ("queued", "running") else 200
         return JSONResponse(scene_out(row), status_code)
@@ -352,7 +352,7 @@ def _simplify_geometry(row: db.Record) -> JsonObject:
     """
     try:
         geometry = shape(json.loads(row["geom_geojson"]))
-    except Exception:
+    except Exception:  # noqa: BLE001 - any malformed stored geometry is returned as is.
         return json.loads(row["geom_geojson"])
 
     bbox = (row["bbox_w"], row["bbox_s"], row["bbox_e"], row["bbox_n"])
@@ -363,8 +363,8 @@ async def read_body(request: Request) -> bytes:
     """Read at most MAX_BODY_BYTES; reject excess with 413 and malformed Content-Length with 400."""
     try:
         declared = int(request.headers.get("content-length") or 0)
-    except ValueError:
-        raise HTTPException(400, "invalid Content-Length header")
+    except ValueError as err:
+        raise HTTPException(400, "invalid Content-Length header") from err
 
     if declared > MAX_BODY_BYTES:
         raise HTTPException(413, "request body too large")

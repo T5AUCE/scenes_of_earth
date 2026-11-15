@@ -501,13 +501,11 @@ function StopHandle({
       className={["gradient-stop", selected ? "selected" : "", removing ? "removing" : ""]
         .filter(Boolean)
         .join(" ")}
-      style={
-        {
-          left: `${stop.position}%`,
-          zIndex: selected ? 2 : 1,
-          ...pullStyle(pullPx, removing),
-        } as React.CSSProperties
-      }
+      style={{
+        left: `${stop.position}%`,
+        zIndex: selected ? 2 : 1,
+        ...pullStyle(pullPx, removing),
+      }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

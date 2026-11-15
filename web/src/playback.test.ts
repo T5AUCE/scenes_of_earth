@@ -125,10 +125,10 @@ test("a warmed step outlasts drawn steps until the map reads it", async () => {
   const cache = cacheByIndex(4, async (index) => {
     loaded.push(index);
   });
-  cache.read(1, true);
-  [0, 2, 3, 4, 5].forEach((index) => cache.read(index));
+  void cache.read(1, true);
+  [0, 2, 3, 4, 5].forEach((index) => void cache.read(index));
 
-  cache.read(1);
+  void cache.read(1);
 
   assert.deepEqual(loaded, [1, 0, 2, 3, 4, 5]);
 });
@@ -138,11 +138,11 @@ test("holds left behind by a pause give way so normal reads load once", async ()
   const cache = cacheByIndex(3, async (index) => {
     loads.set(index, (loads.get(index) ?? 0) + 1);
   });
-  [1, 2, 3].forEach((index) => cache.read(index, true));
+  [1, 2, 3].forEach((index) => void cache.read(index, true));
 
   [20, 21, 22, 23].forEach((index) => {
-    cache.read(index);
-    cache.read(index);
+    void cache.read(index);
+    void cache.read(index);
   });
 
   assert.deepEqual(
@@ -156,11 +156,11 @@ test("releasing holds makes abandoned prefetches evictable at once", async () =>
   const cache = cacheByIndex(4, async (index) => {
     loaded.push(index);
   });
-  [1, 2].forEach((index) => cache.read(index, true));
+  [1, 2].forEach((index) => void cache.read(index, true));
   cache.release();
 
-  [3, 4, 5].forEach((index) => cache.read(index));
-  [1, 2].forEach((index) => cache.read(index));
+  [3, 4, 5].forEach((index) => void cache.read(index));
+  [1, 2].forEach((index) => void cache.read(index));
 
   assert.deepEqual(loaded, [1, 2, 3, 4, 5, 1, 2]);
 });
@@ -171,9 +171,9 @@ test("a read never evicts the entry it just inserted", async () => {
     loaded.push(index);
   });
 
-  cache.read(1);
-  cache.read(2);
-  cache.read(2);
+  void cache.read(1);
+  void cache.read(2);
+  void cache.read(2);
 
   assert.deepEqual(loaded, [1, 2]);
 });
@@ -208,10 +208,10 @@ test("reads from draws, blends and prepares share two slots", async () => {
 test("a waiting step the map needs jumps ahead of other prefetches", async () => {
   const reads = fakeReads();
   const reader = createStepReader({ nx: 10, ny: 10 }, reads.load);
-  reader.read(0, false);
-  reader.read(1, false);
-  reader.read(2, false);
-  reader.read(3, false);
+  void reader.read(0, false);
+  void reader.read(1, false);
+  void reader.read(2, false);
+  void reader.read(3, false);
 
   const drawn = reader.read(3);
   reads.finish(0);
@@ -228,7 +228,7 @@ test("playing raises the reads in flight and pausing lowers them again", async (
   const reader = createStepReader({ nx: 10, ny: 10 }, reads.load);
   const steps = Array.from({ length: 8 }, (_, step) => step);
 
-  steps.slice(0, 5).forEach((step) => reader.read(step, false));
+  steps.slice(0, 5).forEach((step) => void reader.read(step, false));
 
   assert.equal(reads.active, READS_IN_FLIGHT_PAUSED);
 
@@ -237,7 +237,7 @@ test("playing raises the reads in flight and pausing lowers them again", async (
   assert.equal(reads.active, READS_IN_FLIGHT_PLAYING);
 
   reader.setPlaying(false);
-  steps.slice(5).forEach((step) => reader.read(step, false));
+  steps.slice(5).forEach((step) => void reader.read(step, false));
   reads.finish(0);
   await flush();
 
@@ -254,7 +254,7 @@ test("while playing a step the map needs still jumps the queue", async () => {
   const reads = fakeReads();
   const reader = createStepReader({ nx: 10, ny: 10 }, reads.load);
   reader.setPlaying(true);
-  [0, 1, 2, 3, 4, 5, 6].forEach((step) => reader.read(step, false));
+  [0, 1, 2, 3, 4, 5, 6].forEach((step) => void reader.read(step, false));
 
   const drawn = reader.read(6);
   reads.finish(0);
@@ -347,7 +347,7 @@ test("a failed read frees its slot for the next one", async () => {
   const reads = fakeReads();
   const reader = createStepReader({ nx: 10, ny: 10 }, reads.load);
   const failing = [0, 1].map((step) => reader.read(step, false).catch(() => "failed"));
-  reader.read(2, false);
+  void reader.read(2, false);
 
   reads.fail(0);
   await failing[0];
@@ -889,7 +889,10 @@ test("a crossfade never paints more than the two images", () => {
     fade.frame(step, step + 1, 0);
   }
 
-  assert.deepEqual([...new Set(layers.images.map(({ slot }) => slot))].sort(), [0, 1]);
+  assert.deepEqual(
+    [...new Set(layers.images.map(({ slot }) => slot))].sort((a, b) => a - b),
+    [0, 1],
+  );
   assert.equal(fade.holds(18) && fade.holds(19), true);
   assert.equal(fade.holds(0), false);
 });
@@ -968,7 +971,10 @@ test("a failed outgoing step stays failed through a hide and fades the next one 
 
   assert.equal(fade.isReady(2, 3), true);
   assert.equal(fade.frame(2, 3, 0.5), true);
-  assert.deepEqual([...layers.opacities].sort(), [0, FADE_ALPHA * 0.5]);
+  assert.deepEqual(
+    [...layers.opacities].sort((a, b) => a - b),
+    [0, FADE_ALPHA * 0.5],
+  );
 
   idle.restore();
 });
@@ -985,7 +991,10 @@ test("a dropped image is reported with its key and invalidating reports both", (
 
   fade.invalidate();
 
-  assert.deepEqual(evicted.toSorted(), [1, 2, 3]);
+  assert.deepEqual(
+    evicted.toSorted((a, b) => a - b),
+    [1, 2, 3],
+  );
 });
 
 test("selecting a held key shows it at full opacity without painting", () => {

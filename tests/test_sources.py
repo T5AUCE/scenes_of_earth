@@ -2,6 +2,7 @@
 
 import functools
 import http.server
+import itertools
 import threading
 from collections.abc import Callable
 from dataclasses import replace
@@ -189,8 +190,11 @@ class FakeCubes:
 def temperature_over(
     land: dict[str, str], era5: dict[str, str] | None = None
 ) -> Era5LandTemperatureDataset:
-    """Return a temperature dataset using the supplied cube markers; default ERA5 markers to final."""
-    era5 = era5 or {month: "0001:era5" for month in land}
+    """Return a temperature dataset using the supplied cube markers.
+
+    Markers default to final ERA5 ones.
+    """
+    era5 = era5 or dict.fromkeys(land, "0001:era5")
     cubes = FakeCubes({"era5land_temperature": land, "era5_temperature": era5})
     synthetic = make_registry(SyntheticSource())["era5land_temperature"]
 
@@ -396,7 +400,7 @@ def real_registry(cubes_dir: Path, values: dict[str, float], month: str = "2016-
 
 def row_ramp(month: str, window: tuple[int, int, int, int]) -> np.ndarray:
     """Fake CHIRPS rain that equals the row of the CHIRPS grid, so a misplaced window shows."""
-    col, row, width, height = window
+    _col, row, width, height = window
     return np.repeat(np.arange(row, row + height, dtype="float32")[:, None], width, axis=1)
 
 
@@ -813,7 +817,7 @@ def test_wrapped_read_joins_both_edges_on_a_tenth_degree_grid():
 
     def read_window(window: tuple[int, int, int, int]) -> np.ndarray:
         reads.append(window)
-        col, row, width, height = window
+        col, _row, width, height = window
         return np.tile(np.arange(col, col + width), (height, 1)).astype("float32")
 
     cells = read_wrapped(grid, [179.45, -1.05, 180.65, 0.05], read_window)
@@ -1018,10 +1022,7 @@ def test_terrain_distribution_matches_hand_computed_weighted_mean():
     assert distribution["values"][50] == 0.5
     assert distribution["values"][0] == -2.5
     assert distribution["values"][-1] == 3.25
-    assert all(
-        later >= earlier
-        for earlier, later in zip(distribution["values"], distribution["values"][1:])
-    )
+    assert all(later >= earlier for earlier, later in itertools.pairwise(distribution["values"]))
 
     assert stats["min"] == distribution["min"]
     assert stats["max"] == distribution["max"]
@@ -1042,7 +1043,7 @@ def test_terrain_tied_values_combine_weights_and_stay_ordered():
     assert values[50] == 1.0
     assert values[25] == 1.0
     assert values[75] == 2.0
-    assert all(later >= earlier for earlier, later in zip(values, values[1:]))
+    assert all(later >= earlier for earlier, later in itertools.pairwise(values))
 
 
 def test_terrain_constant_grid_gives_flat_quantiles():
@@ -1604,7 +1605,8 @@ def test_placed_tiles_west_of_180_keep_the_unwrapped_longitude():
     ids=["rain-blend", "narrow-offset", "wide-offset", "drop-repeats", "constant"],
 )
 def test_stops_blend_quantiles_and_round_to_field_span(dataset, statistics, quantiles, expected):
-    stats = dict(zip(("min", "max", "mean", "p98"), statistics))
+    # Only the first four statistics feed the stops, so the pairing ignores the rest.
+    stats = dict(zip(("min", "max", "mean", "p98"), statistics, strict=False))
 
     assert dataset.stops(stats, list(quantiles)) == expected
 

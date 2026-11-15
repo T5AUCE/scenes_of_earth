@@ -28,7 +28,7 @@ import {
 } from "../render/palettes";
 import type { SceneStore } from "../scene-store";
 import { displacedOwner, showAsOptions, storeShowAs, type ShowAsAction } from "../show-as";
-import type { InkMenu, LayerDoc, LayerMenu, LayerView, Part } from "../types";
+import type { InkMenu, LayerDoc, LayerView, Part } from "../types";
 import { DomNode } from "./dom-node";
 import { GradientStops } from "./gradient-stops";
 import { RangeSection } from "./range-section";

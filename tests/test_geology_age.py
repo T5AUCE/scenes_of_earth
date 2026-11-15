@@ -175,7 +175,7 @@ def test_riphean_and_middle_proterozoic_aliases_span_eras():
 
 
 def test_unknown_age_names_fail_together_instead_of_becoming_no_data():
-    with pytest.raises(ValueError, match="BOGUS.*WEIRD|WEIRD.*BOGUS"):
+    with pytest.raises(ValueError, match=r"BOGUS.*WEIRD|WEIRD.*BOGUS"):
         classify_age_ranges([("BOGUS", "CAMBRIAN"), ("CAMBRIAN", "WEIRD")], GSC_AGE_NAMES)
 
 
@@ -417,7 +417,7 @@ def test_failed_fetch_leaves_no_members_or_cog(tmp_path, monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", refuse)
     cubes = tmp_path / "cubes"
 
-    with pytest.raises(OSError):
+    with pytest.raises(OSError, match="network down"):
         ingest_geology_age(cubes)
 
     assert not (cubes / GEOLOGY_AGE_FILE).exists()

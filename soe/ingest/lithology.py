@@ -27,13 +27,12 @@ from ..geology_type import (
     GLIM_VALUES,
     LITHOLOGY_FILE,
     LITHOLOGY_RES_DEG,
-    LITHOLOGY_SOURCE_TAG,
     OPENLANDMAP_SOURCE,
     UNDEFINED_CLASS,
     WATER_CLASS,
 )
 from ..sources.grid import Bbox
-from .cog import BLOCK_PX, NORTH_EDGE_DEG, SOUTH_EDGE_DEG, TILE_DEG, publish_cog, write_tiled_raster
+from .cog import BLOCK_PX, NORTH_EDGE_DEG, SOUTH_EDGE_DEG, publish_cog, write_tiled_raster
 from .cubes import DOWNLOADS_DIR
 
 if TYPE_CHECKING:
@@ -94,9 +93,11 @@ def _download(url: str, target: Path) -> None:
     """Fetch url onto target, leaving no partial file when the download is interrupted."""
     descriptor, temp_name = tempfile.mkstemp(dir=target.parent, suffix=".tmp")
     try:
-        with os.fdopen(descriptor, "wb") as file:
-            with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECS) as response:
-                shutil.copyfileobj(response, file, DOWNLOAD_CHUNK_BYTES)
+        with (
+            os.fdopen(descriptor, "wb") as file,
+            urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECS) as response,
+        ):
+            shutil.copyfileobj(response, file, DOWNLOAD_CHUNK_BYTES)
         os.replace(temp_name, target)
     except BaseException:
         Path(temp_name).unlink(missing_ok=True)
@@ -173,7 +174,8 @@ def _rasterize_glim_tile(
     polygons = _read_glim_polygons(glim_path, bounds)
     # Water bodies and no data are left out of GLIM_VALUES so that they stay 0.
     values = polygons["code"].map(GLIM_VALUES).fillna(0).astype("uint8")
-    classed = [(geometry, value) for geometry, value in zip(polygons.geometry, values) if value]
+    paired = zip(polygons.geometry, values, strict=True)
+    classed = [(geometry, value) for geometry, value in paired if value]
     if not classed:
         return np.zeros(shape, "uint8")
 

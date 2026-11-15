@@ -94,8 +94,8 @@ def prepare_scene(db_path: Path | str, registry: Registry, body: bytes | str) ->
 def _parse_body(body: bytes | str) -> JsonObject:
     try:
         data = json.loads(body)
-    except (ValueError, RecursionError):
-        raise AreaError("body must be JSON")
+    except (ValueError, RecursionError) as err:
+        raise AreaError("body must be JSON") from err
 
     if not isinstance(data, dict):
         raise AreaError("body must be a JSON object")

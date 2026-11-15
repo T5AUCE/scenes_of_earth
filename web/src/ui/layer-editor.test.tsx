@@ -698,7 +698,7 @@ test("the blend switch remembers its choice for a fresh scene", async (context) 
         { layer: RAIN, view: fieldView("rain") },
         { layer: TEMPERATURE, view: fieldView("temp") },
       ],
-      blend: blend as unknown as import("../layers/blend.ts").BlendView,
+      blend: blend,
       store,
     });
   });
@@ -1177,7 +1177,7 @@ test("the notice fades and clears after about three seconds", async (context) =>
   const window = new Window({ url: "http://localhost" });
   context.after(() => {
     mock.timers.reset();
-    window.happyDOM.abort();
+    void window.happyDOM.abort();
   });
 
   installBrowser(window);
@@ -1228,7 +1228,7 @@ test("a new notice restarts the fade timer", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => {
     mock.timers.reset();
-    window.happyDOM.abort();
+    void window.happyDOM.abort();
   });
 
   installBrowser(window);
@@ -1293,7 +1293,7 @@ test("unmounting clears the notice timer", async (context) => {
   const window = new Window({ url: "http://localhost" });
   context.after(() => {
     mock.timers.reset();
-    window.happyDOM.abort();
+    void window.happyDOM.abort();
   });
 
   installBrowser(window);
@@ -1463,7 +1463,7 @@ test("picking a palette swatch applies it", async (context) => {
     setPalette: (next: string) => {
       paletteValue = next;
     },
-  } as LayerMenu;
+  };
 
   const container = document.createElement("div");
   document.body.append(container);
@@ -1512,7 +1512,7 @@ test("Reset keeps a stored custom palette in the Custom box", async (context) =>
     setPalette: (next: string) => {
       paletteValue = next;
     },
-  } as LayerMenu;
+  };
 
   const container = document.createElement("div");
   document.body.append(container);
@@ -1596,7 +1596,7 @@ test("ink choices are swatches and Reset keeps a stored custom ink", async (cont
         inkValue = next;
       },
     },
-  } as LayerMenu;
+  };
 
   const container = document.createElement("div");
   document.body.append(container);
@@ -2006,16 +2006,16 @@ function countingTarget(counts: { adds: number; removes: number }): EventTarget 
   const target = new EventTarget();
   const add = target.addEventListener.bind(target);
   const remove = target.removeEventListener.bind(target);
-  target.addEventListener = ((...args: Parameters<EventTarget["addEventListener"]>) => {
+  target.addEventListener = (...args: Parameters<EventTarget["addEventListener"]>) => {
     counts.adds += 1;
 
     return add(...args);
-  }) as EventTarget["addEventListener"];
-  target.removeEventListener = ((...args: Parameters<EventTarget["removeEventListener"]>) => {
+  };
+  target.removeEventListener = (...args: Parameters<EventTarget["removeEventListener"]>) => {
     counts.removes += 1;
 
     return remove(...args);
-  }) as EventTarget["removeEventListener"];
+  };
 
   return target;
 }
@@ -2075,7 +2075,7 @@ function menu(): LayerMenu {
     custom: true,
     palette: "ink-blue",
     setPalette: () => {},
-  } as LayerMenu;
+  };
 }
 
 function inputByValue(container: HTMLElement, value: string): HTMLInputElement {

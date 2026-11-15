@@ -160,8 +160,7 @@ const hooks = registerHooks({
       return { url: `data:text/javascript,${stub}`, shortCircuit: true };
     }
     if (specifier === "./layers/blend") {
-      const stub =
-        "export const BLEND_TITLE = 'Blend';" + "export const createBlendView = () => null;";
+      const stub = "export const BLEND_TITLE = 'Blend';export const createBlendView = () => null;";
       return { url: `data:text/javascript,${stub}`, shortCircuit: true };
     }
     if (specifier === "./ui/scene-column") {

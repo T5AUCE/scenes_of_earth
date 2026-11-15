@@ -94,10 +94,10 @@ function isValidSliceInner(slice: unknown, layers: readonly LayerDoc[]) {
   const ids = new Set<string>();
   for (const definition of definitions) {
     if (validateDefinition(definition, layers) !== null) return false;
-    if (typeof (definition as ChartDefinition).id !== "string") return false;
-    if (ids.has((definition as ChartDefinition).id)) return false;
+    if (typeof definition.id !== "string") return false;
+    if (ids.has(definition.id)) return false;
 
-    ids.add((definition as ChartDefinition).id);
+    ids.add(definition.id);
   }
 
   if (definitions.length === 0) {

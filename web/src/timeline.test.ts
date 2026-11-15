@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { test } from "node:test";
 
 import { Window } from "happy-dom";
 
@@ -92,9 +92,9 @@ test("while a step is loading, only the latest later step is loaded", async () =
   });
 
   const firstRun = draw(0);
-  draw(1);
-  draw(2);
-  draw(3);
+  void draw(1);
+  void draw(2);
+  void draw(3);
   finishFirst();
   await firstRun;
 
@@ -1173,7 +1173,7 @@ function installTimelineBrowser(
   options: { storage?: object; reducedMotion?: boolean },
 ) {
   const window = new Window({ url: "http://localhost/" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
 
   const names = ["Node", "Element", "HTMLElement", "DocumentFragment", "Event"] as const;
   const previous = new Map<string, unknown>();

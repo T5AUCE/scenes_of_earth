@@ -321,7 +321,7 @@ test("temperature keeps readable paint across all chart types", async (context) 
           },
         });
       });
-      const expected = paletteInkFor(fieldGradient(palette)!, "#1a3658");
+      const expected = paletteInkFor(fieldGradient(palette), "#1a3658");
       assert.equal(host.querySelector(selector)?.getAttribute(attribute), expected);
       assert.notEqual(expected, "#f7f7f7");
     }

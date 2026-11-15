@@ -11,7 +11,7 @@ import type { LayerDoc, Scene } from "../types.ts";
 
 test("the collapsed panel keeps its label and switches its preview", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -64,7 +64,7 @@ test("the collapsed panel keeps its label and switches its preview", async (cont
 
 test("the notice badge asks for About while the footer asks for Credits", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -103,7 +103,7 @@ test("the notice badge asks for About while the footer asks for Credits", async 
 
 test("the docked header renders compact collapse and expand symbols", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -142,7 +142,7 @@ test("the docked header renders compact collapse and expand symbols", async (con
 
 test("setTime shows the dialog label and hides it without a time", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -182,7 +182,7 @@ test("setTime shows the dialog label and hides it without a time", async (contex
 
 test("units through the store relabel the summary", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -218,7 +218,7 @@ test("units through the store relabel the summary", async (context) => {
 
 test("open, Escape and close keep focus on the collapsed entry point", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -266,7 +266,7 @@ test("open, Escape and close keep focus on the collapsed entry point", async (co
 
 test("destroy removes both roots and clears the dialog", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -299,7 +299,7 @@ test("destroy removes both roots and clears the dialog", async (context) => {
 
 test("an immediate Credits open wins before the first commit", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -337,7 +337,7 @@ test("an immediate Credits open wins before the first commit", async (context) =
 
 test("an immediate Charts open wins before the first commit", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -374,7 +374,7 @@ test("an immediate Charts open wins before the first commit", async (context) =>
 
 test("reopening About after another tab focuses its tab and resets scroll", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -417,7 +417,7 @@ test("reopening About after another tab focuses its tab and resets scroll", asyn
 
 test("a cold About open focuses its tab after the lazy load", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -454,7 +454,7 @@ test("a cold About open focuses its tab after the lazy load", async (context) =>
 
 test("a failed full-dialog load keeps the panel usable and retries on the next open", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -518,7 +518,7 @@ test("a failed full-dialog load keeps the panel usable and retries on the next o
 
 test("reopening the same tab refocuses and resets scroll", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -563,7 +563,7 @@ test("reopening the same tab refocuses and resets scroll", async (context) => {
 
 test("a notice from Credits commits About before scrolling to notices", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const previousHistory = (globalThis as Record<string, unknown>).history;
@@ -627,7 +627,7 @@ test("a notice from Credits commits About before scrolling to notices", async (c
 
 test("recording the notice request without opening leaves the dialog closed", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const scrolled = installScrollSpy(context);
@@ -666,7 +666,7 @@ test("recording the notice request without opening leaves the dialog closed", as
 
 test("a pending notice destroyed early leaves no stale scroll or focus", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const scrolled = installScrollSpy(context);
@@ -725,7 +725,7 @@ test("a pending notice destroyed early leaves no stale scroll or focus", async (
 
 test("cancel is prevented and delegated while close returns to Expand", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -765,7 +765,7 @@ test("cancel is prevented and delegated while close returns to Expand", async (c
 
 test("the chip previews the main chart and follows time and units", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -813,7 +813,7 @@ test("the chip previews the main chart and follows time and units", async (conte
 
 test("a failed chart chip load keeps the panel usable and retries on the next Charts click", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -873,7 +873,7 @@ test("a failed chart chip load keeps the panel usable and retries on the next Ch
 
 test("gallery opens detail and edit with focus restoration", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -930,7 +930,7 @@ test("gallery opens detail and edit with focus restoration", async (context) => 
 
 test("new chart saves to its close-up while cancel keeps the store untouched", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -992,7 +992,7 @@ test("new chart saves to its close-up while cancel keeps the store untouched", a
 
 test("dirty editor back asks to save, discard or keep editing", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -1065,7 +1065,7 @@ test("dirty editor back asks to save, discard or keep editing", async (context) 
 
 test("escape with a dirty draft holds the dialog and restores focus", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -1122,7 +1122,7 @@ test("escape with a dirty draft holds the dialog and restores focus", async (con
 
 test("dirty tabs stay blocked while preserving the draft", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -1186,7 +1186,7 @@ test("dirty tabs stay blocked while preserving the draft", async (context) => {
 
 test("clean editor tabs stay blocked for every navigation key", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -1238,7 +1238,7 @@ test("clean editor tabs stay blocked for every navigation key", async (context) 
 
 test("close confirm save completes pending close and keep restores focus", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -1292,7 +1292,7 @@ test("close confirm save completes pending close and keep restores focus", async
 
 test("gallery detail editor focus lands on exact controls", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -1315,7 +1315,7 @@ test("gallery detail editor focus lands on exact controls", async (context) => {
 
   const open = [...dialog.querySelectorAll("button")].find(
     (button) => button.textContent === "Open",
-  )! as HTMLButtonElement;
+  )!;
   await act(async () => {
     open.focus();
     open.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
@@ -1331,7 +1331,7 @@ test("gallery detail editor focus lands on exact controls", async (context) => {
 
   const cancel = [...dialog.querySelectorAll("button")].find(
     (button) => button.textContent === "Cancel",
-  )! as HTMLButtonElement;
+  )!;
   await act(async () => {
     cancel.focus();
     cancel.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
@@ -1352,7 +1352,7 @@ test("gallery detail editor focus lands on exact controls", async (context) => {
 
 test("arbitrary chart ids focus without selector failure", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -1409,7 +1409,7 @@ test("arbitrary chart ids focus without selector failure", async (context) => {
 
 test("chip uses one covering row and unavailable outside coverage", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -1456,7 +1456,7 @@ test("chip uses one covering row and unavailable outside coverage", async (conte
 
 test("chip follows effective palette and collapse preserves preview", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -1498,9 +1498,9 @@ test("chip follows effective palette and collapse preserves preview", async (con
   const after = mark();
   assert.notEqual(before, after);
 
-  const collapse = panel!.element.querySelector(
+  const collapse = panel!.element.querySelector<HTMLButtonElement>(
     'button[aria-label="Collapse scene panel"]',
-  )! as HTMLButtonElement;
+  )!;
   await act(async () => {
     collapse.focus();
     collapse.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
@@ -1509,7 +1509,7 @@ test("chip follows effective palette and collapse preserves preview", async (con
 
   const shown = [...panel!.element.querySelectorAll("button")].find(
     (button) => button.textContent === "Show details",
-  )! as HTMLButtonElement;
+  )!;
   assertSameNode(document.activeElement, shown);
   assert.match(panel!.element.textContent ?? "", /note/);
 
@@ -1520,9 +1520,9 @@ test("chip follows effective palette and collapse preserves preview", async (con
   assert.ok(panel!.element.querySelector("svg"));
   assert.match(panel!.element.textContent ?? "", /Rain/);
 
-  const restored = panel!.element.querySelector(
+  const restored = panel!.element.querySelector<HTMLButtonElement>(
     'button[aria-label="Collapse scene panel"]',
-  )! as HTMLButtonElement;
+  )!;
   assertSameNode(document.activeElement, restored);
 
   await act(async () => panel!.destroy());
@@ -1530,7 +1530,7 @@ test("chip follows effective palette and collapse preserves preview", async (con
 
 test("sync notice appears inside gallery and clears on recovery", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -1559,7 +1559,7 @@ test("sync notice appears inside gallery and clears on recovery", async (context
   await act(async () => {
     panel!.setSyncNotice("Charts are kept for this visit only.");
   });
-  assert.equal([...dialog.textContent!.matchAll(/kept for this visit/g)].length, 1);
+  assert.equal([...dialog.textContent.matchAll(/kept for this visit/g)].length, 1);
 
   await act(async () => {
     panel!.setSyncNotice(null);
@@ -1589,7 +1589,7 @@ test("outer confirmation focuses Save and Keep editing restores the invoker", as
 
 test("sync notice stays visible while editing until recovery", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -1623,7 +1623,7 @@ test("sync notice stays visible while editing until recovery", async (context) =
   });
   assert.ok(dialog.querySelector(".chart-editor"));
   assert.match(dialog.textContent ?? "", /kept for this visit/);
-  assert.equal([...dialog.textContent!.matchAll(/kept for this visit/g)].length, 1);
+  assert.equal([...dialog.textContent.matchAll(/kept for this visit/g)].length, 1);
 
   await act(async () => {
     panel!.setSyncNotice(null);
@@ -1747,7 +1747,7 @@ test("invalid pending Save keeps the draft, decision focus and history", async (
 
 test("the charts gallery shows its download section below it", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -1774,11 +1774,11 @@ test("the charts gallery shows its download section below it", async (context) =
   assert.ok(gallery);
   assert.ok(downloads);
   assert.equal(
-    gallery!.compareDocumentPosition(downloads!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    gallery.compareDocumentPosition(downloads) & Node.DOCUMENT_POSITION_FOLLOWING,
     Node.DOCUMENT_POSITION_FOLLOWING,
   );
 
-  const labels = [...downloads!.querySelectorAll("button")].map((button) => button.textContent);
+  const labels = [...downloads.querySelectorAll("button")].map((button) => button.textContent);
   assert.ok(labels.includes("Area means (CSV)"));
   assert.ok(labels.includes("Elevation distribution (CSV)"));
 
@@ -1787,7 +1787,7 @@ test("the charts gallery shows its download section below it", async (context) =
 
 test("the gallery download writes attribution and cleans up its object url", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const downloads = installDownloadCapture(context);
@@ -1829,7 +1829,7 @@ test("the gallery download writes attribution and cleans up its object url", asy
 
 test("detail downloads follow the selected shape from the gallery", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -1878,7 +1878,7 @@ test("detail downloads follow the selected shape from the gallery", async (conte
 
 test("main switches keep type fidelity while About and collapse stay put", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -2005,7 +2005,7 @@ test("main switches keep type fidelity while About and collapse stay put", async
 
 test("detail main edits and delete or reset update both panel roots", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const { act } = await import("react");
@@ -2103,7 +2103,7 @@ test("detail main edits and delete or reset update both panel roots", async (con
 
 test("notes focus the detail heading and back restores the notes action", async (context) => {
   const window = new Window({ url: "http://localhost" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const scrolled = installScrollSpy(context);
@@ -2177,7 +2177,7 @@ function buttonNamed(host: ParentNode, text: string): HTMLButtonElement {
   const button = [...host.querySelectorAll("button")].find((entry) => entry.textContent === text);
   assert.ok(button, `Expected button ${text}`);
 
-  return button as HTMLButtonElement;
+  return button;
 }
 
 function galleryCardFor(host: ParentNode, id: string): HTMLElement {
@@ -2236,7 +2236,7 @@ function installScrollSpy(context: { after: (hook: () => void) => void }): strin
 }
 
 function makeDialog(): HTMLDialogElement {
-  const dialog = document.createElement("dialog") as HTMLDialogElement;
+  const dialog = document.createElement("dialog");
   if (typeof dialog.showModal !== "function") {
     let open = false;
     Object.defineProperty(dialog, "open", { get: () => open, configurable: true });
@@ -2442,7 +2442,7 @@ function installBrowser(window: Window): void {
 
 async function openDirtyEditor(context: { after(hook: () => void): void }, title: string) {
   const window = new Window({ url: "https://example.test/a/?scene=test" });
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const previousHistory = (globalThis as Record<string, unknown>).history;

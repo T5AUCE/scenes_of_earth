@@ -379,7 +379,7 @@ export function createIsolineOverlay(
     const features = traced.map((line) =>
       lineFeature(line, interval, layer.grid, shift, nativeUnits, displayUnit),
     );
-    (map.getSource(sourceIds[slot]) as GeoJSONSource).setData({
+    void (map.getSource(sourceIds[slot]) as GeoJSONSource).setData({
       type: "FeatureCollection",
       features,
     });
@@ -402,7 +402,7 @@ export function createIsolineOverlay(
 
   function clearSources() {
     for (const sourceId of sourceIds) {
-      (map.getSource(sourceId) as GeoJSONSource).setData(EMPTY_LINES);
+      void (map.getSource(sourceId) as GeoJSONSource).setData(EMPTY_LINES);
     }
 
     keys = [null, null];

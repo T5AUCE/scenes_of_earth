@@ -1132,7 +1132,7 @@ function restoreBasemapSymbols(
   for (const [id, original] of baseline) {
     if (!map.getLayer(id)) continue;
     // An unset original clears the property back to the style default.
-    map.setLayoutProperty(id, "visibility", original as VisibilitySpecification);
+    map.setLayoutProperty(id, "visibility", original);
   }
 }
 
@@ -1162,8 +1162,12 @@ function completeUrl(relative: string) {
 // The current address is already in history, so it never introduces a new oversized URL.
 function currentAddress(fallback: string) {
   try {
-    if (typeof location !== "undefined" && typeof location.href === "string") {
-      if (!isCompleteUrlOversized(location.href)) return location.href;
+    if (
+      typeof location !== "undefined"
+      && typeof location.href === "string"
+      && !isCompleteUrlOversized(location.href)
+    ) {
+      return location.href;
     }
   } catch {}
   return fallback;

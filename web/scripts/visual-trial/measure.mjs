@@ -237,7 +237,7 @@ export function zoomBandRecord({ spot, scene, variant, band, stats, deltas, requ
     repeats,
     requests_during_sweep: requests,
     ...stats,
-    ...(deltas ?? {}),
+    ...deltas,
   };
 }
 
@@ -264,7 +264,7 @@ export function sameSample(first, second) {
 function withoutPool(sample) {
   if (!sample || typeof sample !== "object") return sample;
 
-  const { pool, ...rest } = sample;
+  const { pool: _pool, ...rest } = sample;
 
   return rest;
 }

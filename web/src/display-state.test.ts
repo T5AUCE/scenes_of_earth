@@ -47,10 +47,9 @@ const {
   storeEdges,
   storeDensity,
   storeSmoothing,
-  storeUnits,
   subscribeMapDetails,
 } = await import("./display-state.ts");
-const { choose, loadStoredShowAs, storeShowAs, toggle } = await import("./show-as.ts");
+const { choose, toggle } = await import("./show-as.ts");
 const { DENSITY_STEP_LOG2, MAX_DENSITY_RATIO, MIN_DENSITY_RATIO, quantiseDensity } =
   await import("./render/lattice.ts").finally(() => hooks.deregister());
 
@@ -861,7 +860,7 @@ test("a linked density reaches the control on the slider's step", () => {
   const { display } = resolveDisplay(LAYERS, { ...NO_TOKENS, dens: "chirps_monthly:1.23" }, {});
   const calls: number[] = [];
   const control = densityControl(
-    () => display.layers.chirps_monthly!.density!,
+    () => display.layers.chirps_monthly.density!,
     (density) => calls.push(density),
   );
 

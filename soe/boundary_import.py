@@ -60,7 +60,7 @@ def _read_cgaz_level(folder: Path | str, level: int) -> "gpd.GeoDataFrame":
 
 def _cgaz_rows(frames: dict[int, "gpd.GeoDataFrame"]) -> Iterator[db.BoundaryValues | None]:
     """Boundary row per CGAZ shape, countries first; None for a shape outside the coverage."""
-    country_names = dict(zip(frames[0]["shapeGroup"], frames[0]["shapeName"]))
+    country_names = dict(zip(frames[0]["shapeGroup"], frames[0]["shapeName"], strict=True))
     county_states = _county_states(counties=frames[2], states=frames[1])
     for level, frame in frames.items():
         # ADM0 has no shapeID and its id column is empty, so the ISO3 group names a country.

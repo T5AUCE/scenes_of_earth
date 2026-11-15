@@ -577,7 +577,7 @@ class PrefetchWindow {
     meter.begin(nowMs());
 
     // A failed prepare must not stall play forever because the draw reports it later.
-    view.prepare!(time)
+    void view.prepare!(time)
       .catch(() => {})
       .then(() => {
         meter.finish(nowMs());

@@ -289,7 +289,7 @@ def _preview_for_backfill(record: db.Record) -> str | None:
     """The preview GeoJSON of a boundary row missing it, or None when its geometry is broken."""
     try:
         geometry = shape(json.loads(record["geom_geojson"]))
-    except Exception:
+    except Exception:  # noqa: BLE001 - any malformed stored geometry is returned as is.
         try:
             json.loads(record["geom_geojson"])
         except ValueError:

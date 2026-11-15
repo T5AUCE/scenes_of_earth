@@ -211,7 +211,7 @@ class FieldView implements LayerView {
 
           this.isolines?.setSmooth(on);
           if (this.draw === "isolines" && this.shownStep >= 0) {
-            this.drawLatestStep(this.shownStep);
+            void this.drawLatestStep(this.shownStep);
           }
         },
       },
@@ -318,6 +318,7 @@ class FieldView implements LayerView {
   }
 
   private createDensityControl(): LayerControl {
+    // oxlint-disable-next-line typescript/no-this-alias -- getters below run with the control object as this
     const view = this;
 
     return {
@@ -343,6 +344,7 @@ class FieldView implements LayerView {
   }
 
   private createMenu(): LayerMenu {
+    // oxlint-disable-next-line typescript/no-this-alias -- getters below run with the control object as this
     const view = this;
     const { layer } = this.context;
     const stats = valueStats(layer);
@@ -400,6 +402,7 @@ class FieldView implements LayerView {
   }
 
   private createUnitsMenu(): UnitsMenu | undefined {
+    // oxlint-disable-next-line typescript/no-this-alias -- getters below run with the control object as this
     const view = this;
     const { layer } = this.context;
     const options = unitOptions(layer.units);
@@ -420,13 +423,14 @@ class FieldView implements LayerView {
         this.menuUpdates.dispatchEvent(new Event("change"));
 
         if (view.draw === "isolines" && this.shownStep >= 0) {
-          this.drawLatestStep(this.shownStep);
+          void this.drawLatestStep(this.shownStep);
         }
       },
     };
   }
 
   private createInkMenu(): InkMenu | undefined {
+    // oxlint-disable-next-line typescript/no-this-alias -- getters below run with the control object as this
     const view = this;
 
     if (!this.marks && !this.isolines) return undefined;
@@ -463,7 +467,7 @@ class FieldView implements LayerView {
     this.isolines?.setRange(this.range);
     this.showLegend();
 
-    if (this.shownStep >= 0) this.drawLatestStep(this.shownStep);
+    if (this.shownStep >= 0) void this.drawLatestStep(this.shownStep);
   }
 
   setTime(time: string) {
@@ -483,7 +487,7 @@ class FieldView implements LayerView {
       this.showMarks(this.marksFade.get(this.shownStep)!);
     }
 
-    this.drawLatestStep(this.shownStep);
+    void this.drawLatestStep(this.shownStep);
   }
 
   setFrame(time: string, next: string, mix: number) {
@@ -768,7 +772,7 @@ class FieldView implements LayerView {
     this.showLegend();
     this.menuUpdates.dispatchEvent(new Event("change"));
 
-    if (this.draw && this.shownStep >= 0) this.drawLatestStep(this.shownStep);
+    if (this.draw && this.shownStep >= 0) void this.drawLatestStep(this.shownStep);
   }
 
   private hideStep() {

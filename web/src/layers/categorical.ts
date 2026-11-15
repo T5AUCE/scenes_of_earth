@@ -134,6 +134,7 @@ class CategoricalView implements LayerView {
   }
 
   private createEdgesMenu(): EdgesMenu {
+    // oxlint-disable-next-line typescript/no-this-alias -- getters below run with the menu object as this
     const view = this;
     const layerId = this.context.layer.id;
     // Geology smooths widely and keeps the default rounding internally, so its menu hides it.
@@ -213,6 +214,7 @@ class CategoricalView implements LayerView {
   }
 
   private createMenu(): LayerMenu {
+    // oxlint-disable-next-line typescript/no-this-alias -- getters below run with the menu object as this
     const view = this;
     const layerId = this.context.layer.id;
 

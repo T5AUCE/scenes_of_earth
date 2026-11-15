@@ -2,7 +2,7 @@
 
 import time
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
 import pytest
@@ -77,7 +77,7 @@ def test_rain_remote_revision_follows_the_chirps_file_and_local_one_the_fallback
 def rain_over(
     chirps_cube: dict[str, str], fallback_months: tuple[str, ...] = ("2026-06", "2026-07")
 ) -> tuple[RainDataset, FakeRainBackend]:
-    fallback = {month: "0001:a" for month in fallback_months}
+    fallback = dict.fromkeys(fallback_months, "0001:a")
     backend = FakeRainBackend(fallback, "http file", chirps_cube)
     return replace(RAIN, backend=backend), backend
 
@@ -141,7 +141,7 @@ class RecordingSource(SyntheticSource):
         self.cube_reads = []
 
     def optional_cube_months(self, spec: CubeSpec) -> dict[str, str]:
-        return {month: "0001:cube" for month in self.held}
+        return dict.fromkeys(self.held, "0001:cube")
 
     def read_rain(self, month: str, window: CellWindow) -> np.ndarray:
         self.http_reads.append(month)
@@ -285,7 +285,7 @@ def test_rain_needs_its_fallback_cube_to_be_listed(tmp_path):
 
 
 def test_latest_month_probe_picks_the_newest_existing_month(monkeypatch):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     newest_existing = previous_month(*previous_month(now.year, now.month))
     existing_urls = set()
     year, month = newest_existing
@@ -301,7 +301,7 @@ def test_latest_month_probe_picks_the_newest_existing_month(monkeypatch):
 
 
 def test_latest_month_is_rechecked_soon_when_a_newer_month_was_unreachable(monkeypatch):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     this_month = chirps._chirps_url(f"{now.year:04d}-{now.month:02d}")
     monkeypatch.setattr(
         chirps, "_head", lambda url: (None, None) if url == this_month else (True, None)

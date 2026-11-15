@@ -11,6 +11,7 @@ import rasterio
 import shapely
 import zarr
 from rasterio.transform import from_origin
+from shapely.errors import GEOSException
 from shapely.geometry import box
 
 from soe.areas import Area
@@ -57,7 +58,6 @@ from soe.ingest.geology_classification import (
 )
 from soe.ingest.geology_names import EGDI_TYPE_NAMES
 from soe.ingest.geology_regional import (
-    GMNA_SHAPE,
     SIM3340_DIR,
     SIM3340_GDB,
     _close_wkb_rings,
@@ -172,7 +172,7 @@ def test_sources_for_kind_lists_only_suppliers_in_priority_order():
 
 def test_candidates_need_a_footprint_hit_and_a_file_on_disk(tmp_path):
     present = {"geology_age_canada.tif"}
-    canada = [source for source in sources_for_kind("age") if source["id"] == "canada_5m"][0]
+    canada = next(source for source in sources_for_kind("age") if source["id"] == "canada_5m")
 
     assert candidates_for("age", (36.5, -1.5, 37.5, -0.5), present.__contains__) == []
     assert candidates_for("age", (-100.0, 40.0, -99.0, 41.0), present.__contains__) == [canada]
@@ -272,7 +272,7 @@ def test_canada_marble_maps_to_the_pure_metamorphic_class():
 
 
 def test_canada_unknown_names_fail_with_the_full_list():
-    with pytest.raises(ValueError, match="BOGUS.*WEIRD|WEIRD.*BOGUS"):
+    with pytest.raises(ValueError, match=r"BOGUS.*WEIRD|WEIRD.*BOGUS"):
         canada_age_batch([("Cenozoic", "BOGUS", " "), ("WEIRD", "Cambrian", " ")])
 
 
@@ -368,7 +368,7 @@ def test_sgmc_batch_lists_every_unknown_name_at_once():
         ("Atlantis", "", "", "", ""),
     ]
 
-    with pytest.raises(ValueError) as error:
+    with pytest.raises(ValueError, match="BOGUS") as error:
         sgmc_type_batch(records)
 
     assert all(name in str(error.value) for name in ("BOGUS", "WEIRD", "ODD", "Atlantis"))
@@ -459,7 +459,7 @@ def test_sgmc_names_with_known_substrings_still_fail():
         ("Sedimentary", "Clastic", "WEIRD basalt", "", ""),
     ]
 
-    with pytest.raises(ValueError) as error:
+    with pytest.raises(ValueError, match="BOGUS volcanic") as error:
         sgmc_type_batch(records)
 
     assert all(name in str(error.value) for name in ("BOGUS volcanic", "WEIRD basalt"))
@@ -482,7 +482,7 @@ def test_sim3340_ages_take_the_finest_name_of_each_path_and_alias_odd_spellings(
 
 
 def test_sim3340_unknown_age_names_fail_with_the_full_list():
-    with pytest.raises(ValueError, match="BOGUS.*ODD"):
+    with pytest.raises(ValueError, match=r"BOGUS.*ODD"):
         sim3340_age_batch([("Phanerozoic;BOGUS", "Phanerozoic;ODD")])
 
 
@@ -763,7 +763,7 @@ def test_regional_sources_are_absent_offline():
 def scene_id(folder: Path, layers: list[str], bbox: tuple[float, ...] | None = None) -> str:
     registry = make_registry(RealSource(cubes_dir=folder))
     datasets = [registry[layer_id] for layer_id in layers]
-    bboxes = {layer_id: bbox for layer_id in layers} if bbox else None
+    bboxes = dict.fromkeys(layers, bbox) if bbox else None
 
     return compute_scene_id("poly:abc", layers, None, datasets, {}, bboxes)
 
@@ -1272,7 +1272,7 @@ def test_gmna_geometry_closes_rings_the_archive_left_open():
     ring = struct.pack("<I", len(coords)) + b"".join(struct.pack("<2d", x, y) for x, y in coords)
     wkb = b"\x01\x03\x00\x00\x00" + struct.pack("<I", 1) + ring
 
-    with pytest.raises(Exception):
+    with pytest.raises(GEOSException, match=r"do not form a closed linestring"):
         shapely.from_wkb(wkb)
 
     fixed = _close_wkb_rings(wkb)

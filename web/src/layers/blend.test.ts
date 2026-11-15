@@ -419,7 +419,12 @@ test("after a failed step reports, the next good step fades in from nothing", as
 
   view.setFrame!(FADE_TIMES[1], FADE_TIMES[2], 0.5);
 
-  assert.deepEqual(opacities().at(-1)!.toSorted(), [0, 0.4]);
+  assert.deepEqual(
+    opacities()
+      .at(-1)!
+      .toSorted((a, b) => a - b),
+    [0, 0.4],
+  );
 });
 
 test("repeated frames never paint the image themselves", async () => {

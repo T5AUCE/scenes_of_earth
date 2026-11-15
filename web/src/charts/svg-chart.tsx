@@ -160,9 +160,9 @@ export function SvgChart({
     showCoverageDetails,
   );
   const hasDomain = domain !== null;
-  const rawTicks = hasDomain ? ticksForDomain(domain!, 4) : [];
+  const rawTicks = hasDomain ? ticksForDomain(domain, 4) : [];
   const ticks = dedupeNumericTicks(rawTicks);
-  const plan = hasDomain ? tickLabelsFor(domain!, ticks) : null;
+  const plan = hasDomain ? tickLabelsFor(domain, ticks) : null;
   const left = leftGutterFor(plan?.labels ?? [], compact);
   const disclosure = disclosureLinesFor(plan, width, left, compact);
   const showTitles = !compact && table.shape !== "categorical_shares";

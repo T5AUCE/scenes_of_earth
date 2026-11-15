@@ -50,11 +50,8 @@ const {
   POSITION_JITTER_RATIO,
   VALUE_RADIUS_EXPONENT,
   aimedSpacingPx,
-  areaNoise,
-  dotRadiusPx,
   highZoomDotOpacity,
   highZoomDotSizeScale,
-  levelRadiusPx,
   representativeRadiusPx,
   representativeSpacingPx,
 } = latticeModule;
@@ -107,12 +104,12 @@ test("the isotherm legend shows the dashed ink over its dashed casing", () => {
   assert.equal(sample.className, "legend-isotherm");
   assert.equal(
     sample.style.background,
-    "repeating-linear-gradient(to right, rgb(246, 239, 227) 0 6px, " + "transparent 6px 10px)",
+    "repeating-linear-gradient(to right, rgb(246, 239, 227) 0 6px, transparent 6px 10px)",
   );
   assert.equal(sample.style.height, "3.2px");
   assert.equal(
     line.style.background,
-    "repeating-linear-gradient(to right, rgb(49, 63, 77) 0 6px, " + "transparent 6px 10px)",
+    "repeating-linear-gradient(to right, rgb(49, 63, 77) 0 6px, transparent 6px 10px)",
   );
   assert.equal(line.style.height, "2px");
   assert.ok(Math.abs(Number.parseFloat(line.style.top) - 0.6) < 1e-9);

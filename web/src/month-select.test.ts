@@ -9,7 +9,7 @@ import { assertSameNode } from "./testing/dom-assert.ts";
 
 test("year options run from the first to the last allowed month", (context) => {
   const window = new Window();
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const control = createMonthSelect("From month", "From year");
@@ -23,7 +23,7 @@ test("year options run from the first to the last allowed month", (context) => {
 
 test("months outside an edge year stay listed but disabled", (context) => {
   const window = new Window();
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const control = createMonthSelect("From month", "From year");
@@ -53,7 +53,7 @@ test("months outside an edge year stay listed but disabled", (context) => {
 
 test("picking a year outside the month moves to the nearest allowed month", (context) => {
   const window = new Window();
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const control = createMonthSelect("From month", "From year");
@@ -75,7 +75,7 @@ test("picking a year outside the month moves to the nearest allowed month", (con
 
 test("a picked month round-trips through value", (context) => {
   const window = new Window();
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const control = createMonthSelect("From month", "From year");
@@ -96,7 +96,7 @@ test("a picked month round-trips through value", (context) => {
 
 test("the wrapper fires change and names the month and year dropdowns", (context) => {
   const window = new Window();
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const start = createMonthSelect("From month", "From year");
@@ -123,7 +123,7 @@ test("the wrapper fires change and names the month and year dropdowns", (context
 
 test("disabling the control disables both dropdowns", (context) => {
   const window = new Window();
-  context.after(() => window.happyDOM.abort());
+  context.after(() => void window.happyDOM.abort());
   installBrowser(window);
 
   const control = createMonthSelect("From month", "From year");

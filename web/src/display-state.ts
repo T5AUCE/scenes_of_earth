@@ -564,7 +564,7 @@ export function formatDisplayParams(display: SceneDisplay, layers: LayerDoc[]) {
       return [`${id}:${effective}`];
     }),
     outline: [
-      `${display.outline.shown ? "on" : "off"}`
+      (display.outline.shown ? "on" : "off")
         + `:${outlineToLink(display.outline.color)}:${display.outline.widthPx}`,
     ],
   };

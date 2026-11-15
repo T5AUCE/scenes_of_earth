@@ -84,13 +84,13 @@ test("a range tuple is copied for every snapshot and for the initial display", (
   store.dispatch({ kind: "clear", unit: "rain" });
 
   const after = store.getSnapshot();
-  after.display.layers.temp!.range![0] = -5;
-  initial.layers.temp!.range![0] = -99;
+  after.display.layers.temp.range![0] = -5;
+  initial.layers.temp.range![0] = -99;
 
-  assert.deepEqual(after.display.layers.temp!.range, [-5, 10]);
-  assert.deepEqual(before.display.layers.temp!.range, [0, 10]);
-  assert.deepEqual(initial.layers.temp!.range, [-99, 10]);
-  assert.deepEqual(store.getSnapshot().display.layers.temp!.range, [-5, 10]);
+  assert.deepEqual(after.display.layers.temp.range, [-5, 10]);
+  assert.deepEqual(before.display.layers.temp.range, [0, 10]);
+  assert.deepEqual(initial.layers.temp.range, [-99, 10]);
+  assert.deepEqual(store.getSnapshot().display.layers.temp.range, [-5, 10]);
 });
 
 test("an in-place layer update does not reach an earlier snapshot", () => {
@@ -103,12 +103,12 @@ test("an in-place layer update does not reach an earlier snapshot", () => {
   store.dispatch({
     kind: "display",
     update: (next) => {
-      next.layers.temp!.palette = "viridis";
+      next.layers.temp.palette = "viridis";
     },
   });
 
-  assert.equal(before.display.layers.temp!.palette, "thermal");
-  assert.equal(store.getSnapshot().display.layers.temp!.palette, "viridis");
+  assert.equal(before.display.layers.temp.palette, "thermal");
+  assert.equal(store.getSnapshot().display.layers.temp.palette, "viridis");
 });
 
 test("listeners fire once per dispatch and stop after unsubscribing", () => {
@@ -235,7 +235,7 @@ test("chart ingress copies nested inputs so later mutations stay local", () => {
   };
   const store = createSceneStore(layers, display(), initial);
   const before = store.getSnapshot();
-  initial.definitions[0].options.yRange![0] = -99;
+  initial.definitions[0].options.yRange[0] = -99;
   initial.definitions[0].source.layerId = "mutated";
 
   assert.deepEqual(store.getSnapshot().charts.definitions[0].options.yRange, [0, 100]);
@@ -252,7 +252,7 @@ test("chart ingress copies nested inputs so later mutations stay local", () => {
   store.dispatch({ kind: "saveChart", definition });
 
   const saved = store.getSnapshot();
-  definition.options.yRange![0] = -99;
+  definition.options.yRange[0] = -99;
 
   assert.deepEqual(saved.charts.definitions[1].options.yRange, [0, 50]);
   assert.deepEqual(store.getSnapshot().charts.definitions[1].options.yRange, [0, 50]);

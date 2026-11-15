@@ -289,7 +289,7 @@ test("rendering writes the badge and keeps its node", () => {
     assert.equal(badge.textContent, "60 fps · worst 16 ms");
     assertSameNode(badge, window.document.getElementById("dev-stats"));
   } finally {
-    window.happyDOM.abort();
+    void window.happyDOM.abort();
   }
 });
 
@@ -316,7 +316,7 @@ test("a second start keeps one frame chain", () => {
     assert.deepEqual(stubs.cancelled, [1]);
   } finally {
     stubs.restore();
-    window.happyDOM.abort();
+    void window.happyDOM.abort();
   }
 });
 
@@ -341,7 +341,7 @@ test("stopping the readout hides the badge and frees the panel", () => {
     assert.deepEqual(stubs.cancelled, [1]);
   } finally {
     stubs.restore();
-    window.happyDOM.abort();
+    void window.happyDOM.abort();
   }
 });
 
@@ -428,7 +428,7 @@ function rangeSource(): { store: AsyncReadable; requests: RangeRequest[] } {
     },
     async getRange(key, range) {
       if ("suffixLength" in range) return bytes.slice(bytes.length - range.suffixLength);
-      requests.push({ key: key as string, offset: range.offset, length: range.length });
+      requests.push({ key: key, offset: range.offset, length: range.length });
 
       return bytes.slice(range.offset, range.offset + range.length);
     },
@@ -1184,7 +1184,7 @@ test("the pool badge counts every request start, not only decoded tiles", () => 
   } finally {
     scope.__getDemPoolStats = previousHook;
     stubs.restore();
-    window.happyDOM.abort();
+    void window.happyDOM.abort();
   }
 });
 

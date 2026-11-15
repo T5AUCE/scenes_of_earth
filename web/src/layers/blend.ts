@@ -290,7 +290,7 @@ class Blend implements BlendView {
     if (key !== null && this.fade.select(key)) this.values = null;
     else this.hide();
 
-    this.drawLatest(this.shownTime);
+    void this.drawLatest(this.shownTime);
   }
 
   private hide() {

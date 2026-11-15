@@ -524,7 +524,7 @@ test("the detail row keeps two stops from removal and validates hex", async (con
     first.dispatchEvent(pointerUp(window, 10, 10));
   });
 
-  const remove = buttonWithText(container, "Remove") as HTMLButtonElement;
+  const remove = buttonWithText(container, "Remove");
   assert.equal(remove.disabled, true);
   assert.match(container.textContent ?? "", /at least two colours/);
 

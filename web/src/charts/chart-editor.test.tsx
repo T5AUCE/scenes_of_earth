@@ -146,7 +146,7 @@ test("changing the layer commits a cleaned unit with its source", async (context
       />,
     );
   });
-  const layerSelect = [...host.querySelectorAll("select")][0] as HTMLSelectElement;
+  const layerSelect = [...host.querySelectorAll("select")][0];
   await act(async () => {
     setSelectValue(window, layerSelect, "temp");
   });
@@ -198,7 +198,7 @@ test("changing the layer commits a cleaned range with its source", async (contex
       />,
     );
   });
-  const layerSelect = [...host.querySelectorAll("select")][0] as HTMLSelectElement;
+  const layerSelect = [...host.querySelectorAll("select")][0];
   await act(async () => {
     setSelectValue(window, layerSelect, "temp");
   });
@@ -246,7 +246,7 @@ test("changing the table shape commits a seasonal source", async (context) => {
       />,
     );
   });
-  const shapeSelect = [...host.querySelectorAll("select")][1] as HTMLSelectElement;
+  const shapeSelect = [...host.querySelectorAll("select")][1];
   await act(async () => {
     setSelectValue(window, shapeSelect, "seasonal_cycle");
   });

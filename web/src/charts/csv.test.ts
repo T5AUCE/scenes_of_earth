@@ -164,12 +164,12 @@ test("csv metadata carries every credit, disclaimer, endorsement and terms line"
   const scene = makeScene([rainLayer(), terrainLayer()]);
   const file = buildAreaMeansCsv(scene);
 
-  for (const line of scene.credits!.lines!) assert.ok(file.content.includes(line));
+  for (const line of scene.credits.lines) assert.ok(file.content.includes(line));
 
-  for (const line of scene.credits!.disclaimers!) assert.ok(file.content.includes(line));
+  for (const line of scene.credits.disclaimers) assert.ok(file.content.includes(line));
 
-  assert.ok(file.content.includes(scene.credits!.endorsement!));
-  assert.ok(file.content.includes(scene.credits!.terms_passthrough!));
+  assert.ok(file.content.includes(scene.credits.endorsement));
+  assert.ok(file.content.includes(scene.credits.terms_passthrough));
   assert.ok(file.content.includes("Rain credit"));
   assert.ok(file.content.includes("DEM credit"));
   assert.ok(file.content.includes("Boundary credit"));
@@ -180,7 +180,7 @@ test("csv metadata carries every credit, disclaimer, endorsement and terms line"
 
 test("multiline metadata prefixes each physical line with a hash", () => {
   const scene = makeScene([rainLayer()]);
-  scene.credits!.disclaimers = ["First line.\nSecond line."];
+  scene.credits.disclaimers = ["First line.\nSecond line."];
 
   const file = buildAreaMeansCsv(scene);
   const lines = file.content.split("\r\n");
@@ -191,8 +191,8 @@ test("multiline metadata prefixes each physical line with a hash", () => {
 
 test("metadata prefixes CRLF and bare CR lines in terms and sources", () => {
   const scene = makeScene([rainLayer()]);
-  scene.credits!.disclaimers = ["First line.\r\nSecond line.\rThird line."];
-  scene.credits!.terms_passthrough = "Terms first.\r\nTerms second.\rTerms third.";
+  scene.credits.disclaimers = ["First line.\r\nSecond line.\rThird line."];
+  scene.credits.terms_passthrough = "Terms first.\r\nTerms second.\rTerms third.";
   scene.layers[0].source.attribution = "Rain credit\r\nSecond credit\rThird credit";
 
   const file = buildAreaMeansCsv(scene);
@@ -217,7 +217,7 @@ test("metadata prefixes CRLF and bare CR lines in terms and sources", () => {
 
 test("metadata with commas stays a comment without csv quoting", () => {
   const scene = makeScene([rainLayer()]);
-  scene.credits!.lines = ["Rain, summed over the month."];
+  scene.credits.lines = ["Rain, summed over the month."];
 
   const file = buildAreaMeansCsv(scene);
 

@@ -537,10 +537,10 @@ export function createHarness() {
   };
 
   const originalEnter = harness.mode.enter.bind(harness.mode);
-  harness.mode.enter = ((...args: Parameters<typeof originalEnter>) => {
+  harness.mode.enter = (...args: Parameters<typeof originalEnter>) => {
     harness.requestedTime = (args[1] as { time?: string | null }).time ?? null;
     return originalEnter(...args);
-  }) as typeof harness.mode.enter;
+  };
 
   Object.assign(globalThis, {
     sceneModeTest: harness,

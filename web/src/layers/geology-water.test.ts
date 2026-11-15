@@ -27,7 +27,7 @@ function makeMap(layers: string[] = ["background", "water", "fill-anchor"]) {
       ],
     }),
     addLayer: (spec: { id: string }, beforeId?: string) => {
-      specs.set(spec.id, spec as Record<string, unknown>);
+      specs.set(spec.id, spec);
       const index = beforeId ? order.indexOf(beforeId) : order.length;
       order.splice(index < 0 ? order.length : index, 0, spec.id);
     },
@@ -46,7 +46,7 @@ test("the water copy sits between geology and the rest with the basemap paint", 
 
   assert.equal(addGeologyWater(map as never, "fill-anchor"), true);
 
-  map.addLayer({ id: "cover-classes" } as never, "fill-anchor");
+  map.addLayer({ id: "cover-classes" }, "fill-anchor");
 
   assert.deepEqual(map.getLayersOrder(), [
     "geology-classes",

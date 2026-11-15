@@ -125,7 +125,7 @@ test("seasonal conversion keeps counts and year ranges while converting means", 
   assert.equal(table.rows[0].value, 10);
   assert.equal(table.yTitle, "Rain by month (mm/month)");
 
-  converted.rows[0].yearRange![0] = 1999;
+  converted.rows[0].yearRange[0] = 1999;
 
   assert.deepEqual(table.rows[0].yearRange, [2019, 2020]);
 });

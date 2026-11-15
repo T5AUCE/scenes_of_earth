@@ -105,7 +105,9 @@ export async function extractBitmapRgba(bitmap: ImageBitmap): Promise<Uint8Clamp
       return await readBitmapFrame(bitmap);
     } catch (error) {
       const reason = (error as Error).message;
-      throw new Error(`DEM tile rejected because VideoFrame decode failed: ${reason}`);
+      throw new Error(`DEM tile rejected because VideoFrame decode failed: ${reason}`, {
+        cause: error,
+      });
     }
   }
 

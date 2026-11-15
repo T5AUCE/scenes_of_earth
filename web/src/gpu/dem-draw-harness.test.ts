@@ -304,6 +304,8 @@ export function createDemHarness(options: { linear?: boolean } = {}) {
     },
     /** Let every posted load come back, so the next frames can upload them. */
     async landLoads() {
+      // The posted-load callbacks lower pendingReplies while this loop waits.
+      // oxlint-disable-next-line eslint/no-unmodified-loop-condition
       for (let turn = 0; turn < 50 && pendingReplies > 0; turn++) {
         await new Promise((resolve) => setTimeout(resolve, 0));
       }

@@ -296,9 +296,11 @@ def _download(url: str, target: Path) -> None:
     descriptor, temp_name = tempfile.mkstemp(dir=target.parent, suffix=".tmp")
     try:
         request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        with os.fdopen(descriptor, "wb") as file:
-            with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT_SECS) as response:
-                shutil.copyfileobj(response, file, DOWNLOAD_CHUNK_BYTES)
+        with (
+            os.fdopen(descriptor, "wb") as file,
+            urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT_SECS) as response,
+        ):
+            shutil.copyfileobj(response, file, DOWNLOAD_CHUNK_BYTES)
 
         os.replace(temp_name, target)
     except BaseException:
@@ -344,7 +346,9 @@ def _read_igme_units(shape_path: Path) -> "object":
     ages = igme_age_batch(frame["AgeName"].fillna("unknown").tolist())
     # Ice-only units name their cover in the IceO field instead of the petrography one.
     petr = frame["Portr_Petr"].where(frame["Portr_Petr"].notna(), frame["Portr_IceO"])
-    records = list(zip(petr, frame["Portr_Pe_1"], frame["Portr_IGNE"], frame["Portr_MARI"]))
+    records = list(
+        zip(petr, frame["Portr_Pe_1"], frame["Portr_IGNE"], frame["Portr_MARI"], strict=True)
+    )
 
     def cleaned(value: object) -> str | None:
         return value if isinstance(value, str) else None
@@ -380,13 +384,13 @@ def _read_gmna_units(shape_path: Path) -> "object":
     geometries = [_gmna_geometry(wkb) for wkb in wkbs]
     frame = gpd.GeoDataFrame(
         frame,
-        geometry=[geometry for geometry, keep in zip(geometries, onshore) if keep],
+        geometry=[geometry for geometry, keep in zip(geometries, onshore, strict=True) if keep],
         crs=meta["crs"],
     )
 
-    pairs = list(zip(frame["MIN_AGE"].fillna(""), frame["MAX_AGE"].fillna("")))
+    pairs = list(zip(frame["MIN_AGE"].fillna(""), frame["MAX_AGE"].fillna(""), strict=True))
     ages = gmna_age_batch(pairs)
-    rocks = list(zip(frame["ROCKTYPE"].fillna(""), frame["LITHOLOGY"].fillna("")))
+    rocks = list(zip(frame["ROCKTYPE"].fillna(""), frame["LITHOLOGY"].fillna(""), strict=True))
     types = gmna_type_batch(rocks)
 
     frame["age"] = [value or 0 for value in ages]
@@ -413,7 +417,7 @@ def _gmna_geometry(wkb: bytes | None) -> BaseGeometry | None:
     raw = bytes(wkb)
     try:
         return shapely.from_wkb(raw)
-    except Exception:
+    except Exception:  # noqa: BLE001 - any unreadable shape falls back to repaired rings.
         return shapely.from_wkb(_close_wkb_rings(raw))
 
 
@@ -465,14 +469,14 @@ def _read_sgmc_lithology(gdb_path: Path) -> dict[str, int]:
     """Return the rock-type class of each SGMC unit link."""
     hierarchies = _first_major_hierarchies(gdb_path, SGMC_LITHOLOGY_LAYER, "UNIT_LINK", "LITH_RANK")
     values = sgmc_type_batch(list(hierarchies.values()))
-    return dict(zip(hierarchies, values))
+    return dict(zip(hierarchies, values, strict=True))
 
 
 def _read_sim3340_types(gdb_path: Path) -> dict[int, int]:
     """Return the rock-type class of each SIM 3340 unit class, 0 where the base map fills in."""
     hierarchies = _first_major_hierarchies(gdb_path, SIM3340_LITHOLOGY_LAYER, "NSACLASS", "RANK")
     values = sim3340_type_batch(list(hierarchies.values()))
-    return {unit: value or 0 for unit, value in zip(hierarchies, values)}
+    return {unit: value or 0 for unit, value in zip(hierarchies, values, strict=True)}
 
 
 def _read_sim3340_ages(gdb_path: Path) -> dict[int, int]:
@@ -485,10 +489,10 @@ def _read_sim3340_ages(gdb_path: Path) -> dict[int, int]:
         columns=["NSACLASS", "FULL_MIN", "FULL_MAX"],
         read_geometry=False,
     )
-    pairs = list(zip(table["FULL_MIN"].fillna(""), table["FULL_MAX"].fillna("")))
+    pairs = list(zip(table["FULL_MIN"].fillna(""), table["FULL_MAX"].fillna(""), strict=True))
     values = sim3340_age_batch(pairs)
 
-    return {unit: value or 0 for unit, value in zip(table["NSACLASS"], values)}
+    return {unit: value or 0 for unit, value in zip(table["NSACLASS"], values, strict=True)}
 
 
 def _first_major_hierarchies(
@@ -554,10 +558,12 @@ def _publish_sgmc(gdb_path: Path, kind: str, res_deg: float, cog_path: Path) -> 
     attributes = pyogrio.read_dataframe(
         gdb_path, layer=SGMC_LAYER, columns=["UNIT_LINK", "AGE_MIN", "AGE_MAX"], read_geometry=False
     )
-    pairs = list(zip(attributes["AGE_MIN"].fillna(""), attributes["AGE_MAX"].fillna("")))
+    pairs = list(
+        zip(attributes["AGE_MIN"].fillna(""), attributes["AGE_MAX"].fillna(""), strict=True)
+    )
     ages = sgmc_age_batch(pairs)
     if kind == "age":
-        values = dict(zip(attributes["UNIT_LINK"], [value or 0 for value in ages]))
+        values = dict(zip(attributes["UNIT_LINK"], [value or 0 for value in ages], strict=True))
     else:
         lithology = _read_sgmc_lithology(gdb_path)
         values = {link: (value or 0) for link, value in lithology.items()}
@@ -610,7 +616,7 @@ def _publish_by_key(
 
         classed.geometry = classed.geometry.segmentize(TILED_SEGMENT_M)
         return rasterize(
-            zip(_world_geometries(classed.geometry.to_crs(4326)), classed["value"]),
+            zip(_world_geometries(classed.geometry.to_crs(4326)), classed["value"], strict=True),
             out_shape=shape,
             transform=transform,
             dtype="uint8",
@@ -629,7 +635,7 @@ def _world_geometries(geometries: "gpd.GeoSeries") -> list[BaseGeometry]:
     widths = geometries.bounds["maxx"] - geometries.bounds["minx"]
     return [
         _split_at_antimeridian(geometry) if width > ANTIMERIDIAN_WRAP_DEG else geometry
-        for geometry, width in zip(geometries, widths)
+        for geometry, width in zip(geometries, widths, strict=True)
     ]
 
 
@@ -658,7 +664,10 @@ def _rasterize_units(
         return np.zeros(shape, "uint8")
 
     return rasterize(
-        zip(classed.geometry, classed[kind]), out_shape=shape, transform=transform, dtype="uint8"
+        zip(classed.geometry, classed[kind], strict=True),
+        out_shape=shape,
+        transform=transform,
+        dtype="uint8",
     )
 
 
@@ -737,7 +746,7 @@ def _egdi_lookup(source: DatasetReader) -> np.ndarray:
     present.discard(int(source.nodata))
     values = sorted(present)
     lookup = np.zeros(values[-1] + 1, "uint8")
-    for value, cls in zip(values, egdi_type_batch(values)):
+    for value, cls in zip(values, egdi_type_batch(values), strict=True):
         lookup[value] = cls or 0
 
     return lookup

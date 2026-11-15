@@ -335,13 +335,13 @@ function huesOfVariants(parent: string, color: string): number[] {
     variant,
   }));
 
-  return [...classColors("geology", family, "painted").values()].map((rgb) => rgbToOklch(rgb!).hue);
+  return [...classColors("geology", family, "painted").values()].map((rgb) => rgbToOklch(rgb).hue);
 }
 
 test("geology variants alternate around the family hue within about +-35 degrees", () => {
   for (const palette of ["painted", "classic"]) {
     const hues = [...classColors("geology", SEDIMENT_FAMILY, palette).values()].map(
-      (rgb) => rgbToOklch(rgb!).hue,
+      (rgb) => rgbToOklch(rgb).hue,
     );
     const offsets = hues.map((hue) => hueOffsetDeg(hue, hues[0]));
 
@@ -358,7 +358,7 @@ test("geology variants alternate around the family hue within about +-35 degrees
 
 test("ten sediment variants stay pairwise distinct and inside the sRGB gamut", () => {
   for (const palette of ["painted", "classic"]) {
-    const rgbs = [...classColors("geology", SEDIMENT_FAMILY, palette).values()].map((rgb) => rgb!);
+    const rgbs = [...classColors("geology", SEDIMENT_FAMILY, palette).values()].map((rgb) => rgb);
 
     for (const rgb of rgbs) {
       assert.equal(rgb.length, COLOR_CHANNELS);

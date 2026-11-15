@@ -751,7 +751,7 @@ function readGpuSnapshot(): { msByLayer: Record<string, number>; unavailable: bo
       __gpuMs?: Record<string, number>;
       __gpuUnavailable?: boolean;
     };
-    const msByLayer = { ...(scope.__gpuMs ?? {}) };
+    const msByLayer = { ...scope.__gpuMs };
     return { msByLayer, unavailable: scope.__gpuUnavailable ?? false };
   } catch {
     return { msByLayer: {}, unavailable: false };

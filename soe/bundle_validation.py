@@ -1,5 +1,6 @@
 """Validate scene.json's layer contract and attribution requirements."""
 
+import itertools
 import math
 import re
 from typing import Any
@@ -281,9 +282,9 @@ def _time_problems(layer_id: str, layer: JsonObject) -> list[str]:
     if time_varying is True and not consistent:
         return [f"{layer_id}: time axis missing or count does not match values"]
 
-    if time_varying is True and consistent:
-        if not isinstance(end, str) or not values[-1] < end:
-            return [f"{layer_id}: time.end must be after the last time value"]
+    ends_after_values = isinstance(end, str) and values[-1] < end
+    if time_varying is True and consistent and not ends_after_values:
+        return [f"{layer_id}: time.end must be after the last time value"]
 
     if time_varying is False:
         return [f"{layer_id}: static layer has a time axis"]
@@ -532,7 +533,8 @@ def _series_value_problems(
 ) -> list[str]:
     """Return problems with one step's mean, shares and their null consistency."""
     problems = []
-    for index, (value, share) in enumerate(zip(values, valid)):
+    # Length mismatches are reported above, so the pairing below only reads the shared prefix.
+    for index, (value, share) in enumerate(zip(values, valid, strict=False)):
         if not _is_share(share):
             problems.append(
                 f"{layer_id}: area_series.valid_fraction[{index}] must be between 0 and 1"
@@ -555,11 +557,12 @@ def _series_value_problems(
                 problems.append(
                     f"{layer_id}: area_series.fallback_fraction[{index}] must be between 0 and 1"
                 )
-            elif share == 0 and share_fallback != 0:
-                problems.append(
-                    f"{layer_id}: area_series.fallback_fraction must not exceed valid_fraction"
-                )
-            elif share_fallback > share + FRACTION_TOLERANCE:
+                continue
+
+            overstated = share_fallback > share + FRACTION_TOLERANCE or (
+                share == 0 and share_fallback != 0
+            )
+            if overstated:
                 problems.append(
                     f"{layer_id}: area_series.fallback_fraction must not exceed valid_fraction"
                 )
@@ -640,7 +643,7 @@ def _distribution_problems(layer_id: str, layer: JsonObject) -> list[str]:
     if not all(_is_finite_number(value) for value in values):
         return [*problems, f"{layer_id}: distribution.values must be finite numbers"]
 
-    if any(later < earlier for earlier, later in zip(values, values[1:])):
+    if any(later < earlier for earlier, later in itertools.pairwise(values)):
         problems.append(f"{layer_id}: distribution.values must not decrease")
 
     for key in ("min", "max", "mean"):
@@ -703,7 +706,7 @@ def _stops_problems(layer_id: str, stops: object) -> list[str]:
     if not all(_is_finite_number(stop) for stop in stops):
         return [f"{layer_id}: style.stops must be finite numbers"]
 
-    if any(high < low for low, high in zip(stops, stops[1:])):
+    if any(high < low for low, high in itertools.pairwise(stops)):
         return [f"{layer_id}: style.stops must not decrease"]
 
     return []

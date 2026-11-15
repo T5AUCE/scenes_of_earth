@@ -380,7 +380,7 @@ def test_series_that_fit_keep_native_resolution():
 def test_refuses_when_every_series_is_at_the_resolution_cap(monkeypatch):
     monkeypatch.setattr("soe.plan.MAX_OUTPUT_BYTES", 10_000)
 
-    with pytest.raises(AreaError, match="even at 0.4 degree aggregation"):
+    with pytest.raises(AreaError, match=r"even at 0\.4 degree aggregation"):
         plan_months(Area(box(36, -2, 38, 0)), [RAIN, COARSE], 240)
 
 

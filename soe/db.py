@@ -5,7 +5,7 @@ import logging
 import sqlite3
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -128,7 +128,7 @@ def recover_interrupted_scenes(path: Path | str) -> None:
     """
     with connect(path) as connection:
         connection.execute(
-            "UPDATE scenes SET status='failed', error='interrupted', "
+            "UPDATE scenes SET status='failed', error='interrupted', "  # noqa: S608 - the list is a module constant.
             "error_class='Interrupted', finished=? "
             f"WHERE status IN {ACTIVE_STATUSES}",
             (now(),),
@@ -192,7 +192,7 @@ def search(path: Path | str, query: str, level: str | None = None, limit: int = 
         f"{LEVEL_RANK}, boundaries.cells DESC, boundaries.name"
     )
     sql = (
-        "SELECT boundaries.id, boundaries.name, boundaries.level, boundaries.iso3, "
+        "SELECT boundaries.id, boundaries.name, boundaries.level, boundaries.iso3, "  # noqa: S608 - only constants shape the query.
         "boundaries.parent_name, boundaries.bbox_w, boundaries.bbox_s, boundaries.bbox_e, "
         "boundaries.bbox_n, boundaries.cells, admin_kinds.kind AS kind FROM boundaries "
         "LEFT JOIN admin_kinds ON admin_kinds.iso3 = boundaries.iso3 "
@@ -233,7 +233,7 @@ def get_boundary(path: Path | str, boundary_id: str, with_geometry: bool = True)
     )
     with connect(path) as connection:
         row = connection.execute(
-            "SELECT boundaries.id, boundaries.level, "
+            "SELECT boundaries.id, boundaries.level, "  # noqa: S608 - one of two fixed column lists.
             "boundaries.name, boundaries.parent_name, boundaries.iso3, boundaries.bbox_w, "
             "boundaries.bbox_s, boundaries.bbox_e, boundaries.bbox_n, boundaries.cells, "
             f"{geometry_select}, boundaries.preview_geojson, boundaries.source, "
@@ -441,7 +441,8 @@ def update_scene(path: Path | str, scene_id: str, **fields: SqlValue) -> None:
     assignments = ", ".join(f"{column} = ?" for column in fields)
     with connect(path) as connection:
         connection.execute(
-            f"UPDATE scenes SET {assignments} WHERE id = ?", (*fields.values(), scene_id)
+            f"UPDATE scenes SET {assignments} WHERE id = ?",  # noqa: S608 - keys are code column names.
+            (*fields.values(), scene_id),
         )
 
 
@@ -485,7 +486,7 @@ def _check_capacity(connection: sqlite3.Connection, max_active: int | None) -> N
         return
 
     active = connection.execute(
-        f"SELECT COUNT(*) FROM scenes WHERE status IN {ACTIVE_STATUSES}"
+        f"SELECT COUNT(*) FROM scenes WHERE status IN {ACTIVE_STATUSES}"  # noqa: S608 - the list is a module constant.
     ).fetchone()[0]
     if active >= max_active:
         raise Busy()
@@ -520,7 +521,7 @@ def get_revision(path: Path | str, dataset_id: str, period: str) -> tuple[str, f
     if row is None:
         return None
 
-    age = datetime.now(timezone.utc) - datetime.fromisoformat(row["checked"])
+    age = datetime.now(UTC) - datetime.fromisoformat(row["checked"])
     return row["revision"], age.total_seconds()
 
 
@@ -551,4 +552,4 @@ def connect(path: Path | str) -> Iterator[sqlite3.Connection]:
 
 def now() -> str:
     """The current UTC time as an ISO 8601 string, to the second."""
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")

@@ -919,11 +919,11 @@ function fragmentAt(
   };
 }
 
-function straightId(cellX: number, cellY: number): number {
+function straightId(cellX: number, _cellY: number): number {
   return cellX < 0 ? TREE : GRASS;
 }
 
-function oddStraightId(cellX: number, cellY: number): number {
+function oddStraightId(cellX: number, _cellY: number): number {
   return cellX < 1 ? TREE : GRASS;
 }
 

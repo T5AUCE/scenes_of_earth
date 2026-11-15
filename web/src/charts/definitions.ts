@@ -263,14 +263,14 @@ export function validateDefinition(
     return "The chart needs a source.";
   }
 
-  if (!isSupportedShape((source as ChartSource).shape)) return "The chart shape is not supported.";
+  if (!isSupportedShape(source.shape)) return "The chart shape is not supported.";
   if (!isChartType(chartType)) return "The chart type is not supported.";
 
   const byId = new Map(layers.map((layer) => [layer.id, layer]));
-  const layer = byId.get((source as ChartSource).layerId);
+  const layer = byId.get(source.layerId);
   if (!layer) return "The chart source layer is missing.";
 
-  const shape = (source as ChartSource).shape;
+  const shape = source.shape;
   if (shape === "time_series" && !isTimeSeriesLayer(layer)) {
     return "The layer has no time series to chart.";
   }
@@ -283,7 +283,7 @@ export function validateDefinition(
     return "The layer has no distribution to chart.";
   }
 
-  if (!allowedTypesFor(shape).includes(chartType!)) {
+  if (!allowedTypesFor(shape).includes(chartType)) {
     return "The chart type is not supported for this shape.";
   }
 
@@ -306,7 +306,7 @@ export function validateDefinition(
     }
   }
 
-  return validateOptions(options, layer.units, chartType!, shape, validationTable);
+  return validateOptions(options, layer.units, chartType, shape, validationTable);
 }
 
 /**
@@ -331,10 +331,11 @@ function validateOptions(
     return "The chart options are not an object.";
   }
 
-  if (options.ink !== undefined) {
-    if (typeof options.ink !== "string" || inkColor(options.ink) === undefined) {
-      return "The series ink is not a preset or #rrggbb colour.";
-    }
+  if (
+    options.ink !== undefined
+    && (typeof options.ink !== "string" || inkColor(options.ink) === undefined)
+  ) {
+    return "The series ink is not a preset or #rrggbb colour.";
   }
 
   if (options.displayUnit !== undefined && !isUnitFor(nativeUnits, options.displayUnit)) {

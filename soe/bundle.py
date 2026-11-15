@@ -16,6 +16,8 @@ from .bundle_validation import (
 from .plan import LayerPlan, Plan
 from .sources import REQUEST_STEP, SOURCE_ROLE, SOURCES, STOP_COUNT, Dataset
 
+__all__ = ["COLOUR_PATTERN", "MIN_STOPS", "STOP_COUNT", "STYLE_KINDS", "validate"]
+
 VERSION = "0.7"
 
 BOUNDARY_SOURCE_FIELDS = ("licence_url", "attribution", "citation", "modified")

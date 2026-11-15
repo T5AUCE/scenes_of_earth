@@ -4,7 +4,7 @@ Check trailing-month probing, revision re-checks, grid checks and retries.
 """
 
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 from http.client import IncompleteRead
 from pathlib import Path
@@ -330,7 +330,7 @@ def test_chirps_head_gives_up_with_url(monkeypatch):
     def attempt() -> tuple[bool, str | None]:
         return chirps._head_once(url, chirps.HEAD_TIMEOUT_SECS)
 
-    with pytest.raises(OSError, match="example.test"):
+    with pytest.raises(OSError, match=r"example\.test"):
         chirps._with_retries(url, attempt)
 
     assert slept == [2, 4, 8, 16, 32]
@@ -371,7 +371,7 @@ def test_chirps_get_gives_up_on_incomplete_read_with_url(monkeypatch):
     def attempt() -> tuple[bytes, str | None]:
         return chirps._fetch_once(url, chirps.DOWNLOAD_TIMEOUT_SECS)
 
-    with pytest.raises(OSError, match="example.test"):
+    with pytest.raises(OSError, match=r"example\.test"):
         chirps._with_retries(url, attempt)
 
     assert slept == [2, 4, 8, 16, 32]
@@ -387,7 +387,7 @@ def test_retry_after_delay_seconds_wins_over_backoff(monkeypatch):
 
 
 def test_retry_after_http_date_wins_over_backoff(monkeypatch):
-    future = datetime.now(timezone.utc) + timedelta(seconds=120)
+    future = datetime.now(UTC) + timedelta(seconds=120)
     headers = {"Retry-After": format_datetime(future, usegmt=True)}
     slept = []
     monkeypatch.setattr(chirps, "_sleep", slept.append)

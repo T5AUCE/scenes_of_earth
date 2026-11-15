@@ -30,7 +30,7 @@ def test_add_boundaries_replaces_duplicate_ids(tmp_path):
         "CC BY 4.0",
     )
 
-    assert db.add_boundaries(path, "geoBoundaries CGAZ", [row, row, ("x:2",) + row[1:]]) == 1
+    assert db.add_boundaries(path, "geoBoundaries CGAZ", [row, row, ("x:2", *row[1:])]) == 1
     assert len(db.search(path, "Dup")) == 2
 
 

@@ -1,4 +1,5 @@
 /** Own boundary search interaction and picked outlines without owning scene cancellation. */
+import type { Geometry } from "geojson";
 import type { Map as MapLibreMap } from "maplibre-gl";
 
 import { getArea, searchAreas } from "./api";
@@ -55,14 +56,14 @@ export function bindAreaSearch(
   let hitItems: HTMLElement[] = [];
   let activeIndex = -1;
   // Hiding keeps the geometry so leaving the scene can show it again.
-  let lastOutline: GeoJSON.Geometry | null = null;
+  let lastOutline: Geometry | null = null;
   let isOutlineHidden = false;
   // A failure notice must not overwrite the entry status while the outline is hidden.
   let outlineNotice: string | null = null;
 
   const scheduleSearch = () => {
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(runSearch, SEARCH_DEBOUNCE_MS);
+    searchTimer = setTimeout(() => void runSearch(), SEARCH_DEBOUNCE_MS);
   };
 
   search.oninput = () => {
@@ -131,7 +132,7 @@ export function bindAreaSearch(
     isOutlineHidden = false;
     outlineNotice = null;
     fitToBbox(map, hit.bbox, { padding: BROWSE_PADDING_PX, maxZoom: BROWSE_MAX_ZOOM });
-    drawPickedOutline(hit);
+    void drawPickedOutline(hit);
   }
 
   // The outline is the stored geometry; the bbox rectangle stands in when it cannot be fetched.
@@ -155,7 +156,7 @@ export function bindAreaSearch(
     if (thisPick !== pickCount) return;
 
     const shifted = shiftLongitudes(geometry.coordinates, worldShift(hit.bbox));
-    lastOutline = { ...geometry, coordinates: shifted } as GeoJSON.Geometry;
+    lastOutline = { ...geometry, coordinates: shifted } as Geometry;
     outlineNotice = isOutlineHidden ? pendingNotice : null;
 
     if (isOutlineHidden) return;

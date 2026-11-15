@@ -249,17 +249,17 @@ test("geology Edge smoothing menu reaches the fragment shader for both ids", asy
 
       assert.ok(smoothing, layerId);
 
-      layer.render!(harness.gpu.gl, harness.gpu.input);
+      layer.render(harness.gpu.gl, harness.gpu.input);
 
       assert.equal(harness.gpu.uniforms.get("uSmoothRadiusCells"), GEOLOGY_SMOOTH_RADIUS_CELLS);
 
       smoothing.set(0.5);
-      layer.render!(harness.gpu.gl, harness.gpu.input);
+      layer.render(harness.gpu.gl, harness.gpu.input);
 
       assert.equal(harness.gpu.uniforms.get("uSmoothRadiusCells"), 0.5);
 
       view.menu?.edges?.reset();
-      layer.render!(harness.gpu.gl, harness.gpu.input);
+      layer.render(harness.gpu.gl, harness.gpu.input);
 
       assert.equal(harness.gpu.uniforms.get("uSmoothRadiusCells"), GEOLOGY_SMOOTH_RADIUS_CELLS);
 
@@ -654,9 +654,7 @@ function createViewHarness(
   Object.assign(globalThis, {
     document: { body, createElement: () => ({ replaceChildren: () => {} }) },
     localStorage: { getItem: () => null },
-    ImageData: class {
-      constructor(_pixels: Uint8ClampedArray, _width: number, _height: number) {}
-    },
+    ImageData: class {},
   });
 
   const capture = new Map<string, () => void>();
@@ -669,7 +667,9 @@ function createViewHarness(
     : [{ id: "outline", type: "line" }];
   const visibility = new Map<string, string>();
   const custom = new Map<string, typeof gpu.field.layer>();
-  const gpuMap = { ...gpu.map, getLayoutProperty: (id: string) => visibility.get(id) };
+  const gpuMap = Object.assign({}, gpu.map, {
+    getLayoutProperty: (id: string) => visibility.get(id),
+  });
 
   const map = {
     image: null as ImageData | null,
@@ -706,7 +706,7 @@ function createViewHarness(
 
       const field = layer as typeof gpu.field.layer;
       custom.set(layer.id, field);
-      field.onAdd!(gpuMap as typeof gpu.map, gpu.gl);
+      field.onAdd!(gpuMap, gpu.gl);
     },
     removeLayer: (id: string) => {
       layers.splice(

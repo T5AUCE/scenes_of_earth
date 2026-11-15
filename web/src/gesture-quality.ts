@@ -136,15 +136,15 @@ export function subscribeGesture(map: GestureMap, handler: GestureHandler): () =
   if (hub.active) handler.onStart();
 
   return () => {
-    if (!hub!.handlers.has(handler)) return;
+    if (!hub.handlers.has(handler)) return;
 
-    const wasStarted = hub!.handlers.get(handler)!;
-    hub!.handlers.delete(handler);
+    const wasStarted = hub.handlers.get(handler)!;
+    hub.handlers.delete(handler);
 
     if (wasStarted) handler.onEnd();
-    if (hub!.handlers.size === 0) {
-      map.off("movestart", hub!.onMoveStart);
-      map.off("moveend", hub!.onMoveEnd);
+    if (hub.handlers.size === 0) {
+      map.off("movestart", hub.onMoveStart);
+      map.off("moveend", hub.onMoveEnd);
       hubs.delete(map);
     }
   };

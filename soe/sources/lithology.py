@@ -11,22 +11,27 @@ from rasterio.transform import Affine, from_origin
 from ..areas import WORLD_WIDTH_DEG
 from ..geology_type import (
     GEOLOGY_CLASSES,
-    GLIM_FAMILIES,
-    GLIM_LEVEL2_NAMES,
-    GLIM_SOURCE,
     GLIM_VALUES,
     LITHOLOGY_FILE,
-    LITHOLOGY_RES_DEG,
     LITHOLOGY_SOURCE_TAG,
     OPENLANDMAP_CLASSES,
     OPENLANDMAP_SOURCE,
     UNDEFINED_CLASS,
-    WATER_CLASS,
 )
-from .geology import PROVENANCE_ROLE, GeologyDataset
+from .geology import GeologyDataset
 from .grid import Bbox
 from .remote import SourceUnavailable
 from .worldcover import overview_factor, overview_level, warp_modes
+
+# Tests read the map classes through this module, so they stay re-exported here.
+__all__ = [
+    "GEOLOGY_CLASSES",
+    "GLIM_VALUES",
+    "LITHOLOGY_SOURCE_TAG",
+    "OPENLANDMAP_CLASSES",
+    "UNDEFINED_CLASS",
+    "GeologyDataset",
+]
 
 ANTIMERIDIAN_DEG = WORLD_WIDTH_DEG / 2
 

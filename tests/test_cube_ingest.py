@@ -6,6 +6,7 @@ Check GRIB decoding and grid placement. Verify update recovery and CDS request s
 import hashlib
 import json
 from collections.abc import Iterator
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -196,7 +197,7 @@ def test_message_too_short_for_its_sections_is_refused(tmp_path):
 
     path.write_bytes(bytes(message))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="GRIB message at byte 0"):
         grib_expvers(path)
 
 
@@ -248,7 +249,7 @@ def test_grid_with_another_resolution_is_refused(tmp_path):
     path = tmp_path / "field.tif"
     write_raster(path, -180, 0.25, 10, 10, np.zeros((10, 10)))
 
-    with rasterio.open(path) as dataset, pytest.raises(ValueError, match="0.1 degree cells"):
+    with rasterio.open(path) as dataset, pytest.raises(ValueError, match=r"0\.1 degree cells"):
         list(read_months(dataset, ["0001"], LAND))
 
 
@@ -482,7 +483,7 @@ def test_failure_before_the_update_starts_changes_nothing(tmp_path, monkeypatch)
 
     monkeypatch.setattr(cubes, "_begin_update", fail_to_begin)
 
-    with pytest.raises(OSError):
+    with pytest.raises(OSError, match="metadata not written"):
         write_months(tmp_path, LAND.cube, LAND.complete, two_months())
 
     cube = land_cube(tmp_path)
@@ -524,12 +525,10 @@ def update_between_stamp_and_validation(
         if not publish:
             monkeypatch.setattr(cubes, "_publish", raise_os_error)
 
-        try:
+        with suppress(OSError):
             write_months(
                 tmp_path, LAND.cube, LAND.complete, [("2016-01", celsius_field(21), "0001")]
             )
-        except OSError:
-            pass
 
         return months_at(self, stamp)
 
@@ -663,7 +662,7 @@ def test_other_failures_of_the_newest_month_are_not_taken_for_unpublished(
 ):
     client = FakeClient(refuse_month="2017-02", error=error)
 
-    with pytest.raises(Exception, match="credentials|Unauthorized"):
+    with pytest.raises(Exception, match=r"credentials|Unauthorized"):
         ingest(tmp_path, LAND, "2017-01", client)
 
 
@@ -803,7 +802,7 @@ def test_precipitation_cube_stores_tenths_of_a_millimetre(tmp_path):
 def test_month_that_the_cube_encoding_would_clip_is_refused(tmp_path):
     field = np.full(ERA5_SHAPE, 7000, "float32")
 
-    with pytest.raises(ValueError, match="values outside 0 to 6553.4 mm/month"):
+    with pytest.raises(ValueError, match=r"values outside 0 to 6553\.4 mm/month"):
         write_months(
             tmp_path,
             ERA5_PRECIPITATION.cube,

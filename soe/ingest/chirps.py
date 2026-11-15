@@ -9,7 +9,7 @@ last stored month.
 import logging
 import time
 from collections.abc import Callable, Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.message import Message
 from email.utils import parsedate_to_datetime
 from http.client import IncompleteRead
@@ -298,9 +298,9 @@ def _retry_after_delay(headers: Message) -> float:
         return 0
 
     if date.tzinfo is None:
-        date = date.replace(tzinfo=timezone.utc)
+        date = date.replace(tzinfo=UTC)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return max(0, (date - now).total_seconds())
 
 

@@ -22,28 +22,22 @@ from .geology_names import (
     SGMC_BASIC_NAMES,
     SGMC_CARBONATE_CLASSES,
     SGMC_CARBONATITE_NAMES,
-    SGMC_CHEMICAL_OTHER_NAMES,
     SGMC_CLASTIC_COARSE_NAMES,
     SGMC_CLASTIC_FINE_NAMES,
     SGMC_CLASTIC_MIXED_NAMES,
     SGMC_COAL_NAMES,
     SGMC_EVAPORITE_NAMES,
     SGMC_EVAPORITE_PURE_NAMES,
-    SGMC_IGNEOUS_GROUP_NAMES,
     SGMC_INTERMEDIATE_NAMES,
     SGMC_KNOWN_NAMES,
     SGMC_LITH1_DEFAULTS,
     SGMC_METAMORPHIC_CLASSES,
-    SGMC_METAMORPHIC_NAMES,
     SGMC_MIXED_FINE_NAMES,
     SGMC_MIXED_NAMES,
-    SGMC_SEDIMENTARY_GROUP_NAMES,
     SGMC_SILICEOUS_NAMES,
     SGMC_STAGE_PERIODS,
-    SGMC_TECTONITE_NAMES,
     SGMC_UNCONSOLIDATED_COARSE_NAMES,
     SGMC_UNCONSOLIDATED_FINE_NAMES,
-    SGMC_UNCONSOLIDATED_MIXED_NAMES,
     SGMC_UNCONSOLIDATED_ORGANIC_NAMES,
     SIM3340_AGE_ALIASES,
     SIM3340_LITHOLOGY_ALIASES,
@@ -318,7 +312,10 @@ def sgmc_class(lith1: str, lith2: str, lith3: str, lith4: str, lith5: str) -> st
 
 
 def _sgmc_unconsolidated_class(finer: set[str]) -> str:
-    """Return the GLiM code of loose finer names, or the mixed-grain code when none names a grain."""
+    """Return the GLiM code of loose finer names.
+
+    Falls back to the mixed-grain code when none names a grain.
+    """
     if finer & set(SGMC_UNCONSOLIDATED_COARSE_NAMES):
         return "suss"
     if finer & set(SGMC_UNCONSOLIDATED_FINE_NAMES):

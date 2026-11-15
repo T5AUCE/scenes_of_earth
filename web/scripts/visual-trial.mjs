@@ -18,8 +18,12 @@ import { startServers, stopServers } from "./visual-trial/servers.mjs";
 const WEB_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CACHE_DIR = path.join(WEB_DIR, ".trial-cache");
 
-process.on("SIGINT", () => stopAndExit(130));
-process.on("SIGTERM", () => stopAndExit(143));
+process.on("SIGINT", () => {
+  void stopAndExit(130);
+});
+process.on("SIGTERM", () => {
+  void stopAndExit(143);
+});
 
 // Importing the runner must not start a trial, so tests can call runTrial with fakes.
 const invokedAsScript = path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);

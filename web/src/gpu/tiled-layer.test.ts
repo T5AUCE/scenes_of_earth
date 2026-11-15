@@ -59,10 +59,10 @@ test("a hidden layer does not compile until shown", () => {
   const harness = createHarness();
   let compiles = 0;
   const createProgram = harness.gl.createProgram.bind(harness.gl);
-  harness.gl.createProgram = (() => {
+  harness.gl.createProgram = () => {
     compiles++;
     return createProgram();
-  }) as WebGL2RenderingContext["createProgram"];
+  };
 
   const map = harness.map as unknown as { getLayoutProperty: (id: string, name: string) => string };
   let visibility = "none";
@@ -159,7 +159,7 @@ test("context restore clears stale timings and the unavailable flag", () => {
 
   assert.ok(restored);
 
-  restored!({});
+  restored({});
 
   assert.deepEqual((globalThis as Record<string, unknown>).__gpuMs, {});
   assert.equal((globalThis as Record<string, unknown>).__gpuUnavailable, undefined);

@@ -117,7 +117,8 @@ class GeologyDataset(StaticDataset):
         """Return "id:version" of each installed regional source whose footprint meets bbox."""
         installed = candidates_for(self.kind, tuple(bbox), self.backend.has_lithology)
         versions = [self._regional_source(source)["version"] for source in installed]
-        return [f"{source['id']}:{version}" for source, version in zip(installed, versions)]
+        paired = zip(installed, versions, strict=True)
+        return [f"{source['id']}:{version}" for source, version in paired]
 
     def summary(
         self,

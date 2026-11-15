@@ -366,7 +366,12 @@ test("after a failed step reports, the next good step fades in from nothing", as
 
   view.setFrame!(TIMES[1], TIMES[2], 0.5);
 
-  assert.deepEqual(opacities().at(-1)!.toSorted(), [0, 0.4]);
+  assert.deepEqual(
+    opacities()
+      .at(-1)!
+      .toSorted((a, b) => a - b),
+    [0, 0.4],
+  );
 });
 
 test("a reverse scrub keeps each retained image's hatch through a hide and show", async () => {
@@ -954,8 +959,8 @@ function mountWithEncodings(steps: number[][], encodings: string[], end = "2026-
     },
   });
 
-  Reflect.deleteProperty(globalThis as Record<string, unknown>, "matchMedia");
-  Reflect.deleteProperty(globalThis as Record<string, unknown>, "lastIsolineOverlay");
+  Reflect.deleteProperty(globalThis, "matchMedia");
+  Reflect.deleteProperty(globalThis, "lastIsolineOverlay");
 
   const layer = {
     id: "rain",

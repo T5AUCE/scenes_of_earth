@@ -301,10 +301,10 @@ export function mountScene(
 
   // Entry warms the current allocation and first-render work while the old pixels stay.
   const prepareEntry = (getTime: () => string | null, signal: AbortSignal) =>
-    prepareEntryLayers(sceneStore as SceneStore, views, blend, timeline, getTime(), signal);
+    prepareEntryLayers(sceneStore, views, blend, timeline, getTime(), signal);
 
   // The try block assigns the store, so reaching here means it exists.
-  return { unmount, addNote, timeline, layerIds, store: sceneStore as SceneStore, prepareEntry };
+  return { unmount, addNote, timeline, layerIds, store: sceneStore, prepareEntry };
 }
 
 /** What an entry preparation warmed, so staging can check that nothing changed since. */
@@ -451,7 +451,7 @@ async function showShiftedOutline(
     geometry: { ...geometry, coordinates: shiftLongitudes(geometry.coordinates, shift) },
   };
 
-  (map.getSource(OUTLINE_ID) as GeoJSONSource).setData(shifted as GeoJsonData);
+  void (map.getSource(OUTLINE_ID) as GeoJSONSource).setData(shifted as GeoJsonData);
 }
 
 function addSlotAnchors(map: MapLibreMap) {

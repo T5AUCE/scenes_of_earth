@@ -15,11 +15,14 @@ from shapely.geometry.base import BaseGeometry
 from . import __version__
 from .areas import Area, simplify_for_display
 from .bundle import VERSION, JsonObject, make, validate
-from .layer_writer import LayerProgress, ProgressCallback, _write_layers
+from .layer_writer import ProgressCallback, _write_layers
 from .plan import Plan, scene_datasets
 from .plan import plan as make_plan
 from .sources import Dataset
-from .zarr_encoding import COMPRESSION, DeterministicGzipCodec, _DeterministicGZip, encode_values
+from .zarr_encoding import COMPRESSION, DeterministicGzipCodec, encode_values
+
+# Tests read the encoding helpers from build, so they stay re-exported here.
+__all__ = ["COMPRESSION", "DeterministicGzipCodec", "encode_values"]
 
 CACHE_DIR_NAME = ".cache"  # in the scenes directory; the leading dot keeps it unserved
 

@@ -516,7 +516,7 @@ export class DemDraw {
   ): void {
     gl.uniform3f(this.uniform(name), ...sourceUv(quad, source));
     gl.activeTexture(gl.TEXTURE0 + unit);
-    gl.bindTexture(gl.TEXTURE_2D, this.gpu!.pool.texture(source) as WebGLTexture);
+    gl.bindTexture(gl.TEXTURE_2D, this.gpu!.pool.texture(source));
   }
 
   private uniform(name: string): WebGLUniformLocation | null {
