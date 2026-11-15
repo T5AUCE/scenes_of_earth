@@ -5,6 +5,7 @@ import type { Bbox } from "../types.ts";
 import {
   DEFAULT_BLEND_WINDOW,
   demLevels,
+  LOOKAHEAD_PAN_SPEED_PX_PER_SEC,
   pinnedBase,
   planDemTiles,
   type DemPlanRequest,
@@ -98,7 +99,7 @@ test("pinned base of a scene across the antimeridian holds wrapped tiles from bo
 
 test("wanted tiles come in tier order with pinned first and no repeats", () => {
   const { wanted } = planDemTiles(request({ zoom: 7.5 }));
-  const order = ["pinned", "view", "partner", "parent", "ring", "coarse"];
+  const order = ["pinned", "view", "partner", "parent", "lookahead", "ring", "coarse"];
   const ranks = wanted.map((tile) => order.indexOf(tile.tier));
 
   assert.deepEqual(
@@ -185,6 +186,126 @@ test("ring tiles are the one-tile border of the view and lean towards the headin
   assert.equal(first({ x: -1, y: 0 }).x, minX - 1);
   assert.equal(first({ x: 0, y: -1 }).y, minY - 1);
   assert.equal(first({ x: 0, y: 1 }).y, maxY + 1);
+});
+
+test("no look-ahead is wanted while still or panning slowly", () => {
+  const still = planDemTiles(request({ zoom: 9.3 }));
+
+  const slow = planDemTiles(
+    request({
+      zoom: 9.3,
+      heading: { x: 1, y: 0, speedPxPerSec: LOOKAHEAD_PAN_SPEED_PX_PER_SEC - 1 },
+    }),
+  );
+
+  assert.equal(still.wanted.filter((tile) => tile.tier === "lookahead").length, 0);
+  assert.equal(slow.wanted.filter((tile) => tile.tier === "lookahead").length, 0);
+});
+
+test("a fast pan wants two extra columns ahead at the sharp level", () => {
+  const { wanted, levels } = planDemTiles(
+    request({ zoom: 9.3, heading: { x: 1, y: 0, speedPxPerSec: LOOKAHEAD_PAN_SPEED_PX_PER_SEC } }),
+  );
+
+  const view = wanted.filter((tile) => tile.tier === "view");
+  const ahead = wanted.filter((tile) => tile.tier === "lookahead");
+  const maxX = Math.max(...view.map((tile) => tile.x));
+  const rows = new Set(view.map((tile) => tile.y));
+
+  assert.ok(ahead.length > 0 && ahead.every((tile) => tile.z === levels.sharp));
+  assert.ok(ahead.every((tile) => tile.x === maxX + 1 || tile.x === maxX + 2));
+  assert.ok(ahead.every((tile) => rows.has(tile.y)));
+  assert.ok(ahead.some((tile) => tile.x === maxX + 2));
+
+  const tiers = wanted.map((tile) => tile.tier);
+
+  assert.ok(tiers.indexOf("lookahead") > tiers.indexOf("parent"));
+  assert.ok(tiers.lastIndexOf("lookahead") < tiers.indexOf("ring"));
+});
+
+test("twice the speed threshold reaches one row further ahead", () => {
+  const fast = planDemTiles(
+    request({ zoom: 9.3, heading: { x: 0, y: 1, speedPxPerSec: LOOKAHEAD_PAN_SPEED_PX_PER_SEC } }),
+  );
+
+  const faster = planDemTiles(
+    request({
+      zoom: 9.3,
+      heading: { x: 0, y: 1, speedPxPerSec: 2 * LOOKAHEAD_PAN_SPEED_PX_PER_SEC },
+    }),
+  );
+
+  const view = fast.wanted.filter((tile) => tile.tier === "view");
+  const maxY = Math.max(...view.map((tile) => tile.y));
+  const fastRows = fast.wanted.filter((tile) => tile.tier === "lookahead").map((tile) => tile.y);
+  const fasterRows = faster.wanted
+    .filter((tile) => tile.tier === "lookahead")
+    .map((tile) => tile.y);
+
+  assert.equal(Math.max(...fastRows), maxY + 2);
+  assert.equal(Math.max(...fasterRows), maxY + 3);
+});
+
+test("a diagonal pan looks ahead along the dominant axis only", () => {
+  const { wanted } = planDemTiles(
+    request({
+      zoom: 9.3,
+      heading: { x: 1, y: 0.2, speedPxPerSec: LOOKAHEAD_PAN_SPEED_PX_PER_SEC },
+    }),
+  );
+
+  const view = wanted.filter((tile) => tile.tier === "view");
+  const ahead = wanted.filter((tile) => tile.tier === "lookahead");
+  const rows = new Set(view.map((tile) => tile.y));
+
+  assert.ok(ahead.length > 0 && ahead.every((tile) => rows.has(tile.y)));
+});
+
+test("the look-ahead leads whichever edge the pan moves towards", () => {
+  const west = planDemTiles(
+    request({ zoom: 9.3, heading: { x: -1, y: 0, speedPxPerSec: LOOKAHEAD_PAN_SPEED_PX_PER_SEC } }),
+  );
+
+  const north = planDemTiles(
+    request({ zoom: 9.3, heading: { x: 0, y: -1, speedPxPerSec: LOOKAHEAD_PAN_SPEED_PX_PER_SEC } }),
+  );
+
+  const westView = west.wanted.filter((tile) => tile.tier === "view");
+  const northView = north.wanted.filter((tile) => tile.tier === "view");
+  const westAhead = west.wanted.filter((tile) => tile.tier === "lookahead");
+  const northAhead = north.wanted.filter((tile) => tile.tier === "lookahead");
+  const minX = Math.min(...westView.map((tile) => tile.x));
+  const minY = Math.min(...northView.map((tile) => tile.y));
+
+  assert.ok(westAhead.every((tile) => tile.x === minX - 1 || tile.x === minX - 2));
+  assert.ok(northAhead.every((tile) => tile.y === minY - 1 || tile.y === minY - 2));
+});
+
+test("look-ahead tiles outside the scene are never wanted", () => {
+  const half = 1.5 / 2 ** 9;
+  const eastEdge = worldX(KENYA_LIKE[2]) - half;
+  const centre = { x: eastEdge - half, y: worldY(0) };
+
+  const { wanted } = planDemTiles({
+    zoom: 9.3,
+    view: {
+      west: centre.x - half,
+      east: centre.x + half,
+      north: centre.y - half,
+      south: centre.y + half,
+    },
+    bbox: KENYA_LIKE,
+    fitLevel: 5,
+    maxZoom: 12,
+    blendWindow: WINDOW,
+    heading: { x: 1, y: 0, speedPxPerSec: LOOKAHEAD_PAN_SPEED_PX_PER_SEC },
+  });
+
+  const ahead = wanted.filter((tile) => tile.tier === "lookahead");
+  const sceneEast = Math.floor(worldX(KENYA_LIKE[2]) * 2 ** 9);
+
+  assert.ok(ahead.length > 0);
+  assert.ok(ahead.every((tile) => tile.x <= sceneEast));
 });
 
 test("tiles outside the scene are never wanted or drawn", () => {

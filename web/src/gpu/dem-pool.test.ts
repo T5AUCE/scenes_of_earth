@@ -10,6 +10,7 @@ import {
   demPoolHas,
   demPoolStats,
   DemPool,
+  MAX_FETCHES,
   releaseDemPool,
   TEXTURE_BYTES,
   TEXTURE_SIZE_PX,
@@ -179,9 +180,9 @@ test("a tile asked for on every frame loads once", () => {
   assert.equal(request.type === "load" && request.url, "https://dem/6/1/0.png");
 });
 
-test("at most six fetches run and the best-ranked tiles go first", () => {
+test("at most MAX_FETCHES fetches run and the best-ranked tiles go first", () => {
   const harness = setup();
-  const wanted = Array.from({ length: 10 }, (_, index) => tile(index));
+  const wanted = Array.from({ length: MAX_FETCHES + 4 }, (_, index) => tile(index));
 
   harness.pool.update(wanted);
 
@@ -189,23 +190,28 @@ test("at most six fetches run and the best-ranked tiles go first", () => {
 
   assert.deepEqual(
     urls,
-    wanted.slice(0, 6).map((entry) => `https://dem/6/${entry.x}/0.png`),
+    wanted.slice(0, MAX_FETCHES).map((entry) => `https://dem/6/${entry.x}/0.png`),
   );
   assert.deepEqual(
     harness.workers.map((worker) => worker.requests.length),
-    [3, 3],
+    [MAX_FETCHES / 2, MAX_FETCHES / 2],
   );
   assert.equal(harness.pool.stats().queueDepth, 4);
 });
 
 test("a landed tile frees a slot for the next one", () => {
   const harness = setup();
-  const wanted = Array.from({ length: 7 }, (_, index) => tile(index));
+  const wanted = Array.from({ length: MAX_FETCHES + 1 }, (_, index) => tile(index));
   harness.pool.update(wanted);
+
+  assert.equal(harness.loads().length, MAX_FETCHES);
+  assert.equal(harness.pool.stats().queueDepth, 1);
 
   land(harness, wanted[0]);
 
-  assert.equal(harness.loads().length, 7);
+  assert.equal(harness.loads().length, MAX_FETCHES + 1);
+  assert.equal(harness.pool.stats().inflight, MAX_FETCHES);
+  assert.equal(harness.pool.stats().queueDepth, 0);
   assert.equal(harness.changes(), 1);
 });
 
@@ -218,6 +224,20 @@ test("loads nobody wants any more are cancelled", () => {
   assert.deepEqual(
     harness.cancels().map((request) => request.id),
     [keyOf(tile(1))],
+  );
+  assert.equal(harness.pool.stats().inflight, 1);
+  assert.equal(harness.pool.stats().cancelled, 1);
+});
+
+test("look-ahead loads are cancelled when the pan turns away", () => {
+  const harness = setup();
+
+  harness.pool.update([tile(1), tile(2, 0, "lookahead")]);
+  harness.pool.update([tile(1)]);
+
+  assert.deepEqual(
+    harness.cancels().map((request) => request.id),
+    [keyOf(tile(2, 0, "lookahead"))],
   );
   assert.equal(harness.pool.stats().inflight, 1);
   assert.equal(harness.pool.stats().cancelled, 1);
@@ -471,6 +491,17 @@ test("a decoded tile that nobody wants any more is dropped before upload", () =>
   assert.equal(harness.pool.uploadPending(), 0);
 });
 
+test("a decoded look-ahead tile nobody wants is dropped before upload", () => {
+  const harness = setup();
+
+  harness.pool.update([tile(2, 0, "lookahead")]);
+  land(harness, tile(2, 0, "lookahead"));
+  harness.pool.update([tile(1)]);
+
+  assert.equal(harness.pool.stats().awaitingUpload, 0);
+  assert.equal(harness.pool.uploadPending(), 0);
+});
+
 test("a tile waiting to upload is not requested again", () => {
   const harness = setup();
   harness.pool.update([tile(1)]);
@@ -577,6 +608,32 @@ test("a tile stays drawable when a ring neighbour becomes a view tile", () => {
   assert.equal(harness.pool.isDrawable(centre), true);
 });
 
+test("a tile ignores look-ahead neighbours while it waits for on-screen ones", () => {
+  const harness = setup();
+  const centre = tile(5, 5);
+
+  harness.pool.update([centre, tile(6, 5, "lookahead")]);
+  land(harness, centre);
+  harness.pool.uploadPending();
+
+  assert.equal(harness.pool.isDrawable(centre), true);
+});
+
+test("a tile stays drawable when a look-ahead neighbour becomes a view tile", () => {
+  const harness = setup();
+  const centre = tile(5, 5);
+
+  harness.pool.update([centre, tile(6, 5, "lookahead")]);
+  land(harness, centre);
+  harness.pool.uploadPending();
+
+  assert.equal(harness.pool.isDrawable(centre), true);
+
+  harness.pool.update([centre, tile(6, 5, "view")]);
+
+  assert.equal(harness.pool.isDrawable(centre), true);
+});
+
 test("a tile gives up waiting for a neighbour after 300 ms", () => {
   const harness = setup();
   const centre = tile(5, 5);
@@ -622,6 +679,23 @@ test("view readiness needs every view tile while the ring stays out", () => {
   const east = tile(6, 5);
 
   harness.pool.update([centre, east, tile(4, 5, "ring")]);
+  land(harness, centre);
+  harness.pool.uploadPending();
+
+  assert.equal(harness.pool.areViewTilesDrawable(), false);
+
+  land(harness, east);
+  harness.pool.uploadPending();
+
+  assert.equal(harness.pool.areViewTilesDrawable(), true);
+});
+
+test("view readiness ignores the look-ahead", () => {
+  const harness = setup();
+  const centre = tile(5, 5);
+  const east = tile(6, 5);
+
+  harness.pool.update([centre, east, tile(4, 5, "lookahead")]);
   land(harness, centre);
   harness.pool.uploadPending();
 

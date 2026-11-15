@@ -6,11 +6,13 @@ import {
   ARRIVAL_FADE_MS,
   ArrivalFades,
   DemDraw,
+  HeadingTracker,
   resolveSources,
   sourceUv,
   type FadeOf,
 } from "./dem-draw.ts";
-import type { PlacedTile, TileId } from "./dem-plan.ts";
+import { LOOKAHEAD_PAN_SPEED_PX_PER_SEC } from "./dem-plan.ts";
+import type { PanHeading, PlacedTile, TileId } from "./dem-plan.ts";
 
 const FINE_ZOOM = 7;
 
@@ -151,6 +153,157 @@ test("an ancestor that was ready long before it is needed gives full weight at o
 
   assert.deepEqual(weightsByZoom(sources), { 6: 1 });
   assert.equal(fadesOf.isFading, false);
+});
+
+test("a heading starts still with no speed", () => {
+  const tracker = new HeadingTracker();
+  const view = { west: 0.6, east: 0.61, north: 0.49, south: 0.5 };
+
+  assert.deepEqual(tracker.update(view, 1280, 1000), { x: 0, y: 0, speedPxPerSec: 0 });
+});
+
+test("a steady pan reports its direction and CSS px/s speed", () => {
+  const widthPx = 1280;
+  const viewWidth = 0.01;
+  const stepFraction = 0.01;
+  const smallStepMs = 16;
+  const stepCount = 5;
+  const totalMs = stepCount * smallStepMs;
+  const startMs = 1000;
+  const zoom = 8;
+  const startView = { west: 0.6, east: 0.6 + viewWidth, north: 0.49, south: 0.5 };
+
+  const viewAfterSteps = (steps: number) => ({
+    west: 0.6 + steps * stepFraction * viewWidth,
+    east: 0.6 + viewWidth + steps * stepFraction * viewWidth,
+    north: 0.49,
+    south: 0.5,
+  });
+
+  const fineTracker = new HeadingTracker();
+  fineTracker.update(startView, widthPx, startMs, zoom);
+  let fineHeading: PanHeading = { x: 0, y: 0, speedPxPerSec: 0 };
+
+  for (let frame = 1; frame <= stepCount; frame++) {
+    fineHeading = fineTracker.update(
+      viewAfterSteps(frame),
+      widthPx,
+      startMs + frame * smallStepMs,
+      zoom,
+    );
+  }
+
+  const coarseTracker = new HeadingTracker();
+  coarseTracker.update(startView, widthPx, startMs, zoom);
+  const coarseHeading = coarseTracker.update(
+    viewAfterSteps(stepCount),
+    widthPx,
+    startMs + totalMs,
+    zoom,
+  );
+  const instantPxPerSec = ((stepFraction * widthPx) / smallStepMs) * 1000;
+  const expectedPxPerSec = instantPxPerSec * (1 - Math.exp(-1));
+
+  assert.ok(fineHeading.x > 0);
+  assert.ok(coarseHeading.x > 0);
+  assert.equal(fineHeading.y, 0);
+  assert.equal(coarseHeading.y, 0);
+  assert.ok(Math.abs((fineHeading.speedPxPerSec ?? 0) - (coarseHeading.speedPxPerSec ?? 0)) < 1e-9);
+  assert.ok(Math.abs((fineHeading.speedPxPerSec ?? 0) - expectedPxPerSec) < 1);
+  assert.ok(Math.abs((coarseHeading.speedPxPerSec ?? 0) - expectedPxPerSec) < 1);
+});
+
+test("a pan without a canvas width tracks direction but reports no speed", () => {
+  const tracker = new HeadingTracker();
+  const first = { west: 0.6, east: 0.61, north: 0.49, south: 0.5 };
+  const second = { west: 0.61, east: 0.62, north: 0.49, south: 0.5 };
+
+  tracker.update(first, 0, 1000);
+
+  const heading = tracker.update(second, 0, 1016);
+
+  assert.ok(heading.x > 0);
+  assert.equal(heading.speedPxPerSec, 0);
+});
+
+test("a zero time step keeps the last speed", () => {
+  const tracker = new HeadingTracker();
+  const first = { west: 0.6, east: 0.61, north: 0.49, south: 0.5 };
+  const second = { west: 0.61, east: 0.62, north: 0.49, south: 0.5 };
+
+  tracker.update(first, 1280, 1000);
+
+  const moving = tracker.update(second, 1280, 1016);
+  const kept = tracker.update(second, 1280, 1016);
+
+  assert.equal(kept.speedPxPerSec, moving.speedPxPerSec);
+  assert.ok(Number.isFinite(kept.x) && Number.isFinite(kept.speedPxPerSec ?? 0));
+});
+
+test("a jump followed by a slow pan starts from rest with no look-ahead speed", () => {
+  const tracker = new HeadingTracker();
+  const widthPx = 1280;
+  const start = { west: 0.6, east: 0.61, north: 0.49, south: 0.5 };
+
+  tracker.update(start, widthPx, 1000, 8);
+
+  const jumpedView = { west: 0.7, east: 0.705, north: 0.49, south: 0.495 };
+  const jumped = tracker.update(jumpedView, widthPx, 1016, 9);
+
+  assert.equal(jumped.speedPxPerSec, 0);
+  assert.equal(jumped.x, 0);
+  assert.equal(jumped.y, 0);
+
+  const pausedView = { west: 0.8, east: 0.805, north: 0.49, south: 0.495 };
+  const paused = tracker.update(pausedView, widthPx, 1200, 9);
+
+  assert.equal(paused.speedPxPerSec, 0);
+  assert.equal(paused.x, 0);
+  assert.equal(paused.y, 0);
+
+  const viewWidth = pausedView.east - pausedView.west;
+  const step = 0.01 * viewWidth;
+  const resumed = tracker.update(
+    { west: pausedView.west + step, east: pausedView.east + step, north: 0.49, south: 0.495 },
+    widthPx,
+    1716,
+    9,
+  );
+
+  assert.ok((resumed.speedPxPerSec ?? 0) < LOOKAHEAD_PAN_SPEED_PX_PER_SEC);
+
+  const settled = tracker.update(
+    {
+      west: pausedView.west + 2 * step,
+      east: pausedView.east + 2 * step,
+      north: 0.49,
+      south: 0.495,
+    },
+    widthPx,
+    1732,
+    9,
+  );
+
+  assert.ok((settled.speedPxPerSec ?? 0) < LOOKAHEAD_PAN_SPEED_PX_PER_SEC);
+});
+
+test("a zoom-only frame starts from rest", () => {
+  const tracker = new HeadingTracker();
+  const widthPx = 1280;
+  const start = { west: 0.6, east: 0.61, north: 0.49, south: 0.5 };
+
+  tracker.update(start, widthPx, 1000, 8);
+
+  const fastView = { west: 0.605, east: 0.615, north: 0.49, south: 0.5 };
+  const fast = tracker.update(fastView, widthPx, 1016, 8);
+
+  assert.ok((fast.speedPxPerSec ?? 0) > LOOKAHEAD_PAN_SPEED_PX_PER_SEC);
+
+  const zoomed = tracker.update(fastView, widthPx, 1032, 9);
+
+  assert.equal(zoomed.speedPxPerSec, 0);
+  assert.equal(zoomed.x, 0);
+  assert.equal(zoomed.y, 0);
 });
 
 function drawFrame(
@@ -352,4 +505,64 @@ test("a tenth below the fit still draws the floor level", () => {
   assert.ok(urls.some((url) => url.includes("/6/")));
 
   draw.detach(harness.gl);
+});
+
+/** Move the fake map's view east by degrees, as a pan would. */
+function shiftEast(harness: ReturnType<typeof createDemHarness>, eastBy: number): void {
+  const bounds = harness.map.getBounds();
+  const shifted = {
+    getWest: () => bounds.getWest() + eastBy,
+    getEast: () => bounds.getEast() + eastBy,
+    getSouth: () => bounds.getSouth(),
+    getNorth: () => bounds.getNorth(),
+  };
+
+  Object.assign(harness.map, { getBounds: () => shifted });
+}
+
+/** The tile urls six panning frames ask for, moving east a little each frame. */
+async function urlsAfterPan(stepMs: number): Promise<string[]> {
+  const harness = createDemHarness();
+  const draw = new DemDraw({
+    map: harness.map,
+    tileUrl: "https://dem/{z}/{x}/{y}.png",
+    // Wider than the harness scene, so the pan and the look-ahead stay inside it.
+    bbox: [30, -10, 45, 10],
+    maxZoom: 12,
+    fitZoom: 8,
+    poolOptions: harness.poolOptions,
+  });
+  const program = {} as WebGLProgram;
+  draw.attach(harness.gl, program);
+  Object.assign(harness.map.getCanvas(), { clientWidth: 1280 });
+
+  drawFrame(harness, draw);
+  await harness.landLoads();
+
+  for (let frame = 0; frame < 6; frame++) {
+    harness.advance(stepMs);
+    shiftEast(harness, 0.05);
+    drawFrame(harness, draw);
+    await harness.landLoads();
+  }
+
+  const urls = loadUrls(harness);
+  draw.detach(harness.gl);
+
+  return urls;
+}
+
+test("a fast pan loads look-ahead tiles while a slow pan of the same move does not", async () => {
+  // The harness view spans 0.4 degrees, so each 0.05 degree step moves an eighth of a screen.
+  const stepFraction = 0.05 / 0.4;
+  const fastMs = ((stepFraction * 1280) / (2 * LOOKAHEAD_PAN_SPEED_PX_PER_SEC)) * 1000;
+
+  const fastUrls = (await urlsAfterPan(fastMs)).filter((url) => url.includes("/8/"));
+  const slowUrls = (await urlsAfterPan(2000)).filter((url) => url.includes("/8/"));
+
+  const tileX = (urls: string[]) => urls.map((url) => Number(url.split("/")[4]));
+
+  assert.equal(Math.max(...tileX(fastUrls)), Math.max(...tileX(slowUrls)) + 1);
+  assert.equal(Math.min(...tileX(fastUrls)), Math.min(...tileX(slowUrls)));
+  assert.equal(fastUrls.length, slowUrls.length + 2);
 });

@@ -36,9 +36,16 @@ test("Fiji, Kenya and the flat scene keep the specified fixed bold steps", () =>
   assert.equal(contourLadder(FLAT).boldInterval, 50);
 });
 
+test("a flat feet scene labels 100 ft in bold, as flat metre scenes label 50 m", () => {
+  const ladder = contourLadder(FLAT, { elevationUnit: "ft" });
+
+  assert.equal(ladder.boldInterval, 100);
+  assert.deepEqual(ladder.labelTiers[0], { interval: 100, entryZoom: 11 });
+});
+
 test("the global table gives every scene the same tiers at the same zooms", () => {
   assert.deepEqual(ENTRY_ZOOM_M, { 2000: 5, 1000: 6, 500: 7, 100: 9, 50: 10.5, 10: 12 });
-  assert.deepEqual(ENTRY_ZOOM_FT, { 5000: 5, 1000: 7, 500: 8, 100: 11 });
+  assert.deepEqual(ENTRY_ZOOM_FT, { 5000: 5, 1000: 7, 500: 8, 100: 11, 20: 12 });
 
   for (const sample of [FIJI, KENYA, FLAT, makeStats(0, 0, 0, 0)]) {
     assert.deepEqual(contourLadder(sample).tiers, contourLadder(KENYA).tiers);

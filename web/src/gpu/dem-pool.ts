@@ -70,7 +70,8 @@ export const TEXTURE_SIZE_PX = DEM_TILE_SIZE_PX + 2 * STRIP_WIDTH_PX;
 export const TEXTURE_BYTES = TEXTURE_SIZE_PX ** 2 * Float32Array.BYTES_PER_ELEMENT;
 
 const WORKER_COUNT = 2;
-const MAX_FETCHES = 6;
+// Tiles arrive over HTTP/2, so this many requests share one connection.
+export const MAX_FETCHES = 16;
 // Coarse tiles fetch at most this many at once, so the view always keeps its slots.
 const MAX_COARSE_FETCHES = 2;
 // Uploads stop after this much main-thread time or this many tiles, whichever comes first.
@@ -326,16 +327,17 @@ export class DemPool {
   }
 
   /**
-   * Whether a tile can draw without a visible seam: once every wanted neighbour that is not
-   * in the ring has landed or failed, it stays drawable while neighbours change around it.
+   * Whether a tile can draw without a visible seam: once every wanted neighbour that is not in
+   * the ring or the look-ahead has landed or failed, it stays drawable while neighbours change
+   * around it.
    */
   isDrawable(tile: Pick<WantedTile, "z" | "x" | "y">): boolean {
     return this.drawableForMs(tile) !== null;
   }
 
   /**
-   * Whether every pinned and view tile of the last wanted list can draw. The ring stays
-   * out because it only looks ahead, so its refills never hold a gesture open.
+   * Whether every pinned and view tile of the last wanted list can draw. The ring and the
+   * look-ahead stay out because they only look ahead, so their refills never hold a gesture open.
    */
   areViewTilesDrawable(): boolean {
     for (const tile of this.wantedList) {
@@ -684,7 +686,7 @@ export class DemPool {
 
   private isNeighbourSettled(key: number): boolean {
     const wanted = this.wanted.get(key);
-    if (key < 0 || !wanted || wanted.tier === "ring") return true;
+    if (key < 0 || !wanted || wanted.tier === "ring" || wanted.tier === "lookahead") return true;
 
     return this.strips.has(key) || this.hasFailed(key);
   }

@@ -13,6 +13,7 @@ import {
   pinnedBase,
   planDemTiles,
   type DemPlan,
+  type PanHeading,
   type PinnedBase,
   type PlacedTile,
   type TileId,
@@ -189,23 +190,55 @@ export class ArrivalFades {
 }
 
 const HEADING_SMOOTHING = 0.8;
+const SPEED_SMOOTHING_MS = 80;
+const HEADING_RESET_GAP_MS = 100;
 
-/** Smooths the pan direction in world units, which the planner uses to order the ring. */
-class HeadingTracker {
+/** Smooths the pan direction in world units and its speed in CSS px/s, which order the ring and size the look-ahead. */
+export class HeadingTracker {
   private previous: { x: number; y: number } | null = null;
-  private readonly heading = { x: 0, y: 0 };
+  private previousMs = 0;
+  private previousZoom: number | null = null;
+  private readonly heading: PanHeading = { x: 0, y: 0, speedPxPerSec: 0 };
 
-  update(view: ViewBounds): { x: number; y: number } {
+  /** Fold one frame's view into the smoothed heading and speed. */
+  update(view: ViewBounds, widthPx: number, nowMs: number, zoom?: number): PanHeading {
     const centre = { x: (view.west + view.east) / 2, y: (view.north + view.south) / 2 };
+    const elapsedMs = this.previous === null ? 0 : nowMs - this.previousMs;
+    const zoomChanged =
+      zoom !== undefined && this.previousZoom !== null && zoom !== this.previousZoom;
 
-    if (this.previous) {
-      this.heading.x =
-        this.heading.x * HEADING_SMOOTHING + (centre.x - this.previous.x) * (1 - HEADING_SMOOTHING);
-      this.heading.y =
-        this.heading.y * HEADING_SMOOTHING + (centre.y - this.previous.y) * (1 - HEADING_SMOOTHING);
+    if (this.previous === null || zoomChanged || elapsedMs > HEADING_RESET_GAP_MS) {
+      // A stale heading points at the wrong place after a jump, so each gesture starts from rest.
+      this.heading.x = 0;
+      this.heading.y = 0;
+      this.heading.speedPxPerSec = 0;
+      this.previous = centre;
+      this.previousMs = nowMs;
+
+      if (zoom !== undefined) this.previousZoom = zoom;
+
+      return this.heading;
+    }
+
+    const deltaX = centre.x - this.previous.x;
+    const deltaY = centre.y - this.previous.y;
+    this.heading.x = this.heading.x * HEADING_SMOOTHING + deltaX * (1 - HEADING_SMOOTHING);
+    this.heading.y = this.heading.y * HEADING_SMOOTHING + deltaY * (1 - HEADING_SMOOTHING);
+
+    const viewWidth = view.east - view.west;
+
+    if (widthPx > 0 && viewWidth > 0 && elapsedMs > 0) {
+      const instantPxPerSec =
+        ((Math.hypot(deltaX, deltaY) / viewWidth) * widthPx) / (elapsedMs / 1000);
+      const weight = 1 - Math.exp(-elapsedMs / SPEED_SMOOTHING_MS);
+      const keptPxPerSec = (this.heading.speedPxPerSec ?? 0) * (1 - weight);
+      this.heading.speedPxPerSec = keptPxPerSec + instantPxPerSec * weight;
     }
 
     this.previous = centre;
+    this.previousMs = nowMs;
+
+    if (zoom !== undefined) this.previousZoom = zoom;
 
     return this.heading;
   }
@@ -419,17 +452,24 @@ export class DemDraw {
 
   private plan(): DemPlan {
     const { map, bbox, maxZoom } = this.options;
+    const zoom = map.getZoom();
     const view = viewBoundsOf(map);
+    const widthPx = map.getCanvas().clientWidth ?? 0;
 
     return planDemTiles({
-      zoom: map.getZoom(),
+      zoom,
       view,
       bbox,
       fitLevel: this.fitLevel,
       maxZoom,
       base: this.base,
-      heading: this.heading.update(view),
+      heading: this.heading.update(view, widthPx, this.clock(), zoom),
     });
+  }
+
+  /** The shared pool clock when tests replace it, so heading speed follows the driven time. */
+  private clock(): number {
+    return this.options.poolOptions?.now?.() ?? performance.now();
   }
 
   private levelOf(zoom: number): number {

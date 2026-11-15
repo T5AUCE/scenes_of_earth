@@ -10,7 +10,7 @@ export const INTERVAL_CHAIN_FT = [20, 100, 500, 1000, 5000];
 /**
  * The entry zoom of every contour height, the same at each zoom everywhere because the user
  * forbids terrain or latitude adaptation. Values sit close to the previous mid-relief Kenya
- * ladder, so the 20 ft step stays beyond the z12 cap while metres keep their 10 m floor.
+ * ladder, and both finest steps (20 ft and 10 m) start at the z12 cap.
  */
 export const ENTRY_ZOOM_M: Record<number, number> = {
   2000: 5,
@@ -21,8 +21,8 @@ export const ENTRY_ZOOM_M: Record<number, number> = {
   10: 12,
 };
 
-/** The entry zoom of every feet height. The 20 ft step never enters at or below the z12 cap. */
-export const ENTRY_ZOOM_FT: Record<number, number> = { 5000: 5, 1000: 7, 500: 8, 100: 11 };
+/** The entry zoom of every feet height. The 20 ft step starts at the z12 cap like 10 m. */
+export const ENTRY_ZOOM_FT: Record<number, number> = { 5000: 5, 1000: 7, 500: 8, 100: 11, 20: 12 };
 
 /** Contour tiles are traced from DEM tiles one zoom coarser, so their ceiling is one above. */
 export const CONTOUR_OVERZOOM = 1;

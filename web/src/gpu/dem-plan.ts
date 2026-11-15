@@ -11,6 +11,19 @@ const COARSE_LEVELS = 4;
 /** How far ahead of the map centre, in tiles, the ring is sorted towards the pan heading. */
 const RING_LEAD_TILES = 2;
 
+/**
+ * Pan speed above which the planner wants look-ahead tiles, in CSS px per second. The reviewer
+ * probes panned one screen width in 500 ms fast and 2000 ms slow, so on the 1024-1280 px wide
+ * desktop viewports slow stays below about 640 px/s while fast passes 2000 px/s.
+ */
+export const LOOKAHEAD_PAN_SPEED_PX_PER_SEC = 1000;
+
+/** Rows or columns ahead of the view the look-ahead covers while panning fast. */
+const LOOKAHEAD_DEPTH_TILES = 2;
+
+/** Rows or columns ahead of the view the look-ahead covers at twice the speed threshold. */
+const LOOKAHEAD_FAST_DEPTH_TILES = 3;
+
 /** Shares this close to 0 or 1 count as exactly that, so rounding noise starts no blend. */
 const SHARE_SNAP = 1e-9;
 
@@ -25,7 +38,7 @@ export interface WantedTile {
   z: number;
   x: number;
   y: number;
-  tier: "pinned" | "view" | "partner" | "parent" | "ring" | "coarse";
+  tier: "pinned" | "view" | "partner" | "parent" | "lookahead" | "ring" | "coarse";
 }
 
 /** A slippy-map tile address. */
@@ -49,6 +62,14 @@ export interface PinnedBase {
   tiles: WantedTile[];
 }
 
+/** Smoothed pan direction in world units with its speed, which sizes the look-ahead. */
+export interface PanHeading {
+  x: number;
+  y: number;
+  /** CSS px per second; missing means still, so nothing looks ahead. */
+  speedPxPerSec?: number;
+}
+
 /** What the planner needs to know about the map and the scene. */
 export interface DemPlanRequest {
   zoom: number;
@@ -61,7 +82,7 @@ export interface DemPlanRequest {
   /** The pinned base from `pinnedBase`, which the caller can compute once per scene and refit. */
   base?: PinnedBase;
   /** Smoothed pan direction in world units; a zero vector means no heading. */
-  heading?: { x: number; y: number };
+  heading?: PanHeading;
 }
 
 /** The levels in play at one zoom and how the finer one is mixed over the lower one. */
@@ -117,6 +138,7 @@ export function planDemTiles(request: DemPlanRequest): DemPlan {
   const partnerLevel = blendPartnerLevel(levels);
   const partnerTiles = partnerLevel === null ? [] : viewTilesAt(partnerLevel);
   const parentTiles = levels.sharp > fitLevel ? viewTilesAt(levels.sharp - 1) : [];
+  const lookaheadTiles = lookaheadTilesOf(levels.sharp, view, bbox, centre, heading);
   const ringTiles = ringTilesOf(levels.sharp, view, bbox, centre, heading);
   const coarseTiles = coarseTilesOf(levels.sharp, fitLevel, view, bbox, centre);
 
@@ -125,6 +147,7 @@ export function planDemTiles(request: DemPlanRequest): DemPlan {
     ...viewTiles.map((tile) => wantedOf(tile, "view")),
     ...partnerTiles.map((tile) => wantedOf(tile, "partner")),
     ...parentTiles.map((tile) => wantedOf(tile, "parent")),
+    ...lookaheadTiles.map((tile) => wantedOf(tile, "lookahead")),
     ...ringTiles.map((tile) => wantedOf(tile, "ring")),
     ...coarseTiles.map((tile) => wantedOf(tile, "coarse")),
   ]);
@@ -208,7 +231,7 @@ function ringTilesOf(
   view: ViewBounds,
   bbox: Bbox,
   centre: { x: number; y: number },
-  heading: { x: number; y: number } | undefined,
+  heading: PanHeading | undefined,
 ): TileId[] {
   const count = 2 ** zoom;
   const length = Math.hypot(heading?.x ?? 0, heading?.y ?? 0);
@@ -224,6 +247,51 @@ function ringTilesOf(
   };
 
   return tilesOf(zoom, outer, bbox, ahead, inner);
+}
+
+/**
+ * Extra view-level rows or columns ahead of the pan heading, nearest first. The band starts at
+ * the view edge so its first row overlaps the ring and only reprioritises it, while the rows
+ * past it are new. Nothing is wanted while still or panning slowly, and twice the speed
+ * threshold reaches one row further.
+ */
+function lookaheadTilesOf(
+  zoom: number,
+  view: ViewBounds,
+  bbox: Bbox,
+  centre: { x: number; y: number },
+  heading: PanHeading | undefined,
+): TileId[] {
+  if (heading === undefined) return [];
+
+  const depth = lookaheadDepthTiles(heading.speedPxPerSec ?? 0);
+  if (depth === 0 || (heading.x === 0 && heading.y === 0)) return [];
+
+  const inner = rectOf(zoom, view);
+  const outer = leadingRect(inner, heading, depth, zoom);
+
+  return tilesOf(zoom, outer, bbox, centre, inner);
+}
+
+/** How many rows or columns ahead the look-ahead reaches at one pan speed, or 0 below it. */
+function lookaheadDepthTiles(speedPxPerSec: number): number {
+  if (speedPxPerSec >= 2 * LOOKAHEAD_PAN_SPEED_PX_PER_SEC) return LOOKAHEAD_FAST_DEPTH_TILES;
+  if (speedPxPerSec >= LOOKAHEAD_PAN_SPEED_PX_PER_SEC) return LOOKAHEAD_DEPTH_TILES;
+
+  return 0;
+}
+
+/** The view rect grown past its leading edge along the dominant pan axis. */
+function leadingRect(rect: TileRect, heading: PanHeading, depth: number, zoom: number): TileRect {
+  if (Math.abs(heading.x) >= Math.abs(heading.y)) {
+    return heading.x > 0 ? { ...rect, x1: rect.x1 + depth } : { ...rect, x0: rect.x0 - depth };
+  }
+
+  const count = 2 ** zoom;
+
+  return heading.y > 0
+    ? { ...rect, y1: Math.min(rect.y1 + depth, count - 1) }
+    : { ...rect, y0: Math.max(rect.y0 - depth, 0) };
 }
 
 /**
