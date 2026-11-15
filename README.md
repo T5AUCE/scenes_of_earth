@@ -396,7 +396,7 @@ maps now read GMNA, lowest priority, instead of the global base maps.
   rather than replacing an immutable bundle in place. The viewer rejects older formats with a prompt to pick the area again.
 - Contours use `maplibre-contour` (BSD-3-Clause) for labels only, with a fixed global nested
   10–2000 m ladder and statistics-selected bold heights. The GPU layer draws the lines from
-  the same DEM textures as the relief. New tiers fade in over 1.5 zoom levels. Geometry stops
+  the same DEM textures as the relief. New tiers fade in over one zoom level. Geometry stops
   refining at z12; bold heights never change on zoom. The plugin's shared worker and small DEM
   cache are reused for each distinct tile source for the life of the page, because version 0.1.1
   has no manager-disposal API.

@@ -17,7 +17,7 @@ export const ENTRY_ZOOM_M: Record<number, number> = {
   1000: 6,
   500: 7,
   100: 9,
-  50: 10,
+  50: 10.5,
   10: 12,
 };
 
@@ -27,7 +27,9 @@ export const ENTRY_ZOOM_FT: Record<number, number> = { 5000: 5, 1000: 7, 500: 8,
 /** Contour tiles are traced from DEM tiles one zoom coarser, so their ceiling is one above. */
 export const CONTOUR_OVERZOOM = 1;
 /** Zoom levels a tier takes to reach full opacity after it first shows. */
-export const FADE_SPAN_ZOOM = 1.5;
+export const FADE_SPAN_ZOOM = 1;
+/** Share of the fade before the legend names a height, so the name matches the lines. */
+export const LEGEND_FADE_SHARE = 0.5;
 
 /** Add the next finer labelled height where bold lines sit far apart; the M5 trial asked for it. */
 export const LABEL_SPARSE_FALLBACK = true;
@@ -118,10 +120,15 @@ function labelTiersFor(
   return [...labelTiers, { interval: finer.interval, entryZoom: MAX_CONTOUR_ZOOM }];
 }
 
-/** The finest height step that shows at a zoom, or null before any does. */
+/** The finest height step whose fade is half done, else the coarsest entered step, else null. */
 export function finestIntervalAt(ladder: ContourLadder, zoom: number) {
-  const shown = ladder.tiers.filter((tier) => tier.entryZoom <= zoom);
-  return shown.length === 0 ? null : Math.min(...shown.map((tier) => tier.interval));
+  const shown = ladder.tiers.filter(
+    (tier) => zoom >= tier.entryZoom + FADE_SPAN_ZOOM * LEGEND_FADE_SHARE,
+  );
+  if (shown.length > 0) return Math.min(...shown.map((tier) => tier.interval));
+
+  const entered = ladder.tiers.filter((tier) => zoom >= tier.entryZoom);
+  return entered.length === 0 ? null : Math.max(...entered.map((tier) => tier.interval));
 }
 
 /** The heights of the label tiers that show at a zoom, coarsest first. */

@@ -53,7 +53,7 @@ test("the metres ladder fills the arrays coarsest first with bold and minor widt
       ...Array<number>(2).fill(MINOR_LINE_WIDTH_PX),
     ].map(Math.fround),
   );
-  assert.deepEqual(uniforms.entryZooms, [5, 6, 7, 9, 10, 12]);
+  assert.deepEqual(uniforms.entryZooms, [5, 6, 7, 9, 10.5, 12]);
   assert.equal(uniforms.intervalsM.length, MAX_TIERS);
   assert.equal(MAX_TIERS, INTERVAL_CHAIN_M.length);
 });

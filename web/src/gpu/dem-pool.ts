@@ -71,6 +71,8 @@ export const TEXTURE_BYTES = TEXTURE_SIZE_PX ** 2 * Float32Array.BYTES_PER_ELEME
 
 const WORKER_COUNT = 2;
 const MAX_FETCHES = 6;
+// Coarse tiles fetch at most this many at once, so the view always keeps its slots.
+const MAX_COARSE_FETCHES = 2;
 // Uploads stop after this much main-thread time or this many tiles, whichever comes first.
 const UPLOAD_BUDGET_MS = 4;
 const MAX_UPLOADS_PER_FRAME = 8;
@@ -447,12 +449,42 @@ export class DemPool {
   private fillFetchSlots(): void {
     if (!this.store) return;
 
+    let coarseJobs = this.coarseJobCount();
+
     for (const tile of this.wantedList) {
       if (this.jobs.size >= MAX_FETCHES) return;
+      // Coarse tiles wait while the view still needs work, so they never take its fetch slots.
+      if (tile.tier === "coarse" && (this.hasHigherWork() || coarseJobs >= MAX_COARSE_FETCHES)) {
+        return;
+      }
 
       const key = tileKey(tile);
-      if (this.needsLoad(key)) this.startJob(tile, key);
+      if (this.needsLoad(key)) {
+        this.startJob(tile, key);
+        if (tile.tier === "coarse") coarseJobs++;
+      }
     }
+  }
+
+  private hasHigherWork(): boolean {
+    for (const tile of this.wantedList) {
+      if (tile.tier === "coarse") continue;
+
+      const key = tileKey(tile);
+      if (this.jobs.has(key) || this.pending.has(key) || this.needsLoad(key)) return true;
+    }
+
+    return false;
+  }
+
+  private coarseJobCount(): number {
+    let count = 0;
+
+    for (const job of this.jobs.values()) {
+      if (job.tile.tier === "coarse") count++;
+    }
+
+    return count;
   }
 
   private queueDepth(): number {

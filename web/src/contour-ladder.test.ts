@@ -37,7 +37,7 @@ test("Fiji, Kenya and the flat scene keep the specified fixed bold steps", () =>
 });
 
 test("the global table gives every scene the same tiers at the same zooms", () => {
-  assert.deepEqual(ENTRY_ZOOM_M, { 2000: 5, 1000: 6, 500: 7, 100: 9, 50: 10, 10: 12 });
+  assert.deepEqual(ENTRY_ZOOM_M, { 2000: 5, 1000: 6, 500: 7, 100: 9, 50: 10.5, 10: 12 });
   assert.deepEqual(ENTRY_ZOOM_FT, { 5000: 5, 1000: 7, 500: 8, 100: 11 });
 
   for (const sample of [FIJI, KENYA, FLAT, makeStats(0, 0, 0, 0)]) {
@@ -57,7 +57,7 @@ test("the global table gives every scene the same tiers at the same zooms", () =
       [1000, 6],
       [500, 7],
       [100, 9],
-      [50, 10],
+      [50, 10.5],
       [10, 12],
     ],
   );
@@ -113,15 +113,27 @@ test("the ladder shows nothing before z5 and freezes at z12 or the DEM overzoom 
   assert.equal(finestIntervalAt(global, 0), null);
   assert.equal(finestIntervalAt(global, 4), null);
   assert.equal(finestIntervalAt(global, 5), 2000);
-  assert.equal(finestIntervalAt(global, 12), 10);
+  assert.equal(finestIntervalAt(global, 5.25), 2000);
+  assert.equal(finestIntervalAt(global, 5.5), 2000);
+  assert.equal(finestIntervalAt(global, 12), 50);
+  assert.equal(finestIntervalAt(global, 12.5), 10);
   assert.equal(finestIntervalAt(global, 20), 10);
   assert.deepEqual(contourLadder(FIJI, { maxZoom: 20 }), contourLadder(FIJI));
 
   const capped = contourLadder(FIJI, { maxZoom: 9 });
 
   assert.ok(capped.tiers.every((tier) => tier.entryZoom <= 9));
-  assert.equal(finestIntervalAt(capped, 9), 100);
+  assert.equal(finestIntervalAt(capped, 9), 500);
+  assert.equal(finestIntervalAt(capped, 9.5), 100);
   assert.equal(finestIntervalAt(capped, 12), 100);
+});
+
+test("the legend keeps 100 m until the 50 m tier is half faded in", () => {
+  const ladder = contourLadder(KENYA);
+
+  assert.equal(finestIntervalAt(ladder, 10.5), 100);
+  assert.equal(finestIntervalAt(ladder, 10.75), 100);
+  assert.equal(finestIntervalAt(ladder, 11), 50);
 });
 
 test("labels are bold-only without the sparse switch, which only adds a finer tier at z12", () => {
@@ -356,7 +368,7 @@ test("contour styles validate in MapLibre and cap refinement at z12", (context) 
   map.zoom = 12;
   map.emit("zoomend");
 
-  assert.equal(overlay.legend.textContent, contourLegendText(10, 100));
+  assert.equal(overlay.legend.textContent, contourLegendText(50, 100));
 
   overlay.part.onToggle?.(false);
 

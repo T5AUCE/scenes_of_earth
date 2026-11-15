@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { contourLadder } from "../contour-ladder.ts";
+import { contourLadder, FADE_SPAN_ZOOM } from "../contour-ladder.ts";
 import { RELIEF_STRENGTH } from "../layers/relief.ts";
 import { CONTOUR_COLORS } from "../render/palettes.ts";
 import type { TerrainStats } from "../types.ts";
@@ -67,9 +67,9 @@ test("the tier opacities follow the zoom's fade from each entry zoom", async () 
 
   const alphas = harness.uniforms.get("uTierAlpha") as number[];
 
-  // At zoom 8 the 2000 m tier entered at 5 is full, the 500 m tier entered at 7 is two thirds.
+  // At zoom 8 the tiers entered at 5 through 7 are full while the 100 m tier has not entered.
   assert.ok(Math.abs(alphas[0] - CONTOUR_OPACITY) < 1e-6);
-  assert.ok(Math.abs(alphas[2] - (CONTOUR_OPACITY * (8 - 7)) / 1.5) < 1e-6);
+  assert.ok(Math.abs(alphas[2] - (CONTOUR_OPACITY * (8 - 7)) / FADE_SPAN_ZOOM) < 1e-6);
   assert.deepEqual(alphas.slice(3), [0, 0, 0]);
 
   finish(harness, handle);

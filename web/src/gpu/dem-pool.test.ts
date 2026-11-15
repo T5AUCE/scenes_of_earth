@@ -650,6 +650,72 @@ test("view readiness waits for pinned tiles", () => {
   assert.equal(harness.pool.areViewTilesDrawable(), true);
 });
 
+test("coarse tiles wait while higher tiers still need fetches or uploads", () => {
+  const harness = setup();
+  const view = tile(5, 5);
+  const coarse = tile(1, 1, "coarse", 5);
+
+  harness.pool.update([view, coarse]);
+
+  assert.equal(harness.loads().length, 1);
+
+  land(harness, view);
+  harness.pool.update([view, coarse]);
+
+  assert.equal(harness.loads().length, 1);
+
+  harness.pool.uploadPending();
+  harness.pool.update([view, coarse]);
+
+  assert.equal(harness.loads().length, 2);
+});
+
+test("at most two coarse tiles fetch at once", () => {
+  const harness = setup();
+  const view = [tile(1), tile(2)];
+  const coarse = [tile(10, 0, "coarse"), tile(11, 0, "coarse"), tile(12, 0, "coarse")];
+
+  harness.pool.update([...view, ...coarse]);
+
+  for (const entry of view) land(harness, entry);
+
+  harness.pool.uploadPending();
+  harness.pool.update([...view, ...coarse]);
+
+  assert.equal(harness.loads().length, 4);
+
+  land(harness, coarse[0]);
+  land(harness, coarse[1]);
+  harness.pool.update([...view, ...coarse]);
+
+  assert.equal(harness.loads().length, 5);
+});
+
+test("coarse uploads stay within the unpinned texture limit", () => {
+  const harness = setup();
+  const view = Array.from({ length: 96 }, (_, index) => tile(index % 64, Math.floor(index / 64)));
+
+  for (let index = 0; index < view.length; index += 2) {
+    const pair = view.slice(index, index + 2);
+    harness.pool.update(pair);
+
+    for (const entry of pair) land(harness, entry);
+
+    harness.pool.uploadPending();
+  }
+
+  assert.equal(harness.pool.stats().textures, 96);
+
+  const coarse = tile(1, 1, "coarse", 5);
+
+  harness.pool.update([view[94], view[95], coarse]);
+  land(harness, coarse);
+  harness.pool.uploadPending();
+
+  assert.equal(harness.pool.stats().textures, 96);
+  assert.ok(harness.pool.texture(coarse));
+});
+
 test("neighbours wrap across the antimeridian", () => {
   const harness = setup({ keepData: true });
   const east = tile(63, 5);

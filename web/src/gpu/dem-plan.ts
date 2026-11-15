@@ -5,6 +5,9 @@ import type { Bbox } from "../types";
 /** The pinned base moves one level coarser when the fit level needs more tiles than this. */
 const PINNED_TILE_LIMIT = 48;
 
+/** How many levels below the sharp level the pool keeps over the zoomed-out area. */
+const COARSE_LEVELS = 4;
+
 /** How far ahead of the map centre, in tiles, the ring is sorted towards the pan heading. */
 const RING_LEAD_TILES = 2;
 
@@ -22,7 +25,7 @@ export interface WantedTile {
   z: number;
   x: number;
   y: number;
-  tier: "pinned" | "view" | "partner" | "parent" | "ring";
+  tier: "pinned" | "view" | "partner" | "parent" | "ring" | "coarse";
 }
 
 /** A slippy-map tile address. */
@@ -115,6 +118,7 @@ export function planDemTiles(request: DemPlanRequest): DemPlan {
   const partnerTiles = partnerLevel === null ? [] : viewTilesAt(partnerLevel);
   const parentTiles = levels.sharp > fitLevel ? viewTilesAt(levels.sharp - 1) : [];
   const ringTiles = ringTilesOf(levels.sharp, view, bbox, centre, heading);
+  const coarseTiles = coarseTilesOf(levels.sharp, fitLevel, view, bbox, centre);
 
   const wanted = withoutRepeats([
     ...base.tiles,
@@ -122,6 +126,7 @@ export function planDemTiles(request: DemPlanRequest): DemPlan {
     ...partnerTiles.map((tile) => wantedOf(tile, "partner")),
     ...parentTiles.map((tile) => wantedOf(tile, "parent")),
     ...ringTiles.map((tile) => wantedOf(tile, "ring")),
+    ...coarseTiles.map((tile) => wantedOf(tile, "coarse")),
   ]);
 
   const isBlending = partnerLevel !== null;
@@ -219,6 +224,45 @@ function ringTilesOf(
   };
 
   return tilesOf(zoom, outer, bbox, ahead, inner);
+}
+
+/**
+ * The area each zoom-out level would show, so a zoom-out finds it already uploaded. Each depth
+ * scales the view by 2x around the centre, which tilesOf clips to the scene.
+ */
+function coarseTilesOf(
+  sharp: number,
+  fitLevel: number,
+  view: ViewBounds,
+  bbox: Bbox,
+  centre: { x: number; y: number },
+): TileId[] {
+  const tiles: TileId[] = [];
+
+  for (let depth = 1; depth <= COARSE_LEVELS; depth++) {
+    const level = sharp - depth;
+    if (level < fitLevel) break;
+
+    tiles.push(...tilesOf(level, rectOf(level, zoomedOutView(view, centre, depth)), bbox, centre));
+  }
+
+  return tiles;
+}
+
+/** The view scaled by 2^depth around the centre, which is what a zoom-out shows. */
+function zoomedOutView(
+  view: ViewBounds,
+  centre: { x: number; y: number },
+  depth: number,
+): ViewBounds {
+  const scale = 2 ** depth;
+
+  return {
+    west: centre.x - (centre.x - view.west) * scale,
+    east: centre.x + (view.east - centre.x) * scale,
+    north: centre.y - (centre.y - view.north) * scale,
+    south: centre.y + (view.south - centre.y) * scale,
+  };
 }
 
 function rectOf(zoom: number, bounds: ViewBounds): TileRect {

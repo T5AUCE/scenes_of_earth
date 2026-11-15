@@ -98,7 +98,7 @@ test("pinned base of a scene across the antimeridian holds wrapped tiles from bo
 
 test("wanted tiles come in tier order with pinned first and no repeats", () => {
   const { wanted } = planDemTiles(request({ zoom: 7.5 }));
-  const order = ["pinned", "view", "partner", "parent", "ring"];
+  const order = ["pinned", "view", "partner", "parent", "ring", "coarse"];
   const ranks = wanted.map((tile) => order.indexOf(tile.tier));
 
   assert.deepEqual(
@@ -306,6 +306,77 @@ test("the pinned base keeps exactly 48 tiles and moves coarser at 49", () => {
 test("no parent tier is wanted at the fit level", () => {
   const { wanted } = planDemTiles(request({ zoom: 5 }));
   assert.equal(wanted.filter((tile) => tile.tier === "parent").length, 0);
+});
+
+test("coarse tiles keep the four lower levels after the ring", () => {
+  const { wanted, levels } = planDemTiles(request({ zoom: 10.3 }));
+
+  assert.equal(levels.sharp, 10);
+
+  const coarse = wanted.filter((tile) => tile.tier === "coarse");
+
+  assert.ok(coarse.length > 0);
+  assert.deepEqual(
+    [...new Set(coarse.map((tile) => tile.z))].sort((left, right) => left - right),
+    [6, 7, 8, 9],
+  );
+
+  const lastRing = wanted.map((tile) => tile.tier).lastIndexOf("ring");
+  const firstCoarse = wanted.findIndex((tile) => tile.tier === "coarse");
+
+  assert.ok(firstCoarse > lastRing);
+});
+
+test("the first coarse level covers more than the parent tier", () => {
+  const { wanted } = planDemTiles(request({ zoom: 8.3 }));
+
+  const parents = wanted.filter((tile) => tile.tier === "parent");
+  const depthOne = wanted.filter((tile) => tile.tier === "coarse" && tile.z === 7);
+
+  assert.ok(parents.length > 0 && depthOne.length > 0);
+
+  const rows = (tiles: { y: number }[]) => tiles.map((tile) => tile.y);
+
+  assert.ok(Math.min(...rows(depthOne)) < Math.min(...rows(parents)));
+  assert.ok(Math.max(...rows(depthOne)) > Math.max(...rows(parents)));
+});
+
+test("a zoom-out of one to three levels finds its view tiles already wanted", () => {
+  const settled = planDemTiles(request({ zoom: 9.3 }));
+  const settledKeys = new Set(settled.wanted.filter((tile) => tile.tier !== "pinned").map(keyOf));
+
+  for (let out = 1; out <= 3; out += 1) {
+    const zoomed = planDemTiles(request({ zoom: 9.3 - out }));
+    const view = zoomed.wanted.filter((tile) => tile.tier === "view");
+
+    assert.ok(view.length > 0);
+
+    for (const tile of view) {
+      assert.ok(settledKeys.has(keyOf(tile)), `zoom-out by ${out} misses ${keyOf(tile)}`);
+    }
+  }
+});
+
+test("a zoom-out of four levels lands on the coarsest coarse tier", () => {
+  const settled = planDemTiles(request({ zoom: 10.3 }));
+  const coarsest = new Set(
+    settled.wanted.filter((tile) => tile.tier === "coarse" && tile.z === 6).map(keyOf),
+  );
+
+  const zoomed = planDemTiles(request({ zoom: 6.3 }));
+  const view = zoomed.wanted.filter((tile) => tile.tier === "view");
+
+  assert.ok(view.length > 0);
+
+  for (const tile of view) {
+    assert.ok(coarsest.has(keyOf(tile)), `zoom-out by 4 misses ${keyOf(tile)}`);
+  }
+});
+
+test("no coarse tier is wanted at the fit level", () => {
+  const { wanted } = planDemTiles(request({ zoom: 5 }));
+
+  assert.equal(wanted.filter((tile) => tile.tier === "coarse").length, 0);
 });
 
 test("a view far below the fit zoom plans a bounded number of tiles", () => {
