@@ -484,7 +484,10 @@ function mountLayerViews(
     .sort((first, second) => first.kind!.stack - second.kind!.stack);
 
   const geology = supported.filter(({ layer }) => isGeologyLayer(layer.id));
-  const rest = supported.filter(({ layer }) => !isGeologyLayer(layer.id));
+  const cover = supported.filter(
+    ({ layer }) => layer.style.kind === "categorical" && !isGeologyLayer(layer.id),
+  );
+  const rest = supported.filter(({ layer }) => layer.style.kind !== "categorical");
 
   const mounted: MountedLayer[] = [];
   const mountOne = (entry: (typeof supported)[number]) => {
@@ -512,7 +515,12 @@ function mountLayerViews(
 
   for (const entry of geology) mountOne(entry);
 
-  if (mounted.some(({ layer }) => isGeologyLayer(layer.id))) addGeologyWater(map, SLOTS.fill);
+  for (const entry of cover) mountOne(entry);
+
+  // Water sits above categorical fills but below later renderers so spill hides.
+  if (mounted.some(({ layer }) => layer.style.kind === "categorical")) {
+    addGeologyWater(map, SLOTS.fill);
+  }
 
   for (const entry of rest) mountOne(entry);
 

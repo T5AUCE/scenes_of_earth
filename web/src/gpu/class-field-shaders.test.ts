@@ -2406,3 +2406,132 @@ function patchGrid(sample: (cellX: number, cellY: number) => number): Uint8Array
 
   return cells;
 }
+
+const WATER = 80; // WorldCover permanent water bodies keep their own cells during smoothing.
+
+test("protected water keeps its own cells when surrounded on three sides", () => {
+  const cells = patchGrid((cellX, cellY) => {
+    if (cellX === 12 && cellY === 12) return WATER;
+    if (cellX === 12 && cellY === 11) return GRASS;
+    return TREE;
+  });
+
+  for (const rounding of [0, 0.25, 0.6]) {
+    for (const softnessCells of [0, 1]) {
+      for (const smooth of [true, false]) {
+        for (const smoothRadiusCells of [undefined, GEOLOGY_SMOOTH_RADIUS_CELLS, 4]) {
+          for (const offset of [-0.4, -0.2, 0, 0.2, 0.4]) {
+            const result = sampleClassField(
+              gridFragment(cells, PATCH, PATCH, 12 + offset, 12, 0.01),
+              { smooth, rounding, softnessCells, smoothRadiusCells, protectedWaterId: WATER },
+            );
+
+            assert.equal(result.discarded, false, `${rounding} ${softnessCells} ${offset}`);
+            assert.equal(result.nearest, WATER);
+            assert.deepEqual(result.weights, [{ id: WATER, weight: 1 }]);
+            assert.equal(weightOf(result, TREE), 0);
+            assert.equal(weightOf(result, GRASS), 0);
+          }
+        }
+      }
+    }
+  }
+});
+
+test("protected water keeps a one-cell channel and a diagonal shore", () => {
+  const channel = patchGrid((cellX) => (cellX === 12 ? WATER : TREE));
+  const diagonal = patchGrid((cellX, cellY) => (cellX - cellY < 0 ? WATER : TREE));
+
+  for (const [name, cells, cellX, cellY] of [
+    ["channel", channel, 12, 12],
+    ["diagonal", diagonal, 11, 12],
+  ] as const) {
+    for (const rounding of [0, 0.25, 0.6]) {
+      for (const softnessCells of [0, 1]) {
+        for (const smooth of [true, false]) {
+          const result = sampleClassField(gridFragment(cells, PATCH, PATCH, cellX, cellY, 0.01), {
+            smooth,
+            rounding,
+            softnessCells,
+            smoothRadiusCells: GEOLOGY_SMOOTH_RADIUS_CELLS,
+            protectedWaterId: WATER,
+          });
+
+          assert.equal(result.nearest, WATER, name);
+          assert.deepEqual(result.weights, [{ id: WATER, weight: 1 }], name);
+        }
+      }
+    }
+  }
+});
+
+test("protected water stays water without a basemap water polygon", () => {
+  const cells = patchGrid((cellX, cellY) => (cellX === 12 && cellY === 12 ? WATER : GRASS));
+  const result = sampleClassField(gridFragment(cells, PATCH, PATCH, 12, 12, 0.01), {
+    smooth: true,
+    rounding: 0.25,
+    softnessCells: 0,
+    smoothRadiusCells: GEOLOGY_SMOOTH_RADIUS_CELLS,
+    protectedWaterId: WATER,
+  });
+
+  assert.equal(result.nearest, WATER);
+  assert.deepEqual(result.weights, [{ id: WATER, weight: 1 }]);
+});
+
+test("water without protection still blends with its neighbours", () => {
+  const cells = patchGrid((cellX, cellY) => (cellX === 12 && cellY === 12 ? WATER : TREE));
+  const unprotected = sampleClassField(gridFragment(cells, PATCH, PATCH, 12.49, 12, 0.01), {
+    smooth: true,
+    rounding: 0.25,
+    softnessCells: 0,
+  });
+
+  assert.ok(weightOf(unprotected, WATER) < 1);
+  assert.ok(weightOf(unprotected, TREE) > 0);
+
+  const kept = sampleClassField(gridFragment(cells, PATCH, PATCH, 12.49, 12, 0.01), {
+    smooth: true,
+    rounding: 0.25,
+    softnessCells: 0,
+    protectedWaterId: WATER,
+  });
+
+  assert.deepEqual(kept.weights, [{ id: WATER, weight: 1 }]);
+});
+
+test("protected water is never no-data and keeps its inspect value", () => {
+  const cells = patchGrid((cellX, cellY) => (cellX === 12 && cellY === 12 ? WATER : TREE));
+  const fragment = gridFragment(cells, PATCH, PATCH, 12, 12, 0.01);
+  const result = sampleClassField(fragment, {
+    smooth: true,
+    rounding: 0.25,
+    softnessCells: 1,
+    smoothRadiusCells: GEOLOGY_SMOOTH_RADIUS_CELLS,
+    protectedWaterId: WATER,
+  });
+
+  assert.equal(result.discarded, false);
+  assert.equal(result.nearest, WATER);
+  assert.deepEqual(result.weights, [{ id: WATER, weight: 1 }]);
+  assert.deepEqual(classFieldAlpha(result, fillAppearance()), { ink: 0, alpha: 1 });
+});
+
+test("the baked band keeps protected water as well as the full gather", () => {
+  const cells = patchGrid((cellX, cellY) => (cellX === 12 && cellY === 12 ? WATER : TREE));
+
+  for (const radius of [GEOLOGY_SMOOTH_RADIUS_CELLS, 4]) {
+    const band = bakeBand(cells, PATCH, PATCH, radius);
+    const texel = bandTexelAt(band, PATCH, 12, 12)!;
+    const baked = gridFragment(cells, PATCH, PATCH, 12, 12, 0.01, texel);
+    const options = {
+      smooth: true,
+      rounding: 0.25,
+      softnessCells: 0,
+      smoothRadiusCells: radius,
+      protectedWaterId: WATER,
+    };
+
+    assert.deepEqual(sampleClassField(baked, options).weights, [{ id: WATER, weight: 1 }]);
+  }
+});

@@ -32,8 +32,13 @@ const viewHooks = registerHooks({
 });
 const categoricalModule = await import("./categorical.ts");
 await import("./categorical-image.ts").finally(() => viewHooks.deregister());
-const { createCategoricalView, coastalFillRadiusCells, fillCoastalGaps, unhatchIds } =
-  categoricalModule;
+const {
+  createCategoricalView,
+  coastalFillRadiusCells,
+  fillCoastalGaps,
+  protectedWaterIdFor,
+  unhatchIds,
+} = categoricalModule;
 
 function viewMockModule(specifier: string) {
   switch (specifier) {
@@ -533,6 +538,51 @@ test("geology fill hides a coastal hatch while land cover keeps it", async () =>
   }
 });
 
+test("only the WorldCover layer keeps a protected water class", () => {
+  assert.equal(protectedWaterIdFor("esa_worldcover", [10, 20, 80, 90]), 3);
+  assert.equal(protectedWaterIdFor("esa_worldcover", [10, 20]), undefined);
+  assert.equal(protectedWaterIdFor("geology", [10, 20, 80]), undefined);
+  assert.equal(protectedWaterIdFor("cover", [10, 20, 80]), undefined);
+});
+
+test("the WorldCover view passes its water class to the GPU edges", async () => {
+  const harness = createViewHarness(true, undefined, "esa_worldcover", WORLDCOVER_LIKE_CLASSES);
+
+  try {
+    const view = createCategoricalView(harness.context);
+    await view.ready;
+
+    const layer = harness.custom.get("esa_worldcover-classes")!;
+    layer.render(harness.gpu.gl, harness.gpu.input);
+
+    assert.equal(harness.gpu.uniforms.get("uProtectedWaterId"), 3);
+
+    view.destroy();
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("geology and other layers pass no protected water class", async () => {
+  for (const layerId of ["geology", "cover"]) {
+    const harness = createViewHarness(true, undefined, layerId, COVER_CLASSES);
+
+    try {
+      const view = createCategoricalView(harness.context);
+      await view.ready;
+
+      const layer = harness.custom.get(`${layerId}-classes`)!;
+      layer.render(harness.gpu.gl, harness.gpu.input);
+
+      assert.equal(harness.gpu.uniforms.get("uProtectedWaterId"), 0, layerId);
+
+      view.destroy();
+    } finally {
+      harness.cleanup();
+    }
+  }
+});
+
 const SMALL_PATCHES: Record<string, (column: number, row: number) => number> = {
   island: (column, row) => (column === 3 && row === 3 ? 2 : 1),
   pair: (column, row) => (column >= 2 && column < 4 && row >= 2 && row < 4 ? 2 : 1),
@@ -618,6 +668,12 @@ function gpuWinnerAt(cells: Uint8Array, column: number, row: number, radius: num
 const COVER_CLASSES = [
   { value: 10, label: "Trees", color: "#112233" },
   { value: 20, label: "Grass", color: "#445566" },
+];
+
+const WORLDCOVER_LIKE_CLASSES = [
+  { value: 10, label: "Trees", color: "#112233" },
+  { value: 20, label: "Grass", color: "#445566" },
+  { value: 80, label: "Permanent water bodies", color: "#0064c8" },
 ];
 
 const AGE_LIKE_CLASSES = [

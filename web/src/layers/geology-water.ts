@@ -1,7 +1,7 @@
-/** Draw basemap water above geology so coastal gaps hide under the map's own water. */
+/** Draw basemap water above categorical fills so coastal gaps hide under the map's own water. */
 import type { Map as MapLibreMap } from "maplibre-gl";
 
-/** The water copy above geology; the basemap source stays owned by the basemap. */
+/** The water copy above categorical fills; the basemap source stays owned by the basemap. */
 export const GEOLOGY_WATER_ID = "soe-geology-water";
 
 interface WaterLayer {
@@ -16,8 +16,11 @@ interface WaterLayer {
 }
 
 /**
- * Add the basemap water fill above geology. The copy reuses the basemap vector source,
- * so removing it must never remove the source. Returns false when the style has no water.
+ * Add the basemap water fill above categorical fills. The copy reuses the basemap vector source,
+ * so removing it must never remove the source and mounting it adds no network requests. The single
+ * copy sits above both geology and land cover, while WorldCover water outside basemap polygons
+ * stays visible because the copy only paints where the basemap has water. Returns false when the
+ * style has no water.
  */
 export function addGeologyWater(map: MapLibreMap, beforeId: string | undefined): boolean {
   if (map.getLayer(GEOLOGY_WATER_ID)) return true;

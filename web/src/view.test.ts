@@ -27,7 +27,11 @@ interface ViewTestState {
   pendingReads: Map<string, PendingRead>;
   readyGates: Map<string, ReadyGate>;
   currentTime: string | null;
-  createView(context: { layer: { id: string; time: unknown } }): unknown;
+  createView(context: {
+    layer: { id: string; time: unknown };
+    map?: { addLayer: (spec: { id: string }, beforeId?: string) => void };
+    slots?: { fill?: string };
+  }): unknown;
 }
 
 const window = new Window({ url: "http://localhost/?scene=test" });
@@ -69,10 +73,18 @@ function freshState(): ViewTestState {
     pendingReads: new Map(),
     readyGates: new Map(),
     currentTime: null,
-    createView(context: { layer: { id: string; time: unknown } }) {
+    createView(context: {
+      layer: { id: string; time: unknown };
+      map?: { addLayer: (spec: { id: string }, beforeId?: string) => void };
+      slots?: { fill?: string };
+    }) {
       const state = globalThis.viewTest as ViewTestState;
       const record: ViewRecord = { layerId: context.layer.id, prepareCalls: [], showCalls: [] };
       state.records.push(record);
+
+      if (context.map && context.slots?.fill) {
+        context.map.addLayer({ id: `${context.layer.id}-draw` }, context.slots.fill);
+      }
 
       const loadEntry = (stepTime: string | null, signal?: AbortSignal) => {
         record.prepareCalls.push(stepTime);
@@ -156,7 +168,9 @@ const hooks = registerHooks({
       const stub =
         "export const LAYER_KINDS = new Map(["
         + "['alpha', { stack: 0, create: (context) => globalThis.viewTest.createView(context) }],"
-        + "['beta', { stack: 1, create: (context) => globalThis.viewTest.createView(context) }]]);";
+        + "['beta', { stack: 1, create: (context) => globalThis.viewTest.createView(context) }],"
+        + "['categorical', { stack: 0, create: (context) => globalThis.viewTest.createView(context) }],"
+        + "['field', { stack: 1, create: (context) => globalThis.viewTest.createView(context) }]]);";
       return { url: `data:text/javascript,${stub}`, shortCircuit: true };
     }
     if (specifier === "./layers/blend") {
@@ -367,6 +381,53 @@ test("an outline display change repaints the map and remembers the choice", () =
   mounted.unmount();
 });
 
+test("basemap water mounts for categorical scenes and leaves with the scene", async () => {
+  const { GEOLOGY_WATER_ID } = await import("./layers/geology-water.ts");
+
+  for (const layerIds of [["geology"], ["esa_worldcover"], ["geology", "esa_worldcover"]]) {
+    const { mounted, map } = mountCategoricalLayers(layerIds);
+
+    assert.ok(map.getLayer(GEOLOGY_WATER_ID), layerIds.join(","));
+    assert.equal(map.addedSources(), 0, layerIds.join(","));
+
+    mounted.unmount();
+
+    assert.equal(map.getLayer(GEOLOGY_WATER_ID), undefined, layerIds.join(","));
+  }
+});
+
+test("scenes without categorical layers mount no water copy", () => {
+  const { mounted, map } = mountTwoLayers();
+
+  assert.equal(map.getLayer("soe-geology-water"), undefined);
+
+  mounted.unmount();
+});
+
+test("water sits above categorical fills but below climate colour images", async () => {
+  const { GEOLOGY_WATER_ID } = await import("./layers/geology-water.ts");
+  const { mounted, map } = mountMixedLayers();
+  const orderOf = () => [...map.layers.keys()];
+  const belowClimate = (order: string[]): boolean =>
+    order.indexOf("esa_worldcover-draw") < order.indexOf(GEOLOGY_WATER_ID)
+    && order.indexOf(GEOLOGY_WATER_ID) < order.indexOf("rain-draw");
+
+  assert.ok(belowClimate(orderOf()));
+  assert.equal(map.addedSources(), 0);
+
+  mounted.store.dispatch({ kind: "choose", unit: "rain", draw: "colour" });
+
+  assert.ok(belowClimate(orderOf()));
+
+  mounted.store.dispatch({ kind: "choose", unit: "esa_worldcover", draw: "colour" });
+
+  assert.ok(belowClimate(orderOf()));
+
+  mounted.unmount();
+
+  assert.equal(map.getLayer(GEOLOGY_WATER_ID), undefined);
+});
+
 function mountTwoLayers(withTime = true, readyLayers: string[] = [], outline = "") {
   installBrowser();
 
@@ -448,22 +509,27 @@ async function settle() {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
-function fakeMap() {
+function fakeMap(withWater = false) {
   const layers = new Map<string, object>();
   const sources = new Map<string, object>();
   const layouts: string[] = [];
   const paints: string[] = [];
+  const addedSourceIds: string[] = [];
 
   return {
     layouts,
     paints,
+    layers,
     addSource(id: string, source: object) {
+      addedSourceIds.push(id);
       sources.set(id, source);
     },
-    addLayer(spec: { id: string }) {
+    addedSources: () => addedSourceIds.filter((id) => id === "openmaptiles").length,
+    addLayer(spec: { id: string }, _beforeId?: string) {
       layers.set(spec.id, spec);
     },
     getSource(id: string) {
+      if (id === "openmaptiles") return {};
       return sources.get(id);
     },
     getLayer(id: string) {
@@ -482,11 +548,118 @@ function fakeMap() {
       paints.push(`${id}:${name}:${String(value)}`);
     },
     getStyle() {
-      return { layers: [] };
+      if (!withWater) return { layers: [] };
+      return {
+        layers: [
+          {
+            id: "water",
+            type: "fill",
+            source: "openmaptiles",
+            "source-layer": "water",
+            filter: ["!=", ["get", "brunnel"], "tunnel"],
+            paint: { "fill-color": "rgb(158,189,255)" },
+          },
+        ],
+      };
     },
     addControl() {},
     removeControl() {},
   };
+}
+
+function mountCategoricalLayers(layerIds: string[]) {
+  installBrowser();
+
+  const state = freshState();
+  (globalThis as Record<string, unknown>).viewTest = state;
+
+  const map = fakeMap(true);
+  const scene = makeScene(false);
+  scene.layers = layerIds.map((id) => ({
+    id,
+    title: id.toUpperCase(),
+    units: "",
+    source: { name: "Test", licence: "CC0", attribution: "Test" },
+    style: { kind: "categorical", encodings: ["fill"] },
+    grid: { bbox: [0, -1, 1, 1], res: 0.01, nx: 10, ny: 10 },
+    mask: { path: "mask.zarr", cells_inside: 100 },
+    time: null,
+    arrays: {},
+  })) as unknown as Scene["layers"];
+
+  const mounted = mountScene(map as never, scene, {
+    cards: document.createElement("div"),
+    timeBar: document.createElement("div"),
+    display: {
+      pal: "",
+      range: "",
+      off: "",
+      as: "",
+      ink: "",
+      dens: "",
+      units: "",
+      outline: "",
+      charts: "",
+    },
+    onTime() {},
+    onDisplay() {},
+  });
+
+  return { mounted, map };
+}
+
+function mountMixedLayers() {
+  installBrowser();
+
+  const state = freshState();
+  (globalThis as Record<string, unknown>).viewTest = state;
+
+  const map = fakeMap(true);
+  const scene = makeScene(false);
+  scene.layers = [
+    {
+      id: "esa_worldcover",
+      title: "ESA_WORLDCOVER",
+      units: "",
+      source: { name: "Test", licence: "CC0", attribution: "Test" },
+      style: { kind: "categorical", encodings: ["fill"] },
+      grid: { bbox: [0, -1, 1, 1], res: 0.01, nx: 10, ny: 10 },
+      mask: { path: "mask.zarr", cells_inside: 100 },
+      time: null,
+      arrays: {},
+    },
+    {
+      id: "rain",
+      title: "RAIN",
+      units: "units",
+      source: { name: "Test", licence: "CC0", attribution: "Test" },
+      style: { kind: "field", encodings: ["ramp"] },
+      grid: { bbox: [0, -1, 1, 1], res: 0.01, nx: 10, ny: 10 },
+      mask: { path: "mask.zarr", cells_inside: 100 },
+      time: null,
+      arrays: {},
+    },
+  ] as unknown as Scene["layers"];
+
+  const mounted = mountScene(map as never, scene, {
+    cards: document.createElement("div"),
+    timeBar: document.createElement("div"),
+    display: {
+      pal: "",
+      range: "",
+      off: "",
+      as: "",
+      ink: "",
+      dens: "",
+      units: "",
+      outline: "",
+      charts: "",
+    },
+    onTime() {},
+    onDisplay() {},
+  });
+
+  return { mounted, map };
 }
 
 function makeScene(withTime: boolean): Scene {
