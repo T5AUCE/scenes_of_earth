@@ -194,6 +194,9 @@ export function contourCoverage(
     if (tier.alpha <= 0) continue;
 
     const level = (height - TIE_BIAS_M) / tier.intervalM;
+    // The coast already shows sea level, so the zero contour stays hidden at every zoom.
+    if (Math.round(level) === 0) continue;
+
     const levelAbsM = Math.round(level) * tier.intervalM + TIE_BIAS_M;
     if (levelAbsM < lowestM || levelAbsM >= highestM) continue;
 
@@ -282,6 +285,9 @@ float contourCoverage(HeightSample surface) {
     float originModM = mod(surface.origin, intervalM);
     float nearM = originModM + surface.relative;
     float level = (nearM - ${glslFloat(TIE_BIAS_M)}) / intervalM;
+    // The coast already shows sea level, so the zero contour stays hidden at every zoom.
+    float absoluteLevel = floor(surface.origin / intervalM) + round(level);
+    if (absoluteLevel == 0.0) continue;
     float levelRelM = round(level) * intervalM - originModM + ${glslFloat(TIE_BIAS_M)};
     if (levelRelM < surface.lowest || levelRelM >= surface.highest) continue;
 

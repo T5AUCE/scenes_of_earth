@@ -33,7 +33,6 @@ import { nextEntryFrame } from "./entry-curtain";
 import { makeHtmlElement } from "./html";
 import { BLEND, blendPair } from "./layers/allocate";
 import { BLEND_TITLE, type BlendView, createBlendView } from "./layers/blend";
-import { addGeologyWater, removeGeologyWater } from "./layers/geology-water";
 import { LAYER_KINDS } from "./layers/registry";
 import { firstSymbolId, removeLayerAndSource, showScaleBar } from "./map";
 import { shiftLongitudes, worldShift } from "./render/mercator";
@@ -130,7 +129,6 @@ export function mountScene(
     views.forEach((view) => view.destroy());
     blend?.destroy();
 
-    removeGeologyWater(map);
     Object.values(SLOTS).forEach((id) => removeLayerAndSource(map, id));
     removeLayerAndSource(map, OUTLINE_ID);
 
@@ -522,11 +520,6 @@ function mountLayerViews(
   for (const entry of geology) mountOne(entry);
 
   for (const entry of cover) mountOne(entry);
-
-  // Water sits above categorical fills but below later renderers so spill hides.
-  if (mounted.some(({ layer }) => layer.style.kind === "categorical")) {
-    addGeologyWater(map, SLOTS.fill);
-  }
 
   for (const entry of rest) mountOne(entry);
 

@@ -18,7 +18,7 @@ registerHooks({
 import { entryStats, isPreloadDisabled } from "./dev-stats.ts";
 import { DEFAULT_OUTLINE, storeMapDetailsShown } from "./display-state.ts";
 import { REVEAL_MS } from "./entry-curtain.ts";
-import { OCEAN_COVER_ID } from "./layers/geology-water.ts";
+import { INLAND_WATER_ID, OCEAN_COVER_ID } from "./layers/geology-water.ts";
 import { currentScenePreload } from "./layers/tile-prefetch.ts";
 import { assertSameNode } from "./testing/dom-assert.ts";
 import {
@@ -34,7 +34,7 @@ import type { TestMap } from "./testing/scene-mode-harness.ts";
 import type { Scene } from "./types.ts";
 
 const FADE_ID = "soe-scene-fade";
-const FADE_OPACITY = 0.6;
+const FADE_OPACITY = 1;
 const PREPARING = "Preparing scene…";
 
 const BASEMAP_TEMPLATE = "https://tiles.example.test/planet/{z}/{x}/{y}.pbf";
@@ -215,24 +215,28 @@ test("basemap geometry stays below scene data with the mask above both", async (
   );
 });
 
-test("the ocean cover sits above the mask and fade with an ocean-only filter", async () => {
+test("the ocean cover sits above scene data, the mask, and the outline in the page colour", async () => {
   const harness = createHarness();
-  const { order, waterFilter, waterPaint } = seedOceanBasemap(harness);
+  const { order, waterFilter } = seedOceanBasemap(harness);
 
   harness.enter();
   harness.data.resolve();
   harness.geometry.resolve(FEATURE);
   await settle();
 
-  assert.ok(order.indexOf(MASK_ID) < order.indexOf(FADE_ID));
+  assert.ok(order.indexOf("overview") < order.indexOf(OCEAN_COVER_ID));
+  assert.ok(order.indexOf(MASK_ID) < order.indexOf(OCEAN_COVER_ID));
   assert.ok(order.indexOf(FADE_ID) < order.indexOf(OCEAN_COVER_ID));
+  assert.ok(order.indexOf("soe-area-outline") < order.indexOf(OCEAN_COVER_ID));
+  assert.ok(order.indexOf(MASK_ID) < order.indexOf("label_city"));
   assert.ok(order.indexOf("label_city") < order.indexOf(FADE_ID));
+  assert.ok(order.indexOf(FADE_ID) < order.indexOf("soe-area-outline"));
 
   const cover = harness.map.layers.get(OCEAN_COVER_ID) as unknown as Record<string, unknown>;
 
   assert.equal(cover.source, "openmaptiles");
   assert.equal(cover["source-layer"], "water");
-  assert.deepEqual(cover.paint, waterPaint);
+  assert.deepEqual(cover.paint, { "fill-color": "#faf8f3", "fill-opacity": 1 });
   assert.deepEqual(cover.filter, ["all", waterFilter, ["==", ["get", "class"], "ocean"]]);
   assert.equal(harness.map.sources.size, 1);
   assert.ok(harness.map.sources.has("openmaptiles"));
@@ -247,7 +251,113 @@ test("the ocean cover sits above the mask and fade with an ocean-only filter", a
   assert.equal(harness.map.sources.size, 1);
 });
 
-test("sea labels stay above the ocean cover", async () => {
+test("inland water stays above scene data below the mask through entry and exit", async () => {
+  storeMapDetailsShown(false);
+
+  const harness = phasedHarness();
+  const { order, waterFilter, waterPaint } = seedOceanBasemap(harness);
+  (harness.map.layers.get("contours") as unknown as Record<string, unknown>).type = "symbol";
+
+  harness.enter();
+  await settle();
+  await finishPreparation(harness);
+  harness.land();
+  await settle();
+
+  assert.ok(harness.events.includes("curtain"));
+
+  // A scrub after the curtain starts reprepares instead of staging stale work.
+  const stale = harness.curtain!;
+  harness.onTime!("2020-02-01", "2020-02");
+  stale.cover();
+  await settle();
+  await settle();
+
+  assert.deepEqual(harness.preparationTimes, [null, "2020-02-01"]);
+  assert.ok(stale !== harness.curtain);
+
+  const fresh = harness.curtain!;
+  fresh.cover();
+
+  assertSceneOrder(harness, order, ["relief", "contours", "rain", "overview"]);
+
+  const cover = harness.map.layers.get(INLAND_WATER_ID) as unknown as Record<string, unknown>;
+
+  assert.equal(cover.source, "openmaptiles");
+  assert.equal(cover["source-layer"], "water");
+  assert.deepEqual(cover.paint, waterPaint);
+  assert.deepEqual(cover.filter, ["all", waterFilter, ["!=", ["get", "class"], "ocean"]]);
+
+  fresh.fade();
+  fresh.finish();
+
+  assertSceneOrder(harness, order, ["relief", "contours", "rain", "overview"]);
+
+  // A card display change keeps the staged order.
+  const store = harness.mountStore as {
+    dispatch(action: { kind: string; update(display: never): void }): void;
+  };
+  store.dispatch({
+    kind: "display",
+    update: (display) => {
+      const state = display as { outline: { widthPx: number } };
+      state.outline.widthPx = 3;
+    },
+  });
+
+  assertSceneOrder(harness, order, ["relief", "contours", "rain", "overview"]);
+
+  // The details toggle shows and hides basemap names without moving the covers.
+  storeMapDetailsShown(true);
+
+  assertSceneOrder(harness, order, ["relief", "contours", "rain", "overview"]);
+  assert.equal(harness.map.getLayer(FADE_ID)?.layout.visibility, "visible");
+
+  storeMapDetailsShown(false);
+
+  assertSceneOrder(harness, order, ["relief", "contours", "rain", "overview"]);
+  assert.equal(harness.map.getLayer(FADE_ID)?.layout.visibility, "none");
+
+  // A units change swaps in new symbol layers below the inland cover.
+  harness.map.layers.set("contours-ft", {
+    id: "contours-ft",
+    type: "symbol",
+    layout: { visibility: "visible" },
+  });
+  harness.map.layers.delete("contours");
+  harness.onUnits!("ft", { terrain: "ft" }, ["relief", "contours-ft", "rain", "overview"]);
+
+  assertSceneOrder(harness, order, ["relief", "contours-ft", "rain", "overview"]);
+
+  harness.mode.exit();
+  await settle();
+
+  assert.equal(harness.map.getLayer(INLAND_WATER_ID), undefined);
+  assert.equal(harness.map.getLayer(OCEAN_COVER_ID), undefined);
+  assert.equal(harness.map.getLayer(MASK_ID), undefined);
+  assert.equal(harness.map.getLayer(FADE_ID), undefined);
+  assert.equal(harness.map.filters.size, 0);
+  assert.deepEqual(
+    order.filter(
+      (id) =>
+        ![MASK_ID, FADE_ID, INLAND_WATER_ID, OCEAN_COVER_ID, ...DATA_IDS, "contours-ft"].includes(
+          id,
+        ),
+    ),
+    [
+      "soe-area-outline",
+      "background",
+      "water",
+      "label_city",
+      "water_name_point_label",
+      "water_name_line_label",
+    ],
+  );
+
+  storeMapDetailsShown(false);
+});
+
+test("sea labels stay below the fade and the ocean cover with the other basemap labels", async () => {
   const harness = createHarness();
   const { order } = seedOceanBasemap(harness);
 
@@ -256,12 +366,16 @@ test("sea labels stay above the ocean cover", async () => {
   harness.geometry.resolve(FEATURE);
   await settle();
 
-  assert.ok(order.indexOf(OCEAN_COVER_ID) < order.indexOf("water_name_point_label"));
-  assert.ok(order.indexOf(OCEAN_COVER_ID) < order.indexOf("water_name_line_label"));
+  assert.ok(order.indexOf(MASK_ID) < order.indexOf("water_name_point_label"));
+  assert.ok(order.indexOf("water_name_point_label") < order.indexOf(FADE_ID));
+  assert.ok(order.indexOf("water_name_line_label") < order.indexOf(FADE_ID));
   assert.ok(order.indexOf("water_name_point_label") < order.indexOf("water_name_line_label"));
+  assert.ok(order.indexOf("water_name_point_label") < order.indexOf(OCEAN_COVER_ID));
+  assert.ok(order.indexOf(FADE_ID) < order.indexOf("soe-area-outline"));
+  assert.ok(order.indexOf("soe-area-outline") < order.indexOf(OCEAN_COVER_ID));
 });
 
-test("the outline sits above the area mask and below the ocean cover", async () => {
+test("the outline sits above the mask and the fade but below the ocean", async () => {
   const harness = createHarness();
   const { order } = seedOceanBasemap(harness);
 
@@ -271,11 +385,12 @@ test("the outline sits above the area mask and below the ocean cover", async () 
   await settle();
 
   assert.ok(order.indexOf(MASK_ID) < order.indexOf("soe-area-outline"));
+  assert.ok(order.indexOf(FADE_ID) < order.indexOf("soe-area-outline"));
   assert.ok(order.indexOf("soe-area-outline") < order.indexOf(OCEAN_COVER_ID));
-  assert.ok(order.indexOf(OCEAN_COVER_ID) < order.indexOf("water_name_point_label"));
+  assert.ok(order.indexOf("water_name_point_label") < order.indexOf(FADE_ID));
 });
 
-test("a later layer update keeps the outline below the ocean cover", async () => {
+test("a later layer update keeps new symbols below the ocean and the outline below it", async () => {
   const harness = createHarness();
   const { order } = seedOceanBasemap(harness);
 
@@ -292,15 +407,16 @@ test("a later layer update keeps the outline below the ocean cover", async () =>
   harness.onUnits!("ft", { terrain: "ft" }, ["relief", "contours-ft", "rain", "overview"]);
 
   assert.ok(order.indexOf("contours-ft") < order.indexOf(MASK_ID));
+  assert.ok(order.indexOf("contours-ft") < order.indexOf(OCEAN_COVER_ID));
   assert.ok(order.indexOf(MASK_ID) < order.indexOf("soe-area-outline"));
   assert.ok(order.indexOf("soe-area-outline") < order.indexOf(OCEAN_COVER_ID));
-  assert.ok(order.indexOf(OCEAN_COVER_ID) < order.indexOf("water_name_point_label"));
+  assert.ok(order.indexOf(FADE_ID) < order.indexOf("soe-area-outline"));
   assert.ok(order.indexOf("water_name_point_label") < order.indexOf("water_name_line_label"));
 });
 
 test("the ocean cover mounts inside the curtain and keeps its paint", async () => {
   const harness = phasedHarness();
-  const { waterPaint } = seedOceanBasemap(harness);
+  seedOceanBasemap(harness);
 
   const painted: [string, string][] = [];
   const stub = harness.map as unknown as Record<string, unknown>;
@@ -330,7 +446,7 @@ test("the ocean cover mounts inside the curtain and keeps its paint", async () =
   );
   assert.deepEqual(
     (harness.map.layers.get(OCEAN_COVER_ID) as unknown as Record<string, unknown>).paint,
-    waterPaint,
+    { "fill-color": "#faf8f3", "fill-opacity": 1 },
   );
 
   harness.curtain!.fade();
@@ -342,13 +458,113 @@ test("the ocean cover mounts inside the curtain and keeps its paint", async () =
   );
   assert.deepEqual(
     (harness.map.layers.get(OCEAN_COVER_ID) as unknown as Record<string, unknown>).paint,
-    waterPaint,
+    { "fill-color": "#faf8f3", "fill-opacity": 1 },
   );
 
   await exitActiveHarness();
 });
 
-test("scene entry without basemap water adds no ocean cover", async () => {
+test("a theme change repaints the ocean cover and exit stops watching", async () => {
+  storeMapDetailsShown(false);
+  const harness = createHarness();
+  const { order } = seedOceanBasemap(harness);
+
+  const callbacks = new Set<(records: unknown) => void>();
+  const disconnected: object[] = [];
+  const previousObserver = (globalThis as Record<string, unknown>).MutationObserver;
+  (globalThis as Record<string, unknown>).MutationObserver = class {
+    constructor(private readonly callback: (records: unknown) => void) {}
+    observe() {
+      callbacks.add(this.callback);
+    }
+    disconnect() {
+      disconnected.push(this);
+    }
+  };
+
+  try {
+    harness.enter();
+    harness.data.resolve();
+    harness.geometry.resolve(FEATURE);
+    await settle();
+
+    assert.equal(callbacks.size, 1);
+
+    const painted: [string, unknown][] = [];
+    const stub = harness.map as unknown as Record<string, unknown>;
+    const originalSetPaint = harness.map.setPaintProperty.bind(harness.map);
+    stub.setPaintProperty = (id: string, name: string, value: unknown) => {
+      painted.push([id, value]);
+      return originalSetPaint(id, name, value);
+    };
+
+    const orderBefore = [...order];
+
+    const repaintWith = async (color: string) => {
+      const previousStyle = globalThis.getComputedStyle;
+      (globalThis as Record<string, unknown>).getComputedStyle = () => ({
+        getPropertyValue: () => color,
+      });
+
+      try {
+        for (const callback of [...callbacks]) callback([]);
+      } finally {
+        globalThis.getComputedStyle = previousStyle;
+      }
+      await settle();
+    };
+
+    await repaintWith("#111111");
+
+    assert.deepEqual(painted, [[OCEAN_COVER_ID, "#111111"]]);
+    assert.deepEqual(order, orderBefore);
+    assert.equal(maskFillOpacity(harness.map), 1);
+    assert.equal(fadeFillOpacity(harness.map), 1);
+    assert.equal(harness.map.getLayer(FADE_ID)?.layout.visibility, "none");
+
+    storeMapDetailsShown(true);
+
+    assert.equal(harness.map.getLayer(FADE_ID)?.layout.visibility, "visible");
+
+    painted.length = 0;
+    const orderOn = [...order];
+    await repaintWith("#222222");
+
+    assert.deepEqual(painted, [[OCEAN_COVER_ID, "#222222"]]);
+    assert.deepEqual(order, orderOn);
+    assert.equal(maskFillOpacity(harness.map), 1);
+    assert.equal(fadeFillOpacity(harness.map), 1);
+    assert.equal(harness.map.getLayer(FADE_ID)?.layout.visibility, "visible");
+
+    storeMapDetailsShown(false);
+
+    assert.equal(harness.map.getLayer(FADE_ID)?.layout.visibility, "none");
+
+    painted.length = 0;
+    const orderOff = [...order];
+    await repaintWith("#333333");
+
+    assert.deepEqual(painted, [[OCEAN_COVER_ID, "#333333"]]);
+    assert.deepEqual(order, orderOff);
+    assert.equal(maskFillOpacity(harness.map), 1);
+    assert.equal(fadeFillOpacity(harness.map), 1);
+    assert.equal(harness.map.getLayer(FADE_ID)?.layout.visibility, "none");
+
+    harness.mode.exit();
+    await settle();
+
+    assert.equal(disconnected.length, 1);
+  } finally {
+    storeMapDetailsShown(false);
+    if (previousObserver === undefined) {
+      Reflect.deleteProperty(globalThis, "MutationObserver");
+    } else {
+      (globalThis as Record<string, unknown>).MutationObserver = previousObserver;
+    }
+  }
+});
+
+test("scene entry without basemap water adds no ocean or inland cover", async () => {
   const harness = createHarness();
   (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
     layers: [
@@ -367,11 +583,13 @@ test("scene entry without basemap water adds no ocean cover", async () => {
   await settle();
 
   assert.equal(harness.map.getLayer(OCEAN_COVER_ID), undefined);
+  assert.equal(harness.map.getLayer(INLAND_WATER_ID), undefined);
 
   harness.mode.exit();
   await settle();
 
   assert.equal(harness.map.getLayer(MASK_ID), undefined);
+  assert.equal(harness.map.getLayer(INLAND_WATER_ID), undefined);
 });
 
 test("scene entry hides fully-outside basemap features and exit restores filters", async () => {
@@ -1705,7 +1923,7 @@ test("a throwing renderer keeps charts while the working layer keeps colour", as
   mounted.unmount();
 });
 
-test("a throwing geology mount adds no water copy while others still mount", async (context) => {
+test("a throwing geology mount keeps others mounted while the view adds no water copy", async (context) => {
   const window = new Window({ url: "https://example.test/?scene=test" });
   context.after(async () => {
     const { act } = await import("react");
@@ -1717,7 +1935,6 @@ test("a throwing geology mount adds no water copy while others still mount", asy
 
   const mountScene = await importViewWithStubs(THROWING_REGISTRY_STUB);
   const { NO_TOKENS } = await import("./display-state.ts");
-  const { GEOLOGY_WATER_ID } = await import("./layers/geology-water.ts");
 
   const rain = {
     id: "rain",
@@ -1762,7 +1979,7 @@ test("a throwing geology mount adds no water copy while others still mount", asy
 
   assert.equal(failed.layerIds.includes("rain"), true);
   assert.equal(failed.layerIds.includes("geology"), false);
-  assert.equal(failedMap.getLayer(GEOLOGY_WATER_ID), undefined);
+  assert.equal(failedMap.getLayer(INLAND_WATER_ID), undefined);
   assert.match(cards.textContent ?? "", /renderer failed/);
 
   failed.unmount();
@@ -1783,7 +2000,7 @@ test("a throwing geology mount adds no water copy while others still mount", asy
   );
 
   assert.equal(watering.layerIds.includes("geology_age"), true);
-  assert.ok(wateredMap.getLayer(GEOLOGY_WATER_ID));
+  assert.equal(wateredMap.getLayer(INLAND_WATER_ID), undefined);
 
   watering.unmount();
 });
@@ -3590,6 +3807,24 @@ function assertRanges(map: TestMap, expected: number[][]) {
 function assertFadeCovers(map: TestMap) {
   assert.ok(map.getLayer(FADE_ID), "the fade layer exists above basemap labels");
   assert.equal(fadeFillOpacity(map), FADE_OPACITY);
+}
+
+/** Every scene layer sits below the inland cover, which sits below the mask and the ocean. */
+function assertSceneOrder(
+  harness: ReturnType<typeof createHarness>,
+  order: string[],
+  sceneIds: string[],
+) {
+  for (const id of sceneIds) {
+    assert.ok(harness.map.getLayer(id), `${id} is still mounted`);
+    assert.ok(order.indexOf(id) < order.indexOf(INLAND_WATER_ID), `${id} sits below inland water`);
+  }
+
+  assert.ok(order.indexOf("water") < order.indexOf(sceneIds[0]));
+  assert.ok(order.indexOf(INLAND_WATER_ID) < order.indexOf(MASK_ID));
+  assert.ok(order.indexOf(MASK_ID) < order.indexOf(FADE_ID));
+  assert.ok(order.indexOf(FADE_ID) < order.indexOf("soe-area-outline"));
+  assert.ok(order.indexOf("soe-area-outline") < order.indexOf(OCEAN_COVER_ID));
 }
 
 function captureListeners(map: TestMap) {

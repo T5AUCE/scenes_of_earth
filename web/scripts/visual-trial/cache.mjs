@@ -33,6 +33,8 @@ export async function installCache(context, dir) {
     }
 
     const entry = await revalidate(route, request, stored);
+    // An unreachable host fails only this request, as a dropped connection would in a browser.
+    if (!entry) return route.abort("failed");
 
     if (canStore(entry)) writeEntry(file, entry);
 
@@ -40,17 +42,16 @@ export async function installCache(context, dir) {
   });
 }
 
-// A stale cached response still answers a run when the upstream host cannot be reached.
+// A stale cached response still answers a run when the upstream host cannot be reached, and
+// without one the result is null.
 async function revalidate(route, request, stored) {
   const headers = { ...request.headers(), ...makeValidatorHeaders(stored) };
   let response;
 
   try {
     response = await route.fetch({ headers });
-  } catch (error) {
-    if (!stored) throw error;
-
-    return stored;
+  } catch {
+    return stored ?? null;
   }
 
   const revalidated = response.status() === 304 && stored;

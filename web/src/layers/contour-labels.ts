@@ -510,8 +510,9 @@ function tierFades(
   return opacity;
 }
 
+/** Heights on a contour step except sea level, because the coast already shows it. */
 function multipleOf(interval: number): ExpressionSpecification {
-  return ["==", ["%", ["get", "ele"], interval], 0];
+  return ["all", ["==", ["%", ["get", "ele"], interval], 0], ["!=", ["get", "ele"], 0]];
 }
 
 /** MapLibre source bounds cannot express an unwrapped antimeridian bbox. */

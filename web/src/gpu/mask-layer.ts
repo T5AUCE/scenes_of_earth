@@ -143,7 +143,11 @@ export function createMaskLayers(options: MaskOptions, ids: string[]) {
   return ids.map((id) => {
     const layer = new MaskLayer(id, fill, options.opacity);
 
-    return { layer, setOpacity: (opacity: number) => layer.setOpacity(opacity) };
+    return {
+      layer,
+      setOpacity: (opacity: number) => layer.setOpacity(opacity),
+      setColor: (color: string) => layer.setColor(color),
+    };
   });
 }
 
@@ -214,6 +218,11 @@ class MaskLayer implements CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
+  setColor(color: string) {
+    this.fill.setColor(color);
+    this.map?.triggerRepaint();
+  }
+
   onAdd(map: MapLibreMap) {
     this.map = map;
     this.fill.addUser();
@@ -281,6 +290,12 @@ class MaskFill {
 
   addUser() {
     this.users++;
+  }
+
+  setColor(hex: string): void {
+    this.color.set(colorChannels(hex));
+    // The cached fill holds the old colour, so the next frame refills it.
+    this.filledMatrix = null;
   }
 
   removeUser(gl: WebGL2RenderingContext) {

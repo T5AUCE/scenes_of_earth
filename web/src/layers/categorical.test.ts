@@ -40,7 +40,7 @@ function viewMockModule(specifier: string) {
     case "../data":
       return `
         export const arrayDoc = (layer) => layer.arrays.value;
-        export const readArray = async () => Float32Array.of(10, 20, 0, 10);
+        export const readArray = async () => globalThis.__values ?? Float32Array.of(10, 20, 0, 10);
         export const decode = (raw) => raw;
         export const decodeInSlices = async (raw) => raw;
         export const isCancel = (error) => error?.name === "AbortError";
@@ -499,6 +499,63 @@ test("invalid coastal dimensions fall back to metre cells for window and distanc
   assert.deepEqual([...filled], [1, 1]);
 });
 
+test("the default fill still targets hatched cells with any class as source", () => {
+  const ids = Uint8Array.of(2, CLASS_HATCH_ID);
+  const mask = Uint8Array.of(1, 1);
+  const filled = fillCoastalGaps(ids, mask, 2, 1, 1);
+
+  assert.deepEqual([...filled], [2, 2]);
+  assert.deepEqual([...ids], [2, CLASS_HATCH_ID]);
+});
+
+test("land-cover water borrows the nearest land class while the input keeps 80", () => {
+  const ids = Uint8Array.of(1, WATER_ID, 1);
+  const mask = new Uint8Array(3).fill(1);
+  const filled = fillCoastalGaps(ids, mask, 3, 1, 1, 1, 1, WATER_ID);
+
+  assert.deepEqual([...filled], [1, 1, 1]);
+  assert.deepEqual([...ids], [1, WATER_ID, 1]);
+});
+
+test("a lake interior beyond the radius keeps water", () => {
+  const ids = new Uint8Array(25).fill(WATER_ID);
+  ids[0] = 1;
+
+  const mask = new Uint8Array(25).fill(1);
+  const filled = fillCoastalGaps(ids, mask, 5, 5, 2, 1, 1, WATER_ID);
+
+  assert.equal(filled[2], 1);
+  assert.equal(filled[6], 1);
+  assert.equal(filled[12], WATER_ID);
+});
+
+test("masked-out water stays water and masked-out land never donates", () => {
+  const outsideWater = Uint8Array.of(1, WATER_ID, 1, WATER_ID);
+  const outsideMask = Uint8Array.of(0, 1, 1, 0);
+  const filledOutside = fillCoastalGaps(outsideWater, outsideMask, 4, 1, 1, 1, 1, WATER_ID);
+
+  assert.deepEqual([...filledOutside], [1, 1, 1, WATER_ID]);
+
+  const hiddenSource = Uint8Array.of(WATER_ID, 1);
+  const hiddenMask = Uint8Array.of(1, 0);
+  const filledHidden = fillCoastalGaps(hiddenSource, hiddenMask, 2, 1, 1, 1, 1, WATER_ID);
+
+  assert.deepEqual([...filledHidden], [WATER_ID, 1]);
+});
+
+test("water ties go to the smallest id and water never donates", () => {
+  const tied = Uint8Array.of(3, WATER_ID, 1);
+  const mask = new Uint8Array(3).fill(1);
+  const filledTied = fillCoastalGaps(tied, mask, 3, 1, 1, 1, 1, WATER_ID);
+
+  assert.deepEqual([...filledTied], [3, 1, 1]);
+
+  const allWater = Uint8Array.of(WATER_ID, CLASS_HATCH_ID);
+  const filledAlone = fillCoastalGaps(allWater, mask.subarray(0, 2), 2, 1, 5, 1, 1, WATER_ID);
+
+  assert.deepEqual([...filledAlone], [WATER_ID, CLASS_HATCH_ID]);
+});
+
 test("geology fill hides a coastal hatch while land cover keeps it", async () => {
   (globalThis as { __mask?: Uint8Array }).__mask = Uint8Array.of(1, 1, 1, 1);
   (globalThis as { __noDataLegendCalls?: unknown[] }).__noDataLegendCalls = [];
@@ -530,6 +587,41 @@ test("geology fill hides a coastal hatch while land cover keeps it", async () =>
   } finally {
     coverHarness.cleanup();
     Reflect.deleteProperty(globalThis, "__mask");
+  }
+});
+
+test("land cover draws water as its neighbour while the legend keeps Permanent water", async () => {
+  (globalThis as { __mask?: Uint8Array }).__mask = Uint8Array.of(1, 1, 1, 1);
+  (globalThis as { __values?: Float32Array }).__values = Float32Array.of(10, 80, 10, 10);
+
+  const harness = createViewHarness(false, undefined, "esa_worldcover", WATER_CLASSES);
+
+  try {
+    const view = createCategoricalView(harness.context);
+    await view.ready;
+    harness.custom.get("esa_worldcover-classes")!.render(harness.gpu.gl, harness.gpu.input);
+    await Promise.resolve();
+
+    const present = legendCalls().at(-1)?.[1] as Set<number>;
+
+    assert.ok(present.has(80));
+    assert.ok(present.has(10));
+
+    const tree = classColors("esa_worldcover", WATER_CLASSES, "painted").get(10)!;
+    const pixels = harness.map.image!.data;
+
+    assert.ok(pixels.length > 0);
+
+    for (let pixel = 0; pixel < pixels.length; pixel += 4) {
+      assert.deepEqual([...pixels.slice(pixel, pixel + 3)], tree);
+      assert.equal(pixels[pixel + 3], 255);
+    }
+
+    view.destroy();
+  } finally {
+    harness.cleanup();
+    Reflect.deleteProperty(globalThis, "__mask");
+    Reflect.deleteProperty(globalThis, "__values");
   }
 });
 
@@ -620,6 +712,14 @@ const COVER_CLASSES = [
   { value: 20, label: "Grass", color: "#445566" },
 ];
 
+const WATER_CLASSES = [
+  { value: 10, label: "Tree cover", color: "#006400" },
+  { value: 80, label: "Permanent water bodies", color: "#0064c8" },
+];
+
+// The one-based display id of class 80 in WATER_CLASSES.
+const WATER_ID = WATER_CLASSES.findIndex(({ value }) => value === 80) + 1;
+
 const AGE_LIKE_CLASSES = [
   { value: 1, label: "Quaternary", color: "#f9f97f", group: "Cenozoic" },
   { value: 5, label: "Cretaceous", color: "#7fc64e", group: "Mesozoic" },
@@ -654,7 +754,13 @@ function createViewHarness(
   Object.assign(globalThis, {
     document: { body, createElement: () => ({ replaceChildren: () => {} }) },
     localStorage: { getItem: () => null },
-    ImageData: class {},
+    ImageData: class {
+      constructor(data, width, height) {
+        this.data = data;
+        this.width = width;
+        this.height = height;
+      }
+    },
   });
 
   const capture = new Map<string, () => void>();

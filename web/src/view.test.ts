@@ -360,7 +360,7 @@ test("the outline layer paints the linked colour and width and hides when linked
   mounted.unmount();
 });
 
-test("the outline draws the land borders of a scene cut to land and the area otherwise", () => {
+test("the outline draws only the land borders when the area is cut to land", () => {
   const outlineData = (map: ReturnType<typeof fakeMap>) =>
     (map.getSource("soe-area-outline") as { data: string }).data;
 
@@ -395,51 +395,47 @@ test("an outline display change repaints the map and remembers the choice", () =
   mounted.unmount();
 });
 
-test("basemap water mounts for categorical scenes and leaves with the scene", async () => {
-  const { GEOLOGY_WATER_ID } = await import("./layers/geology-water.ts");
+test("scene view mounts no water copy because the scene owner adds the single inland cover", async () => {
+  const { INLAND_WATER_ID } = await import("./layers/geology-water.ts");
 
   for (const layerIds of [["geology"], ["esa_worldcover"], ["geology", "esa_worldcover"]]) {
     const { mounted, map } = mountCategoricalLayers(layerIds);
 
-    assert.ok(map.getLayer(GEOLOGY_WATER_ID), layerIds.join(","));
-    assert.equal(map.addedSources(), 0, layerIds.join(","));
+    assert.equal(map.getLayer(INLAND_WATER_ID), undefined, layerIds.join(","));
+    assert.equal(map.getLayer("soe-geology-water"), undefined, layerIds.join(","));
 
     mounted.unmount();
-
-    assert.equal(map.getLayer(GEOLOGY_WATER_ID), undefined, layerIds.join(","));
   }
 });
 
 test("scenes without categorical layers mount no water copy", () => {
   const { mounted, map } = mountTwoLayers();
 
+  assert.equal(map.getLayer("soe-inland-water"), undefined);
   assert.equal(map.getLayer("soe-geology-water"), undefined);
 
   mounted.unmount();
 });
 
-test("water sits above categorical fills but below climate colour images", async () => {
-  const { GEOLOGY_WATER_ID } = await import("./layers/geology-water.ts");
+test("categorical fills and climate colours mount in stack order with no water between them", async () => {
   const { mounted, map } = mountMixedLayers();
   const orderOf = () => [...map.layers.keys()];
-  const belowClimate = (order: string[]): boolean =>
-    order.indexOf("esa_worldcover-draw") < order.indexOf(GEOLOGY_WATER_ID)
-    && order.indexOf(GEOLOGY_WATER_ID) < order.indexOf("rain-draw");
 
-  assert.ok(belowClimate(orderOf()));
+  assert.ok(orderOf().indexOf("esa_worldcover-draw") < orderOf().indexOf("rain-draw"));
+  assert.equal(map.getLayer("soe-inland-water"), undefined);
   assert.equal(map.addedSources(), 0);
 
   mounted.store.dispatch({ kind: "choose", unit: "rain", draw: "colour" });
 
-  assert.ok(belowClimate(orderOf()));
+  assert.ok(orderOf().indexOf("esa_worldcover-draw") < orderOf().indexOf("rain-draw"));
 
   mounted.store.dispatch({ kind: "choose", unit: "esa_worldcover", draw: "colour" });
 
-  assert.ok(belowClimate(orderOf()));
+  assert.ok(orderOf().indexOf("esa_worldcover-draw") < orderOf().indexOf("rain-draw"));
 
   mounted.unmount();
 
-  assert.equal(map.getLayer(GEOLOGY_WATER_ID), undefined);
+  assert.equal(map.getLayer("soe-inland-water"), undefined);
 });
 
 function mountTwoLayers(

@@ -478,6 +478,27 @@ test("the terrain legend shows the interval while the contours part carries no n
   view.destroy();
 });
 
+test("sea level carries no contour label while the other steps keep theirs", (context) => {
+  mockPage(context);
+
+  const map = new TestMap();
+  const dem = sharedDemSource(TILES);
+  const overlay = new ContourLabels(layerContext(map), dem, TILES, FIJI);
+
+  const labels = map.layers.get("terrain-contours-labels")!;
+  const dumped = JSON.stringify({
+    filter: labels.filter,
+    field: labels.layout["text-field"],
+    opacity: labels.paint["text-opacity"],
+  });
+
+  // The zero check rides on every step multiple, so 0 hides at each zoom in both units.
+  assert.ok(dumped.includes(`["!=",${JSON.stringify(["get", "ele"])},0]`));
+  assert.ok(JSON.stringify(labels.filter).includes("100"));
+
+  overlay.destroy();
+});
+
 test("the configured contour buffer stays inside the plugin's materialized padding", (context) => {
   mockPage(context);
 

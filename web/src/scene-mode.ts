@@ -24,7 +24,15 @@ import { createMaskLayers } from "./gpu/mask-layer";
 import { keepThroughContextLoss } from "./gpu/tiled-layer";
 import { makeHtmlElement } from "./html";
 import { polygonParts } from "./label-filter";
-import { addOceanCover, OCEAN_COVER_ID, removeOceanCover } from "./layers/geology-water";
+import {
+  addInlandWater,
+  addOceanCover,
+  INLAND_WATER_ID,
+  OCEAN_COVER_ID,
+  refreshOceanCover,
+  removeInlandWater,
+  removeOceanCover,
+} from "./layers/geology-water";
 import { basemapPreloadSource } from "./layers/scene-preload";
 import { pinGpuTerrainBase, setTerrainBaseZoom } from "./layers/terrain";
 import { closeScenePreload, currentScenePreload, openScenePreload } from "./layers/tile-prefetch";
@@ -48,11 +56,9 @@ import { type EntryPreparation, mountScene, OUTLINE_ID } from "./view";
 
 const MASK_ID = "soe-scene-mask";
 const FADE_ID = "soe-scene-fade";
-// Sea names stay above the ocean cover, so they remain readable over the basemap blue.
-const SEA_LABEL_PREFIX = "water_name";
 const MASK_OPACITY = 1;
-// Outside labels show through this much of the page background, so they read as faded.
-const FADE_OPACITY = 0.6;
+// The fade is opaque so outside labels hide completely while inside labels stay visible.
+const FADE_OPACITY = 1;
 // Hidden masks stay fully transparent until the reveal stages the scene under the curtain.
 const HIDDEN_OPACITY = 0;
 const PAGE_BACKGROUND_PROPERTY = "--page-background";
@@ -353,10 +359,13 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       syncFadeVisible(map, shown);
     });
 
+    // The sea cover follows the page theme while the scene is open, in dark mode too.
+    let masks: MaskLayers | null = null;
+    const stopOceanTheme = watchOceanTheme(map, () => masks);
+
     const entryRun = new AbortController();
     const flight = flyIn(map, scene, roots);
     let reveal: EntryReveal | null = null;
-    let masks: MaskLayers | null = null;
     let curtainId = 0;
     let isPreparing = true;
     let landedMs = 0;
@@ -396,6 +405,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
         stopDocking();
         stopGesture();
         stopDetails();
+        stopOceanTheme();
         stopEntryContextLoss();
 
         masks?.release();
@@ -405,6 +415,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
         removeLayerAndSource(map, FADE_ID);
         removeLayerAndSource(map, MASK_ID);
         removeOceanCover(map);
+        removeInlandWater(map);
         restoreBasemapFilters(map, savedBasemapFilters);
         savedBasemapFilters = null;
         restoreBasemapOrder(map, savedBasemapOrder);
@@ -589,7 +600,10 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
         if (map.getLayer(symbol)) map.moveLayer(symbol, FADE_ID);
       }
 
-      addOceanCover(map, undefined);
+      // The sea cover sits above every scene layer, so the coast stays exact at any zoom.
+      addOceanCover(map, undefined, pageBackground());
+      // Inland water stays above scene data, so lakes and rivers keep basemap blue.
+      addInlandWater(map, map.getLayer(MASK_ID) ? MASK_ID : undefined);
 
       masks?.mask.setOpacity(MASK_OPACITY);
       masks?.fade.setOpacity(FADE_OPACITY);
@@ -961,7 +975,7 @@ function addHiddenMask(
   );
   // Both start transparent so the basemap stays stable while required work settles.
   const options = { rings, color: pageBackground(), opacity: HIDDEN_OPACITY, onFail };
-  // The fade is a second layer above the basemap symbols, so outside labels read as dimmed.
+  // The fade sits above the basemap symbols so outside labels hide once it turns opaque.
   const [mask, fade] = createMaskLayers(options, [MASK_ID, FADE_ID]);
   map.addLayer(mask.layer);
   map.addLayer(fade.layer);
@@ -1087,35 +1101,21 @@ function bboxMaskGeometry([west, south, east, north]: Bbox) {
   return { type: "MultiPolygon", coordinates: [[maskRing([ring])]] };
 }
 
-/**
- * Scene symbols sit under the mask so labels are cut at the outline, not drawn outside it. The
- * outline sits above the mask but under the ocean cover so that sea beyond the land hides the
- * coast drawn offshore, while sea names stay above the ocean cover and remain readable.
- */
+/** Scene symbols sit under the inland cover and the mask, so contour labels never print over lakes and rivers while the mask still cuts them at the outline. */
 function placeSceneSymbols(map: MapLibreMap, sceneLayerIds: readonly string[]): void {
-  const beforeId = map.getLayer(MASK_ID) ? MASK_ID : undefined;
-  for (const id of sceneSymbols(map, sceneLayerIds)) map.moveLayer(id, beforeId);
+  const inland = map.getLayer(INLAND_WATER_ID) ? INLAND_WATER_ID : undefined;
+  const belowCover = inland ?? (map.getLayer(MASK_ID) ? MASK_ID : undefined);
+  for (const id of sceneSymbols(map, sceneLayerIds)) map.moveLayer(id, belowCover);
+  // The inland cover stays below the mask, so the world outside the area stays hidden.
+  if (inland && map.getLayer(MASK_ID)) map.moveLayer(inland, MASK_ID);
+  // The outline stays below the sea cover, so the coast it draws never shows over the sea.
   if (map.getLayer(OUTLINE_ID)) {
     map.moveLayer(OUTLINE_ID, map.getLayer(OCEAN_COVER_ID) ? OCEAN_COVER_ID : undefined);
   }
-  raiseSeaLabelsAboveOcean(map);
 }
 
 function sceneSymbols(map: MapLibreMap, sceneLayerIds: readonly string[]): string[] {
   return sceneLayerIds.filter((id) => map.getLayer(id)?.type === "symbol");
-}
-
-/**
- * Sea names in style order move above the ocean cover, so they stay readable over the
- * basemap blue instead of hiding under it. The order among the sea names stays as styled.
- */
-function raiseSeaLabelsAboveOcean(map: MapLibreMap): void {
-  if (!map.getLayer(OCEAN_COVER_ID)) return;
-
-  for (const layer of map.getStyle()?.layers ?? []) {
-    if (layer.type !== "symbol" || !layer.id.startsWith(SEA_LABEL_PREFIX)) continue;
-    if (map.getLayer(layer.id)) map.moveLayer(layer.id, undefined);
-  }
 }
 
 /** Remember each basemap symbol's own visibility so scenes restore it exactly. */
@@ -1169,6 +1169,46 @@ function outlines(geometry: AreaFeature["geometry"]) {
     exteriors: parts.map((part) => part[0]),
     interiors: parts.flatMap((part) => part.slice(1)),
   };
+}
+
+/**
+ * Repaint the sea cover and the outside mask when the page theme changes, because map paint
+ * keeps the colour it was given while the style sheet variable follows the theme. A class
+ * toggle moves the attributes and the operating system setting moves the media query, so both
+ * are watched. The mask keeps its opacity, visibility and order because only its colour fills
+ * again.
+ */
+function watchOceanTheme(map: MapLibreMap, getMasks: () => MaskLayers | null): () => void {
+  try {
+    const stops: (() => void)[] = [];
+    const refresh = () => {
+      const color = pageBackground();
+      refreshOceanCover(map, color);
+
+      const currentMasks = getMasks();
+      currentMasks?.mask.setColor?.(color);
+      currentMasks?.fade.setColor?.(color);
+    };
+
+    if (typeof MutationObserver === "function") {
+      const observer = new MutationObserver(refresh);
+      observer.observe(document.documentElement, { attributes: true });
+      stops.push(() => observer.disconnect());
+    }
+
+    if (typeof matchMedia === "function") {
+      const media = matchMedia("(prefers-color-scheme: dark)");
+      media.addEventListener("change", refresh);
+      stops.push(() => media.removeEventListener("change", refresh));
+    }
+
+    return () => {
+      for (const stop of stops) stop();
+    };
+  } catch {
+    // Without a browser the sea cover and the mask keep the colour they were given.
+    return () => {};
+  }
 }
 
 function pageBackground() {

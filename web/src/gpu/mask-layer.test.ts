@@ -216,6 +216,71 @@ test("a colour that is not hex fails when the layer is made", () => {
   assert.throws(make, /hex colour/);
 });
 
+test("a colour change refills the shared target with the new colour", () => {
+  const { gl, calls } = fakeGl();
+  const [mask, fade] = createMaskLayers(options(), ["mask", "fade"]);
+  mask.setOpacity(1);
+  fade.setOpacity(1);
+
+  for (const { layer } of [mask, fade]) layer.prerender(gl, input());
+
+  assert.deepEqual(channels(names(calls, "uniform3fv").at(-1)![1]), [1, 1, 1]);
+  assert.equal(names(calls, "clear").length, 1);
+  assert.equal(names(calls, "renderbufferStorage").length, 1);
+
+  mask.setColor("#336699");
+
+  for (const { layer } of [mask, fade]) layer.prerender(gl, input());
+
+  assert.deepEqual(channels(names(calls, "uniform3fv").at(-1)![1]), [0.2, 0.4, 0.6]);
+  assert.equal(names(calls, "clear").length, 2);
+  assert.equal(names(calls, "renderbufferStorage").length, 1);
+});
+
+test("a colour change keeps the layer opacity", () => {
+  const { gl, calls, find } = fakeGl();
+  const [{ layer, setOpacity, setColor }] = createMaskLayers(options(), IDS);
+  setOpacity(0.6);
+  layer.prerender(gl, input());
+  calls.length = 0;
+
+  setColor("#336699");
+  layer.prerender(gl, input());
+  layer.render(gl, input());
+
+  assert.deepEqual(find("uniform1f"), ["uOpacity", 0.6]);
+  assert.ok(names(calls, "drawArrays").length > 0);
+});
+
+test("a colour change while hidden paints the new colour once shown", () => {
+  const { gl, find } = fakeGl();
+  const [{ layer, setOpacity, setColor }] = createMaskLayers(options(), IDS);
+
+  layer.prerender(gl, input());
+  setColor("#336699");
+  setOpacity(1);
+  layer.prerender(gl, input());
+
+  assert.deepEqual(channels(find("uniform3fv")![1]), [0.2, 0.4, 0.6]);
+});
+
+test("a colour that is not hex fails when the colour changes", () => {
+  const [{ setColor }] = createMaskLayers(options(), IDS);
+
+  assert.throws(() => setColor("rebeccapurple"), /hex colour/);
+});
+
+test("a colour change asks the map for another frame", () => {
+  let repaints = 0;
+  const map = { triggerRepaint: () => repaints++ } as unknown as MapLibreMap;
+  const [{ layer, setColor }] = createMaskLayers(options(), IDS);
+  layer.onAdd(map, fakeGl().gl);
+
+  setColor("#336699");
+
+  assert.equal(repaints, 1);
+});
+
 test("the target is composited premultiplied at the layer opacity", () => {
   const { gl, calls, find } = fakeGl();
   const [{ layer, setOpacity }] = createMaskLayers(options(), IDS);

@@ -233,6 +233,9 @@ test("the shader carries the fade constants of the reference", () => {
 
 test("the shader carries the tie bias and floors the slope in CSS pixels", () => {
   assert.ok(CONTOUR_FRAGMENT_SHADER.includes("nearM - 0.001"));
+  assert.ok(CONTOUR_FRAGMENT_SHADER.includes("floor(surface.origin / intervalM) + round(level)"));
+  assert.ok(CONTOUR_FRAGMENT_SHADER.includes("absoluteLevel == 0.0"));
+  assert.ok(!CONTOUR_FRAGMENT_SHADER.includes("if (round(level)"));
   assert.ok(CONTOUR_FRAGMENT_SHADER.includes("0.000500000000 / uPixelRatio"));
   assert.ok(CONTOUR_FRAGMENT_SHADER.includes("levelRelM < surface.lowest"));
   assert.ok(CONTOUR_FRAGMENT_SHADER.includes("levelRelM >= surface.highest"));
@@ -531,23 +534,84 @@ test("a 0 m and -2 m sea seam draws no line", () => {
   assert.equal(strongestAcross(seam, [tier(10)]), 0);
 });
 
-test("a 0 m and 1 m coast keeps its line", () => {
-  const coast = [
+test("a slope past 10 m keeps its line while a 0 m and 1 m coast draws none", () => {
+  const flat = [
     [0, 0, 1, 1],
     [0, 0, 1, 1],
     [0, 0, 1, 1],
     [0, 0, 1, 1],
   ];
+  const pastTen = [
+    [0, 0, 11, 11],
+    [0, 0, 11, 11],
+    [0, 0, 11, 11],
+    [0, 0, 11, 11],
+  ];
 
-  assert.ok(strongestAcross(coast, [tier(10)]) > 0);
+  assert.equal(strongestAcross(flat, [tier(10)]), 0);
+  assert.ok(strongestAcross(pastTen, [tier(10)]) > 0);
 });
 
-test("a sea-level terrace at 0 m still counts as below the line", () => {
-  const lower = Array.from({ length: 4 }, () => [-1, 0, 0, 0]);
-  const higher = Array.from({ length: 4 }, () => [1, 0, 0, 0]);
+test("a terrace at a labelled height is below it, whichever side the neighbour is", () => {
+  const lowerNeighbour = Array.from({ length: 4 }, () => [9, 10, 10, 10]);
+  const higherNeighbour = Array.from({ length: 4 }, () => [11, 10, 10, 10]);
 
-  assert.equal(strongestAcross(lower, [tier(10)]), 0);
-  assert.ok(strongestAcross(higher, [tier(10)]) > 0);
+  assert.equal(strongestAcross(lowerNeighbour, [tier(10)]), 0);
+  assert.ok(strongestAcross(higherNeighbour, [tier(10)]) > 0);
+});
+
+test("a ramp crossing only sea level draws no line while one crossing -10 m does", () => {
+  const acrossZero = [
+    [-5, -5, 5, 5],
+    [-5, -5, 5, 5],
+    [-5, -5, 5, 5],
+    [-5, -5, 5, 5],
+  ];
+  const acrossMinusTen = [
+    [-15, -15, -5, -5],
+    [-15, -15, -5, -5],
+    [-15, -15, -5, -5],
+    [-15, -15, -5, -5],
+  ];
+
+  assert.equal(strongestAcross(acrossZero, [tier(10)]), 0);
+  assert.ok(strongestAcross(acrossMinusTen, [tier(10)]) > 0);
+});
+
+test("the shader skips only the absolute zero for a positive nonzero origin", () => {
+  for (const intervalM of [100, 100 * METRES_PER_FOOT]) {
+    for (const heightM of [0, intervalM, -intervalM]) {
+      const originM = intervalM;
+      const expected = referenceSkipsZero(heightM, intervalM);
+
+      assert.equal(shaderSkipsZero(originM, heightM - originM, intervalM), expected);
+    }
+
+    assert.equal(shaderSkipsZero(intervalM, 0, intervalM), false);
+    assert.equal(referenceSkipsZero(intervalM, intervalM), false);
+  }
+});
+
+test("the shader skips only the absolute zero for a negative nonzero origin", () => {
+  for (const intervalM of [100, 100 * METRES_PER_FOOT]) {
+    for (const heightM of [0, intervalM, -intervalM]) {
+      const originM = -intervalM;
+      const expected = referenceSkipsZero(heightM, intervalM);
+
+      assert.equal(shaderSkipsZero(originM, heightM - originM, intervalM), expected);
+    }
+
+    assert.equal(shaderSkipsZero(-intervalM, 0, intervalM), false);
+    assert.equal(referenceSkipsZero(-intervalM, intervalM), false);
+  }
+});
+
+test("the shader hides a zero crossing whose origin sits below sea level", () => {
+  for (const intervalM of [100, 100 * METRES_PER_FOOT]) {
+    assert.equal(shaderSkipsZero(-1, 1, intervalM), true);
+    assert.equal(referenceSkipsZero(0, intervalM), true);
+    assert.equal(shaderSkipsZero(-1, 1, intervalM), referenceSkipsZero(0, intervalM));
+  }
 });
 
 test("a blend between two levels keeps its line where the taps straddle it", () => {
@@ -611,6 +675,24 @@ function rimCrossing(heights: number[][], height: number): number {
 
 function tier(intervalM: number, options: Partial<ContourTier> = {}): ContourTier {
   return { intervalM, alpha: CONTOUR_OPACITY, widthPx: MINOR_LINE_WIDTH_PX, ...options };
+}
+
+/** The shader guard over relative heights, which must match the absolute reference. */
+function shaderSkipsZero(originM: number, relativeM: number, intervalM: number): boolean {
+  const nearM = glslMod(originM, intervalM) + relativeM;
+  const level = (nearM - TIE_BIAS_M) / intervalM;
+
+  return Math.floor(originM / intervalM) + Math.round(level) === 0;
+}
+
+/** The reference guard over an absolute height, which hides only sea level. */
+function referenceSkipsZero(heightM: number, intervalM: number): boolean {
+  return Math.round((heightM - TIE_BIAS_M) / intervalM) === 0;
+}
+
+/** The GLSL remainder, which stays positive for a positive interval. */
+function glslMod(value: number, interval: number): number {
+  return value - interval * Math.floor(value / interval);
 }
 
 function assertClose(actual: number, expected: number, message?: string) {

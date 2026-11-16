@@ -50,6 +50,9 @@ const DEGREES_PER_RADIAN = 180 / Math.PI;
 const COASTAL_FILL_M = 2000;
 const MIN_FILL_RADIUS_CELLS = 1;
 
+const LAND_COVER_LAYER_ID = "esa_worldcover";
+const LAND_COVER_WATER_VALUE = 80; // ESA WorldCover permanent water.
+
 // Entry slices stay well under a frame while the previous pixels stay responsive.
 const ENTRY_CHECK_CELLS = 4096;
 const ENTRY_BUDGET_MS = 4;
@@ -442,19 +445,45 @@ class CategoricalView implements LayerView {
       const mask = await readMask(store, this.context.layer);
       await markHatchedNoDataInSlices(this.ids!, mask, signal);
 
+      const { bbox, nx, ny, res } = this.context.layer.grid;
+      const meanLatitude = (bbox[1] + bbox[3]) / 2;
+      const fillRadius = coastalFillRadiusCells(res, meanLatitude);
+      const fillWidth = cellWidthM(res, meanLatitude);
+      const fillHeight = cellHeightM(res);
+
       if (isGeologyLayer(this.context.layer.id)) {
-        const { bbox, nx, ny, res } = this.context.layer.grid;
-        const meanLatitude = (bbox[1] + bbox[3]) / 2;
+        // Spill into water stays hidden under the inland-water cover.
         this.ids = await fillCoastalGapsInSlices(
           this.ids!,
           mask,
           nx,
           ny,
-          coastalFillRadiusCells(res, meanLatitude),
-          cellWidthM(res, meanLatitude),
-          cellHeightM(res),
+          fillRadius,
+          fillWidth,
+          fillHeight,
+          CLASS_HATCH_ID,
           signal,
         );
+      }
+
+      // Water cells borrow their neighbours on screen, so coarse coastal cells meet the shore.
+      // The fill changes only the drawn ids, so inspection and statistics still see class 80.
+      if (this.context.layer.id === LAND_COVER_LAYER_ID) {
+        const waterId = this.classValues.indexOf(LAND_COVER_WATER_VALUE) + 1;
+
+        if (waterId > 0) {
+          this.ids = await fillCoastalGapsInSlices(
+            this.ids!,
+            mask,
+            nx,
+            ny,
+            fillRadius,
+            fillWidth,
+            fillHeight,
+            waterId,
+            signal,
+          );
+        }
       }
 
       this.hasHatched = this.ids!.includes(CLASS_HATCH_ID);
@@ -609,9 +638,9 @@ function cellHeightM(resDeg: number): number {
 }
 
 /**
- * Extend geology classes into neighbouring hatched cells inside the area by nearest class.
- * The fill stays discrete and display-only. Ties go to the smallest id. Outside cells stay
- * untouched. Cells beyond the radius stay hatched. Spill into water hides under the copy.
+ * Draw replaced cells inside the area as their nearest kept class, so coarse cells meet
+ * the shore without a blocky band. The fill stays display-only. Ties go to the smallest id.
+ * Outside cells stay untouched. Cells beyond the radius keep their id.
  */
 export function fillCoastalGaps(
   ids: Uint8Array,
@@ -621,6 +650,7 @@ export function fillCoastalGaps(
   radiusCells: number,
   widthM = 1,
   heightM = 1,
+  replacedId = CLASS_HATCH_ID,
 ): Uint8Array {
   const filled = Uint8Array.from(ids);
 
@@ -637,7 +667,7 @@ export function fillCoastalGaps(
   for (let row = 0; row < ny; row++) {
     for (let column = 0; column < nx; column++) {
       const cell = row * nx + column;
-      if (mask[cell] !== 1 || filled[cell] !== CLASS_HATCH_ID) continue;
+      if (mask[cell] !== 1 || filled[cell] !== replacedId) continue;
 
       const best = nearestCoastalSource(
         ids,
@@ -651,6 +681,7 @@ export function fillCoastalGaps(
         maxDistance,
         cellWidth,
         cellHeight,
+        replacedId,
       );
 
       if (best !== 0) filled[cell] = best;
@@ -669,7 +700,7 @@ export function unhatchIds(ids: Uint8Array) {
 }
 
 /**
- * Fill coastal gaps in bounded row slices so entry keeps responding while filling.
+ * Fill replaced cells in bounded row slices so entry keeps responding while filling.
  * The output matches fillCoastalGaps exactly.
  */
 async function fillCoastalGapsInSlices(
@@ -680,6 +711,7 @@ async function fillCoastalGapsInSlices(
   radiusCells: number,
   widthM = 1,
   heightM = 1,
+  replacedId = CLASS_HATCH_ID,
   signal?: AbortSignal,
 ): Promise<Uint8Array> {
   const filled = Uint8Array.from(ids);
@@ -703,7 +735,7 @@ async function fillCoastalGapsInSlices(
     for (let column = 0; column < nx; column++) {
       const cell = row * nx + column;
 
-      if (mask[cell] === 1 && filled[cell] === CLASS_HATCH_ID) {
+      if (mask[cell] === 1 && filled[cell] === replacedId) {
         const best = nearestCoastalSource(
           ids,
           mask,
@@ -716,6 +748,7 @@ async function fillCoastalGapsInSlices(
           maxDistance,
           cellWidth,
           cellHeight,
+          replacedId,
         );
 
         if (best !== 0) filled[cell] = best;
@@ -766,6 +799,7 @@ function nearestCoastalSource(
   maxDistance: number,
   widthM: number,
   heightM: number,
+  replacedId: number,
 ): number {
   let bestDistance = Number.POSITIVE_INFINITY;
   let bestSource = 0;
@@ -780,7 +814,7 @@ function nearestCoastalSource(
       if (mask[sourceCell] !== 1) continue;
 
       const source = ids[sourceCell];
-      if (source === 0 || source === CLASS_HATCH_ID) continue;
+      if (source === 0 || source === CLASS_HATCH_ID || source === replacedId) continue;
 
       const distance = Math.hypot((column - sourceColumn) * widthM, (row - sourceRow) * heightM);
       if (distance > maxDistance) continue;
