@@ -8,13 +8,15 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+import shapely
 import zarr
-from shapely.geometry import mapping
+from shapely.geometry import MultiPolygon, mapping
 from shapely.geometry.base import BaseGeometry
 
 from . import __version__
 from .areas import Area, simplify_for_display
 from .bundle import VERSION, JsonObject, make, validate
+from .land import OUTLINE_PRECISION_DEG
 from .layer_writer import ProgressCallback, _write_layers
 from .plan import Plan, scene_datasets
 from .plan import plan as make_plan
@@ -145,21 +147,46 @@ def _write_scene_documents(
     temp_dir: Path, scene_document: JsonObject, title: str, area: Area, scene_plan: Plan
 ) -> None:
     area_name = (area.boundary or {}).get("name", title)
-    area_feature = {
-        "type": "Feature",
-        "properties": {"name": area_name},
-        "geometry": mapping(_display_geometry(scene_plan)),
-    }
+    outline = (
+        _land_outline(area, scene_plan) if area.land_version else _display_geometry(scene_plan)
+    )
+    _write_feature(temp_dir / "area.geojson", area_name, outline)
 
-    (temp_dir / "area.geojson").write_text(json.dumps(area_feature), encoding="utf-8")
+    if area.land_version:
+        borders = shapely.set_precision(area.borders, OUTLINE_PRECISION_DEG)
+        _write_feature(temp_dir / "borders.geojson", area_name, borders)
+
     (temp_dir / "scene.json").write_text(json.dumps(scene_document, indent=1), encoding="utf-8")
+
+
+def _write_feature(path: Path, name: str, geometry: BaseGeometry) -> None:
+    feature = {"type": "Feature", "properties": {"name": name}, "geometry": mapping(geometry)}
+    path.write_text(json.dumps(feature), encoding="utf-8")
 
 
 def _display_geometry(scene_plan: Plan) -> BaseGeometry:
     """Return the plan outline simplified with the display tolerance."""
-    finest_cell_deg = min(layer.res for layer in scene_plan.layers.values())
-    tolerance_deg = max(MIN_DISPLAY_TOLERANCE_DEG, finest_cell_deg / DISPLAY_SIMPLIFY_DIVISOR)
-    return simplify_for_display(scene_plan.geometry, tolerance_deg)
+    return simplify_for_display(scene_plan.geometry, _display_tolerance(scene_plan))
+
+
+def _land_outline(area: Area, scene_plan: Plan) -> BaseGeometry:
+    """Return the outline of an area cut to land without parts smaller than the finest cell.
+
+    The largest part stays, so an area of islets keeps an outline.
+    """
+    finest_cell_deg = _finest_cell(scene_plan)
+    parts = sorted(shapely.get_parts(area.display), key=lambda part: part.area, reverse=True)
+    kept = [part for part in parts if part.area >= finest_cell_deg**2] or parts[:1]
+
+    return shapely.set_precision(MultiPolygon(kept), OUTLINE_PRECISION_DEG)
+
+
+def _display_tolerance(scene_plan: Plan) -> float:
+    return max(MIN_DISPLAY_TOLERANCE_DEG, _finest_cell(scene_plan) / DISPLAY_SIMPLIFY_DIVISOR)
+
+
+def _finest_cell(scene_plan: Plan) -> float:
+    return min(layer.res for layer in scene_plan.layers.values())
 
 
 def _publish_scene(temp_dir: Path, final_dir: Path, built_size: int) -> int:

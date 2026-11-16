@@ -7,15 +7,18 @@ from pathlib import Path
 import pytest
 from shapely.geometry import box, mapping
 
-from soe import db
+from soe import db, land
 from soe.areas import AreaError
+from soe.land import write_land_store
 from soe.scene_request import (
     DRAWN_AREA_TITLE,
     ID_CHARS,
+    LAND_CHANGED_MESSAGE,
     PreparedScene,
     check_period,
     compute_scene_id,
     prepare_scene,
+    resolve_area,
 )
 from soe.sources import (
     CubeSpec,
@@ -28,9 +31,10 @@ from soe.sources import (
     request_range,
 )
 from tests.conftest import RevisionSource
-from tests.helpers import RAIN, write_cube
+from tests.helpers import RAIN, boundary_row, write_cube
 
 SQUARE = mapping(box(36.5, -1.5, 37.5, -0.5))
+LAND_VERSION = "2026-11-14"
 PINNED_REVISION = "Tue, 01 Sep 2015 00:00:00 GMT"
 PINNED_SCENE_ID = "bdafee6364463965855c"  # Computed for soe 0.9.1 and scene format 0.7.
 IN_RANGE_SCENE_ID = "22136ea1c3d6ca07ce8b"  # Nairobi square, as built before 84N support.
@@ -58,6 +62,16 @@ def request_body(**overrides: object) -> str:
             **overrides,
         }
     )
+
+
+@pytest.fixture(autouse=True)
+def land_store(tmp_path, monkeypatch):
+    """A land store covering the request square, for scenes of layers that are not offline."""
+    store = tmp_path / "land.sqlite"
+    write_land_store(store, LAND_VERSION, [box(36, -2, 38, 0)])
+    monkeypatch.setenv("SOE_LAND", str(store))
+
+    return store
 
 
 @pytest.fixture
@@ -438,3 +452,128 @@ def test_request_keeps_the_local_revisions_its_id_was_made_from(db_path):
     assert json.loads(prepared.request_json)["local_revisions"] == {
         "chirps_monthly": rain.local_revision(steps)
     }
+
+
+def test_scene_id_names_the_land_version_the_area_was_cut_to(db_path, land_store, revision_source):
+    registry = make_registry(revision_source)
+    first = prepare_scene(db_path, registry, request_body())
+
+    write_land_store(land_store, "2026-12-01", [box(36, -2, 38, 0)])
+    second = prepare_scene(db_path, registry, request_body())
+
+    assert json.loads(first.request_json)["area"]["land"] == LAND_VERSION
+    assert second.scene_id != first.scene_id
+
+
+def test_scene_of_offline_layers_is_not_cut_to_land(db_path, monkeypatch):
+    monkeypatch.setenv("SOE_LAND", "missing.sqlite")
+
+    prepared = prepare_scene(db_path, make_registry(SyntheticSource()), request_body())
+
+    assert "land" not in json.loads(prepared.request_json)["area"]
+
+
+def test_missing_land_store_fails_before_any_read(db_path, monkeypatch, revision_source):
+    monkeypatch.setenv("SOE_LAND", "missing.sqlite")
+
+    with pytest.raises(SourceUnavailable):
+        prepare_scene(db_path, make_registry(revision_source), request_body())
+
+    assert revision_source.revision_calls == 0
+    assert revision_source.data.reads == 0
+
+
+def test_area_without_land_is_refused_before_any_read(db_path, revision_source):
+    sea = {"type": "polygon", "geometry": mapping(box(10, 10, 11, 11))}
+
+    with pytest.raises(AreaError, match="no land"):
+        prepare_scene(db_path, make_registry(revision_source), request_body(area=sea))
+
+    assert revision_source.revision_calls == 0
+    assert revision_source.data.reads == 0
+
+
+def test_a_land_version_sent_by_the_client_is_not_trusted(db_path, revision_source):
+    area = {"type": "polygon", "geometry": SQUARE, "land": "made-up"}
+
+    prepared = prepare_scene(db_path, make_registry(revision_source), request_body(area=area))
+
+    assert json.loads(prepared.request_json)["area"]["land"] == LAND_VERSION
+
+
+def test_queued_scene_is_cut_to_the_land_version_its_id_names(db_path, land_store, revision_source):
+    prepared = prepare_scene(db_path, make_registry(revision_source), request_body())
+    spec = json.loads(prepared.request_json)["area"]
+
+    assert resolve_area(db_path, spec).land_version == LAND_VERSION
+
+    write_land_store(land_store, "2026-12-01", [box(36, -2, 38, 0)])
+
+    with pytest.raises(AreaError, match=LAND_CHANGED_MESSAGE):
+        resolve_area(db_path, spec)
+
+
+def add_named_pair(db_path, neighbour_east_deg):
+    """Two same-level boundaries side by side; the second one ends at `neighbour_east_deg`."""
+    parts = {"A": box(36, -2, 37, 0), "B": box(37, -2, neighbour_east_deg, 0)}
+    rows = [
+        boundary_row(
+            f"cgaz:ADM1:{name}", "state", name, bbox=part.bounds, geometry=json.dumps(mapping(part))
+        )
+        for name, part in parts.items()
+    ]
+    db.add_boundaries(db_path, "geoBoundaries CGAZ", rows)
+
+
+def test_scene_id_names_the_neighbours_the_area_was_cut_against(db_path, revision_source):
+    registry = make_registry(revision_source)
+    area = {"type": "boundary", "id": "cgaz:ADM1:A"}
+    add_named_pair(db_path, 38)
+    first = prepare_scene(db_path, registry, request_body(area=area))
+
+    add_named_pair(db_path, 38.5)
+    second = prepare_scene(db_path, registry, request_body(area=area))
+
+    assert second.scene_id != first.scene_id
+    assert json.loads(second.request_json)["area"]["neighbours"]
+
+
+def test_queued_scene_is_refused_when_a_neighbour_changed_while_it_waited(db_path, revision_source):
+    add_named_pair(db_path, 38)
+    area = {"type": "boundary", "id": "cgaz:ADM1:A"}
+    prepared = prepare_scene(db_path, make_registry(revision_source), request_body(area=area))
+    spec = json.loads(prepared.request_json)["area"]
+
+    assert resolve_area(db_path, spec).neighbour_revision == spec["neighbours"]
+
+    add_named_pair(db_path, 38.5)
+
+    with pytest.raises(AreaError, match="neighbouring boundaries changed"):
+        resolve_area(db_path, spec)
+
+
+def test_scene_id_names_the_clip_method_the_area_was_cut_with(
+    db_path, revision_source, monkeypatch
+):
+    registry = make_registry(revision_source)
+    first = prepare_scene(db_path, registry, request_body())
+
+    monkeypatch.setattr(land, "CLIP_METHOD_VERSION", land.CLIP_METHOD_VERSION + 1)
+    second = prepare_scene(db_path, registry, request_body())
+
+    assert second.scene_id != first.scene_id
+    assert json.loads(second.request_json)["area"]["clip"] == land.CLIP_METHOD_VERSION
+
+
+def test_queued_scene_is_refused_when_the_clip_method_changed_while_it_waited(
+    db_path, revision_source, monkeypatch
+):
+    prepared = prepare_scene(db_path, make_registry(revision_source), request_body())
+    spec = json.loads(prepared.request_json)["area"]
+
+    assert resolve_area(db_path, spec).land_version == spec["land"]
+
+    monkeypatch.setattr(land, "CLIP_METHOD_VERSION", land.CLIP_METHOD_VERSION + 1)
+
+    with pytest.raises(AreaError, match="request the scene again"):
+        resolve_area(db_path, spec)

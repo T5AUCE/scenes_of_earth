@@ -16,6 +16,7 @@ from shapely.geometry import box, mapping, shape
 from soe import api, db
 from soe.api import QUEUE_RETRY_AFTER_SECS, SOURCE_RETRY_AFTER_SECS, create_app
 from soe.bundle import SYNTHETIC_DATA_CREDIT, JsonObject, validate
+from soe.land import write_land_store
 from soe.scene_request import ID_CHARS
 from soe.sources import (
     CellWindow,
@@ -38,6 +39,16 @@ from tests.helpers import (
 POLL_ATTEMPTS = 100
 POLL_INTERVAL_SECS = 0.1
 SQUARE = mapping(box(36.5, -1.5, 37.5, -0.5))
+
+
+@pytest.fixture
+def land_store(tmp_path, monkeypatch):
+    """A land store that holds the request square, for scenes of layers that are not offline."""
+    store = tmp_path / "land.sqlite"
+    write_land_store(store, "2026-11-14", [box(36, -2, 38, 0)])
+    monkeypatch.setenv("SOE_LAND", str(store))
+
+    return store
 
 
 @pytest.fixture
@@ -495,7 +506,7 @@ def test_queue_full_gives_503_and_unreachable_source_gives_503(tmp_path):
 
 
 def test_built_scene_is_served_again_when_the_source_goes_down(
-    tmp_path, monkeypatch, revision_source
+    tmp_path, monkeypatch, revision_source, land_store
 ):
     app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(revision_source))
     with TestClient(app) as client:
@@ -508,6 +519,50 @@ def test_built_scene_is_served_again_when_the_source_goes_down(
 
         assert again.status_code == 200
         assert again.json()["id"] == first.json()["id"]
+
+
+def test_scene_cut_to_land_is_built_with_its_outline_borders_and_credit(
+    tmp_path, revision_source, land_store
+):
+    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(revision_source))
+    with TestClient(app) as client:
+        scene_id = client.post("/api/scenes", json=body()).json()["id"]
+        done = wait_for(client, scene_id)
+        scene = client.get(done["bundle_url"]).json()
+        outline = client.get(f"/scenes/{scene_id}/area.geojson").json()
+        borders = client.get(f"/scenes/{scene_id}/borders.geojson").json()
+
+    assert done["status"] == "done"
+    assert validate(scene) == []
+    assert scene["area"]["borders_href"] == "borders.geojson"
+    assert scene["area"]["land"]["version"] == "2026-11-14"
+    assert any("OpenStreetMap contributors" in line for line in scene["credits"]["lines"])
+    assert shape(outline["geometry"]).symmetric_difference(shape(SQUARE)).area < 1e-9
+    assert shape(borders["geometry"]).length == pytest.approx(4)
+
+
+def test_missing_land_store_gives_503_before_any_read(tmp_path, monkeypatch, revision_source):
+    monkeypatch.setenv("SOE_LAND", str(tmp_path / "missing.sqlite"))
+    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(revision_source))
+
+    with TestClient(app) as client:
+        response = client.post("/api/scenes", json=body())
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == str(SOURCE_RETRY_AFTER_SECS)
+    assert revision_source.revision_calls == 0
+
+
+def test_drawn_area_over_open_sea_gives_422_before_any_read(tmp_path, revision_source, land_store):
+    app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(revision_source))
+    sea = {"type": "polygon", "geometry": mapping(box(10, 10, 11, 11))}
+
+    with TestClient(app) as client:
+        response = client.post("/api/scenes", json=body(area=sea))
+
+    assert response.status_code == 422
+    assert "no land" in response.json()["detail"]
+    assert revision_source.revision_calls == 0
 
 
 def test_job_queued_before_a_cube_update_fails_with_a_request_again_message(tmp_path):

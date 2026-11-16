@@ -624,6 +624,9 @@ interface TestLayer {
   layout: { visibility: string };
   paint?: Record<string, unknown>;
   type?: string;
+  source?: string;
+  ["source-layer"]?: string;
+  filter?: unknown;
 }
 
 /** Minimal map double tracking zoom ranges and listeners. */

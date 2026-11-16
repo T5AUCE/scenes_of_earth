@@ -20,6 +20,7 @@ from soe import db
 from soe.areas import Area, AreaError
 from soe.build import SourceChanged, build_scene
 from soe.bundle import JsonObject, validate
+from soe.land import MIN_DISPLAY_TOLERANCE_DEG, clip_area_to_land, write_land_store
 from soe.layer_writer import _fill_outside
 from soe.plan import plan, scene_datasets
 from soe.scene_request import prepare_scene, resolve_area
@@ -28,6 +29,7 @@ from soe.sources import (
     Bbox,
     CellWindow,
     CubeSpec,
+    Dataset,
     FilledStep,
     Role,
     SeriesDataset,
@@ -1912,3 +1914,79 @@ def test_read_of_an_outline_is_cached_apart_from_the_full_read(tmp_path):
     assert is_cached(TERRAIN, bbox, 0.01, tmp_path)
     assert not is_cached(TERRAIN, bbox, 0.01, tmp_path, NAIROBI)
     assert not is_cached(TERRAIN, bbox, 0.01, tmp_path, box(36.5, -1.5, 36.6, -1.4))
+
+
+LAND_VERSION = "2026-11-14"
+ISLAND = box(36.6, -1.4, 37.4, -0.6)
+
+
+def build_cut_nairobi(
+    tmp_path: Path, *land: BaseGeometry, datasets: tuple[Dataset, ...] = (TERRAIN, RAIN)
+) -> tuple[JsonObject, Path]:
+    """Build the Nairobi scene cut to the given land and return its scene.json and directory."""
+    write_land_store(tmp_path / "land.sqlite", LAND_VERSION, land)
+    db.init(tmp_path / "soe.db")
+    area = clip_area_to_land(tmp_path / "soe.db", tmp_path / "land.sqlite", Area(NAIROBI, BOUNDARY))
+
+    build_scene(HASH_A, area, "2015-01", "2015-02", list(datasets), "Test", tmp_path / "scenes")
+
+    scene_dir = tmp_path / "scenes" / HASH_A
+    return json.loads((scene_dir / "scene.json").read_text(encoding="utf-8")), scene_dir
+
+
+def read_geometry(path: Path) -> BaseGeometry:
+    return shape(json.loads(path.read_text(encoding="utf-8"))["geometry"])
+
+
+def test_scene_cut_to_land_has_no_cells_in_the_sea(tmp_path):
+    cut, _ = build_cut_nairobi(tmp_path, ISLAND)
+    uncut, _ = build_nairobi(tmp_path / "uncut")
+
+    cells = {layer["id"]: layer["mask"]["cells_inside"] for layer in cut["layers"]}
+    uncut_cells = {layer["id"]: layer["mask"]["cells_inside"] for layer in uncut["layers"]}
+
+    assert all(cells[layer_id] < uncut_cells[layer_id] for layer_id in cells)
+
+
+def test_outline_of_a_scene_cut_to_land_reaches_a_little_past_the_coast(tmp_path):
+    _, scene_dir = build_cut_nairobi(tmp_path, ISLAND)
+
+    outline = read_geometry(scene_dir / "area.geojson")
+
+    assert ISLAND.difference(outline).area < 1e-9
+    assert outline.difference(ISLAND.buffer(0.002)).area < 1e-9
+
+
+def test_island_scene_has_no_borders(tmp_path):
+    _, scene_dir = build_cut_nairobi(tmp_path, ISLAND)
+
+    assert read_geometry(scene_dir / "borders.geojson").is_empty
+
+
+def test_scene_cut_to_land_credits_the_coast_and_both_licences(tmp_path):
+    scene, _ = build_cut_nairobi(tmp_path, ISLAND)
+
+    assert validate(scene) == []
+    assert scene["area"]["borders_href"] == "borders.geojson"
+    assert scene["area"]["land"]["version"] == LAND_VERSION
+    assert scene["area"]["boundary"]["licence"] == "CC BY 4.0 + ODbL 1.0"
+    assert scene["area"]["land"]["attribution"] in scene["credits"]["lines"]
+    assert SOURCES["geoBoundaries CGAZ"]["attribution"] in scene["credits"]["lines"]
+
+
+def test_outline_drops_parts_smaller_than_the_finest_cell(tmp_path):
+    finest_cell = RAIN.resolution_deg
+    islet = box(37.45, -1.45, 37.46, -1.44)
+
+    assert MIN_DISPLAY_TOLERANCE_DEG**2 <= islet.area < finest_cell**2
+
+    _, scene_dir = build_cut_nairobi(tmp_path, ISLAND, islet, datasets=(RAIN,))
+
+    assert len(read_geometry(scene_dir / "area.geojson").geoms) == 1
+
+
+def test_scene_that_is_not_cut_to_land_has_no_borders_file(tmp_path):
+    scene, _ = build_nairobi(tmp_path)
+
+    assert "borders_href" not in scene["area"]
+    assert not (tmp_path / HASH_A / "borders.geojson").exists()

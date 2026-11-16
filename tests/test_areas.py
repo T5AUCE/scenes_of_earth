@@ -6,8 +6,10 @@ import numpy as np
 import pytest
 from shapely.geometry import LineString, MultiPolygon, Polygon, box, mapping
 
+from soe import db
 from soe.areas import Area, AreaError, clean_polygon, simplify_for_display, unwrap
 from soe.bundle import JsonObject
+from soe.land import clip_area_to_land, write_land_store
 from soe.plan import LayerPlan
 from soe.sources import RealSource, SyntheticSource, make_registry, terrain_tiles
 from tests.helpers import COARSE, FIJI, NAIROBI, RAIN, TERRAIN, plan_months
@@ -399,3 +401,22 @@ def test_static_layers_over_budget_get_their_own_message(monkeypatch):
 
     with pytest.raises(AreaError, match="static layers alone"):
         plan_months(Area(NAIROBI), [TERRAIN], 1)
+
+
+def test_area_is_not_cut_to_land_until_it_is_clipped():
+    area = Area(NAIROBI)
+
+    assert (area.display, area.borders, area.land_version) == (None, None, None)
+
+
+def test_area_across_180_cut_to_land_is_planned_in_one_longitude_frame(tmp_path):
+    db.init(tmp_path / "soe.db")
+    write_land_store(
+        tmp_path / "land.sqlite", "2026-11-14", [box(178, -19, 180, -17), box(-180, -19, -178, -17)]
+    )
+
+    area = clip_area_to_land(tmp_path / "soe.db", tmp_path / "land.sqlite", Area(FIJI))
+    planned = plan_months(area, [RAIN])
+
+    assert area.land_version == "2026-11-14"
+    assert planned.geometry.bounds == (178, -19, 182, -17)

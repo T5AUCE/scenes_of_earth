@@ -82,6 +82,9 @@ export async function loadScene(bundleUrl: string): Promise<Scene> {
   }
 
   scene.area.geometry_href = new URL(scene.area.geometry_href, base).href;
+  if (scene.area.borders_href) {
+    scene.area.borders_href = new URL(scene.area.borders_href, base).href;
+  }
   scene.data.href = new URL(scene.data.href, base).href;
 
   for (const layer of scene.layers) {

@@ -1,8 +1,14 @@
-/** Draw basemap water above categorical fills so coastal gaps hide under the map's own water. */
+/** Draw basemap water above categorical fills and the ocean above the scene mask. */
 import type { Map as MapLibreMap } from "maplibre-gl";
 
 /** The water copy above categorical fills; the basemap source stays owned by the basemap. */
 export const GEOLOGY_WATER_ID = "soe-geology-water";
+
+/** The ocean copy above the scene mask and fade; the basemap source stays owned by the basemap. */
+export const OCEAN_COVER_ID = "soe-ocean-cover";
+
+/** The basemap water class that marks the sea. */
+const OCEAN_CLASS = "ocean";
 
 interface WaterLayer {
   type?: string;
@@ -23,18 +29,46 @@ interface WaterLayer {
  * style has no water.
  */
 export function addGeologyWater(map: MapLibreMap, beforeId: string | undefined): boolean {
-  if (map.getLayer(GEOLOGY_WATER_ID)) return true;
+  return addWaterCopy(map, GEOLOGY_WATER_ID, undefined, beforeId);
+}
+
+/**
+ * Add the basemap ocean fill above the scene mask and fade. The copy reuses the basemap vector
+ * source so mounting it adds no network requests, and the soe- id keeps the scene bbox clip from
+ * filtering it. It paints only the ocean class with the basemap paint, so the sea shows the
+ * basemap blue at every zoom while lakes keep today's rule. Returns false when the style has no
+ * water.
+ */
+export function addOceanCover(map: MapLibreMap, beforeId: string | undefined): boolean {
+  const oceanOnly = ["==", ["get", "class"], OCEAN_CLASS];
+
+  return addWaterCopy(map, OCEAN_COVER_ID, oceanOnly, beforeId);
+}
+
+/**
+ * Add one basemap water copy with an optional extra filter. The copy keeps the basemap paint and
+ * zoom range while the extra filter narrows the water underneath.
+ */
+function addWaterCopy(
+  map: MapLibreMap,
+  id: string,
+  extraFilter: unknown,
+  beforeId: string | undefined,
+): boolean {
+  if (map.getLayer(id)) return true;
 
   const water = basemapWaterSpec(map);
   if (!water) return false;
 
+  const filter = combinedFilter(water.filter, extraFilter);
+
   map.addLayer(
     {
-      id: GEOLOGY_WATER_ID,
+      id,
       type: "fill",
       source: water.source,
       "source-layer": water["source-layer"],
-      ...(water.filter !== undefined ? { filter: water.filter as never } : {}),
+      ...(filter !== undefined ? { filter: filter as never } : {}),
       ...(water.layout ? { layout: water.layout as never } : {}),
       paint: water.paint as never,
       ...(water.minzoom !== undefined ? { minzoom: water.minzoom } : {}),
@@ -44,6 +78,14 @@ export function addGeologyWater(map: MapLibreMap, beforeId: string | undefined):
   );
 
   return true;
+}
+
+/** Keep the basemap filter and narrow it with the extra clause when both exist. */
+function combinedFilter(base: unknown, extra: unknown): unknown {
+  if (extra === undefined) return base;
+  if (base === undefined) return extra;
+
+  return ["all", base, extra];
 }
 
 /**
@@ -67,5 +109,15 @@ function basemapWaterSpec(map: MapLibreMap) {
 
 /** Remove the water copy while leaving the basemap source untouched. */
 export function removeGeologyWater(map: MapLibreMap): void {
-  if (map.getLayer(GEOLOGY_WATER_ID)) map.removeLayer(GEOLOGY_WATER_ID);
+  removeWaterCopy(map, GEOLOGY_WATER_ID);
+}
+
+/** Remove the ocean copy while leaving the basemap source untouched. */
+export function removeOceanCover(map: MapLibreMap): void {
+  removeWaterCopy(map, OCEAN_COVER_ID);
+}
+
+/** Remove one water copy while leaving the basemap source untouched. */
+function removeWaterCopy(map: MapLibreMap, id: string): void {
+  if (map.getLayer(id)) map.removeLayer(id);
 }

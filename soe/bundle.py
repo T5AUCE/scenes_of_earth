@@ -21,6 +21,9 @@ __all__ = ["COLOUR_PATTERN", "MIN_STOPS", "STOP_COUNT", "STYLE_KINDS", "validate
 VERSION = "0.7"
 
 BOUNDARY_SOURCE_FIELDS = ("licence_url", "attribution", "citation", "modified")
+LAND_SOURCE = "osm_land"  # key in SOURCES of the land polygons that cut areas are made from
+LAND_LICENCE = "ODbL 1.0"
+LAND_CUT_NOTE = "intersected with OpenStreetMap land polygons"
 SYNTHETIC_DATA_CREDIT = "Data: synthetically generated, not real measurements"
 
 
@@ -42,6 +45,7 @@ def make(
     ]
 
     boundary_source = SOURCES[area.boundary["source"]] if area.named else None
+    land_source = _land_block(area) if area.land_version else None
     synthetic = any(dataset.synthetic for dataset in datasets)
     layer_notices = [
         note
@@ -61,6 +65,7 @@ def make(
             "bbox": plan.bbox,
             "geometry_href": "area.geojson",
             "clipped_to_coverage": plan.clipped,
+            **_land_fields(area, land_source),
         },
         "period": _period_block(plan),
         "layers": layer_blocks,
@@ -69,7 +74,7 @@ def make(
             "format": "zarr v3, gzip, sharded series, consolidated metadata",
         },
         "notices": {"limits": plan.notices + layer_notices},
-        "credits": credits(layer_blocks, boundary_source, synthetic),
+        "credits": credits(layer_blocks, boundary_source, synthetic, land_source),
     }
 
 
@@ -80,6 +85,19 @@ def _period_block(plan: Plan) -> JsonObject | None:
 
     start, end = plan.period
     return {"start": start, "end": end, "step": REQUEST_STEP}
+
+
+def _land_block(area: Area) -> JsonObject:
+    """The land polygon source with the version that the area was cut to."""
+    return {**SOURCES[LAND_SOURCE], "version": area.land_version}
+
+
+def _land_fields(area: Area, land_source: JsonObject | None) -> JsonObject:
+    """The area fields of a scene cut to land: the file of land borders and the land source."""
+    if land_source is None:
+        return {}
+
+    return {"borders_href": "borders.geojson", "land": land_source}
 
 
 def _boundary_block(area: Area) -> JsonObject:
@@ -94,6 +112,11 @@ def _boundary_block(area: Area) -> JsonObject:
     }
     source = SOURCES[row["source"]]
     block.update({key: source[key] for key in BOUNDARY_SOURCE_FIELDS if key in source})
+    if area.land_version:
+        if LAND_LICENCE not in row["licence"]:
+            block["licence"] = f"{row['licence']} + {LAND_LICENCE}"
+        if "modified" in block:
+            block["modified"] += f"; {LAND_CUT_NOTE}"
 
     return block
 
@@ -181,12 +204,17 @@ def _array_blocks(dataset: Dataset, result: JsonObject) -> dict[str, JsonObject]
 
 
 def credits(
-    layer_blocks: list[JsonObject], boundary_source: dict[str, str] | None, synthetic: bool = False
+    layer_blocks: list[JsonObject],
+    boundary_source: dict[str, str] | None,
+    synthetic: bool = False,
+    land_source: JsonObject | None = None,
 ) -> JsonObject:
     """Generate attribution for the sources actually used and any synthetic data."""
     sources = _layer_sources(layer_blocks)
     if boundary_source:
         sources.append(boundary_source)
+    if land_source:
+        sources.append(land_source)
 
     lines = list(dict.fromkeys(source["attribution"] for source in sources))
     if synthetic:

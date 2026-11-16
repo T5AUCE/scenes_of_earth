@@ -2,7 +2,8 @@
 
 The module imports country and city boundaries into SQLite, with each country's own names
 for its administrative levels. It also backfills the stored display previews and geometry
-digests of boundaries imported before them. It rebuilds the Copernicus terrain
+digests of boundaries imported before them. It imports the OpenStreetMap land polygons that
+areas are cut to. It rebuilds the Copernicus terrain
 tile indexes and the ESA WorldCover tile index. It also ingests ERA5-Land, ERA5 and CHIRPS
 monthly cubes, the lithology map and the rock-age map into local folders. Run
 `python -m soe.cli --help` to see the commands and their options.
@@ -28,6 +29,7 @@ from .ingest.era5 import INGEST_SPECS, ingest
 from .ingest.geology_age import ingest_geology_age
 from .ingest.geology_regional import SOURCE_IDS, ingest_geology_regional
 from .ingest.lithology import ingest_lithology
+from .land import import_land, store_path
 from .sources import (
     CHIRPS_CUBE,
     DEFAULT_CUBES_DIR,
@@ -72,6 +74,11 @@ def main(argv: list[str] | None = None) -> None:
 
         logging.basicConfig(level=logging.INFO)
         print(f"Area previews: {backfill_area_previews(args.db, args.batch_size)} backfilled")
+        return
+
+    if args.command == "import-land":
+        logging.basicConfig(level=logging.INFO)
+        print("Land clips stored:", import_land(args.land, args.db))
         return
 
     if args.command == "ingest-cube":
@@ -137,6 +144,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--meta", help="folder with the gbOpen ADM1/ADM2 metadata JSON files"
     )
     import_parser.add_argument("--db", default=os.environ.get("SOE_DB", "./data/soe.db"))
+
+    land_parser = subparsers.add_parser(
+        "import-land",
+        help="download the OpenStreetMap land polygons (930 MB) and store each country's and "
+        "state's clip to them",
+    )
+    land_parser.add_argument(
+        "--land",
+        default=store_path(),
+        help="the land polygon store to write (default: SOE_LAND or ./data/land.sqlite)",
+    )
+    land_parser.add_argument("--db", default=os.environ.get("SOE_DB", "./data/soe.db"))
 
     subparsers.add_parser(
         "terrain-index",

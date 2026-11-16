@@ -24,6 +24,7 @@ import { createMaskLayers } from "./gpu/mask-layer";
 import { keepThroughContextLoss } from "./gpu/tiled-layer";
 import { makeHtmlElement } from "./html";
 import { polygonParts } from "./label-filter";
+import { addOceanCover, OCEAN_COVER_ID, removeOceanCover } from "./layers/geology-water";
 import { basemapPreloadSource } from "./layers/scene-preload";
 import { pinGpuTerrainBase, setTerrainBaseZoom } from "./layers/terrain";
 import { closeScenePreload, currentScenePreload, openScenePreload } from "./layers/tile-prefetch";
@@ -47,6 +48,8 @@ import { type EntryPreparation, mountScene, OUTLINE_ID } from "./view";
 
 const MASK_ID = "soe-scene-mask";
 const FADE_ID = "soe-scene-fade";
+// Sea names stay above the ocean cover, so they remain readable over the basemap blue.
+const SEA_LABEL_PREFIX = "water_name";
 const MASK_OPACITY = 1;
 // Outside labels show through this much of the page background, so they read as faded.
 const FADE_OPACITY = 0.6;
@@ -401,6 +404,7 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
         removeLayerAndSource(map, FADE_ID);
         removeLayerAndSource(map, MASK_ID);
+        removeOceanCover(map);
         restoreBasemapFilters(map, savedBasemapFilters);
         savedBasemapFilters = null;
         restoreBasemapOrder(map, savedBasemapOrder);
@@ -584,6 +588,8 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       for (const symbol of basemap.symbols) {
         if (map.getLayer(symbol)) map.moveLayer(symbol, FADE_ID);
       }
+
+      addOceanCover(map, undefined);
 
       masks?.mask.setOpacity(MASK_OPACITY);
       masks?.fade.setOpacity(FADE_OPACITY);
@@ -1081,15 +1087,35 @@ function bboxMaskGeometry([west, south, east, north]: Bbox) {
   return { type: "MultiPolygon", coordinates: [[maskRing([ring])]] };
 }
 
-/** Scene symbols sit under the mask so labels are cut at the outline, not drawn outside it. */
+/**
+ * Scene symbols sit under the mask so labels are cut at the outline, not drawn outside it. The
+ * outline sits above the mask but under the ocean cover so that sea beyond the land hides the
+ * coast drawn offshore, while sea names stay above the ocean cover and remain readable.
+ */
 function placeSceneSymbols(map: MapLibreMap, sceneLayerIds: readonly string[]): void {
   const beforeId = map.getLayer(MASK_ID) ? MASK_ID : undefined;
   for (const id of sceneSymbols(map, sceneLayerIds)) map.moveLayer(id, beforeId);
-  if (map.getLayer(OUTLINE_ID)) map.moveLayer(OUTLINE_ID);
+  if (map.getLayer(OUTLINE_ID)) {
+    map.moveLayer(OUTLINE_ID, map.getLayer(OCEAN_COVER_ID) ? OCEAN_COVER_ID : undefined);
+  }
+  raiseSeaLabelsAboveOcean(map);
 }
 
 function sceneSymbols(map: MapLibreMap, sceneLayerIds: readonly string[]): string[] {
   return sceneLayerIds.filter((id) => map.getLayer(id)?.type === "symbol");
+}
+
+/**
+ * Sea names in style order move above the ocean cover, so they stay readable over the
+ * basemap blue instead of hiding under it. The order among the sea names stays as styled.
+ */
+function raiseSeaLabelsAboveOcean(map: MapLibreMap): void {
+  if (!map.getLayer(OCEAN_COVER_ID)) return;
+
+  for (const layer of map.getStyle()?.layers ?? []) {
+    if (layer.type !== "symbol" || !layer.id.startsWith(SEA_LABEL_PREFIX)) continue;
+    if (map.getLayer(layer.id)) map.moveLayer(layer.id, undefined);
+  }
 }
 
 /** Remember each basemap symbol's own visibility so scenes restore it exactly. */

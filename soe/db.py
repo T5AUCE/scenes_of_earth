@@ -1,4 +1,4 @@
-"""SQLite: boundaries (search), scene jobs and source revisions; one WAL connection per call."""
+"""SQLite: boundaries, scene jobs, source revisions and land clips; one WAL connection per call."""
 
 import hashlib
 import logging
@@ -15,6 +15,7 @@ SqlValue = str | int | float | None
 Record = dict[str, Any]  # one table row as column -> value
 BoundaryValues = tuple[SqlValue, ...]  # one boundaries row in INSERT_BOUNDARY column order
 PreviewWrite = tuple[str, str, str | None, str]  # id, preview, expected digest, new digest
+LandClipWkbs = tuple[bytes, bytes, bytes]  # land clip, display outline and land borders, as WKB
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS boundaries (
@@ -42,6 +43,16 @@ CREATE TABLE IF NOT EXISTS admin_kinds (
     level TEXT NOT NULL,
     kind TEXT NOT NULL,
     PRIMARY KEY (iso3, level)
+);
+
+CREATE TABLE IF NOT EXISTS land_clips (
+    geom_digest TEXT NOT NULL,
+    land_version TEXT NOT NULL,
+    clip_method INTEGER NOT NULL,
+    wkb BLOB NOT NULL,
+    display_wkb BLOB NOT NULL,
+    borders_wkb BLOB NOT NULL,
+    PRIMARY KEY (geom_digest, land_version, clip_method)
 );
 
 CREATE TABLE IF NOT EXISTS scenes (
@@ -163,6 +174,21 @@ def _add_missing_columns(connection: sqlite3.Connection) -> None:
             if "duplicate column" not in str(error):
                 raise
 
+    _ensure_land_clips_method(connection)
+
+
+def _ensure_land_clips_method(connection: sqlite3.Connection) -> None:
+    """Recreate land_clips with the clip method when an older file lacks it.
+
+    Older clips used a margin-only display subtraction, so they must never be reused.
+    """
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(land_clips)")}
+    if "clip_method" in columns:
+        return
+
+    connection.execute("DROP TABLE IF EXISTS land_clips")
+    connection.executescript(SCHEMA)
+
 
 def search(path: Path | str, query: str, level: str | None = None, limit: int = 20) -> list[Record]:
     """Boundaries whose name starts with `query`, or has a word that does; best matches first.
@@ -244,6 +270,72 @@ def get_boundary(path: Path | str, boundary_id: str, with_geometry: bool = True)
         ).fetchone()
 
     return dict(row) if row else None
+
+
+def boundary_ids(path: Path | str, source: str, levels: tuple[str, ...]) -> list[str]:
+    """Ids of the boundaries of one source at the given levels, in id order."""
+    marks = ", ".join("?" for _ in levels)
+    with connect(path) as connection:
+        rows = connection.execute(
+            f"SELECT id FROM boundaries WHERE source = ? AND level IN ({marks}) ORDER BY id",  # noqa: S608 - only placeholders are joined in.
+            (source, *levels),
+        )
+        return [row["id"] for row in rows]
+
+
+def neighbour_digests(
+    path: Path | str, boundary: Record, window: tuple[float, float, float, float]
+) -> list[tuple[str, str]]:
+    """(id, geometry digest) of the other boundaries of the same source and level in `window`.
+
+    A boundary is listed when its bbox meets `window`, which is (west, south, east, north).
+    """
+    west, south, east, north = window
+    with connect(path) as connection:
+        rows = connection.execute(
+            "SELECT id, COALESCE(geom_digest, '') AS digest FROM boundaries "
+            "WHERE source = ? AND level = ? AND id != ? "
+            "AND bbox_e >= ? AND bbox_w <= ? AND bbox_n >= ? AND bbox_s <= ?",
+            (boundary["source"], boundary["level"], boundary["id"], west, east, south, north),
+        )
+        return [(row["id"], row["digest"]) for row in rows]
+
+
+def get_land_clip(
+    path: Path | str, geom_digest: str, land_version: str, clip_method: int
+) -> LandClipWkbs | None:
+    """The stored land clip of an area geometry for one land version and clip method, or None."""
+    with connect(path) as connection:
+        row = connection.execute(
+            "SELECT wkb, display_wkb, borders_wkb FROM land_clips "
+            "WHERE geom_digest = ? AND land_version = ? AND clip_method = ?",
+            (geom_digest, land_version, clip_method),
+        ).fetchone()
+
+    return (row["wkb"], row["display_wkb"], row["borders_wkb"]) if row else None
+
+
+def set_land_clip(
+    path: Path | str, geom_digest: str, land_version: str, clip_method: int, wkbs: LandClipWkbs
+) -> None:
+    """Store the land clip of an area geometry for one land version and clip method."""
+    with connect(path) as connection:
+        connection.execute(
+            "INSERT OR REPLACE INTO land_clips "
+            "(geom_digest, land_version, clip_method, wkb, display_wkb, borders_wkb) "
+            "VALUES (?,?,?,?,?,?)",
+            (geom_digest, land_version, clip_method, *wkbs),
+        )
+
+
+def delete_land_clips_except(path: Path | str, land_version: str, clip_method: int) -> int:
+    """Drop the clips of older land versions or clip methods, which no scene id can use any more."""
+    with connect(path) as connection:
+        cursor = connection.execute(
+            "DELETE FROM land_clips WHERE land_version != ? OR clip_method != ?",
+            (land_version, clip_method),
+        )
+        return cursor.rowcount
 
 
 def add_boundaries(path: Path | str, source: str, rows: Iterable[BoundaryValues]) -> int:

@@ -2,6 +2,7 @@
 
 import copy
 import json
+from pathlib import Path
 
 import pytest
 
@@ -1002,3 +1003,61 @@ def _with_distribution_value(doc: dict, value: object) -> dict:
     mutated = copy.deepcopy(doc)
     mutated["layers"][0]["distribution"]["values"][0] = value
     return mutated
+
+
+def cut_to_land_doc(tmp_path: Path) -> dict:
+    """The Nairobi scene.json with the fields of a scene cut to land added."""
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
+    land = {**SOURCES["osm_land"], "version": "2026-11-14"}
+    doc["area"].update(borders_href="borders.geojson", land=land)
+    doc["area"]["boundary"]["licence"] = "CC BY 4.0 + ODbL 1.0"
+    doc["credits"]["lines"].append(land["attribution"])
+
+    return doc
+
+
+def test_scene_cut_to_land_is_valid_with_its_credit(tmp_path):
+    assert validate(cut_to_land_doc(tmp_path)) == []
+
+
+def test_scene_cut_to_land_without_the_coast_credit_is_invalid(tmp_path):
+    doc = cut_to_land_doc(tmp_path)
+    doc["credits"]["lines"].remove(doc["area"]["land"]["attribution"])
+
+    assert any("OpenStreetMap land polygons" in problem for problem in validate(doc))
+
+
+def test_land_source_and_borders_file_come_together(tmp_path):
+    doc = cut_to_land_doc(tmp_path)
+    del doc["area"]["borders_href"]
+
+    assert any("given together" in problem for problem in validate(doc))
+
+
+def test_land_source_must_carry_the_odbl_licence(tmp_path):
+    doc = cut_to_land_doc(tmp_path)
+    doc["area"]["land"]["licence"] = "CC BY 4.0"
+
+    assert any("ODbL" in problem for problem in validate(doc))
+
+
+@pytest.mark.parametrize(
+    ("licence", "missing"),
+    [("CC BY 4.0", "ODbL 1.0"), ("ODbL 1.0", "CC BY 4.0"), ("Public Domain", "CC BY 4.0 and ODbL")],
+)
+def test_land_cut_boundary_keeps_both_licences(tmp_path, licence, missing):
+    doc = cut_to_land_doc(tmp_path)
+    doc["area"]["boundary"]["licence"] = licence
+
+    assert "ODbL" in str(doc["area"]["land"].get("licence"))
+    assert doc["area"]["land"]["attribution"] in doc["credits"]["lines"]
+
+    assert any(f"must include {missing}" in problem for problem in validate(doc))
+
+
+def test_credits_include_the_land_source_of_a_cut_area():
+    land = {**SOURCES["osm_land"], "version": "2026-11-14"}
+
+    lines = credits([{"source": SOURCES["glo90"]}], SOURCES["geoBoundaries CGAZ"], False, land)
+
+    assert land["attribution"] in lines["lines"]

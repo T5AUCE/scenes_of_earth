@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from . import __version__
+from .boundary_import import CGAZ_SOURCE
 from .sources import SOURCE_ROLE, STOP_COUNT
 
 JsonObject = dict[str, Any]  # a decoded JSON object, such as scene.json or one of its blocks
@@ -29,6 +30,9 @@ AREA_WEIGHTS_NAME = "cell_area_inside_outline"
 DISTRIBUTION_STATISTIC = "quantiles"
 DISTRIBUTION_PERCENT = 1
 DISTRIBUTION_VALUE_COUNT = 101
+
+# A boundary cut to OpenStreetMap land keeps its own licence beside the land one.
+CUT_BOUNDARY_LICENCES = ("CC BY 4.0", "ODbL 1.0")
 
 FRACTION_TOLERANCE = 1e-12  # summation order may nudge an exact share slightly above one
 
@@ -96,6 +100,34 @@ def _area_problems(area: object) -> list[str]:
     if not (west < east and south < north):
         return ["bbox is not W < E and S < N"]
 
+    return _land_problems(area)
+
+
+def _land_problems(area: JsonObject) -> list[str]:
+    """Return problems with an area cut to land, whose outline is derived from OpenStreetMap."""
+    land = area.get("land")
+    if bool(land) != bool(area.get("borders_href")):
+        return ["area.land and area.borders_href must be given together"]
+
+    if land and "ODbL" not in str(land.get("licence")):
+        return ["area.land must carry the ODbL licence of the OpenStreetMap land polygons"]
+
+    return _cut_boundary_problems(area) if land else []
+
+
+def _cut_boundary_problems(area: JsonObject) -> list[str]:
+    """Return problems with the licence of a CGAZ boundary whose outline was cut to land."""
+    boundary = area.get("boundary")
+    if not isinstance(boundary, dict) or boundary.get("source") != CGAZ_SOURCE:
+        return []
+
+    licence = str(boundary.get("licence"))
+    missing = [name for name in CUT_BOUNDARY_LICENCES if name not in licence]
+    if missing:
+        return [
+            f"area.boundary.licence of a land-cut boundary must include {' and '.join(missing)}"
+        ]
+
     return []
 
 
@@ -138,6 +170,9 @@ def _attribution_problems(doc: JsonObject) -> list[str]:
                 sources.append(area["boundary"])
             else:
                 problems.append("boundary area without boundary block")
+
+        if area.get("land"):
+            sources.append(area["land"])
 
         lines = credits.get("lines", [])
         disclaimers = credits.get("disclaimers", [])

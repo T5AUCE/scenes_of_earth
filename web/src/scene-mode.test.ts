@@ -18,6 +18,7 @@ registerHooks({
 import { entryStats, isPreloadDisabled } from "./dev-stats.ts";
 import { DEFAULT_OUTLINE, storeMapDetailsShown } from "./display-state.ts";
 import { REVEAL_MS } from "./entry-curtain.ts";
+import { OCEAN_COVER_ID } from "./layers/geology-water.ts";
 import { currentScenePreload } from "./layers/tile-prefetch.ts";
 import { assertSameNode } from "./testing/dom-assert.ts";
 import {
@@ -212,6 +213,165 @@ test("basemap geometry stays below scene data with the mask above both", async (
       "label_city",
     ],
   );
+});
+
+test("the ocean cover sits above the mask and fade with an ocean-only filter", async () => {
+  const harness = createHarness();
+  const { order, waterFilter, waterPaint } = seedOceanBasemap(harness);
+
+  harness.enter();
+  harness.data.resolve();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+
+  assert.ok(order.indexOf(MASK_ID) < order.indexOf(FADE_ID));
+  assert.ok(order.indexOf(FADE_ID) < order.indexOf(OCEAN_COVER_ID));
+  assert.ok(order.indexOf("label_city") < order.indexOf(FADE_ID));
+
+  const cover = harness.map.layers.get(OCEAN_COVER_ID) as unknown as Record<string, unknown>;
+
+  assert.equal(cover.source, "openmaptiles");
+  assert.equal(cover["source-layer"], "water");
+  assert.deepEqual(cover.paint, waterPaint);
+  assert.deepEqual(cover.filter, ["all", waterFilter, ["==", ["get", "class"], "ocean"]]);
+  assert.equal(harness.map.sources.size, 1);
+  assert.ok(harness.map.sources.has("openmaptiles"));
+  assert.equal(harness.map.filters.has(OCEAN_COVER_ID), false);
+
+  harness.mode.exit();
+  await settle();
+
+  assert.equal(harness.map.getLayer(OCEAN_COVER_ID), undefined);
+  assert.equal(harness.map.getLayer(MASK_ID), undefined);
+  assert.equal(harness.map.getLayer(FADE_ID), undefined);
+  assert.equal(harness.map.sources.size, 1);
+});
+
+test("sea labels stay above the ocean cover", async () => {
+  const harness = createHarness();
+  const { order } = seedOceanBasemap(harness);
+
+  harness.enter();
+  harness.data.resolve();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+
+  assert.ok(order.indexOf(OCEAN_COVER_ID) < order.indexOf("water_name_point_label"));
+  assert.ok(order.indexOf(OCEAN_COVER_ID) < order.indexOf("water_name_line_label"));
+  assert.ok(order.indexOf("water_name_point_label") < order.indexOf("water_name_line_label"));
+});
+
+test("the outline sits above the area mask and below the ocean cover", async () => {
+  const harness = createHarness();
+  const { order } = seedOceanBasemap(harness);
+
+  harness.enter();
+  harness.data.resolve();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+
+  assert.ok(order.indexOf(MASK_ID) < order.indexOf("soe-area-outline"));
+  assert.ok(order.indexOf("soe-area-outline") < order.indexOf(OCEAN_COVER_ID));
+  assert.ok(order.indexOf(OCEAN_COVER_ID) < order.indexOf("water_name_point_label"));
+});
+
+test("a later layer update keeps the outline below the ocean cover", async () => {
+  const harness = createHarness();
+  const { order } = seedOceanBasemap(harness);
+
+  harness.enter();
+  harness.data.resolve();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+
+  harness.map.layers.set("contours-ft", {
+    id: "contours-ft",
+    type: "symbol",
+    layout: { visibility: "visible" },
+  });
+  harness.onUnits!("ft", { terrain: "ft" }, ["relief", "contours-ft", "rain", "overview"]);
+
+  assert.ok(order.indexOf("contours-ft") < order.indexOf(MASK_ID));
+  assert.ok(order.indexOf(MASK_ID) < order.indexOf("soe-area-outline"));
+  assert.ok(order.indexOf("soe-area-outline") < order.indexOf(OCEAN_COVER_ID));
+  assert.ok(order.indexOf(OCEAN_COVER_ID) < order.indexOf("water_name_point_label"));
+  assert.ok(order.indexOf("water_name_point_label") < order.indexOf("water_name_line_label"));
+});
+
+test("the ocean cover mounts inside the curtain and keeps its paint", async () => {
+  const harness = phasedHarness();
+  const { waterPaint } = seedOceanBasemap(harness);
+
+  const painted: [string, string][] = [];
+  const stub = harness.map as unknown as Record<string, unknown>;
+  const originalSetPaint = harness.map.setPaintProperty.bind(harness.map);
+  stub.setPaintProperty = (id: string, name: string, value: unknown) => {
+    painted.push([id, name]);
+    return originalSetPaint(id, name, value);
+  };
+
+  harness.enter();
+  await settle();
+  await finishPreparation(harness);
+
+  assert.equal(harness.map.getLayer(OCEAN_COVER_ID), undefined);
+
+  harness.land();
+  await settle();
+
+  assert.equal(harness.map.getLayer(OCEAN_COVER_ID), undefined);
+
+  harness.curtain!.cover();
+
+  assert.ok(harness.map.getLayer(OCEAN_COVER_ID));
+  assert.deepEqual(
+    painted.filter(([id]) => id === OCEAN_COVER_ID),
+    [],
+  );
+  assert.deepEqual(
+    (harness.map.layers.get(OCEAN_COVER_ID) as unknown as Record<string, unknown>).paint,
+    waterPaint,
+  );
+
+  harness.curtain!.fade();
+  harness.curtain!.finish();
+
+  assert.deepEqual(
+    painted.filter(([id]) => id === OCEAN_COVER_ID),
+    [],
+  );
+  assert.deepEqual(
+    (harness.map.layers.get(OCEAN_COVER_ID) as unknown as Record<string, unknown>).paint,
+    waterPaint,
+  );
+
+  await exitActiveHarness();
+});
+
+test("scene entry without basemap water adds no ocean cover", async () => {
+  const harness = createHarness();
+  (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
+    layers: [
+      { id: "background", type: "background" },
+      { id: "label_city", type: "symbol" },
+    ],
+  });
+
+  for (const id of ["background", "label_city"]) {
+    harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
+  }
+
+  harness.enter();
+  harness.data.resolve();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+
+  assert.equal(harness.map.getLayer(OCEAN_COVER_ID), undefined);
+
+  harness.mode.exit();
+  await settle();
+
+  assert.equal(harness.map.getLayer(MASK_ID), undefined);
 });
 
 test("scene entry hides fully-outside basemap features and exit restores filters", async () => {
@@ -3263,6 +3423,93 @@ function phasedHarness() {
   harness.autoReveal = false;
 
   return harness;
+}
+
+/** Seed a basemap with a water fill and sea-name labels for ocean cover tests. */
+function seedOceanBasemap(harness: ReturnType<typeof createHarness>) {
+  const waterFilter = ["!=", ["get", "brunnel"], "tunnel"];
+  const waterPaint = { "fill-color": "rgb(158,189,255)" };
+  const styleOrder = [
+    "background",
+    "water",
+    "relief",
+    "contours",
+    "rain",
+    "overview",
+    "label_city",
+    "water_name_point_label",
+    "water_name_line_label",
+    "soe-area-outline",
+  ];
+  const types: Record<string, string> = {
+    background: "background",
+    water: "fill",
+    relief: "raster",
+    contours: "raster",
+    rain: "raster",
+    overview: "raster",
+    label_city: "symbol",
+    water_name_point_label: "symbol",
+    water_name_line_label: "symbol",
+    "soe-area-outline": "line",
+  };
+  (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
+    layers: styleOrder.map((id) => ({
+      id,
+      type: types[id],
+      ...(id === "water"
+        ? {
+            source: "openmaptiles",
+            "source-layer": "water",
+            filter: waterFilter,
+            paint: waterPaint,
+          }
+        : {}),
+    })),
+  });
+
+  for (const id of styleOrder) {
+    if (!harness.map.layers.has(id)) {
+      harness.map.layers.set(id, { id, layout: { visibility: "visible" } });
+    }
+  }
+  harness.map.sources.set("openmaptiles", { tiles: [BASEMAP_TEMPLATE], maxzoom: 14 });
+
+  return { order: trackOrder(harness, styleOrder), waterFilter, waterPaint };
+}
+
+/** Track layer order through adds, moves and removals for ocean cover assertions. */
+function trackOrder(harness: ReturnType<typeof createHarness>, initial: string[]) {
+  const order = [...initial];
+  const place = (id: string, beforeId?: string) => {
+    const at = order.indexOf(id);
+
+    if (at >= 0) order.splice(at, 1);
+
+    const anchor = beforeId === undefined ? order.length : order.indexOf(beforeId);
+    order.splice(anchor < 0 ? order.length : anchor, 0, id);
+  };
+
+  const originalAdd = harness.map.addLayer.bind(harness.map);
+  harness.map.addLayer = (layer: { id: string }, beforeId?: string) => {
+    place(layer.id, beforeId);
+    return originalAdd(layer as never);
+  };
+
+  const originalMove = harness.map.moveLayer.bind(harness.map);
+  harness.map.moveLayer = ((id: string, beforeId?: string) => {
+    place(id, beforeId);
+    return originalMove(id, beforeId);
+  }) as typeof harness.map.moveLayer;
+
+  const originalRemove = harness.map.removeLayer.bind(harness.map);
+  harness.map.removeLayer = (id: string) => {
+    const at = order.indexOf(id);
+    if (at >= 0) order.splice(at, 1);
+    return originalRemove(id);
+  };
+
+  return order;
 }
 
 /** Prove the scene UI never started, since a failure leaves only the build panel visible. */

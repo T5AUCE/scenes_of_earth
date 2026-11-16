@@ -26,10 +26,18 @@ class AreaError(ValueError):
 
 @dataclass
 class Area:
-    """The requested area: a shape, plus its boundary row when it was picked by name."""
+    """The requested area, which is a shape plus its boundary row when it was picked by name.
+
+    An area cut to land also holds the outline to draw and the land borders. The clipped shape
+    is in the longitude frame that planning uses (up to 360 when it crosses 180).
+    """
 
     geom: object  # shapely (Multi)Polygon, EPSG:4326
     boundary: dict | None = None  # boundary row for named areas, None for drawn ones
+    display: object | None = None  # outline to draw, a little wider than the coast; None if uncut
+    borders: object | None = None  # shapely (Multi)LineString of land borders; None if uncut
+    land_version: str | None = None  # version of the land polygons the shape was cut to
+    neighbour_revision: str | None = None  # revision of the boundaries that bounded the cut
 
     @property
     def named(self) -> bool:
@@ -91,7 +99,7 @@ def _is_number(value: object) -> bool:
 
 def _within_world(positions: list[Sequence[float]]) -> bool:
     try:
-        # Written so NaN, infinity and huge integers all fail the comparison (no float conversion).
+        # Written so NaN, infinity, and huge integers all fail the comparison (no float conversion).
         return all(
             len(position) >= 2
             and abs(position[0]) <= MAX_LONGITUDE_DEG

@@ -407,7 +407,8 @@ function addOutline(
   isMounted: () => boolean,
   outline: OutlineState,
 ) {
-  const data = shift === 0 ? scene.area.geometry_href : EMPTY_FEATURES;
+  const href = outlineHref(scene);
+  const data = shift === 0 ? href : EMPTY_FEATURES;
 
   map.addSource(OUTLINE_ID, { type: "geojson", data });
   map.addLayer({ id: OUTLINE_ID, type: "line", source: OUTLINE_ID }, firstSymbolId(map));
@@ -415,9 +416,14 @@ function addOutline(
 
   if (shift === 0) return;
 
-  showShiftedOutline(map, scene.area.geometry_href, shift, isMounted).catch((error) =>
+  showShiftedOutline(map, href, shift, isMounted).catch((error) =>
     addNote(`Area outline: ${error.message}`),
   );
+}
+
+// A scene cut to land draws only its land borders, because the basemap's ocean draws the coast.
+function outlineHref(scene: Scene) {
+  return scene.area.borders_href ?? scene.area.geometry_href;
 }
 
 /** Paint the area outline's colour, width and visibility without rebuilding. */

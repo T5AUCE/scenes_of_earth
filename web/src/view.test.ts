@@ -360,6 +360,20 @@ test("the outline layer paints the linked colour and width and hides when linked
   mounted.unmount();
 });
 
+test("the outline draws the land borders of a scene cut to land and the area otherwise", () => {
+  const outlineData = (map: ReturnType<typeof fakeMap>) =>
+    (map.getSource("soe-area-outline") as { data: string }).data;
+
+  const cut = mountTwoLayers(true, [], "", { borders_href: "borders.geojson" });
+  const uncut = mountTwoLayers();
+
+  assert.equal(outlineData(cut.map), "borders.geojson");
+  assert.equal(outlineData(uncut.map), "area.geojson");
+
+  cut.mounted.unmount();
+  uncut.mounted.unmount();
+});
+
 test("an outline display change repaints the map and remembers the choice", () => {
   const { mounted, map } = mountTwoLayers();
 
@@ -428,7 +442,12 @@ test("water sits above categorical fills but below climate colour images", async
   assert.equal(map.getLayer(GEOLOGY_WATER_ID), undefined);
 });
 
-function mountTwoLayers(withTime = true, readyLayers: string[] = [], outline = "") {
+function mountTwoLayers(
+  withTime = true,
+  readyLayers: string[] = [],
+  outline = "",
+  areaPatch: Partial<Scene["area"]> = {},
+) {
   installBrowser();
 
   const state = freshState();
@@ -438,7 +457,10 @@ function mountTwoLayers(withTime = true, readyLayers: string[] = [], outline = "
   (globalThis as Record<string, unknown>).viewTest = state;
 
   const map = fakeMap();
-  const mounted = mountScene(map as never, makeScene(withTime), {
+  const scene = makeScene(withTime);
+  Object.assign(scene.area, areaPatch);
+
+  const mounted = mountScene(map as never, scene, {
     cards: document.createElement("div"),
     timeBar: document.createElement("div"),
     display: {

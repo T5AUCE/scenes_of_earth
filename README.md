@@ -109,6 +109,31 @@ Boundaries imported before previews existed get them with
 previews in batches with progress; an area without a stored preview still serves, computing
 and storing it on its first request.
 
+## Import land (once)
+
+Scene areas are cut to OpenStreetMap land before planning, so cells, statistics and the outline stop at the coast. The
+land polygons are loaded once:
+
+```
+python -m soe.cli import-land
+```
+
+- It downloads `land-polygons-split-4326.zip` from https://osmdata.openstreetmap.de/data/land-polygons.html (930 MB), reads it
+  with pyogrio (the `import` extra) and writes `data/land.sqlite` (about 1.4 GB, `SOE_LAND`): the polygons with an R-tree and
+  the file's last-modified date as the land version. The download is deleted afterwards. A run that finds the same version
+  skips the download.
+- It then cuts every country and every state to land and stores each clip in `land_clips` in the main database, so a request
+  for a large area, such as Norway with millions of coast vertices, never waits for one. Counties, cities and drawn shapes
+  are cut on their first request and stored too.
+- The land version is part of every scene id of a layer that is not offline, so a refreshed land file renames every scene.
+  Refresh it rarely, such as at deploy time. Old clips are deleted by the import.
+- A request without the land file gets 503 before any data is read, and a drawn shape with no land in it gets 422. Scenes of
+  offline (synthetic) layers need no land file and keep their ids.
+- A named area may reach up to 0.02 degrees past its boundary to take land that the boundary leaves out, but never land that a
+  same-level neighbour holds. Parts under about 1 ha are dropped, except the largest, and the cut shape loses detail below a
+  200,000th of the area's longer side (75 m for Norway, 3 m for Fiji), which keeps planning of a country with millions of
+  coast vertices to a few seconds.
+
 ## Cubes (once, then monthly)
 
 Builds read monthly Zarr cubes from local disk (`SOE_CUBES_DIR`). Reading the cubes makes no network calls. Rainfall reads each month from the CHIRPS cube when it holds that month, and over HTTP otherwise, so a checkout without the CHIRPS cube still builds:
@@ -327,9 +352,9 @@ maps now read GMNA, lowest priority, instead of the global base maps.
 - Terrain carries `distribution` with `statistic` `quantiles`, the same weights, `percent` 1, 101 nondecreasing `values`,
   exact `min`/`max`/`mean`, `valid_fraction` and `reference_values`. Quantiles follow the inverse empirical curve with exact
   endpoints and no interpolation, so the median is `values[50]` and `stats` mirrors the distribution with `p2` as `values[2]`
-  and `p98` as `values[98]`. Elevations keep source units and full precision. Absent tiles and nodata are excluded, while
-  sea encoded inside published coastal tiles is still included because no water mask exists yet. Genuine zero-height land
-  is preserved, so coastal means are not land-only. `reference_values` may hold sea level 0 only when valid heights span
+  and `p98` as `values[98]`. Elevations keep source units and full precision. Absent tiles and nodata are excluded. Cells over open sea
+  are outside a scene cut to land, but sea inside a cell that touches the coast still counts, and genuine zero-height land is
+  preserved. `reference_values` may hold sea level 0 only when valid heights span
   zero or the outline overlaps an ocean square missing from both GLO indexes, which is a coarse test, and markers never
   enter the samples. `categorical_shares` and any `path` in `area_series` or `distribution` are reserved for later
   and rejected in v1, as are other statistics or weights.
@@ -350,13 +375,20 @@ maps now read GMNA, lowest priority, instead of the global base maps.
   scene's finest grid cell (never below 0.0005 degrees), so one layer's mask can reach slightly beyond the outline.
   Masks, statistics, style stops and scene ids all use the full stored outline, which is why the bundle format stays at 0.7: old bundles keep
   their exact outline and every reader treats `area.geojson` as display-only.
+- A scene whose layers are not offline is cut to land (see Import land). Its `area.geojson` is the land outline simplified
+  to the larger of 0.001 degrees and a 2000th of the area's longer side, grown by the same amount along the coast, never onto a
+  neighbour's land, and at most 50,000 vertices. Parts smaller than the finest grid cell are dropped, except the largest.
+  Coordinates are rounded to 1e-5 degrees. `area.borders_href` names `borders.geojson`, the outline lines that run over land,
+  which are the borders with other areas and the edges of a drawn shape. An island country has none. The viewer draws
+  the outline from this file, since the sea side is drawn by the basemap. `area.land` is the credit block of the land polygons
+  (with their `version`) and `area.boundary.licence` reads "CC BY 4.0 + ODbL 1.0". The three fields are absent from bundles
+  built before the cut and from offline ones, which keep the old outline. They are optional, so the bundle format stays 0.7.
 - The terrain layer holds no elevation array. The viewer draws GPU relief and contour lines from
   one shared DEM texture pool built from the elevation tiles named by `layers[].tiles`
   (Terrarium encoding, 512 px, Mapterhorn by default), with maplibre-contour labels, and the build
   keeps `stats` (`min`, `max`, `mean`, `p2`, `p98`, `slope_p50_deg`, `slope_p90_deg`, `cell_m`) with
   `distribution`, both taken on mask 1, which choose the bold contour heights while intervals
-  follow a fixed global ladder. Absent tiles and nodata are excluded, while in-tile sea is
-  still included until a water mask exists.
+  follow a fixed global ladder. Absent tiles and nodata are excluded, and a scene cut to land has no cells over open sea.
   Genuine zero-height land is preserved. The tile URL is part of the scene id, so pointing `SOE_TERRAIN_TILES` at another
   copy renames the scenes. With `SOE_SYNTHETIC=1` the statistics are fake while the tiles are still the real hosted ones.
 - Land cover (`esa_worldcover`, not a default layer) is a static `categorical` layer with a uint8
@@ -413,6 +445,7 @@ maps now read GMNA, lowest priority, instead of the global base maps.
 | `SOE_SYNTHETIC` | `0` | `1` uses fake offline data |
 | `SOE_LATEST` | probed | Fix the latest CHIRPS month (`YYYY-MM`) and skip the probe; unused when the CHIRPS cube exists |
 | `SOE_CUBES_DIR` | `./data/cubes` | Where the ERA5-Land, ERA5 and CHIRPS cubes are read from and written to |
+| `SOE_LAND` | `./data/land.sqlite` | OpenStreetMap land polygon store that areas are cut to (see Import land) |
 | `SOE_TERRAIN_TILES` | `https://tiles.mapterhorn.com/{z}/{x}/{y}.webp` | Elevation tile URL template, absolute or relative to `bundle_url` |
 
 ## Tests
@@ -523,6 +556,13 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
   administrative boundaries. PLoS ONE 15(4): e0231866. https://www.geoboundaries.org. Simplified to 0.01 degrees and
   clipped to 60S-84N. CC BY 4.0 for CGAZ itself is the repository-wide licence for geoBoundaries derivatives, not a
   statement naming CGAZ.
+- **Coastline: OpenStreetMap land polygons**, ODbL 1.0. Credit: "Coastline: © OpenStreetMap contributors
+  (https://www.openstreetmap.org/copyright)". OpenStreetMap contributors, land polygons (split, EPSG:4326) built from
+  `natural=coastline` with osmcoastline, https://osmdata.openstreetmap.de/data/land-polygons.html. Modified: intersected
+  with the area outline (geoBoundaries CGAZ or the drawn shape), without the land its same-level neighbours hold, and parts
+  under about 1 ha dropped. A scene cut to land carries `area.geojson` and `borders.geojson` as a derived database, so they are
+  offered under ODbL 1.0 with this credit, and the boundary licence of such a scene is "CC BY 4.0 + ODbL 1.0". The same
+  text is in `soe/sources/licences.py`.
 - **Area search level names: geoBoundaries gbOpen metadata.** Each country's own ADM1/ADM2 type names
   (County, Canton) come from the gbOpen API metadata (`boundaryCanonical` field); only the short names
   are stored, no geometry. Citation: Runfola, D. et al. (2020) geoBoundaries: A global database of political

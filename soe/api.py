@@ -1,10 +1,11 @@
 """Serve boundary search, scene build jobs and static scene files through FastAPI.
 
 Environment settings are SOE_DB, SOE_SCENES_DIR, SOE_PUBLIC_BASE, SOE_MAX_BUILDS,
-SOE_MAX_QUEUE, SOE_SYNTHETIC, SOE_LATEST, SOE_CUBES_DIR and SOE_TERRAIN_TILES.
+SOE_MAX_QUEUE, SOE_SYNTHETIC, SOE_LATEST, SOE_CUBES_DIR, SOE_LAND and SOE_TERRAIN_TILES.
 SOE_LATEST applies only without the CHIRPS cube, and SOE_CUBES_DIR holds the ERA5 and CHIRPS cubes.
-SOE_TERRAIN_TILES defaults to hosted Mapterhorn tiles. With SOE_SYNTHETIC=1 an empty
-boundaries table is seeded from soe/data/sample_areas.geojson.
+SOE_LAND is the land polygon store that scene areas are cut to; a request is refused with 503 until
+it is imported, except for offline layers. SOE_TERRAIN_TILES defaults to hosted Mapterhorn tiles.
+With SOE_SYNTHETIC=1 an empty boundaries table is seeded from soe/data/sample_areas.geojson.
 """
 
 import json

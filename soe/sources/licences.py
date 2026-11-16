@@ -337,6 +337,23 @@ SOURCES = {
         ),
         "modified": "simplified 0.01°, clipped to 60°S-84°N",
     },
+    "osm_land": {
+        "name": "OpenStreetMap land polygons",
+        "licence": "ODbL 1.0",
+        "licence_url": "https://opendatacommons.org/licenses/odbl/1-0/",
+        "attribution": (
+            "Coastline: © OpenStreetMap contributors (https://www.openstreetmap.org/copyright)"
+        ),
+        "citation": (
+            "OpenStreetMap contributors. Land polygons (split, EPSG:4326) built from OSM "
+            "natural=coastline with osmcoastline. "
+            "https://osmdata.openstreetmap.de/data/land-polygons.html"
+        ),
+        "modified": (
+            "intersected with the area outline (geoBoundaries CGAZ or the drawn shape), without "
+            "the land its same-level neighbours hold, and parts under about 1 ha dropped"
+        ),
+    },
     "synthetic": {
         "name": "Sample areas",
         "licence": "per feature: Public Domain, ODbL 1.0 or CC BY 4.0 (geoBoundaries gbOpen)",

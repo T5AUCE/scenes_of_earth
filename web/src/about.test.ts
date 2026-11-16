@@ -16,7 +16,7 @@ const hooks = registerHooks({
     return next(specifier, context);
   },
 });
-const { renderAbout, summaryText } = await import("./about.ts");
+const { renderAbout, renderCredits, summaryText } = await import("./about.ts");
 hooks.deregister();
 
 test("area weighting describes outline shares without equal-cell claims", (context) => {
@@ -106,6 +106,30 @@ test("a scene with partial layer coverage keeps the whole area and says layers c
 
   assert.match(root.textContent ?? "", /Some layers cover only part of the area/);
   assert.doesNotMatch(root.textContent ?? "", /was clipped/);
+});
+
+test("a scene cut to land credits the land polygons once, with their licence and changes", (context) => {
+  const window = new Window();
+  context.after(() => window.happyDOM.abort());
+  installBrowser(window);
+
+  const attribution = "Coastline: © OpenStreetMap contributors";
+  const scene = makeScene();
+  scene.area.land = {
+    name: "OpenStreetMap land polygons",
+    version: "2026-11-14",
+    licence: "ODbL 1.0",
+    attribution,
+    modified: "intersected with the area outline",
+  };
+  scene.credits.lines.push(attribution);
+
+  const text = renderCredits(scene).textContent ?? "";
+
+  assert.match(text, /OpenStreetMap land polygons \(2026-11-14\)/);
+  assert.match(text, /Licence: ODbL 1\.0/);
+  assert.match(text, /Changes: intersected with the area outline/);
+  assert.equal(text.split(attribution).length - 1, 1);
 });
 
 test("smoothing explains geology Smoothing in plain sentences", (context) => {

@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { addGeologyWater, GEOLOGY_WATER_ID, removeGeologyWater } from "./geology-water.ts";
+import {
+  addGeologyWater,
+  addOceanCover,
+  GEOLOGY_WATER_ID,
+  OCEAN_COVER_ID,
+  removeGeologyWater,
+  removeOceanCover,
+} from "./geology-water.ts";
 
 const WATER_PAINT = { "fill-color": "rgb(158,189,255)" };
 const WATER_FILTER = ["!=", ["get", "brunnel"], "tunnel"];
@@ -134,4 +141,74 @@ test("no water in the style means no copy", () => {
 
   assert.equal(addGeologyWater(map as never, "fill-anchor"), false);
   assert.equal(map.getLayer(GEOLOGY_WATER_ID), undefined);
+});
+
+test("the ocean copy sits above the fade with the basemap paint and an ocean-only filter", () => {
+  const map = makeMap(["background", "water", "fill-anchor"]);
+
+  assert.equal(addOceanCover(map as never, "fill-anchor"), true);
+  assert.deepEqual(map.getLayersOrder(), ["background", "water", OCEAN_COVER_ID, "fill-anchor"]);
+
+  const spec = map.specs.get(OCEAN_COVER_ID)!;
+
+  assert.equal(spec.source, "openmaptiles");
+  assert.equal(spec["source-layer"], "water");
+  assert.deepEqual(spec.paint, WATER_PAINT);
+  assert.deepEqual(spec.filter, ["all", WATER_FILTER, ["==", ["get", "class"], "ocean"]]);
+  assert.equal(map.getSource("openmaptiles") !== undefined, true);
+  assert.equal(map.addedSources(), 0);
+});
+
+test("the ocean copy id keeps the scene clip from filtering it", () => {
+  assert.ok(OCEAN_COVER_ID.startsWith("soe-"));
+});
+
+test("a second ocean copy adds no layer and no source", () => {
+  const map = makeMap(["background", "water", "fill-anchor"]);
+
+  assert.equal(addOceanCover(map as never, "fill-anchor"), true);
+  assert.equal(addOceanCover(map as never, "fill-anchor"), true);
+  assert.deepEqual(map.getLayersOrder(), ["background", "water", OCEAN_COVER_ID, "fill-anchor"]);
+  assert.equal(map.addedSources(), 0);
+});
+
+test("the ocean copy without a basemap filter still paints ocean only", () => {
+  const map = makeMap();
+  (map as { getStyle: () => unknown }).getStyle = () => ({
+    layers: [
+      {
+        id: "water",
+        type: "fill",
+        source: "openmaptiles",
+        "source-layer": "water",
+        paint: WATER_PAINT,
+      },
+    ],
+  });
+
+  assert.equal(addOceanCover(map as never, "fill-anchor"), true);
+
+  const spec = map.specs.get(OCEAN_COVER_ID)!;
+
+  assert.deepEqual(spec.filter, ["==", ["get", "class"], "ocean"]);
+  assert.deepEqual(spec.paint, WATER_PAINT);
+});
+
+test("removing the ocean copy leaves the basemap source alone", () => {
+  const map = makeMap();
+  addOceanCover(map as never, "fill-anchor");
+  removeOceanCover(map as never);
+
+  assert.equal(map.getLayer(OCEAN_COVER_ID), undefined);
+  assert.ok(map.getSource("openmaptiles"));
+
+  removeOceanCover(map as never);
+});
+
+test("no water in the style means no ocean copy", () => {
+  const map = makeMap();
+  (map as { getStyle: () => unknown }).getStyle = () => ({ layers: [] });
+
+  assert.equal(addOceanCover(map as never, "fill-anchor"), false);
+  assert.equal(map.getLayer(OCEAN_COVER_ID), undefined);
 });

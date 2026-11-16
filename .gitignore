@@ -6,6 +6,7 @@ reports/
 open-report
 CLAUDE.md
 STYLE.md
+STYLE-examples.md
 
 # User resources (local files for the user, never committed)
 user-resources/

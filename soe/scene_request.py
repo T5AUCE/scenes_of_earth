@@ -15,7 +15,7 @@ from pathlib import Path
 
 from shapely.geometry import mapping, shape
 
-from . import __version__, db
+from . import __version__, db, land
 from .areas import WORLD_WIDTH_DEG, Area, AreaError, clean_polygon
 from .bundle import VERSION, JsonObject
 from .plan import Plan, beyond_legacy_extent, plan, scene_datasets
@@ -40,6 +40,13 @@ DRAWN_AREA_TITLE = "Drawn area"
 MAX_TITLE_CHARS = 120
 
 HIGH_LATITUDE_ID_MARK = ":north-84"  # separates scenes that reach past 60 degrees latitude
+LAND_ID_MARK = ":land-"  # followed by the version of the land polygons the area was cut to
+NEIGHBOURS_ID_MARK = ":near-"  # followed by the revision of the boundaries around a cut area
+CLIP_METHOD_ID_MARK = ":clip-"  # followed by the method version that cut the area to land
+LAND_CHANGED_MESSAGE = (
+    "The land polygons or neighbouring boundaries changed while the scene was waiting; "
+    "request the scene again."
+)
 
 WORLD_BBOX_DEG = (-WORLD_WIDTH_DEG / 2, -90.0, WORLD_WIDTH_DEG / 2, 90.0)
 
@@ -61,7 +68,8 @@ def prepare_scene(db_path: Path | str, registry: Registry, body: bytes | str) ->
     data = _parse_body(body)
     layers = _requested_layers(data, registry)
     title = _requested_title(data)
-    area = resolve_area(db_path, data.get("area"))
+    requested = _parse_area(db_path, data.get("area"))
+    area = cut_to_land(db_path, registry, layers, requested)
 
     datasets = scene_datasets(area, [registry[layer_id] for layer_id in layers])
     start, end = _requested_period(data, datasets)
@@ -69,7 +77,7 @@ def prepare_scene(db_path: Path | str, registry: Registry, body: bytes | str) ->
     # Planning refuses a bad request before any data is read.
     scene_plan = plan(area, datasets, start, end)
 
-    geometry_id, area_spec = _area_identity(area)
+    geometry_id, area_spec = _area_identity(requested, area)
     revisions = _current_revisions(db_path, datasets, scene_plan)
     scene_id = compute_scene_id(
         geometry_id,
@@ -130,7 +138,28 @@ def _requested_title(data: JsonObject) -> str | None:
 
 
 def resolve_area(db_path: Path | str, spec: object) -> Area:
-    """Turn {"type": "boundary", "id"} or {"type": "polygon", "geometry"} into an Area."""
+    """Turn a stored area spec into an Area, cut to land when the spec names a land version.
+
+    The spec is {"type": "boundary", "id"} or {"type": "polygon", "geometry"}. Raises AreaError
+    when the land polygons, the clip method or the boundaries around the area changed after
+    the scene was named, because its id is then wrong.
+    """
+    area = _parse_area(db_path, spec)
+    land_version = spec.get("land")
+    if land_version is None:
+        return area
+
+    cut = land.clip_area_to_land(db_path, land.store_path(), area)
+    expected = (land_version, spec.get("neighbours", ""), spec.get("clip"))
+    actual = (cut.land_version, cut.neighbour_revision, land.CLIP_METHOD_VERSION)
+    if actual != expected:
+        raise AreaError(LAND_CHANGED_MESSAGE)
+
+    return cut
+
+
+def _parse_area(db_path: Path | str, spec: object) -> Area:
+    """The area asked for, as named or drawn, ignoring land, clip and neighbour entries."""
     if not isinstance(spec, dict):
         raise AreaError("area must be an object")
 
@@ -146,6 +175,19 @@ def resolve_area(db_path: Path | str, spec: object) -> Area:
         return Area(clean_polygon(spec.get("geometry")))
 
     raise AreaError("area.type must be 'boundary' or 'polygon'")
+
+
+def cut_to_land(db_path: Path | str, registry: Registry, layers: list[str], area: Area) -> Area:
+    """The area cut to land, so cells, statistics and the outline stop at the coast.
+
+    Raises SourceUnavailable when no land polygons are imported and AreaError when the area has
+    no land, both before any data is read. Offline layers keep the area as requested, so tests
+    and the synthetic mode need no land store.
+    """
+    if all(registry[layer_id].synthetic for layer_id in layers):
+        return area
+
+    return land.clip_area_to_land(db_path, land.store_path(), area)
 
 
 def _requested_period(data: JsonObject, datasets: list[Dataset]) -> tuple[str | None, str | None]:
@@ -186,22 +228,42 @@ def request_bounds(dataset: SeriesDataset) -> tuple[str, str]:
     return first, request_label(last_start, REQUEST_STEP)
 
 
-def _area_identity(area: Area) -> tuple[str, JsonObject]:
+def _area_identity(requested: Area, area: Area) -> tuple[str, JsonObject]:
     """(id that changes when the geometry does, area spec stored in the job's request).
 
-    An area reaching past 60 degrees latitude is marked so that its scene is rebuilt with the whole
-    outline, while every other area keeps the id of its existing bundle.
+    `requested` is the area as asked for and `area` is the same cut to land. An area reaching past
+    60 degrees latitude is marked so that its scene is rebuilt with the whole outline, while every
+    other area keeps the id of its existing bundle. An area cut to land also names the land
+    version, the clip method and the revision of the boundaries around it, so a new version of
+    the land polygons, a change to the clip method or a change to a neighbour renames the scene.
     """
     mark = HIGH_LATITUDE_ID_MARK if beyond_legacy_extent(area.geom) else ""
-    if area.named:
-        boundary = area.boundary
+    if area.land_version:
+        mark += LAND_ID_MARK + area.land_version
+        mark += CLIP_METHOD_ID_MARK + str(land.CLIP_METHOD_VERSION)
+        if area.neighbour_revision:
+            mark += NEIGHBOURS_ID_MARK + area.neighbour_revision
+
+    if requested.named:
+        boundary = requested.boundary
         geometry_hash = hashlib.sha256(boundary["geom_geojson"].encode()).hexdigest()
         geometry_id = boundary["id"] + ":" + geometry_hash + mark
 
-        return geometry_id, {"type": "boundary", "id": boundary["id"]}
+        spec = {"type": "boundary", "id": boundary["id"]}
+        return geometry_id, _with_land_version(spec, area)
 
-    geometry_hash = hashlib.sha256(area.geom.wkb).hexdigest()
-    return "poly:" + geometry_hash + mark, {"type": "polygon", "geometry": mapping(area.geom)}
+    geometry_hash = hashlib.sha256(requested.geom.wkb).hexdigest()
+    spec = {"type": "polygon", "geometry": mapping(requested.geom)}
+    return "poly:" + geometry_hash + mark, _with_land_version(spec, area)
+
+
+def _with_land_version(spec: JsonObject, area: Area) -> JsonObject:
+    """The area spec, naming the land version, clip method and neighbours when cut to land."""
+    if not area.land_version:
+        return spec
+
+    neighbours = {"neighbours": area.neighbour_revision} if area.neighbour_revision else {}
+    return {**spec, "land": area.land_version, "clip": land.CLIP_METHOD_VERSION, **neighbours}
 
 
 def _current_revisions(

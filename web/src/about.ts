@@ -243,6 +243,9 @@ export function renderCredits(scene: Scene) {
 
   for (const entry of creditEntries(scene)) root.append(creditCard(entry));
 
+  const { land } = scene.area;
+  if (land) root.append(creditCard({ ...land, isBoundary: false }));
+
   const basemap = makeHtmlElement("section", "", root);
   makeHtmlElement("h4", "Basemap", basemap);
   makeHtmlElement("p", BASEMAP_CREDIT, basemap);
@@ -250,7 +253,8 @@ export function renderCredits(scene: Scene) {
 
   const terms = makeHtmlElement("section", "", root);
 
-  for (const line of extraCreditLines(scene)) makeHtmlElement("p", line, terms);
+  const extraLines = extraCreditLines(scene).filter((line) => line !== land?.attribution);
+  for (const line of extraLines) makeHtmlElement("p", line, terms);
 
   makeHtmlElement("p", scene.credits.endorsement, terms);
 
