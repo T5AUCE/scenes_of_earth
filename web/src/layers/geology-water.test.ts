@@ -2,11 +2,15 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  addCoastStroke,
   addInlandWater,
   addOceanCover,
+  applyCoastStroke,
+  COAST_STROKE_ID,
   INLAND_WATER_ID,
   OCEAN_COVER_ID,
   refreshOceanCover,
+  removeCoastStroke,
   removeInlandWater,
   removeOceanCover,
 } from "./geology-water.ts";
@@ -261,3 +265,123 @@ test("no water in the style means no ocean copy", () => {
   assert.equal(addOceanCover(map as never, "fill-anchor", "#faf8f3"), false);
   assert.equal(map.getLayer(OCEAN_COVER_ID), undefined);
 });
+
+test("the coast stroke copies ocean water as a line in the border colour and width", () => {
+  const map = makeCoastMap(["background", "water", "fill-anchor"]);
+
+  assert.equal(
+    addCoastStroke(map as never, "fill-anchor", { shown: true, color: "white", widthPx: 2 }),
+    true,
+  );
+
+  const spec = map.specs.get(COAST_STROKE_ID)!;
+
+  assert.equal(spec.type, "line");
+  assert.equal(spec.source, "openmaptiles");
+  assert.equal(spec["source-layer"], "water");
+  assert.deepEqual(spec.filter, ["all", WATER_FILTER, ["==", ["get", "class"], "ocean"]]);
+  assert.deepEqual(spec.paint, { "line-color": "#ffffff", "line-width": 2, "line-opacity": 1 });
+  assert.deepEqual(spec.layout, {
+    "line-join": "round",
+    "line-cap": "round",
+    visibility: "visible",
+  });
+  assert.equal(map.addedSources(), 0);
+});
+
+test("the coast stroke id keeps the scene clip from filtering it", () => {
+  assert.ok(COAST_STROKE_ID.startsWith("soe-"));
+});
+
+test("a second coast stroke repaints instead of doubling", () => {
+  const map = makeCoastMap(["background", "water", "fill-anchor"]);
+
+  assert.equal(
+    addCoastStroke(map as never, "fill-anchor", { shown: true, color: "white", widthPx: 2 }),
+    true,
+  );
+  assert.equal(
+    addCoastStroke(map as never, "fill-anchor", { shown: false, color: "graphite", widthPx: 3 }),
+    true,
+  );
+
+  assert.deepEqual(map.getLayersOrder(), ["background", "water", COAST_STROKE_ID, "fill-anchor"]);
+  assert.equal(map.layouts.get(COAST_STROKE_ID)?.at(-1), "none");
+  assert.deepEqual(map.paints.get(COAST_STROKE_ID)?.slice(-2), [
+    ["line-color", "#333333"],
+    ["line-width", 3],
+  ]);
+  assert.equal(map.addedSources(), 0);
+});
+
+test("the border state drives the coast colour, width, and visibility", () => {
+  const map = makeCoastMap();
+  addCoastStroke(map as never, "fill-anchor", { shown: true, color: "white", widthPx: 2 });
+
+  applyCoastStroke(map as never, { shown: false, color: "graphite", widthPx: 3 });
+
+  assert.equal(map.layouts.get(COAST_STROKE_ID)?.at(-1), "none");
+  assert.deepEqual(map.paints.get(COAST_STROKE_ID)?.slice(-2), [
+    ["line-color", "#333333"],
+    ["line-width", 3],
+  ]);
+
+  map.layouts.clear();
+  map.paints.clear();
+  applyCoastStroke(map as never, { shown: true, color: "white", widthPx: 2 });
+
+  assert.deepEqual(map.layouts.get(COAST_STROKE_ID), ["visible"]);
+  assert.deepEqual(map.paints.get(COAST_STROKE_ID), [
+    ["line-color", "#ffffff"],
+    ["line-width", 2],
+  ]);
+});
+
+test("a missing coast layer needs no repaint", () => {
+  const map = makeCoastMap();
+
+  applyCoastStroke(map as never, { shown: true, color: "white", widthPx: 2 });
+
+  assert.equal(map.layouts.size, 0);
+  assert.equal(map.paints.size, 0);
+});
+
+test("removing the coast stroke leaves the basemap source alone", () => {
+  const map = makeCoastMap();
+  addCoastStroke(map as never, "fill-anchor", { shown: true, color: "white", widthPx: 2 });
+  removeCoastStroke(map as never);
+
+  assert.equal(map.getLayer(COAST_STROKE_ID), undefined);
+  assert.ok(map.getSource("openmaptiles"));
+
+  removeCoastStroke(map as never);
+});
+
+test("no water in the style means no coast stroke", () => {
+  const map = makeCoastMap();
+  (map as { getStyle: () => unknown }).getStyle = () => ({ layers: [] });
+
+  assert.equal(
+    addCoastStroke(map as never, "fill-anchor", { shown: true, color: "white", widthPx: 2 }),
+    false,
+  );
+  assert.equal(map.getLayer(COAST_STROKE_ID), undefined);
+});
+
+function makeCoastMap(layers: string[] = ["background", "water", "fill-anchor"]) {
+  const base = makeMap(layers);
+  const layouts = new Map<string, string[]>();
+  const paints = new Map<string, [string, unknown][]>();
+
+  return {
+    ...base,
+    layouts,
+    paints,
+    setLayoutProperty: (id: string, name: string, value: unknown) => {
+      if (name === "visibility") layouts.set(id, [...(layouts.get(id) ?? []), String(value)]);
+    },
+    setPaintProperty: (id: string, name: string, value: unknown) => {
+      paints.set(id, [...(paints.get(id) ?? []), [name, value]]);
+    },
+  };
+}

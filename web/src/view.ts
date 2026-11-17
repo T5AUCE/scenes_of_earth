@@ -33,6 +33,7 @@ import { nextEntryFrame } from "./entry-curtain";
 import { makeHtmlElement } from "./html";
 import { BLEND, blendPair } from "./layers/allocate";
 import { BLEND_TITLE, type BlendView, createBlendView } from "./layers/blend";
+import { applyCoastStroke, COAST_STROKE_ID } from "./layers/geology-water";
 import { LAYER_KINDS } from "./layers/registry";
 import { firstSymbolId, removeLayerAndSource, showScaleBar } from "./map";
 import { shiftLongitudes, worldShift } from "./render/mercator";
@@ -427,8 +428,14 @@ function outlineHref(scene: Scene) {
 /** Paint the area outline's colour, width and visibility without rebuilding. */
 function applyOutline(map: MapLibreMap, outline: OutlineState) {
   map.setLayoutProperty(OUTLINE_ID, "visibility", outline.shown ? "visible" : "none");
+  // Round joins keep the outline corners smooth at every width the slider offers.
+  map.setLayoutProperty(OUTLINE_ID, "line-join", "round");
+  map.setLayoutProperty(OUTLINE_ID, "line-cap", "round");
   map.setPaintProperty(OUTLINE_ID, "line-color", outlineCss(outline.color));
   map.setPaintProperty(OUTLINE_ID, "line-width", outline.widthPx);
+
+  // The coast shares the border paint, so linked or stored outline edits repaint it here.
+  if (map.getLayer(COAST_STROKE_ID)) applyCoastStroke(map, outline);
 }
 
 function outlineChanged(next: OutlineState, previous: OutlineState): boolean {

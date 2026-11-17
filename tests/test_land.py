@@ -4,17 +4,21 @@ import json
 import zipfile
 from pathlib import Path
 
+import numpy as np
 import pytest
 import shapely
+from shapely.errors import ShapelyError
 from shapely.geometry import (
     GeometryCollection,
     LineString,
+    MultiLineString,
     MultiPolygon,
     Point,
     Polygon,
     box,
     mapping,
 )
+from shapely.geometry.base import BaseGeometry
 
 from soe import db, land
 from soe.areas import Area, AreaError
@@ -173,6 +177,14 @@ def test_outline_covers_the_coast_and_stays_off_the_neighbours_land(tmp_path):
     assert clip.display.intersection(neighbour).area < 1e-9
 
 
+def as_served(geometry):
+    """The geometry on the build's rounding grid, then without the grid's precision model.
+
+    Intersecting a fixed-precision geometry snaps to its grid and can hide an overlap.
+    """
+    return shapely.set_precision(shapely.set_precision(geometry, land.OUTLINE_PRECISION_DEG), 0)
+
+
 def zigzag_edge(x_deg, amplitude_deg, count=200):
     """Points of a vertical edge at `x_deg` from south to north, bending in and out."""
     return [(x_deg - (index % 2) * amplitude_deg, index / count) for index in range(count + 1)]
@@ -189,7 +201,7 @@ def test_simplified_geometry_never_reaches_a_neighbour_across_a_bent_border(
 
     clip = clip_to_land(store, frame, [neighbour])
 
-    rounded = shapely.set_precision(clip.display, land.OUTLINE_PRECISION_DEG)
+    rounded = as_served(clip.display)
     assert clip.geom.intersection(neighbour).area < 1e-12
     assert clip.display.intersection(neighbour).area < 1e-12
     assert rounded.intersection(neighbour).area < 1e-12
@@ -206,10 +218,167 @@ def test_simplified_display_never_reaches_a_neighbour_when_tolerance_exceeds_the
 
     clip = clip_to_land(store, frame, [neighbour])
 
-    rounded = shapely.set_precision(clip.display, land.OUTLINE_PRECISION_DEG)
+    rounded = as_served(clip.display)
     assert clip.geom.intersection(neighbour).area < 1e-12
     assert clip.display.intersection(neighbour).area < 1e-12
     assert rounded.intersection(neighbour).area < 1e-12
+
+
+def test_outline_holds_all_land_when_the_tolerance_would_cut_into_the_coast(tmp_path):
+    coast = [(index * 0.5, 1 + 0.04 * (index % 2)) for index in range(201)]
+    mainland = Polygon([(0, 0), (100, 0), *reversed(coast)])
+    islets = [box(10 + index, 3, 10.01 + index, 3.01) for index in range(5)]
+    store = store_of(tmp_path, mainland, *islets)
+
+    clip = clip_to_land(store, box(-1, -1, 101, 4), [])
+
+    rounded = as_served(clip.display)
+    parts = shapely.union_all([mainland, *islets])
+    plain = shapely.simplify(parts, land._display_tolerance(parts.bounds))
+    assert parts.difference(plain).area > 0.1
+    assert parts.difference(clip.display).area < 1e-12
+    assert parts.difference(rounded).area < 1e-12
+
+
+def test_outline_holds_the_land_up_to_a_neighbour_it_must_not_cover(tmp_path):
+    frame = Polygon(
+        [(0, 0), (100, 0), (100, 1), (1.08, 1), (1.08, 0.96), (1, 0.96), (1, 1), (0, 1)]
+    )
+    neighbour = Polygon(
+        [(0, 1), (1, 1), (1, 0.96), (1.08, 0.96), (1.08, 1), (100, 1), (100, 2), (0, 2)]
+    )
+    store = store_of(tmp_path, box(0, 0, 100, 2))
+
+    clip = clip_to_land(store, frame, [neighbour])
+
+    rounded = as_served(clip.display)
+    guard_deg = 3 * land.OUTLINE_PRECISION_DEG
+    assert clip.geom.difference(rounded).buffer(-guard_deg).is_empty
+    assert rounded.intersection(neighbour).area < 1e-12
+
+
+def test_display_margin_reaches_a_400th_of_the_span(tmp_path):
+    store = store_of(tmp_path, box(0, 0, 1, 1))
+
+    clip = clip_to_land(store, box(-1, -1, 2, 2), [])
+
+    west, south, east, north = clip.geom.bounds
+    margin_deg = max(east - west, north - south) / land.DISPLAY_SPAN_DIVISOR
+    display_west, display_south, display_east, display_north = clip.display.bounds
+    assert display_west <= west - margin_deg + 1e-9
+    assert display_south <= south - margin_deg + 1e-9
+    assert display_east >= east + margin_deg - 1e-9
+    assert display_north >= north + margin_deg - 1e-9
+
+
+def test_display_stops_at_a_coastal_border_on_the_sea_side(tmp_path):
+    west, east = box(0, 0, 1, 2), box(1, 0, 2, 2)
+    store = store_of(tmp_path, box(0, 0, 2, 2))
+
+    clip = clip_to_land(store, west, [east])
+
+    assert clip.borders.length > 0
+    assert clip.display.intersection(box(1, 2, 3, 3)).area < 1e-12
+    assert clip.display.intersection(box(1, -1, 3, 0)).area < 1e-12
+    assert clip.display.intersection(box(-1, 2, 1, 3)).area > 1e-12
+
+
+def test_display_contains_all_land_where_a_border_reaches_the_coast(tmp_path):
+    west, east = box(0, 0, 1, 2), box(1, 0, 2, 2)
+    store = store_of(tmp_path, box(0, 0, 2, 2))
+
+    clip = clip_to_land(store, west, [east])
+
+    rounding_strip_deg2 = land.OUTLINE_PRECISION_DEG * clip.borders.length
+    assert clip.geom.difference(clip.display).area <= rounding_strip_deg2 + 1e-9
+    assert clip.display.area > clip.geom.area
+    assert clip.display.intersection(east).area < 1e-9
+
+
+def test_segmented_border_grows_rays_only_from_its_merged_ends(monkeypatch):
+    border = MultiLineString(
+        [LineString([(1, index / 10), (1, (index + 1) / 10)]) for index in range(20)]
+    )
+    grown = box(-0.05, -0.05, 1.05, 2.05)
+    mainland = box(0, 0, 1, 2)
+    neighbour = box(1, 0, 2, 2)
+    coast = land._coast_lines(mainland, border)
+    seen = {}
+    seaward_rays = land._seaward_border_rays
+
+    def spy(borders: BaseGeometry, growth_deg: float, covered: BaseGeometry) -> list[LineString]:
+        rays = seaward_rays(borders, growth_deg, covered)
+        seen["rays"] = len(rays)
+        return rays
+
+    monkeypatch.setattr(land, "_seaward_border_rays", spy)
+    outline = land._cut_sea_at_borders(grown, mainland, border, coast, 0.01, neighbour)
+
+    assert seen["rays"] == 2
+    merged = land._cut_sea_at_borders(
+        grown, mainland, shapely.line_merge(border), coast, 0.01, neighbour
+    )
+    assert outline.equals(merged)
+
+    def unmerged_border_rays(
+        borders: BaseGeometry, growth_deg: float, covered: BaseGeometry
+    ) -> list[LineString]:
+        # The original segments bypass merging to preserve the previous outline as a reference.
+        return seaward_rays(border, growth_deg, covered)
+
+    monkeypatch.setattr(land, "_seaward_border_rays", unmerged_border_rays)
+    previous_outline = land._cut_sea_at_borders(grown, mainland, border, coast, 0.01, neighbour)
+
+    assert outline.equals(previous_outline)
+
+
+def test_shallow_border_ray_leaves_no_tail_on_the_neighbour_sea_side():
+    selected = Polygon([(0, 0), (0, 1), (5.67, 1)])
+    neighbour = Polygon([(0, 0), (5.67, 0), (5.67, 1)])
+
+    for shift_deg in (0, 360):
+        parts = [Polygon([(x + shift_deg, y) for x, y in selected.exterior.coords])]
+        shifted_neighbour = Polygon([(x + shift_deg, y) for x, y in neighbour.exterior.coords])
+        frame_bounds = shapely.total_bounds(parts)
+        tolerance_deg = land._display_tolerance(frame_bounds)
+        limit_deg = land._conservative_reach_deg(frame_bounds)
+
+        outline = land._display_outline(
+            parts, [shifted_neighbour], tolerance_deg, keep_in_reach=True, limit_deg=limit_deg
+        )
+
+        assert not shapely.covers(outline, Point(5.68 + shift_deg, 1.001))
+        assert shapely.covers(outline, Point(2 + shift_deg, 0.9))
+
+
+def test_neighbour_side_sea_joined_by_an_island_margin_is_dropped(tmp_path):
+    west, east = box(0, 0, 1, 2), box(1, 0, 2, 2)
+    island = box(1.002, 2.007, 1.004, 2.009)
+    store = store_of(tmp_path, box(0, 0, 2, 2), island)
+
+    clip = clip_to_land(store, west, [east])
+
+    assert not shapely.covers(clip.display, Point(1.003, 2.0001))
+    assert shapely.covers(clip.display, Point(0.5, 2.001))
+    assert shapely.covers(clip.display, island)
+
+
+def test_neighbour_just_outside_the_old_window_is_found(tmp_path, monkeypatch):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    frame, neighbour = box(0, 0, 1, 1), box(1.02255, 0.2, 2, 0.8)
+    add_boundaries(db_path, {"WEST": frame, "EAST": neighbour})
+    store = store_of(tmp_path, box(-0.02, 0.1, 1.02, 0.9))
+    area = named_area(db_path, "WEST")
+
+    assert "cgaz:ADM1:EAST" in [item.id for item in land._neighbours(db_path, area, area.geom)]
+
+    # A tiny vertex cap forces the coarsening branch while recovered land is present.
+    monkeypatch.setattr(land, "MAX_DISPLAY_VERTICES", 4)
+    clip = clip_area_to_land(db_path, store, area)
+
+    assert clip.display.intersection(neighbour).area < 1e-12
+    assert clip.display.intersection(box(1.03, 0.2, 2, 0.8)).area < 1e-12
 
 
 def test_neighbour_touching_the_reach_only_along_an_edge_keeps_the_clip(tmp_path):
@@ -243,21 +412,157 @@ def test_outline_stays_off_a_neighbour_narrower_than_the_grid(tmp_path):
 
     clip = clip_to_land(store, land_box.difference(neighbour), [neighbour])
 
-    rounded = shapely.set_precision(clip.display, land.OUTLINE_PRECISION_DEG)
+    rounded = as_served(clip.display)
     assert clip.display.intersection(neighbour).area < 1e-12
     assert rounded.intersection(neighbour).area < 1e-12
+
+
+def test_outline_stays_off_a_neighbour_just_past_its_unrounded_edge(tmp_path):
+    land_box = box(0, 0, 1.000006, 1)
+    neighbour = box(1.001108, 0, 2, 1)
+    store = store_of(tmp_path, land_box)
+
+    clip = clip_to_land(store, land_box, [neighbour])
+
+    assert as_served(clip.display).intersection(neighbour).area < 1e-12
+
+
+def test_coarsening_never_reaches_a_neighbour_outside_the_lookup_window(tmp_path, monkeypatch):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    islands = [
+        box(column * 0.1, row * 0.1, column * 0.1 + 0.002, row * 0.1 + 0.002)
+        for column in range(30)
+        for row in range(20)
+    ]
+    store = store_of(tmp_path, *islands)
+    neighbour = box(2.94, -1, 4, 3)
+    add_boundaries(db_path, {"WEST": box(-0.01, -0.01, 2.91, 1.91), "EAST": neighbour})
+    area = named_area(db_path, "WEST")
+    assert land._neighbours(db_path, area, area.geom) == []
+    monkeypatch.setattr(land, "MAX_DISPLAY_VERTICES", 100)
+
+    clip = clip_area_to_land(db_path, store, area)
+
+    assert as_served(clip.display).intersection(neighbour).area < 1e-12
 
 
 def test_outline_is_coarsened_until_it_has_few_enough_vertices(tmp_path, monkeypatch):
     store = store_of(tmp_path, harmonic_island(2000, west=0, south=0))
     frame = box(-1, -1, 4, 4)
-    detailed = clip_to_land(store, frame, [])
+    detailed = clip_to_land(store, frame, [], grow_deg=0)
 
     monkeypatch.setattr(land, "MAX_DISPLAY_VERTICES", 60)
-    coarse = clip_to_land(store, frame, [])
+    coarse = clip_to_land(store, frame, [], grow_deg=0)
 
     assert shapely.get_num_coordinates(detailed.display) > 60
     assert shapely.get_num_coordinates(coarse.display) <= 60
+    assert coarse.geom.difference(coarse.display).area < 1e-12
+
+
+def test_coarsening_cuts_the_sea_only_for_the_final_tolerances(monkeypatch):
+    island = harmonic_island(2000, west=0, south=0)
+    west = shapely.intersection(island, box(-1, -1, 1, 3))
+    east = shapely.intersection(island, box(1, -1, 3, 3))
+    parts = [west]
+    neighbours = [east]
+    frame_bounds = shapely.total_bounds(parts)
+    tolerance_deg = land._display_tolerance(frame_bounds)
+    limit_deg = land._conservative_reach_deg(frame_bounds)
+    monkeypatch.setattr(land, "MAX_DISPLAY_VERTICES", 120)
+
+    # Build the reference first so its cuts do not enter the count.
+    expected, old_cuts = _outline_with_a_cut_per_round(
+        parts, neighbours, tolerance_deg, True, limit_deg
+    )
+
+    cuts = []
+    cut_once = land._cut_sea_at_borders
+
+    def counting_cut(
+        covered: BaseGeometry,
+        land_union: BaseGeometry,
+        border_lines: BaseGeometry,
+        coast_lines: BaseGeometry,
+        growth_deg: float,
+        exclusion: BaseGeometry,
+    ) -> BaseGeometry:
+        cuts.append(1)
+        return cut_once(covered, land_union, border_lines, coast_lines, growth_deg, exclusion)
+
+    monkeypatch.setattr(land, "_cut_sea_at_borders", counting_cut)
+    outline = land._display_outline(
+        parts, neighbours, tolerance_deg, keep_in_reach=True, limit_deg=limit_deg
+    )
+
+    assert old_cuts > 2
+    assert len(cuts) <= 2
+    assert shapely.equals_exact(outline, expected, 0)
+
+
+def _outline_with_a_cut_per_round(
+    parts: list[Polygon],
+    neighbours: list[BaseGeometry],
+    tolerance_deg: float,
+    keep_in_reach: bool,
+    limit_deg: float,
+) -> tuple[BaseGeometry, int]:
+    """The outline the previous loop gave, cutting the sea on every tolerance round."""
+    west, south, east, north = shapely.total_bounds(parts)
+    span_deg = max(east - west, north - south)
+    valid_neighbours = [part if part.is_valid else shapely.make_valid(part) for part in neighbours]
+    land_union = shapely.union_all(parts)
+    border_lines = land._shared_border_lines(land_union, valid_neighbours)
+    coast_lines = land._coast_lines(land_union, border_lines)
+    previous_vertices = None
+    cuts = 0
+    while True:
+        growth_deg = land._display_growth(tolerance_deg, span_deg)
+        shapes = [part if part.area >= tolerance_deg**2 else part.convex_hull for part in parts]
+        simplified = shapely.simplify(shapes, tolerance_deg)
+        collapsed = shapely.is_empty(simplified)
+        simplified[collapsed] = shapely.envelope(np.array(shapes, dtype=object)[collapsed])
+        grown = shapely.buffer(
+            shapely.make_valid(simplified), growth_deg, quad_segs=land.DISPLAY_CORNER_SEGMENTS
+        )
+        covered = shapely.union_all(grown)
+        exclusion = land._display_exclusion(valid_neighbours, covered)
+        outline = land._cut_sea_at_borders(
+            covered, land_union, border_lines, coast_lines, growth_deg, exclusion
+        )
+        cuts += 1
+        vertices = shapely.get_num_coordinates(outline)
+        stalled = (
+            not exclusion.is_empty
+            and previous_vertices is not None
+            and vertices > previous_vertices * land.STALLED_RATIO
+        )
+        too_wide = keep_in_reach and land._display_growth(tolerance_deg * 2, span_deg) > limit_deg
+        if (
+            vertices <= land.MAX_DISPLAY_VERTICES
+            or tolerance_deg >= span_deg
+            or stalled
+            or too_wide
+        ):
+            return outline, cuts
+
+        previous_vertices = vertices
+        tolerance_deg *= 2
+
+
+def test_irrelevant_neighbour_does_not_change_coarsening(monkeypatch):
+    monkeypatch.setattr(land, "MAX_DISPLAY_VERTICES", 8)
+    parts = [box(0, 0, 1, 1)]
+    frame_bounds = shapely.total_bounds(parts)
+    tolerance_deg = land._display_tolerance(frame_bounds)
+    limit_deg = land._conservative_reach_deg(frame_bounds)
+
+    plain = land._display_outline(parts, [], tolerance_deg, keep_in_reach=True, limit_deg=limit_deg)
+    with_far = land._display_outline(
+        parts, [box(10, 10, 11, 11)], tolerance_deg, keep_in_reach=True, limit_deg=limit_deg
+    )
+
+    assert shapely.equals_exact(with_far, plain, 0)
 
 
 def test_missing_store_is_unavailable_before_the_database_is_read(tmp_path):
@@ -427,6 +732,23 @@ def test_import_stores_the_clip_of_every_country_and_state_once(tmp_path):
 
     assert store_clips(db_path, store) == 2
     assert store_clips(db_path, store) == 0
+
+
+def test_area_that_breaks_the_clip_is_skipped_not_raised(tmp_path, monkeypatch, capsys):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    add_boundaries(db_path, {"WEST": box(0, 0, 1, 1)})
+    store = store_of(tmp_path, box(0, 0, 1, 1))
+
+    def broken(db_path: Path | str, store: Path | str, area: Area) -> Area:
+        raise ShapelyError("boom")
+
+    monkeypatch.setattr(land, "clip_area_to_land", broken)
+
+    assert land._store_clip(db_path, store, "cgaz:ADM1:WEST") is False
+    skipped = capsys.readouterr().out
+    assert "cgaz:ADM1:WEST" in skipped
+    assert "boom" in skipped
 
 
 def test_land_version_is_the_stored_date(tmp_path):

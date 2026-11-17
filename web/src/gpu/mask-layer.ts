@@ -137,14 +137,15 @@ void main() {
  * first frame even at zero opacity, so a failure shows before anything is revealed. Setters
  * take effect on the next frame.
  */
-export function createMaskLayers(options: MaskOptions, ids: string[]) {
-  const fill = new MaskFill(options);
+export function createMaskLayers(options: MaskOptions, ids: string[], sharedFill?: MaskFill) {
+  const fill = sharedFill ?? new MaskFill(options);
 
   return ids.map((id) => {
     const layer = new MaskLayer(id, fill, options.opacity);
 
     return {
       layer,
+      fill,
       setOpacity: (opacity: number) => layer.setOpacity(opacity),
       setColor: (color: string) => layer.setColor(color),
     };
@@ -271,7 +272,7 @@ class MaskLayer implements CustomLayerInterface {
 }
 
 /** The GPU objects and the filled target that every layer of one mask composites. */
-class MaskFill {
+export class MaskFill {
   gpu: MaskGpu | null = null;
   readonly geometry: MaskGeometry;
 

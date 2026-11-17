@@ -669,6 +669,7 @@ async function createCacheHarness(context, responses) {
           };
         },
         fulfill: async (entry) => entry,
+        abort: async (reason) => ({ aborted: reason }),
       }),
   };
 }
@@ -687,10 +688,11 @@ test("a network failure while revalidating serves the stale cached response", as
   assert.equal(cache.fetches.length, 2);
 });
 
-test("a network failure without a cached response still fails the request", async (context) => {
+test("a network failure without a cached response fails only that request", async (context) => {
   const cache = await createCacheHarness(context, [{ error: "getaddrinfo ENOTFOUND" }]);
 
-  await assert.rejects(cache.request(), /ENOTFOUND/);
+  assert.deepEqual(await cache.request(), { aborted: "failed" });
+  assert.deepEqual(fs.readdirSync(cache.directory), []);
 });
 
 test("missing resources are fetched again instead of caching negatives", async (context) => {

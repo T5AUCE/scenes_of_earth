@@ -18,7 +18,7 @@ registerHooks({
 import { entryStats, isPreloadDisabled } from "./dev-stats.ts";
 import { DEFAULT_OUTLINE, storeMapDetailsShown } from "./display-state.ts";
 import { REVEAL_MS } from "./entry-curtain.ts";
-import { INLAND_WATER_ID, OCEAN_COVER_ID } from "./layers/geology-water.ts";
+import { COAST_STROKE_ID, INLAND_WATER_ID, OCEAN_COVER_ID } from "./layers/geology-water.ts";
 import { currentScenePreload } from "./layers/tile-prefetch.ts";
 import { assertSameNode } from "./testing/dom-assert.ts";
 import {
@@ -34,6 +34,8 @@ import type { TestMap } from "./testing/scene-mode-harness.ts";
 import type { Scene } from "./types.ts";
 
 const FADE_ID = "soe-scene-fade";
+// Matches the second mask in scene-mode.ts, which the harness stub cannot import directly.
+const COAST_MASK_ID = "soe-coast-mask";
 const FADE_OPACITY = 1;
 const PREPARING = "Preparing scene…";
 
@@ -215,7 +217,7 @@ test("basemap geometry stays below scene data with the mask above both", async (
   );
 });
 
-test("the ocean cover sits above scene data, the mask, and the outline in the page colour", async () => {
+test("the ocean cover sits above scene data with the coast stroke and masks above it", async () => {
   const harness = createHarness();
   const { order, waterFilter } = seedOceanBasemap(harness);
 
@@ -227,7 +229,9 @@ test("the ocean cover sits above scene data, the mask, and the outline in the pa
   assert.ok(order.indexOf("overview") < order.indexOf(OCEAN_COVER_ID));
   assert.ok(order.indexOf(MASK_ID) < order.indexOf(OCEAN_COVER_ID));
   assert.ok(order.indexOf(FADE_ID) < order.indexOf(OCEAN_COVER_ID));
-  assert.ok(order.indexOf("soe-area-outline") < order.indexOf(OCEAN_COVER_ID));
+  assert.ok(order.indexOf(OCEAN_COVER_ID) < order.indexOf(COAST_STROKE_ID));
+  assert.ok(order.indexOf(COAST_STROKE_ID) < order.indexOf(COAST_MASK_ID));
+  assert.ok(order.indexOf(COAST_MASK_ID) < order.indexOf("soe-area-outline"));
   assert.ok(order.indexOf(MASK_ID) < order.indexOf("label_city"));
   assert.ok(order.indexOf("label_city") < order.indexOf(FADE_ID));
   assert.ok(order.indexOf(FADE_ID) < order.indexOf("soe-area-outline"));
@@ -242,10 +246,18 @@ test("the ocean cover sits above scene data, the mask, and the outline in the pa
   assert.ok(harness.map.sources.has("openmaptiles"));
   assert.equal(harness.map.filters.has(OCEAN_COVER_ID), false);
 
+  const stroke = harness.map.layers.get(COAST_STROKE_ID) as unknown as Record<string, unknown>;
+
+  assert.equal(stroke.source, "openmaptiles");
+  assert.equal(stroke["source-layer"], "water");
+  assert.deepEqual(stroke.filter, ["all", waterFilter, ["==", ["get", "class"], "ocean"]]);
+
   harness.mode.exit();
   await settle();
 
   assert.equal(harness.map.getLayer(OCEAN_COVER_ID), undefined);
+  assert.equal(harness.map.getLayer(COAST_STROKE_ID), undefined);
+  assert.equal(harness.map.getLayer(COAST_MASK_ID), undefined);
   assert.equal(harness.map.getLayer(MASK_ID), undefined);
   assert.equal(harness.map.getLayer(FADE_ID), undefined);
   assert.equal(harness.map.sources.size, 1);
@@ -334,15 +346,24 @@ test("inland water stays above scene data below the mask through entry and exit"
 
   assert.equal(harness.map.getLayer(INLAND_WATER_ID), undefined);
   assert.equal(harness.map.getLayer(OCEAN_COVER_ID), undefined);
+  assert.equal(harness.map.getLayer(COAST_STROKE_ID), undefined);
+  assert.equal(harness.map.getLayer(COAST_MASK_ID), undefined);
   assert.equal(harness.map.getLayer(MASK_ID), undefined);
   assert.equal(harness.map.getLayer(FADE_ID), undefined);
   assert.equal(harness.map.filters.size, 0);
   assert.deepEqual(
     order.filter(
       (id) =>
-        ![MASK_ID, FADE_ID, INLAND_WATER_ID, OCEAN_COVER_ID, ...DATA_IDS, "contours-ft"].includes(
-          id,
-        ),
+        ![
+          MASK_ID,
+          FADE_ID,
+          INLAND_WATER_ID,
+          OCEAN_COVER_ID,
+          COAST_STROKE_ID,
+          COAST_MASK_ID,
+          ...DATA_IDS,
+          "contours-ft",
+        ].includes(id),
     ),
     [
       "soe-area-outline",
@@ -357,7 +378,7 @@ test("inland water stays above scene data below the mask through entry and exit"
   storeMapDetailsShown(false);
 });
 
-test("sea labels stay below the fade and the ocean cover with the other basemap labels", async () => {
+test("sea labels stay below the fade with the coast stack above the ocean cover", async () => {
   const harness = createHarness();
   const { order } = seedOceanBasemap(harness);
 
@@ -372,10 +393,12 @@ test("sea labels stay below the fade and the ocean cover with the other basemap 
   assert.ok(order.indexOf("water_name_point_label") < order.indexOf("water_name_line_label"));
   assert.ok(order.indexOf("water_name_point_label") < order.indexOf(OCEAN_COVER_ID));
   assert.ok(order.indexOf(FADE_ID) < order.indexOf("soe-area-outline"));
-  assert.ok(order.indexOf("soe-area-outline") < order.indexOf(OCEAN_COVER_ID));
+  assert.ok(order.indexOf(OCEAN_COVER_ID) < order.indexOf(COAST_STROKE_ID));
+  assert.ok(order.indexOf(COAST_STROKE_ID) < order.indexOf(COAST_MASK_ID));
+  assert.ok(order.indexOf(COAST_MASK_ID) < order.indexOf("soe-area-outline"));
 });
 
-test("the outline sits above the mask and the fade but below the ocean", async () => {
+test("the outline sits above the mask, the fade, and the coast stack", async () => {
   const harness = createHarness();
   const { order } = seedOceanBasemap(harness);
 
@@ -386,11 +409,14 @@ test("the outline sits above the mask and the fade but below the ocean", async (
 
   assert.ok(order.indexOf(MASK_ID) < order.indexOf("soe-area-outline"));
   assert.ok(order.indexOf(FADE_ID) < order.indexOf("soe-area-outline"));
-  assert.ok(order.indexOf("soe-area-outline") < order.indexOf(OCEAN_COVER_ID));
+  assert.ok(order.indexOf(OCEAN_COVER_ID) < order.indexOf("soe-area-outline"));
+  assert.ok(order.indexOf(OCEAN_COVER_ID) < order.indexOf(COAST_STROKE_ID));
+  assert.ok(order.indexOf(COAST_STROKE_ID) < order.indexOf(COAST_MASK_ID));
+  assert.ok(order.indexOf(COAST_MASK_ID) < order.indexOf("soe-area-outline"));
   assert.ok(order.indexOf("water_name_point_label") < order.indexOf(FADE_ID));
 });
 
-test("a later layer update keeps new symbols below the ocean and the outline below it", async () => {
+test("a later layer update keeps new symbols below the ocean and the coast below the outline", async () => {
   const harness = createHarness();
   const { order } = seedOceanBasemap(harness);
 
@@ -409,7 +435,9 @@ test("a later layer update keeps new symbols below the ocean and the outline bel
   assert.ok(order.indexOf("contours-ft") < order.indexOf(MASK_ID));
   assert.ok(order.indexOf("contours-ft") < order.indexOf(OCEAN_COVER_ID));
   assert.ok(order.indexOf(MASK_ID) < order.indexOf("soe-area-outline"));
-  assert.ok(order.indexOf("soe-area-outline") < order.indexOf(OCEAN_COVER_ID));
+  assert.ok(order.indexOf(OCEAN_COVER_ID) < order.indexOf(COAST_STROKE_ID));
+  assert.ok(order.indexOf(COAST_STROKE_ID) < order.indexOf(COAST_MASK_ID));
+  assert.ok(order.indexOf(COAST_MASK_ID) < order.indexOf("soe-area-outline"));
   assert.ok(order.indexOf(FADE_ID) < order.indexOf("soe-area-outline"));
   assert.ok(order.indexOf("water_name_point_label") < order.indexOf("water_name_line_label"));
 });
@@ -584,12 +612,49 @@ test("scene entry without basemap water adds no ocean or inland cover", async ()
 
   assert.equal(harness.map.getLayer(OCEAN_COVER_ID), undefined);
   assert.equal(harness.map.getLayer(INLAND_WATER_ID), undefined);
+  assert.equal(harness.map.getLayer(COAST_STROKE_ID), undefined);
+  assert.equal(harness.map.getLayer(COAST_MASK_ID), undefined);
 
   harness.mode.exit();
   await settle();
 
   assert.equal(harness.map.getLayer(MASK_ID), undefined);
   assert.equal(harness.map.getLayer(INLAND_WATER_ID), undefined);
+  assert.equal(harness.map.getLayer(COAST_STROKE_ID), undefined);
+  assert.equal(harness.map.getLayer(COAST_MASK_ID), undefined);
+});
+
+test("the coast stroke shares the border paint and is clipped by the second mask", async () => {
+  const harness = createHarness();
+  const { order } = seedOceanBasemap(harness);
+
+  harness.enter();
+  harness.data.resolve();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+
+  const stroke = harness.map.layers.get(COAST_STROKE_ID) as unknown as Record<string, unknown>;
+
+  assert.equal(stroke.type, "line");
+  assert.equal(stroke.source, "openmaptiles");
+  assert.equal(stroke["source-layer"], "water");
+  assert.deepEqual(stroke.paint, { "line-color": "#333333", "line-width": 1.5, "line-opacity": 1 });
+  assert.deepEqual(stroke.layout, {
+    "line-join": "round",
+    "line-cap": "round",
+    visibility: "visible",
+  });
+  assert.ok(order.indexOf(OCEAN_COVER_ID) < order.indexOf(COAST_STROKE_ID));
+  assert.ok(order.indexOf(COAST_STROKE_ID) < order.indexOf(COAST_MASK_ID));
+  assert.ok(order.indexOf(COAST_MASK_ID) < order.indexOf("soe-area-outline"));
+  assert.deepEqual([...harness.keptLayers].sort(), [COAST_MASK_ID, FADE_ID, MASK_ID]);
+
+  harness.mode.exit();
+  await settle();
+
+  assert.equal(harness.map.getLayer(COAST_STROKE_ID), undefined);
+  assert.equal(harness.map.getLayer(COAST_MASK_ID), undefined);
+  assert.deepEqual([...harness.keptLayers], []);
 });
 
 test("scene entry hides fully-outside basemap features and exit restores filters", async () => {
@@ -3809,7 +3874,7 @@ function assertFadeCovers(map: TestMap) {
   assert.equal(fadeFillOpacity(map), FADE_OPACITY);
 }
 
-/** Every scene layer sits below the inland cover, which sits below the mask and the ocean. */
+/** Every scene layer sits below the inland cover, which sits below the mask and the coast stack. */
 function assertSceneOrder(
   harness: ReturnType<typeof createHarness>,
   order: string[],
@@ -3824,7 +3889,9 @@ function assertSceneOrder(
   assert.ok(order.indexOf(INLAND_WATER_ID) < order.indexOf(MASK_ID));
   assert.ok(order.indexOf(MASK_ID) < order.indexOf(FADE_ID));
   assert.ok(order.indexOf(FADE_ID) < order.indexOf("soe-area-outline"));
-  assert.ok(order.indexOf("soe-area-outline") < order.indexOf(OCEAN_COVER_ID));
+  assert.ok(order.indexOf(OCEAN_COVER_ID) < order.indexOf(COAST_STROKE_ID));
+  assert.ok(order.indexOf(COAST_STROKE_ID) < order.indexOf(COAST_MASK_ID));
+  assert.ok(order.indexOf(COAST_MASK_ID) < order.indexOf("soe-area-outline"));
 }
 
 function captureListeners(map: TestMap) {

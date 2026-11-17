@@ -1,11 +1,16 @@
-/** Draw inland water above all scene layers and the sea in the page colour above everything. */
+/** Draw inland water, the sea cover in the page colour, and the coast stroke above it. */
 import type { Map as MapLibreMap } from "maplibre-gl";
+
+import { outlineCss, type OutlineState } from "../display-state";
 
 /** The inland cover above every scene layer; the basemap source stays owned by the basemap. */
 export const INLAND_WATER_ID = "soe-inland-water";
 
 /** The ocean copy above every scene layer; the basemap source stays owned by the basemap. */
 export const OCEAN_COVER_ID = "soe-ocean-cover";
+
+/** The coast stroke above the ocean cover; the basemap source stays owned by the basemap. */
+export const COAST_STROKE_ID = "soe-coast-stroke";
 
 /** The basemap water class that marks the sea. */
 const OCEAN_CLASS = "ocean";
@@ -59,6 +64,70 @@ export function refreshOceanCover(map: MapLibreMap, color: string): void {
   if (!map.getLayer(OCEAN_COVER_ID)) return;
 
   map.setPaintProperty(OCEAN_COVER_ID, "fill-color", color);
+}
+
+/**
+ * Add the coast stroke centred on the basemap ocean edge above the ocean cover. The copy
+ * reuses the basemap water source with an ocean-only filter, so it draws the sea coast at
+ * the same detail as the water edge the viewer sees and it draws no lake or reservoir
+ * shore. It shares the outline colour and width, with round joins and caps, so the coast
+ * reads as part of the border. The soe- id keeps the scene bbox clip from filtering it.
+ * Returns false when the style has no water.
+ */
+export function addCoastStroke(
+  map: MapLibreMap,
+  beforeId: string | undefined,
+  outline: OutlineState,
+): boolean {
+  if (map.getLayer(COAST_STROKE_ID)) {
+    applyCoastStroke(map, outline);
+
+    return true;
+  }
+
+  const water = basemapWaterSpec(map);
+  if (!water) return false;
+
+  const filter = combinedFilter(water.filter, ["==", ["get", "class"], OCEAN_CLASS]);
+
+  map.addLayer(
+    {
+      id: COAST_STROKE_ID,
+      type: "line",
+      source: water.source,
+      "source-layer": water["source-layer"],
+      ...(filter !== undefined ? { filter: filter as never } : {}),
+      ...(water.minzoom !== undefined ? { minzoom: water.minzoom } : {}),
+      ...(water.maxzoom !== undefined ? { maxzoom: water.maxzoom } : {}),
+      layout: { "line-join": "round", "line-cap": "round", visibility: "visible" } as never,
+      paint: {
+        "line-color": outlineCss(outline.color),
+        "line-width": outline.widthPx,
+        "line-opacity": 1,
+      } as never,
+    } as Parameters<MapLibreMap["addLayer"]>[0],
+    beforeId,
+  );
+  applyCoastStroke(map, outline);
+
+  return true;
+}
+
+/**
+ * Repaint the coast stroke from the outline state, so the coast shares the border colour,
+ * width, and visibility. A missing layer needs nothing, because exit removes it.
+ */
+export function applyCoastStroke(map: MapLibreMap, outline: OutlineState): void {
+  if (!map.getLayer(COAST_STROKE_ID)) return;
+
+  map.setLayoutProperty(COAST_STROKE_ID, "visibility", outline.shown ? "visible" : "none");
+  map.setPaintProperty(COAST_STROKE_ID, "line-color", outlineCss(outline.color));
+  map.setPaintProperty(COAST_STROKE_ID, "line-width", outline.widthPx);
+}
+
+/** Remove the coast stroke while leaving the basemap source untouched. */
+export function removeCoastStroke(map: MapLibreMap): void {
+  if (map.getLayer(COAST_STROKE_ID)) map.removeLayer(COAST_STROKE_ID);
 }
 
 /**

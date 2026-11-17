@@ -25,11 +25,14 @@ import { keepThroughContextLoss } from "./gpu/tiled-layer";
 import { makeHtmlElement } from "./html";
 import { polygonParts } from "./label-filter";
 import {
+  addCoastStroke,
   addInlandWater,
   addOceanCover,
+  COAST_STROKE_ID,
   INLAND_WATER_ID,
   OCEAN_COVER_ID,
   refreshOceanCover,
+  removeCoastStroke,
   removeInlandWater,
   removeOceanCover,
 } from "./layers/geology-water";
@@ -56,6 +59,8 @@ import { type EntryPreparation, mountScene, OUTLINE_ID } from "./view";
 
 const MASK_ID = "soe-scene-mask";
 const FADE_ID = "soe-scene-fade";
+/** The second mask above the coast stroke, which clips the stroke to the scene. */
+export const COAST_MASK_ID = "soe-coast-mask";
 const MASK_OPACITY = 1;
 // The fade is opaque so outside labels hide completely while inside labels stay visible.
 const FADE_OPACITY = 1;
@@ -106,7 +111,14 @@ export interface EntryPanel {
 interface MaskLayers {
   mask: ReturnType<typeof createMaskLayers>[number];
   fade: ReturnType<typeof createMaskLayers>[number];
+  rings: number[][][];
   release(): void;
+}
+
+/** One coast mask layer with its colour setter and its context-loss keeper. */
+interface CoastMask {
+  layer: ReturnType<typeof createMaskLayers>[number];
+  stopKeeping: () => void;
 }
 
 /** Group the scene's column and time bar with its full-view dialog. */
@@ -361,7 +373,13 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
     // The sea cover follows the page theme while the scene is open, in dark mode too.
     let masks: MaskLayers | null = null;
-    const stopOceanTheme = watchOceanTheme(map, () => masks);
+    let coastMask: CoastMask | null = null;
+    const failMask = (error: Error) => failEntry(new Error(`Area mask: ${error.message}`));
+    const stopOceanTheme = watchOceanTheme(
+      map,
+      () => masks,
+      () => coastMask,
+    );
 
     const entryRun = new AbortController();
     const flight = flyIn(map, scene, roots);
@@ -409,11 +427,15 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
         stopEntryContextLoss();
 
         masks?.release();
+        coastMask?.stopKeeping();
+        coastMask = null;
         closeScenePreload();
         setPreloadDisabled(false);
 
         removeLayerAndSource(map, FADE_ID);
         removeLayerAndSource(map, MASK_ID);
+        removeLayerAndSource(map, COAST_MASK_ID);
+        removeCoastStroke(map);
         removeOceanCover(map);
         removeInlandWater(map);
         restoreBasemapFilters(map, savedBasemapFilters);
@@ -501,7 +523,6 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       const feature = await Promise.race([loaded, aborted]);
       if (feature === null || signal.aborted) return;
 
-      const failMask = (error: Error) => failEntry(new Error(`Area mask: ${error.message}`));
       masks = addHiddenMask(map, feature, scene.area.bbox, failMask);
     }
 
@@ -602,11 +623,33 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
 
       // The sea cover sits above every scene layer, so the coast stays exact at any zoom.
       addOceanCover(map, undefined, pageBackground());
+      // The stroke sits above the cover and shares the border paint, so the coast reads as border.
+      const currentOutline = mounted.store.getSnapshot().display.outline;
+      const hasCoast = addCoastStroke(map, undefined, currentOutline);
+      // The second mask shares the outside target, so it clips without a second allocation.
+      try {
+        if (hasCoast && masks && !map.getLayer(COAST_MASK_ID)) {
+          const [coast] = createMaskLayers(
+            { rings: masks.rings, color: pageBackground(), opacity: 1, onFail: failMask },
+            [COAST_MASK_ID],
+            masks.mask.fill,
+          );
+          map.addLayer(coast.layer, map.getLayer(OUTLINE_ID) ? OUTLINE_ID : undefined);
+          coastMask = {
+            layer: coast,
+            stopKeeping: keepThroughContextLoss(map, coast.layer, undefined),
+          };
+        }
+      } catch (error) {
+        failEntry(error);
+        return;
+      }
       // Inland water stays above scene data, so lakes and rivers keep basemap blue.
       addInlandWater(map, map.getLayer(MASK_ID) ? MASK_ID : undefined);
 
       masks?.mask.setOpacity(MASK_OPACITY);
       masks?.fade.setOpacity(FADE_OPACITY);
+      coastMask?.layer.setOpacity(1);
       placeSceneSymbols(map, sceneLayerIds);
       savedBasemapFilters ??= clipBasemapToArea(map, scene.area.bbox, new Set(sceneLayerIds));
       dataLayers.show();
@@ -986,6 +1029,7 @@ function addHiddenMask(
   return {
     mask,
     fade,
+    rings,
     release() {
       stopKeepingMask();
       stopKeepingFade();
@@ -1102,15 +1146,30 @@ function bboxMaskGeometry([west, south, east, north]: Bbox) {
 }
 
 /** Scene symbols sit under the inland cover and the mask, so contour labels never print over lakes and rivers while the mask still cuts them at the outline. */
-function placeSceneSymbols(map: MapLibreMap, sceneLayerIds: readonly string[]): void {
+export function placeSceneSymbols(map: MapLibreMap, sceneLayerIds: readonly string[]): void {
   const inland = map.getLayer(INLAND_WATER_ID) ? INLAND_WATER_ID : undefined;
   const belowCover = inland ?? (map.getLayer(MASK_ID) ? MASK_ID : undefined);
   for (const id of sceneSymbols(map, sceneLayerIds)) map.moveLayer(id, belowCover);
   // The inland cover stays below the mask, so the world outside the area stays hidden.
   if (inland && map.getLayer(MASK_ID)) map.moveLayer(inland, MASK_ID);
-  // The outline stays below the sea cover, so the coast it draws never shows over the sea.
-  if (map.getLayer(OUTLINE_ID)) {
-    map.moveLayer(OUTLINE_ID, map.getLayer(OCEAN_COVER_ID) ? OCEAN_COVER_ID : undefined);
+
+  // The coast group stacks ocean, stroke, second mask, and outline from bottom to top.
+  const hasOcean = Boolean(map.getLayer(OCEAN_COVER_ID));
+  const hasStroke = Boolean(map.getLayer(COAST_STROKE_ID));
+  const hasCoastMask = Boolean(map.getLayer(COAST_MASK_ID));
+  const hasOutline = Boolean(map.getLayer(OUTLINE_ID));
+
+  if (hasStroke || hasCoastMask) {
+    // The outline stays on top, so the border it draws is never hidden by the covers.
+    if (hasOutline) map.moveLayer(OUTLINE_ID, undefined);
+    if (hasCoastMask && hasOutline) map.moveLayer(COAST_MASK_ID, OUTLINE_ID);
+    if (hasStroke) map.moveLayer(COAST_STROKE_ID, hasCoastMask ? COAST_MASK_ID : undefined);
+
+    // The stroke stays directly above the ocean cover, so the coast reads as one line.
+    if (hasOcean && hasStroke) map.moveLayer(OCEAN_COVER_ID, COAST_STROKE_ID);
+  } else if (hasOutline) {
+    // Without a coast the outline stays below the sea cover, so it never shows over the sea.
+    map.moveLayer(OUTLINE_ID, hasOcean ? OCEAN_COVER_ID : undefined);
   }
 }
 
@@ -1178,7 +1237,11 @@ function outlines(geometry: AreaFeature["geometry"]) {
  * are watched. The mask keeps its opacity, visibility and order because only its colour fills
  * again.
  */
-function watchOceanTheme(map: MapLibreMap, getMasks: () => MaskLayers | null): () => void {
+function watchOceanTheme(
+  map: MapLibreMap,
+  getMasks: () => MaskLayers | null,
+  getCoastMask: () => CoastMask | null,
+): () => void {
   try {
     const stops: (() => void)[] = [];
     const refresh = () => {
@@ -1188,6 +1251,7 @@ function watchOceanTheme(map: MapLibreMap, getMasks: () => MaskLayers | null): (
       const currentMasks = getMasks();
       currentMasks?.mask.setColor?.(color);
       currentMasks?.fade.setColor?.(color);
+      getCoastMask()?.layer.setColor?.(color);
     };
 
     if (typeof MutationObserver === "function") {

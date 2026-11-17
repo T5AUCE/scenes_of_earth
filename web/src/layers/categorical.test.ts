@@ -14,6 +14,11 @@ import {
 import { classColors, rgbToHex } from "../render/palettes.ts";
 import { smoothClassIds } from "../render/smooth-classes.ts";
 import type { Bbox, LayerContext } from "../types.ts";
+import {
+  isWaterCoverageComplete,
+  readyWaterCoverage,
+  waterScreenQuads,
+} from "./basemap-water-readiness.ts";
 
 const viewHooks = registerHooks({
   resolve(specifier, context, next) {
@@ -32,8 +37,13 @@ const viewHooks = registerHooks({
 });
 const categoricalModule = await import("./categorical.ts");
 await import("./categorical-image.ts").finally(() => viewHooks.deregister());
-const { createCategoricalView, coastalFillRadiusCells, fillCoastalGaps, unhatchIds } =
-  categoricalModule;
+const {
+  createCategoricalView,
+  coastalFillRadiusCells,
+  fillCoastalGaps,
+  fillWaterGaps,
+  unhatchIds,
+} = categoricalModule;
 
 function viewMockModule(specifier: string) {
   switch (specifier) {
@@ -511,34 +521,44 @@ test("the default fill still targets hatched cells with any class as source", ()
 test("land-cover water borrows the nearest land class while the input keeps 80", () => {
   const ids = Uint8Array.of(1, WATER_ID, 1);
   const mask = new Uint8Array(3).fill(1);
-  const filled = fillCoastalGaps(ids, mask, 3, 1, 1, 1, 1, WATER_ID);
+  const filled = fillWaterGaps(ids, mask, 3, 1, 1, 1, WATER_ID);
 
   assert.deepEqual([...filled], [1, 1, 1]);
   assert.deepEqual([...ids], [1, WATER_ID, 1]);
 });
 
-test("a lake interior beyond the radius keeps water", () => {
+test("distant water draws the nearest land with no distance limit", () => {
   const ids = new Uint8Array(25).fill(WATER_ID);
   ids[0] = 1;
 
   const mask = new Uint8Array(25).fill(1);
-  const filled = fillCoastalGaps(ids, mask, 5, 5, 2, 1, 1, WATER_ID);
+  const filled = fillWaterGaps(ids, mask, 5, 5, 1, 1, WATER_ID);
 
   assert.equal(filled[2], 1);
   assert.equal(filled[6], 1);
-  assert.equal(filled[12], WATER_ID);
+  assert.equal(filled[12], 1);
+  assert.equal(filled[24], 1);
+  assert.equal(ids[12], WATER_ID);
+});
+
+test("water without any land keeps water", () => {
+  const ids = new Uint8Array(9).fill(WATER_ID);
+  const mask = new Uint8Array(9).fill(1);
+  const filled = fillWaterGaps(ids, mask, 3, 3, 1, 1, WATER_ID);
+
+  assert.deepEqual([...filled], [...ids]);
 });
 
 test("masked-out water stays water and masked-out land never donates", () => {
   const outsideWater = Uint8Array.of(1, WATER_ID, 1, WATER_ID);
   const outsideMask = Uint8Array.of(0, 1, 1, 0);
-  const filledOutside = fillCoastalGaps(outsideWater, outsideMask, 4, 1, 1, 1, 1, WATER_ID);
+  const filledOutside = fillWaterGaps(outsideWater, outsideMask, 4, 1, 1, 1, WATER_ID);
 
   assert.deepEqual([...filledOutside], [1, 1, 1, WATER_ID]);
 
   const hiddenSource = Uint8Array.of(WATER_ID, 1);
   const hiddenMask = Uint8Array.of(1, 0);
-  const filledHidden = fillCoastalGaps(hiddenSource, hiddenMask, 2, 1, 1, 1, 1, WATER_ID);
+  const filledHidden = fillWaterGaps(hiddenSource, hiddenMask, 2, 1, 1, 1, WATER_ID);
 
   assert.deepEqual([...filledHidden], [WATER_ID, 1]);
 });
@@ -546,12 +566,18 @@ test("masked-out water stays water and masked-out land never donates", () => {
 test("water ties go to the smallest id and water never donates", () => {
   const tied = Uint8Array.of(3, WATER_ID, 1);
   const mask = new Uint8Array(3).fill(1);
-  const filledTied = fillCoastalGaps(tied, mask, 3, 1, 1, 1, 1, WATER_ID);
+  const filledTied = fillWaterGaps(tied, mask, 3, 1, 1, 1, WATER_ID);
 
   assert.deepEqual([...filledTied], [3, 1, 1]);
 
+  const distant = Uint8Array.of(3, WATER_ID, WATER_ID, WATER_ID, 1);
+  const distantMask = new Uint8Array(5).fill(1);
+  const filledDistant = fillWaterGaps(distant, distantMask, 5, 1, 1, 1, WATER_ID);
+
+  assert.deepEqual([...filledDistant], [3, 3, 1, 1, 1]);
+
   const allWater = Uint8Array.of(WATER_ID, CLASS_HATCH_ID);
-  const filledAlone = fillCoastalGaps(allWater, mask.subarray(0, 2), 2, 1, 5, 1, 1, WATER_ID);
+  const filledAlone = fillWaterGaps(allWater, mask.subarray(0, 2), 2, 1, 1, 1, WATER_ID);
 
   assert.deepEqual([...filledAlone], [WATER_ID, CLASS_HATCH_ID]);
 });
@@ -861,4 +887,349 @@ function createViewHarness(
         else Reflect.deleteProperty(globalThis, name);
       }),
   };
+}
+
+test("an ideal tile at the current zoom counts while a loaded parent never does", () => {
+  const child = tileDouble({ z: 5, x: 19, y: 16, buckets: { water: waterBucketDouble() } });
+  const parent = tileDouble({ z: 4, x: 9, y: 8, buckets: { water: waterBucketDouble() } });
+  const map = coverageMapDouble(5, [child, parent]);
+
+  const coverage = readyWaterCoverage(map as never)!;
+
+  assert.deepEqual(coverage.tiles, [{ z: 5, x: 19, y: 16, wrap: 0 }]);
+});
+
+test("a parsed tile without water counts while missing and loading tiles stay absent", () => {
+  const empty = tileDouble({ z: 5, x: 19, y: 16, buckets: {} });
+  const park = tileDouble({
+    z: 5,
+    x: 20,
+    y: 16,
+    buckets: { park: { layers: [{ sourceLayer: "park" }] } },
+  });
+  const loading = tileDouble({ z: 5, x: 21, y: 16, buckets: { water: waterBucketDouble() } });
+  loading.state = "loading";
+  const map = coverageMapDouble(5, [empty, park, loading]);
+
+  const coverage = readyWaterCoverage(map as never)!;
+
+  assert.deepEqual(coverage.tiles, [
+    { z: 5, x: 19, y: 16, wrap: 0 },
+    { z: 5, x: 20, y: 16, wrap: 0 },
+  ]);
+});
+
+test("world-wrap copies are kept and the cache key follows the camera", () => {
+  const first = tileDouble({
+    z: 5,
+    x: 19,
+    y: 16,
+    wrap: 1,
+    buckets: { water: waterBucketDouble() },
+  });
+  const map = coverageMapDouble(5, [first]);
+
+  const before = readyWaterCoverage(map as never)!;
+
+  assert.deepEqual(before.tiles, [{ z: 5, x: 19, y: 16, wrap: 1 }]);
+
+  const second = tileDouble({
+    z: 5,
+    x: 19,
+    y: 16,
+    wrap: -1,
+    buckets: { water: waterBucketDouble() },
+  });
+  const moved = coverageMapDouble(6, [second]);
+
+  assert.notEqual(readyWaterCoverage(moved as never)!.key, before.key);
+});
+
+test("the completeness check needs every viewed tile, including empty ones", () => {
+  const bbox = [36, -2, 37, -1] as Bbox;
+  const map = coverageMapDouble(5, []);
+  const empty = { z: 5, x: 19, y: 16, wrap: 0 };
+
+  assert.equal(isWaterCoverageComplete(map as never, { key: "none", tiles: [] }, bbox, 0), false);
+  assert.equal(
+    isWaterCoverageComplete(map as never, { key: "ready", tiles: [empty] }, bbox, 0),
+    true,
+  );
+});
+
+test("a loaded parent never satisfies its child in the completeness check", () => {
+  const bbox = [36, -2, 37, -1] as Bbox;
+  const map = coverageMapDouble(5, []);
+  const parent = { z: 4, x: 9, y: 8, wrap: 0 };
+
+  assert.equal(
+    isWaterCoverageComplete(map as never, { key: "parent", tiles: [parent] }, bbox, 0),
+    false,
+  );
+});
+
+test("ready tiles project four corners so rotation keeps their shape", () => {
+  const map = {
+    getCanvas: () => ({ clientWidth: 800, clientHeight: 600 }),
+    project: ([longitude, latitude]: [number, number]) => ({
+      x: (longitude + 180) * 2,
+      y: (90 - latitude) * 2,
+    }),
+  };
+  const coverage = { key: "one", tiles: [{ z: 1, x: 1, y: 0, wrap: 0 }] };
+
+  const quads = waterScreenQuads(map as never, coverage);
+
+  assert.equal(quads.length, 1);
+  assert.equal(quads[0].points.length, 4);
+});
+
+test("a missing projection yields no quads instead of guessing coverage", () => {
+  const map = { getCanvas: () => ({ clientWidth: 800, clientHeight: 600 }) };
+
+  assert.deepEqual(
+    waterScreenQuads(map as never, { key: "one", tiles: [{ z: 1, x: 0, y: 0, wrap: 0 }] }),
+    [],
+  );
+});
+
+test("the image fallback stays hidden until the viewed water tile parses", async () => {
+  const harness = createViewHarness(false);
+
+  try {
+    const view = createCategoricalView(harness.context);
+    await view.ready;
+    harness.custom.get("cover-classes")!.render(harness.gpu.gl, harness.gpu.input);
+    await Promise.resolve();
+
+    installFallbackCoverage(harness.map, { zoom: 5, tiles: [] });
+    view.show("colour");
+
+    assert.equal(harness.map.getLayoutProperty("cover-classes", "visibility"), "none");
+
+    installFallbackCoverage(harness.map, {
+      zoom: 5,
+      tiles: [tileDouble({ z: 5, x: 19, y: 16, buckets: { water: waterBucketDouble() } })],
+    });
+    harness.map.emit("data", {});
+
+    assert.equal(harness.map.getLayoutProperty("cover-classes", "visibility"), "visible");
+
+    view.destroy();
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("the image fallback shows a dry tile with no buckets", async () => {
+  const harness = createViewHarness(false);
+
+  try {
+    const view = createCategoricalView(harness.context);
+    await view.ready;
+    harness.custom.get("cover-classes")!.render(harness.gpu.gl, harness.gpu.input);
+    await Promise.resolve();
+
+    installFallbackCoverage(harness.map, {
+      zoom: 5,
+      tiles: [tileDouble({ z: 5, x: 19, y: 16, buckets: {} })],
+    });
+    view.show("colour");
+
+    assert.equal(harness.map.getLayoutProperty("cover-classes", "visibility"), "visible");
+
+    view.destroy();
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("the image fallback shows a tile with only non-water buckets", async () => {
+  const harness = createViewHarness(false);
+
+  try {
+    const view = createCategoricalView(harness.context);
+    await view.ready;
+    harness.custom.get("cover-classes")!.render(harness.gpu.gl, harness.gpu.input);
+    await Promise.resolve();
+
+    installFallbackCoverage(harness.map, {
+      zoom: 5,
+      tiles: [
+        tileDouble({
+          z: 5,
+          x: 19,
+          y: 16,
+          buckets: { park: { layers: [{ sourceLayer: "park" }] } },
+        }),
+      ],
+    });
+    view.show("colour");
+
+    assert.equal(harness.map.getLayoutProperty("cover-classes", "visibility"), "visible");
+
+    view.destroy();
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("the image fallback hides on a pan without another show call", async () => {
+  const harness = createViewHarness(false);
+
+  try {
+    const view = createCategoricalView(harness.context);
+    await view.ready;
+    harness.custom.get("cover-classes")!.render(harness.gpu.gl, harness.gpu.input);
+    await Promise.resolve();
+
+    installFallbackCoverage(harness.map, {
+      zoom: 5,
+      tiles: [tileDouble({ z: 5, x: 19, y: 16, buckets: { water: waterBucketDouble() } })],
+    });
+    view.show("colour");
+
+    assert.equal(harness.map.getLayoutProperty("cover-classes", "visibility"), "visible");
+
+    installFallbackCoverage(harness.map, { zoom: 5, tiles: [] });
+    harness.map.emit("move", {});
+
+    assert.equal(harness.map.getLayoutProperty("cover-classes", "visibility"), "none");
+
+    installFallbackCoverage(harness.map, {
+      zoom: 5,
+      tiles: [tileDouble({ z: 5, x: 19, y: 16, buckets: { water: waterBucketDouble() } })],
+    });
+    harness.map.emit("data", {});
+
+    assert.equal(harness.map.getLayoutProperty("cover-classes", "visibility"), "visible");
+
+    view.destroy();
+
+    assert.equal(
+      (
+        harness.map as unknown as { fallbackListeners?: Map<string, Set<() => void>> }
+      ).fallbackListeners?.get("move")?.size ?? 0,
+      0,
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("the image fallback ignores a loaded parent tile", async () => {
+  const harness = createViewHarness(false);
+
+  try {
+    const view = createCategoricalView(harness.context);
+    await view.ready;
+    harness.custom.get("cover-classes")!.render(harness.gpu.gl, harness.gpu.input);
+    await Promise.resolve();
+
+    installFallbackCoverage(harness.map, {
+      zoom: 5,
+      tiles: [tileDouble({ z: 4, x: 9, y: 8, buckets: { water: waterBucketDouble() } })],
+    });
+    view.show("colour");
+
+    assert.equal(harness.map.getLayoutProperty("cover-classes", "visibility"), "none");
+
+    view.destroy();
+  } finally {
+    harness.cleanup();
+  }
+});
+
+function tileDouble(options: {
+  z: number;
+  x: number;
+  y: number;
+  wrap?: number;
+  buckets: Record<string, unknown>;
+}) {
+  return {
+    tileID: {
+      overscaledZ: options.z,
+      wrap: options.wrap ?? 0,
+      canonical: { z: options.z, x: options.x, y: options.y },
+    },
+    state: "loaded",
+    buckets: options.buckets,
+  };
+}
+
+function waterBucketDouble() {
+  return { layers: [{ sourceLayer: "water" }] };
+}
+
+function coverageMapDouble(zoom: number, tiles: ReturnType<typeof tileDouble>[]) {
+  const manager = {
+    getRenderableIds: () => tiles.map((_, index) => `key${index}`),
+    getTileById: (key: string) => tiles[Number(key.replace("key", ""))],
+  };
+
+  return {
+    getZoom: () => zoom,
+    getCenter: () => ({ lng: 0, lat: 0 }),
+    getBearing: () => 0,
+    getBounds: () => ({
+      getWest: () => 36,
+      getSouth: () => -2,
+      getEast: () => 37,
+      getNorth: () => -1,
+    }),
+    style: { tileManagers: { openmaptiles: manager } },
+  };
+}
+
+function installFallbackCoverage(
+  map: { getLayoutProperty(id: string, name: string): string | undefined } & Record<
+    string,
+    unknown
+  >,
+  options: { zoom: number; tiles: ReturnType<typeof tileDouble>[] },
+) {
+  const target = map as unknown as {
+    getZoom?: () => number;
+    getCenter?: () => { lng: number; lat: number };
+    getBearing?: () => number;
+    getBounds?: () => {
+      getWest(): number;
+      getSouth(): number;
+      getEast(): number;
+      getNorth(): number;
+    };
+    on?: (event: string, listener: () => void) => void;
+    off?: (event: string, listener: () => void) => void;
+    emit?: (event: string, payload: unknown) => void;
+    style?: unknown;
+  };
+  const shared = target as unknown as { fallbackListeners?: Map<string, Set<() => void>> };
+  const listeners = (shared.fallbackListeners ??= new Map<string, Set<() => void>>());
+  const manager = {
+    getRenderableIds: () => options.tiles.map((_, index) => `key${index}`),
+    getTileById: (key: string) => options.tiles[Number(key.replace("key", ""))],
+  };
+
+  target.getZoom = () => options.zoom;
+  target.getCenter = () => ({ lng: 36.5, lat: -1.5 });
+  target.getBearing = () => 0;
+  target.getBounds = () => ({
+    getWest: () => 36,
+    getSouth: () => -2,
+    getEast: () => 37,
+    getNorth: () => -1,
+  });
+  target.on = (event: string, listener: () => void) => {
+    const entries = listeners.get(event) ?? new Set<() => void>();
+    entries.add(listener);
+    listeners.set(event, entries);
+  };
+  target.off = (event: string, listener: () => void) => {
+    listeners.get(event)?.delete(listener);
+  };
+  target.emit = (event: string) => {
+    for (const listener of [...(listeners.get(event) ?? [])]) listener();
+  };
+  target.style = { tileManagers: { openmaptiles: manager } };
 }

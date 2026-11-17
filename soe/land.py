@@ -10,10 +10,12 @@ version is part of the scene id.
 import hashlib
 import json
 import logging
+import math
 import os
 import shutil
 import sqlite3
 import tempfile
+import time
 import urllib.request
 import zipfile
 from collections.abc import Iterator, Sequence
@@ -28,8 +30,10 @@ from pathlib import Path
 import numpy as np
 import shapely
 from shapely.affinity import translate
-from shapely.geometry import MultiLineString, MultiPolygon, Polygon, shape
+from shapely.errors import ShapelyError
+from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon, shape
 from shapely.geometry.base import BaseGeometry
+from shapely.ops import split
 
 from . import db
 from .areas import MAX_LONGITUDE_DEG, WORLD_WIDTH_DEG, Area, AreaError, polygonal_parts, unwrap
@@ -52,13 +56,24 @@ CLIP_WORKERS_BY_LEVEL = {"country": 1, "state": 4}  # levels whose clips the imp
 # Version 2 removes the whole neighbour inside the display, not only the margin part.
 # Version 3 buffers the neighbour before any grid snapping, so a neighbour narrower
 # than the grid still leaves a gap.
-CLIP_METHOD_VERSION = 3
+# Version 4 grows the display outline past its tolerance, so it holds all the land.
+# Version 5 widens the sea margin to a 400th of the span and stops it at land borders.
+# Version 6 counts the grown shape and cuts the sea once, so later outlines may differ.
+CLIP_METHOD_VERSION = 6
+SLOW_CLIP_SECS = 30  # clips slower than this print one line, so slow areas stay visible
 
 PLANNING_TOLERANCE_DIVISOR = 200_000  # a 200000th of the larger bbox side, a tenth of a cell
 MIN_DISPLAY_TOLERANCE_DEG = 0.001
 DISPLAY_TOLERANCE_DIVISOR = 2000  # a 2000th of the larger bbox side, so small areas stay sharp
 MAX_DISPLAY_VERTICES = 50_000
+STALLED_RATIO = 0.9  # a coarser outline with over this share of the vertices gained too little
 DISPLAY_CORNER_SEGMENTS = 2  # segments per quarter circle where the outline is grown
+DISPLAY_GROWTH_FACTOR = 1.1  # makes up for the polygonal corners of the growth, 1.082 at least
+DISPLAY_SPAN_DIVISOR = 400  # a 400th of the span keeps a centred coast line inside the mask
+DISPLAY_BORDER_RAY_FACTOR = 2  # twice the growth is the shortest seaward ray
+NEIGHBOUR_TOUCH_DEG = (
+    10 * OUTLINE_PRECISION_DEG
+)  # shorter contacts are rounding, not neighbour land
 
 LINE_STRING_TYPE_ID = 1  # shapely.get_type_id of a LineString
 STORED_LONGITUDE_RANGE_DEG = (-MAX_LONGITUDE_DEG, WORLD_WIDTH_DEG)  # of unwrapped boundary bboxes
@@ -170,10 +185,23 @@ def clip_to_land(
 
     tolerance_deg = _display_tolerance(frame.bounds)
     borders = _borders(reach, crossing, held if grow_deg else None)
+    limit_deg = _conservative_reach_deg(frame.bounds)
+
+    # Recovered land already spends part of the lookup window, so coarsening cannot spend it again.
+    west, south, east, north = frame.bounds
+    part_west, part_south, part_east, part_north = shapely.total_bounds(parts)
+    outward_deg = max(part_east - east, west - part_west, part_north - north, south - part_south)
+    display_limit_deg = limit_deg - outward_deg
 
     return LandClip(
         _planning_land(parts, frame.bounds, held),
-        _display_outline(parts, reach, neighbours, tolerance_deg),
+        _display_outline(
+            parts,
+            neighbours,
+            tolerance_deg,
+            keep_in_reach=bool(grow_deg),
+            limit_deg=display_limit_deg,
+        ),
         shapely.simplify(borders, tolerance_deg),
     )
 
@@ -259,61 +287,135 @@ def _display_tolerance(bounds: tuple[float, float, float, float]) -> float:
     )
 
 
+def _display_growth(tolerance_deg: float, span_deg: float) -> float:
+    return max(DISPLAY_GROWTH_FACTOR * tolerance_deg, span_deg / DISPLAY_SPAN_DIVISOR)
+
+
+def _conservative_reach_deg(frame_bounds: tuple[float, float, float, float]) -> float:
+    """The neighbour search and the grown outline share this farthest reach past the frame.
+
+    Recovered land can sit a full margin beyond the frame, so the span includes that margin on
+    both sides before the display growth is added.
+    """
+    west, south, east, north = frame_bounds
+    span_deg = max(east - west, north - south) + 2 * GROW_DEG
+    tolerance_deg = _display_tolerance(frame_bounds)
+
+    return GROW_DEG + _display_growth(tolerance_deg, span_deg) + 2 * OUTLINE_PRECISION_DEG
+
+
 def _display_outline(
     parts: list[Polygon],
-    reach: BaseGeometry,
     neighbours: Sequence[BaseGeometry],
     tolerance_deg: float,
+    keep_in_reach: bool,
+    limit_deg: float,
 ) -> BaseGeometry:
-    """The parts simplified and grown by the tolerance, within `reach`.
+    """The parts simplified and grown past the tolerance, minus every neighbour.
 
-    Growing hides the places where simplifying cut into the coast. Every neighbour inside the
-    simplified reach is taken back after the growth, with one rounding step to spare because
-    the build rounds coordinates and could otherwise move an edge onto it. The full neighbour
-    is needed because simplifying can bridge further than the growth margin when the tolerance
-    is larger. A coarser tolerance is tried until the outline has at most MAX_DISPLAY_VERTICES
-    vertices or the tolerance is as wide as the area.
+    Simplifying moves the coast by up to the tolerance in either direction, and growing by more
+    than the tolerance puts all land back inside. The sea margin also reaches a 400th of the
+    span, so a centred coast line stays inside at the fit zoom. Parts too small for the
+    tolerance are replaced by their hull, so no islet is lost. The whole neighbour near the
+    grown parts is taken back afterwards, with one rounding step to spare because the build
+    rounds coordinates and could otherwise move an edge onto it. The sea margin is split where
+    land borders reach the coast, and the side touching a neighbour is dropped, so the mask
+    stops at the border. The loop counts only the grown shape because the sea cut barely
+    changes its vertex count, and the cut runs once on the picked tolerance with at most one
+    coarser retry, so long coasts skip a full sea cut per round. A coarser tolerance is tried
+    until the grown shape has at most MAX_DISPLAY_VERTICES vertices, the tolerance is as wide
+    as the area, the growth would pass the neighbours that were looked up (so the cap is soft;
+    only checked when `keep_in_reach`, which named areas set even when none were found, because
+    one could lie just past the lookup), or a coarser tolerance stops removing vertices while
+    neighbours are near, because the rest is a neighbour's detail, which must stay.
     """
-    west, south, east, north = reach.bounds
+    west, south, east, north = shapely.total_bounds(parts)
     span_deg = max(east - west, north - south)
     valid_neighbours = [part if part.is_valid else shapely.make_valid(part) for part in neighbours]
+    land_union = shapely.union_all(parts)
+    border_lines = _shared_border_lines(land_union, valid_neighbours)
+    coast_lines = _coast_lines(land_union, border_lines)
+    previous_vertices = None
+    max_growth_deg = limit_deg
     while True:
-        large = [part for part in parts if part.area >= tolerance_deg**2] or parts[:1]
-        simplified = shapely.make_valid(shapely.simplify(large, tolerance_deg))
-        grown = shapely.buffer(simplified, tolerance_deg, quad_segs=DISPLAY_CORNER_SEGMENTS)
-        # The reach is simplified too, because its sea side holds every vertex of the
-        # boundary. The simplified reach can hold lines where islets collapsed, so only
-        # its polygons are kept.
-        coarse = reach.simplify(tolerance_deg, preserve_topology=True)
-        coarse_reach = shapely.union_all(_polygonal_parts(coarse))
-        within_reach = shapely.intersection(shapely.union_all(grown), coarse_reach)
-        exclusion = _display_exclusion(valid_neighbours, coarse_reach)
-        outline = shapely.normalize(shapely.difference(within_reach, exclusion))
-        if (
-            shapely.get_num_coordinates(outline) <= MAX_DISPLAY_VERTICES
-            or tolerance_deg >= span_deg
-        ):
-            return outline
+        growth_deg = _display_growth(tolerance_deg, span_deg)
+        covered = _grown_cover(parts, tolerance_deg, growth_deg)
 
+        vertices = shapely.get_num_coordinates(covered)
+        # A stall means only neighbour detail is left, so it counts only near a neighbour.
+        stalled = (
+            _has_nearby_neighbour(valid_neighbours, covered)
+            and previous_vertices is not None
+            and vertices > previous_vertices * STALLED_RATIO
+        )
+        too_wide = keep_in_reach and _display_growth(tolerance_deg * 2, span_deg) > max_growth_deg
+        if vertices <= MAX_DISPLAY_VERTICES or tolerance_deg >= span_deg or stalled or too_wide:
+            break
+
+        previous_vertices = vertices
         tolerance_deg *= 2
 
+    exclusion = _display_exclusion(valid_neighbours, covered)
+    outline = _cut_sea_at_borders(
+        covered, land_union, border_lines, coast_lines, growth_deg, exclusion
+    )
+    if (
+        shapely.get_num_coordinates(outline) <= MAX_DISPLAY_VERTICES
+        or tolerance_deg >= span_deg
+        or stalled
+        or too_wide
+    ):
+        return outline
 
-def _display_exclusion(
-    neighbours: Sequence[BaseGeometry], coarse_reach: BaseGeometry
-) -> BaseGeometry:
-    """The neighbour land inside the simplified reach, grown by one rounding step.
+    tolerance_deg *= 2
+    growth_deg = _display_growth(tolerance_deg, span_deg)
+    covered = _grown_cover(parts, tolerance_deg, growth_deg)
+    exclusion = _display_exclusion(valid_neighbours, covered)
+    return _cut_sea_at_borders(
+        covered, land_union, border_lines, coast_lines, growth_deg, exclusion
+    )
 
-    Simplifying the reach can bridge across a border indentation when the tolerance is larger
-    than the growth margin, so the whole neighbour inside the simplified reach is removed.
-    Only the neighbours near the simplified reach are read, so far-away detail never enters
-    the outline.
+
+def _grown_cover(parts: list[Polygon], tolerance_deg: float, growth_deg: float) -> BaseGeometry:
+    """The parts simplified to `tolerance_deg`, grown seaward and merged into one shape."""
+    shapes = [part if part.area >= tolerance_deg**2 else part.convex_hull for part in parts]
+    simplified = shapely.simplify(shapes, tolerance_deg)
+    collapsed = shapely.is_empty(simplified)
+    simplified[collapsed] = shapely.envelope(np.array(shapes, dtype=object)[collapsed])
+    grown = shapely.buffer(
+        shapely.make_valid(simplified), growth_deg, quad_segs=DISPLAY_CORNER_SEGMENTS
+    )
+
+    return shapely.union_all(grown)
+
+
+def _has_nearby_neighbour(neighbours: Sequence[BaseGeometry], covered: BaseGeometry) -> bool:
+    """Whether any neighbour lies within the rounding guard of the grown cover."""
+    if not neighbours or covered.is_empty:
+        return False
+
+    # The full exclusion is rebuilt once later, so the loop only checks the distance.
+    return any(
+        shapely.dwithin(covered, neighbour, 2 * OUTLINE_PRECISION_DEG) for neighbour in neighbours
+    )
+
+
+def _display_exclusion(neighbours: Sequence[BaseGeometry], covered: BaseGeometry) -> BaseGeometry:
+    """The neighbour land inside the grown parts, grown by one rounding step.
+
+    The whole neighbour inside the parts is removed, not only the growth margin, because the
+    display tolerance can be larger than the margin. Only the neighbours near the grown parts
+    are read, so far-away detail never enters the outline.
     """
     if not neighbours:
         return shapely.GeometryCollection()
 
-    valid_reach = shapely.union_all(_polygonal_parts(shapely.make_valid(coarse_reach)))
+    valid_reach = shapely.union_all(_polygonal_parts(shapely.make_valid(covered)))
     if valid_reach.is_empty:
         return valid_reach
+
+    # Rounding can move the outline onto a neighbour just past its unrounded edge.
+    valid_reach = valid_reach.buffer(2 * OUTLINE_PRECISION_DEG, join_style="mitre")
 
     clipped = shapely.intersection(list(neighbours), valid_reach.envelope)
     polygons = _polygonal_parts(clipped)
@@ -325,6 +427,143 @@ def _display_exclusion(
     relevant = shapely.intersection(shapely.make_valid(nearby), valid_reach)
 
     return relevant.buffer(OUTLINE_PRECISION_DEG, join_style="mitre")
+
+
+def _cut_sea_at_borders(
+    covered: BaseGeometry,
+    land_union: BaseGeometry,
+    border_lines: BaseGeometry,
+    coast_lines: BaseGeometry,
+    growth_deg: float,
+    exclusion: BaseGeometry,
+) -> BaseGeometry:
+    """The grown parts without a neighbour and without the sea past a land border.
+
+    The sea margin is split with straight extensions of the borders, and only the pieces
+    sharing a coast segment with the land are kept, so the mask stops where the border
+    reaches the coast.
+    """
+    base = shapely.difference(covered, exclusion)
+    if border_lines.is_empty or exclusion.is_empty:
+        return shapely.normalize(base)
+
+    try:
+        sea = shapely.difference(covered, land_union)
+        if sea.is_empty:
+            return shapely.normalize(base)
+
+        # Merging turns each border into whole lines, so only the real ends grow rays.
+        rays = _seaward_border_rays(shapely.line_merge(border_lines), growth_deg, covered)
+        if not rays:
+            return shapely.normalize(base)
+
+        divided = split(sea, shapely.union_all(rays))
+        # Only pieces sharing a coast segment stay, so point touches at borders are dropped.
+        # The buffer overlaps each coastal piece, so only a larger overlap marks the neighbour side.
+        kept = [
+            part
+            for part in _polygonal_parts(divided)
+            if shapely.intersection(part, coast_lines).length > OUTLINE_PRECISION_DEG
+            and shapely.intersection(part, exclusion).area <= NEIGHBOUR_TOUCH_DEG * growth_deg
+        ]
+    except ShapelyError:
+        # Splitting is only a visual trim, so an unexpected split keeps the grown shape.
+        return shapely.normalize(base)
+
+    if not kept:
+        return shapely.normalize(shapely.difference(land_union, exclusion))
+
+    kept_sea = shapely.union_all(kept)
+    return shapely.normalize(
+        shapely.difference(shapely.union_all([land_union, kept_sea]), exclusion)
+    )
+
+
+def _shared_border_lines(
+    land_union: BaseGeometry, neighbours: Sequence[BaseGeometry]
+) -> BaseGeometry:
+    """The edges where the land meets its neighbours, which the sea margin must stop at."""
+    lines: list[BaseGeometry] = []
+    for neighbour in neighbours:
+        try:
+            touching = shapely.intersection(land_union, neighbour)
+        except ShapelyError:
+            # A neighbour that cannot be compared leaves the sea margin as it is.
+            continue
+
+        if touching.is_empty:
+            continue
+
+        lines += [
+            part
+            for part in shapely.get_parts(touching)
+            if shapely.get_type_id(part) == LINE_STRING_TYPE_ID
+        ]
+
+    if not lines:
+        return shapely.GeometryCollection()
+
+    return shapely.union_all(lines)
+
+
+def _coast_lines(land_union: BaseGeometry, border_lines: BaseGeometry) -> BaseGeometry:
+    """The land boundary without its borders, where the sea margin may stay."""
+    boundary = land_union.boundary
+    if border_lines.is_empty:
+        return boundary
+
+    return shapely.difference(boundary, border_lines)
+
+
+def _seaward_border_rays(
+    border_lines: BaseGeometry, growth_deg: float, covered: BaseGeometry
+) -> list[LineString]:
+    """Extend the ends of shared land edges straight past the sea margin.
+
+    Both ends are extended because an inland end stays over land and never splits the sea,
+    while a coastal end reaches the water and divides it.
+    """
+    minimum_ray_deg = DISPLAY_BORDER_RAY_FACTOR * growth_deg
+    west, south, east, north = covered.bounds
+    rays: list[LineString] = []
+    for line in shapely.get_parts(border_lines):
+        coords = list(line.coords)
+        if len(coords) < 2:
+            continue
+
+        for first, second in ((coords[0], coords[1]), (coords[-1], coords[-2])):
+            delta_x = first[0] - second[0]
+            delta_y = first[1] - second[1]
+            length_deg = math.hypot(delta_x, delta_y)
+            if length_deg == 0:
+                continue
+
+            unit_x = delta_x / length_deg
+            unit_y = delta_y / length_deg
+            if unit_x > 0:
+                exit_x_deg = (east - first[0]) / unit_x
+            elif unit_x < 0:
+                exit_x_deg = (west - first[0]) / unit_x
+            else:
+                exit_x_deg = math.inf
+            if unit_y > 0:
+                exit_y_deg = (north - first[1]) / unit_y
+            elif unit_y < 0:
+                exit_y_deg = (south - first[1]) / unit_y
+            else:
+                exit_y_deg = math.inf
+            exit_deg = min(exit_x_deg, exit_y_deg)
+            # A shallow angle stays inside the margin for a long run, so the ray leaves its bounds.
+            if not math.isfinite(exit_deg) or exit_deg < 0:
+                ray_length_deg = minimum_ray_deg
+            else:
+                ray_length_deg = max(minimum_ray_deg, exit_deg + 2 * OUTLINE_PRECISION_DEG)
+
+            # Continuing straight past the end keeps the mask edge aligned with the border.
+            far = (first[0] + unit_x * ray_length_deg, first[1] + unit_y * ray_length_deg)
+            rays.append(LineString([first, far]))
+
+    return rays
 
 
 def clip_area_to_land(db_path: Path | str, store: Path | str, area: Area) -> Area:
@@ -388,14 +627,16 @@ def _neighbours(db_path: Path | str, area: Area, frame: BaseGeometry) -> list[Ne
         return []
 
     west, south, east, north = frame.bounds
+    # The display outline grows past the frame by its sea margin and must not cover these.
+    reach_deg = _conservative_reach_deg(frame.bounds)
     stored_west, stored_east = STORED_LONGITUDE_RANGE_DEG
     neighbours = []
     for shift_deg in (0, WORLD_WIDTH_DEG, -WORLD_WIDTH_DEG):
         window = (
-            west - GROW_DEG - shift_deg,
-            south - GROW_DEG,
-            east + GROW_DEG - shift_deg,
-            north + GROW_DEG,
+            west - reach_deg - shift_deg,
+            south - reach_deg,
+            east + reach_deg - shift_deg,
+            north + reach_deg,
         )
         if window[2] < stored_west or window[0] > stored_east:
             continue
@@ -451,7 +692,10 @@ def store_clips(db_path: Path | str, store: Path | str) -> int:
     stored = 0
     for level, workers in CLIP_WORKERS_BY_LEVEL.items():
         boundary_ids = db.boundary_ids(db_path, CGAZ_SOURCE, (level,))
-        with ProcessPoolExecutor(workers, mp_context=get_context("spawn")) as pool:
+        # Each area runs in a fresh worker, so its peak memory is released afterwards.
+        with ProcessPoolExecutor(
+            workers, mp_context=get_context("spawn"), max_tasks_per_child=1
+        ) as pool:
             results = pool.map(
                 _store_clip, repeat(db_path), repeat(store), boundary_ids, chunksize=1
             )
@@ -476,9 +720,14 @@ def _store_clip(db_path: Path | str, store: Path | str, boundary_id: str) -> boo
         return False
 
     try:
+        start_secs = time.monotonic()
         clip_area_to_land(db_path, store, area)
-    except AreaError:
-        print(f"land clips: {boundary_id} has no land, skipped", flush=True)
+
+        elapsed_secs = time.monotonic() - start_secs
+        if elapsed_secs > SLOW_CLIP_SECS:
+            print(f"land clips: {boundary_id} took {elapsed_secs:.0f} s to clip", flush=True)
+    except (AreaError, ShapelyError) as error:
+        print(f"land clips: {boundary_id} skipped ({error})", flush=True)
         return False
 
     return True

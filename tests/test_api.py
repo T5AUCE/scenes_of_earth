@@ -537,7 +537,9 @@ def test_scene_cut_to_land_is_built_with_its_outline_borders_and_credit(
     assert scene["area"]["borders_href"] == "borders.geojson"
     assert scene["area"]["land"]["version"] == "2026-11-14"
     assert any("OpenStreetMap contributors" in line for line in scene["credits"]["lines"])
-    assert shape(outline["geometry"]).symmetric_difference(shape(SQUARE)).area < 1e-9
+    drawn = shape(outline["geometry"])
+    assert shape(SQUARE).difference(drawn).area < 1e-9
+    assert drawn.difference(shape(SQUARE)).area < 0.011  # only the sea margin overshoots
     assert shape(borders["geometry"]).length == pytest.approx(4)
 
 

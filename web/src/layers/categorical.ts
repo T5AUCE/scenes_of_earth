@@ -37,6 +37,12 @@ import type {
   LayerView,
 } from "../types";
 import type { Draw } from "./allocate";
+import {
+  isBasemapWaterAbsent,
+  isWaterCoverageComplete,
+  noteWaterReadinessUnknown,
+  readyWaterCoverage,
+} from "./basemap-water-readiness";
 import { createImagePainter } from "./categorical-image";
 
 const CATEGORICAL_OPACITY = 0.8;
@@ -90,6 +96,8 @@ class CategoricalView implements LayerView {
   private readonly context: LayerContext;
   private restorePosition: LayerPosition | null = null;
   private readonly loadAbort = new AbortController();
+  private stopWaterWatch: (() => void) | null = null;
+  private wantsColour = false;
 
   constructor(context: LayerContext) {
     this.context = context;
@@ -352,6 +360,14 @@ class CategoricalView implements LayerView {
     const colors = this.classValues.map((value) => this.colors.get(value) ?? [0, 0, 0]);
 
     if (this.image) {
+      // Dry tiles count as ready, so the fallback waits only for unparsed water.
+      if (!this.imageCoverageReady()) {
+        this.setVisible(false);
+        this.ensureWaterWatch();
+        return;
+      }
+
+      if (this.wantsColour) this.ensureWaterWatch();
       if (this.ids) this.image.paint(unhatchIds(this.ids), colors, this.smooth);
     } else {
       this.gpu.setColors(colors);
@@ -363,6 +379,76 @@ class CategoricalView implements LayerView {
     if (this.hasHatched && !this.image) legend.append(classNoDataLegend());
 
     this.legendBox.replaceChildren(legend);
+  }
+
+  /**
+   * Whether the image fallback may show. Absent water bypasses the gate.
+   */
+  private imageCoverageReady(): boolean {
+    try {
+      const { map, layer, shift } = this.context;
+      // Confirmed absence needs no gate, so waterless styles paint as before.
+      if (isBasemapWaterAbsent(map)) return true;
+
+      const coverage = readyWaterCoverage(map);
+
+      // Unknown parse state hides colour so no flash appears.
+      if (!coverage) {
+        noteWaterReadinessUnknown();
+
+        return false;
+      }
+
+      return isWaterCoverageComplete(map, coverage, layer.grid.bbox, shift);
+    } catch {
+      noteWaterReadinessUnknown();
+
+      return false;
+    }
+  }
+
+  /** Keep the fallback gated while it owns colour, across pans and source updates. */
+  private ensureWaterWatch(): void {
+    if (this.stopWaterWatch || !this.alive || !this.image || !this.wantsColour) return;
+
+    const { map } = this.context;
+    const on = (map as unknown as { on?: (event: string, listener: () => void) => void }).on;
+    const off = (map as unknown as { off?: (event: string, listener: () => void) => void }).off;
+
+    if (typeof on !== "function" || typeof off !== "function") return;
+
+    const events = ["move", "zoom", "data", "sourcedata"];
+    for (const event of events) on.call(map, event, this.onWaterMaybeChanged);
+    this.stopWaterWatch = () => {
+      for (const event of events) off.call(map, event, this.onWaterMaybeChanged);
+    };
+  }
+
+  private readonly onWaterMaybeChanged = (): void => {
+    if (!this.alive || !this.image || !this.wantsColour) return;
+
+    const ready = this.imageCoverageReady();
+
+    // Repainting also restores visibility, so a pan never leaves stale pixels hidden.
+    if (ready && !this.isVisible()) {
+      this.setVisible(true);
+      this.repaint();
+    } else if (!ready && this.isVisible()) this.setVisible(false);
+  };
+
+  private isVisible(): boolean {
+    if (this.restorePosition) return this.restorePosition.visibility === "visible";
+
+    try {
+      return this.context.map.getLayoutProperty?.(this.id, "visibility") !== "none";
+    } catch {
+      return false;
+    }
+  }
+
+  private clearWaterWatch(): void {
+    this.stopWaterWatch?.();
+    this.stopWaterWatch = null;
   }
 
   private async load() {
@@ -466,18 +552,17 @@ class CategoricalView implements LayerView {
         );
       }
 
-      // Water cells borrow their neighbours on screen, so coarse coastal cells meet the shore.
+      // Every water cell borrows its nearest land on screen, so distant water still meets the shore.
       // The fill changes only the drawn ids, so inspection and statistics still see class 80.
       if (this.context.layer.id === LAND_COVER_LAYER_ID) {
         const waterId = this.classValues.indexOf(LAND_COVER_WATER_VALUE) + 1;
 
         if (waterId > 0) {
-          this.ids = await fillCoastalGapsInSlices(
+          this.ids = await fillWaterGapsInSlices(
             this.ids!,
             mask,
             nx,
             ny,
-            fillRadius,
             fillWidth,
             fillHeight,
             waterId,
@@ -498,10 +583,21 @@ class CategoricalView implements LayerView {
 
   show(draw: Draw | null) {
     if (draw !== "colour") {
+      this.wantsColour = false;
+      this.clearWaterWatch();
       this.setVisible(false);
       return;
     }
 
+    this.wantsColour = true;
+
+    if (this.image && !this.imageCoverageReady()) {
+      this.setVisible(false);
+      this.ensureWaterWatch();
+      return;
+    }
+
+    this.ensureWaterWatch();
     this.setVisible(true);
     this.repaint();
     this.menuUpdates.dispatchEvent(new Event("change"));
@@ -514,6 +610,7 @@ class CategoricalView implements LayerView {
   destroy() {
     this.alive = false;
     this.loadAbort.abort();
+    this.clearWaterWatch();
 
     const { map } = this.context;
     const canvas = map.getCanvas();
@@ -827,4 +924,257 @@ function nearestCoastalSource(
   }
 
   return bestSource;
+}
+
+/**
+ * Draw every replaced cell inside the area as its nearest kept class, with no distance limit.
+ * The fill stays display-only. Ties go to the smallest id. Cells without any land keep their id.
+ */
+export function fillWaterGaps(
+  ids: Uint8Array,
+  mask: ArrayLike<number>,
+  nx: number,
+  ny: number,
+  widthM = 1,
+  heightM = 1,
+  replacedId = CLASS_HATCH_ID,
+): Uint8Array {
+  const filled = Uint8Array.from(ids);
+  const field = seedLandField(ids, mask, nx, ny, replacedId);
+
+  if (!field.hasSeed) return filled;
+
+  const { widthM: cellWidth, heightM: cellHeight } = normalizeCellSize(widthM, heightM);
+
+  forwardDistancePass(field.distances, field.labels, nx, ny, cellWidth, cellHeight);
+  backwardDistancePass(field.distances, field.labels, nx, ny, cellWidth, cellHeight);
+  paintNearestLand(filled, field.labels, mask, nx, ny, replacedId);
+
+  return filled;
+}
+
+/**
+ * Fill replaced cells in bounded slices so entry keeps responding while filling.
+ * The output matches fillWaterGaps exactly.
+ */
+async function fillWaterGapsInSlices(
+  ids: Uint8Array,
+  mask: ArrayLike<number>,
+  nx: number,
+  ny: number,
+  widthM = 1,
+  heightM = 1,
+  replacedId = CLASS_HATCH_ID,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
+  const filled = Uint8Array.from(ids);
+  const size = nx * ny;
+  const distances = new Float64Array(size).fill(Number.POSITIVE_INFINITY);
+  const labels = new Uint8Array(size);
+  let hasSeed = false;
+  let sliceMs = performance.now();
+
+  for (let cell = 0; cell < size; cell++) {
+    if (mask[cell] === 1) {
+      const id = ids[cell];
+
+      if (id !== 0 && id !== CLASS_HATCH_ID && id !== replacedId) {
+        distances[cell] = 0;
+        labels[cell] = id;
+        hasSeed = true;
+      }
+    }
+
+    if ((cell + 1) % ENTRY_CHECK_CELLS !== 0) continue;
+    if (signal?.aborted) throw cancelError();
+    if (performance.now() - sliceMs < ENTRY_BUDGET_MS) continue;
+
+    await yieldToBrowser(signal);
+    sliceMs = performance.now();
+  }
+
+  if (signal?.aborted) throw cancelError();
+
+  if (!hasSeed) return filled;
+
+  const { widthM: cellWidth, heightM: cellHeight } = normalizeCellSize(widthM, heightM);
+  const diagonalM = Math.hypot(cellWidth, cellHeight);
+  let checked = 0;
+
+  for (let row = 0; row < ny; row++) {
+    for (let column = 0; column < nx; column++) {
+      const cell = row * nx + column;
+
+      if (column > 0) relaxDistance(distances, labels, cell, cell - 1, cellWidth);
+      if (row > 0) {
+        relaxDistance(distances, labels, cell, cell - nx, cellHeight);
+
+        if (column > 0) relaxDistance(distances, labels, cell, cell - nx - 1, diagonalM);
+        if (column + 1 < nx) relaxDistance(distances, labels, cell, cell - nx + 1, diagonalM);
+      }
+
+      checked += 1;
+
+      if (checked % ENTRY_CHECK_CELLS !== 0) continue;
+      if (signal?.aborted) throw cancelError();
+      if (performance.now() - sliceMs < ENTRY_BUDGET_MS) continue;
+
+      await yieldToBrowser(signal);
+      sliceMs = performance.now();
+    }
+  }
+
+  if (signal?.aborted) throw cancelError();
+
+  for (let row = ny - 1; row >= 0; row--) {
+    for (let column = nx - 1; column >= 0; column--) {
+      const cell = row * nx + column;
+
+      if (column + 1 < nx) relaxDistance(distances, labels, cell, cell + 1, cellWidth);
+      if (row + 1 < ny) {
+        relaxDistance(distances, labels, cell, cell + nx, cellHeight);
+
+        if (column + 1 < nx) relaxDistance(distances, labels, cell, cell + nx + 1, diagonalM);
+        if (column > 0) relaxDistance(distances, labels, cell, cell + nx - 1, diagonalM);
+      }
+
+      checked += 1;
+
+      if (checked % ENTRY_CHECK_CELLS !== 0) continue;
+      if (signal?.aborted) throw cancelError();
+      if (performance.now() - sliceMs < ENTRY_BUDGET_MS) continue;
+
+      await yieldToBrowser(signal);
+      sliceMs = performance.now();
+    }
+  }
+
+  if (signal?.aborted) throw cancelError();
+
+  paintNearestLand(filled, labels, mask, nx, ny, replacedId);
+
+  return filled;
+}
+
+function seedLandField(
+  ids: Uint8Array,
+  mask: ArrayLike<number>,
+  nx: number,
+  ny: number,
+  replacedId: number,
+): { distances: Float64Array; labels: Uint8Array; hasSeed: boolean } {
+  const size = nx * ny;
+  const distances = new Float64Array(size).fill(Number.POSITIVE_INFINITY);
+  const labels = new Uint8Array(size);
+  let hasSeed = false;
+
+  for (let cell = 0; cell < size; cell++) {
+    if (mask[cell] !== 1) continue;
+
+    const id = ids[cell];
+    if (id === 0 || id === CLASS_HATCH_ID || id === replacedId) continue;
+
+    distances[cell] = 0;
+    labels[cell] = id;
+    hasSeed = true;
+  }
+
+  return { distances, labels, hasSeed };
+}
+
+function normalizeCellSize(widthM: number, heightM: number): { widthM: number; heightM: number } {
+  // Invalid dimensions fall back to one metre so the passes and the distances agree.
+  if (!Number.isFinite(widthM) || widthM <= 0) widthM = 1;
+  if (!Number.isFinite(heightM) || heightM <= 0) heightM = 1;
+
+  return { widthM, heightM };
+}
+
+function forwardDistancePass(
+  distances: Float64Array,
+  labels: Uint8Array,
+  nx: number,
+  ny: number,
+  widthM: number,
+  heightM: number,
+): void {
+  const diagonalM = Math.hypot(widthM, heightM);
+
+  for (let row = 0; row < ny; row++) {
+    for (let column = 0; column < nx; column++) {
+      const cell = row * nx + column;
+
+      if (column > 0) relaxDistance(distances, labels, cell, cell - 1, widthM);
+      if (row > 0) {
+        relaxDistance(distances, labels, cell, cell - nx, heightM);
+
+        if (column > 0) relaxDistance(distances, labels, cell, cell - nx - 1, diagonalM);
+        if (column + 1 < nx) relaxDistance(distances, labels, cell, cell - nx + 1, diagonalM);
+      }
+    }
+  }
+}
+
+function backwardDistancePass(
+  distances: Float64Array,
+  labels: Uint8Array,
+  nx: number,
+  ny: number,
+  widthM: number,
+  heightM: number,
+): void {
+  const diagonalM = Math.hypot(widthM, heightM);
+
+  for (let row = ny - 1; row >= 0; row--) {
+    for (let column = nx - 1; column >= 0; column--) {
+      const cell = row * nx + column;
+
+      if (column + 1 < nx) relaxDistance(distances, labels, cell, cell + 1, widthM);
+      if (row + 1 < ny) {
+        relaxDistance(distances, labels, cell, cell + nx, heightM);
+
+        if (column + 1 < nx) relaxDistance(distances, labels, cell, cell + nx + 1, diagonalM);
+        if (column > 0) relaxDistance(distances, labels, cell, cell + nx - 1, diagonalM);
+      }
+    }
+  }
+}
+
+function relaxDistance(
+  distances: Float64Array,
+  labels: Uint8Array,
+  cell: number,
+  neighbour: number,
+  stepM: number,
+): void {
+  const neighbourDistance = distances[neighbour];
+  if (!Number.isFinite(neighbourDistance)) return;
+
+  const neighbourLabel = labels[neighbour];
+  if (neighbourLabel === 0) return;
+
+  const candidate = neighbourDistance + stepM;
+  const current = distances[cell];
+
+  if (candidate < current || (candidate === current && neighbourLabel < labels[cell])) {
+    distances[cell] = candidate;
+    labels[cell] = neighbourLabel;
+  }
+}
+
+function paintNearestLand(
+  filled: Uint8Array,
+  labels: Uint8Array,
+  mask: ArrayLike<number>,
+  nx: number,
+  ny: number,
+  replacedId: number,
+): void {
+  const size = nx * ny;
+
+  for (let cell = 0; cell < size; cell++) {
+    if (mask[cell] !== 1 || filled[cell] !== replacedId) continue;
+
+    if (labels[cell] !== 0) filled[cell] = labels[cell];
+  }
 }
