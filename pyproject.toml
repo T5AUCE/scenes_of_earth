@@ -13,11 +13,11 @@ dependencies = [
     "numpy",
     "rasterio>=1.4",
     "zarr>=3",
-    "shapely>=2",
+    "shapely>=2.1",
 ]
 
 [project.optional-dependencies]
-import = ["geopandas", "pyogrio", "cdsapi>=0.7.4"]
+import = ["geopandas", "pyogrio", "cdsapi>=0.7.4", "duckdb>=1.3"]
 dev = ["pytest", "pytest-xdist", "httpx", "ruff==0.17.5"]
 
 [project.scripts]

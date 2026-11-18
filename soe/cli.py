@@ -30,6 +30,7 @@ from .ingest.geology_age import ingest_geology_age
 from .ingest.geology_regional import SOURCE_IDS, ingest_geology_regional
 from .ingest.lithology import ingest_lithology
 from .land import import_land, store_path
+from .overture_import import import_overture, open_release, update_overture_levels
 from .sources import (
     CHIRPS_CUBE,
     DEFAULT_CUBES_DIR,
@@ -114,14 +115,25 @@ def main(argv: list[str] | None = None) -> None:
 
         return
 
-    if not (args.cgaz or args.ucdb or args.meta):
-        parser.error("give at least one of --cgaz, --ucdb, --meta")
+    if not (args.cgaz or args.overture or args.overture_levels or args.ucdb or args.meta):
+        parser.error("give at least one of --cgaz, --overture, --overture-levels, --ucdb, --meta")
 
     logging.basicConfig(level=logging.INFO)
+    overture_source = open_release(args.overture) if args.overture else None
+    levels_source = open_release(args.overture_levels) if args.overture_levels else None
     db.ensure_schema(args.db)
 
     if args.cgaz:
         print("CGAZ rows:", import_cgaz(args.db, args.cgaz))
+
+    if overture_source:
+        print("Overture rows per level:", dict(import_overture(args.db, overture_source)))
+
+    if levels_source:
+        print(
+            "Overture rows given a level:",
+            update_overture_levels(args.db, levels_source, full=args.full),
+        )
 
     if args.ucdb:
         print("UCDB city rows:", import_ucdb(args.db, args.ucdb))
@@ -136,9 +148,25 @@ def _build_parser() -> argparse.ArgumentParser:
 
     import_parser = subparsers.add_parser(
         "import-boundaries",
-        help="load CGAZ ADM0/1/2, GHSL UCDB cities and gbOpen level names into SQLite",
+        help="load CGAZ ADM0/1/2, Overture divisions, GHSL UCDB cities and gbOpen level names "
+        "into SQLite",
     )
     import_parser.add_argument("--cgaz", help="folder with the CGAZ ADM0/ADM1/ADM2 GeoPackages")
+    import_parser.add_argument(
+        "--overture",
+        help="Overture Maps release to read from S3, such as 2026-10-21.0 (needs duckdb; asks "
+        "Overpass for OpenStreetMap admin levels)",
+    )
+    import_parser.add_argument(
+        "--overture-levels",
+        help="Overture Maps release whose stored rows get their missing OpenStreetMap admin "
+        "levels from Overpass, without reading geometry",
+    )
+    import_parser.add_argument(
+        "--full",
+        action="store_true",
+        help="with --overture-levels, fetch the exact level of every sampled or empty row",
+    )
     import_parser.add_argument("--ucdb", help="GHS UCDB R2024A GeoPackage or zip")
     import_parser.add_argument(
         "--meta", help="folder with the gbOpen ADM1/ADM2 metadata JSON files"

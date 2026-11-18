@@ -1,9 +1,13 @@
-"""Load geoBoundaries CGAZ shapes, GHSL UCDB cities and gbOpen level names into SQLite."""
+"""Load geoBoundaries CGAZ shapes, GHSL UCDB cities, gbOpen kinds and Overture rows into SQLite."""
 
 import json
+import os
 import re
+import sqlite3
+import tempfile
 import zipfile
-from collections.abc import Iterable, Iterator
+from collections import Counter
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -37,6 +41,53 @@ WORD_RE = re.compile(r"[^\W\d_]+")
 CONNECTORS = {"and", "or"}
 
 CELL_AREA_DEG2 = CELL_DEG * CELL_DEG
+
+# Columns that Overture rows add after the 15 shared by every source, in write order.
+OVERTURE_COLUMNS = {
+    "name_local": "TEXT",
+    "parent_name_local": "TEXT",
+    "state_name": "TEXT",
+    "kind": "TEXT",
+    "has_maritime": "INTEGER",
+    "border_level": "INTEGER",
+    "aliases": "TEXT",
+    "contributors": "TEXT",
+    "border_level_sampled": "INTEGER",  # 1 when border_level was copied from a sample of its group
+}
+BASE_COLUMNS = (
+    "id, level, name, parent_name, iso3, bbox_w, bbox_s, bbox_e, bbox_n, cells, geom_geojson, "
+    "geom_digest, preview_geojson, source, licence"
+)
+ALL_COLUMNS = f"{BASE_COLUMNS}, {', '.join(OVERTURE_COLUMNS)}"
+BOUNDARY_PARTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS boundary_parts (
+    parent_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    member_id TEXT NOT NULL,
+    PRIMARY KEY (parent_id, position)
+);
+
+CREATE TABLE IF NOT EXISTS disputed_lines (
+    id TEXT PRIMARY KEY,
+    level TEXT NOT NULL,
+    bbox_w REAL NOT NULL,
+    bbox_s REAL NOT NULL,
+    bbox_e REAL NOT NULL,
+    bbox_n REAL NOT NULL,
+    wkb BLOB NOT NULL
+);
+"""
+
+OSM_LEVELS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS osm_levels (
+    record_id TEXT PRIMARY KEY,
+    admin_level INTEGER
+)
+"""
+STAGED_COLUMNS = f"{ALL_COLUMNS}, osm_record_id"
+
+PartRow = tuple[str, int, str]  # parent area id, position among its parts, part area id
+DisputedRow = tuple[str, str, float, float, float, float, bytes]  # id, level, bbox, WKB
 
 
 def import_cgaz(db_path: Path | str, folder: Path | str) -> int:
@@ -240,6 +291,113 @@ def _store(
     return kept.count
 
 
+def store_overture(
+    db_path: Path | str,
+    source: str,
+    rows: Iterable[db.BoundaryValues | None],
+    parts: list[PartRow],
+    disputed_lines: list[DisputedRow],
+    before_replace: Callable[[], None],
+) -> Counter[str]:
+    """Replace the boundaries of `source`, their parts and the disputed lines in one transaction.
+
+    Rows hold the 15 shared columns, the OVERTURE_COLUMNS values with an empty border_level, and
+    the OpenStreetMap record id, and None rows are skipped. `before_replace` runs once the rows
+    are staged, and the replace then fills border_level from the osm_levels table by record id.
+    Building them takes hours, so they go to a scratch file beside the database first and
+    only the final copy holds the database's write lock. Each run uses its own scratch file, so
+    overlapping imports cannot share or delete each other's staging data. Returns the number of
+    rows stored per level.
+    """
+    target = Path(db_path)
+    # A unique name keeps overlapping imports from sharing one file.
+    staging_fd, staging_name = tempfile.mkstemp(dir=target.parent, prefix=f"{target.name}.staging-")
+    os.close(staging_fd)
+    staging_path = Path(staging_name)
+
+    try:
+        stored = _stage_rows(staging_path, rows)
+        before_replace()
+        _replace_from_staging(db_path, staging_path, source, parts, disputed_lines)
+    finally:
+        staging_path.unlink(missing_ok=True)
+
+    return stored
+
+
+def _stage_rows(staging_path: Path, rows: Iterable[db.BoundaryValues | None]) -> Counter[str]:
+    """Write the rows to a scratch SQLite file; returns the distinct ids per level."""
+    insert = f"INSERT INTO boundaries ({STAGED_COLUMNS}) VALUES ({_placeholders()})"  # noqa: S608 - only module constants are joined in.
+    staging = sqlite3.connect(staging_path, isolation_level=None)
+    try:
+        # The file is thrown away after the copy, so a crash needs no recovery.
+        staging.execute("PRAGMA journal_mode=OFF")
+        staging.execute("PRAGMA synchronous=OFF")
+        staging.execute(f"CREATE TABLE boundaries ({STAGED_COLUMNS})")
+        staging.execute("BEGIN")
+        batch: list[db.BoundaryValues] = []
+        for row in rows:
+            if row is None:
+                continue
+
+            batch.append(row)
+            if len(batch) >= db.INSERT_BATCH_ROWS:
+                staging.executemany(insert, batch)
+                batch = []
+
+        staging.executemany(insert, batch)
+        staging.execute("COMMIT")
+
+        counts = staging.execute("SELECT level, count(DISTINCT id) FROM boundaries GROUP BY level")
+        return Counter(dict(counts))
+    finally:
+        staging.close()
+
+
+def _replace_from_staging(
+    db_path: Path | str,
+    staging_path: Path,
+    source: str,
+    parts: list[PartRow],
+    disputed_lines: list[DisputedRow],
+) -> None:
+    with db.connect(db_path) as connection:
+        _add_overture_columns(connection)
+        connection.executescript(BOUNDARY_PARTS_SCHEMA)
+        connection.execute(OSM_LEVELS_SCHEMA)
+        connection.execute("ATTACH DATABASE ? AS staging", (str(staging_path),))
+        # Immediate holds the write lock during the level read, so another writer cannot slip in.
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            "UPDATE staging.boundaries SET border_level = ("
+            "SELECT admin_level FROM main.osm_levels WHERE record_id = osm_record_id)"
+        )
+        connection.execute("DELETE FROM boundaries WHERE source = ?", (source,))
+        connection.execute("DELETE FROM boundary_parts")
+        connection.execute("DELETE FROM disputed_lines")
+        connection.execute(
+            f"INSERT OR REPLACE INTO boundaries ({ALL_COLUMNS}) "  # noqa: S608 - only module constants are joined in.
+            f"SELECT {ALL_COLUMNS} FROM staging.boundaries"
+        )
+        connection.executemany("INSERT INTO boundary_parts VALUES (?, ?, ?)", parts)
+        connection.executemany(
+            "INSERT INTO disputed_lines VALUES (?, ?, ?, ?, ?, ?, ?)", disputed_lines
+        )
+        connection.execute("COMMIT")
+
+
+def _placeholders() -> str:
+    return ", ".join("?" for _ in STAGED_COLUMNS.split(", "))
+
+
+def _add_overture_columns(connection: sqlite3.Connection) -> None:
+    """Give a database created before these columns existed the columns Overture rows fill."""
+    existing = {row["name"] for row in connection.execute("PRAGMA table_info(boundaries)")}
+    for column, column_type in OVERTURE_COLUMNS.items():
+        if column not in existing:
+            connection.execute(f"ALTER TABLE boundaries ADD COLUMN {column} {column_type}")
+
+
 class _PresentRows:
     """Filter None rows while counting how many were kept, so the count stays with the iteration."""
 
@@ -262,8 +420,12 @@ def _row(
     iso3: str | None,
     geometry: BaseGeometry,
     source: str,
+    licence: str | None = None,
 ) -> db.BoundaryValues | None:
-    """Return a repaired boundary row clipped to the supported extent, keeping every vertex."""
+    """Return a repaired boundary row clipped to the supported extent, keeping every vertex.
+
+    The licence comes from SOURCES unless the caller states it.
+    """
     from shapely.errors import GEOSException
     from shapely.geometry import MultiPolygon, box, mapping
 
@@ -313,5 +475,5 @@ def _row(
         db.geometry_digest(geometry_text),
         preview,
         source,
-        SOURCES[source]["licence"],
+        licence or SOURCES[source]["licence"],
     )
