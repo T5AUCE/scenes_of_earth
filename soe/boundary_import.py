@@ -311,7 +311,7 @@ def store_overture(
     before_replace: Callable[[], None],
     levels: tuple[str, ...] | None = None,
 ) -> Counter[str]:
-    """Replace the boundaries of `source`, their parts and the disputed lines in one transaction.
+    """Replace the boundaries of `source`, their parts, lines and search tokens in one transaction.
 
     With `levels`, only the rows of `source` at those levels are replaced, and the stored parts
     and disputed lines stay as they are.
@@ -388,6 +388,7 @@ def _replace_from_staging(
             "UPDATE staging.boundaries SET border_level = ("
             "SELECT admin_level FROM main.osm_levels WHERE record_id = osm_record_id)"
         )
+        db._delete_source_search_state(connection, source, levels)
         if levels:
             marks = ", ".join("?" for _ in levels)
             connection.execute(
@@ -407,6 +408,7 @@ def _replace_from_staging(
         connection.executemany(
             "INSERT INTO disputed_lines VALUES (?, ?, ?, ?, ?, ?, ?)", disputed_lines
         )
+        db._insert_source_search_state(connection, source, levels)
         connection.execute("COMMIT")
 
 

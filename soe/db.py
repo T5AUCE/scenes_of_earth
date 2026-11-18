@@ -1,6 +1,7 @@
 """SQLite: boundaries, scene jobs, source revisions and land clips; one WAL connection per call."""
 
 import hashlib
+import json
 import logging
 import sqlite3
 from collections.abc import Iterable, Iterator
@@ -17,7 +18,30 @@ BoundaryValues = tuple[SqlValue, ...]  # one boundaries row in INSERT_BOUNDARY c
 PreviewWrite = tuple[str, str, str | None, str]  # id, preview, expected digest, new digest
 LandClipWkbs = tuple[bytes, bytes, bytes]  # land clip, display outline and land borders, as WKB
 
-SCHEMA = """
+BOUNDARY_NAMES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS boundary_names (
+    boundary_id TEXT NOT NULL,
+    name TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_boundary_names_name ON boundary_names(name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS ix_boundary_names_boundary ON boundary_names(boundary_id);
+
+CREATE TABLE IF NOT EXISTS imported_country_iso3 (
+    iso3 TEXT PRIMARY KEY
+);
+
+CREATE TABLE IF NOT EXISTS search_migration (
+    version TEXT PRIMARY KEY,
+    finished TEXT NOT NULL
+);
+"""
+
+# Bump when the token scheme changes, so an older migration no longer counts.
+SEARCH_MIGRATION_VERSION = "1"
+
+SCHEMA = (
+    """
 CREATE TABLE IF NOT EXISTS boundaries (
     id TEXT PRIMARY KEY,
     level TEXT NOT NULL,
@@ -76,6 +100,8 @@ CREATE TABLE IF NOT EXISTS period_revisions (
     PRIMARY KEY (dataset_id, period)
 );
 """
+    + BOUNDARY_NAMES_SCHEMA
+)
 
 LEVEL_RANK = (
     "CASE boundaries.level WHEN 'country' THEN 0 WHEN 'state' THEN 1 "
@@ -85,8 +111,7 @@ LEVEL_RANK = (
 SHADOWED_SYNTHETIC_COUNTRY = (
     "boundaries.level = 'country' AND boundaries.source = 'synthetic' "
     "AND boundaries.iso3 IS NOT NULL AND boundaries.iso3 != '' "
-    "AND EXISTS (SELECT 1 FROM boundaries AS rival WHERE rival.level = 'country' "
-    "AND rival.source != 'synthetic' AND rival.iso3 = boundaries.iso3)"
+    "AND EXISTS (SELECT 1 FROM imported_country_iso3 WHERE iso3 = boundaries.iso3)"
 )
 ACTIVE_STATUSES = "('queued','running')"
 
@@ -132,6 +157,37 @@ def ensure_schema(path: Path | str) -> None:
         _add_missing_columns(connection)
 
 
+def require_search_names(path: Path | str) -> None:
+    """Fail when stored boundaries lack a completed search migration, naming the rebuild command.
+
+    Fresh databases pass, since there is nothing to search. The marker is written by a full
+    rebuild and by any import that leaves every row tokenized, so a legacy database that only
+    gained new rows still trips this.
+    """
+    with connect(path) as connection:
+        tables = {
+            row["name"]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        if "boundaries" not in tables:
+            return
+
+        if connection.execute("SELECT 1 FROM boundaries LIMIT 1").fetchone() is None:
+            return
+
+        migrated = "search_migration" in tables and (
+            connection.execute(
+                "SELECT 1 FROM search_migration WHERE version = ?", (SEARCH_MIGRATION_VERSION,)
+            ).fetchone()
+            is not None
+        )
+        if not migrated:
+            raise SystemExit(
+                f"search names are missing for {path}: stop the API and importers, then run "
+                f"python -m soe.cli rebuild-search-names --db {path}"
+            )
+
+
 def recover_interrupted_scenes(path: Path | str) -> None:
     """Mark jobs that were queued or running when the process died as failed.
 
@@ -174,7 +230,27 @@ def _add_missing_columns(connection: sqlite3.Connection) -> None:
             if "duplicate column" not in str(error):
                 raise
 
+    _ensure_boundary_search_columns(connection, boundaries_columns)
+
     _ensure_land_clips_method(connection)
+
+
+def _ensure_boundary_search_columns(
+    connection: sqlite3.Connection, boundaries_columns: set[str] | None = None
+) -> None:
+    """Give a database created before local names and aliases existed their columns."""
+    if boundaries_columns is None:
+        boundaries_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(boundaries)")
+        }
+
+    for column in ("name_local", "parent_name_local", "aliases"):
+        if column not in boundaries_columns:
+            try:
+                connection.execute(f"ALTER TABLE boundaries ADD COLUMN {column} TEXT")
+            except sqlite3.OperationalError as error:
+                if "duplicate column" not in str(error):
+                    raise
 
 
 def _ensure_land_clips_method(connection: sqlite3.Connection) -> None:
@@ -191,59 +267,48 @@ def _ensure_land_clips_method(connection: sqlite3.Connection) -> None:
 
 
 def search(path: Path | str, query: str, level: str | None = None, limit: int = 20) -> list[Record]:
-    """Boundaries whose name starts with `query`, or has a word that does; best matches first.
+    """Boundaries whose name, local name or alias starts with `query`, or continues with it.
 
-    Countries also match their official long name under the same rules, after direct matches.
-    A sample country stays listed only while no imported country shares its iso3.
+    A match continues with the query when the query starts at a word boundary inside the name,
+    so later words and phrases match as well as prefixes. Countries also match their official
+    long name under the same rules, after direct matches. A plain country ranks above its
+    combined area, which shares its level but holds more cells. A sample country stays listed
+    only while no imported country shares its iso3.
     """
     # User text must match literally, so LIKE wildcards are escaped with '!'.
-    needle = query.strip().lower()
     query = query.replace("!", "!!").replace("%", "!%").replace("_", "!_")
     prefix_pattern, word_pattern = f"{query}%", f"% {query}%"
-    official_iso3s = _official_matches(needle)
 
-    where = "(name LIKE ? ESCAPE '!' OR name LIKE ? ESCAPE '!'"
-    if official_iso3s:
-        placeholders = ", ".join("?" for _ in official_iso3s)
-        where += f" OR (boundaries.level = 'country' AND boundaries.iso3 IN ({placeholders}))"
-
-    where += ")"
+    where = (
+        "(boundaries.id IN (SELECT boundary_id FROM boundary_names WHERE name LIKE ? ESCAPE '!'))"
+    )
     where += f" AND NOT ({SHADOWED_SYNTHETIC_COUNTRY})"
     if level:
         where += " AND boundaries.level = ?"
 
+    # Combined areas share their country's level but hold more cells, so one sorts first.
     order_by = (
         "(boundaries.name LIKE ? ESCAPE '!') DESC, "
         "((boundaries.name LIKE ? ESCAPE '!') OR (boundaries.name LIKE ? ESCAPE '!')) DESC, "
-        f"{LEVEL_RANK}, boundaries.cells DESC, boundaries.name"
+        f"{LEVEL_RANK}, (boundaries.id LIKE '%+overseas') ASC, "
+        "boundaries.cells DESC, boundaries.name"
     )
     sql = (
         "SELECT boundaries.id, boundaries.name, boundaries.level, boundaries.iso3, "  # noqa: S608 - only constants shape the query.
-        "boundaries.parent_name, boundaries.bbox_w, boundaries.bbox_s, boundaries.bbox_e, "
+        "boundaries.parent_name, boundaries.name_local, boundaries.parent_name_local, "
+        "boundaries.bbox_w, boundaries.bbox_s, boundaries.bbox_e, "
         "boundaries.bbox_n, boundaries.cells, admin_kinds.kind AS kind FROM boundaries "
         "LEFT JOIN admin_kinds ON admin_kinds.iso3 = boundaries.iso3 "
         "AND admin_kinds.level = boundaries.level "
         f"WHERE {where} ORDER BY {order_by} LIMIT ?"
     )
 
-    arguments: list[SqlValue] = [prefix_pattern, word_pattern, *official_iso3s]
+    arguments: list[SqlValue] = [prefix_pattern]
     arguments += [level] if level else []
     arguments += [prefix_pattern, prefix_pattern, word_pattern, limit]
 
     with connect(path) as connection:
         return [dict(row) for row in connection.execute(sql, arguments)]
-
-
-def _official_matches(needle: str) -> list[str]:
-    """Iso3s whose official long name starts with `needle` or has a word that does."""
-    if not needle:
-        return []
-
-    return [
-        iso3
-        for iso3, official in OFFICIAL_NAMES.items()
-        if official.lower().startswith(needle) or f" {needle}" in official.lower()
-    ]
 
 
 def get_boundary(path: Path | str, boundary_id: str, with_geometry: bool = True) -> Record | None:
@@ -260,7 +325,8 @@ def get_boundary(path: Path | str, boundary_id: str, with_geometry: bool = True)
     with connect(path) as connection:
         row = connection.execute(
             "SELECT boundaries.id, boundaries.level, "  # noqa: S608 - one of two fixed column lists.
-            "boundaries.name, boundaries.parent_name, boundaries.iso3, boundaries.bbox_w, "
+            "boundaries.name, boundaries.parent_name, boundaries.name_local, "
+            "boundaries.parent_name_local, boundaries.iso3, boundaries.bbox_w, "
             "boundaries.bbox_s, boundaries.bbox_e, boundaries.bbox_n, boundaries.cells, "
             f"{geometry_select}, boundaries.preview_geojson, boundaries.source, "
             "boundaries.licence, admin_kinds.kind AS kind FROM boundaries "
@@ -339,7 +405,7 @@ def delete_land_clips_except(path: Path | str, land_version: str, clip_method: i
 
 
 def add_boundaries(path: Path | str, source: str, rows: Iterable[BoundaryValues]) -> int:
-    """Replace all boundaries of one source. Returns the number of duplicate ids replaced.
+    """Replace all boundaries of one source, with their search tokens. Returns duplicates replaced.
 
     Rows insert in batches, so a full import never holds every geometry at once.
     """
@@ -347,6 +413,7 @@ def add_boundaries(path: Path | str, source: str, rows: Iterable[BoundaryValues]
     seen: set[SqlValue] = set()
     with connect(path) as connection:
         connection.execute("BEGIN")
+        _delete_source_search_state(connection, source)
         connection.execute("DELETE FROM boundaries WHERE source = ?", (source,))
         batch: list[BoundaryValues] = []
         for row in rows:
@@ -363,12 +430,172 @@ def add_boundaries(path: Path | str, source: str, rows: Iterable[BoundaryValues]
         if batch:
             connection.executemany(INSERT_BOUNDARY, batch)
 
+        _insert_source_search_state(connection, source)
         connection.execute("COMMIT")
 
     if replaced:
         log.warning("%s: %d duplicate boundary ids replaced", source, replaced)
 
     return replaced
+
+
+def _delete_source_search_state(
+    connection: sqlite3.Connection, source: str | None, levels: tuple[str, ...] | None = None
+) -> None:
+    """Drop the tokens of rows about to be replaced, while those rows still exist."""
+    token_filter, token_args = _source_filter(source, levels)
+    connection.execute(
+        "DELETE FROM boundary_names WHERE boundary_id IN "  # noqa: S608 - the filter is code constants and placeholders.
+        f"(SELECT id FROM boundaries WHERE {token_filter})",
+        token_args,
+    )
+
+
+def _insert_source_search_state(
+    connection: sqlite3.Connection, source: str | None, levels: tuple[str, ...] | None = None
+) -> int:
+    """Tokenize the stored rows of a source and refresh which countries imports cover.
+
+    Coverage is recomputed from every remaining non-synthetic country row, so replacing
+    one source cannot erase another source's coverage.
+    """
+    token_filter, token_args = _source_filter(source, levels)
+    rows = connection.execute(
+        f"SELECT id, level, name, name_local, aliases, iso3 FROM boundaries WHERE {token_filter}",  # noqa: S608 - the filter joins code constants and placeholders.
+        token_args,
+    )
+
+    stored = 0
+    batch: list[tuple[str, str]] = []
+    for row in rows:
+        for token in _search_tokens(
+            row["name"], row["name_local"], row["aliases"], row["iso3"], row["level"]
+        ):
+            batch.append((row["id"], token))
+            if len(batch) >= INSERT_BATCH_ROWS:
+                _insert_name_batch(connection, "boundary_names", batch)
+                stored += len(batch)
+                batch = []
+
+    _insert_name_batch(connection, "boundary_names", batch)
+    stored += len(batch)
+
+    if levels is None or "country" in levels:
+        connection.execute("DELETE FROM imported_country_iso3")
+        connection.execute(
+            "INSERT OR IGNORE INTO imported_country_iso3 SELECT DISTINCT iso3 FROM boundaries "
+            "WHERE level = 'country' AND source != 'synthetic' "
+            "AND iso3 IS NOT NULL AND iso3 != ''"
+        )
+
+    _refresh_search_migration(connection)
+
+    return stored
+
+
+def _refresh_search_migration(connection: sqlite3.Connection) -> None:
+    """Record whether every boundary now has search tokens, so startup skips the probe.
+
+    The marker is written only when no boundary lacks tokens, so a partial import never
+    marks the database complete.
+    """
+    connection.execute("DELETE FROM search_migration")
+    connection.execute(
+        "INSERT INTO search_migration (version, finished) SELECT ?, ? WHERE NOT EXISTS ("
+        "SELECT 1 FROM boundaries WHERE id NOT IN (SELECT boundary_id FROM boundary_names)"
+        ")",
+        (SEARCH_MIGRATION_VERSION, now()),
+    )
+
+
+def _insert_name_batch(
+    connection: sqlite3.Connection, table: str, batch: list[tuple[str, str]]
+) -> None:
+    """Insert one batch of search tokens into the names table."""
+    connection.executemany(
+        f"INSERT INTO {table} (boundary_id, name) VALUES (?, ?)",  # noqa: S608 - the table is a code constant at each caller.
+        batch,
+    )
+
+
+def _source_filter(
+    source: str | None, levels: tuple[str, ...] | None
+) -> tuple[str, list[SqlValue]]:
+    """The WHERE fragment matching one source and level set, or every row when both are None."""
+    clauses: list[str] = []
+    args: list[SqlValue] = []
+    if source is not None:
+        clauses.append("source = ?")
+        args.append(source)
+    if levels is not None:
+        marks = ", ".join("?" for _ in levels)
+        clauses.append(f"level IN ({marks})")
+        args.extend(levels)
+
+    return (" AND ".join(clauses) if clauses else "1 = 1"), args
+
+
+def sync_search_names(path: Path | str, source: str | None = None) -> int:
+    """Rebuild the search tokens of one source, or of every boundary; returns stored rows.
+
+    Imports keep tokens current inside their own transaction; this covers databases
+    written before that and the offline rebuild command.
+    """
+    with connect(path) as connection:
+        _ensure_boundary_search_columns(connection)
+        connection.executescript(BOUNDARY_NAMES_SCHEMA)
+        connection.execute("BEGIN")
+        _delete_source_search_state(connection, source)
+        stored = _insert_source_search_state(connection, source)
+        connection.execute("COMMIT")
+
+    return stored
+
+
+def _search_tokens(
+    name: str | None,
+    name_local: str | None,
+    aliases_text: str | None,
+    iso3: str | None,
+    level: str | None,
+) -> list[str]:
+    """The full names and their word-boundary suffixes that one boundary is found by.
+
+    Storing each suffix lets a prefix seek serve the phrase rule, so the query never scans.
+    Countries also carry their official long name, which today's search matches separately.
+    """
+    texts = [name, name_local, *_parse_aliases(aliases_text)]
+    if level == "country" and iso3:
+        texts.append(OFFICIAL_NAMES.get(iso3))
+
+    tokens = set()
+    for text in texts:
+        stripped = (text or "").strip()
+        if not stripped:
+            continue
+
+        words = stripped.split(" ")
+        for index, word in enumerate(words):
+            if word:
+                tokens.add(" ".join(words[index:]))
+
+    return sorted(tokens)
+
+
+def _parse_aliases(aliases_text: str | None) -> list[str]:
+    """The alias list of a boundaries row, or nothing when it is missing or malformed."""
+    if not aliases_text:
+        return []
+
+    try:
+        aliases = json.loads(aliases_text)
+    except ValueError:
+        return []
+
+    if not isinstance(aliases, list):
+        return []
+
+    return [alias for alias in aliases if isinstance(alias, str) and alias]
 
 
 def _complete_row(row: BoundaryValues) -> BoundaryValues:

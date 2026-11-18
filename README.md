@@ -104,7 +104,10 @@ The stored outlines keep every CGAZ vertex, and each row also stores its display
 first pick serves the small preview without reading the full geometry; search never reads the
 geometry column and stays fast. Each row also stores a short revision of its geometry text,
 so a reimport with the same-length text still serves a fresh outline and validator.
-Boundaries imported before previews existed get them with
+Boundaries from before search tokens existed get them with
+`python -m soe.cli rebuild-search-names --db <soe.db>` while the API and importers are stopped;
+the API refuses a database that still lacks them. Boundaries imported before previews existed
+get them with
 `python -m soe.cli backfill-area-previews --db <soe.db>`, which fills missing digests and
 previews in batches with progress; an area without a stored preview still serves, computing
 and storing it on its first request.

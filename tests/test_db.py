@@ -446,3 +446,505 @@ def test_backfill_area_previews_skips_a_row_whose_geometry_is_not_json(tmp_path,
     assert backfill_area_previews(path, batch_size=1) == 0
     assert db.count_boundaries_missing_preview(path) == 1
     assert "skipping x:bad" in capsys.readouterr().out
+
+
+def test_search_matches_local_name_and_alias(tmp_path):
+    path = tmp_path / "soe.db"
+    db.init(path)
+    db.add_boundaries(
+        path,
+        "Overture Maps divisions",
+        [
+            boundary_row(
+                "ovt:NO", "country", "Norway", iso3="NOR", source="Overture Maps divisions"
+            ),
+            boundary_row(
+                "ovt:CN", "country", "China", iso3="CHN", source="Overture Maps divisions"
+            ),
+            boundary_row(
+                "ovt:GF", "country", "French Guiana", iso3="GUF", source="Overture Maps divisions"
+            ),
+        ],
+    )
+    with db.connect(path) as connection:
+        connection.execute(
+            "UPDATE boundaries SET name_local = 'Norge', aliases = ? WHERE id = 'ovt:NO'",
+            (json.dumps(["Noreg"]),),
+        )
+        connection.execute("UPDATE boundaries SET name_local = '中国' WHERE id = 'ovt:CN'")
+        connection.execute("UPDATE boundaries SET aliases = '\"oops\"' WHERE id = 'ovt:CN'")
+        connection.execute(
+            "UPDATE boundaries SET aliases = ? WHERE id = 'ovt:GF'",
+            (json.dumps(["Région Guyane"]),),
+        )
+
+    db.sync_search_names(path)
+
+    assert [row["id"] for row in db.search(path, "norge")] == ["ovt:NO"]
+    assert [row["id"] for row in db.search(path, "noreg")] == ["ovt:NO"]
+    assert [row["id"] for row in db.search(path, "中国")] == ["ovt:CN"]
+    assert [row["id"] for row in db.search(path, "guyane")] == ["ovt:GF"]
+
+
+def test_plain_country_ranks_above_combined_area(tmp_path):
+    path = tmp_path / "soe.db"
+    db.init(path)
+    db.add_boundaries(
+        path,
+        "Overture Maps divisions",
+        [
+            boundary_row(
+                "ovt:FI",
+                "country",
+                "Finland",
+                iso3="FIN",
+                cells=100,
+                source="Overture Maps divisions",
+            ),
+            boundary_row(
+                "ovt:FI+overseas",
+                "country",
+                "Finland with Åland Islands",
+                iso3="FIN",
+                cells=200,
+                source="Overture Maps divisions",
+            ),
+        ],
+    )
+
+    assert [row["id"] for row in db.search(path, "finland")] == ["ovt:FI", "ovt:FI+overseas"]
+    assert [row["id"] for row in db.search(path, "Åland")] == ["ovt:FI+overseas"]
+
+
+def test_search_matches_phrase_after_a_word_boundary(tmp_path):
+    path = tmp_path / "soe.db"
+    db.init(path)
+    db.add_boundaries(
+        path,
+        "Overture Maps divisions",
+        [
+            boundary_row(
+                "ovt:NSW",
+                "state",
+                "New South Wales",
+                "Australia",
+                "AUS",
+                source="Overture Maps divisions",
+            )
+        ],
+    )
+    with db.connect(path) as connection:
+        connection.execute(
+            "UPDATE boundaries SET name_local = 'Nueva Gales del Sur' WHERE id = 'ovt:NSW'"
+        )
+        connection.execute(
+            "UPDATE boundaries SET aliases = ? WHERE id = 'ovt:NSW'",
+            (json.dumps(["Great Southern Land"]),),
+        )
+
+    db.sync_search_names(path)
+
+    assert [row["id"] for row in db.search(path, "south wa")] == ["ovt:NSW"]
+    assert [row["id"] for row in db.search(path, "gales del")] == ["ovt:NSW"]
+    assert [row["id"] for row in db.search(path, "southern la")] == ["ovt:NSW"]
+    assert db.search(path, "outh wa") == []
+    assert db.search(path, "ew south") == []
+
+
+def staged_row(
+    row_id: str,
+    level: str = "state",
+    name: str = "X",
+    source: str = "Overture Maps divisions",
+    aliases: str = "[]",
+) -> tuple:
+    """One staged Overture row in STAGED_COLUMNS order, for direct store_overture calls."""
+    return (
+        row_id,
+        level,
+        name,
+        "",
+        "TST",
+        0,
+        0,
+        1,
+        1,
+        10,
+        "{}",
+        "0" * 16,
+        None,
+        source,
+        "ODbL 1.0",
+        None,
+        None,
+        None,
+        None,
+        0,
+        None,
+        aliases,
+        "[]",
+        0,
+        None,
+    )
+
+
+def token_ids(path: Path | str) -> set[str]:
+    """Ids that hold search tokens."""
+    with db.connect(path) as connection:
+        return {
+            row["boundary_id"]
+            for row in connection.execute("SELECT DISTINCT boundary_id FROM boundary_names")
+        }
+
+
+def orphan_token_count(path: Path | str) -> int:
+    """Token rows whose boundary no longer exists."""
+    with db.connect(path) as connection:
+        return connection.execute(
+            "SELECT COUNT(*) FROM boundary_names "
+            "WHERE boundary_id NOT IN (SELECT id FROM boundaries)"
+        ).fetchone()[0]
+
+
+def test_failed_replacement_rolls_back_rows_and_tokens(tmp_path, monkeypatch):
+    path = tmp_path / "soe.db"
+    db.init(path)
+    db.add_boundaries(
+        path,
+        "geoBoundaries CGAZ",
+        [boundary_row("cgaz:ADM0:OLD", "country", "Oldland", iso3="OLD")],
+    )
+
+    def boom(connection: sqlite3.Connection, source: str | None, levels=None) -> int:
+        raise RuntimeError("token build failed")
+
+    monkeypatch.setattr(db, "_insert_source_search_state", boom)
+
+    with pytest.raises(RuntimeError, match="token build failed"):
+        db.add_boundaries(
+            path,
+            "geoBoundaries CGAZ",
+            [boundary_row("cgaz:ADM0:NEW", "country", "Newland", iso3="NEW")],
+        )
+
+    assert db.get_boundary(path, "cgaz:ADM0:OLD")["name"] == "Oldland"
+    assert db.get_boundary(path, "cgaz:ADM0:NEW") is None
+    assert [row["id"] for row in db.search(path, "oldland")] == ["cgaz:ADM0:OLD"]
+    assert db.search(path, "newland") == []
+    assert token_ids(path) == {"cgaz:ADM0:OLD"}
+
+
+def test_replacement_removes_tokens_of_replaced_ids(tmp_path):
+    path = tmp_path / "soe.db"
+    db.init(path)
+    db.add_boundaries(
+        path,
+        "geoBoundaries CGAZ",
+        [boundary_row("cgaz:A", "state", "Alpha"), boundary_row("cgaz:B", "state", "Beta")],
+    )
+    db.add_boundaries(path, "geoBoundaries CGAZ", [boundary_row("cgaz:C", "state", "Gamma")])
+
+    assert token_ids(path) == {"cgaz:C"}
+    assert orphan_token_count(path) == 0
+    assert db.search(path, "alpha") == []
+    assert [row["id"] for row in db.search(path, "gamma")] == ["cgaz:C"]
+
+
+def test_empty_replacement_clears_tokens_and_country_coverage(tmp_path):
+    path = tmp_path / "soe.db"
+    db.init(path)
+    db.add_boundaries(
+        path,
+        "synthetic",
+        [boundary_row("sample:kenya", "country", "Kenya", iso3="KEN", source="synthetic")],
+    )
+    db.add_boundaries(
+        path, "geoBoundaries CGAZ", [boundary_row("cgaz:ADM0:KEN", "country", "Kenya", iso3="KEN")]
+    )
+
+    assert [row["id"] for row in db.search(path, "Kenya")] == ["cgaz:ADM0:KEN"]
+
+    db.add_boundaries(path, "geoBoundaries CGAZ", [])
+
+    assert [row["id"] for row in db.search(path, "Kenya")] == ["sample:kenya"]
+    with db.connect(path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM imported_country_iso3").fetchone()[0] == 0
+
+
+def test_store_overture_failure_rolls_back_rows_and_tokens(tmp_path, monkeypatch):
+    from soe.boundary_import import store_overture
+
+    path = str(tmp_path / "soe.db")
+    db.init(path)
+    store_overture(
+        path,
+        "Overture Maps divisions",
+        [staged_row("ovt:AA", level="country", name="Alandia")],
+        [],
+        [],
+        lambda: None,
+    )
+
+    def boom(connection: sqlite3.Connection, source: str | None, levels=None) -> int:
+        raise RuntimeError("token build failed")
+
+    monkeypatch.setattr(db, "_insert_source_search_state", boom)
+
+    with pytest.raises(RuntimeError, match="token build failed"):
+        store_overture(
+            path,
+            "Overture Maps divisions",
+            [staged_row("ovt:BB", level="country", name="Bermuda")],
+            [],
+            [],
+            lambda: None,
+        )
+
+    assert db.get_boundary(path, "ovt:AA")["name"] == "Alandia"
+    assert db.get_boundary(path, "ovt:BB") is None
+    assert [row["id"] for row in db.search(path, "alandia")] == ["ovt:AA"]
+    assert db.search(path, "bermuda") == []
+    assert token_ids(path) == {"ovt:AA"}
+
+
+def test_store_overture_city_failure_rolls_back(tmp_path, monkeypatch):
+    from soe.boundary_import import store_overture
+
+    path = str(tmp_path / "soe.db")
+    db.init(path)
+    store_overture(
+        path,
+        "Overture Maps divisions",
+        [
+            staged_row("ovt:CC", level="country", name="Candia"),
+            staged_row("ovt:CC-1", level="city", name="Oldcity"),
+        ],
+        [],
+        [],
+        lambda: None,
+    )
+
+    def boom(connection: sqlite3.Connection, source: str | None, levels=None) -> int:
+        raise RuntimeError("token build failed")
+
+    monkeypatch.setattr(db, "_insert_source_search_state", boom)
+
+    with pytest.raises(RuntimeError, match="token build failed"):
+        store_overture(
+            path,
+            "Overture Maps divisions",
+            [staged_row("ovt:CC-2", level="city", name="Newcity")],
+            [],
+            [],
+            lambda: None,
+            levels=("city",),
+        )
+
+    assert db.get_boundary(path, "ovt:CC-1")["name"] == "Oldcity"
+    assert db.get_boundary(path, "ovt:CC-2") is None
+    assert [row["id"] for row in db.search(path, "oldcity")] == ["ovt:CC-1"]
+    assert db.search(path, "newcity") == []
+
+
+def test_full_replacement_removes_tokens_of_replaced_ids(tmp_path):
+    from soe.boundary_import import store_overture
+
+    path = str(tmp_path / "soe.db")
+    db.init(path)
+    store_overture(
+        path,
+        "Overture Maps divisions",
+        [staged_row("ovt:AA", level="country", name="Alandia")],
+        [],
+        [],
+        lambda: None,
+    )
+    store_overture(
+        path,
+        "Overture Maps divisions",
+        [staged_row("ovt:BB", level="country", name="Bermuda")],
+        [],
+        [],
+        lambda: None,
+    )
+
+    assert db.get_boundary(path, "ovt:AA") is None
+    assert token_ids(path) == {"ovt:BB"}
+    assert orphan_token_count(path) == 0
+
+
+def test_city_only_replacement_keeps_other_levels_tokens(tmp_path):
+    from soe.boundary_import import store_overture
+
+    path = str(tmp_path / "soe.db")
+    db.init(path)
+    store_overture(
+        path,
+        "Overture Maps divisions",
+        [
+            staged_row("ovt:CC", level="country", name="Candia"),
+            staged_row("ovt:CC-1", level="city", name="Oldcity"),
+        ],
+        [],
+        [],
+        lambda: None,
+    )
+    store_overture(
+        path,
+        "Overture Maps divisions",
+        [staged_row("ovt:CC-2", level="city", name="Newcity")],
+        [],
+        [],
+        lambda: None,
+        levels=("city",),
+    )
+
+    assert db.get_boundary(path, "ovt:CC") is not None
+    assert db.get_boundary(path, "ovt:CC-1") is None
+    assert token_ids(path) == {"ovt:CC", "ovt:CC-2"}
+    assert orphan_token_count(path) == 0
+    assert db.search(path, "oldcity") == []
+
+
+def test_empty_store_overture_removes_source_tokens(tmp_path):
+    from soe.boundary_import import store_overture
+
+    path = str(tmp_path / "soe.db")
+    db.init(path)
+    store_overture(
+        path,
+        "Overture Maps divisions",
+        [staged_row("ovt:AA", level="country", name="Alandia")],
+        [],
+        [],
+        lambda: None,
+    )
+    store_overture(path, "Overture Maps divisions", [], [], [], lambda: None)
+
+    assert db.get_boundary(path, "ovt:AA") is None
+    assert token_ids(path) == set()
+    assert orphan_token_count(path) == 0
+
+
+def test_removing_one_source_keeps_other_sources_country_coverage(tmp_path):
+    path = tmp_path / "soe.db"
+    db.init(path)
+    db.add_boundaries(
+        path,
+        "synthetic",
+        [boundary_row("sample:kenya", "country", "Kenya", iso3="KEN", source="synthetic")],
+    )
+    db.add_boundaries(
+        path, "geoBoundaries CGAZ", [boundary_row("cgaz:ADM0:KEN", "country", "Kenya", iso3="KEN")]
+    )
+    db.add_boundaries(
+        path,
+        "Overture Maps divisions",
+        [boundary_row("ovt:KE", "country", "Kenya", iso3="KEN", source="Overture Maps divisions")],
+    )
+
+    assert {row["id"] for row in db.search(path, "Kenya")} == {"cgaz:ADM0:KEN", "ovt:KE"}
+
+    db.add_boundaries(path, "geoBoundaries CGAZ", [])
+
+    assert {row["id"] for row in db.search(path, "Kenya")} == {"ovt:KE"}
+
+
+def test_require_search_names_fails_on_unmigrated_database(tmp_path):
+    path = str(tmp_path / "soe.db")
+    db.init(path)
+    with db.connect(path) as connection:
+        connection.executemany(
+            db.INSERT_BOUNDARY, [db._complete_row(boundary_row("x:1", "state", "Place"))]
+        )
+
+    with pytest.raises(SystemExit, match="rebuild-search-names"):
+        db.require_search_names(path)
+
+
+def test_require_search_names_passes_for_empty_and_migrated_databases(tmp_path):
+    path = str(tmp_path / "soe.db")
+    db.init(path)
+    db.require_search_names(path)
+
+    db.add_boundaries(path, "geoBoundaries CGAZ", [boundary_row("x:1", "state", "One")])
+    db.require_search_names(path)
+
+
+def test_rebuild_search_names_command_restores_search(tmp_path, capsys):
+    from soe import cli
+
+    path = str(tmp_path / "soe.db")
+    db.init(path)
+    with db.connect(path) as connection:
+        connection.executemany(
+            db.INSERT_BOUNDARY,
+            [
+                db._complete_row(boundary_row("x:1", "state", "One")),
+                db._complete_row(boundary_row("x:2", "state", "Two")),
+            ],
+        )
+
+    assert db.search(path, "one") == []
+
+    cli.main(["rebuild-search-names", "--db", path])
+
+    assert [row["id"] for row in db.search(path, "one")] == ["x:1"]
+    assert [row["id"] for row in db.search(path, "two")] == ["x:2"]
+    db.require_search_names(path)
+    assert "Search names:" in capsys.readouterr().out
+
+
+def test_startup_rejects_partially_migrated_database(tmp_path):
+    from soe import cli
+
+    path = str(tmp_path / "soe.db")
+    db.init(path)
+    with db.connect(path) as connection:
+        connection.executemany(
+            db.INSERT_BOUNDARY,
+            [db._complete_row(boundary_row("old:1", "state", "Oldland", source="legacy"))],
+        )
+
+    db.add_boundaries(
+        path, "geoBoundaries CGAZ", [boundary_row("cgaz:ADM0:NEW", "country", "Newland")]
+    )
+
+    with pytest.raises(SystemExit, match="rebuild-search-names"):
+        db.require_search_names(path)
+
+    assert [row["id"] for row in db.search(path, "newland")] == ["cgaz:ADM0:NEW"]
+    assert db.search(path, "oldland") == []
+
+    cli.rebuild_search_names(path)
+    db.require_search_names(path)
+
+    assert [row["id"] for row in db.search(path, "oldland")] == ["old:1"]
+
+
+def test_startup_rejects_city_only_import_on_legacy_database(tmp_path):
+    from soe.boundary_import import store_overture
+
+    path = str(tmp_path / "soe.db")
+    db.init(path)
+    with db.connect(path) as connection:
+        connection.executemany(
+            db.INSERT_BOUNDARY,
+            [db._complete_row(boundary_row("old:1", "state", "Oldland", source="legacy"))],
+        )
+
+    store_overture(
+        path,
+        "Overture Maps divisions",
+        [staged_row("ovt:CC-1", level="city", name="Newcity")],
+        [],
+        [],
+        lambda: None,
+        levels=("city",),
+    )
+
+    with pytest.raises(SystemExit, match="rebuild-search-names"):
+        db.require_search_names(path)
+
+    assert [row["id"] for row in db.search(path, "newcity")] == ["ovt:CC-1"]
+    assert db.search(path, "oldland") == []

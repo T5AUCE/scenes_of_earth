@@ -2,7 +2,8 @@
 
 The module imports country, city, and urban area boundaries into SQLite, with each country's own
 names for its administrative levels. It also backfills the stored display previews and geometry
-digests of boundaries imported before them. It imports the OpenStreetMap land polygons that
+digests of boundaries imported before them, and rebuilds the area search tokens and country
+coverage of databases imported before those. It imports the OpenStreetMap land polygons that
 areas are cut to. It rebuilds the Copernicus terrain
 tile indexes and the ESA WorldCover tile index. It also ingests ERA5-Land, ERA5 and CHIRPS
 monthly cubes, the lithology map and the rock-age map into local folders. Run
@@ -80,6 +81,11 @@ def main(argv: list[str] | None = None) -> None:
 
         logging.basicConfig(level=logging.INFO)
         print(f"Area previews: {backfill_area_previews(args.db, args.batch_size)} backfilled")
+        return
+
+    if args.command == "rebuild-search-names":
+        logging.basicConfig(level=logging.INFO)
+        print(f"Search names: {rebuild_search_names(args.db)} stored")
         return
 
     if args.command == "import-land":
@@ -232,6 +238,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="boundaries read and updated per transaction",
     )
 
+    search_parser = subparsers.add_parser(
+        "rebuild-search-names",
+        help="rebuild the area search tokens and country coverage "
+        "(run while the API and importers are stopped)",
+    )
+    search_parser.add_argument("--db", default=os.environ.get("SOE_DB", "./data/soe.db"))
+
     lithology_parser = subparsers.add_parser(
         "ingest-lithology",
         help="write the Rock type COG from the downloaded GLiM, else the OpenLandMap map (232 MB)",
@@ -296,6 +309,21 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     return parser
+
+
+def rebuild_search_names(db_path: Path | str) -> int:
+    """Rebuild every boundary's search tokens and country coverage; returns stored rows.
+
+    Run while the API and importers are stopped, since the rebuild holds the writer lock.
+    """
+    db.ensure_schema(db_path)
+    stored = db.sync_search_names(db_path)
+    with db.connect(db_path) as connection:
+        boundaries = connection.execute("SELECT COUNT(*) FROM boundaries").fetchone()[0]
+
+    print(f"search names: {stored} tokens for {boundaries} boundaries stored")
+
+    return stored
 
 
 def backfill_area_previews(db_path: Path | str, batch_size: int = BACKFILL_BATCH_SIZE) -> int:

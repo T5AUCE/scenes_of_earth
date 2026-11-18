@@ -1,5 +1,6 @@
 """API tests with FastAPI's TestClient and the synthetic source (no network)."""
 
+import asyncio
 import json
 import threading
 import time
@@ -124,6 +125,49 @@ def test_search_hits_without_stored_names_carry_null_kind(env):
     hits = client.get("/api/areas/search", params={"q": "county"}).json()
 
     assert hits[0]["name"] == "Washington County" and hits[0]["kind"] is None
+
+
+def test_search_hits_and_detail_carry_local_names(env):
+    client, _, tmp_path = env
+    db_path = str(tmp_path / "soe.db")
+    db.add_boundaries(
+        db_path,
+        "Overture Maps divisions",
+        [
+            boundary_row(
+                "ovt:FR-BRE",
+                "state",
+                "Brittany",
+                "France",
+                "FRA",
+                geometry=json.dumps(mapping(box(-5, 47, -1, 49))),
+                source="Overture Maps divisions",
+            )
+        ],
+    )
+    with db.connect(db_path) as connection:
+        connection.execute(
+            "UPDATE boundaries SET name_local = 'Bretagne', parent_name_local = 'France', "
+            "aliases = ? WHERE id = 'ovt:FR-BRE'",
+            (json.dumps(["Breizh"]),),
+        )
+
+    db.sync_search_names(db_path)
+
+    hits = client.get("/api/areas/search", params={"q": "breizh"}).json()
+
+    assert hits[0]["id"] == "ovt:FR-BRE"
+    assert hits[0]["name_local"] == "Bretagne"
+    assert hits[0]["parent_name_local"] == "France"
+
+    detail = client.get("/api/areas/ovt:FR-BRE").json()
+
+    assert detail["name_local"] == "Bretagne"
+    assert detail["parent_name_local"] == "France"
+
+    legacy = client.get("/api/areas/search", params={"q": "nair"}).json()[0]
+
+    assert legacy["name_local"] is None and legacy["parent_name_local"] is None
 
 
 def test_sample_search_hits_carry_null_kind(tmp_path, monkeypatch):
@@ -1047,6 +1091,53 @@ def test_area_detail_etag_returns_304_until_reimport(env):
 
     assert stale.status_code == 200
     assert stale.headers["etag"] != etag
+
+
+def test_area_detail_etag_changes_with_local_names(env):
+    client, _, tmp_path = env
+
+    first = client.get("/api/areas/cgaz:ADM1:NBO")
+    etag = first.headers["etag"]
+
+    with db.connect(str(tmp_path / "soe.db")) as connection:
+        connection.execute(
+            "UPDATE boundaries SET name_local = '中国', parent_name_local = '肯尼亚' "
+            "WHERE id = 'cgaz:ADM1:NBO'"
+        )
+
+    second = client.get("/api/areas/cgaz:ADM1:NBO", headers={"If-None-Match": etag})
+
+    assert second.status_code == 200
+    assert second.headers["etag"] != etag
+    assert second.json()["name_local"] == "中国"
+    assert second.json()["parent_name_local"] == "肯尼亚"
+
+    third = client.get(
+        "/api/areas/cgaz:ADM1:NBO", headers={"If-None-Match": second.headers["etag"]}
+    )
+
+    assert third.status_code == 304
+    assert third.headers["etag"] == second.headers["etag"]
+
+
+def test_app_refuses_database_without_search_names(tmp_path):
+    path = str(tmp_path / "soe.db")
+    db.init(path)
+    with db.connect(path) as connection:
+        connection.executemany(
+            db.INSERT_BOUNDARY, [db._complete_row(boundary_row("x:1", "state", "One"))]
+        )
+
+    app = create_app(path, tmp_path / "scenes", make_registry(SyntheticSource()))
+
+    with pytest.raises(SystemExit, match="rebuild-search-names"):
+        asyncio.run(_run_lifespan(app))
+
+
+async def _run_lifespan(app: FastAPI) -> None:
+    """Drive the app lifespan once, so startup checks run without a server."""
+    async with app.router.lifespan_context(app):
+        pass
 
 
 def test_equal_length_reimport_gets_a_new_etag_and_fresh_outline(env):

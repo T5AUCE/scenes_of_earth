@@ -101,6 +101,9 @@ def create_app(
         if os.environ.get("SOE_SYNTHETIC") == "1":
             seed_sample_areas(db_path)
 
+        # A database from before search tokens existed cannot serve areas until migrated.
+        db.require_search_names(db_path)
+
         threading.Thread(target=_warm_latest_months, args=(registry,), daemon=True).start()
         yield
         jobs.shutdown()
@@ -256,6 +259,8 @@ def _area_out(row: db.Record) -> JsonObject:
         "kind": row["kind"],
         "iso3": row["iso3"],
         "parent_name": row["parent_name"],
+        "name_local": row["name_local"],
+        "parent_name_local": row["parent_name_local"],
         "bbox": [row["bbox_w"], row["bbox_s"], row["bbox_e"], row["bbox_n"]],
         "cells": row["cells"],
     }
@@ -337,8 +342,21 @@ def _geometry_cache_key(row: db.Record) -> GeometryKey:
 
 
 def _area_etag(row: db.Record) -> str:
-    """The area detail validator from the same cheap version as the preview key."""
-    return f'"{row["id"]}:{row["geom_digest"]}:{_bbox_of(row)}"'
+    """The area detail validator: an ASCII hash of the geometry version and name fields."""
+    versioned = json.dumps(
+        [
+            "area-detail-v1",
+            row["id"],
+            row["geom_digest"],
+            _bbox_of(row),
+            row["name"],
+            row["parent_name"],
+            row["name_local"],
+            row["parent_name_local"],
+        ],
+        ensure_ascii=True,
+    )
+    return f'"{db.geometry_digest(versioned)}"'
 
 
 def _bbox_of(row: db.Record) -> tuple[float, float, float, float]:
