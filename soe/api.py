@@ -62,7 +62,7 @@ _geometry_cache_lock = threading.Lock()
 GZIP_MINIMUM_SIZE_BYTES = 1000
 
 MAX_BODY_BYTES = 1_000_000
-LEVELS = ("country", "state", "county", "city")
+LEVELS = ("country", "state", "county", "city", "urban")
 MAX_SEARCH_LIMIT = 50
 
 DEFAULT_MAX_BUILDS = 1

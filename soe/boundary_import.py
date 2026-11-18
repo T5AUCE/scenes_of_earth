@@ -1,4 +1,4 @@
-"""Load geoBoundaries CGAZ shapes, GHSL UCDB cities, gbOpen kinds and Overture rows into SQLite."""
+"""Load geoBoundaries CGAZ shapes, GHSL UCDB urban areas, gbOpen kinds and Overture into SQLite."""
 
 import json
 import os
@@ -24,7 +24,8 @@ if TYPE_CHECKING:
 CGAZ_SOURCE = "geoBoundaries CGAZ"
 CGAZ_LEVELS = {0: "country", 1: "state", 2: "county"}
 UCDB_SOURCE = "GHSL UCDB R2024A"
-MIN_CITY_POP = 1_000_000
+UCDB_LEVEL = "urban"
+MIN_URBAN_POP = 1_000_000
 
 META_FILES = {"gbOpen-ADM1.json": "state", "gbOpen-ADM2.json": "county"}
 MAX_KIND_CHARS = 24
@@ -223,7 +224,7 @@ def _connectors_lowered(named: str) -> str:
 
 
 def import_ucdb(db_path: Path | str, path: Path | str) -> int:
-    """GHSL UCDB R2024A (GeoPackage or zip of one): urban centres with population >= 1,000,000.
+    """GHSL UCDB R2024A (GeoPackage or zip of one): urban areas with population >= 1,000,000.
 
     Column names are matched by substring (UCN_MAI name, POP_TOT, CNT_GAD country) because the
     exact R2024A names could not be checked offline. Returns the number of rows stored.
@@ -232,11 +233,11 @@ def import_ucdb(db_path: Path | str, path: Path | str) -> int:
     name_column = _latest_column(cities, "UCN_MAI")
     population_column = _latest_column(cities, "POP_TOT")
     country_column = _latest_column(cities, "CNT_GAD")
-    large_cities = cities[cities[population_column] >= MIN_CITY_POP]
+    large_cities = cities[cities[population_column] >= MIN_URBAN_POP]
     rows = (
         _row(
             f"ucdb:{index}",
-            level="city",
+            level=UCDB_LEVEL,
             name=city[name_column],
             parent=city[country_column],
             iso3=None,
@@ -247,6 +248,16 @@ def import_ucdb(db_path: Path | str, path: Path | str) -> int:
     )
 
     return _store(db_path, UCDB_SOURCE, "UCDB", rows)
+
+
+def relabel_ucdb_as_urban(db_path: Path | str) -> int:
+    """Move the UCDB rows stored as `city` before the urban level existed; returns the count."""
+    with db.connect(db_path) as connection:
+        cursor = connection.execute(
+            "UPDATE boundaries SET level = ? WHERE source = ? AND level = 'city'",
+            (UCDB_LEVEL, UCDB_SOURCE),
+        )
+        return cursor.rowcount
 
 
 def _read_ucdb(path: Path | str) -> "gpd.GeoDataFrame":
@@ -298,8 +309,12 @@ def store_overture(
     parts: list[PartRow],
     disputed_lines: list[DisputedRow],
     before_replace: Callable[[], None],
+    levels: tuple[str, ...] | None = None,
 ) -> Counter[str]:
     """Replace the boundaries of `source`, their parts and the disputed lines in one transaction.
+
+    With `levels`, only the rows of `source` at those levels are replaced, and the stored parts
+    and disputed lines stay as they are.
 
     Rows hold the 15 shared columns, the OVERTURE_COLUMNS values with an empty border_level, and
     the OpenStreetMap record id, and None rows are skipped. `before_replace` runs once the rows
@@ -318,7 +333,7 @@ def store_overture(
     try:
         stored = _stage_rows(staging_path, rows)
         before_replace()
-        _replace_from_staging(db_path, staging_path, source, parts, disputed_lines)
+        _replace_from_staging(db_path, staging_path, source, parts, disputed_lines, levels)
     finally:
         staging_path.unlink(missing_ok=True)
 
@@ -360,6 +375,7 @@ def _replace_from_staging(
     source: str,
     parts: list[PartRow],
     disputed_lines: list[DisputedRow],
+    levels: tuple[str, ...] | None,
 ) -> None:
     with db.connect(db_path) as connection:
         _add_overture_columns(connection)
@@ -372,9 +388,17 @@ def _replace_from_staging(
             "UPDATE staging.boundaries SET border_level = ("
             "SELECT admin_level FROM main.osm_levels WHERE record_id = osm_record_id)"
         )
-        connection.execute("DELETE FROM boundaries WHERE source = ?", (source,))
-        connection.execute("DELETE FROM boundary_parts")
-        connection.execute("DELETE FROM disputed_lines")
+        if levels:
+            marks = ", ".join("?" for _ in levels)
+            connection.execute(
+                f"DELETE FROM boundaries WHERE source = ? AND level IN ({marks})",  # noqa: S608 - only placeholders are joined in.
+                (source, *levels),
+            )
+        else:
+            connection.execute("DELETE FROM boundaries WHERE source = ?", (source,))
+            connection.execute("DELETE FROM boundary_parts")
+            connection.execute("DELETE FROM disputed_lines")
+
         connection.execute(
             f"INSERT OR REPLACE INTO boundaries ({ALL_COLUMNS}) "  # noqa: S608 - only module constants are joined in.
             f"SELECT {ALL_COLUMNS} FROM staging.boundaries"

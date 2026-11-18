@@ -1,12 +1,15 @@
-"""Load one Overture Maps divisions release into SQLite as boundary rows at four levels.
+"""Load one Overture Maps divisions release into SQLite as boundary rows at five levels.
 
 Countries and dependencies become `country`, regions `state`, counties `county`, and local
-administrative units `municipality`. A DuckDB fetch layer reads the release from S3, and the
-rest turns plain records into rows, so it runs without a network.
+administrative units `municipality`. Towns, cities, and large villages that are not municipalities
+become `city`, which a separate pass can replace without redoing the rest. A DuckDB fetch layer
+reads the release from S3, and the rest turns plain records into rows, so it runs without a
+network.
 """
 
 import http.client
 import json
+import math
 import re
 import threading
 import time
@@ -22,6 +25,7 @@ from typing import Protocol
 
 import shapely
 from shapely.errors import GEOSException
+from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
 
 from . import db
@@ -31,6 +35,7 @@ from .boundary_import import (
     PartRow,
     _add_overture_columns,
     _row,
+    relabel_ucdb_as_urban,
     store_overture,
 )
 from .country_codes import ALPHA3_BY_ALPHA2
@@ -45,6 +50,7 @@ DUCKDB_MEMORY_LIMIT = "6GB"
 AREA_FETCH_ROWS = 1000
 
 LEVEL_ORDER = ("country", "state", "county", "municipality")
+CITY_LEVEL = "city"
 LEVEL_BY_SUBTYPE = {
     "country": "country",
     "dependency": "country",
@@ -63,6 +69,14 @@ SIMPLIFY_TOLERANCE_DEG = 5e-5
 MIN_TILING_CHILDREN = 2
 MIN_TILING_AREA_RATIO = 0.9
 MAX_TILING_AREA_RATIO = 1.1
+
+# Villages this size serve as towns, so the city pass keeps them.
+CITY_LOCAL_TYPES = ("city", "town")
+VILLAGE_LOCAL_TYPE = "village"
+MIN_VILLAGE_POPULATION = 5_000
+MIN_CITY_AREA_KM2 = 1
+MAX_DUPLICATE_IOU = 0.9  # shared share of the union that makes a city a municipality's twin
+KM_PER_DEGREE = 111.32
 
 # One scene grid has one longitude window, and the country itself must fill most of the grid.
 COMBINED_MAX_WIDTH_DEG = 180
@@ -112,6 +126,7 @@ class Division:
     local_type: str | None
     record_id: str | None  # OpenStreetMap relation record from any source entry, such as r123@45
     credits: frozenset[Credit] = frozenset()
+    population: int | None = None
 
 
 @dataclass(frozen=True)
@@ -137,6 +152,10 @@ class DivisionSource(Protocol):
     """Where divisions come from; the DuckDB source reads a release and tests build their own."""
 
     def divisions(self) -> list[Division]: ...
+
+    def cities(self) -> list[Division]: ...
+
+    def divisions_by_id(self, ids: list[str]) -> list[Division]: ...
 
     def areas(self, country: str, subtypes: tuple[str, ...]) -> Iterator[DivisionArea]: ...
 
@@ -175,7 +194,131 @@ def import_overture(
             "<release>"
         )
 
+    cities = _replace_cities(db_path, source, catalog, _stored_division_ids(db_path), fetch_levels)
+    if cities:
+        stored[CITY_LEVEL] = sum(cities.values())
+
     return stored
+
+
+def import_overture_cities(
+    db_path: Path | str,
+    source: DivisionSource,
+    fetch_levels: Callable[[list[int]], dict[int, int | None]] | None = None,
+) -> Counter[str]:
+    """Replace the Overture city rows, leaving every other level as it is.
+
+    A city is a locality of any record type that is a city or town, or a village of at least
+    MIN_VILLAGE_POPULATION people. It is left out when it is already stored as a municipality,
+    when it covers the same place as one, or when it is under MIN_CITY_AREA_KM2. The admin levels of
+    the relations are fetched before any geometry, so a failed fetch costs little. Moves the UCDB
+    rows from `city` to `urban` first. Returns the rows stored per country and prints a summary.
+    """
+    stored_ids = _stored_division_ids(db_path)
+    if not stored_ids:
+        raise SystemExit("Import the Overture divisions with --overture before the cities")
+
+    catalog = Catalog(source.divisions())
+    return _replace_cities(db_path, source, catalog, stored_ids, fetch_levels)
+
+
+def _replace_cities(
+    db_path: Path | str,
+    source: DivisionSource,
+    catalog: "Catalog",
+    stored_ids: set[str],
+    fetch_levels: Callable[[list[int]], dict[int, int | None]] | None,
+) -> Counter[str]:
+    relabel_ucdb_as_urban(db_path)
+    candidates = source.cities()
+    catalog = catalog.with_ancestors(_missing_ancestors(source, catalog, candidates))
+    cities = [
+        city
+        for city in candidates
+        if is_city(city) and city.country and catalog.row_id(city) not in stored_ids
+    ]
+    record_ids = [city.record_id for city in cities if city.record_id]
+    cached_admin_levels(db_path, record_ids, fetch_levels or _fetch_overpass_levels)
+
+    builder = _CityRows(source, catalog, db_path, stored_ids)
+    store_overture(
+        db_path, OVERTURE_SOURCE, builder.rows(cities), [], [], lambda: None, levels=(CITY_LEVEL,)
+    )
+    print(builder.summary())
+
+    return builder.per_country
+
+
+def _missing_ancestors(
+    source: DivisionSource, catalog: "Catalog", candidates: list[Division]
+) -> list[Division]:
+    """The ancestors of the candidates that the catalog lacks, following parent links.
+
+    The divisions feed only holds relation localities, so a city under a way-sourced locality
+    would otherwise lose its parent and state. Each missing id is requested at most once, even
+    when the source never returns it, so an absent ancestor ends the walk instead of the import.
+    """
+    found: dict[str, Division] = {}
+    requested: set[str] = set()
+    while wanted := _parents_to_fetch(catalog, candidates, found, requested):
+        requested.update(wanted)
+        for division in source.divisions_by_id(sorted(wanted)):
+            if not catalog.has(division.id):
+                found.setdefault(division.id, division)
+
+    return list(found.values())
+
+
+def _parents_to_fetch(
+    catalog: "Catalog", candidates: list[Division], found: dict[str, Division], requested: set[str]
+) -> set[str]:
+    """Parent ids along the candidates' chains that are neither known nor already requested.
+
+    Each chain is followed through the catalog and the fetched entries until it ends, reaches
+    an id the source never returned, or meets a parent that is still unfetched.
+    """
+    missing: set[str] = set()
+    for candidate in candidates:
+        current: Division | None = candidate
+        seen = {candidate.id}
+        while current is not None and current.parent_id and current.parent_id not in seen:
+            seen.add(current.parent_id)
+            parent_id = current.parent_id
+            if catalog.has(parent_id):
+                current = catalog.parent(current)
+            elif parent_id in found:
+                current = found[parent_id]
+            else:
+                if parent_id not in requested:
+                    missing.add(parent_id)
+
+                break
+
+    return missing
+
+
+def is_city(division: Division) -> bool:
+    """Whether a locality is a city, a town, or a village big enough to count as one."""
+    if division.subtype != "locality":
+        return False
+    if division.local_type in CITY_LOCAL_TYPES:
+        return True
+
+    return division.local_type == VILLAGE_LOCAL_TYPE and (
+        (division.population or 0) >= MIN_VILLAGE_POPULATION
+    )
+
+
+def _stored_division_ids(db_path: Path | str) -> set[str]:
+    """Ids of the stored Overture rows above the city level, which a city must not repeat."""
+    with db.connect(db_path) as connection:
+        return {
+            row["id"]
+            for row in connection.execute(
+                "SELECT id FROM boundaries WHERE source = ? AND level != ?",
+                (OVERTURE_SOURCE, CITY_LEVEL),
+            )
+        }
 
 
 def update_overture_levels(
@@ -427,6 +570,13 @@ class Catalog:
 
         return None
 
+    def with_ancestors(self, divisions: list[Division]) -> "Catalog":
+        """A catalog that also holds these divisions, such as a city's missing ancestors."""
+        if not divisions:
+            return self
+
+        return Catalog([*self._by_id.values(), *divisions])
+
     def country_codes(self) -> list[str]:
         """Alpha-2 codes that have at least one division to import, in order."""
         return sorted({code for code, _ in self._by_country_level})
@@ -477,6 +627,10 @@ class Catalog:
 
     def parent(self, division: Division) -> Division | None:
         return self._by_id.get(division.parent_id or "")
+
+    def has(self, division_id: str) -> bool:
+        """Whether the catalog holds the division with this id."""
+        return division_id in self._by_id
 
     def state(self, division: Division) -> Division | None:
         """The nearest region above `division`."""
@@ -568,7 +722,17 @@ class _RowBuilder:
             if division.id in self._part_ids:
                 self._parts[division.id] = _Part(geometry, area.is_maritime, credits)
 
-            yield self._overture_row(division, level, geometry, area, credits)
+            yield _overture_row(
+                self._catalog,
+                division,
+                level,
+                geometry,
+                area,
+                credits,
+                parent=self._catalog.parent(division),
+                kind=self._catalog.kind(division),
+                aliases=sorted(set(division.common_names.values())),
+            )
 
     def _load_areas(
         self, code: str, divisions: list[Division], land_areas: dict[str, float]
@@ -601,44 +765,6 @@ class _RowBuilder:
             )
 
         return kept
-
-    def _overture_row(
-        self,
-        division: Division,
-        level: str,
-        geometry: BaseGeometry,
-        area: DivisionArea,
-        credits: frozenset[Credit],
-    ) -> db.BoundaryValues | None:
-        catalog = self._catalog
-        parent = catalog.parent(division)
-        state = catalog.state(division)
-        row = _row(
-            catalog.row_id(division),
-            level=level,
-            name=catalog.name(division),
-            parent=catalog.name(parent) if parent else "",
-            iso3=ALPHA3_BY_ALPHA2.get(division.country),
-            geometry=geometry,
-            source=OVERTURE_SOURCE,
-            licence=_licence_text(credits),
-        )
-        if row is None:
-            return None
-
-        return (
-            *row,
-            division.primary_name,
-            parent.primary_name if parent else None,
-            catalog.name(state) if state else None,
-            catalog.kind(division),
-            int(area.is_maritime),
-            None,
-            json.dumps(sorted(set(division.common_names.values())), ensure_ascii=False),
-            _contributors_text(credits),
-            0,
-            division.record_id,
-        )
 
     def _combined_rows(self) -> Iterator[db.BoundaryValues | None]:
         """One merged area for each country whose dependencies sit close to it."""
@@ -691,6 +817,164 @@ class _RowBuilder:
             0,
             sovereign.record_id,
         )
+
+
+class _CityRows:
+    """Builds the city rows country by country, counting the localities it leaves out."""
+
+    def __init__(
+        self, source: DivisionSource, catalog: Catalog, db_path: Path | str, stored_ids: set[str]
+    ) -> None:
+        self.per_country: Counter[str] = Counter()
+        self._source = source
+        self._catalog = catalog
+        self._db_path = db_path
+        self._stored_ids = stored_ids
+        self._too_small = 0
+        self._duplicates = 0
+
+    def rows(self, cities: list[Division]) -> Iterator[db.BoundaryValues | None]:
+        by_country: defaultdict[str, list[Division]] = defaultdict(list)
+        for city in cities:
+            by_country[city.country].append(city)
+
+        for code in sorted(by_country):
+            yield from self._country_rows(code, {city.id: city for city in by_country[code]})
+
+    def summary(self) -> str:
+        countries = ", ".join(f"{code} {count:,}" for code, count in self.per_country.most_common())
+        return (
+            f"Cities per country: {countries or 'none'}\n"
+            f"Left out: {self._too_small:,} under {MIN_CITY_AREA_KM2} km2, "
+            f"{self._duplicates:,} repeating a municipality"
+        )
+
+    def _country_rows(
+        self, code: str, cities: dict[str, Division]
+    ) -> Iterator[db.BoundaryValues | None]:
+        municipalities = self._stored_municipalities(code)
+        for area in self._source.areas(code, ("locality",)):
+            city = cities.get(area.division_id)
+            if city is None:
+                continue
+
+            geometry = area.geometry.simplify(SIMPLIFY_TOLERANCE_DEG)
+            if _area_km2(geometry) < MIN_CITY_AREA_KM2:
+                self._too_small += 1
+                continue
+
+            if _repeats_a_shape(geometry, municipalities):
+                self._duplicates += 1
+                continue
+
+            row = self._city_row(city, geometry, area)
+            if row is not None:
+                self.per_country[code] += 1
+
+            yield row
+
+    def _stored_municipalities(self, code: str) -> shapely.STRtree:
+        iso3 = ALPHA3_BY_ALPHA2.get(code)
+        with db.connect(self._db_path) as connection:
+            texts = connection.execute(
+                "SELECT geom_geojson FROM boundaries WHERE source = ? AND level = 'municipality' "
+                "AND iso3 = ?",
+                (OVERTURE_SOURCE, iso3),
+            )
+            return shapely.STRtree([shape(json.loads(text[0])) for text in texts])
+
+    def _city_row(
+        self, city: Division, geometry: BaseGeometry, area: DivisionArea
+    ) -> db.BoundaryValues | None:
+        names = {city.primary_name, city.common_names.get("en")}
+        return _overture_row(
+            self._catalog,
+            city,
+            CITY_LEVEL,
+            geometry,
+            area,
+            city.credits | area.credits,
+            parent=self._parent(city),
+            kind=(city.local_type or "").capitalize() or None,
+            aliases=sorted(name for name in names if name),
+            state_fallback=True,
+        )
+
+    def _parent(self, city: Division) -> Division | None:
+        """The nearest stored division above the city, skipping one that only repeats its name."""
+        name = self._catalog.name(city).casefold()
+        ancestor = self._catalog.parent(city)
+        while ancestor is not None:
+            stored = self._catalog.row_id(ancestor) in self._stored_ids
+            if stored and self._catalog.name(ancestor).casefold() != name:
+                return ancestor
+
+            ancestor = self._catalog.parent(ancestor)
+
+        return None
+
+
+def _overture_row(
+    catalog: Catalog,
+    division: Division,
+    level: str,
+    geometry: BaseGeometry,
+    area: DivisionArea,
+    credits: frozenset[Credit],
+    parent: Division | None,
+    kind: str | None,
+    aliases: list[str],
+    state_fallback: bool = False,
+) -> db.BoundaryValues | None:
+    state = catalog.state(division)
+    state_name = catalog.name(state) if state else None
+    if state_name is None and state_fallback:
+        state_name = division.region_code
+    row = _row(
+        catalog.row_id(division),
+        level=level,
+        name=catalog.name(division),
+        parent=catalog.name(parent) if parent else "",
+        iso3=ALPHA3_BY_ALPHA2.get(division.country),
+        geometry=geometry,
+        source=OVERTURE_SOURCE,
+        licence=_licence_text(credits),
+    )
+    if row is None:
+        return None
+
+    return (
+        *row,
+        division.primary_name,
+        parent.primary_name if parent else None,
+        state_name,
+        kind,
+        int(area.is_maritime),
+        None,
+        json.dumps(aliases, ensure_ascii=False),
+        _contributors_text(credits),
+        0,
+        division.record_id,
+    )
+
+
+def _area_km2(geometry: BaseGeometry) -> float:
+    """The area in square kilometres, scaling the degrees by the latitude of the shape."""
+    return geometry.area * KM_PER_DEGREE**2 * math.cos(math.radians(geometry.centroid.y))
+
+
+def _repeats_a_shape(geometry: BaseGeometry, shapes: shapely.STRtree) -> bool:
+    """Whether a stored shape covers about the same place, by intersection over union."""
+    try:
+        for other in shapes.geometries.take(shapes.query(geometry, predicate="intersects")):
+            union_area = geometry.union(other).area
+            if union_area and geometry.intersection(other).area / union_area >= MAX_DUPLICATE_IOU:
+                return True
+    except GEOSException:
+        # A shape GEOS cannot intersect is kept rather than ending a long import.
+        return False
+
+    return False
 
 
 def tiling_municipalities(
@@ -1067,6 +1351,43 @@ class DuckDbSource:
         )
         return [
             Division(*record[:6], dict(record[6] or {}), *record[7:9], _credits(record[9]))
+            for record in cursor.fetchall()
+        ]
+
+    def cities(self) -> list[Division]:
+        """Localities of any record type that may be cities, with the population for villages.
+
+        The query only narrows the rows; `is_city` decides.
+        """
+        cursor = self._connection.execute(
+            "SELECT id, country, subtype, parent_division_id, region, names.primary, "  # noqa: S608 - only module constants are joined in.
+            f"names.common, local_type['en'], {OSM_RELATIONS}[1].record_id, {CREDITS}, population "
+            "FROM division WHERE subtype = 'locality' AND (list_contains(?, local_type['en']) "
+            "OR (local_type['en'] = ? AND population >= ?))",
+            [list(CITY_LOCAL_TYPES), VILLAGE_LOCAL_TYPE, MIN_VILLAGE_POPULATION],
+        )
+        return [
+            Division(
+                *record[:6], dict(record[6] or {}), *record[7:9], _credits(record[9]), record[10]
+            )
+            for record in cursor.fetchall()
+        ]
+
+    def divisions_by_id(self, ids: list[str]) -> list[Division]:
+        """The division rows for these ids, of any subtype; unknown ids are skipped."""
+        if not ids:
+            return []
+
+        cursor = self._connection.execute(
+            "SELECT id, country, subtype, parent_division_id, region, names.primary, "  # noqa: S608 - only module constants are joined in.
+            f"names.common, local_type['en'], {OSM_RELATIONS}[1].record_id, {CREDITS}, population "
+            "FROM division WHERE list_contains(?, id)",
+            [ids],
+        )
+        return [
+            Division(
+                *record[:6], dict(record[6] or {}), *record[7:9], _credits(record[9]), record[10]
+            )
             for record in cursor.fetchall()
         ]
 

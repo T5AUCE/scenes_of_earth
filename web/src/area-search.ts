@@ -24,6 +24,7 @@ const AREA_LEVELS = [
   { value: "state", label: "ADM1" },
   { value: "county", label: "ADM2" },
   { value: "city", label: "City" },
+  { value: "urban", label: "Urban area" },
 ];
 // Results name the official admin level rather than each country's local word for it.
 const LEVEL_LABELS = new Map([
@@ -31,6 +32,7 @@ const LEVEL_LABELS = new Map([
   ["state", "ADM1"],
   ["county", "ADM2"],
   ["city", "City"],
+  ["urban", "Urban area"],
 ]);
 
 /** The existing combobox and selected-area label owned by one search interaction. */

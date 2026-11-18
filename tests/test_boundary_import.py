@@ -167,7 +167,7 @@ def test_import_boundaries_tiny_geopackage(tmp_path):
     assert county_row["parent_name"] == "West State" and county_row["iso3"] == "TST"
 
     assert db.search(path, "t")[0]["level"] == "country"
-    assert db.search(path, "big")[0]["level"] == "city"
+    assert db.search(path, "big")[0]["level"] == "urban"
     assert db.get_boundary(path, "ucdb:0")["licence"] == "CC BY 4.0"
 
     assert db.get_boundary(path, "cgaz:ADM0:TST")["name"] == "Testland"

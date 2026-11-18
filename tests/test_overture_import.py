@@ -6,6 +6,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -15,6 +16,7 @@ from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
 
 from soe import cli, db, overture_import
+from soe.boundary_import import UCDB_SOURCE
 from soe.overture_import import (
     Catalog,
     Credit,
@@ -23,6 +25,8 @@ from soe.overture_import import (
     DivisionArea,
     cached_admin_levels,
     import_overture,
+    import_overture_cities,
+    is_city,
     is_compact,
     open_release,
     parse_overpass_levels,
@@ -43,7 +47,7 @@ def division(
     parent_id: str | None = None,
     name: str | None = None,
     english: str | None = None,
-    **fields: str | frozenset[Credit] | None,
+    **fields: str | int | frozenset[Credit] | None,
 ) -> Division:
     return Division(
         id=division_id,
@@ -56,6 +60,7 @@ def division(
         local_type=fields.get("local_type"),
         record_id=fields.get("record_id"),
         credits=fields.get("credits", frozenset()),
+        population=fields.get("population"),
     )
 
 
@@ -70,16 +75,29 @@ def sea(division_id: str, geometry: BaseGeometry) -> DivisionArea:
 
 
 class FakeSource:
-    def __init__(self, divisions: list[Division], areas: list[DivisionArea]) -> None:
+    def __init__(
+        self,
+        divisions: list[Division],
+        areas: list[DivisionArea],
+        cities: list[Division] | None = None,
+    ) -> None:
         self._divisions = divisions
         self._areas = areas
+        self._cities = cities or []
         self.disputed = []
 
     def divisions(self) -> list[Division]:
         return self._divisions
 
+    def cities(self) -> list[Division]:
+        return self._cities
+
+    def divisions_by_id(self, ids: list[str]) -> list[Division]:
+        wanted = set(ids)
+        return [item for item in [*self._divisions, *self._cities] if item.id in wanted]
+
     def areas(self, country: str, subtypes: tuple[str, ...]) -> Iterator[DivisionArea]:
-        owners = {item.id: item for item in self._divisions}
+        owners = {item.id: item for item in [*self._divisions, *self._cities]}
         for area in self._areas:
             owner = owners[area.division_id]
             if owner.country == country and owner.subtype in subtypes:
@@ -1048,3 +1066,243 @@ def test_mixed_states_share_one_fetch_batch(tmp_path, capsys):
 
     assert [len(batch) for batch in batches] == [10, 10, 30]
     assert "Fetching 30 relations for 2 mixed states" in capsys.readouterr().out
+
+
+def test_city_pass_replaces_only_city_rows(tmp_path):
+    first = italy([city_division("old")], [land("old", box(2, 0, 3, 1))])
+    first.disputed = [DisputedLine("line-1", "region", box(0, 0, 1, 2).exterior)]
+    path = run_import(tmp_path, first)
+    db.add_boundaries(path, "other", [boundary_row("old:1", "state", "Old", source="other")])
+    assert city_ids(path) == ["ovt:old"]
+
+    run_cities(path, italy([city_division("new")], [land("new", box(2, 0, 3, 1))]))
+
+    assert city_ids(path) == ["ovt:new"]
+    assert stored(path, "ovt:west")["level"] == "municipality"
+    assert db.get_boundary(path, "old:1") is not None
+    with db.connect(path) as connection:
+        assert connection.execute("SELECT count(*) FROM boundary_parts").fetchone()[0] == 2
+        assert connection.execute("SELECT count(*) FROM disputed_lines").fetchone()[0] == 1
+
+
+def test_locality_kept_as_municipality_is_not_a_city(tmp_path):
+    towns = [
+        division(
+            f"town-{name}", "IT", "locality", "lazio", local_type="town", record_id=f"r{index}@1"
+        )
+        for index, name in enumerate(("a", "b"), start=1)
+    ]
+    source = FakeSource(
+        [division("it", "IT", "country"), division("lazio", "IT", "region", "it"), *towns],
+        [
+            land("it", box(0, 0, 4, 2)),
+            land("lazio", box(0, 0, 2, 1)),
+            land("town-a", box(0, 0, 1, 1)),
+            land("town-b", box(1, 0, 2, 1)),
+        ],
+        towns,
+    )
+
+    path = run_import(tmp_path, source)
+
+    assert stored(path, "ovt:town-a")["level"] == "municipality"
+    assert city_ids(path) == []
+
+
+def test_city_parent_skips_same_name_parent(tmp_path):
+    source = italy(
+        [city_division("city", "town", "west", english="Lörrach")],
+        [land("city", box(0.1, 0.1, 0.4, 0.4))],
+        west_name="Lörrach",
+    )
+
+    path = run_import(tmp_path, source)
+
+    city = stored(path, "ovt:city")
+    assert city["level"] == "city"
+    assert city["parent_name"] == "Lazio"
+    assert city["state_name"] == "Lazio"
+    assert city["kind"] == "Town"
+
+
+def test_city_under_a_way_sourced_locality_keeps_its_parent_and_state(tmp_path):
+    parent = division("borgo", "IT", "locality", "lazio", local_type="hamlet")
+    city = city_division("city", parent_id="borgo")
+    source = italy([city, parent], [land("city", box(2, 0, 3, 1))])
+
+    path = run_import(tmp_path, source)
+
+    row = stored(path, "ovt:city")
+    assert row["parent_name"] == "Lazio"
+    assert row["state_name"] == "Lazio"
+
+
+def test_city_without_a_stored_region_falls_back_to_its_region_code(tmp_path):
+    city = city_division("city", parent_id="nowhere", region_code="IT-RM")
+    source = italy([city], [land("city", box(2, 0, 3, 1))])
+
+    path = run_import(tmp_path, source)
+
+    assert stored(path, "ovt:city")["state_name"] == "IT-RM"
+
+
+def test_city_with_an_absent_grandparent_uses_its_region_code(tmp_path):
+    parent = division("borgo", "IT", "locality", "nowhere", local_type="hamlet", record_id="w3@1")
+    city = city_division("city", parent_id="borgo", region_code="IT-RM")
+    source = italy([city, parent], [land("city", box(2, 0, 3, 1))])
+
+    path = run_import(tmp_path, source)
+
+    assert stored(path, "ovt:city")["state_name"] == "IT-RM"
+
+
+def test_city_below_a_cataloged_locality_reaches_past_a_way_sourced_gap(tmp_path):
+    known = division("rel", "IT", "locality", "via", local_type="town", record_id="r9@1")
+    gap = division("via", "IT", "locality", "lazio", local_type="hamlet", record_id="w3@1")
+    city = city_division("city", parent_id="rel")
+    source = FakeSource(
+        [
+            division("it", "IT", "country"),
+            division("lazio", "IT", "region", "it", english="Lazio"),
+            known,
+        ],
+        [
+            land("it", box(0, 0, 4, 2)),
+            land("lazio", box(0, 0, 2, 1)),
+            land("city", box(2, 0, 3, 1)),
+        ],
+        [city, gap],
+    )
+
+    path = run_import(tmp_path, source)
+
+    row = stored(path, "ovt:city")
+    assert row["parent_name"] == "Lazio"
+    assert row["state_name"] == "Lazio"
+
+
+def test_village_and_hamlet_localities_are_not_cities():
+    assert not is_city(city_division("hamlet", "hamlet", population=90_000))
+    assert not is_city(city_division("small", "village", population=4_999))
+    assert not is_city(city_division("unknown", "village"))
+    assert not is_city(division("county", "IT", "county", local_type="city"))
+
+
+def test_village_of_5000_people_is_a_city(tmp_path):
+    big = city_division("big", "village", population=5_000)
+    small = city_division("small", "village", population=4_999)
+    areas = [land("big", box(2, 0, 3, 1)), land("small", box(3, 0, 4, 1))]
+    source = italy([big, small], areas)
+
+    path = run_import(tmp_path, source)
+
+    assert city_ids(path) == ["ovt:big"]
+    assert stored(path, "ovt:big")["kind"] == "Village"
+
+
+def test_city_covering_a_municipality_is_left_out(tmp_path, capsys):
+    twin = city_division("twin")
+    near_twin = city_division("near-twin")
+    overlap = city_division("overlap")
+    areas = [
+        land("twin", box(0, 0, 1, 1)),
+        land("near-twin", box(0, 0, 1, 0.95)),
+        land("overlap", box(0, 0, 0.5, 0.5)),
+    ]
+
+    path = run_import(tmp_path, italy([twin, near_twin, overlap], areas))
+
+    assert city_ids(path) == ["ovt:overlap"]
+    assert "2 repeating a municipality" in capsys.readouterr().out
+
+
+def test_city_under_one_square_kilometre_is_left_out(tmp_path, capsys):
+    tiny = city_division("tiny")
+    areas = [land("tiny", box(2, 0, 2.005, 0.005))]
+
+    path = run_import(tmp_path, italy([tiny], areas))
+
+    assert city_ids(path) == []
+    assert "1 under 1 km2" in capsys.readouterr().out
+
+
+def test_city_takes_the_admin_level_of_its_relation(tmp_path):
+    relation = city_division("relation", record_id="r7@3")
+    way = city_division("way")
+    areas = [land("relation", box(2, 0, 3, 1)), land("way", box(3, 0, 4, 1))]
+    path = run_import(tmp_path, italy([], []))
+
+    import_overture_cities(path, italy([relation, way], areas), lambda ids: dict.fromkeys(ids, 8))
+
+    assert stored(path, "ovt:relation")["border_level"] == 8
+    assert stored(path, "ovt:way")["border_level"] is None
+
+
+def test_city_names_for_search_are_the_primary_and_english_names(tmp_path):
+    city = city_division("city", name="北京", english="Beijing")
+
+    path = run_import(tmp_path, italy([city], [land("city", box(2, 0, 3, 1))]))
+
+    row = stored(path, "ovt:city")
+    assert row["name"] == "Beijing"
+    assert row["name_local"] == "北京"
+    assert json.loads(row["aliases"]) == ["Beijing", "北京"]
+
+
+def test_city_pass_before_the_divisions_import_exits(tmp_path):
+    path = str(tmp_path / "soe.db")
+    db.init(path)
+
+    with pytest.raises(SystemExit, match="before the cities"):
+        run_cities(path, italy([city_division("city")], [land("city", box(2, 0, 3, 1))]))
+
+
+def test_city_pass_moves_ucdb_urban_centres_to_the_urban_level(tmp_path):
+    path = run_import(tmp_path, italy([], []))
+    db.add_boundaries(
+        path, UCDB_SOURCE, [boundary_row("ucdb:1", "city", "Paris", source=UCDB_SOURCE)]
+    )
+
+    run_cities(path, italy([], []))
+
+    assert db.get_boundary(path, "ucdb:1")["level"] == "urban"
+    assert db.search(path, "Paris", "urban")[0]["id"] == "ucdb:1"
+    assert db.search(path, "Paris", "city") == []
+
+
+def italy(cities: list[Division], areas: list[DivisionArea], west_name: str = "West") -> FakeSource:
+    """A region tiled by two municipalities at 0-2 E, with room for cities to the east of them."""
+    return FakeSource(
+        [
+            division("it", "IT", "country"),
+            division("sm", "SM", "dependency", "it"),
+            division("lazio", "IT", "region", "it", english="Lazio"),
+            division("west", "IT", "localadmin", "lazio", english=west_name),
+            division("east", "IT", "localadmin", "lazio", english="East"),
+        ],
+        [
+            land("it", box(0, 0, 4, 2)),
+            land("sm", box(10, 10, 11, 11)),
+            land("lazio", box(0, 0, 2, 1)),
+            land("west", box(0, 0, 1, 1)),
+            land("east", box(1, 0, 2, 1)),
+            *areas,
+        ],
+        cities,
+    )
+
+
+def city_division(
+    city_id: str, local_type: str = "city", parent_id: str = "lazio", **fields: str | int | None
+) -> Division:
+    return division(city_id, "IT", "locality", parent_id, local_type=local_type, **fields)
+
+
+def run_cities(path: str, source: FakeSource) -> Counter[str]:
+    return import_overture_cities(path, source, no_levels)
+
+
+def city_ids(path: str) -> list[str]:
+    with db.connect(path) as connection:
+        rows = connection.execute("SELECT id FROM boundaries WHERE level = 'city' ORDER BY id")
+        return [row["id"] for row in rows]

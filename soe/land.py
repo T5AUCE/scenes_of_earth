@@ -579,7 +579,7 @@ def clip_area_to_land(db_path: Path | str, store: Path | str, area: Area) -> Are
     if _too_wide(frame):
         return area
 
-    neighbours = _neighbours(db_path, area, frame)
+    neighbours = [] if _plain_cut(area) else _neighbours(db_path, area, frame)
     revision = _neighbour_revision(neighbours)
     digest = _clip_digest(area, frame, revision)
     stored = db.get_land_clip(db_path, digest, version, CLIP_METHOD_VERSION)
@@ -656,6 +656,18 @@ def _neighbour_revision(neighbours: list[Neighbour]) -> str:
     return hashlib.sha256("\n".join(lines).encode()).hexdigest()[:REVISION_CHARS]
 
 
+def _plain_cut(area: Area) -> bool:
+    """Whether the area is cut to land without neighbours and without growth.
+
+    Cities can overlap, so no same-level neighbour may cut their outline. Drawn shapes have
+    no neighbours at all.
+    """
+    if not area.named:
+        return True
+
+    return area.boundary.get("level") == "city"
+
+
 def _clip_area(
     db_path: Path | str,
     store: Path | str,
@@ -663,7 +675,7 @@ def _clip_area(
     frame: BaseGeometry,
     neighbours: list[Neighbour],
 ) -> LandClip:
-    if not area.named:
+    if _plain_cut(area):
         return clip_to_land(store, frame, [], grow_deg=0)
 
     return clip_to_land(store, frame, _neighbour_shapes(db_path, neighbours))

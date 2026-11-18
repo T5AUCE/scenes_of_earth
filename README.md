@@ -2,7 +2,7 @@
 
 <img src="https://github.com/T5AUCE/scenes_of_earth/blob/main/docs/sample_kenya_new.png" alt="Example Image of Kenya With Custom Temperature Colors" width="1100" height="600">
 
-Scenes of Earth is an open-source web application for exploring and sharing climate and geographic data through special interactive maps known as **scenes**, that serve as highly configurable sandboxes for environmental datasets. Users can choose to select a country, state, county, major city, or draw their own region, then explore layers such as rainfall, temperature, terrain, and land cover (more to be added later) using editable layers and a time slider.
+Scenes of Earth is an open-source web application for exploring and sharing climate and geographic data through special interactive maps known as **scenes**, that serve as highly configurable sandboxes for environmental datasets. Users can choose to select a country, state, county, city, or urban area, or draw their own region, then explore layers such as rainfall, temperature, terrain, and land cover (more to be added later) using editable layers and a time slider.
 
 Each saved scene combines a region, selected datasets, and a date range. Shareable URLs identify the scene and encode its viewing settings, allowing others to open and explore the same view. The aim is to support scientific communication by making environmental data easier to explore and discuss, while also attempting to promote interest and outreach simply through the innate visual beauty that it offers.
 
@@ -87,8 +87,8 @@ python -m soe.cli import-boundaries --cgaz <folder> --ucdb <GHS_UCDB file or zip
 - geoBoundaries CGAZ (ADM0, ADM1, ADM2 GeoPackages): https://www.geoboundaries.org/globalDownloads.html
   (files are in https://github.com/wmgeolab/geoBoundaries/tree/main/releaseData/CGAZ; use the media.githubusercontent.com
   links, the raw links return Git LFS pointers).
-- GHS-UCDB R2024A: https://human-settlement.emergency.copernicus.eu/ghs_ucdb_2024.php (only cities of 1,000,000 or
-  more people are imported).
+- GHS-UCDB R2024A: https://human-settlement.emergency.copernicus.eu/ghs_ucdb_2024.php (only urban areas of 1,000,000 or
+  more people are imported, stored at the Urban area level).
 - geoBoundaries gbOpen level metadata (each country's own ADM1/ADM2 type names, shown in area search):
   https://www.geoboundaries.org/api/current/gbOpen/ALL/ADM1/ and
   https://www.geoboundaries.org/api/current/gbOpen/ALL/ADM2/ (save each response as
@@ -99,7 +99,7 @@ python -m soe.cli import-boundaries --cgaz <folder> --ucdb <GHS_UCDB file or zip
 
 The import is large (several hundred MB of input, about a gigabyte in SQLite). CGAZ draws disputed borders to US State Department definitions.
 Search shows each country's own name for its levels (County, Canton) where the metadata
-names one, else the generic level; countries and cities always show the generic level.
+names one, else the generic level; countries, cities, and urban areas always show the generic level.
 The stored outlines keep every CGAZ vertex, and each row also stores its display preview, so a
 first pick serves the small preview without reading the full geometry; search never reads the
 geometry column and stays fast. Each row also stores a short revision of its geometry text,
@@ -108,6 +108,14 @@ Boundaries imported before previews existed get them with
 `python -m soe.cli backfill-area-previews --db <soe.db>`, which fills missing digests and
 previews in batches with progress; an area without a stored preview still serves, computing
 and storing it on its first request.
+
+Overture divisions come from `python -m soe.cli import-boundaries --overture <release>`, which stores
+countries, states, counties, and municipalities. Run
+`python -m soe.cli import-boundaries --overture-cities <release>` afterwards to replace the stored
+city rows. A city is a locality whose local type is city or town, or a village of at least 5,000
+people. Localities already stored as municipalities, near-duplicates of one, and shapes under
+1 km² are left out. The same pass moves existing UCDB rows from City to the Urban area level once,
+so the two sources never share a level.
 
 ## Import land (once)
 

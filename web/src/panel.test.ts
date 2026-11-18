@@ -45,6 +45,7 @@ for (const { level, label } of [
   { level: "county", label: "ADM2" },
   { level: "country", label: "ADM0" },
   { level: "city", label: "City" },
+  { level: "urban", label: "Urban area" },
 ]) {
   test(`search results use the ${level} label`, async (context) => {
     const root = await panelWithHits(context, [areaHit({ level })]);
@@ -80,6 +81,7 @@ test("the level dropdown shows official admin levels and preserves API values", 
       ["state", "ADM1"],
       ["county", "ADM2"],
       ["city", "City"],
+      ["urban", "Urban area"],
     ],
   );
 });

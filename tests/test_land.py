@@ -648,6 +648,25 @@ def test_named_area_leaves_the_land_of_a_same_level_neighbour(tmp_path):
     assert clipped.geom.area == pytest.approx(NEIGHBOUR_EDGE_DEG)
 
 
+def test_city_area_keeps_the_land_another_city_holds(tmp_path):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    west, east = box(0, 0, 1, 1), box(0.6, 0, 1.6, 1)
+    rows = [
+        boundary_row(
+            f"ovt:{name}", "city", name, bbox=part.bounds, geometry=json.dumps(mapping(part))
+        )
+        for name, part in (("WEST", west), ("EAST", east))
+    ]
+    db.add_boundaries(db_path, "Overture Maps divisions", rows)
+    store = store_of(tmp_path, box(0, 0, 1.6, 1))
+
+    clipped = clip_area_to_land(db_path, store, Area(east, db.get_boundary(db_path, "ovt:EAST")))
+
+    assert clipped.geom.area == pytest.approx(1)
+    assert clipped.display.intersection(west).area > 0.3
+
+
 def add_boundaries(db_path, parts):
     rows = [
         boundary_row(

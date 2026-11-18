@@ -1,7 +1,7 @@
 """Run the offline data jobs from the command line.
 
-The module imports country and city boundaries into SQLite, with each country's own names
-for its administrative levels. It also backfills the stored display previews and geometry
+The module imports country, city, and urban area boundaries into SQLite, with each country's own
+names for its administrative levels. It also backfills the stored display previews and geometry
 digests of boundaries imported before them. It imports the OpenStreetMap land polygons that
 areas are cut to. It rebuilds the Copernicus terrain
 tile indexes and the ESA WorldCover tile index. It also ingests ERA5-Land, ERA5 and CHIRPS
@@ -30,7 +30,12 @@ from .ingest.geology_age import ingest_geology_age
 from .ingest.geology_regional import SOURCE_IDS, ingest_geology_regional
 from .ingest.lithology import ingest_lithology
 from .land import import_land, store_path
-from .overture_import import import_overture, open_release, update_overture_levels
+from .overture_import import (
+    import_overture,
+    import_overture_cities,
+    open_release,
+    update_overture_levels,
+)
 from .sources import (
     CHIRPS_CUBE,
     DEFAULT_CUBES_DIR,
@@ -115,12 +120,23 @@ def main(argv: list[str] | None = None) -> None:
 
         return
 
-    if not (args.cgaz or args.overture or args.overture_levels or args.ucdb or args.meta):
-        parser.error("give at least one of --cgaz, --overture, --overture-levels, --ucdb, --meta")
+    if not (
+        args.cgaz
+        or args.overture
+        or args.overture_levels
+        or args.overture_cities
+        or args.ucdb
+        or args.meta
+    ):
+        parser.error(
+            "give at least one of --cgaz, --overture, --overture-levels, --overture-cities, "
+            "--ucdb, --meta"
+        )
 
     logging.basicConfig(level=logging.INFO)
     overture_source = open_release(args.overture) if args.overture else None
     levels_source = open_release(args.overture_levels) if args.overture_levels else None
+    cities_source = open_release(args.overture_cities) if args.overture_cities else None
     db.ensure_schema(args.db)
 
     if args.cgaz:
@@ -135,8 +151,12 @@ def main(argv: list[str] | None = None) -> None:
             update_overture_levels(args.db, levels_source, full=args.full),
         )
 
+    if cities_source:
+        cities = import_overture_cities(args.db, cities_source)
+        print("Overture city rows:", sum(cities.values()))
+
     if args.ucdb:
-        print("UCDB city rows:", import_ucdb(args.db, args.ucdb))
+        print("UCDB urban area rows:", import_ucdb(args.db, args.ucdb))
 
     if args.meta:
         print("Admin kind rows:", import_admin_kinds(args.db, args.meta))
@@ -148,7 +168,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     import_parser = subparsers.add_parser(
         "import-boundaries",
-        help="load CGAZ ADM0/1/2, Overture divisions, GHSL UCDB cities and gbOpen level names "
+        help="load CGAZ ADM0/1/2, Overture divisions, GHSL UCDB urban areas and gbOpen level names "
         "into SQLite",
     )
     import_parser.add_argument("--cgaz", help="folder with the CGAZ ADM0/ADM1/ADM2 GeoPackages")
@@ -161,6 +181,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--overture-levels",
         help="Overture Maps release whose stored rows get their missing OpenStreetMap admin "
         "levels from Overpass, without reading geometry",
+    )
+    import_parser.add_argument(
+        "--overture-cities",
+        help="Overture Maps release whose towns, cities, and large villages replace the stored "
+        "city rows, leaving the other levels as they are (asks Overpass for admin levels)",
     )
     import_parser.add_argument(
         "--full",
