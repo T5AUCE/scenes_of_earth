@@ -2,6 +2,7 @@
 
 import json
 import zipfile
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
@@ -34,6 +35,7 @@ from soe.sources import SourceUnavailable
 from tests.helpers import boundary_row, harmonic_island
 
 VERSION = "2026-11-14"
+OVERTURE = "Overture Maps divisions"
 SQUARE_DEG2 = 1.0
 NEIGHBOUR_EDGE_DEG = 0.99
 
@@ -701,6 +703,410 @@ def test_neighbour_only_change_makes_a_new_clip_despite_a_warm_cache(tmp_path):
     assert again.geom.equals(held.geom)
 
 
+def add_overture(
+    db_path: Path | str,
+    parts: dict[str, BaseGeometry],
+    level: str = "state",
+    maritime: bool = True,
+    border_level: int | None = None,
+) -> None:
+    """Store boundaries of the Overture source, with the maritime flag the clip reads."""
+    rows = [
+        boundary_row(
+            f"ovt:{name}",
+            level,
+            name,
+            iso3=name,
+            bbox=part.bounds,
+            geometry=json.dumps(mapping(part)),
+            source=OVERTURE,
+        )
+        for name, part in parts.items()
+    ]
+    db.add_boundaries(db_path, OVERTURE, rows)
+    with db.connect(db_path) as connection:
+        connection.execute(
+            "UPDATE boundaries SET has_maritime = ?, border_level = ?",
+            (int(maritime), border_level),
+        )
+
+
+def overture_area(db_path: Path | str, name: str) -> Area:
+    return land._named_area(db_path, f"ovt:{name}")
+
+
+def test_territorial_area_clips_without_neighbours(tmp_path):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    west, east = box(-1, -1, 1.5, 2), box(1.5, -1, 4, 2)
+    add_overture(db_path, {"WEST": west, "EAST": east})
+    store = store_of(tmp_path, box(0, 0, 3, 1))
+
+    clipped = clip_area_to_land(db_path, store, overture_area(db_path, "WEST"))
+
+    assert clipped.geom.bounds == (0, 0, 1.5, 1)
+
+
+def test_coast_following_area_keeps_grow_path(tmp_path):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    add_overture(db_path, {"WEST": box(0, 0, 1, 1)}, maritime=False)
+    store = store_of(tmp_path, box(0, 0, 3, 1))
+
+    clipped = clip_area_to_land(db_path, store, overture_area(db_path, "WEST"))
+
+    assert clipped.geom.area == pytest.approx(1.02, abs=1e-6)
+
+
+def test_county_with_a_maritime_extent_still_follows_the_coast(tmp_path):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    add_overture(db_path, {"WEST": box(0, 0, 1, 1)}, level="county")
+    store = store_of(tmp_path, box(0, 0, 3, 1))
+
+    clipped = clip_area_to_land(db_path, store, overture_area(db_path, "WEST"))
+
+    assert clipped.geom.area == pytest.approx(1.02, abs=1e-6)
+
+
+def test_display_stops_at_maritime_limit(tmp_path):
+    margin_deg = 0.001
+    frame = box(-margin_deg, -margin_deg, 1 + margin_deg, 1 + margin_deg)
+    store = store_of(tmp_path, box(0, 0, 1, 1))
+
+    clip = land.clip_territorial(store, frame, [])
+
+    assert clip.display.difference(frame).area < 1e-12
+    assert clip.display.bounds == pytest.approx(frame.bounds)
+
+
+def test_disputed_border_segments_are_tagged(tmp_path):
+    store = store_of(tmp_path, box(0, 0, 3, 1))
+    disputed_line = LineString([(1.5, 0.4), (1.5, 3)])
+
+    clip = land.clip_territorial(store, box(-1, -1, 1.5, 2), [disputed_line])
+
+    assert clip.disputed.length == pytest.approx(0.6, abs=0.02)
+    assert clip.borders.length == pytest.approx(0.4, abs=0.02)
+
+
+def test_coast_following_borders_split_disputed_lines(tmp_path):
+    store = store_of(tmp_path, box(0, 0, 3, 1))
+    held = box(1, -1, 2, 2)
+    disputed_line = LineString([(1, 0.4), (1, 3)])
+
+    clip = clip_to_land(store, box(-1, -1, 1, 2), [held], disputed_lines=[disputed_line])
+
+    assert clip.disputed.length == pytest.approx(0.6, abs=0.02)
+    assert clip.borders.length == pytest.approx(0.4, abs=0.02)
+
+
+def test_disputed_lines_are_stored_with_the_clip(tmp_path):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    add_overture(db_path, {"WEST": box(-1, -1, 1.5, 2)})
+    with db.connect(db_path) as connection:
+        line = shapely.to_wkb(LineString([(1.5, 0), (1.5, 1)]))
+        connection.execute(
+            "INSERT INTO disputed_lines VALUES ('d', 'state', 1.5, 0, 1.5, 1, ?)", (line,)
+        )
+    store = store_of(tmp_path, box(0, 0, 3, 1))
+    area = overture_area(db_path, "WEST")
+    frame = land.unwrap(area.geom)
+
+    first = land._cached_clip(db_path, store, VERSION, area, frame)[0]
+    again = land._cached_clip(db_path, store, VERSION, area, frame)[0]
+
+    assert first.disputed.length == pytest.approx(1, abs=0.02)
+    assert again.disputed.equals(first.disputed)
+
+
+def add_disputed_line(db_path: Path | str, line: LineString) -> None:
+    with db.connect(db_path) as connection:
+        connection.execute("DELETE FROM disputed_lines")
+        connection.execute(
+            "INSERT INTO disputed_lines VALUES ('d', 'state', ?, ?, ?, ?, ?)",
+            (*line.bounds, shapely.to_wkb(line)),
+        )
+
+
+def test_border_level_change_makes_a_new_clip_despite_a_warm_cache(tmp_path):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    add_overture(db_path, {"WEST": box(-1, -1, 1.5, 2)}, border_level=4)
+    store = store_of(tmp_path, box(0, 0, 3, 1))
+    first = clip_area_to_land(db_path, store, overture_area(db_path, "WEST"))
+
+    with db.connect(db_path) as connection:
+        connection.execute("UPDATE boundaries SET border_level = 8")
+    again = clip_area_to_land(db_path, store, overture_area(db_path, "WEST"))
+
+    assert again.neighbour_revision != first.neighbour_revision
+
+
+def test_disputed_line_change_makes_a_new_clip_despite_a_warm_cache(tmp_path):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    add_overture(db_path, {"WEST": box(-1, -1, 1.5, 2)})
+    store = store_of(tmp_path, box(0, 0, 3, 1))
+    add_disputed_line(db_path, LineString([(1.5, 0), (1.5, 0.5)]))
+    area = overture_area(db_path, "WEST")
+    frame = land.unwrap(area.geom)
+    first = land._cached_clip(db_path, store, VERSION, area, frame)[0]
+
+    add_disputed_line(db_path, LineString([(1.5, 0), (1.5, 1)]))
+    again = land._cached_clip(db_path, store, VERSION, area, frame)[0]
+
+    assert again.disputed.length == pytest.approx(1, abs=0.02)
+    assert first.disputed.length == pytest.approx(0.5, abs=0.02)
+
+
+def test_territorial_and_coast_following_clips_of_one_frame_have_different_revisions(tmp_path):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    add_overture(db_path, {"WEST": box(0, 0, 1, 1)})
+    store = store_of(tmp_path, box(0, 0, 3, 1))
+    first = clip_area_to_land(db_path, store, overture_area(db_path, "WEST"))
+
+    with db.connect(db_path) as connection:
+        connection.execute("UPDATE boundaries SET has_maritime = 0")
+    again = clip_area_to_land(db_path, store, overture_area(db_path, "WEST"))
+
+    assert again.neighbour_revision != first.neighbour_revision
+    assert again.geom.area > first.geom.area
+
+
+@pytest.mark.parametrize(
+    ("border_level", "zoom"), [(2, 5), (4, 5), (5, 9), (6, 9), (7, 11), (8, 11), (9, 12), (10, 12)]
+)
+def test_border_tolerance_follows_level(border_level, zoom):
+    half_pixel_deg = 360 / 512 / 2**zoom / 2
+
+    assert land._border_tolerance_deg(border_level, (0, 0, 1, 1)) == pytest.approx(half_pixel_deg)
+
+
+def test_border_without_a_level_is_simplified_like_the_outline():
+    bounds = (0, 0, 40, 10)
+
+    assert land._border_tolerance_deg(None, bounds) == land._display_tolerance(bounds)
+
+
+def test_combined_clip_is_union_of_members(tmp_path):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    main, island = box(0, 0, 1, 1), box(3, 0, 4, 1)
+    add_overture(db_path, {"AA": main, "BB": island}, level="country")
+    combined = boundary_row(
+        "ovt:AA+overseas",
+        "country",
+        "AA with BB",
+        bbox=(0, 0, 4, 1),
+        geometry=json.dumps(mapping(MultiPolygon([main, island]))),
+        source=OVERTURE,
+    )
+    db.add_boundaries(db_path, "Overture combined", [combined])
+    with db.connect(db_path) as connection:
+        connection.executemany(
+            "INSERT INTO boundary_parts VALUES (?, ?, ?)",
+            [("ovt:AA", 0, "ovt:AA"), ("ovt:AA", 1, "ovt:BB")],
+        )
+    store = store_of(tmp_path, box(0, 0, 1, 1), box(3, 0, 4, 1))
+
+    clipped = clip_area_to_land(db_path, store, overture_area(db_path, "AA+overseas"))
+
+    assert clipped.geom.area == pytest.approx(2)
+    assert len(clipped.geom.geoms) == 2
+
+
+def add_combined(db_path: Path | str, members: dict[str, BaseGeometry]) -> None:
+    """Store the members as countries and a combined area of them, named after the first."""
+    add_overture(db_path, members, level="country")
+    first = next(iter(members))
+    merged = MultiPolygon([part for geometry in members.values() for part in polygons_of(geometry)])
+    combined = boundary_row(
+        f"ovt:{first}+overseas",
+        "country",
+        "combined",
+        bbox=merged.bounds,
+        geometry=json.dumps(mapping(merged)),
+        source=OVERTURE,
+    )
+    db.add_boundaries(db_path, "Overture combined", [combined])
+    with db.connect(db_path) as connection:
+        connection.execute("DELETE FROM boundary_parts")
+        connection.executemany(
+            "INSERT INTO boundary_parts VALUES (?, ?, ?)",
+            [(f"ovt:{first}", position, f"ovt:{name}") for position, name in enumerate(members)],
+        )
+
+
+def polygons_of(geometry: BaseGeometry) -> list[Polygon]:
+    return list(getattr(geometry, "geoms", [geometry]))
+
+
+def test_combined_borders_leave_out_the_edge_that_members_share(tmp_path):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    add_combined(db_path, {"AA": box(0, 0, 1, 1), "BB": box(1, 0, 2, 1)})
+    add_disputed_line(db_path, LineString([(0, -1), (0, 2)]))
+    store = store_of(tmp_path, box(-1, -1, 3, 2))
+
+    area = overture_area(db_path, "AA+overseas")
+    clipped = land._cached_clip(db_path, store, VERSION, area, land.unwrap(area.geom))[0]
+    shared = LineString([(1, 0), (1, 1)])
+
+    assert clipped.borders.intersection(shared).length == pytest.approx(0, abs=1e-9)
+    assert clipped.disputed.intersection(shared).length == pytest.approx(0, abs=1e-9)
+    # The disputed zone borrows 0.01 degrees off each neighbouring edge.
+    assert clipped.borders.length == pytest.approx(4.98, abs=1e-6)
+    assert clipped.disputed.length == pytest.approx(1.02, abs=1e-6)
+    assert clipped.borders.length + clipped.disputed.length == pytest.approx(6, abs=1e-9)
+
+
+def test_combined_borders_keep_narrow_touching_members(tmp_path):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    add_combined(db_path, {"AA": box(-0.005, 0, 0, 1), "BB": box(0, 0, 0.005, 1)})
+    store = store_of(tmp_path, box(-0.01, -0.01, 0.01, 1.01))
+
+    area = overture_area(db_path, "AA+overseas")
+    clipped = land._cached_clip(db_path, store, VERSION, area, land.unwrap(area.geom))[0]
+    shared = LineString([(0, 0), (0, 1)])
+
+    assert clipped.borders.intersection(shared).length == pytest.approx(0, abs=1e-9)
+    assert clipped.borders.length == pytest.approx(2.02, abs=1e-6)
+
+
+def test_combined_borders_leave_out_a_curved_shared_edge_segmented_differently(tmp_path):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    curve = [(1 + 0.1 * float(np.sin(np.pi * step / 8)), step / 8) for step in range(9)]
+    midpoints = [((x1 + x2) / 2, (y1 + y2) / 2) for (x1, y1), (x2, y2) in pairwise(curve)]
+    finer = sorted([*curve, *midpoints], key=lambda point: point[1])
+    add_combined(
+        db_path,
+        {"AA": Polygon([(0, 0), *curve, (0, 1)]), "BB": Polygon([(2, 0), (2, 1), *finer[::-1]])},
+    )
+    store = store_of(tmp_path, box(-1, -1, 3, 2))
+
+    area = overture_area(db_path, "AA+overseas")
+    clipped = land._cached_clip(db_path, store, VERSION, area, land.unwrap(area.geom))[0]
+
+    interior = LineString(curve[1:-1]).buffer(1e-6)
+
+    assert clipped.borders.intersection(interior).length == 0
+    assert clipped.disputed.is_empty
+    assert clipped.borders.length == pytest.approx(6, abs=1e-6)
+
+
+def test_combined_clip_ignores_member_order(tmp_path):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    add_combined(db_path, {"AA": box(0, 0, 1, 1), "BB": box(3, 0, 4, 1)})
+    store = store_of(tmp_path, box(0, 0, 1, 1), box(3, 0, 4, 1))
+    area = overture_area(db_path, "AA+overseas")
+    frame = land.unwrap(area.geom)
+    first_revision = land._clip_revision(db_path, area, frame, [])
+    first = clip_area_to_land(db_path, store, area)
+
+    with db.connect(db_path) as connection:
+        # Negating reverses the member order without colliding positions.
+        connection.execute("UPDATE boundary_parts SET position = -position")
+    area = overture_area(db_path, "AA+overseas")
+    frame = land.unwrap(area.geom)
+    again_revision = land._clip_revision(db_path, area, frame, [])
+    again = clip_area_to_land(db_path, store, area)
+
+    assert again_revision == first_revision
+    assert again.neighbour_revision == first.neighbour_revision
+    assert again.geom.equals(first.geom)
+
+
+def test_member_change_makes_a_new_combined_clip_despite_a_warm_cache(tmp_path):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    add_combined(db_path, {"AA": box(0, 0, 1, 1), "BB": box(3, 0, 4, 1)})
+    store = store_of(tmp_path, box(0, 0, 1, 1), box(3, 0, 4, 1))
+    first = clip_area_to_land(db_path, store, overture_area(db_path, "AA+overseas"))
+
+    add_disputed_line(db_path, LineString([(0, 0.2), (0, 0.4)]))
+    again = clip_area_to_land(db_path, store, overture_area(db_path, "AA+overseas"))
+
+    assert again.neighbour_revision != first.neighbour_revision
+
+
+def test_membership_change_makes_a_new_combined_clip_despite_a_warm_cache(tmp_path):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    add_combined(db_path, {"AA": box(0, 0, 1, 1), "BB": box(3, 0, 4, 1)})
+    store = store_of(tmp_path, box(0, 0, 1, 1), box(3, 0, 4, 1))
+    first = clip_area_to_land(db_path, store, overture_area(db_path, "AA+overseas"))
+
+    with db.connect(db_path) as connection:
+        connection.execute("DELETE FROM boundary_parts WHERE member_id = 'ovt:BB'")
+    again = clip_area_to_land(db_path, store, overture_area(db_path, "AA+overseas"))
+
+    assert again.neighbour_revision != first.neighbour_revision
+    assert again.geom.area == pytest.approx(1)
+
+
+def test_unassigned_land_report_sums_country_land_no_state_holds(tmp_path):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    add_overture(db_path, {"AAA": box(0, 0, 2, 1)}, level="country", maritime=False)
+    rows = [
+        boundary_row(
+            "ovt:AAA-1",
+            "state",
+            "One",
+            iso3="AAA",
+            bbox=(0, 0, 1, 1),
+            geometry=json.dumps(mapping(box(0, 0, 1, 1))),
+            source=OVERTURE,
+        )
+    ]
+    db.add_boundaries(db_path, "Overture states", rows)
+    store = store_of(tmp_path, box(0, 0, 2, 1))
+
+    report = land.unassigned_land_report(db_path, store)
+
+    assert [country_id for country_id, _ in report] == ["ovt:AAA"]
+    assert report[0][1] == pytest.approx(0.98 * 111.32**2, rel=0.01)
+
+
+def test_unassigned_land_report_matches_states_across_180(tmp_path):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    country = box(170, 0, 200, 1)
+    add_overture(db_path, {"AAA": country}, level="country", maritime=False)
+    rows = [
+        boundary_row(
+            "ovt:AAA-1",
+            "state",
+            "One",
+            iso3="AAA",
+            bbox=(-180, 0, -160, 1),
+            geometry=json.dumps(mapping(box(-180, 0, -160, 1))),
+            source=OVERTURE,
+        ),
+        boundary_row(
+            "ovt:AAA-2",
+            "state",
+            "Two",
+            iso3="AAA",
+            bbox=(170, 0, 180, 1),
+            geometry=json.dumps(mapping(box(170, 0, 180, 1))),
+            source=OVERTURE,
+        ),
+    ]
+    db.add_boundaries(db_path, "Overture states", rows)
+    store = store_of(tmp_path, box(170, 0, 180, 1), box(-180, 0, -160, 1))
+
+    report = land.unassigned_land_report(db_path, store)
+
+    assert report[0][1] == pytest.approx(0, abs=1)
+
+
 def test_neighbour_across_180_is_found_from_the_western_side(tmp_path):
     db_path = tmp_path / "soe.db"
     db.init(db_path)
@@ -730,23 +1136,29 @@ def test_neighbour_found_only_through_the_grown_bounds_across_180(tmp_path):
 def test_import_stores_the_clip_of_every_country_and_state_once(tmp_path):
     db_path = tmp_path / "soe.db"
     db.init(db_path)
-    shapes = {"ADM0:AAA": ("country", box(0, 0, 1, 1)), "ADM1:BBB": ("state", box(2, 2, 3, 3))}
+    shapes = {"AAA": ("country", box(0, 0, 1, 1)), "BBB": ("state", box(2, 2, 3, 3))}
     rows = [
         boundary_row(
-            f"cgaz:{name}", level, name, bbox=part.bounds, geometry=json.dumps(mapping(part))
+            f"ovt:{name}",
+            level,
+            name,
+            bbox=part.bounds,
+            geometry=json.dumps(mapping(part)),
+            source=OVERTURE,
         )
         for name, (level, part) in shapes.items()
     ]
     rows.append(
         boundary_row(
-            "cgaz:ADM2:CCC",
+            "ovt:CCC",
             "county",
             "CCC",
             bbox=(4, 4, 5, 5),
             geometry=json.dumps(mapping(box(4, 4, 5, 5))),
+            source=OVERTURE,
         )
     )
-    db.add_boundaries(db_path, "geoBoundaries CGAZ", rows)
+    db.add_boundaries(db_path, OVERTURE, rows)
     store = store_of(tmp_path, box(0, 0, 1, 1), box(2, 2, 3, 3), box(4, 4, 5, 5))
 
     assert store_clips(db_path, store) == 2
@@ -777,7 +1189,7 @@ def test_land_version_is_the_stored_date(tmp_path):
 def test_land_clips_of_older_versions_are_deleted(tmp_path):
     db_path = tmp_path / "soe.db"
     db.init(db_path)
-    wkbs = (b"a", b"b", b"c")
+    wkbs = (b"a", b"b", b"c", b"d")
     method = land.CLIP_METHOD_VERSION
     db.set_land_clip(db_path, "x", "old", method, wkbs)
     db.set_land_clip(db_path, "x", VERSION, method - 1, wkbs)

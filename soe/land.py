@@ -3,8 +3,9 @@
 `import-land` loads the split land polygons into a local SQLite file with an R-tree, then stores
 the clip of every country and state, so a request for a large area never waits for one. A clip is
 the area's shape, reaching a little past its boundary, minus the land its same-level neighbours
-hold, cut to land. Clips are cached in the main database for each land version, and the land
-version is part of the scene id.
+hold, cut to land. An area with a maritime extent already reaches past its coast, so its clip is
+its own shape cut to land, and a combined area joins the clips of its parts. Clips are cached in
+the main database for each land version, and the land version is part of the scene id.
 """
 
 import hashlib
@@ -37,7 +38,7 @@ from shapely.ops import split
 
 from . import db
 from .areas import MAX_LONGITUDE_DEG, WORLD_WIDTH_DEG, Area, AreaError, polygonal_parts, unwrap
-from .boundary_import import CGAZ_SOURCE
+from .overture_import import COMBINED_ID_SUFFIX, KM_PER_DEGREE, OVERTURE_SOURCE
 from .sources import SourceUnavailable
 
 DEFAULT_LAND_PATH = "./data/land.sqlite"
@@ -53,13 +54,17 @@ MIN_PART_DEG2 = 1e-6
 OUTLINE_PRECISION_DEG = 1e-5  # the build rounds outline and border coordinates to this
 BORDER_MATCH_DEG = GROW_DEG / 2  # how close a cut edge must be to a neighbour to count as a border
 CLIP_WORKERS_BY_LEVEL = {"country": 1, "state": 4}  # levels whose clips the import stores
+TERRITORIAL_LEVELS = ("country", "state")  # levels whose maritime extent holds all their land
+# Member frames merge slivers below the build rounding precision before their union.
+FRAME_SNAP_DEG = OUTLINE_PRECISION_DEG
 # Version 2 removes the whole neighbour inside the display, not only the margin part.
 # Version 3 buffers the neighbour before any grid snapping, so a neighbour narrower
 # than the grid still leaves a gap.
 # Version 4 grows the display outline past its tolerance, so it holds all the land.
 # Version 5 widens the sea margin to a 400th of the span and stops it at land borders.
 # Version 6 counts the grown shape and cuts the sea once, so later outlines may differ.
-CLIP_METHOD_VERSION = 6
+# Version 7 cuts an area with a maritime extent to its own shape and simplifies borders by level.
+CLIP_METHOD_VERSION = 7
 SLOW_CLIP_SECS = 30  # clips slower than this print one line, so slow areas stay visible
 
 PLANNING_TOLERANCE_DIVISOR = 200_000  # a 200000th of the larger bbox side, a tenth of a cell
@@ -74,6 +79,12 @@ DISPLAY_BORDER_RAY_FACTOR = 2  # twice the growth is the shortest seaward ray
 NEIGHBOUR_TOUCH_DEG = (
     10 * OUTLINE_PRECISION_DEG
 )  # shorter contacts are rounding, not neighbour land
+
+# The area's own border lines only serve below the zoom from which the basemap draws that level.
+BORDER_ZOOM_BY_MAX_LEVEL = ((4, 5), (6, 9), (8, 11))
+BORDER_FINEST_ZOOM = 12
+TILE_SIZE_PX = 512
+UNASSIGNED_REPORT_COUNT = 10
 
 LINE_STRING_TYPE_ID = 1  # shapely.get_type_id of a LineString
 STORED_LONGITUDE_RANGE_DEG = (-MAX_LONGITUDE_DEG, WORLD_WIDTH_DEG)  # of unwrapped boundary bboxes
@@ -100,6 +111,7 @@ class LandClip:
     geom: BaseGeometry  # land inside the area, in the longitude frame that planning uses
     display: BaseGeometry  # simplified geom, grown seaward and never onto a neighbour's land
     borders: BaseGeometry  # MultiLineString of the edges that run over land
+    disputed: BaseGeometry  # MultiLineString of the borders that follow a disputed line
 
 
 def store_path() -> str:
@@ -156,12 +168,16 @@ def clip_to_land(
     neighbours: Sequence[BaseGeometry],
     grow_deg: float = GROW_DEG,
     min_part_deg2: float = MIN_PART_DEG2,
+    disputed_lines: Sequence[BaseGeometry] = (),
+    border_level: int | None = None,
 ) -> LandClip:
     """Cut `frame` to land, after growing it by `grow_deg` and taking back what `neighbours` hold.
 
     `frame` and `neighbours` share one longitude frame. Land that the frame fully contains is
     kept as it is, and only the land that crosses its edge is intersected. Parts under
-    `min_part_deg2` are dropped, except the largest. Raises AreaError when no land is left.
+    `min_part_deg2` are dropped, except the largest. The borders along `disputed_lines` are split
+    off and the borders are simplified by `border_level`, as `clip_territorial` does. Raises
+    AreaError when no land is left.
     """
     frame = _valid(frame)
     held = _held_by_neighbours(frame, neighbours, grow_deg)
@@ -169,19 +185,7 @@ def clip_to_land(
     # The union keeps lines where a neighbour sliver only touches the frame, so only
     # its polygons are kept for the land search, the borders and the outline below.
     reach = shapely.union_all(_polygonal_parts(frame.union(margin)))
-    candidates = np.array(land_in(store, reach.bounds), dtype=object)
-
-    shapely.prepare(reach)
-    touching = shapely.intersects(reach, candidates)
-    whole = touching & shapely.contains(reach, candidates)
-    crossing = candidates[touching & ~whole]
-
-    cut = shapely.intersection(reach, crossing)
-    cut_polygons = [part for part in _polygonal_parts(cut) if part.area > 0]
-    pieces = [*candidates[whole], *cut_polygons]
-    parts = _large_parts(shapely.union_all(pieces), min_part_deg2)
-    if not parts:
-        raise AreaError(NO_LAND_MESSAGE)
+    parts, crossing = _land_inside(store, reach, min_part_deg2)
 
     tolerance_deg = _display_tolerance(frame.bounds)
     borders = _borders(reach, crossing, held if grow_deg else None)
@@ -193,6 +197,11 @@ def clip_to_land(
     outward_deg = max(part_east - east, west - part_west, part_north - north, south - part_south)
     display_limit_deg = limit_deg - outward_deg
 
+    solid, disputed = _split_disputed(borders, disputed_lines)
+    solid, disputed = _simplified_borders(
+        solid, disputed, _border_tolerance_deg(border_level, frame.bounds), frame.bounds
+    )
+
     return LandClip(
         _planning_land(parts, frame.bounds, held),
         _display_outline(
@@ -202,8 +211,67 @@ def clip_to_land(
             keep_in_reach=bool(grow_deg),
             limit_deg=display_limit_deg,
         ),
-        shapely.simplify(borders, tolerance_deg),
+        solid,
+        disputed,
     )
+
+
+def clip_territorial(
+    store: Path | str,
+    frame: BaseGeometry,
+    disputed_lines: Sequence[BaseGeometry],
+    border_level: int | None = None,
+    min_part_deg2: float = MIN_PART_DEG2,
+) -> LandClip:
+    """Cut `frame` to land when it already reaches past the coast, as a maritime extent does.
+
+    No neighbour holds land the frame leaves out, so the frame is neither grown nor cut by others.
+    The edges of the frame over land are the borders, and the ones along `disputed_lines` are
+    split off. `border_level` is the OpenStreetMap admin level that sets how much the borders are
+    simplified. Raises AreaError when no land is left.
+    """
+    frame = _valid(frame)
+    parts, crossing = _land_inside(store, frame, min_part_deg2)
+    solid, disputed = _split_disputed(_borders(frame, crossing, None), disputed_lines)
+    solid, disputed = _simplified_borders(
+        solid, disputed, _border_tolerance_deg(border_level, frame.bounds), frame.bounds
+    )
+
+    return LandClip(
+        _planning_land(parts, frame.bounds, shapely.GeometryCollection()),
+        _territorial_display(parts, frame),
+        solid,
+        disputed,
+    )
+
+
+def _land_inside(
+    store: Path | str, reach: BaseGeometry, min_part_deg2: float
+) -> tuple[list[Polygon], np.ndarray]:
+    """The land polygons in `reach`, largest first, and the ones that cross its edge.
+
+    Land that `reach` fully contains is kept as it is, and only the land that crosses its edge
+    is intersected. Raises AreaError when no land is left.
+    """
+    whole, crossing = _whole_and_crossing(store, reach)
+    cut = shapely.intersection(reach, crossing)
+    cut_polygons = [part for part in _polygonal_parts(cut) if part.area > 0]
+    parts = _large_parts(shapely.union_all([*whole, *cut_polygons]), min_part_deg2)
+    if not parts:
+        raise AreaError(NO_LAND_MESSAGE)
+
+    return parts, crossing
+
+
+def _whole_and_crossing(store: Path | str, reach: BaseGeometry) -> tuple[np.ndarray, np.ndarray]:
+    """The land polygons `reach` fully contains, and the ones that cross its edge."""
+    candidates = np.array(land_in(store, reach.bounds), dtype=object)
+
+    shapely.prepare(reach)
+    touching = shapely.intersects(reach, candidates)
+    whole = touching & shapely.contains(reach, candidates)
+
+    return candidates[whole], candidates[touching & ~whole]
 
 
 def _held_by_neighbours(
@@ -258,6 +326,86 @@ def _borders(
         merged = merged[shapely.dwithin(merged, held, BORDER_MATCH_DEG)]
 
     return MultiLineString(merged.tolist())
+
+
+def _split_disputed(
+    borders: MultiLineString, disputed_lines: Sequence[BaseGeometry]
+) -> tuple[MultiLineString, MultiLineString]:
+    """The borders away from the disputed lines, and the borders along them."""
+    if not disputed_lines or borders.is_empty:
+        return borders, MultiLineString()
+
+    zone = shapely.union_all(shapely.buffer(list(disputed_lines), BORDER_MATCH_DEG))
+    return _line_parts(borders.difference(zone)), _line_parts(borders.intersection(zone))
+
+
+def _line_parts(geometry: BaseGeometry) -> MultiLineString:
+    """The lines of an overlay result, without the points where it only touched."""
+    parts = shapely.get_parts(shapely.get_parts(geometry))
+    lines = [part for part in parts if shapely.get_type_id(part) == LINE_STRING_TYPE_ID]
+    return MultiLineString([line for line in lines if not line.is_empty])
+
+
+def _border_tolerance_deg(
+    border_level: int | None, bounds: tuple[float, float, float, float]
+) -> float:
+    """Half a pixel at the zoom from which the basemap draws borders of the level itself.
+
+    The zooms follow the basemap's boundary layer, which sets them per admin level in
+    https://github.com/openmaptiles/planetiler-openmaptiles/blob/main/src/main/java/org/openmaptiles/layers/Boundary.java
+    and a border without a known level is simplified like the display outline.
+    """
+    if border_level is None:
+        return _display_tolerance(bounds)
+
+    zoom = next(
+        (zoom for max_level, zoom in BORDER_ZOOM_BY_MAX_LEVEL if border_level <= max_level),
+        BORDER_FINEST_ZOOM,
+    )
+    return WORLD_WIDTH_DEG / TILE_SIZE_PX / 2**zoom / 2
+
+
+def _simplified_borders(
+    solid: MultiLineString,
+    disputed: MultiLineString,
+    tolerance_deg: float,
+    bounds: tuple[float, float, float, float],
+) -> tuple[BaseGeometry, BaseGeometry]:
+    """Both border sets simplified, with the tolerance doubled until they fit the vertex cap."""
+    west, south, east, north = bounds
+    span_deg = max(east - west, north - south)
+    while True:
+        simplified = shapely.simplify([solid, disputed], tolerance_deg)
+        vertices = int(shapely.get_num_coordinates(simplified).sum())
+        if vertices <= MAX_DISPLAY_VERTICES or tolerance_deg >= span_deg:
+            return simplified[0], simplified[1]
+
+        tolerance_deg *= 2
+
+
+def _territorial_display(parts: list[Polygon], frame: BaseGeometry) -> BaseGeometry:
+    """The parts simplified and grown past the tolerance, then cut at the frame edge.
+
+    The frame holds the sea out to the maritime limit, so the sea margin stops there, and a border
+    keeps the detail of the frame. That detail never coarsens, so the loop stops when a coarser
+    tolerance removes few vertices.
+    """
+    west, south, east, north = shapely.total_bounds(parts)
+    span_deg = max(east - west, north - south)
+    tolerance_deg = _display_tolerance(frame.bounds)
+    previous_vertices = None
+    while True:
+        growth_deg = _display_growth(tolerance_deg, span_deg)
+        cut = shapely.intersection(_grown_cover(parts, tolerance_deg, growth_deg), frame)
+        outline = shapely.union_all(_polygonal_parts(cut))
+
+        vertices = shapely.get_num_coordinates(outline)
+        stalled = previous_vertices is not None and vertices > previous_vertices * STALLED_RATIO
+        if vertices <= MAX_DISPLAY_VERTICES or tolerance_deg >= span_deg or stalled:
+            return shapely.normalize(outline)
+
+        previous_vertices = vertices
+        tolerance_deg *= 2
 
 
 def _planning_land(
@@ -569,34 +717,44 @@ def _seaward_border_rays(
 def clip_area_to_land(db_path: Path | str, store: Path | str, area: Area) -> Area:
     """The area cut to land, using the stored clip when the land version has one.
 
-    The clip also depends on the boundaries around a named area, so a stored clip is used only
-    while those are unchanged. Raises SourceUnavailable without a land store and AreaError when
-    the area has no land, both before any data is read. An area wider than planning accepts is
-    returned as it is, for planning to refuse.
+    A stored clip is used only while the boundaries and disputed lines it was cut with, and the
+    clips of a combined area's members, are unchanged. Raises SourceUnavailable without a land store
+    and AreaError when the area has no land, both before any data is read. An area wider than
+    planning accepts is returned as it is, for planning to refuse.
     """
     version = land_version(store)
     frame = unwrap(area.geom)
     if _too_wide(frame):
         return area
 
-    neighbours = [] if _plain_cut(area) else _neighbours(db_path, area, frame)
-    revision = _neighbour_revision(neighbours)
-    digest = _clip_digest(area, frame, revision)
-    stored = db.get_land_clip(db_path, digest, version, CLIP_METHOD_VERSION)
-    if stored is None:
-        clip = _clip_area(db_path, store, area, frame, neighbours)
-        db.set_land_clip(db_path, digest, version, CLIP_METHOD_VERSION, _wkbs(clip))
-    else:
-        clip = LandClip(*shapely.from_wkb(stored))
+    clip, revision = _cached_clip(db_path, store, version, area, frame)
 
     return replace(
         area,
         geom=clip.geom,
         display=clip.display,
-        borders=clip.borders,
+        # TODO: draw disputed borders apart once Area carries them; until then they join the rest.
+        borders=MultiLineString(shapely.get_parts([clip.borders, clip.disputed]).tolist()),
         land_version=version,
         neighbour_revision=revision,
     )
+
+
+def _cached_clip(
+    db_path: Path | str, store: Path | str, version: str, area: Area, frame: BaseGeometry
+) -> tuple[LandClip, str]:
+    """The clip of the area and its revision, stored when it was not yet."""
+    neighbours = _neighbours(db_path, area, frame)
+    revision = _clip_revision(db_path, area, frame, neighbours)
+    digest = _clip_digest(area, frame, revision)
+    stored = db.get_land_clip(db_path, digest, version, CLIP_METHOD_VERSION)
+    if stored is not None:
+        return LandClip(*shapely.from_wkb(stored)), revision
+
+    clip = _clip_area(db_path, store, area, frame, neighbours)
+    db.set_land_clip(db_path, digest, version, CLIP_METHOD_VERSION, _wkbs(clip))
+
+    return clip, revision
 
 
 def _too_wide(frame: BaseGeometry) -> bool:
@@ -618,19 +776,33 @@ def _clip_digest(area: Area, frame: BaseGeometry, neighbour_revision: str) -> st
 
 
 def _neighbours(db_path: Path | str, area: Area, frame: BaseGeometry) -> list[Neighbour]:
-    """The same-level boundaries around a named area's frame, in either longitude frame.
+    """The same-level boundaries around the frame of an area that follows the coast.
 
-    Boundaries that cross 180 are stored from -180 up to 360, so the grown frame is looked up
-    again a world width to either side to find the ones stored on the other side of 180.
+    The grown frame is looked up on either side of 180 to find the ones stored on the other side.
     """
-    if not area.named:
+    if not _follows_coast(area):
         return []
 
-    west, south, east, north = frame.bounds
     # The display outline grows past the frame by its sea margin and must not cover these.
     reach_deg = _conservative_reach_deg(frame.bounds)
-    stored_west, stored_east = STORED_LONGITUDE_RANGE_DEG
     neighbours = []
+    for window, shift_deg in _stored_windows(frame.bounds, reach_deg):
+        found = db.neighbour_digests(db_path, area.boundary, window)
+        neighbours += [Neighbour(boundary_id, digest, shift_deg) for boundary_id, digest in found]
+
+    return neighbours
+
+
+def _stored_windows(
+    bounds: tuple[float, float, float, float], reach_deg: float
+) -> Iterator[tuple[tuple[float, float, float, float], float]]:
+    """The bounds grown by `reach_deg` as lookup windows for stored shapes, with their shifts.
+
+    Shapes that cross 180 are stored from -180 up to 360, so the window is looked up again a
+    world width to either side. A shape found with a shift moves by it to join the frame.
+    """
+    west, south, east, north = bounds
+    stored_west, stored_east = STORED_LONGITUDE_RANGE_DEG
     for shift_deg in (0, WORLD_WIDTH_DEG, -WORLD_WIDTH_DEG):
         window = (
             west - reach_deg - shift_deg,
@@ -638,22 +810,73 @@ def _neighbours(db_path: Path | str, area: Area, frame: BaseGeometry) -> list[Ne
             east + reach_deg - shift_deg,
             north + reach_deg,
         )
-        if window[2] < stored_west or window[0] > stored_east:
-            continue
-
-        found = db.neighbour_digests(db_path, area.boundary, window)
-        neighbours += [Neighbour(boundary_id, digest, shift_deg) for boundary_id, digest in found]
-
-    return neighbours
+        if window[2] >= stored_west and window[0] <= stored_east:
+            yield window, shift_deg
 
 
-def _neighbour_revision(neighbours: list[Neighbour]) -> str:
-    """A short digest of which neighbours there are and of their geometry; empty without any."""
-    if not neighbours:
+def _clip_revision(
+    db_path: Path | str, area: Area, frame: BaseGeometry, neighbours: list[Neighbour]
+) -> str:
+    """A short digest of everything besides the frame that shapes the clip; empty when nothing does.
+
+    A combined area depends on the clips of its members, a territorial area on its border level
+    and the disputed lines, and a coast-following area also on its neighbours and their geometry.
+    """
+    if _is_combined(area):
+        # Member order is storage order, so the keys are sorted and only the member set matters.
+        lines = sorted(_member_digests(db_path, area))
+    elif _plain_cut(area):
         return ""
+    else:
+        disputed_digest = _lines_digest(_disputed_lines(db_path, frame))
+        lines = [f"level:{area.boundary.get('border_level')}", f"disputed:{disputed_digest}"]
+        if _is_territorial(area):
+            lines.append("territorial")
+        lines += sorted(f"{item.id}:{item.digest}:{item.shift_deg}" for item in neighbours)
 
-    lines = sorted(f"{item.id}:{item.digest}:{item.shift_deg}" for item in neighbours)
     return hashlib.sha256("\n".join(lines).encode()).hexdigest()[:REVISION_CHARS]
+
+
+def _member_digests(db_path: Path | str, area: Area) -> list[str]:
+    """The clip keys of the areas that a combined area is made of, in part order."""
+    digests = []
+    for member_id in db.boundary_part_ids(db_path, _parent_id(area)):
+        member = _named_area(db_path, member_id)
+        frame = unwrap(member.geom)
+        revision = _clip_revision(db_path, member, frame, _neighbours(db_path, member, frame))
+        digests.append(_clip_digest(member, frame, revision))
+
+    return digests
+
+
+def _parent_id(combined: Area) -> str:
+    return combined.boundary["id"].removesuffix(COMBINED_ID_SUFFIX)
+
+
+def _lines_digest(lines: list[BaseGeometry]) -> str:
+    return hashlib.sha256(b"".join(sorted(shapely.to_wkb(line) for line in lines))).hexdigest()
+
+
+def _follows_coast(area: Area) -> bool:
+    """Whether the clip grows past the boundary and leaves the land of same-level neighbours."""
+    return not (_plain_cut(area) or _is_territorial(area) or _is_combined(area))
+
+
+def _is_territorial(area: Area) -> bool:
+    """Whether the stored shape reaches out to sea, so it already holds all of its land.
+
+    Counties and below follow the coast because their maritime extent was not checked to hold
+    all of their land.
+    """
+    return (
+        area.named
+        and bool(area.boundary.get("has_maritime"))
+        and area.boundary.get("level") in TERRITORIAL_LEVELS
+    )
+
+
+def _is_combined(area: Area) -> bool:
+    return area.named and area.boundary["id"].endswith(COMBINED_ID_SUFFIX)
 
 
 def _plain_cut(area: Area) -> bool:
@@ -675,10 +898,112 @@ def _clip_area(
     frame: BaseGeometry,
     neighbours: list[Neighbour],
 ) -> LandClip:
+    if _is_combined(area):
+        return _combined_clip(db_path, store, area)
+
     if _plain_cut(area):
         return clip_to_land(store, frame, [], grow_deg=0)
 
-    return clip_to_land(store, frame, _neighbour_shapes(db_path, neighbours))
+    disputed_lines = _disputed_lines(db_path, frame)
+    border_level = area.boundary.get("border_level")
+    if _is_territorial(area):
+        return clip_territorial(store, frame, disputed_lines, border_level)
+
+    return clip_to_land(
+        store,
+        frame,
+        _neighbour_shapes(db_path, neighbours),
+        disputed_lines=disputed_lines,
+        border_level=border_level,
+    )
+
+
+def _combined_clip(db_path: Path | str, store: Path | str, area: Area) -> LandClip:
+    """The member clips united, with borders from the boundary of their united frames."""
+    version = land_version(store)
+    clips = []
+    frames = []
+    for member_id in db.boundary_part_ids(db_path, _parent_id(area)):
+        member = _named_area(db_path, member_id)
+        frame = unwrap(member.geom)
+        frames.append(frame)
+        clips.append(_cached_clip(db_path, store, version, member, frame)[0])
+
+    frames = _in_one_longitude_frame(frames)
+    frame = _united_frames(frames)
+    _, crossing = _whole_and_crossing(store, frame)
+    solid, disputed = _split_disputed(
+        _borders(frame, crossing, None), _disputed_lines(db_path, frame)
+    )
+    solid, disputed = _simplified_borders(
+        solid,
+        disputed,
+        _border_tolerance_deg(area.boundary.get("border_level"), frame.bounds),
+        frame.bounds,
+    )
+
+    return LandClip(
+        _united_land([clip.geom for clip in clips], _seams(frames, frame)),
+        shapely.union_all([clip.display for clip in clips]),
+        solid,
+        disputed,
+    )
+
+
+def _in_one_longitude_frame(frames: list[BaseGeometry]) -> list[BaseGeometry]:
+    """The frames, each moved to the longitudes of the ones before it."""
+    shifted = [frames[0]]
+    for frame in frames[1:]:
+        west, _, east, _ = shapely.total_bounds(shifted)
+        shifted.append(_shifted_into(frame, west, east))
+
+    return shifted
+
+
+def _united_frames(frames: list[BaseGeometry]) -> BaseGeometry:
+    """The frames united, with slivers where they meet merged."""
+    # Slivers where the frames meet would survive as internal edges, so they merge first.
+    return shapely.buffer(
+        shapely.buffer(shapely.union_all(frames), FRAME_SNAP_DEG, join_style="mitre"),
+        -FRAME_SNAP_DEG,
+        join_style="mitre",
+    )
+
+
+def _seams(frames: list[BaseGeometry], united: BaseGeometry) -> BaseGeometry:
+    """The edges of the frames that run inside their union, a little widened."""
+    edges = shapely.union_all([frame.boundary for frame in frames])
+    inside = edges.intersection(united.buffer(-2 * FRAME_SNAP_DEG))
+    return inside.buffer(FRAME_SNAP_DEG)
+
+
+def _united_land(lands: list[BaseGeometry], seams: BaseGeometry) -> BaseGeometry:
+    """The member land united, uniting only the parts that reach a seam between the frames.
+
+    Archipelagos have thousands of parts, which take minutes to unite although the parts away
+    from the seams are disjoint.
+    """
+    polygons = np.array([part for land in lands for part in shapely.get_parts(land)], dtype=object)
+    at_seams = shapely.STRtree(polygons).query(seams, predicate="intersects")
+    away = np.delete(polygons, at_seams)
+
+    united = _polygonal_parts(shapely.union_all(polygons[at_seams]))
+    return shapely.normalize(shapely.multipolygons([*away, *united]))
+
+
+def _disputed_lines(db_path: Path | str, frame: BaseGeometry) -> list[BaseGeometry]:
+    """The disputed lines near the frame, moved into its longitude frame."""
+    lines: list[BaseGeometry] = []
+    for window, shift_deg in _stored_windows(frame.bounds, BORDER_MATCH_DEG):
+        wkbs = db.disputed_line_wkbs(db_path, window)
+        lines += [translate(line, xoff=shift_deg) for line in shapely.from_wkb(wkbs)]
+
+    return lines
+
+
+def _named_area(db_path: Path | str, boundary_id: str) -> Area:
+    boundary = db.get_boundary(db_path, boundary_id)
+    return Area(shape(json.loads(boundary["geom_geojson"])), boundary)
 
 
 def _neighbour_shapes(db_path: Path | str, neighbours: list[Neighbour]) -> list[BaseGeometry]:
@@ -692,7 +1017,12 @@ def _neighbour_shapes(db_path: Path | str, neighbours: list[Neighbour]) -> list[
 
 
 def _wkbs(clip: LandClip) -> db.LandClipWkbs:
-    return (shapely.to_wkb(clip.geom), shapely.to_wkb(clip.display), shapely.to_wkb(clip.borders))
+    return (
+        shapely.to_wkb(clip.geom),
+        shapely.to_wkb(clip.display),
+        shapely.to_wkb(clip.borders),
+        shapely.to_wkb(clip.disputed),
+    )
 
 
 def store_clips(db_path: Path | str, store: Path | str) -> int:
@@ -703,7 +1033,7 @@ def store_clips(db_path: Path | str, store: Path | str) -> int:
     """
     stored = 0
     for level, workers in CLIP_WORKERS_BY_LEVEL.items():
-        boundary_ids = db.boundary_ids(db_path, CGAZ_SOURCE, (level,))
+        boundary_ids = db.boundary_ids(db_path, OVERTURE_SOURCE, (level,))
         # Each area runs in a fresh worker, so its peak memory is released afterwards.
         with ProcessPoolExecutor(
             workers, mp_context=get_context("spawn"), max_tasks_per_child=1
@@ -721,12 +1051,75 @@ def store_clips(db_path: Path | str, store: Path | str) -> int:
     return stored
 
 
+def unassigned_land_report(
+    db_path: Path | str, store: Path | str, count: int = UNASSIGNED_REPORT_COUNT
+) -> list[tuple[str, float]]:
+    """The countries with the most land (id, km2) that no clip of their states holds.
+
+    A plain cut of a country is right only when its states tile it, so a large figure points at
+    land the state clips lose. Clips that are not stored yet are computed.
+    """
+    version = land_version(store)
+    unassigned = []
+    for country_id in db.boundary_ids(db_path, OVERTURE_SOURCE, ("country",)):
+        country = _named_area(db_path, country_id)
+        if _is_combined(country) or not country.boundary["iso3"]:
+            continue
+
+        state_ids = db.state_ids_of_country(db_path, OVERTURE_SOURCE, country.boundary["iso3"])
+        if not state_ids:
+            continue
+
+        leftover = _land_without_states(db_path, store, version, country, state_ids)
+        unassigned.append((country_id, sum(_area_km2(part) for part in leftover)))
+
+    return sorted(unassigned, key=lambda item: item[1], reverse=True)[:count]
+
+
+def _land_without_states(
+    db_path: Path | str, store: Path | str, version: str, country: Area, state_ids: list[str]
+) -> list[Polygon]:
+    """The parts of the country's clip outside every state clip, from the planning tolerance up."""
+    frame = unwrap(country.geom)
+    country_land = _cached_clip(db_path, store, version, country, frame)[0].geom
+    states = []
+    for state_id in state_ids:
+        state = _named_area(db_path, state_id)
+        states.append(_cached_clip(db_path, store, version, state, unwrap(state.geom))[0].geom)
+
+    west, south, east, north = country_land.bounds
+    tolerance_deg = max(east - west, north - south) / PLANNING_TOLERANCE_DIVISOR
+    aligned = [_shifted_into(state, west, east) for state in states]
+    covered = shapely.union_all(aligned).buffer(2 * tolerance_deg)
+    leftover = _polygonal_parts(shapely.difference(country_land, covered))
+
+    return [part for part in leftover if part.area >= MIN_PART_DEG2]
+
+
+def _shifted_into(geometry: BaseGeometry, west: float, east: float) -> BaseGeometry:
+    """The geometry moved a world width when that puts its centre between `west` and `east`.
+
+    Each area is unwrapped on its own, so a state can sit on the other side of 180 from its country.
+    """
+    min_x, _, max_x, _ = geometry.bounds
+    centre = (min_x + max_x) / 2
+    for shift_deg in (0, WORLD_WIDTH_DEG, -WORLD_WIDTH_DEG):
+        if west <= centre + shift_deg <= east:
+            return translate(geometry, xoff=shift_deg)
+
+    return geometry
+
+
+def _area_km2(geometry: BaseGeometry) -> float:
+    """The area in square kilometres, scaling the degrees by the latitude of the shape."""
+    return geometry.area * KM_PER_DEGREE**2 * math.cos(math.radians(geometry.centroid.y))
+
+
 def _store_clip(db_path: Path | str, store: Path | str, boundary_id: str) -> bool:
     """Store the clip of one boundary unless it has one; whether a clip was stored."""
-    boundary = db.get_boundary(db_path, boundary_id)
-    area = Area(shape(json.loads(boundary["geom_geojson"])), boundary)
+    area = _named_area(db_path, boundary_id)
     frame = unwrap(area.geom)
-    revision = _neighbour_revision(_neighbours(db_path, area, frame))
+    revision = _clip_revision(db_path, area, frame, _neighbours(db_path, area, frame))
     digest = _clip_digest(area, frame, revision)
     if db.get_land_clip(db_path, digest, land_version(store), CLIP_METHOD_VERSION) is not None:
         return False
@@ -748,7 +1141,7 @@ def _store_clip(db_path: Path | str, store: Path | str, boundary_id: str) -> boo
 def import_land(store: Path | str, db_path: Path | str) -> int:
     """Download the land polygons when they changed, then store each country's and state's clip.
 
-    Returns the number of clips stored.
+    Prints the countries whose land the state clips leave out. Returns the number of clips stored.
     """
     version = _remote_version(LAND_ZIP_URL)
     if not _has_version(store, version):
@@ -756,7 +1149,13 @@ def import_land(store: Path | str, db_path: Path | str) -> int:
 
     db.ensure_schema(db_path)
     db.delete_land_clips_except(db_path, version, CLIP_METHOD_VERSION)
-    return store_clips(db_path, store)
+    stored = store_clips(db_path, store)
+
+    print("Land of a country that no state clip holds (km2):")
+    for country_id, km2 in unassigned_land_report(db_path, store):
+        print(f"  {country_id}: {km2:,.1f}")
+
+    return stored
 
 
 def write_land_store(store: Path | str, version: str, polygons: Sequence[BaseGeometry]) -> None:

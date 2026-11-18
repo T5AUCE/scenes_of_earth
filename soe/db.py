@@ -16,7 +16,8 @@ SqlValue = str | int | float | None
 Record = dict[str, Any]  # one table row as column -> value
 BoundaryValues = tuple[SqlValue, ...]  # one boundaries row in INSERT_BOUNDARY column order
 PreviewWrite = tuple[str, str, str | None, str]  # id, preview, expected digest, new digest
-LandClipWkbs = tuple[bytes, bytes, bytes]  # land clip, display outline and land borders, as WKB
+# Land clip, display outline, solid land borders and disputed land borders, as WKB.
+LandClipWkbs = tuple[bytes, bytes, bytes, bytes]
 
 BOUNDARY_NAMES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS boundary_names (
@@ -76,7 +77,25 @@ CREATE TABLE IF NOT EXISTS land_clips (
     wkb BLOB NOT NULL,
     display_wkb BLOB NOT NULL,
     borders_wkb BLOB NOT NULL,
+    disputed_wkb BLOB NOT NULL DEFAULT x'',
     PRIMARY KEY (geom_digest, land_version, clip_method)
+);
+
+CREATE TABLE IF NOT EXISTS boundary_parts (
+    parent_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    member_id TEXT NOT NULL,
+    PRIMARY KEY (parent_id, position)
+);
+
+CREATE TABLE IF NOT EXISTS disputed_lines (
+    id TEXT PRIMARY KEY,
+    level TEXT NOT NULL,
+    bbox_w REAL NOT NULL,
+    bbox_s REAL NOT NULL,
+    bbox_e REAL NOT NULL,
+    bbox_n REAL NOT NULL,
+    wkb BLOB NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS scenes (
@@ -231,8 +250,10 @@ def _add_missing_columns(connection: sqlite3.Connection) -> None:
                 raise
 
     _ensure_boundary_search_columns(connection, boundaries_columns)
+    _ensure_boundary_clip_columns(connection)
 
     _ensure_land_clips_method(connection)
+    _ensure_land_clips_disputed(connection)
 
 
 def _ensure_boundary_search_columns(
@@ -253,6 +274,18 @@ def _ensure_boundary_search_columns(
                     raise
 
 
+def _ensure_boundary_clip_columns(connection: sqlite3.Connection) -> None:
+    """Give a database created before the land clip read these columns of Overture rows theirs."""
+    existing = {row["name"] for row in connection.execute("PRAGMA table_info(boundaries)")}
+    for column in ("has_maritime", "border_level"):
+        if column not in existing:
+            try:
+                connection.execute(f"ALTER TABLE boundaries ADD COLUMN {column} INTEGER")
+            except sqlite3.OperationalError as error:
+                if "duplicate column" not in str(error):
+                    raise
+
+
 def _ensure_land_clips_method(connection: sqlite3.Connection) -> None:
     """Recreate land_clips with the clip method when an older file lacks it.
 
@@ -264,6 +297,21 @@ def _ensure_land_clips_method(connection: sqlite3.Connection) -> None:
 
     connection.execute("DROP TABLE IF EXISTS land_clips")
     connection.executescript(SCHEMA)
+
+
+def _ensure_land_clips_disputed(connection: sqlite3.Connection) -> None:
+    """Give clips stored before disputed borders existed the column, empty."""
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(land_clips)")}
+    if "disputed_wkb" in columns:
+        return
+
+    try:
+        connection.execute(
+            "ALTER TABLE land_clips ADD COLUMN disputed_wkb BLOB NOT NULL DEFAULT x''"
+        )
+    except sqlite3.OperationalError as error:
+        if "duplicate column" not in str(error):
+            raise
 
 
 def search(path: Path | str, query: str, level: str | None = None, limit: int = 20) -> list[Record]:
@@ -328,6 +376,7 @@ def get_boundary(path: Path | str, boundary_id: str, with_geometry: bool = True)
             "boundaries.name, boundaries.parent_name, boundaries.name_local, "
             "boundaries.parent_name_local, boundaries.iso3, boundaries.bbox_w, "
             "boundaries.bbox_s, boundaries.bbox_e, boundaries.bbox_n, boundaries.cells, "
+            "boundaries.has_maritime, boundaries.border_level, "
             f"{geometry_select}, boundaries.preview_geojson, boundaries.source, "
             "boundaries.licence, admin_kinds.kind AS kind FROM boundaries "
             "LEFT JOIN admin_kinds ON admin_kinds.iso3 = boundaries.iso3 "
@@ -345,6 +394,17 @@ def boundary_ids(path: Path | str, source: str, levels: tuple[str, ...]) -> list
         rows = connection.execute(
             f"SELECT id FROM boundaries WHERE source = ? AND level IN ({marks}) ORDER BY id",  # noqa: S608 - only placeholders are joined in.
             (source, *levels),
+        )
+        return [row["id"] for row in rows]
+
+
+def state_ids_of_country(path: Path | str, source: str, iso3: str) -> list[str]:
+    """Ids of the states of one source in a country, in id order."""
+    with connect(path) as connection:
+        rows = connection.execute(
+            "SELECT id FROM boundaries WHERE source = ? AND level = 'state' AND iso3 = ? "
+            "ORDER BY id",
+            (source, iso3),
         )
         return [row["id"] for row in rows]
 
@@ -367,18 +427,43 @@ def neighbour_digests(
         return [(row["id"], row["digest"]) for row in rows]
 
 
+def boundary_part_ids(path: Path | str, parent_id: str) -> list[str]:
+    """Ids of the areas that a combined area is made of, in part order."""
+    with connect(path) as connection:
+        rows = connection.execute(
+            "SELECT member_id FROM boundary_parts WHERE parent_id = ? ORDER BY position",
+            (parent_id,),
+        )
+        return [row["member_id"] for row in rows]
+
+
+def disputed_line_wkbs(path: Path | str, window: tuple[float, float, float, float]) -> list[bytes]:
+    """The WKB of the disputed lines whose bbox meets `window` (west, south, east, north)."""
+    west, south, east, north = window
+    with connect(path) as connection:
+        rows = connection.execute(
+            "SELECT wkb FROM disputed_lines "
+            "WHERE bbox_e >= ? AND bbox_w <= ? AND bbox_n >= ? AND bbox_s <= ?",
+            (west, east, south, north),
+        )
+        return [row["wkb"] for row in rows]
+
+
 def get_land_clip(
     path: Path | str, geom_digest: str, land_version: str, clip_method: int
 ) -> LandClipWkbs | None:
     """The stored land clip of an area geometry for one land version and clip method, or None."""
     with connect(path) as connection:
         row = connection.execute(
-            "SELECT wkb, display_wkb, borders_wkb FROM land_clips "
+            "SELECT wkb, display_wkb, borders_wkb, disputed_wkb FROM land_clips "
             "WHERE geom_digest = ? AND land_version = ? AND clip_method = ?",
             (geom_digest, land_version, clip_method),
         ).fetchone()
 
-    return (row["wkb"], row["display_wkb"], row["borders_wkb"]) if row else None
+    if row is None:
+        return None
+
+    return (row["wkb"], row["display_wkb"], row["borders_wkb"], row["disputed_wkb"])
 
 
 def set_land_clip(
@@ -388,8 +473,8 @@ def set_land_clip(
     with connect(path) as connection:
         connection.execute(
             "INSERT OR REPLACE INTO land_clips "
-            "(geom_digest, land_version, clip_method, wkb, display_wkb, borders_wkb) "
-            "VALUES (?,?,?,?,?,?)",
+            "(geom_digest, land_version, clip_method, wkb, display_wkb, borders_wkb, disputed_wkb) "
+            "VALUES (?,?,?,?,?,?,?)",
             (geom_digest, land_version, clip_method, *wkbs),
         )
 

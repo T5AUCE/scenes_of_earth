@@ -948,3 +948,43 @@ def test_startup_rejects_city_only_import_on_legacy_database(tmp_path):
 
     assert [row["id"] for row in db.search(path, "newcity")] == ["ovt:CC-1"]
     assert db.search(path, "oldland") == []
+
+
+def test_old_database_gains_the_disputed_clip_column_and_the_clip_columns_of_boundaries(tmp_path):
+    path = tmp_path / "old.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE land_clips (geom_digest TEXT NOT NULL, land_version TEXT NOT NULL, "
+            "clip_method INTEGER NOT NULL, wkb BLOB NOT NULL, display_wkb BLOB NOT NULL, "
+            "borders_wkb BLOB NOT NULL, PRIMARY KEY (geom_digest, land_version, clip_method))"
+        )
+        connection.execute("INSERT INTO land_clips VALUES ('x', 'v', 6, x'01', x'02', x'03')")
+
+    db.init(path)
+    db.init(path)
+
+    with db.connect(path) as connection:
+        boundary_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(boundaries)")
+        }
+
+    assert {"has_maritime", "border_level"} <= boundary_columns
+    assert db.get_land_clip(path, "x", "v", 6) == (b"\x01", b"\x02", b"\x03", b"")
+
+
+def test_part_ids_come_in_part_order_and_disputed_lines_in_the_window(tmp_path):
+    path = tmp_path / "soe.db"
+    db.init(path)
+    with db.connect(path) as connection:
+        connection.executemany(
+            "INSERT INTO boundary_parts VALUES (?, ?, ?)",
+            [("ovt:AA", 1, "ovt:BB"), ("ovt:AA", 0, "ovt:AA"), ("ovt:CC", 0, "ovt:CC")],
+        )
+        connection.executemany(
+            "INSERT INTO disputed_lines VALUES (?, 'country', ?, 0, ?, 1, ?)",
+            [("near", 0, 1, b"near"), ("far", 10, 11, b"far")],
+        )
+
+    assert db.boundary_part_ids(path, "ovt:AA") == ["ovt:AA", "ovt:BB"]
+    assert db.boundary_part_ids(path, "ovt:ZZ") == []
+    assert db.disputed_line_wkbs(path, (0.5, 0, 2, 1)) == [b"near"]
