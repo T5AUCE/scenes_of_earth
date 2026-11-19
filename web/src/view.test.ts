@@ -4,6 +4,7 @@ import { afterEach, test } from "node:test";
 
 import { Window } from "happy-dom";
 
+import { BORDER_DISPUTED_ID, BORDER_LINE_ID, BORDER_LOW_ID } from "./layers/borders.ts";
 import type { Scene } from "./types.ts";
 
 interface PendingRead {
@@ -27,6 +28,7 @@ interface ViewTestState {
   pendingReads: Map<string, PendingRead>;
   readyGates: Map<string, ReadyGate>;
   currentTime: string | null;
+  areaDocuments: Record<string, unknown>;
   createView(context: {
     layer: { id: string; time: unknown };
     map?: { addLayer: (spec: { id: string }, beforeId?: string) => void };
@@ -73,6 +75,7 @@ function freshState(): ViewTestState {
     pendingReads: new Map(),
     readyGates: new Map(),
     currentTime: null,
+    areaDocuments: {},
     createView(context: {
       layer: { id: string; time: unknown };
       map?: { addLayer: (spec: { id: string }, beforeId?: string) => void };
@@ -149,7 +152,8 @@ const hooks = registerHooks({
   resolve(specifier, context, next) {
     if (context.parentURL !== viewUrl) return next(specifier, context);
     if (specifier === "./api") {
-      const stub = "export const loadAreaFeature = async () => ({});";
+      const stub =
+        "export const loadAreaFeature = async (href) => globalThis.viewTest.areaDocuments[href] ?? {};";
       return { url: `data:text/javascript,${stub}`, shortCircuit: true };
     }
     if (specifier === "./data") {
@@ -374,6 +378,63 @@ test("the outline draws only the land borders when the area is cut to land", () 
   uncut.mounted.unmount();
 });
 
+test("a shifted scene draws both border features with their properties", async () => {
+  const borders = {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        properties: { name: "Test", disputed: false },
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [179, 0],
+            [181, 0],
+          ],
+        },
+      },
+      {
+        type: "Feature",
+        properties: { name: "Test", disputed: true },
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [182, 1],
+            [184, 1],
+          ],
+        },
+      },
+    ],
+  };
+  const { mounted, map } = mountTwoLayers(
+    true,
+    [],
+    "",
+    { bbox: [176, -20, 190, -15], borders_href: "borders.geojson" },
+    { "borders.geojson": borders },
+  );
+
+  await settle();
+  await settle();
+
+  const data = (map.getSource("soe-area-outline") as { data: typeof borders }).data;
+
+  assert.equal(data.type, "FeatureCollection");
+  assert.equal(data.features.length, 2);
+  assert.deepEqual(data.features[0].geometry.coordinates, [
+    [-181, 0],
+    [-179, 0],
+  ]);
+  assert.deepEqual(data.features[1].geometry.coordinates, [
+    [-178, 1],
+    [-176, 1],
+  ]);
+  assert.deepEqual(data.features[0].properties, { name: "Test", disputed: false });
+  assert.deepEqual(data.features[1].properties, { name: "Test", disputed: true });
+
+  mounted.unmount();
+});
+
 test("an outline display change repaints the map and remembers the choice", () => {
   const { mounted, map } = mountTwoLayers();
 
@@ -391,6 +452,31 @@ test("an outline display change repaints the map and remembers the choice", () =
     window.localStorage.getItem("soe.outline.v1"),
     JSON.stringify({ shown: true, color: "white", widthPx: 3 }),
   );
+
+  mounted.unmount();
+});
+
+test("an outline change repaints every border copy and keeps the fallback outline hidden", () => {
+  const { mounted, map } = mountTwoLayers();
+
+  for (const id of [BORDER_LOW_ID, BORDER_LINE_ID, BORDER_DISPUTED_ID]) {
+    map.layers.set(id, { id });
+  }
+
+  mounted.store.dispatch({
+    kind: "display",
+    update: (next) => {
+      next.outline = { shown: true, color: "white", widthPx: 2 };
+    },
+  });
+
+  assert.ok(map.layouts.includes("soe-area-outline:visibility:none"));
+
+  for (const id of [BORDER_LOW_ID, BORDER_LINE_ID, BORDER_DISPUTED_ID]) {
+    assert.ok(map.layouts.includes(`${id}:visibility:visible`), id);
+    assert.ok(map.paints.includes(`${id}:line-color:#ffffff`), id);
+    assert.ok(map.paints.includes(`${id}:line-width:4`), id);
+  }
 
   mounted.unmount();
 });
@@ -443,10 +529,12 @@ function mountTwoLayers(
   readyLayers: string[] = [],
   outline = "",
   areaPatch: Partial<Scene["area"]> = {},
+  areaDocuments: Record<string, unknown> = {},
 ) {
   installBrowser();
 
   const state = freshState();
+  state.areaDocuments = areaDocuments;
 
   for (const layerId of readyLayers) state.readyGates.set(layerId, deferredUnit());
 
@@ -538,9 +626,15 @@ function fakeMap(withWater = false) {
     layouts,
     paints,
     layers,
-    addSource(id: string, source: object) {
+    addSource(id: string, source: Record<string, unknown>) {
       addedSourceIds.push(id);
-      sources.set(id, source);
+      const stored: Record<string, unknown> & { setData(data: unknown): void } = {
+        ...source,
+        setData(data: unknown) {
+          stored.data = data;
+        },
+      };
+      sources.set(id, stored);
     },
     addedSources: () => addedSourceIds.filter((id) => id === "openmaptiles").length,
     addLayer(spec: { id: string }, _beforeId?: string) {

@@ -741,6 +741,8 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
 
     try {
       writeWaterStencil(gl, stencil, quads, map);
+      // The stencil pass leaves its own program selected, so categorical draws need theirs again.
+      this.beginDraw(gl, gpu);
       gl.stencilMask(0x00);
       gl.stencilFunc(gl.EQUAL, 1, 0xff);
       gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);

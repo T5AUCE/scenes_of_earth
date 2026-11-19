@@ -36,10 +36,12 @@ export interface LayersResponse {
 export interface AreaHit {
   id: string;
   name: string;
+  name_local?: string | null;
   level: string;
   kind: string | null; // each country's own name for its ADM1/ADM2 level, else null
   iso3: string | null;
   parent_name: string | null;
+  parent_name_local?: string | null;
   bbox: Bbox;
   cells: number;
 }

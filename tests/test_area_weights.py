@@ -5,10 +5,11 @@ import time
 
 import numpy as np
 import pytest
+import shapely
 from rasterio.transform import Affine
 from shapely.geometry import MultiPolygon, Polygon, box
 
-from soe.area_weights import area_weights
+from soe.area_weights import _clipped_areas, area_weights
 from tests.helpers import harmonic_island
 
 RES_DEG = 1.0  # cell size of the synthetic grids below
@@ -171,3 +172,25 @@ def test_many_vertex_outline_weights_run_under_a_time_budget():
 
     assert weights.sum() > 0
     assert elapsed < 10
+
+
+def test_chunk_clip_failure_falls_back_to_intersection():
+    # A sliver from the Burkina Faso outline exercises the fallback, as its clip fails.
+    geometry = Polygon(
+        [
+            (0.9376697911498199, 11.00441199689325),
+            (0.9305220122504975, 10.988130770843767),
+            (0.933471492149474, 10.994849102459789),
+            (0.0820009993369581, 11.093333333333332),
+        ]
+    )
+    west, south, east, north = (
+        -5.486666666666666,
+        10.986666666666666,
+        0.9333333333333336,
+        10.993333333333332,
+    )
+    boxes = shapely.box([west, 0.0], [south, south], [west + 0.01, east], [north, north])
+    expected = shapely.area(shapely.intersection(boxes, geometry))
+
+    np.testing.assert_allclose(_clipped_areas(geometry, boxes), expected, rtol=1e-12)

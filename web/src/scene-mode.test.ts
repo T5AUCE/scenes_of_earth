@@ -18,6 +18,7 @@ registerHooks({
 import { entryStats, isPreloadDisabled } from "./dev-stats.ts";
 import { DEFAULT_OUTLINE, storeMapDetailsShown } from "./display-state.ts";
 import { REVEAL_MS } from "./entry-curtain.ts";
+import { BORDER_DISPUTED_ID, BORDER_LINE_ID, BORDER_LOW_ID } from "./layers/borders.ts";
 import { COAST_STROKE_ID, INLAND_WATER_ID, OCEAN_COVER_ID } from "./layers/geology-water.ts";
 import { currentScenePreload } from "./layers/tile-prefetch.ts";
 import { assertSameNode } from "./testing/dom-assert.ts";
@@ -440,6 +441,109 @@ test("a later layer update keeps new symbols below the ocean and the coast below
   assert.ok(order.indexOf(COAST_MASK_ID) < order.indexOf("soe-area-outline"));
   assert.ok(order.indexOf(FADE_ID) < order.indexOf("soe-area-outline"));
   assert.ok(order.indexOf("water_name_point_label") < order.indexOf("water_name_line_label"));
+});
+
+test("the basemap border copy replaces the outline under the coast mask from its switch zoom", async (t) => {
+  useBorderScene(t);
+
+  const harness = createHarness();
+  const { order } = seedOceanBasemap(harness, { boundary: true });
+
+  harness.enter();
+  harness.data.resolve();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+
+  const line = harness.map.layers.get(BORDER_LINE_ID)!;
+  const disputed = harness.map.layers.get(BORDER_DISPUTED_ID)!;
+  const low = harness.map.layers.get(BORDER_LOW_ID)!;
+
+  assert.equal(line.source, "openmaptiles");
+  assert.equal(line["source-layer"], "boundary");
+  assert.deepEqual(line.filter, [
+    "all",
+    ["<=", ["get", "admin_level"], 6],
+    ["!=", ["get", "maritime"], 1],
+    ["!=", ["get", "disputed"], 1],
+  ]);
+  assert.equal(line.minzoom, 9);
+  assert.equal(disputed.minzoom, 9);
+  assert.equal(low.source, "soe-area-outline");
+  assert.equal(low.maxzoom, 9);
+  assert.equal(harness.map.getLayer("soe-area-outline")!.layout.visibility, "none");
+
+  assert.ok(order.indexOf(OCEAN_COVER_ID) < order.indexOf(COAST_STROKE_ID));
+  assert.ok(order.indexOf(COAST_STROKE_ID) < order.indexOf(BORDER_LOW_ID));
+  assert.ok(order.indexOf(BORDER_LOW_ID) < order.indexOf(BORDER_LINE_ID));
+  assert.ok(order.indexOf(BORDER_LINE_ID) < order.indexOf(BORDER_DISPUTED_ID));
+  assert.ok(order.indexOf(BORDER_DISPUTED_ID) < order.indexOf(COAST_MASK_ID));
+  assert.ok(order.indexOf(COAST_MASK_ID) < order.indexOf("soe-area-outline"));
+
+  harness.mode.exit();
+  await settle();
+
+  for (const id of [BORDER_LOW_ID, BORDER_LINE_ID, BORDER_DISPUTED_ID]) {
+    assert.equal(harness.map.getLayer(id), undefined, id);
+  }
+});
+
+test("a scene with a border level keeps the outline when the style has no boundary line", async (t) => {
+  useBorderScene(t);
+
+  const harness = createHarness();
+  seedOceanBasemap(harness);
+
+  harness.enter();
+  harness.data.resolve();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+
+  assert.equal(harness.map.getLayer(BORDER_LINE_ID), undefined);
+  assert.equal(harness.map.getLayer("soe-area-outline")!.layout.visibility, "visible");
+});
+
+test("a scene with a border level keeps the outline when the basemap has no coast", async (t) => {
+  useBorderScene(t);
+
+  const harness = createHarness();
+  (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
+    layers: [
+      { id: "boundary_2", type: "line", source: "openmaptiles", "source-layer": "boundary" },
+    ],
+  });
+  harness.map.layers.set("boundary_2", {
+    id: "boundary_2",
+    type: "line",
+    source: "openmaptiles",
+    "source-layer": "boundary",
+    layout: { visibility: "visible" },
+  });
+  harness.map.layers.set("soe-area-outline", {
+    id: "soe-area-outline",
+    layout: { visibility: "visible" },
+  });
+  harness.map.sources.set("openmaptiles", { tiles: [BASEMAP_TEMPLATE], maxzoom: 14 });
+
+  harness.enter();
+  harness.data.resolve();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+
+  assert.equal(harness.map.getLayer(BORDER_LINE_ID), undefined);
+  assert.equal(harness.map.getLayer("soe-area-outline")!.layout.visibility, "visible");
+});
+
+test("a scene without a border level keeps the outline above the mask", async () => {
+  const harness = createHarness();
+  seedOceanBasemap(harness, { boundary: true });
+
+  harness.enter();
+  harness.data.resolve();
+  harness.geometry.resolve(FEATURE);
+  await settle();
+
+  assert.equal(harness.map.getLayer(BORDER_LINE_ID), undefined);
+  assert.equal(harness.map.getLayer("soe-area-outline")!.layout.visibility, "visible");
 });
 
 test("the ocean cover mounts inside the curtain and keeps its paint", async () => {
@@ -3707,8 +3811,8 @@ function phasedHarness() {
   return harness;
 }
 
-/** Seed a basemap with a water fill and sea-name labels for ocean cover tests. */
-function seedOceanBasemap(harness: ReturnType<typeof createHarness>) {
+/** Seed a basemap with a water fill, sea-name labels, and optionally a boundary line. */
+function seedOceanBasemap(harness: ReturnType<typeof createHarness>, { boundary = false } = {}) {
   const waterFilter = ["!=", ["get", "brunnel"], "tunnel"];
   const waterPaint = { "fill-color": "rgb(158,189,255)" };
   const styleOrder = [
@@ -3721,6 +3825,7 @@ function seedOceanBasemap(harness: ReturnType<typeof createHarness>) {
     "label_city",
     "water_name_point_label",
     "water_name_line_label",
+    ...(boundary ? ["boundary_2"] : []),
     "soe-area-outline",
   ];
   const types: Record<string, string> = {
@@ -3733,6 +3838,7 @@ function seedOceanBasemap(harness: ReturnType<typeof createHarness>) {
     label_city: "symbol",
     water_name_point_label: "symbol",
     water_name_line_label: "symbol",
+    boundary_2: "line",
     "soe-area-outline": "line",
   };
   (harness.map as unknown as Record<string, unknown>).getStyle = () => ({
@@ -3747,6 +3853,7 @@ function seedOceanBasemap(harness: ReturnType<typeof createHarness>) {
             paint: waterPaint,
           }
         : {}),
+      ...(id === "boundary_2" ? { source: "openmaptiles", "source-layer": "boundary" } : {}),
     })),
   });
 
@@ -3758,6 +3865,18 @@ function seedOceanBasemap(harness: ReturnType<typeof createHarness>) {
   harness.map.sources.set("openmaptiles", { tiles: [BASEMAP_TEMPLATE], maxzoom: 14 });
 
   return { order: trackOrder(harness, styleOrder), waterFilter, waterPaint };
+}
+
+/** Give the harness's scene a border copy and restore the shared area afterwards. */
+function useBorderScene(t: { after(hook: () => void): void }) {
+  const area = SCENE.area;
+
+  Object.assign(area, { borders_href: "/borders.geojson", border_level: 6, border_min_zoom: 9 });
+  t.after(() => {
+    delete area.borders_href;
+    delete area.border_level;
+    delete area.border_min_zoom;
+  });
 }
 
 /** Track layer order through adds, moves and removals for ocean cover assertions. */

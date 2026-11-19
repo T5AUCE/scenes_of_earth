@@ -40,13 +40,18 @@ export function readyWaterCoverage(map: MapLibreMap): WaterCoverage | null {
   const manager = basemapTileManager(map);
   if (!manager) return null;
 
+  // The installed TileManager spells the lookup getTileByID, so anything else is unknown.
+  if (typeof manager.getRenderableIds !== "function" || typeof manager.getTileByID !== "function") {
+    return null;
+  }
+
   try {
     const zoom = Math.floor(map.getZoom());
-    const keys = manager.getRenderableIds?.() ?? [];
+    const keys = manager.getRenderableIds();
     const tiles: ReadyWaterTile[] = [];
 
     for (const key of keys) {
-      const tile = manager.getTileById?.(key);
+      const tile = manager.getTileByID(key);
       const id = tile?.tileID;
       // Ideal tiles carry the current zoom as their overscaled zoom.
       if (!id || id.overscaledZ !== zoom) continue;
@@ -257,7 +262,7 @@ function basemapTileManager(map: MapLibreMap): TileManagerPrivate | null {
 }
 
 interface TileManagerPrivate {
-  getTileById?: (key: string) => TilePrivate | undefined;
+  getTileByID?: (key: string) => TilePrivate | undefined;
   getRenderableIds?: () => string[];
 }
 

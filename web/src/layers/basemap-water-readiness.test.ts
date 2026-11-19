@@ -46,7 +46,7 @@ function coverageMapDouble(
 ) {
   const manager = {
     getRenderableIds: () => tiles.map((_, index) => `key${index}`),
-    getTileById: (key: string) => tiles[Number(key.replace("key", ""))],
+    getTileByID: (key: string) => tiles[Number(key.replace("key", ""))],
   };
 
   return {
@@ -242,7 +242,7 @@ test("unknown readiness warns once while absent water stays silent", () => {
 test("a throwing tile accessor yields no coverage instead of ready colour", () => {
   const manager = {
     getRenderableIds: () => ["key0"],
-    getTileById: () => {
+    getTileByID: () => {
       throw new Error("private state unavailable");
     },
   };
@@ -254,4 +254,18 @@ test("a throwing tile accessor yields no coverage instead of ready colour", () =
 
   assert.equal(readyWaterCoverage(map as never), null);
   assert.equal(isBasemapWaterAbsent(map as never), false);
+});
+
+test("a manager without the installed accessor yields no coverage instead of ready colour", () => {
+  const manager = {
+    getRenderableIds: () => ["key0"],
+    getTileById: () => tileDouble({ z: 5, x: 19, y: 16, buckets: {} }),
+  };
+  const map = {
+    getZoom: () => 5,
+    getStyle: () => ({ layers: [{ id: "water", type: "fill", "source-layer": "water" }] }),
+    style: { tileManagers: { openmaptiles: manager } },
+  };
+
+  assert.equal(readyWaterCoverage(map as never), null);
 });

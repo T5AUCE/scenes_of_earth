@@ -1165,7 +1165,7 @@ function waterBucketDouble() {
 function coverageMapDouble(zoom: number, tiles: ReturnType<typeof tileDouble>[]) {
   const manager = {
     getRenderableIds: () => tiles.map((_, index) => `key${index}`),
-    getTileById: (key: string) => tiles[Number(key.replace("key", ""))],
+    getTileByID: (key: string) => tiles[Number(key.replace("key", ""))],
   };
 
   return {
@@ -1208,7 +1208,7 @@ function installFallbackCoverage(
   const listeners = (shared.fallbackListeners ??= new Map<string, Set<() => void>>());
   const manager = {
     getRenderableIds: () => options.tiles.map((_, index) => `key${index}`),
-    getTileById: (key: string) => options.tiles[Number(key.replace("key", ""))],
+    getTileByID: (key: string) => options.tiles[Number(key.replace("key", ""))],
   };
 
   target.getZoom = () => options.zoom;

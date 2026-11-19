@@ -33,6 +33,7 @@ import { nextEntryFrame } from "./entry-curtain";
 import { makeHtmlElement } from "./html";
 import { BLEND, blendPair } from "./layers/allocate";
 import { BLEND_TITLE, type BlendView, createBlendView } from "./layers/blend";
+import { applyBorders, borderCopyMounted } from "./layers/borders";
 import { applyCoastStroke, COAST_STROKE_ID } from "./layers/geology-water";
 import { LAYER_KINDS } from "./layers/registry";
 import { firstSymbolId, removeLayerAndSource, showScaleBar } from "./map";
@@ -41,7 +42,15 @@ import { subscribeDrawing, type MountedLayer } from "./scene-cards";
 import { createSceneStore, type SceneStore } from "./scene-store";
 import { loadStoredShowAs } from "./show-as";
 import { createTimeline, formatTime, scrubberTimes } from "./timeline";
-import type { DisplayTokens, DrawSlots, LayerDisplay, LayerDoc, LayerView, Scene } from "./types";
+import type {
+  AreaFeature,
+  DisplayTokens,
+  DrawSlots,
+  LayerDisplay,
+  LayerDoc,
+  LayerView,
+  Scene,
+} from "./types";
 import { mountSceneColumn } from "./ui/scene-column";
 
 type GeoJsonData = Parameters<GeoJSONSource["setData"]>[0];
@@ -425,16 +434,26 @@ function outlineHref(scene: Scene) {
   return scene.area.borders_href ?? scene.area.geometry_href;
 }
 
-/** Paint the area outline's colour, width and visibility without rebuilding. */
-function applyOutline(map: MapLibreMap, outline: OutlineState) {
-  map.setLayoutProperty(OUTLINE_ID, "visibility", outline.shown ? "visible" : "none");
+/**
+ * Paint the area outline or, when the basemap border copy is mounted, its three border layers.
+ * The copy sits under the coast mask, so it replaces the centred outline above the mask.
+ */
+export function applyOutline(map: MapLibreMap, outline: OutlineState) {
+  const hasBorderCopy = borderCopyMounted(map);
+
+  map.setLayoutProperty(
+    OUTLINE_ID,
+    "visibility",
+    !hasBorderCopy && outline.shown ? "visible" : "none",
+  );
   // Round joins keep the outline corners smooth at every width the slider offers.
   map.setLayoutProperty(OUTLINE_ID, "line-join", "round");
   map.setLayoutProperty(OUTLINE_ID, "line-cap", "round");
   map.setPaintProperty(OUTLINE_ID, "line-color", outlineCss(outline.color));
   map.setPaintProperty(OUTLINE_ID, "line-width", outline.widthPx);
 
-  // The coast shares the border paint, so linked or stored outline edits repaint it here.
+  // The copies and the coast share the border paint, so linked or stored edits repaint them here.
+  if (hasBorderCopy) applyBorders(map, outline);
   if (map.getLayer(COAST_STROKE_ID)) applyCoastStroke(map, outline);
 }
 
@@ -452,17 +471,39 @@ async function showShiftedOutline(
   shift: number,
   isMounted: () => boolean,
 ) {
-  const feature = await loadAreaFeature(geometryHref);
+  const loaded = (await loadAreaFeature(geometryHref)) as unknown as
+    | AreaFeature
+    | OutlineCollection;
 
   if (!isMounted()) return;
 
-  const { geometry } = feature;
-  const shifted = {
-    ...feature,
-    geometry: { ...geometry, coordinates: shiftLongitudes(geometry.coordinates, shift) },
-  };
+  void (map.getSource(OUTLINE_ID) as GeoJSONSource).setData(shiftOutline(loaded, shift));
+}
 
-  void (map.getSource(OUTLINE_ID) as GeoJSONSource).setData(shifted as GeoJsonData);
+interface OutlineCollection {
+  type: "FeatureCollection";
+  features: AreaFeature[];
+}
+
+function shiftOutline(document: AreaFeature | OutlineCollection, shift: number): GeoJsonData {
+  if (document.type === "FeatureCollection") {
+    return {
+      type: "FeatureCollection",
+      features: document.features.map((feature) => shiftFeature(feature, shift)),
+    } as GeoJsonData;
+  }
+
+  return shiftFeature(document, shift) as GeoJsonData;
+}
+
+function shiftFeature(feature: AreaFeature, shift: number): AreaFeature {
+  return {
+    ...feature,
+    geometry: {
+      ...feature.geometry,
+      coordinates: shiftLongitudes(feature.geometry.coordinates, shift),
+    },
+  };
 }
 
 function addSlotAnchors(map: MapLibreMap) {

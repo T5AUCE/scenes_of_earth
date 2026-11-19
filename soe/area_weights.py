@@ -8,6 +8,7 @@ import numpy as np
 import shapely
 from rasterio.features import geometry_mask, rasterize
 from rasterio.transform import Affine
+from shapely.errors import GEOSException
 from shapely.geometry import Polygon, mapping
 from shapely.geometry.base import BaseGeometry
 
@@ -76,7 +77,11 @@ def _clipped_areas(geometry: BaseGeometry, boxes: np.ndarray) -> np.ndarray:
         bounds[:, 2].max(),
         bounds[:, 3].max(),
     )
-    clip = shapely.clip_by_rect(geometry, west, south, east, north)
+    try:
+        clip = shapely.clip_by_rect(geometry, west, south, east, north)
+    except GEOSException:
+        # clip_by_rect fails on some valid outlines, so intersect the chunk rectangle instead.
+        clip = shapely.intersection(geometry, shapely.box(west, south, east, north))
     if clip.is_empty:
         return np.zeros(len(boxes))
 

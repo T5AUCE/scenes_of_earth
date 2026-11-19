@@ -15,10 +15,11 @@ export const COAST_STROKE_ID = "soe-coast-stroke";
 /** The basemap water class that marks the sea. */
 const OCEAN_CLASS = "ocean";
 
-interface WaterLayer {
+/** One basemap layer as the loaded style holds it, with the fields a copy reuses. */
+export interface BasemapLayer {
   type?: string;
-  source?: string;
-  ["source-layer"]?: string;
+  source: string;
+  ["source-layer"]: string;
   filter?: unknown;
   paint?: Record<string, unknown>;
   layout?: Record<string, unknown>;
@@ -177,20 +178,36 @@ function combinedFilter(base: unknown, extra: unknown): unknown {
 }
 
 /**
- * Read the basemap water fill from the loaded style so the copy tracks its colours.
- * A missing style or water layer means there is nothing to copy.
+ * Read the first basemap layer of one source layer from the loaded style, matching the type
+ * when one is given, so copies track the basemap's own source. A missing style or layer means
+ * there is nothing to copy.
  */
-function basemapWaterSpec(map: MapLibreMap) {
-  let layers: WaterLayer[] | undefined;
+export function basemapLayerSpec(
+  map: MapLibreMap,
+  sourceLayer: string,
+  type?: string,
+): BasemapLayer | null {
+  let layers: Partial<BasemapLayer>[] | undefined;
 
   try {
-    layers = (map.getStyle() as unknown as { layers?: WaterLayer[] }).layers;
+    layers = (map.getStyle() as unknown as { layers?: Partial<BasemapLayer>[] }).layers;
   } catch {
     return null;
   }
 
-  const water = layers?.find((layer) => layer.type === "fill" && layer["source-layer"] === "water");
-  if (!water?.source || !water["source-layer"] || !water.paint) return null;
+  const layer = layers?.find(
+    (candidate) =>
+      candidate["source-layer"] === sourceLayer && (type === undefined || candidate.type === type),
+  );
+  if (!layer?.source) return null;
+
+  return { ...layer, source: layer.source, "source-layer": sourceLayer };
+}
+
+/** Read the basemap water fill from the loaded style so the copies track its colours. */
+function basemapWaterSpec(map: MapLibreMap) {
+  const water = basemapLayerSpec(map, "water", "fill");
+  if (!water?.paint) return null;
 
   return water;
 }

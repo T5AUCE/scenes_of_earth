@@ -1434,7 +1434,7 @@ test("unknown readiness hides colour and warns once", async () => {
     };
     style.tileManagers.openmaptiles = {
       getRenderableIds: () => ["key0"],
-      getTileById: () => {
+      getTileByID: () => {
         throw new Error("private state unavailable");
       },
     };
@@ -1445,6 +1445,71 @@ test("unknown readiness hides colour and warns once", async () => {
     harness.field.layer.onAdd!(harness.map, harness.gl);
     harness.field.layer.render(harness.gl, harness.input);
     harness.field.layer.render(harness.gl, harness.input);
+
+    assert.equal(harness.draws.length, 0);
+    assert.equal(warnings.length, 1);
+    assert.equal(stencil.isStencilEnabled(), false);
+  } finally {
+    console.warn = original;
+    resetWaterReadinessWarningsForTests();
+  }
+});
+
+test("categorical draws reuse the categorical program after the stencil", async () => {
+  const harness = createHarness();
+  const stencil = installStencil(harness);
+  installWaterMap(harness, {
+    zoom: 5,
+    tiles: [waterTile({ z: 5, x: 3, y: 4, buckets: { water: waterBucket() } })],
+  });
+  harness.field.setIds(new Uint8Array(12).fill(1));
+  harness.field.layer.onAdd!(harness.map, harness.gl);
+  harness.field.layer.render(harness.gl, harness.input);
+  await Promise.resolve();
+
+  assert.equal(harness.failures.length, 0);
+
+  // One stencil batch plus one categorical draw per world copy.
+  const states = stencil.drawStates();
+  assert.equal(states.length, 4);
+  assert.equal(stencil.stencilWrites(), 1);
+
+  const [stencilState, ...colour] = states;
+  for (const state of colour) {
+    assert.equal(state.program, colour[0].program);
+    assert.ok(state.array);
+    assert.notEqual(state.program, stencilState.program);
+    assert.notEqual(state.array, stencilState.array);
+  }
+  assert.equal(stencil.isStencilEnabled(), false);
+});
+
+test("an unsupported manager accessor hides colour and warns once", async () => {
+  const harness = createHarness();
+  const stencil = installStencil(harness);
+  const warnings: unknown[][] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => void warnings.push(args);
+  const { resetWaterReadinessWarningsForTests } =
+    await import("../layers/basemap-water-readiness.ts");
+
+  try {
+    resetWaterReadinessWarningsForTests();
+    installWaterMap(harness, {
+      zoom: 5,
+      tiles: [waterTile({ z: 5, x: 3, y: 4, buckets: { water: waterBucket() } })],
+    });
+    const style = (harness.map as unknown as { style: unknown }).style as {
+      tileManagers: Record<string, unknown>;
+    };
+    style.tileManagers.openmaptiles = {
+      getRenderableIds: () => ["key0"],
+      getTileById: () => waterTile({ z: 5, x: 3, y: 4, buckets: { water: waterBucket() } }),
+    };
+    harness.field.setIds(new Uint8Array(12).fill(1));
+    harness.field.layer.onAdd!(harness.map, harness.gl);
+    harness.field.layer.render(harness.gl, harness.input);
+    await Promise.resolve();
 
     assert.equal(harness.draws.length, 0);
     assert.equal(warnings.length, 1);
@@ -1503,7 +1568,7 @@ function installWaterMap(
   const tiles = options.tiles;
   const manager = {
     getRenderableIds: () => tiles.map((_, index) => `key${index}`),
-    getTileById: (key: string) => tiles[Number(key.replace("key", ""))],
+    getTileByID: (key: string) => tiles[Number(key.replace("key", ""))],
   };
   const project =
     options.project
@@ -1535,6 +1600,69 @@ function installStencil(harness: ReturnType<typeof createHarness>) {
   let scissorEnabled = false;
   let writes = 0;
   const draws = harness.draws;
+  const inner = harness.gl as unknown as {
+    useProgram: (program: unknown) => void;
+    getUniformLocation: (program: unknown, name: string) => unknown;
+    uniform1i: (location: unknown, value: unknown) => void;
+    uniform1f: (location: unknown, value: unknown) => void;
+    uniform2i: (location: unknown, first: unknown, second: unknown) => void;
+    uniform4f: (location: unknown, ...values: unknown[]) => void;
+    uniformMatrix4fv: (location: unknown, transpose: boolean, value: unknown) => void;
+    bindVertexArray: (array: unknown) => void;
+    drawArrays: (...args: unknown[]) => void;
+  };
+  let currentProgram: unknown = null;
+  let currentArray: unknown = null;
+  const drawStates: { program: unknown; array: unknown }[] = [];
+  // Snapshot before assigning, so the wrappers below cannot call themselves.
+  const originalUse = inner.useProgram.bind(harness.gl);
+  const originalLocation = inner.getUniformLocation.bind(harness.gl);
+  const originalBind = inner.bindVertexArray.bind(harness.gl);
+  const originalDraw = inner.drawArrays.bind(harness.gl);
+
+  const checkLocation = (location: unknown) => {
+    const owned = location as { program: unknown; name: string };
+    // A location from another program must not receive values for this one.
+    if (owned?.program !== currentProgram) {
+      throw new Error(`Uniform ${owned?.name} set while another program is current`);
+    }
+
+    return owned.name;
+  };
+
+  Object.assign(harness.gl, {
+    useProgram: (program: unknown) => {
+      currentProgram = program;
+      originalUse(program);
+    },
+    getUniformLocation: (program: unknown, name: string) => {
+      originalLocation(program, name);
+      return { program, name };
+    },
+    uniform1i: (location: unknown, value: unknown) => {
+      harness.uniforms.set(checkLocation(location), value);
+    },
+    uniform1f: (location: unknown, value: unknown) => {
+      harness.uniforms.set(checkLocation(location), value);
+    },
+    uniform2i: (location: unknown) => {
+      checkLocation(location);
+    },
+    uniform4f: (location: unknown) => {
+      checkLocation(location);
+    },
+    uniformMatrix4fv: (location: unknown, _transpose: boolean, value: unknown) => {
+      harness.uniforms.set(checkLocation(location), value);
+    },
+    bindVertexArray: (array: unknown) => {
+      currentArray = array;
+      originalBind(array);
+    },
+    drawArrays: (...args: unknown[]) => {
+      drawStates.push({ program: currentProgram, array: currentArray });
+      originalDraw(...args);
+    },
+  });
 
   Object.assign(harness.gl, {
     STENCIL_TEST: 2960,
@@ -1587,5 +1715,6 @@ function installStencil(harness: ReturnType<typeof createHarness>) {
     isStencilEnabled: () => stencilEnabled,
     stencilWrites: () => writes,
     drawCount: stencilDraws,
+    drawStates: () => [...drawStates],
   };
 }

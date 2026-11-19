@@ -282,6 +282,140 @@ test("a failed fetch while hidden keeps its notice until the outline is shown", 
   assert.equal(harness.hasOutline(), true);
 });
 
+test("the name toggle offers english and local after the level filter", async (context) => {
+  const harness = await searchWithHits(context, [areaHit()], () => null);
+  const selects = [...document.querySelectorAll("select")];
+
+  assert.equal(harness.toggle.tagName, "SELECT");
+  assert.equal(harness.toggle.getAttribute("aria-label"), "Name language");
+  assert.deepEqual(
+    [...harness.toggle.options].map((option) => [option.value, option.textContent]),
+    [
+      ["english", "English"],
+      ["local", "Local"],
+    ],
+  );
+  assert.equal(harness.toggle.value, "english");
+  assert.equal(selects[0]?.getAttribute("aria-label"), null);
+  assert.equal(selects[1], harness.toggle);
+});
+
+test("search results show the local name when preferred", async (context) => {
+  usePreferenceStorage(context, "local");
+  const hits = [
+    areaHit({
+      name: "Norway",
+      name_local: "Norge",
+      parent_name: "Europe",
+      parent_name_local: "Europa",
+    }),
+  ];
+  const harness = await searchWithHits(context, hits, () => null);
+
+  assert.deepEqual(await harness.showOptions(), ["Norge · Europa · ADM1"]);
+});
+
+test("search results fall back to english when the local name is missing", async (context) => {
+  usePreferenceStorage(context, "local");
+  const harness = await searchWithHits(context, [areaHit()], () => null);
+
+  assert.deepEqual(await harness.showOptions(), ["Nakuru · Kenya · ADM1"]);
+});
+
+test("a pick shows the preferred name", async (context) => {
+  usePreferenceStorage(context, "local");
+  const hits = [areaHit({ name: "Norway", name_local: "Norge" })];
+  const harness = await searchWithHits(context, hits, (url) => {
+    if (url.startsWith("/api/areas/")) {
+      return Promise.resolve(Response.json({ ...hits[0], geometry: outlineA() }));
+    }
+    return null;
+  });
+
+  await harness.pick(0);
+  await flush();
+
+  assert.equal(harness.chosenText(), "Currently selected - Norge");
+});
+
+test("the toggle stores the new language and refreshes shown names", async (context) => {
+  const items = usePreferenceStorage(context, null);
+  const hits = [
+    areaHit({
+      name: "Norway",
+      name_local: "Norge",
+      parent_name: "Europe",
+      parent_name_local: "Europa",
+    }),
+  ];
+  const harness = await searchWithHits(context, hits, () => null);
+
+  assert.deepEqual(await harness.showOptions(), ["Norway · Europe · ADM1"]);
+
+  harness.setPreference("local");
+
+  assert.equal(items.get("soe.name-preference.v1"), "local");
+  assert.deepEqual(harness.shownTexts(), ["Norge · Europa · ADM1"]);
+});
+
+test("changing language after typing keeps the edited query", async (context) => {
+  usePreferenceStorage(context, null);
+  const hits = [areaHit({ name: "Norway", name_local: "Norge" })];
+  const harness = await searchWithHits(context, hits, (url) => {
+    if (url.startsWith("/api/areas/")) {
+      return Promise.resolve(Response.json({ ...hits[0], geometry: outlineA() }));
+    }
+    return null;
+  });
+
+  await harness.pick(0);
+  await flush();
+
+  harness.typeQuery("Sweden");
+  harness.setPreference("local");
+
+  assert.equal(harness.searchValue(), "Sweden");
+  assert.equal(harness.chosenText(), "Currently selected - Norge");
+
+  context.mock.timers.tick(SEARCH_DEBOUNCE_MS);
+  await flush();
+
+  assert.match(harness.searches.at(-1) ?? "", /Sweden/);
+});
+
+test("a blocked store keeps english results without throwing", async (context) => {
+  usePreferenceStorage(context, null, true);
+  const hits = [areaHit({ name: "Norway", name_local: "Norge" })];
+  const harness = await searchWithHits(context, hits, () => null);
+
+  assert.deepEqual(await harness.showOptions(), ["Norway · Kenya · ADM1"]);
+});
+
+function usePreferenceStorage(context: TestContext, initial: string | null, failing = false) {
+  const items = new Map<string, string>();
+  if (initial !== null) items.set("soe.name-preference.v1", initial);
+
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const blocked = () => {
+    throw new Error("blocked");
+  };
+  Object.assign(globalThis, {
+    localStorage: failing
+      ? { getItem: blocked, setItem: blocked, removeItem: blocked }
+      : {
+          getItem: (key: string) => items.get(key) ?? null,
+          setItem: (key: string, value: string) => items.set(key, value),
+          removeItem: (key: string) => items.delete(key),
+        },
+  });
+  context.after(() => {
+    if (previous) Object.defineProperty(globalThis, "localStorage", previous);
+    else Reflect.deleteProperty(globalThis, "localStorage");
+  });
+
+  return items;
+}
+
 function gate(): { promise: Promise<Response>; resolve(response: Response): void } {
   let resolve!: (response: Response) => void;
   const promise = new Promise<Response>((accept) => {
@@ -303,13 +437,23 @@ async function searchWithHits(
   hideOutline(): void;
   showOutline(): void;
   clearSearch(): void;
+  toggle: HTMLSelectElement;
+  setPreference(value: string): void;
+  showOptions(): Promise<(string | null)[]>;
+  shownTexts(): (string | null)[];
+  searches: string[];
+  typeQuery(text: string): void;
+  searchValue(): string | null;
 }> {
   const window = new Window();
   context.after(() => window.happyDOM.abort());
   installBrowser(context, window);
   stubOutlineStyle(context);
   context.mock.method(globalThis, "fetch", async (url: string) => {
-    if (url.startsWith("/api/areas/search?")) return Response.json(hits);
+    if (url.startsWith("/api/areas/search?")) {
+      searched.push(url);
+      return Response.json(hits);
+    }
 
     const pending = areaResponse(url);
     if (pending) return pending;
@@ -319,6 +463,7 @@ async function searchWithHits(
 
   const sources: unknown[] = [];
   const outlineLayers = new Set<string>();
+  const searched: string[] = [];
   const map = {
     fitBounds() {},
     getLayer(id: string) {
@@ -345,13 +490,13 @@ async function searchWithHits(
   const root = document.createElement("div");
   document.body.append(root);
 
-  const { search, level, results } = createSearchControls(root);
+  const { search, level, results, namePreference } = createSearchControls(root);
   const chosen = document.createElement("div");
   root.append(chosen);
 
   const notices: string[] = [];
   const controls = bindAreaSearch(
-    { search, level, results, chosen },
+    { search, level, results, chosen, namePreference },
     map,
     () => {},
     () => {},
@@ -362,17 +507,30 @@ async function searchWithHits(
 
   context.mock.timers.enable({ apis: ["setTimeout"] });
 
-  const pick = async (index: number) => {
+  const triggerSearch = async () => {
+    typeQuery("Nakuru");
+    context.mock.timers.tick(SEARCH_DEBOUNCE_MS);
+    await flush();
+  };
+
+  const queryOptions = () => [...document.querySelectorAll("[role=option]")];
+
+  const typeQuery = (text: string) => {
     const box = document.querySelector<HTMLInputElement>("[role=combobox]");
 
     assert.ok(box);
 
-    box.value = "Nakuru";
+    box.value = text;
     box.dispatchEvent(new window.Event("input"));
-    context.mock.timers.tick(SEARCH_DEBOUNCE_MS);
-    await flush();
+  };
 
-    const options = [...document.querySelectorAll("[role=option]")];
+  const searchValue = () =>
+    document.querySelector<HTMLInputElement>("[role=combobox]")?.value ?? null;
+
+  const pick = async (index: number) => {
+    await triggerSearch();
+
+    const options = queryOptions();
 
     assert.ok(options[index]);
 
@@ -400,6 +558,20 @@ async function searchWithHits(
     hideOutline: () => controls.hideOutline(),
     showOutline: () => controls.showOutline(),
     clearSearch,
+    toggle: namePreference,
+    setPreference: (value: string) => {
+      namePreference.value = value;
+      const view = namePreference.ownerDocument.defaultView!;
+      namePreference.dispatchEvent(new view.Event("change"));
+    },
+    showOptions: async () => {
+      await triggerSearch();
+      return queryOptions().map((item) => item.textContent);
+    },
+    shownTexts: () => queryOptions().map((item) => item.textContent),
+    searches: searched,
+    typeQuery,
+    searchValue,
   };
 }
 
@@ -453,10 +625,12 @@ function areaHit(overrides: Partial<AreaHit> = {}): AreaHit {
   return {
     id: "ovt:NAKURU",
     name: "Nakuru",
+    name_local: null,
     level: "state",
     kind: null,
     iso3: "KEN",
     parent_name: "Kenya",
+    parent_name_local: null,
     bbox: [35, -1, 36, 1],
     cells: 1,
     ...overrides,

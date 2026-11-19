@@ -12,6 +12,12 @@ import {
   fitToBbox,
   showPickedOutline,
 } from "./map";
+import {
+  loadNamePreference,
+  preferredName,
+  storeNamePreference,
+  type NamePreference,
+} from "./name-preference";
 import { shiftLongitudes, worldShift } from "./render/mercator";
 import type { AreaFeature, AreaHit, Bbox } from "./types";
 
@@ -35,17 +41,26 @@ const LEVEL_LABELS = new Map([
   ["urban", "Urban area"],
 ]);
 
+const NAME_PREFERENCE_OPTIONS = [
+  { value: "english", label: "English" },
+  { value: "local", label: "Local" },
+];
+
+// The panel still passes the old shape, so binding finds the new toggle here.
+const nameToggleBySearch = new WeakMap<HTMLInputElement, HTMLSelectElement>();
+
 /** The existing combobox and selected-area label owned by one search interaction. */
 export interface AreaSearchControls {
   search: HTMLInputElement;
   level: HTMLSelectElement;
   results: HTMLUListElement;
   chosen: HTMLElement;
+  namePreference?: HTMLSelectElement;
 }
 
 /** Attach search before layers load while the panel retains selection/build coordination. */
 export function bindAreaSearch(
-  { search, level, results, chosen }: AreaSearchControls,
+  { search, level, results, chosen, namePreference: explicitToggle }: AreaSearchControls,
   map: MapLibreMap,
   onPick: (hit: AreaHit) => void,
   onClear: () => void,
@@ -62,6 +77,20 @@ export function bindAreaSearch(
   let isOutlineHidden = false;
   // A failure notice must not overwrite the entry status while the outline is hidden.
   let outlineNotice: string | null = null;
+  let preference: NamePreference = loadNamePreference();
+  let pickedHit: AreaHit | null = null;
+  let pickedApproximate = false;
+  const toggle = explicitToggle ?? nameToggleBySearch.get(search);
+
+  if (toggle) {
+    toggle.value = preference;
+    toggle.onchange = () => {
+      const previous = preference;
+      preference = toggle.value === "local" ? "local" : "english";
+      storeNamePreference(preference);
+      refreshNames(previous);
+    };
+  }
 
   const scheduleSearch = () => {
     clearTimeout(searchTimer);
@@ -111,9 +140,7 @@ export function bindAreaSearch(
   }
 
   function showHit(hit: AreaHit, index: number) {
-    const level = LEVEL_LABELS.get(hit.level) ?? hit.level;
-    const text = [hit.name, hit.parent_name, level].filter(Boolean).join(" · ");
-    const item = makeHtmlElement("li", text, results);
+    const item = makeHtmlElement("li", hitText(hit), results);
     item.id = `${results.id}-${index}`;
     item.setAttribute("role", "option");
 
@@ -126,11 +153,38 @@ export function bindAreaSearch(
     return item;
   }
 
+  function refreshNames(previous: NamePreference) {
+    shownHits.forEach((hit, index) => {
+      hitItems[index].textContent = hitText(hit);
+    });
+
+    if (!pickedHit) return;
+
+    const name = preferredName(pickedHit.name, pickedHit.name_local, preference);
+    const previousName = preferredName(pickedHit.name, pickedHit.name_local, previous);
+    chosen.textContent = `${AREA_PREFIX}${name}${pickedApproximate ? " (approximate outline)" : ""}`;
+
+    // An edited query is the viewer's next search, so only the untouched pick label follows.
+    if (search.value === previousName) search.value = name;
+  }
+
+  function hitText(hit: AreaHit) {
+    const level = LEVEL_LABELS.get(hit.level) ?? hit.level;
+    const name = preferredName(hit.name, hit.name_local, preference);
+    const parent = hit.parent_name
+      ? preferredName(hit.parent_name, hit.parent_name_local, preference)
+      : null;
+    return [name, parent, level].filter(Boolean).join(" · ");
+  }
+
   function pick(hit: AreaHit) {
     onPick(hit);
     closeResults();
-    chosen.textContent = `${AREA_PREFIX}${hit.name}`;
-    search.value = hit.name;
+    pickedHit = hit;
+    pickedApproximate = false;
+    const name = preferredName(hit.name, hit.name_local, preference);
+    chosen.textContent = `${AREA_PREFIX}${name}`;
+    search.value = name;
     isOutlineHidden = false;
     outlineNotice = null;
     fitToBbox(map, hit.bbox, { padding: BROWSE_PADDING_PX, maxZoom: BROWSE_MAX_ZOOM });
@@ -148,9 +202,11 @@ export function bindAreaSearch(
     } catch {
       if (thisPick !== pickCount) return;
 
+      const name = preferredName(hit.name, hit.name_local, preference);
       geometry = bboxGeometry(hit.bbox);
-      chosen.textContent = `${AREA_PREFIX}${hit.name} (approximate outline)`;
-      pendingNotice = `Outline unavailable for ${hit.name}; showing an approximate outline.`;
+      pickedApproximate = true;
+      chosen.textContent = `${AREA_PREFIX}${name} (approximate outline)`;
+      pendingNotice = `Outline unavailable for ${name}; showing an approximate outline.`;
 
       if (!isOutlineHidden) onOutlineNotice?.(pendingNotice);
     }
@@ -170,6 +226,8 @@ export function bindAreaSearch(
   function deselectArea() {
     onClear();
     pickCount++;
+    pickedHit = null;
+    pickedApproximate = false;
     lastOutline = null;
     outlineNotice = null;
     isOutlineHidden = false;
@@ -260,13 +318,23 @@ export function createSearchControls(root: HTMLElement) {
 
   for (const { value, label } of AREA_LEVELS) level.append(new Option(label, value));
 
+  const namePreference = makeHtmlElement("select", "", root);
+  namePreference.setAttribute("aria-label", "Name language");
+
+  for (const { value, label } of NAME_PREFERENCE_OPTIONS) {
+    namePreference.append(new Option(label, value));
+  }
+
+  namePreference.value = loadNamePreference();
+  nameToggleBySearch.set(search, namePreference);
+
   const results = makeHtmlElement("ul", "", searchBox);
   results.id = "area-results";
   results.className = "results";
   results.setAttribute("role", "listbox");
   results.hidden = true;
 
-  return { search, level, results };
+  return { search, level, results, namePreference };
 }
 
 function bboxGeometry([west, south, east, north]: Bbox): AreaFeature["geometry"] {
