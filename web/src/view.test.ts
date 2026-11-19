@@ -706,7 +706,7 @@ function makeScene(withTime: boolean): Scene {
     id: "test",
     title: "Test scene",
     generator: { name: "soe", version: "0.9.0" },
-    version: "0.7",
+    version: "0.8",
     area: {
       boundary: null,
       bbox: [0, -1, 1, 1],

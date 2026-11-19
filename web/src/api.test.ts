@@ -33,7 +33,7 @@ test("the search URL encodes the query and the level alike", () => {
   assert.equal(searchUrl("a", "x&y=1"), "/api/areas/search?q=a&level=x%26y%3D1");
 });
 
-test("loadScene accepts format 0.7 and rejects format 0.6", async (context) => {
+test("loadScene accepts format 0.8 and rejects format 0.7", async (context) => {
   const locationDescriptor = Object.getOwnPropertyDescriptor(globalThis, "location");
   Object.defineProperty(globalThis, "location", {
     configurable: true,
@@ -80,7 +80,7 @@ test("loadScene accepts format 0.7 and rejects format 0.6", async (context) => {
     reference_values: [{ id: "sea_level", value: 0 }],
   };
   const scene = {
-    version: "0.7",
+    version: "0.8",
     area: { geometry_href: "area.geojson" },
     data: { href: "data.zarr" },
     credits: {
@@ -112,7 +112,7 @@ test("loadScene accepts format 0.7 and rejects format 0.6", async (context) => {
 
   const loaded = await loadScene("/scenes/example/scene.json");
 
-  assert.equal(loaded.version, "0.7");
+  assert.equal(loaded.version, "0.8");
   assert.equal(loaded.area.geometry_href, "https://example.test/scenes/example/area.geojson");
   assert.equal(loaded.data.href, "https://example.test/scenes/example/data.zarr");
   assert.equal(loaded.layers[0].tiles?.url, "https://example.test/terrain/v1/{z}/{x}/{y}.webp");
@@ -131,7 +131,7 @@ test("loadScene accepts format 0.7 and rejects format 0.6", async (context) => {
   assert.ok(!("distribution" in loaded.layers[3]));
   assert.equal(loaded.credits.terms_passthrough, "Reuse is subject to each source licence.");
 
-  scene.version = "0.6";
+  scene.version = "0.7";
 
-  await assert.rejects(loadScene("/scenes/example/scene.json"), /format 0\.6/);
+  await assert.rejects(loadScene("/scenes/example/scene.json"), /format 0\.7/);
 });

@@ -18,6 +18,7 @@ from shapely.geometry.base import BaseGeometry
 from soe import cli, db, overture_import
 from soe.boundary_import import UCDB_SOURCE
 from soe.overture_import import (
+    OVERTURE_SOURCE,
     Catalog,
     Credit,
     DisputedLine,
@@ -33,6 +34,7 @@ from soe.overture_import import (
     tiling_municipalities,
     update_overture_levels,
 )
+from soe.sources.licences import SOURCES
 from tests.helpers import boundary_row
 
 RELEASE = "2026-10-21.0"
@@ -464,6 +466,42 @@ def test_absent_release_fails_before_any_write(tmp_path, monkeypatch):
 def test_release_name_is_checked_before_opening_s3():
     with pytest.raises(SystemExit, match="must look like"):
         open_release("2026-10-21")
+
+
+def test_import_refuses_release_other_than_the_credited_one(tmp_path, monkeypatch):
+    credited = SOURCES[OVERTURE_SOURCE]["version"]
+    other = "2025-01-01.0" if credited != "2025-01-01.0" else "2024-01-01.0"
+    opened: list[str] = []
+
+    def refuses_s3(release: str) -> None:
+        opened.append(release)
+        pytest.fail("must refuse before opening S3")
+
+    monkeypatch.setattr(overture_import, "DuckDbSource", refuses_s3)
+
+    with pytest.raises(SystemExit) as error:
+        open_release(other)
+
+    message = str(error.value)
+    assert other in message
+    assert credited in message
+    assert "SOURCES entry" in message
+    assert opened == []
+
+    written: list[str] = []
+    monkeypatch.setattr(cli.db, "ensure_schema", lambda db_path: written.append("schema"))
+    monkeypatch.setattr(cli, "import_cgaz", lambda *args: written.append("cgaz"))
+
+    for flag in ("--overture", "--overture-levels", "--overture-cities"):
+        written.clear()
+        path = str(tmp_path / "soe.db")
+
+        with pytest.raises(SystemExit, match="SOURCES entry"):
+            cli.main(["import-boundaries", flag, other, "--db", path])
+
+        assert written == []
+        assert not Path(path).exists()
+        assert opened == []
 
 
 def test_locality_under_region_becomes_municipality_only_without_localadmin(tmp_path):

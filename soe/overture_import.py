@@ -39,6 +39,7 @@ from .boundary_import import (
     store_overture,
 )
 from .country_codes import ALPHA3_BY_ALPHA2
+from .sources.licences import SOURCES
 
 OVERTURE_SOURCE = "Overture Maps divisions"
 OVERTURE_LICENCE = "ODbL 1.0"
@@ -518,12 +519,22 @@ def _known_levels(divisions: list[Division], cached: dict[str, int | None]) -> s
 
 
 def open_release(release: str) -> DivisionSource:
-    """The source of `release`, such as '2026-10-21.0'; a malformed or absent release exits.
+    """The source of `release`, such as '2026-10-21.0'.
 
-    Callers open the release before writing anything, so a bad name leaves the database alone.
+    A malformed release, an absent release, or one that differs from the release credited in
+    the licence table exits. Callers open the release before writing anything, so a bad name
+    leaves the database alone.
     """
     if not RELEASE_PATTERN.fullmatch(release):
         raise SystemExit(f"Overture release '{release}' must look like 2026-10-21.0")
+
+    credited = SOURCES[OVERTURE_SOURCE]["version"]
+    if release != credited:
+        # Bundles credit this release, so a new release updates the licence table first.
+        raise SystemExit(
+            f"Overture release '{release}' differs from the credited release '{credited}'. "
+            "Bump the SOURCES entry in soe/sources/licences.py together with the import."
+        )
 
     return DuckDbSource(release)
 
