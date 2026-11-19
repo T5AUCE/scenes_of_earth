@@ -10,7 +10,7 @@ from pathlib import Path
 
 import shapely
 import zarr
-from shapely.geometry import MultiPolygon, mapping
+from shapely.geometry import MultiLineString, MultiPolygon, mapping
 from shapely.geometry.base import BaseGeometry
 
 from . import __version__
@@ -153,8 +153,10 @@ def _write_scene_documents(
     _write_feature(temp_dir / "area.geojson", area_name, outline)
 
     if area.land_version:
-        borders = shapely.set_precision(area.borders, OUTLINE_PRECISION_DEG)
-        _write_feature(temp_dir / "borders.geojson", area_name, borders)
+        solid = shapely.set_precision(area.borders, OUTLINE_PRECISION_DEG)
+        disputed = area.disputed if area.disputed is not None else MultiLineString()
+        disputed = shapely.set_precision(disputed, OUTLINE_PRECISION_DEG)
+        _write_borders(temp_dir / "borders.geojson", area_name, solid, disputed)
 
     (temp_dir / "scene.json").write_text(json.dumps(scene_document, indent=1), encoding="utf-8")
 
@@ -162,6 +164,19 @@ def _write_scene_documents(
 def _write_feature(path: Path, name: str, geometry: BaseGeometry) -> None:
     feature = {"type": "Feature", "properties": {"name": name}, "geometry": mapping(geometry)}
     path.write_text(json.dumps(feature), encoding="utf-8")
+
+
+def _write_borders(path: Path, name: str, solid: BaseGeometry, disputed: BaseGeometry) -> None:
+    """Write solid and disputed borders as one feature each, so the viewer styles them apart."""
+    features = [_border_feature(name, False, solid), _border_feature(name, True, disputed)]
+    collection = {"type": "FeatureCollection", "features": features}
+    path.write_text(json.dumps(collection), encoding="utf-8")
+
+
+def _border_feature(name: str, disputed_flag: bool, geometry: BaseGeometry) -> JsonObject:
+    """One borders feature, marked solid or disputed for the viewer."""
+    properties = {"name": name, "disputed": disputed_flag}
+    return {"type": "Feature", "properties": properties, "geometry": mapping(geometry)}
 
 
 def _display_geometry(scene_plan: Plan) -> BaseGeometry:

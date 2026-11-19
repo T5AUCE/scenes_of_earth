@@ -31,8 +31,8 @@
     "data.zarr/terrain/mask/zarr.json": "95f5f251cb3156261309b4bee8ffc591fdf055607b3395163a4f1cdbfaa101d6",
     "data.zarr/terrain/zarr.json": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2",
     "data.zarr/zarr.json": "b423ba1a9a022ade23527c7f27c9fb73259dbae1a08c4d83316db30e64831c52",
-    "scene.json": "33f2ecf8075bd7e7b00b57b2a54bfb787abe7ae1f228e038fdd2d1b3d8f435e7",
-    "scene_id": "6f03eb9aeae070557923"
+    "scene.json": "d4646d0b406afb502fb32d5b6ed9a8d011a72c592af744413377aaa618cd8184",
+    "scene_id": "f40fc2723bf468d1305a"
   },
   "nairobi": {
     "area.geojson": "a9be3753b59bf00a322aeec442712532fa2b046cfb3c1bb2809c14cb3b91a32c",
@@ -66,7 +66,7 @@
     "data.zarr/terrain/mask/zarr.json": "ff5d3e4f8f21131a081bb20846b65be2bf84e2b0d3affec5e2fbac12ef422d37",
     "data.zarr/terrain/zarr.json": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2",
     "data.zarr/zarr.json": "c362f5d31236b62d663b73a5ea34c5f8699dccbcc9026f0bbd03e61eac5e4bfb",
-    "scene.json": "535ddcfab901183ec897ed8ae43b72dc8e7a6f64efbdaebecbb47bef959ebf65",
-    "scene_id": "88118c6bd9ae2ef75acd"
+    "scene.json": "89bf5796887188266effb4d8dbe4e96e4cf931ebd7b6b5f084ae42268224b0bb",
+    "scene_id": "64cb014f5877a1630ccc"
   }
 }

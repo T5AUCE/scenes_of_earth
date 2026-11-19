@@ -337,6 +337,22 @@ SOURCES = {
         ),
         "modified": "simplified 0.01°, clipped to 60°S-84°N",
     },
+    "Overture Maps divisions": {
+        "name": "Overture Maps divisions 2026-10-21.0",
+        "version": "2026-10-21.0",
+        "licence": "ODbL 1.0",
+        "licence_url": "https://docs.overturemaps.org/attribution/",
+        "attribution": (
+            "Boundaries: © OpenStreetMap contributors, Overture Maps Foundation "
+            "(includes Esri Community Maps, geoBoundaries, and LINZ data where those sources "
+            "contributed)"
+        ),
+        "citation": (
+            "Overture Maps Foundation (2026) Overture Maps divisions, release 2026-10-21.0. "
+            "https://docs.overturemaps.org"
+        ),
+        "modified": "simplified to about 5 m, clipped to 60°S-84°N",
+    },
     "osm_land": {
         "name": "OpenStreetMap land polygons",
         "licence": "ODbL 1.0",
@@ -350,7 +366,7 @@ SOURCES = {
             "https://osmdata.openstreetmap.de/data/land-polygons.html"
         ),
         "modified": (
-            "intersected with the area outline (geoBoundaries CGAZ or the drawn shape), without "
+            "intersected with the area outline (Overture area or the drawn shape), without "
             "the land its same-level neighbours hold, and parts under about 1 ha dropped"
         ),
     },

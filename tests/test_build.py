@@ -1960,7 +1960,14 @@ def test_outline_of_a_scene_cut_to_land_reaches_a_little_past_the_coast(tmp_path
 def test_island_scene_has_no_borders(tmp_path):
     _, scene_dir = build_cut_nairobi(tmp_path, ISLAND)
 
-    assert read_geometry(scene_dir / "borders.geojson").is_empty
+    borders = json.loads((scene_dir / "borders.geojson").read_text(encoding="utf-8"))
+
+    assert borders["type"] == "FeatureCollection"
+    assert sorted(feature["properties"]["disputed"] for feature in borders["features"]) == [
+        False,
+        True,
+    ]
+    assert all(shape(feature["geometry"]).is_empty for feature in borders["features"])
 
 
 def test_scene_cut_to_land_credits_the_coast_and_both_licences(tmp_path):

@@ -112,8 +112,11 @@ get them with
 previews in batches with progress; an area without a stored preview still serves, computing
 and storing it on its first request.
 
-Overture divisions come from `python -m soe.cli import-boundaries --overture <release>`, which stores
-countries, states, counties, and municipalities. Run
+Overture divisions come from `python -m soe.cli import-boundaries --overture 2026-10-21.0`, which stores
+countries, states, counties, and municipalities. The read needs DuckDB from the `import` extra and asks
+Overpass for the OpenStreetMap admin level of each sampled relation, cached by relation version so a rerun
+fetches only new versions. Boundaries follow Overture's on-the-ground view, and disputed lines are stored
+apart so the viewer can dash them. Run
 `python -m soe.cli import-boundaries --overture-cities <release>` afterwards to replace the stored
 city rows. A city is a locality whose local type is city or town, or a village of at least 5,000
 people. Localities already stored as municipalities, near-duplicates of one, and shapes under
@@ -327,7 +330,7 @@ maps now read GMNA, lowest priority, instead of the global base maps.
 
 - `area.bbox` is `[W, S, E, N]` with W < E always. A shape across the antimeridian is unwrapped into one frame, so E may be
   above 180 (up to 360) and `lon` arrays rise past 180, as MapLibre's `LngLatBounds` does. `area.geojson` is in the same frame.
-- `scene.json` is version 0.7 and the generator is 0.9.1. The top-level `period` (`start`, `end` exclusive, `step`; ISO dates) is the requested range,
+- `scene.json` is version 0.8 and the generator is 0.9.1. The top-level `period` (`start`, `end` exclusive, `step`; ISO dates) is the requested range,
   or `null` for a scene without series. Each layer has its own `grid` (crs, bbox, res, nx, ny; `aggregation` for series), `mask`,
   `coverage`, `time` (`step` as an ISO 8601 duration, `end` = the day after the last step's period, `method` = how a step summarises
   its period (`sum`, `mean`, `point`, `max`), `count`, explicit `values`, or `null` for static layers) and
@@ -384,16 +387,21 @@ maps now read GMNA, lowest priority, instead of the global base maps.
   short of part of the area (rain and temperature end at 60N until their 84N cubes are complete) keeps its own
   clipped outline and gets a notice, while `area.geojson` is the whole area, simplified for display to a quarter of the
   scene's finest grid cell (never below 0.0005 degrees), so one layer's mask can reach slightly beyond the outline.
-  Masks, statistics, style stops and scene ids all use the full stored outline, which is why the bundle format stays at 0.7: old bundles keep
+  Masks, statistics, style stops and scene ids all use the full stored outline, so that change needed no format bump: old bundles keep
   their exact outline and every reader treats `area.geojson` as display-only.
 - A scene whose layers are not offline is cut to land (see Import land). Its `area.geojson` is the land outline simplified
   to the larger of 0.001 degrees and a 2000th of the area's longer side, grown by the same amount along the coast, never onto a
   neighbour's land, and at most 50,000 vertices. Parts smaller than the finest grid cell are dropped, except the largest.
-  Coordinates are rounded to 1e-5 degrees. `area.borders_href` names `borders.geojson`, the outline lines that run over land,
-  which are the borders with other areas and the edges of a drawn shape. An island country has none. The viewer draws
-  the outline from this file, since the sea side is drawn by the basemap. `area.land` is the credit block of the land polygons
-  (with their `version`) and `area.boundary.licence` reads "CC BY 4.0 + ODbL 1.0". The three fields are absent from bundles
-  built before the cut and from offline ones, which keep the old outline. They are optional, so the bundle format stays 0.7.
+  Coordinates are rounded to 1e-5 degrees. `area.borders_href` names `borders.geojson`, a FeatureCollection with one feature
+  per `disputed` value that holds the outline lines running over land, which are the borders with other areas and the edges
+  of a drawn shape. An island country holds two empty features. The viewer draws
+  the outline from this file, since the sea side is drawn by the basemap. `area.border_level` is the OpenStreetMap admin level
+  of the boundary and `area.border_min_zoom` is the zoom from which the basemap draws that level, both null when the level is
+  unknown. `area.boundary` also carries `name_local`, `parent_name_local` and the boundary source `version`, which is the
+  Overture release. `area.land` is the credit block of the land polygons
+  (with their `version`) and `area.boundary.licence` names every licence that applies. Source licences are joined
+  with "; ", while the ODbL 1.0 of the land cut is appended with " + " when the row lacks it, so a mixed row reads
+  "CC BY 4.0; ODbL 1.0" and a CC BY-only row cut to land reads "CC BY 4.0 + ODbL 1.0". The land fields are absent from bundles built before the cut and from offline ones, which keep the old outline.
 - The terrain layer holds no elevation array. The viewer draws GPU relief and contour lines from
   one shared DEM texture pool built from the elevation tiles named by `layers[].tiles`
   (Terrarium encoding, 512 px, Mapterhorn by default), with maplibre-contour labels, and the build
@@ -434,7 +442,7 @@ maps now read GMNA, lowest priority, instead of the global base maps.
 - Terrain reads are cached in `SCENES_DIR/.cache/` (keyed by dataset, source versions, bbox, res and soe version), so
   rebuilding an area with other layers or dates does not read the tiles again. Deleting the folder is always safe, and it
   is the way to clear files that older versions left behind.
-- Format 0.7 keeps the real-data ring and adds `area_series` with `distribution`. Generator 0.9.1 and the bundle format
+- Format 0.8 keeps the real-data ring with `area_series` and `distribution` and adds the Overture boundary fields with the borders FeatureCollection. Generator 0.9.1 and the bundle format
   both enter the scene id, so new requests cannot reuse older bundles and old terrain caches are not reused. Build a new scene
   rather than replacing an immutable bundle in place. The viewer rejects older formats with a prompt to pick the area again.
 - Contours use `maplibre-contour` (BSD-3-Clause) for labels only, with a fixed global nested
@@ -567,13 +575,19 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
   administrative boundaries. PLoS ONE 15(4): e0231866. https://www.geoboundaries.org. Simplified to 0.01 degrees and
   clipped to 60S-84N. CC BY 4.0 for CGAZ itself is the repository-wide licence for geoBoundaries derivatives, not a
   statement naming CGAZ.
+- **Boundaries: Overture Maps divisions 2026-10-21.0**, ODbL 1.0. Credit: "Boundaries: © OpenStreetMap
+  contributors, Overture Maps Foundation (includes Esri Community Maps, geoBoundaries, and LINZ data where those sources
+  contributed)". Overture Maps Foundation (2026) Overture Maps divisions, release 2026-10-21.0.
+  https://docs.overturemaps.org. Modified: simplified to about 5 m, clipped to 60S-84N. Boundaries follow Overture's
+  on-the-ground view, and disputed lines are stored apart. A boundary sourced from Esri Community Maps, geoBoundaries,
+  or LINZ carries "CC BY 4.0" in its licence alongside ODbL 1.0. The same text is in `soe/sources/licences.py`.
 - **Coastline: OpenStreetMap land polygons**, ODbL 1.0. Credit: "Coastline: © OpenStreetMap contributors
   (https://www.openstreetmap.org/copyright)". OpenStreetMap contributors, land polygons (split, EPSG:4326) built from
   `natural=coastline` with osmcoastline, https://osmdata.openstreetmap.de/data/land-polygons.html. Modified: intersected
-  with the area outline (geoBoundaries CGAZ or the drawn shape), without the land its same-level neighbours hold, and parts
+  with the area outline (Overture area or the drawn shape), without the land its same-level neighbours hold, and parts
   under about 1 ha dropped. A scene cut to land carries `area.geojson` and `borders.geojson` as a derived database, so they are
-  offered under ODbL 1.0 with this credit, and the boundary licence of such a scene is "CC BY 4.0 + ODbL 1.0". The same
-  text is in `soe/sources/licences.py`.
+  offered under ODbL 1.0 with this credit, and the boundary licence of such a scene is "ODbL 1.0", with "CC BY 4.0" added
+  when a contributing source needs it. The same text is in `soe/sources/licences.py`.
 - **Area search level names: geoBoundaries gbOpen metadata.** Each country's own ADM1/ADM2 type names
   (County, Canton) come from the gbOpen API metadata (`boundaryCanonical` field); only the short names
   are stored, no geometry. Citation: Runfola, D. et al. (2020) geoBoundaries: A global database of political

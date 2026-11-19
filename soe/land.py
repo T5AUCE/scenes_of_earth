@@ -349,20 +349,28 @@ def _line_parts(geometry: BaseGeometry) -> MultiLineString:
 def _border_tolerance_deg(
     border_level: int | None, bounds: tuple[float, float, float, float]
 ) -> float:
-    """Half a pixel at the zoom from which the basemap draws borders of the level itself.
-
-    The zooms follow the basemap's boundary layer, which sets them per admin level in
-    https://github.com/openmaptiles/planetiler-openmaptiles/blob/main/src/main/java/org/openmaptiles/layers/Boundary.java
-    and a border without a known level is simplified like the display outline.
-    """
+    """Half a pixel at the zoom from which the basemap draws borders of the level itself."""
     if border_level is None:
         return _display_tolerance(bounds)
 
-    zoom = next(
+    zoom = border_min_zoom(border_level)
+    return WORLD_WIDTH_DEG / TILE_SIZE_PX / 2**zoom / 2
+
+
+def border_min_zoom(border_level: int | None) -> int | None:
+    """The zoom from which the basemap draws borders of the level itself, or None without one.
+
+    The zooms follow the basemap's boundary layer, which sets them per admin level in
+    https://github.com/openmaptiles/planetiler-openmaptiles/blob/main/src/main/java/org/openmaptiles/layers/Boundary.java
+    and a border without a known level has no switch zoom.
+    """
+    if border_level is None:
+        return None
+
+    return next(
         (zoom for max_level, zoom in BORDER_ZOOM_BY_MAX_LEVEL if border_level <= max_level),
         BORDER_FINEST_ZOOM,
     )
-    return WORLD_WIDTH_DEG / TILE_SIZE_PX / 2**zoom / 2
 
 
 def _simplified_borders(
@@ -733,8 +741,8 @@ def clip_area_to_land(db_path: Path | str, store: Path | str, area: Area) -> Are
         area,
         geom=clip.geom,
         display=clip.display,
-        # TODO: draw disputed borders apart once Area carries them; until then they join the rest.
-        borders=MultiLineString(shapely.get_parts([clip.borders, clip.disputed]).tolist()),
+        borders=clip.borders,
+        disputed=clip.disputed,
         land_version=version,
         neighbour_revision=revision,
     )

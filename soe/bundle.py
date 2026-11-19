@@ -13,12 +13,13 @@ from .bundle_validation import (
     _layer_sources,
     validate,
 )
+from .land import border_min_zoom
 from .plan import LayerPlan, Plan
 from .sources import REQUEST_STEP, SOURCE_ROLE, SOURCES, STOP_COUNT, Dataset
 
 __all__ = ["COLOUR_PATTERN", "MIN_STOPS", "STOP_COUNT", "STYLE_KINDS", "validate"]
 
-VERSION = "0.7"
+VERSION = "0.8"
 
 BOUNDARY_SOURCE_FIELDS = ("licence_url", "attribution", "citation", "modified")
 LAND_SOURCE = "osm_land"  # key in SOURCES of the land polygons that cut areas are made from
@@ -93,24 +94,33 @@ def _land_block(area: Area) -> JsonObject:
 
 
 def _land_fields(area: Area, land_source: JsonObject | None) -> JsonObject:
-    """The area fields of a scene cut to land: the file of land borders and the land source."""
+    """The area fields of a scene cut to land, with the borders and their basemap switch zoom."""
     if land_source is None:
         return {}
 
-    return {"borders_href": "borders.geojson", "land": land_source}
+    level = area.boundary.get("border_level") if area.named else None
+    return {
+        "borders_href": "borders.geojson",
+        "border_level": level,
+        "border_min_zoom": border_min_zoom(level),
+        "land": land_source,
+    }
 
 
 def _boundary_block(area: Area) -> JsonObject:
     row = area.boundary
+    source = SOURCES[row["source"]]
     block = {
         "id": row["id"],
         "name": row["name"],
+        "name_local": row.get("name_local"),
+        "parent_name_local": row.get("parent_name_local"),
         "level": row["level"],
         "iso3": row["iso3"],
         "source": row["source"],
+        "version": source.get("version"),
         "licence": row["licence"],
     }
-    source = SOURCES[row["source"]]
     block.update({key: source[key] for key in BOUNDARY_SOURCE_FIELDS if key in source})
     if area.land_version:
         if LAND_LICENCE not in row["licence"]:

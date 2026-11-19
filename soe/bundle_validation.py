@@ -7,6 +7,8 @@ from typing import Any
 
 from . import __version__
 from .boundary_import import CGAZ_SOURCE
+from .land import border_min_zoom
+from .overture_import import OVERTURE_SOURCE
 from .sources import SOURCE_ROLE, STOP_COUNT
 
 JsonObject = dict[str, Any]  # a decoded JSON object, such as scene.json or one of its blocks
@@ -34,10 +36,15 @@ DISTRIBUTION_VALUE_COUNT = 101
 # A boundary cut to OpenStreetMap land keeps its own licence beside the land one.
 CUT_BOUNDARY_LICENCES = ("CC BY 4.0", "ODbL 1.0")
 
+# An Overture boundary always carries the ODbL of its sources, and the versioned CC BY
+# name when any of them needs it.
+OVERTURE_LICENCE = "ODbL 1.0"
+OVERTURE_CC_LICENCE = "CC BY 4.0"
+
 FRACTION_TOLERANCE = 1e-12  # summation order may nudge an exact share slightly above one
 
 
-def validate(doc: JsonObject, expected_version: str = "0.7") -> list[str]:
+def validate(doc: JsonObject, expected_version: str = "0.8") -> list[str]:
     """Return a list of problems (empty when the bundle is fine)."""
     if not isinstance(doc, dict):
         return ["scene must be an object"]
@@ -112,7 +119,14 @@ def _land_problems(area: JsonObject) -> list[str]:
     if land and "ODbL" not in str(land.get("licence")):
         return ["area.land must carry the ODbL licence of the OpenStreetMap land polygons"]
 
-    return _cut_boundary_problems(area) if land else []
+    if not land:
+        return []
+
+    return (
+        _cut_boundary_problems(area)
+        + _overture_boundary_problems(area)
+        + _border_level_problems(area)
+    )
 
 
 def _cut_boundary_problems(area: JsonObject) -> list[str]:
@@ -127,6 +141,45 @@ def _cut_boundary_problems(area: JsonObject) -> list[str]:
         return [
             f"area.boundary.licence of a land-cut boundary must include {' and '.join(missing)}"
         ]
+
+    return []
+
+
+def _overture_boundary_problems(area: JsonObject) -> list[str]:
+    """Return problems with the licence of an Overture boundary whose outline was cut to land."""
+    boundary = area.get("boundary")
+    if not isinstance(boundary, dict) or boundary.get("source") != OVERTURE_SOURCE:
+        return []
+
+    licence = str(boundary.get("licence") or "")
+    if OVERTURE_LICENCE not in licence:
+        return ["area.boundary.licence of an Overture boundary must include ODbL 1.0"]
+    if "CC BY" in licence and OVERTURE_CC_LICENCE not in licence:
+        return [
+            "area.boundary.licence of an Overture boundary must include CC BY 4.0 "
+            "when it names CC BY"
+        ]
+
+    return []
+
+
+def _border_level_problems(area: JsonObject) -> list[str]:
+    """Return problems when the border level and its basemap switch zoom disagree."""
+    if "border_level" not in area or "border_min_zoom" not in area:
+        return ["area.border_level and area.border_min_zoom must be given with a land cut"]
+
+    level = area.get("border_level")
+    min_zoom = area.get("border_min_zoom")
+    if level is None and min_zoom is None:
+        return []
+    if level is None or min_zoom is None:
+        return ["area.border_level and area.border_min_zoom must be given together"]
+    if isinstance(level, bool) or not isinstance(level, int):
+        return ["area.border_level must be an integer or null"]
+
+    expected = border_min_zoom(level)
+    if min_zoom != expected:
+        return [f"area.border_min_zoom must be {expected} for border_level {level}"]
 
     return []
 

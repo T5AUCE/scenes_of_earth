@@ -5,10 +5,13 @@ import json
 from pathlib import Path
 
 import pytest
+from shapely.geometry import box, shape
 
+from soe import db
 from soe.areas import Area
 from soe.build import build_scene
 from soe.bundle import SYNTHETIC_DATA_CREDIT, credits, validate
+from soe.land import clip_area_to_land, write_land_store
 from soe.sources import SOURCES
 from tests.helpers import (
     CONTRACT_VERSION,
@@ -111,7 +114,7 @@ def test_scene_json_states_the_requested_period(tmp_path):
     doc, store = build_nairobi(tmp_path, ("2015-01", "2016-02"))
     rain = doc["layers"][1]
 
-    assert doc["version"] == "0.7"
+    assert doc["version"] == "0.8"
     assert doc["period"] == {"start": "2015-01-01", "end": "2016-03-01", "step": "P1M"}
     assert rain["time"]["method"] == "sum"
     assert store["chirps_monthly/precip"].attrs["cell_methods"] == "time: sum"
@@ -121,7 +124,7 @@ def test_validate_rejects_a_previous_bundle_format(tmp_path):
     doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-01"))
     doc["version"] = "0.6"
 
-    assert validate(doc, "0.7") == ["version must be 0.7"]
+    assert validate(doc, "0.8") == ["version must be 0.8"]
 
 
 @pytest.mark.parametrize(
@@ -399,7 +402,7 @@ def test_categorical_palette_rejects_unknown_names_and_non_text_values(tmp_path,
     assert validate(doc) == [f"{layer['id']}: style.palette must be omitted or one of: painted"]
 
 
-def test_p6_bundle_carries_the_current_contract_and_generator(tmp_path):
+def test_bundle_carries_the_current_contract_and_generator(tmp_path):
     doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
     rain = next(layer for layer in doc["layers"] if layer["id"] == "chirps_monthly")
     terrain = next(layer for layer in doc["layers"] if layer["id"] == "terrain")
@@ -711,7 +714,7 @@ def test_contract_rejects_wrong_versions_and_missing_terms(tmp_path):
     old_contract = copy.deepcopy(doc)
     old_contract["version"] = "0.6"
 
-    assert validate(old_contract) == ["version must be 0.7"]
+    assert validate(old_contract) == ["version must be 0.8"]
 
     old_generator = copy.deepcopy(doc)
     old_generator["generator"]["version"] = "0.8.1"
@@ -1009,7 +1012,9 @@ def cut_to_land_doc(tmp_path: Path) -> dict:
     """The Nairobi scene.json with the fields of a scene cut to land added."""
     doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
     land = {**SOURCES["osm_land"], "version": "2026-11-14"}
-    doc["area"].update(borders_href="borders.geojson", land=land)
+    doc["area"].update(
+        borders_href="borders.geojson", border_level=None, border_min_zoom=None, land=land
+    )
     doc["area"]["boundary"]["licence"] = "CC BY 4.0 + ODbL 1.0"
     doc["credits"]["lines"].append(land["attribution"])
 
@@ -1055,9 +1060,130 @@ def test_land_cut_boundary_keeps_both_licences(tmp_path, licence, missing):
     assert any(f"must include {missing}" in problem for problem in validate(doc))
 
 
+def test_overture_cut_boundary_rejections_name_each_problem(tmp_path):
+    """Each Overture and border-level rejection of a land-cut scene, from one valid base doc."""
+    overture = SOURCES["Overture Maps divisions"]
+    doc = cut_to_land_doc(tmp_path)
+    doc["area"]["boundary"].update(
+        source="Overture Maps divisions",
+        licence="CC BY 4.0; ODbL 1.0",
+        name_local="Testville",
+        parent_name_local="Testland",
+        version=overture["version"],
+        attribution=overture["attribution"],
+        licence_url=overture["licence_url"],
+        citation=overture["citation"],
+        modified=overture["modified"],
+    )
+    doc["area"].update(border_level=4, border_min_zoom=5)
+    doc["credits"]["lines"].append(overture["attribution"])
+
+    assert validate(doc) == []
+
+    without_odbl = copy.deepcopy(doc)
+    without_odbl["area"]["boundary"]["licence"] = "Public Domain"
+
+    assert validate(without_odbl) == [
+        "area.boundary.licence of an Overture boundary must include ODbL 1.0"
+    ]
+
+    unversioned_cc_by = copy.deepcopy(doc)
+    unversioned_cc_by["area"]["boundary"]["licence"] = "CC BY 3.0; ODbL 1.0"
+
+    assert validate(unversioned_cc_by) == [
+        "area.boundary.licence of an Overture boundary must include CC BY 4.0 when it names CC BY"
+    ]
+
+    without_level_fields = copy.deepcopy(doc)
+    del without_level_fields["area"]["border_level"]
+    del without_level_fields["area"]["border_min_zoom"]
+
+    assert validate(without_level_fields) == [
+        "area.border_level and area.border_min_zoom must be given with a land cut"
+    ]
+
+    half_level_fields = copy.deepcopy(doc)
+    half_level_fields["area"]["border_min_zoom"] = None
+
+    assert validate(half_level_fields) == [
+        "area.border_level and area.border_min_zoom must be given together"
+    ]
+
+    text_level = copy.deepcopy(doc)
+    text_level["area"]["border_level"] = "high"
+
+    assert validate(text_level) == ["area.border_level must be an integer or null"]
+
+    wrong_zoom = copy.deepcopy(doc)
+    wrong_zoom["area"]["border_min_zoom"] = 9
+
+    assert validate(wrong_zoom) == ["area.border_min_zoom must be 5 for border_level 4"]
+
+
 def test_credits_include_the_land_source_of_a_cut_area():
     land = {**SOURCES["osm_land"], "version": "2026-11-14"}
 
     lines = credits([{"source": SOURCES["glo90"]}], SOURCES["geoBoundaries CGAZ"], False, land)
 
     assert land["attribution"] in lines["lines"]
+
+
+OVERTURE_BOUNDARY = {
+    "id": "ovt:TT",
+    "name": "Testland",
+    "level": "country",
+    "iso3": "TTT",
+    "source": "Overture Maps divisions",
+    "licence": "ODbL 1.0",
+}
+
+
+def test_bundle_rejects_version_0_7(tmp_path):
+    doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-01"))
+    doc["version"] = "0.7"
+
+    assert validate(doc) == ["version must be 0.8"]
+
+
+def test_borders_feature_collection_carries_disputed(tmp_path):
+    store = tmp_path / "land.sqlite"
+    write_land_store(store, "2026-11-14", [box(36, -2, 38, 0)])
+    db.init(tmp_path / "soe.db")
+    area = clip_area_to_land(tmp_path / "soe.db", store, Area(box(36.5, -1.5, 37.5, -0.5)))
+
+    build_scene("a" * 20, area, "2015-01", "2015-02", [TERRAIN], "Test", tmp_path / "scenes")
+
+    borders = json.loads((tmp_path / "scenes" / ("a" * 20) / "borders.geojson").read_text())
+
+    assert borders["type"] == "FeatureCollection"
+    assert sorted(feature["properties"]["disputed"] for feature in borders["features"]) == [
+        False,
+        True,
+    ]
+    solid = next(
+        feature for feature in borders["features"] if not feature["properties"]["disputed"]
+    )
+    disputed = next(feature for feature in borders["features"] if feature["properties"]["disputed"])
+
+    assert shape(solid["geometry"]).length == pytest.approx(4)
+    assert shape(disputed["geometry"]).is_empty
+
+
+def test_overture_boundary_licence_lists_cc_by_when_sourced(tmp_path):
+    boundary = {
+        **OVERTURE_BOUNDARY,
+        "licence": "CC BY 4.0; ODbL 1.0",
+        "name_local": "Testville",
+        "parent_name_local": "Testland",
+        "border_level": 4,
+    }
+    area = Area(NAIROBI, boundary)
+
+    build_scene("b" * 20, area, "2015-01", "2015-02", [TERRAIN], "Test", tmp_path)
+    doc = json.loads((tmp_path / ("b" * 20) / "scene.json").read_text(encoding="utf-8"))
+
+    assert "CC BY 4.0" in doc["area"]["boundary"]["licence"]
+    assert "ODbL" in doc["area"]["boundary"]["licence"]
+    assert doc["area"]["boundary"]["name_local"] == "Testville"
+    assert doc["area"]["boundary"]["version"] == SOURCES["Overture Maps divisions"]["version"]
+    assert validate(doc) == []

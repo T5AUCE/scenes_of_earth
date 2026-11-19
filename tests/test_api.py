@@ -20,6 +20,7 @@ from soe.bundle import SYNTHETIC_DATA_CREDIT, JsonObject, validate
 from soe.land import write_land_store
 from soe.scene_request import ID_CHARS
 from soe.sources import (
+    SOURCES,
     CellWindow,
     CubeSpec,
     RealSource,
@@ -194,7 +195,7 @@ def test_post_poll_and_serve(env):
     assert [layer["id"] for layer in scene["layers"]] == ["terrain", "chirps_monthly"]
 
     terrain = scene["layers"][0]
-    assert scene["version"] == "0.7" and terrain["arrays"] == {} and terrain["stats"]["p98"] > 0
+    assert scene["version"] == "0.8" and terrain["arrays"] == {} and terrain["stats"]["p98"] > 0
     assert terrain["tiles"]["source"]["attribution"] in scene["credits"]["lines"]
     assert scene["credits"]["terms_passthrough"]
     assert scene["generator"]["version"] == "0.9.1"
@@ -436,6 +437,56 @@ def test_boundary_scene(env):
     assert client.post("/api/scenes", json={**body(), "area": unknown}).status_code == 422
 
 
+def test_overture_boundary_scene_carries_local_names_and_border_zoom(
+    tmp_path, revision_source, land_store
+):
+    db_path = str(tmp_path / "soe.db")
+    app = create_app(db_path, tmp_path / "scenes", make_registry(revision_source))
+    geometry = box(36.5, -1.5, 37.5, -0.5)
+
+    with TestClient(app) as client:
+        db.add_boundaries(
+            db_path,
+            "Overture Maps divisions",
+            [
+                boundary_row(
+                    "ovt:TEST",
+                    "state",
+                    "Test State",
+                    "Testland",
+                    "TTT",
+                    geometry.bounds,
+                    geometry=json.dumps(mapping(geometry)),
+                    source="Overture Maps divisions",
+                    licence="CC BY 4.0; ODbL 1.0",
+                )
+            ],
+        )
+        with db.connect(db_path) as connection:
+            connection.execute(
+                "UPDATE boundaries SET name_local = 'Test Local', "
+                "parent_name_local = 'Land Local', "
+                "has_maritime = 1, border_level = 4 WHERE id = 'ovt:TEST'"
+            )
+
+        request = {**body(layers=["terrain"]), "area": {"type": "boundary", "id": "ovt:TEST"}}
+        scene_id = client.post("/api/scenes", json=request).json()["id"]
+        done = wait_for(client, scene_id)
+        scene = client.get(done["bundle_url"]).json()
+        borders = client.get(f"/scenes/{scene_id}/borders.geojson").json()
+
+    assert done["status"] == "done"
+    assert validate(scene) == []
+    assert scene["version"] == "0.8"
+    assert scene["area"]["border_level"] == 4
+    assert scene["area"]["border_min_zoom"] == 5
+    assert scene["area"]["boundary"]["name_local"] == "Test Local"
+    assert scene["area"]["boundary"]["parent_name_local"] == "Land Local"
+    assert scene["area"]["boundary"]["version"] == SOURCES["Overture Maps divisions"]["version"]
+    assert "CC BY 4.0" in scene["area"]["boundary"]["licence"]
+    assert borders["type"] == "FeatureCollection"
+
+
 def test_rejections_happen_before_any_read(env):
     client, source, _ = env
     tiny = mapping(box(36.8, -1.1, 36.9, -1.0))  # about 10 km: too small
@@ -584,7 +635,16 @@ def test_scene_cut_to_land_is_built_with_its_outline_borders_and_credit(
     drawn = shape(outline["geometry"])
     assert shape(SQUARE).difference(drawn).area < 1e-9
     assert drawn.difference(shape(SQUARE)).area < 0.011  # only the sea margin overshoots
-    assert shape(borders["geometry"]).length == pytest.approx(4)
+    assert borders["type"] == "FeatureCollection"
+    assert sorted(feature["properties"]["disputed"] for feature in borders["features"]) == [
+        False,
+        True,
+    ]
+    solid = next(
+        feature for feature in borders["features"] if not feature["properties"]["disputed"]
+    )
+
+    assert shape(solid["geometry"]).length == pytest.approx(4)
 
 
 def test_missing_land_store_gives_503_before_any_read(tmp_path, monkeypatch, revision_source):

@@ -47,8 +47,8 @@ BOUNDARY = {
 
 HASH_A, HASH_B, HASH_C = "a" * 20, "b" * 20, "c" * 20
 
-CONTRACT_VERSION = "0.7"  # scene.json format that the P6 validator accepts
-GENERATOR_VERSION = "0.9.1"  # soe release that writes P6 bundles
+CONTRACT_VERSION = "0.8"  # scene.json format that the validator accepts
+GENERATOR_VERSION = "0.9.1"  # soe release that writes the current bundles
 
 
 def write_cube(
