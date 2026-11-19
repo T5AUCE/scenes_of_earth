@@ -6,7 +6,6 @@ import re
 from typing import Any
 
 from . import __version__
-from .boundary_import import CGAZ_SOURCE
 from .land import border_min_zoom
 from .overture_import import OVERTURE_SOURCE
 from .sources import SOURCE_ROLE, STOP_COUNT
@@ -32,9 +31,6 @@ AREA_WEIGHTS_NAME = "cell_area_inside_outline"
 DISTRIBUTION_STATISTIC = "quantiles"
 DISTRIBUTION_PERCENT = 1
 DISTRIBUTION_VALUE_COUNT = 101
-
-# A boundary cut to OpenStreetMap land keeps its own licence beside the land one.
-CUT_BOUNDARY_LICENCES = ("CC BY 4.0", "ODbL 1.0")
 
 # An Overture boundary always carries the ODbL of its sources, and the versioned CC BY
 # name when any of them needs it.
@@ -122,27 +118,7 @@ def _land_problems(area: JsonObject) -> list[str]:
     if not land:
         return []
 
-    return (
-        _cut_boundary_problems(area)
-        + _overture_boundary_problems(area)
-        + _border_level_problems(area)
-    )
-
-
-def _cut_boundary_problems(area: JsonObject) -> list[str]:
-    """Return problems with the licence of a CGAZ boundary whose outline was cut to land."""
-    boundary = area.get("boundary")
-    if not isinstance(boundary, dict) or boundary.get("source") != CGAZ_SOURCE:
-        return []
-
-    licence = str(boundary.get("licence"))
-    missing = [name for name in CUT_BOUNDARY_LICENCES if name not in licence]
-    if missing:
-        return [
-            f"area.boundary.licence of a land-cut boundary must include {' and '.join(missing)}"
-        ]
-
-    return []
+    return _overture_boundary_problems(area) + _border_level_problems(area)
 
 
 def _overture_boundary_problems(area: JsonObject) -> list[str]:

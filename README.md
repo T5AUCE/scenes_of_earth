@@ -78,15 +78,12 @@ only, while the palettes you pick in the menu are also remembered in this browse
 
 ## Import boundaries (once)
 
-Download and unzip into a folder, then:
+Then:
 
 ```
-python -m soe.cli import-boundaries --cgaz <folder> --ucdb <GHS_UCDB file or zip> --meta <folder>
+python -m soe.cli import-boundaries --ucdb <GHS_UCDB file or zip> --meta <folder>
 ```
 
-- geoBoundaries CGAZ (ADM0, ADM1, ADM2 GeoPackages): https://www.geoboundaries.org/globalDownloads.html
-  (files are in https://github.com/wmgeolab/geoBoundaries/tree/main/releaseData/CGAZ; use the media.githubusercontent.com
-  links, the raw links return Git LFS pointers).
 - GHS-UCDB R2024A: https://human-settlement.emergency.copernicus.eu/ghs_ucdb_2024.php (only urban areas of 1,000,000 or
   more people are imported, stored at the Urban area level).
 - geoBoundaries gbOpen level metadata (each country's own ADM1/ADM2 type names, shown in area search):
@@ -97,10 +94,10 @@ python -m soe.cli import-boundaries --cgaz <folder> --ucdb <GHS_UCDB file or zip
   open-data terms); only the type names are stored, so reuse follows the licence of the names shown
   (details under Data sources).
 
-The import is large (several hundred MB of input, about a gigabyte in SQLite). CGAZ draws disputed borders to US State Department definitions.
+The import is large (several hundred MB of input, about a gigabyte in SQLite).
 Search shows each country's own name for its levels (County, Canton) where the metadata
 names one, else the generic level; countries, cities, and urban areas always show the generic level.
-The stored outlines keep every CGAZ vertex, and each row also stores its display preview, so a
+Stored outlines are simplified to about 5 m before storage, and each row also stores its display preview, so a
 first pick serves the small preview without reading the full geometry; search never reads the
 geometry column and stays fast. Each row also stores a short revision of its geometry text,
 so a reimport with the same-length text still serves a fresh outline and validator.
@@ -121,7 +118,7 @@ apart so the viewer can dash them. Run
 city rows. A city is a locality whose local type is city or town, or a village of at least 5,000
 people. Localities already stored as municipalities, near-duplicates of one, and shapes under
 1 km² are left out. The same pass moves existing UCDB rows from City to the Urban area level once,
-so the two sources never share a level.
+so the two sources never share a level. Databases imported before Overture still hold CGAZ rows; remove them with `python -m soe.cli delete-cgaz --db <soe.db>`.
 
 ## Import land (once)
 
@@ -571,10 +568,6 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
   surface lithology based on EGDI/OneGeology map at 1:1M scale, doi:10.5281/zenodo.12607973. Modified: original
   (non-gap-filled) raster reprojected from EPSG:3035 with mode resampling; INSPIRE classes mapped to GLiM families.
   The same text is in `soe/sources/licences.py`.
-- **Boundaries: geoBoundaries CGAZ**, CC BY 4.0. Runfola, D. et al. (2020) geoBoundaries: A global database of political
-  administrative boundaries. PLoS ONE 15(4): e0231866. https://www.geoboundaries.org. Simplified to 0.01 degrees and
-  clipped to 60S-84N. CC BY 4.0 for CGAZ itself is the repository-wide licence for geoBoundaries derivatives, not a
-  statement naming CGAZ.
 - **Boundaries: Overture Maps divisions 2026-10-21.0**, ODbL 1.0. Credit: "Boundaries: © OpenStreetMap
   contributors, Overture Maps Foundation (includes Esri Community Maps, geoBoundaries, and LINZ data where those sources
   contributed)". Overture Maps Foundation (2026) Overture Maps divisions, release 2026-10-21.0.

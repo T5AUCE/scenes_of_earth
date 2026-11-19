@@ -60,7 +60,7 @@ def env(tmp_path):
     with TestClient(app) as client:
         geometry = box(36.5, -1.5, 37.5, -0.5)
         nairobi = boundary_row(
-            "cgaz:ADM1:NBO",
+            "ovt:NBO",
             "state",
             "Nairobi",
             "Kenya",
@@ -68,8 +68,10 @@ def env(tmp_path):
             geometry.bounds,
             geometry=json.dumps(mapping(geometry)),
         )
-        washington = boundary_row("cgaz:ADM2:WA", "county", "Washington County", "Maine", "USA")
-        db.add_boundaries(str(tmp_path / "soe.db"), "geoBoundaries CGAZ", [nairobi, washington])
+        washington = boundary_row("ovt:WA", "county", "Washington County", "Maine", "USA")
+        db.add_boundaries(
+            str(tmp_path / "soe.db"), "Overture Maps divisions", [nairobi, washington]
+        )
         yield client, source, tmp_path
 
 
@@ -78,14 +80,14 @@ def test_health_and_search(env):
     assert client.get("/api/health").json()["ok"] is True
 
     hits = client.get("/api/areas/search", params={"q": "nair"}).json()
-    assert hits[0]["id"] == "cgaz:ADM1:NBO" and hits[0]["parent_name"] == "Kenya"
+    assert hits[0]["id"] == "ovt:NBO" and hits[0]["parent_name"] == "Kenya"
 
     county = client.get("/api/areas/search", params={"q": "county"}).json()[0]
     assert county["name"] == "Washington County"
 
     assert client.get("/api/areas/search", params={"q": "x", "level": "planet"}).status_code == 422
 
-    assert "geometry" in client.get("/api/areas/cgaz:ADM1:NBO").json()
+    assert "geometry" in client.get("/api/areas/ovt:NBO").json()
     assert client.get("/api/areas/nope").status_code == 404
 
 
@@ -98,14 +100,12 @@ def test_search_hides_sample_country_covered_by_import(env):
         [boundary_row("sample:kenya", "country", "Kenya", iso3="KEN", source="synthetic")],
     )
     db.add_boundaries(
-        db_path,
-        "geoBoundaries CGAZ",
-        [boundary_row("cgaz:ADM0:KEN", "country", "Kenya", iso3="KEN")],
+        db_path, "Overture Maps divisions", [boundary_row("ovt:KE", "country", "Kenya", iso3="KEN")]
     )
 
     hits = client.get("/api/areas/search", params={"q": "Kenya"}).json()
 
-    assert [hit["id"] for hit in hits] == ["cgaz:ADM0:KEN"]
+    assert [hit["id"] for hit in hits] == ["ovt:KE"]
     assert client.get("/api/areas/sample:kenya").json()["name"] == "Kenya"
 
 
@@ -117,7 +117,7 @@ def test_search_hits_carry_each_countrys_own_level_name(env):
     hits = client.get("/api/areas/search", params={"q": "nair"}).json()
 
     assert hits[0]["kind"] == "County"
-    assert client.get("/api/areas/cgaz:ADM1:NBO").json()["kind"] == "County"
+    assert client.get("/api/areas/ovt:NBO").json()["kind"] == "County"
 
 
 def test_search_hits_without_stored_names_carry_null_kind(env):
@@ -131,6 +131,7 @@ def test_search_hits_without_stored_names_carry_null_kind(env):
 def test_search_hits_and_detail_carry_local_names(env):
     client, _, tmp_path = env
     db_path = str(tmp_path / "soe.db")
+    nairobi_geometry = box(36.5, -1.5, 37.5, -0.5)
     db.add_boundaries(
         db_path,
         "Overture Maps divisions",
@@ -143,7 +144,17 @@ def test_search_hits_and_detail_carry_local_names(env):
                 "FRA",
                 geometry=json.dumps(mapping(box(-5, 47, -1, 49))),
                 source="Overture Maps divisions",
-            )
+            ),
+            boundary_row(
+                "ovt:NBO",
+                "state",
+                "Nairobi",
+                "Kenya",
+                "KEN",
+                nairobi_geometry.bounds,
+                geometry=json.dumps(mapping(nairobi_geometry)),
+                source="Overture Maps divisions",
+            ),
         ],
     )
     with db.connect(db_path) as connection:
@@ -423,7 +434,7 @@ def test_coverage_without_room_for_whole_aggregation_blocks_is_refused_before_re
 def test_boundary_scene(env):
     client, _, _ = env
 
-    nairobi = {"type": "boundary", "id": "cgaz:ADM1:NBO"}
+    nairobi = {"type": "boundary", "id": "ovt:NBO"}
     response = client.post("/api/scenes", json={**body(), "area": nairobi})
     assert response.status_code == 202
 
@@ -840,16 +851,16 @@ def test_layers_list_request_bounds_in_request_granularity(env):
 def test_area_geometry_is_in_the_same_frame_as_its_bbox(env):
     client, _, tmp_path = env
     fiji = boundary_row(
-        "cgaz:ADM0:FJI",
+        "ovt:FJ",
         "country",
         "Fiji",
         iso3="FJI",
         bbox=(178, -19, 182, -17),
         geometry=json.dumps(mapping(FIJI)),
     )
-    db.add_boundaries(str(tmp_path / "soe.db"), "geoBoundaries CGAZ", [fiji])
+    db.add_boundaries(str(tmp_path / "soe.db"), "Overture Maps divisions", [fiji])
 
-    area = client.get("/api/areas/cgaz:ADM0:FJI").json()
+    area = client.get("/api/areas/ovt:FJ").json()
     west, _, east, _ = area["bbox"]
     shape_west, _, shape_east, _ = shape(area["geometry"]).bounds
 
@@ -860,16 +871,16 @@ def test_area_geometry_is_in_the_same_frame_as_its_bbox(env):
 def test_area_preview_keeps_fiji_valid_across_180(env):
     client, _, tmp_path = env
     fiji = boundary_row(
-        "cgaz:ADM0:FJI",
+        "ovt:FJ",
         "country",
         "Fiji",
         iso3="FJI",
         bbox=(178, -19, 182, -17),
         geometry=json.dumps(mapping(FIJI)),
     )
-    db.add_boundaries(str(tmp_path / "soe.db"), "geoBoundaries CGAZ", [fiji])
+    db.add_boundaries(str(tmp_path / "soe.db"), "Overture Maps divisions", [fiji])
 
-    area = client.get("/api/areas/cgaz:ADM0:FJI").json()
+    area = client.get("/api/areas/ovt:FJ").json()
     preview = shape(area["geometry"])
 
     assert preview.is_valid
@@ -893,16 +904,16 @@ def test_area_preview_is_simplified_but_keeps_shape(env):
     ring = [vertex(index) for index in range(points)]
     circle = {"type": "Polygon", "coordinates": [ring + ring[:1]]}
     row = boundary_row(
-        "cgaz:ADM0:CIRC",
+        "ovt:CIRC",
         "country",
         "Circland",
         iso3="CIR",
         bbox=(0, 0, 1, 1),
         geometry=json.dumps(circle),
     )
-    db.add_boundaries(str(tmp_path / "soe.db"), "geoBoundaries CGAZ", [row])
+    db.add_boundaries(str(tmp_path / "soe.db"), "Overture Maps divisions", [row])
 
-    preview = client.get("/api/areas/cgaz:ADM0:CIRC").json()["geometry"]
+    preview = client.get("/api/areas/ovt:CIRC").json()["geometry"]
 
     assert len(preview["coordinates"][0]) < len(ring)
     assert shape(preview).area == pytest.approx(math.pi / 4, rel=1e-3)
@@ -912,10 +923,10 @@ def test_repeated_area_preview_comes_from_the_cache(env):
     client, _, _ = env
     api._geometry_cache.clear()
 
-    first = client.get("/api/areas/cgaz:ADM1:NBO").json()["geometry"]
+    first = client.get("/api/areas/ovt:NBO").json()["geometry"]
 
     assert len(api._geometry_cache) == 1
-    assert client.get("/api/areas/cgaz:ADM1:NBO").json()["geometry"] == first
+    assert client.get("/api/areas/ovt:NBO").json()["geometry"] == first
     assert len(api._geometry_cache) == 1
 
 
@@ -924,20 +935,20 @@ def test_reimported_identical_boundary_hits_preview_cache(env):
     api._geometry_cache.clear()
     path = str(tmp_path / "soe.db")
 
-    first = client.get("/api/areas/cgaz:ADM1:NBO").json()["geometry"]
+    first = client.get("/api/areas/ovt:NBO").json()["geometry"]
 
     assert len(api._geometry_cache) == 1
 
-    before = db.get_boundary(path, "cgaz:ADM1:NBO")
+    before = db.get_boundary(path, "ovt:NBO")
     with db.connect(path) as connection:
         connection.execute(db.INSERT_BOUNDARY, _nairobi_values(before))
 
-    after = db.get_boundary(path, "cgaz:ADM1:NBO")
+    after = db.get_boundary(path, "ovt:NBO")
 
     assert after["geom_digest"] == before["geom_digest"]
     assert api._geometry_cache_key(after) == api._geometry_cache_key(before)
 
-    second = client.get("/api/areas/cgaz:ADM1:NBO").json()["geometry"]
+    second = client.get("/api/areas/ovt:NBO").json()["geometry"]
 
     assert second == first
     assert len(api._geometry_cache) == 1
@@ -961,10 +972,10 @@ def _nairobi_values(row: db.Record) -> db.BoundaryValues:
 
 
 def test_stored_preview_matches_the_served_simplification():
-    from soe.boundary_import import CGAZ_SOURCE, _row
+    from soe.boundary_import import _row
 
-    for row_id, geometry in (("cgaz:ADM0:TST", box(36, 4, 38, 6)), ("cgaz:ADM0:FJI", FIJI)):
-        row = _row(row_id, "country", "Testland", "", "TST", geometry, CGAZ_SOURCE)
+    for row_id, geometry in (("ovt:TST", box(36, 4, 38, 6)), ("ovt:FJ", FIJI)):
+        row = _row(row_id, "country", "Testland", "", "TST", geometry, "Overture Maps divisions")
 
         assert row is not None
         full = {
@@ -982,7 +993,7 @@ def test_area_detail_serves_the_stored_preview_without_computing(env, monkeypatc
     client, _, tmp_path = env
     sentinel = mapping(box(0, 0, 1, 1))
     legacy = boundary_row(
-        "cgaz:ADM0:SENT",
+        "ovt:SENT",
         "country",
         "Sentinelia",
         iso3="SEN",
@@ -991,7 +1002,7 @@ def test_area_detail_serves_the_stored_preview_without_computing(env, monkeypatc
     )
     db.add_boundaries(
         str(tmp_path / "soe.db"),
-        "geoBoundaries CGAZ",
+        "Overture Maps divisions",
         [(*legacy[:11], json.dumps(sentinel), *legacy[11:])],
     )
 
@@ -1000,9 +1011,7 @@ def test_area_detail_serves_the_stored_preview_without_computing(env, monkeypatc
 
     monkeypatch.setattr(api, "_simplify_geometry", failing)
 
-    assert client.get("/api/areas/cgaz:ADM0:SENT").json()["geometry"] == json.loads(
-        json.dumps(sentinel)
-    )
+    assert client.get("/api/areas/ovt:SENT").json()["geometry"] == json.loads(json.dumps(sentinel))
 
 
 def test_area_detail_without_a_preview_computes_and_stores_it(env, monkeypatch):
@@ -1010,10 +1019,10 @@ def test_area_detail_without_a_preview_computes_and_stores_it(env, monkeypatch):
     path = str(tmp_path / "soe.db")
     db.add_boundaries(
         path,
-        "geoBoundaries CGAZ",
+        "Overture Maps divisions",
         [
             boundary_row(
-                "cgaz:ADM0:FRESH",
+                "ovt:FRESH",
                 "country",
                 "Freshland",
                 iso3="FRE",
@@ -1022,11 +1031,11 @@ def test_area_detail_without_a_preview_computes_and_stores_it(env, monkeypatch):
             )
         ],
     )
-    assert db.get_boundary(path, "cgaz:ADM0:FRESH")["preview_geojson"] is None
+    assert db.get_boundary(path, "ovt:FRESH")["preview_geojson"] is None
 
-    geometry = client.get("/api/areas/cgaz:ADM0:FRESH").json()["geometry"]
+    geometry = client.get("/api/areas/ovt:FRESH").json()["geometry"]
 
-    stored = db.get_boundary(path, "cgaz:ADM0:FRESH")["preview_geojson"]
+    stored = db.get_boundary(path, "ovt:FRESH")["preview_geojson"]
     assert json.loads(stored) == geometry
 
     def failing(row: db.Record) -> JsonObject:
@@ -1034,7 +1043,7 @@ def test_area_detail_without_a_preview_computes_and_stores_it(env, monkeypatch):
 
     monkeypatch.setattr(api, "_simplify_geometry", failing)
 
-    assert client.get("/api/areas/cgaz:ADM0:FRESH").json()["geometry"] == geometry
+    assert client.get("/api/areas/ovt:FRESH").json()["geometry"] == geometry
 
 
 def test_area_geometry_for_a_boundary_deleted_mid_request_is_404(tmp_path):
@@ -1043,7 +1052,7 @@ def test_area_geometry_for_a_boundary_deleted_mid_request_is_404(tmp_path):
     path = str(tmp_path / "soe.db")
     db.init(path)
     row = {
-        "id": "cgaz:ADM0:GONE",
+        "id": "ovt:GONE",
         "geom_digest": "0123456789abcdef",
         "bbox_w": 0.0,
         "bbox_s": 0.0,
@@ -1058,12 +1067,12 @@ def test_area_geometry_for_a_boundary_deleted_mid_request_is_404(tmp_path):
 
 def test_area_preview_refreshes_after_reimport(env):
     client, _, tmp_path = env
-    before = client.get("/api/areas/cgaz:ADM1:NBO").json()["geometry"]
+    before = client.get("/api/areas/ovt:NBO").json()["geometry"]
 
     assert shape(before).bounds == pytest.approx((36.5, -1.5, 37.5, -0.5))
 
     moved = boundary_row(
-        "cgaz:ADM1:NBO",
+        "ovt:NBO",
         "state",
         "Nairobi",
         "Kenya",
@@ -1071,8 +1080,8 @@ def test_area_preview_refreshes_after_reimport(env):
         bbox=(0, 0, 2, 2),
         geometry=json.dumps(mapping(box(0, 0, 2, 2))),
     )
-    db.add_boundaries(str(tmp_path / "soe.db"), "geoBoundaries CGAZ", [moved])
-    after = client.get("/api/areas/cgaz:ADM1:NBO").json()["geometry"]
+    db.add_boundaries(str(tmp_path / "soe.db"), "Overture Maps divisions", [moved])
+    after = client.get("/api/areas/ovt:NBO").json()["geometry"]
 
     assert after != before
     assert shape(after).bounds == pytest.approx((0, 0, 2, 2))
@@ -1083,10 +1092,10 @@ def test_large_area_preview_is_gzipped(env):
     island = harmonic_island(512)
     db.add_boundaries(
         str(tmp_path / "soe.db"),
-        "geoBoundaries CGAZ",
+        "Overture Maps divisions",
         [
             boundary_row(
-                "cgaz:ADM0:BIG",
+                "ovt:BIG",
                 "country",
                 "Bigland",
                 iso3="BIG",
@@ -1096,8 +1105,8 @@ def test_large_area_preview_is_gzipped(env):
         ],
     )
 
-    plain = client.get("/api/areas/cgaz:ADM0:BIG", headers={"Accept-Encoding": "identity"})
-    gzipped = client.get("/api/areas/cgaz:ADM0:BIG", headers={"Accept-Encoding": "gzip"})
+    plain = client.get("/api/areas/ovt:BIG", headers={"Accept-Encoding": "identity"})
+    gzipped = client.get("/api/areas/ovt:BIG", headers={"Accept-Encoding": "gzip"})
 
     assert "content-encoding" not in plain.headers
     assert gzipped.headers["content-encoding"] == "gzip"
@@ -1107,7 +1116,7 @@ def test_large_area_preview_is_gzipped(env):
 def test_small_area_preview_skips_gzip(env):
     client, _, _ = env
 
-    response = client.get("/api/areas/cgaz:ADM1:NBO", headers={"Accept-Encoding": "gzip"})
+    response = client.get("/api/areas/ovt:NBO", headers={"Accept-Encoding": "gzip"})
 
     assert "content-encoding" not in response.headers
 
@@ -1115,7 +1124,7 @@ def test_small_area_preview_skips_gzip(env):
 def test_area_detail_is_cacheable_for_an_hour(env):
     client, _, _ = env
 
-    response = client.get("/api/areas/cgaz:ADM1:NBO")
+    response = client.get("/api/areas/ovt:NBO")
 
     assert response.headers["cache-control"] == "public, max-age=3600, must-revalidate"
 
@@ -1123,17 +1132,17 @@ def test_area_detail_is_cacheable_for_an_hour(env):
 def test_area_detail_etag_returns_304_until_reimport(env):
     client, _, tmp_path = env
 
-    first = client.get("/api/areas/cgaz:ADM1:NBO")
+    first = client.get("/api/areas/ovt:NBO")
     etag = first.headers["etag"]
 
     assert etag
-    cached = client.get("/api/areas/cgaz:ADM1:NBO", headers={"If-None-Match": etag})
+    cached = client.get("/api/areas/ovt:NBO", headers={"If-None-Match": etag})
 
     assert cached.status_code == 304
     assert cached.headers["etag"] == etag
     assert cached.headers["cache-control"] == "public, max-age=3600, must-revalidate"
 
-    before = db.get_boundary(str(tmp_path / "soe.db"), "cgaz:ADM1:NBO")
+    before = db.get_boundary(str(tmp_path / "soe.db"), "ovt:NBO")
     moved = boundary_row(
         before["id"],
         before["level"],
@@ -1146,8 +1155,8 @@ def test_area_detail_etag_returns_304_until_reimport(env):
         source=before["source"],
         licence=before["licence"],
     )
-    db.add_boundaries(str(tmp_path / "soe.db"), "geoBoundaries CGAZ", [moved])
-    stale = client.get("/api/areas/cgaz:ADM1:NBO", headers={"If-None-Match": etag})
+    db.add_boundaries(str(tmp_path / "soe.db"), "Overture Maps divisions", [moved])
+    stale = client.get("/api/areas/ovt:NBO", headers={"If-None-Match": etag})
 
     assert stale.status_code == 200
     assert stale.headers["etag"] != etag
@@ -1156,25 +1165,23 @@ def test_area_detail_etag_returns_304_until_reimport(env):
 def test_area_detail_etag_changes_with_local_names(env):
     client, _, tmp_path = env
 
-    first = client.get("/api/areas/cgaz:ADM1:NBO")
+    first = client.get("/api/areas/ovt:NBO")
     etag = first.headers["etag"]
 
     with db.connect(str(tmp_path / "soe.db")) as connection:
         connection.execute(
             "UPDATE boundaries SET name_local = '中国', parent_name_local = '肯尼亚' "
-            "WHERE id = 'cgaz:ADM1:NBO'"
+            "WHERE id = 'ovt:NBO'"
         )
 
-    second = client.get("/api/areas/cgaz:ADM1:NBO", headers={"If-None-Match": etag})
+    second = client.get("/api/areas/ovt:NBO", headers={"If-None-Match": etag})
 
     assert second.status_code == 200
     assert second.headers["etag"] != etag
     assert second.json()["name_local"] == "中国"
     assert second.json()["parent_name_local"] == "肯尼亚"
 
-    third = client.get(
-        "/api/areas/cgaz:ADM1:NBO", headers={"If-None-Match": second.headers["etag"]}
-    )
+    third = client.get("/api/areas/ovt:NBO", headers={"If-None-Match": second.headers["etag"]})
 
     assert third.status_code == 304
     assert third.headers["etag"] == second.headers["etag"]
@@ -1307,7 +1314,7 @@ def test_sample_areas_seed_only_in_synthetic_mode_and_when_empty(tmp_path, monke
 
     db_path = str(tmp_path / "other" / "soe.db")  # a non-empty table is left alone
     db.init(db_path)
-    db.add_boundaries(db_path, "geoBoundaries CGAZ", [boundary_row("x", "state", "Other")])
+    db.add_boundaries(db_path, "Overture Maps divisions", [boundary_row("x", "state", "Other")])
 
     with TestClient(app_in("other")) as client:
         assert sample_ids(client) == set()

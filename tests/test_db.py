@@ -5,8 +5,10 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from shapely.geometry import box, mapping
 
-from soe import db
+from soe import db, land
+from soe.areas import Area
 from soe.scene_request import ID_CHARS
 from tests.helpers import boundary_row
 
@@ -75,10 +77,10 @@ def test_search_hides_sample_country_covered_by_import(tmp_path):
         [boundary_row("sample:kenya", "country", "Kenya", iso3="KEN", source="synthetic")],
     )
     db.add_boundaries(
-        path, "geoBoundaries CGAZ", [boundary_row("cgaz:ADM0:KEN", "country", "Kenya", iso3="KEN")]
+        path, "Overture Maps divisions", [boundary_row("ovt:KE", "country", "Kenya", iso3="KEN")]
     )
 
-    assert [row["id"] for row in db.search(path, "Kenya")] == ["cgaz:ADM0:KEN"]
+    assert [row["id"] for row in db.search(path, "Kenya")] == ["ovt:KE"]
 
 
 def test_search_finds_sample_country_without_import(tmp_path):
@@ -102,7 +104,7 @@ def test_imported_country_leaves_sample_lookup_by_id(tmp_path):
         [boundary_row("sample:kenya", "country", "Kenya", iso3="KEN", source="synthetic")],
     )
     db.add_boundaries(
-        path, "geoBoundaries CGAZ", [boundary_row("cgaz:ADM0:KEN", "country", "Kenya", iso3="KEN")]
+        path, "Overture Maps divisions", [boundary_row("ovt:KE", "country", "Kenya", iso3="KEN")]
     )
 
     assert db.get_boundary(path, "sample:kenya")["name"] == "Kenya"
@@ -113,12 +115,12 @@ def test_search_returns_each_countrys_own_level_name(tmp_path):
     db.init(path)
     db.add_boundaries(
         path,
-        "geoBoundaries CGAZ",
+        "Overture Maps divisions",
         [
-            boundary_row("cgaz:ADM1:KEN1", "state", "Nakuru", "Kenya", "KEN"),
-            boundary_row("cgaz:ADM0:KEN", "country", "Kenya", iso3="KEN"),
+            boundary_row("ovt:KEN1", "state", "Nakuru", "Kenya", "KEN"),
+            boundary_row("ovt:KE", "country", "Kenya", iso3="KEN"),
             boundary_row("city:nairobi", "city", "Nairobi", "Kenya", "KEN"),
-            boundary_row("cgaz:ADM2:CHE1", "county", "Sion", "Valais", "CHE"),
+            boundary_row("ovt:CHE1", "county", "Sion", "Valais", "CHE"),
         ],
     )
     db.set_admin_kinds(path, [("KEN", "state", "County"), ("CHE", "county", "District")])
@@ -142,14 +144,14 @@ def test_search_keeps_same_name_states(tmp_path):
     db.init(path)
     db.add_boundaries(
         path,
-        "geoBoundaries CGAZ",
+        "Overture Maps divisions",
         [
-            boundary_row("cgaz:ADM1:A", "state", "Springfield", iso3="USA"),
-            boundary_row("cgaz:ADM1:B", "state", "Springfield", iso3="CAN"),
+            boundary_row("ovt:A", "state", "Springfield", iso3="USA"),
+            boundary_row("ovt:B", "state", "Springfield", iso3="CAN"),
         ],
     )
 
-    assert {row["id"] for row in db.search(path, "Springfield")} == {"cgaz:ADM1:A", "cgaz:ADM1:B"}
+    assert {row["id"] for row in db.search(path, "Springfield")} == {"ovt:A", "ovt:B"}
 
 
 def test_startup_marks_interrupted_and_repost_requeues(tmp_path):
@@ -174,14 +176,14 @@ def test_search_matches_official_long_name_for_america(tmp_path):
     db.init(path)
     db.add_boundaries(
         path,
-        "geoBoundaries CGAZ",
+        "Overture Maps divisions",
         [
-            boundary_row("cgaz:ADM0:USA", "country", "United States", iso3="USA"),
-            boundary_row("cgaz:ADM0:GBR", "country", "United Kingdom", iso3="GBR"),
+            boundary_row("ovt:US", "country", "United States", iso3="USA"),
+            boundary_row("ovt:GB", "country", "United Kingdom", iso3="GBR"),
         ],
     )
 
-    assert [row["id"] for row in db.search(path, "america")] == ["cgaz:ADM0:USA"]
+    assert [row["id"] for row in db.search(path, "america")] == ["ovt:US"]
 
 
 def test_search_matches_official_long_name_for_kingdom(tmp_path):
@@ -189,18 +191,18 @@ def test_search_matches_official_long_name_for_kingdom(tmp_path):
     db.init(path)
     db.add_boundaries(
         path,
-        "geoBoundaries CGAZ",
+        "Overture Maps divisions",
         [
-            boundary_row("cgaz:ADM0:USA", "country", "United States", iso3="USA"),
-            boundary_row("cgaz:ADM0:GBR", "country", "United Kingdom", iso3="GBR"),
-            boundary_row("cgaz:ADM0:SAU", "country", "Saudi Arabia", iso3="SAU"),
+            boundary_row("ovt:US", "country", "United States", iso3="USA"),
+            boundary_row("ovt:GB", "country", "United Kingdom", iso3="GBR"),
+            boundary_row("ovt:SA", "country", "Saudi Arabia", iso3="SAU"),
         ],
     )
     hits = [row["id"] for row in db.search(path, "kingdom")]
 
-    assert "cgaz:ADM0:GBR" in hits
-    assert "cgaz:ADM0:SAU" in hits
-    assert hits[0] == "cgaz:ADM0:GBR"
+    assert "ovt:GB" in hits
+    assert "ovt:SA" in hits
+    assert hits[0] == "ovt:GB"
 
 
 def test_geometry_digest_changes_on_geometry_edit_but_not_on_identical_reimport(tmp_path):
@@ -208,23 +210,23 @@ def test_geometry_digest_changes_on_geometry_edit_but_not_on_identical_reimport(
     db.init(path)
     db.add_boundaries(
         path,
-        "geoBoundaries CGAZ",
-        [boundary_row("cgaz:ADM1:NBO", "state", "Nairobi", "Kenya", "KEN")],
+        "Overture Maps divisions",
+        [boundary_row("ovt:NBO", "state", "Nairobi", "Kenya", "KEN")],
     )
-    before = db.get_boundary(path, "cgaz:ADM1:NBO")["geom_digest"]
+    before = db.get_boundary(path, "ovt:NBO")["geom_digest"]
 
-    legacy = boundary_row("cgaz:ADM1:NBO", "state", "Nairobi", "Kenya", "KEN")
+    legacy = boundary_row("ovt:NBO", "state", "Nairobi", "Kenya", "KEN")
     with db.connect(path) as connection:
         connection.execute(db.INSERT_BOUNDARY, db._complete_row(legacy))
 
-    assert db.get_boundary(path, "cgaz:ADM1:NBO")["geom_digest"] == before
+    assert db.get_boundary(path, "ovt:NBO")["geom_digest"] == before
 
     edited = boundary_row(
-        "cgaz:ADM1:NBO", "state", "Nairobi", "Kenya", "KEN", geometry='{"edited": true}'
+        "ovt:NBO", "state", "Nairobi", "Kenya", "KEN", geometry='{"edited": true}'
     )
-    db.add_boundaries(path, "geoBoundaries CGAZ", [edited])
+    db.add_boundaries(path, "Overture Maps divisions", [edited])
 
-    assert db.get_boundary(path, "cgaz:ADM1:NBO")["geom_digest"] != before
+    assert db.get_boundary(path, "ovt:NBO")["geom_digest"] != before
 
 
 def test_old_database_without_preview_column_gets_it_with_null_previews(tmp_path):
@@ -238,7 +240,7 @@ def test_old_database_without_preview_column_gets_it_with_null_previews(tmp_path
         )
         connection.execute(
             "INSERT INTO boundaries VALUES ('x', 'state', 'Old', '', 'TST', 0, 0, 1, 1, "
-            "1, '{}', 'geoBoundaries CGAZ', 'CC BY 4.0')"
+            "1, '{}', 'Overture Maps divisions', 'CC BY 4.0')"
         )
 
     db.init(path)
@@ -255,7 +257,7 @@ def test_get_boundary_without_geometry_skips_the_full_text(tmp_path):
     path = tmp_path / "soe.db"
     db.init(path)
     stored = boundary_row("x:1", "state", "Big", geometry='{"waste": "%s"}' % ("x" * 1000))
-    db.add_boundaries(path, "geoBoundaries CGAZ", [stored])
+    db.add_boundaries(path, "Overture Maps divisions", [stored])
 
     light = db.get_boundary(path, "x:1", with_geometry=False)
 
@@ -269,7 +271,7 @@ def test_add_boundaries_stores_a_digest_for_legacy_rows(tmp_path):
     path = tmp_path / "soe.db"
     db.init(path)
     stored = boundary_row("x:1", "state", "Old")
-    db.add_boundaries(path, "geoBoundaries CGAZ", [stored])
+    db.add_boundaries(path, "Overture Maps divisions", [stored])
 
     row = db.get_boundary(path, "x:1")
 
@@ -282,7 +284,7 @@ def test_add_boundaries_rejects_a_row_of_the_wrong_length(tmp_path):
     db.init(path)
 
     with pytest.raises(ValueError, match="expected 13, 14 or 15"):
-        db.add_boundaries(path, "geoBoundaries CGAZ", [("x:1",)])
+        db.add_boundaries(path, "Overture Maps divisions", [("x:1",)])
 
 
 def test_boundary_preview_helpers_count_fetch_and_store(tmp_path):
@@ -290,7 +292,7 @@ def test_boundary_preview_helpers_count_fetch_and_store(tmp_path):
     db.init(path)
     db.add_boundaries(
         path,
-        "geoBoundaries CGAZ",
+        "Overture Maps divisions",
         [boundary_row("x:1", "state", "One"), boundary_row("x:2", "state", "Two")],
     )
 
@@ -319,7 +321,7 @@ def test_boundary_preview_helpers_count_fetch_and_store(tmp_path):
 def test_guarded_preview_write_stores_when_the_geometry_is_unchanged(tmp_path):
     path = tmp_path / "soe.db"
     db.init(path)
-    db.add_boundaries(path, "geoBoundaries CGAZ", [boundary_row("x:1", "state", "One")])
+    db.add_boundaries(path, "Overture Maps divisions", [boundary_row("x:1", "state", "One")])
     row = db.get_boundary(path, "x:1")
 
     assert db.set_boundary_preview(
@@ -333,13 +335,17 @@ def test_guarded_preview_write_keeps_a_concurrent_reimport(tmp_path):
     path = tmp_path / "soe.db"
     db.init(path)
     db.add_boundaries(
-        path, "geoBoundaries CGAZ", [boundary_row("x:1", "state", "One", geometry='{"old": true}')]
+        path,
+        "Overture Maps divisions",
+        [boundary_row("x:1", "state", "One", geometry='{"old": true}')],
     )
     fetched = db.get_boundary(path, "x:1")
     old_preview = '{"old": true}'
 
     db.add_boundaries(
-        path, "geoBoundaries CGAZ", [boundary_row("x:1", "state", "One", geometry='{"new": true}')]
+        path,
+        "Overture Maps divisions",
+        [boundary_row("x:1", "state", "One", geometry='{"new": true}')],
     )
     current = db.get_boundary(path, "x:1")
     db.set_boundary_preview(
@@ -367,7 +373,7 @@ def test_old_database_without_digest_column_gets_it_with_null_digests(tmp_path):
         )
         connection.execute(
             "INSERT INTO boundaries VALUES ('x', 'state', 'Old', '', 'TST', 0, 0, 1, 1, "
-            "1, '{}', 'geoBoundaries CGAZ', 'CC BY 4.0')"
+            "1, '{}', 'Overture Maps divisions', 'CC BY 4.0')"
         )
 
     db.init(path)
@@ -394,7 +400,7 @@ def test_backfill_leaves_queued_and_running_scenes_alone(tmp_path):
 
     path = str(tmp_path / "soe.db")
     db.init(path)
-    db.add_boundaries(path, "geoBoundaries CGAZ", [boundary_row("x:1", "state", "One")])
+    db.add_boundaries(path, "Overture Maps divisions", [boundary_row("x:1", "state", "One")])
     db.submit(path, "a" * ID_CHARS, "{}", bundle_exists=False)
     db.submit(path, "b" * ID_CHARS, "{}", bundle_exists=False)
     db.update_scene(path, "b" * ID_CHARS, status="running")
@@ -423,7 +429,7 @@ def test_backfill_area_previews_fills_missing_previews(tmp_path):
 
     path = str(tmp_path / "soe.db")
     db.init(path)
-    db.add_boundaries(path, "geoBoundaries CGAZ", [boundary_row("x:1", "state", "One")])
+    db.add_boundaries(path, "Overture Maps divisions", [boundary_row("x:1", "state", "One")])
 
     assert db.count_boundaries_missing_preview(path) == 1
     assert backfill_area_previews(path) == 1
@@ -440,7 +446,9 @@ def test_backfill_area_previews_skips_a_row_whose_geometry_is_not_json(tmp_path,
     path = str(tmp_path / "soe.db")
     db.init(path)
     db.add_boundaries(
-        path, "geoBoundaries CGAZ", [boundary_row("x:bad", "state", "Bad", geometry="not json")]
+        path,
+        "Overture Maps divisions",
+        [boundary_row("x:bad", "state", "Bad", geometry="not json")],
     )
 
     assert backfill_area_previews(path, batch_size=1) == 0
@@ -610,9 +618,7 @@ def test_failed_replacement_rolls_back_rows_and_tokens(tmp_path, monkeypatch):
     path = tmp_path / "soe.db"
     db.init(path)
     db.add_boundaries(
-        path,
-        "geoBoundaries CGAZ",
-        [boundary_row("cgaz:ADM0:OLD", "country", "Oldland", iso3="OLD")],
+        path, "Overture Maps divisions", [boundary_row("ovt:OLD", "country", "Oldland", iso3="OLD")]
     )
 
     def boom(connection: sqlite3.Connection, source: str | None, levels=None) -> int:
@@ -623,15 +629,15 @@ def test_failed_replacement_rolls_back_rows_and_tokens(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="token build failed"):
         db.add_boundaries(
             path,
-            "geoBoundaries CGAZ",
-            [boundary_row("cgaz:ADM0:NEW", "country", "Newland", iso3="NEW")],
+            "Overture Maps divisions",
+            [boundary_row("ovt:NEW", "country", "Newland", iso3="NEW")],
         )
 
-    assert db.get_boundary(path, "cgaz:ADM0:OLD")["name"] == "Oldland"
-    assert db.get_boundary(path, "cgaz:ADM0:NEW") is None
-    assert [row["id"] for row in db.search(path, "oldland")] == ["cgaz:ADM0:OLD"]
+    assert db.get_boundary(path, "ovt:OLD")["name"] == "Oldland"
+    assert db.get_boundary(path, "ovt:NEW") is None
+    assert [row["id"] for row in db.search(path, "oldland")] == ["ovt:OLD"]
     assert db.search(path, "newland") == []
-    assert token_ids(path) == {"cgaz:ADM0:OLD"}
+    assert token_ids(path) == {"ovt:OLD"}
 
 
 def test_replacement_removes_tokens_of_replaced_ids(tmp_path):
@@ -639,15 +645,15 @@ def test_replacement_removes_tokens_of_replaced_ids(tmp_path):
     db.init(path)
     db.add_boundaries(
         path,
-        "geoBoundaries CGAZ",
-        [boundary_row("cgaz:A", "state", "Alpha"), boundary_row("cgaz:B", "state", "Beta")],
+        "Overture Maps divisions",
+        [boundary_row("ovt:A", "state", "Alpha"), boundary_row("ovt:B", "state", "Beta")],
     )
-    db.add_boundaries(path, "geoBoundaries CGAZ", [boundary_row("cgaz:C", "state", "Gamma")])
+    db.add_boundaries(path, "Overture Maps divisions", [boundary_row("ovt:C", "state", "Gamma")])
 
-    assert token_ids(path) == {"cgaz:C"}
+    assert token_ids(path) == {"ovt:C"}
     assert orphan_token_count(path) == 0
     assert db.search(path, "alpha") == []
-    assert [row["id"] for row in db.search(path, "gamma")] == ["cgaz:C"]
+    assert [row["id"] for row in db.search(path, "gamma")] == ["ovt:C"]
 
 
 def test_empty_replacement_clears_tokens_and_country_coverage(tmp_path):
@@ -659,12 +665,12 @@ def test_empty_replacement_clears_tokens_and_country_coverage(tmp_path):
         [boundary_row("sample:kenya", "country", "Kenya", iso3="KEN", source="synthetic")],
     )
     db.add_boundaries(
-        path, "geoBoundaries CGAZ", [boundary_row("cgaz:ADM0:KEN", "country", "Kenya", iso3="KEN")]
+        path, "Overture Maps divisions", [boundary_row("ovt:KE", "country", "Kenya", iso3="KEN")]
     )
 
-    assert [row["id"] for row in db.search(path, "Kenya")] == ["cgaz:ADM0:KEN"]
+    assert [row["id"] for row in db.search(path, "Kenya")] == ["ovt:KE"]
 
-    db.add_boundaries(path, "geoBoundaries CGAZ", [])
+    db.add_boundaries(path, "Overture Maps divisions", [])
 
     assert [row["id"] for row in db.search(path, "Kenya")] == ["sample:kenya"]
     with db.connect(path) as connection:
@@ -835,7 +841,7 @@ def test_removing_one_source_keeps_other_sources_country_coverage(tmp_path):
         [boundary_row("sample:kenya", "country", "Kenya", iso3="KEN", source="synthetic")],
     )
     db.add_boundaries(
-        path, "geoBoundaries CGAZ", [boundary_row("cgaz:ADM0:KEN", "country", "Kenya", iso3="KEN")]
+        path, "other", [boundary_row("other:KE", "country", "Kenya", iso3="KEN", source="other")]
     )
     db.add_boundaries(
         path,
@@ -843,9 +849,9 @@ def test_removing_one_source_keeps_other_sources_country_coverage(tmp_path):
         [boundary_row("ovt:KE", "country", "Kenya", iso3="KEN", source="Overture Maps divisions")],
     )
 
-    assert {row["id"] for row in db.search(path, "Kenya")} == {"cgaz:ADM0:KEN", "ovt:KE"}
+    assert {row["id"] for row in db.search(path, "Kenya")} == {"other:KE", "ovt:KE"}
 
-    db.add_boundaries(path, "geoBoundaries CGAZ", [])
+    db.add_boundaries(path, "other", [])
 
     assert {row["id"] for row in db.search(path, "Kenya")} == {"ovt:KE"}
 
@@ -867,7 +873,7 @@ def test_require_search_names_passes_for_empty_and_migrated_databases(tmp_path):
     db.init(path)
     db.require_search_names(path)
 
-    db.add_boundaries(path, "geoBoundaries CGAZ", [boundary_row("x:1", "state", "One")])
+    db.add_boundaries(path, "Overture Maps divisions", [boundary_row("x:1", "state", "One")])
     db.require_search_names(path)
 
 
@@ -907,13 +913,13 @@ def test_startup_rejects_partially_migrated_database(tmp_path):
         )
 
     db.add_boundaries(
-        path, "geoBoundaries CGAZ", [boundary_row("cgaz:ADM0:NEW", "country", "Newland")]
+        path, "Overture Maps divisions", [boundary_row("ovt:NEW", "country", "Newland")]
     )
 
     with pytest.raises(SystemExit, match="rebuild-search-names"):
         db.require_search_names(path)
 
-    assert [row["id"] for row in db.search(path, "newland")] == ["cgaz:ADM0:NEW"]
+    assert [row["id"] for row in db.search(path, "newland")] == ["ovt:NEW"]
     assert db.search(path, "oldland") == []
 
     cli.rebuild_search_names(path)
@@ -988,3 +994,92 @@ def test_part_ids_come_in_part_order_and_disputed_lines_in_the_window(tmp_path):
     assert db.boundary_part_ids(path, "ovt:AA") == ["ovt:AA", "ovt:BB"]
     assert db.boundary_part_ids(path, "ovt:ZZ") == []
     assert db.disputed_line_wkbs(path, (0.5, 0, 2, 1)) == [b"near"]
+
+
+def test_delete_cgaz_removes_rows_tokens_clips_and_keeps_search_valid(tmp_path):
+    path = tmp_path / "soe.db"
+    db.init(path)
+    db.add_boundaries(
+        path,
+        "synthetic",
+        [boundary_row("sample:kenya", "country", "Kenya", iso3="KEN", source="synthetic")],
+    )
+    kenya = box(10, 10, 11, 11)
+    db.add_boundaries(
+        path,
+        "Overture Maps divisions",
+        [
+            boundary_row(
+                "ovt:KE",
+                "country",
+                "Kenya",
+                iso3="KEN",
+                bbox=kenya.bounds,
+                geometry=json.dumps(mapping(kenya)),
+                source="Overture Maps divisions",
+            )
+        ],
+    )
+    # The removed CGAZ source lingers in databases imported before Overture.
+    legacy = "geoBoundaries CGAZ"
+    home = box(0, 0, 1, 1)
+    db.add_boundaries(
+        path,
+        legacy,
+        [
+            boundary_row(
+                "legacy:KE",
+                "country",
+                "Kenya",
+                iso3="KEN",
+                bbox=home.bounds,
+                geometry=json.dumps(mapping(home)),
+                source=legacy,
+            ),
+            boundary_row(
+                "legacy:NBO",
+                "state",
+                "Nairobi",
+                "Kenya",
+                "KEN",
+                bbox=home.bounds,
+                geometry=json.dumps(mapping(home)),
+                source=legacy,
+            ),
+        ],
+    )
+    store = tmp_path / "land.sqlite"
+    land.write_land_store(store, "v1", [home, kenya])
+    land.clip_area_to_land(path, store, Area(home, db.get_boundary(path, "legacy:KE")))
+    land.clip_area_to_land(path, store, Area(kenya, db.get_boundary(path, "ovt:KE")))
+    with db.connect(path) as connection:
+        keys = [row[0] for row in connection.execute("SELECT geom_digest FROM land_clips")]
+
+    assert len(keys) == 2
+    assert sum(":legacy:KE:" in key for key in keys) == 1
+
+    counts = db.delete_cgaz(path)
+
+    assert counts["boundaries"] == 2
+    assert counts["land_clips"] == 1
+    assert counts["search_names"] > 0
+    assert db.get_boundary(path, "legacy:KE") is None
+    assert db.get_boundary(path, "legacy:NBO") is None
+    assert db.get_boundary(path, "ovt:KE") is not None
+    assert {row["id"] for row in db.search(path, "Kenya")} == {"ovt:KE"}
+    with db.connect(path) as connection:
+        remaining = [row[0] for row in connection.execute("SELECT geom_digest FROM land_clips")]
+
+    assert len(remaining) == 1
+    assert ":ovt:KE:" in remaining[0]
+    assert orphan_token_count(path) == 0
+    with db.connect(path) as connection:
+        covered = {
+            row["iso3"] for row in connection.execute("SELECT iso3 FROM imported_country_iso3")
+        }
+
+    assert "KEN" in covered
+    db.require_search_names(path)
+
+    assert db.delete_cgaz(path) == {"boundaries": 0, "search_names": 0, "land_clips": 0}
+    db.require_search_names(path)

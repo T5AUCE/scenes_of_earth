@@ -524,6 +524,48 @@ def add_boundaries(path: Path | str, source: str, rows: Iterable[BoundaryValues]
     return replaced
 
 
+def delete_cgaz(path: Path | str) -> dict[str, int]:
+    """Remove every leftover CGAZ boundary with its search tokens and stored land clips.
+
+    Returns the counts removed as (boundaries, search names, land clips). Coverage and
+    the search migration marker are recomputed, so the database stays searchable.
+    """
+    with connect(path) as connection:
+        connection.execute("BEGIN")
+        counts = _delete_cgaz_connection(connection)
+        connection.execute("COMMIT")
+
+    return counts
+
+
+def _delete_cgaz_connection(connection: sqlite3.Connection) -> dict[str, int]:
+    """Delete the removed CGAZ source inside the caller's transaction; returns removal counts."""
+    # The name stays as a literal because the constant left with the CGAZ import path.
+    source = "geoBoundaries CGAZ"
+    names = connection.execute(
+        "DELETE FROM boundary_names WHERE boundary_id IN "
+        "(SELECT id FROM boundaries WHERE source = ?)",
+        (source,),
+    ).rowcount
+    # Clip keys hold the boundary id between colons, never the boundary digest.
+    clips = connection.execute(
+        "DELETE FROM land_clips WHERE EXISTS ("
+        "SELECT 1 FROM boundaries WHERE boundaries.source = ? "
+        "AND instr(land_clips.geom_digest, ':' || boundaries.id || ':') > 0)",
+        (source,),
+    ).rowcount
+    boundaries = connection.execute("DELETE FROM boundaries WHERE source = ?", (source,)).rowcount
+    connection.execute("DELETE FROM imported_country_iso3")
+    connection.execute(
+        "INSERT OR IGNORE INTO imported_country_iso3 SELECT DISTINCT iso3 FROM boundaries "
+        "WHERE level = 'country' AND source != 'synthetic' "
+        "AND iso3 IS NOT NULL AND iso3 != ''"
+    )
+    _refresh_search_migration(connection)
+
+    return {"boundaries": boundaries, "search_names": names, "land_clips": clips}
+
+
 def _delete_source_search_state(
     connection: sqlite3.Connection, source: str | None, levels: tuple[str, ...] | None = None
 ) -> None:

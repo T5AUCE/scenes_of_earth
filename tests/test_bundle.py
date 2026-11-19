@@ -1015,7 +1015,7 @@ def cut_to_land_doc(tmp_path: Path) -> dict:
     doc["area"].update(
         borders_href="borders.geojson", border_level=None, border_min_zoom=None, land=land
     )
-    doc["area"]["boundary"]["licence"] = "CC BY 4.0 + ODbL 1.0"
+    doc["area"]["boundary"]["licence"] = "ODbL 1.0"
     doc["credits"]["lines"].append(land["attribution"])
 
     return doc
@@ -1044,20 +1044,6 @@ def test_land_source_must_carry_the_odbl_licence(tmp_path):
     doc["area"]["land"]["licence"] = "CC BY 4.0"
 
     assert any("ODbL" in problem for problem in validate(doc))
-
-
-@pytest.mark.parametrize(
-    ("licence", "missing"),
-    [("CC BY 4.0", "ODbL 1.0"), ("ODbL 1.0", "CC BY 4.0"), ("Public Domain", "CC BY 4.0 and ODbL")],
-)
-def test_land_cut_boundary_keeps_both_licences(tmp_path, licence, missing):
-    doc = cut_to_land_doc(tmp_path)
-    doc["area"]["boundary"]["licence"] = licence
-
-    assert "ODbL" in str(doc["area"]["land"].get("licence"))
-    assert doc["area"]["land"]["attribution"] in doc["credits"]["lines"]
-
-    assert any(f"must include {missing}" in problem for problem in validate(doc))
 
 
 def test_overture_cut_boundary_rejections_name_each_problem(tmp_path):
@@ -1123,7 +1109,7 @@ def test_overture_cut_boundary_rejections_name_each_problem(tmp_path):
 def test_credits_include_the_land_source_of_a_cut_area():
     land = {**SOURCES["osm_land"], "version": "2026-11-14"}
 
-    lines = credits([{"source": SOURCES["glo90"]}], SOURCES["geoBoundaries CGAZ"], False, land)
+    lines = credits([{"source": SOURCES["glo90"]}], SOURCES["Overture Maps divisions"], False, land)
 
     assert land["attribution"] in lines["lines"]
 

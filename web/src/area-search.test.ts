@@ -90,8 +90,8 @@ test("a stale outline never overwrites a newer pick", async (context) => {
   const first = gate();
   const second = gate();
   const hits = [
-    areaHit({ id: "cgaz:ADM1:FIRST", name: "First", bbox: [35, -1, 36, 1] }),
-    areaHit({ id: "cgaz:ADM1:SECOND", name: "Second", bbox: [37, -1, 38, 1] }),
+    areaHit({ id: "ovt:FIRST", name: "First", bbox: [35, -1, 36, 1] }),
+    areaHit({ id: "ovt:SECOND", name: "Second", bbox: [37, -1, 38, 1] }),
   ];
 
   const harness = await searchWithHits(context, hits, (url) => {
@@ -146,8 +146,8 @@ test("a failed outline fetch shows an outline-unavailable notice", async (contex
 
 test("a stale failed outline fetch stays silent", async (context) => {
   const hits = [
-    areaHit({ id: "cgaz:ADM1:FIRST", name: "First", bbox: [35, -1, 36, 1] }),
-    areaHit({ id: "cgaz:ADM1:SECOND", name: "Second", bbox: [37, -1, 38, 1] }),
+    areaHit({ id: "ovt:FIRST", name: "First", bbox: [35, -1, 36, 1] }),
+    areaHit({ id: "ovt:SECOND", name: "Second", bbox: [37, -1, 38, 1] }),
   ];
   const outline = gate();
   let rejectFirst!: (error: Error) => void;
@@ -451,7 +451,7 @@ async function flush(turns = 3): Promise<void> {
 
 function areaHit(overrides: Partial<AreaHit> = {}): AreaHit {
   return {
-    id: "cgaz:ADM1:NAKURU",
+    id: "ovt:NAKURU",
     name: "Nakuru",
     level: "state",
     kind: null,

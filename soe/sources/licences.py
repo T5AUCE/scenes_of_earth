@@ -325,18 +325,6 @@ SOURCES = {
             "resampling; INSPIRE lithology classes mapped to GLiM level-2 classes"
         ),
     },
-    "geoBoundaries CGAZ": {
-        "name": "geoBoundaries CGAZ",
-        "licence": "CC BY 4.0",
-        "licence_url": "https://www.geoboundaries.org/",
-        "attribution": "Boundaries: geoBoundaries (https://www.geoboundaries.org)",
-        "citation": (
-            "Runfola, D. et al. (2020) geoBoundaries: A global database of political "
-            "administrative boundaries. PLoS ONE 15(4): e0231866. "
-            "https://doi.org/10.1371/journal.pone.0231866"
-        ),
-        "modified": "simplified 0.01°, clipped to 60°S-84°N",
-    },
     "Overture Maps divisions": {
         "name": "Overture Maps divisions 2026-10-21.0",
         "version": "2026-10-21.0",

@@ -1,4 +1,4 @@
-"""Load geoBoundaries CGAZ shapes, GHSL UCDB urban areas, gbOpen kinds and Overture into SQLite."""
+"""Load GHSL UCDB urban areas, gbOpen kinds, and Overture divisions into SQLite."""
 
 import json
 import os
@@ -19,10 +19,7 @@ from .sources import CELL_DEG, SOURCES, SUPPORTED_BOUNDS_DEG
 
 if TYPE_CHECKING:
     import geopandas as gpd
-    import pandas as pd
 
-CGAZ_SOURCE = "geoBoundaries CGAZ"
-CGAZ_LEVELS = {0: "country", 1: "state", 2: "county"}
 UCDB_SOURCE = "GHSL UCDB R2024A"
 UCDB_LEVEL = "urban"
 MIN_URBAN_POP = 1_000_000
@@ -89,67 +86,6 @@ STAGED_COLUMNS = f"{ALL_COLUMNS}, osm_record_id"
 
 PartRow = tuple[str, int, str]  # parent area id, position among its parts, part area id
 DisputedRow = tuple[str, str, float, float, float, float, bytes]  # id, level, bbox, WKB
-
-
-def import_cgaz(db_path: Path | str, folder: Path | str) -> int:
-    """geoBoundaries CGAZ ADM0/1/2 GeoPackages, found in `folder` by 'ADM0', 'ADM1', 'ADM2'.
-
-    Returns the number of rows stored.
-    """
-    frames = {level: _read_cgaz_level(folder, level) for level in CGAZ_LEVELS}
-    return _store(db_path, CGAZ_SOURCE, "CGAZ", _cgaz_rows(frames))
-
-
-def _read_cgaz_level(folder: Path | str, level: int) -> "gpd.GeoDataFrame":
-    import geopandas as gpd
-
-    files = sorted(Path(folder).glob(f"*ADM{level}*.gpkg"))
-    if not files:
-        raise SystemExit(f"no *ADM{level}*.gpkg in {folder}")
-
-    return gpd.read_file(files[0]).to_crs(4326)
-
-
-def _cgaz_rows(frames: dict[int, "gpd.GeoDataFrame"]) -> Iterator[db.BoundaryValues | None]:
-    """Boundary row per CGAZ shape, countries first; None for a shape outside the coverage."""
-    country_names = dict(zip(frames[0]["shapeGroup"], frames[0]["shapeName"], strict=True))
-    county_states = _county_states(counties=frames[2], states=frames[1])
-    for level, frame in frames.items():
-        # ADM0 has no shapeID and its id column is empty, so the ISO3 group names a country.
-        id_column = "shapeID" if "shapeID" in frame.columns else "shapeGroup"
-        for index, record in frame.iterrows():
-            country_name = country_names.get(record["shapeGroup"], "")
-            yield _row(
-                f"cgaz:ADM{level}:{record[id_column]}",
-                level=CGAZ_LEVELS[level],
-                name=record["shapeName"],
-                parent=_parent_name(level, index, country_name, county_states),
-                iso3=record["shapeGroup"],
-                geometry=record.geometry,
-                source=CGAZ_SOURCE,
-            )
-
-
-def _parent_name(level: int, index: int, country_name: str, county_states: "pd.Series") -> str:
-    """No parent for a country, its country for a state, the containing state for a county."""
-    if level == 0:
-        return ""
-    if level == 1:
-        return country_name
-
-    return county_states.get(index, country_name)
-
-
-def _county_states(counties: "gpd.GeoDataFrame", states: "gpd.GeoDataFrame") -> "pd.Series":
-    """State name per county index: the state that contains the county's representative point."""
-    county_points = counties.copy()
-    county_points.geometry = counties.representative_point()
-    joined = county_points.sjoin(
-        states[["geometry", "shapeName"]], predicate="within", rsuffix="state"
-    )
-
-    # Overlapping states can both contain the point; keep the first.
-    return joined.groupby(level=0)["shapeName_state"].first()
 
 
 def import_admin_kinds(db_path: Path | str, folder: Path | str) -> int:
@@ -408,6 +344,10 @@ def _replace_from_staging(
         connection.executemany(
             "INSERT INTO disputed_lines VALUES (?, ?, ?, ?, ?, ?, ?)", disputed_lines
         )
+        if levels is None:
+            # Databases imported before Overture still hold the removed source.
+            db._delete_cgaz_connection(connection)
+
         db._insert_source_search_state(connection, source, levels)
         connection.execute("COMMIT")
 

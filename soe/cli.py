@@ -24,7 +24,7 @@ from shapely.geometry import shape
 
 from . import db
 from .areas import display_preview
-from .boundary_import import import_admin_kinds, import_cgaz, import_ucdb
+from .boundary_import import import_admin_kinds, import_ucdb
 from .ingest import chirps
 from .ingest.era5 import INGEST_SPECS, ingest
 from .ingest.geology_age import ingest_geology_age
@@ -88,6 +88,17 @@ def main(argv: list[str] | None = None) -> None:
         print(f"Search names: {rebuild_search_names(args.db)} stored")
         return
 
+    if args.command == "delete-cgaz":
+        logging.basicConfig(level=logging.INFO)
+        db.ensure_schema(args.db)
+        counts = db.delete_cgaz(args.db)
+        print(
+            f"CGAZ rows: {counts['boundaries']} boundaries, "
+            f"{counts['search_names']} search names, "
+            f"{counts['land_clips']} land clips removed"
+        )
+        return
+
     if args.command == "import-land":
         logging.basicConfig(level=logging.INFO)
         print("Land clips stored:", import_land(args.land, args.db))
@@ -127,16 +138,10 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if not (
-        args.cgaz
-        or args.overture
-        or args.overture_levels
-        or args.overture_cities
-        or args.ucdb
-        or args.meta
+        args.overture or args.overture_levels or args.overture_cities or args.ucdb or args.meta
     ):
         parser.error(
-            "give at least one of --cgaz, --overture, --overture-levels, --overture-cities, "
-            "--ucdb, --meta"
+            "give at least one of --overture, --overture-levels, --overture-cities, --ucdb, --meta"
         )
 
     logging.basicConfig(level=logging.INFO)
@@ -144,9 +149,6 @@ def main(argv: list[str] | None = None) -> None:
     levels_source = open_release(args.overture_levels) if args.overture_levels else None
     cities_source = open_release(args.overture_cities) if args.overture_cities else None
     db.ensure_schema(args.db)
-
-    if args.cgaz:
-        print("CGAZ rows:", import_cgaz(args.db, args.cgaz))
 
     if overture_source:
         print("Overture rows per level:", dict(import_overture(args.db, overture_source)))
@@ -174,10 +176,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     import_parser = subparsers.add_parser(
         "import-boundaries",
-        help="load CGAZ ADM0/1/2, Overture divisions, GHSL UCDB urban areas and gbOpen level names "
-        "into SQLite",
+        help="load Overture divisions, GHSL UCDB urban areas, and gbOpen level names into SQLite",
     )
-    import_parser.add_argument("--cgaz", help="folder with the CGAZ ADM0/ADM1/ADM2 GeoPackages")
     import_parser.add_argument(
         "--overture",
         help="Overture Maps release to read from S3, such as 2026-10-21.0 (needs duckdb; asks "
@@ -244,6 +244,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "(run while the API and importers are stopped)",
     )
     search_parser.add_argument("--db", default=os.environ.get("SOE_DB", "./data/soe.db"))
+
+    delete_parser = subparsers.add_parser(
+        "delete-cgaz", help="remove leftover CGAZ boundaries with their search names and land clips"
+    )
+    delete_parser.add_argument("--db", default=os.environ.get("SOE_DB", "./data/soe.db"))
 
     lithology_parser = subparsers.add_parser(
         "ingest-lithology",

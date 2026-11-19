@@ -1,4 +1,4 @@
-"""Offline tests: boundary storage and the CGAZ / UCDB boundary import."""
+"""Test boundary storage and the UCDB import."""
 
 import json
 import sqlite3
@@ -26,18 +26,18 @@ def test_add_boundaries_replaces_duplicate_ids(tmp_path):
         1,
         400,
         "{}",
-        "geoBoundaries CGAZ",
+        "Overture Maps divisions",
         "CC BY 4.0",
     )
 
-    assert db.add_boundaries(path, "geoBoundaries CGAZ", [row, row, ("x:2", *row[1:])]) == 1
+    assert db.add_boundaries(path, "Overture Maps divisions", [row, row, ("x:2", *row[1:])]) == 1
     assert len(db.search(path, "Dup")) == 2
 
 
 def test_add_boundaries_counts_duplicates_across_batch_flushes(tmp_path):
     path = str(tmp_path / "soe.db")
     db.init(path)
-    db.add_boundaries(path, "geoBoundaries CGAZ", [boundary_row("old:1", "state", "Old")])
+    db.add_boundaries(path, "Overture Maps divisions", [boundary_row("old:1", "state", "Old")])
     db.add_boundaries(path, "other", [boundary_row("other:1", "state", "Other", source="other")])
     total = db.INSERT_BATCH_ROWS + 100
 
@@ -49,11 +49,11 @@ def test_add_boundaries_counts_duplicates_across_batch_flushes(tmp_path):
 
         yield boundary_row("new:dup", "state", "Dup")
 
-    assert db.add_boundaries(path, "geoBoundaries CGAZ", rows()) == 1
+    assert db.add_boundaries(path, "Overture Maps divisions", rows()) == 1
 
     with db.connect(path) as connection:
         stored = connection.execute(
-            "SELECT COUNT(*) FROM boundaries WHERE source = ?", ("geoBoundaries CGAZ",)
+            "SELECT COUNT(*) FROM boundaries WHERE source = ?", ("Overture Maps divisions",)
         ).fetchone()[0]
 
     assert stored == total - 1
@@ -67,7 +67,7 @@ def test_add_boundaries_generator_failure_after_first_flush_keeps_old_rows(tmp_p
     db.init(path)
     db.add_boundaries(
         path,
-        "geoBoundaries CGAZ",
+        "Overture Maps divisions",
         [boundary_row("old:1", "state", "Old One"), boundary_row("old:2", "state", "Old Two")],
     )
     db.add_boundaries(path, "other", [boundary_row("other:1", "state", "Other", source="other")])
@@ -78,7 +78,7 @@ def test_add_boundaries_generator_failure_after_first_flush_keeps_old_rows(tmp_p
         raise RuntimeError("boom after first flush")
 
     with pytest.raises(RuntimeError, match="boom"):
-        db.add_boundaries(path, "geoBoundaries CGAZ", failing())
+        db.add_boundaries(path, "Overture Maps divisions", failing())
 
     assert db.get_boundary(path, "old:1") is not None
     assert db.get_boundary(path, "old:2") is not None
@@ -91,7 +91,7 @@ def test_add_boundaries_row_failure_after_first_flush_keeps_old_rows(tmp_path):
     db.init(path)
     db.add_boundaries(
         path,
-        "geoBoundaries CGAZ",
+        "Overture Maps divisions",
         [boundary_row("old:1", "state", "Old One"), boundary_row("old:2", "state", "Old Two")],
     )
     db.add_boundaries(path, "other", [boundary_row("other:1", "state", "Other", source="other")])
@@ -111,14 +111,14 @@ def test_add_boundaries_row_failure_after_first_flush_keeps_old_rows(tmp_path):
                     1,
                     400,
                     "{}",
-                    "geoBoundaries CGAZ",
+                    "Overture Maps divisions",
                     "CC BY 4.0",
                 )
             else:
                 yield boundary_row(f"new:{index}", "state", f"New {index}")
 
     with pytest.raises(sqlite3.IntegrityError):
-        db.add_boundaries(path, "geoBoundaries CGAZ", bad())
+        db.add_boundaries(path, "Overture Maps divisions", bad())
 
     assert db.get_boundary(path, "old:1") is not None
     assert db.get_boundary(path, "old:2") is not None
@@ -128,23 +128,7 @@ def test_add_boundaries_row_failure_after_first_flush_keeps_old_rows(tmp_path):
 
 def test_import_boundaries_tiny_geopackage(tmp_path):
     gpd = pytest.importorskip("geopandas")
-    from soe.boundary_import import import_cgaz, import_ucdb
-
-    country, state, county = box(36, -2, 38, 0), box(36, -2, 37, 0), box(36, -1, 36.5, 0)
-    # ADM0 has no shapeID and its id column is empty, so the ISO3 group names a country.
-    countries = gpd.GeoDataFrame(
-        {"shapeName": ["Testland", "Examplia"], "shapeGroup": ["TST", "EXM"], "id": ["", ""]},
-        geometry=[country, box(40, -2, 42, 0)],
-        crs=4326,
-    )
-    countries.to_file(tmp_path / "geoBoundariesCGAZ_ADM0.gpkg")
-
-    for level, geometry, name in ((1, state, "West State"), (2, county, "Small County")):
-        gpd.GeoDataFrame(
-            {"shapeName": [name], "shapeGroup": ["TST"], "shapeID": [f"id{level}"]},
-            geometry=[geometry],
-            crs=4326,
-        ).to_file(tmp_path / f"geoBoundariesCGAZ_ADM{level}.gpkg")
+    from soe.boundary_import import import_ucdb
 
     cities = gpd.GeoDataFrame(
         {
@@ -160,35 +144,19 @@ def test_import_boundaries_tiny_geopackage(tmp_path):
     path = str(tmp_path / "soe.db")
     db.init(path)
 
-    assert import_cgaz(path, tmp_path) == 4
     assert import_ucdb(path, tmp_path / "ucdb.gpkg") == 1
 
-    county_row = db.search(path, "small", "county")[0]
-    assert county_row["parent_name"] == "West State" and county_row["iso3"] == "TST"
-
-    assert db.search(path, "t")[0]["level"] == "country"
     assert db.search(path, "big")[0]["level"] == "urban"
     assert db.get_boundary(path, "ucdb:0")["licence"] == "CC BY 4.0"
-
-    assert db.get_boundary(path, "cgaz:ADM0:TST")["name"] == "Testland"
-    assert db.get_boundary(path, "cgaz:ADM0:EXM")["name"] == "Examplia"
-
-    # Country ids come from the ISO3 group, so reversing the input order keeps both rows.
-    (tmp_path / "geoBoundariesCGAZ_ADM0.gpkg").unlink()
-    countries.iloc[::-1].to_file(tmp_path / "geoBoundariesCGAZ_ADM0.gpkg")
-
-    assert import_cgaz(path, tmp_path) == 4
-    assert db.get_boundary(path, "cgaz:ADM0:TST")["name"] == "Testland"
-    assert db.get_boundary(path, "cgaz:ADM0:EXM")["name"] == "Examplia"
 
 
 def test_self_intersecting_shape_is_repaired_into_a_row():
     from shapely.geometry import Polygon
 
-    from soe.boundary_import import CGAZ_SOURCE, _row
+    from soe.boundary_import import _row
 
     bowtie = Polygon([(36, 4), (38, 6), (38, 4), (36, 6), (36, 4)])
-    row = _row("cgaz:ADM0:TST", "country", "Testland", "", "TST", bowtie, CGAZ_SOURCE)
+    row = _row("ovt:TST", "country", "Testland", "", "TST", bowtie, "Overture Maps divisions")
 
     assert row is not None
     assert row[1] == "country"
@@ -198,39 +166,47 @@ def test_self_intersecting_shape_is_repaired_into_a_row():
 def test_shape_without_polygons_is_skipped_with_a_reason(capsys):
     from shapely.geometry import LineString
 
-    from soe.boundary_import import CGAZ_SOURCE, _row
+    from soe.boundary_import import _row
 
     row = _row(
-        "cgaz:ADM0:OLD",
+        "ovt:OLD",
         "country",
         "Nowhere",
         "",
         "OLD",
         LineString([(36, 4), (38, 6)]),
-        CGAZ_SOURCE,
+        "Overture Maps divisions",
     )
 
     assert row is None
-    assert "skipping cgaz:ADM0:OLD" in capsys.readouterr().out
+    assert "skipping ovt:OLD" in capsys.readouterr().out
 
 
 def test_overlapping_shape_parts_are_repaired_into_a_row():
     from shapely.geometry import MultiPolygon, box
 
-    from soe.boundary_import import CGAZ_SOURCE, _row
+    from soe.boundary_import import _row
 
     overlap = MultiPolygon([box(36, 4, 38, 6), box(37, 5, 39, 7)])
-    row = _row("cgaz:ADM2:TST", "county", "Twin County", "Testland", "TST", overlap, CGAZ_SOURCE)
+    row = _row(
+        "ovt:TST", "county", "Twin County", "Testland", "TST", overlap, "Overture Maps divisions"
+    )
 
     assert row is not None
     assert tuple(row[5:9]) == pytest.approx((36.0, 4.0, 39.0, 7.0))
 
 
 def test_shape_is_clipped_to_the_supported_extent_at_84_north_and_60_south():
-    from soe.boundary_import import CGAZ_SOURCE, _row
+    from soe.boundary_import import _row
 
     row = _row(
-        "cgaz:ADM1:TST", "state", "Tall State", "Testland", "TST", box(10, -70, 20, 88), CGAZ_SOURCE
+        "ovt:TST",
+        "state",
+        "Tall State",
+        "Testland",
+        "TST",
+        box(10, -70, 20, 88),
+        "Overture Maps divisions",
     )
 
     assert row is not None
@@ -242,7 +218,7 @@ def test_touching_shape_parts_are_kept_without_simplification():
 
     from shapely.geometry import MultiPolygon, Polygon, shape
 
-    from soe.boundary_import import CGAZ_SOURCE, _row
+    from soe.boundary_import import _row
 
     # The sliver shares one vertex with the main part, so the stored row stays a valid MultiPolygon.
     main = Polygon(
@@ -280,13 +256,13 @@ def test_touching_shape_parts_are_kept_without_simplification():
         [(36.0115858, 4.0111794), (36.012, 4.012), (36.0115858, 4.010508), (36.0115858, 4.0111794)]
     )
     row = _row(
-        "cgaz:ADM2:TOUCH",
+        "ovt:TOUCH",
         "county",
         "Touch County",
         "Testland",
         "TST",
         MultiPolygon([main, sliver]),
-        CGAZ_SOURCE,
+        "Overture Maps divisions",
     )
 
     assert row is not None
@@ -299,11 +275,11 @@ def test_touching_shape_parts_are_kept_without_simplification():
 def test_import_keeps_vertices_below_the_old_simplification_tolerance():
     from shapely.geometry import Polygon, shape
 
-    from soe.boundary_import import CGAZ_SOURCE, _row
+    from soe.boundary_import import _row
 
     # A 0.005 degree spike is below the old 0.01 tolerance but must be kept now.
     spiked = Polygon([(36, 4), (38, 4), (38, 6), (37, 6.005), (36, 6), (36, 4)])
-    row = _row("cgaz:ADM0:SPIKE", "country", "Spikeland", "", "SPI", spiked, CGAZ_SOURCE)
+    row = _row("ovt:SPIKE", "country", "Spikeland", "", "SPI", spiked, "Overture Maps divisions")
 
     assert row is not None
     assert shape(json.loads(row[10])).bounds[3] == pytest.approx(6.005)
@@ -312,20 +288,20 @@ def test_import_keeps_vertices_below_the_old_simplification_tolerance():
 def test_shape_without_a_name_is_skipped_with_a_reason(capsys):
     from shapely.geometry import box
 
-    from soe.boundary_import import CGAZ_SOURCE, _row
+    from soe.boundary_import import _row
 
     row = _row(
-        "cgaz:ADM2:NONAME",
+        "ovt:NONAME",
         "county",
         float("nan"),
         "Testland",
         "TST",
         box(36, 4, 38, 6),
-        CGAZ_SOURCE,
+        "Overture Maps divisions",
     )
 
     assert row is None
-    assert "skipping cgaz:ADM2:NONAME" in capsys.readouterr().out
+    assert "skipping ovt:NONAME" in capsys.readouterr().out
 
 
 def test_normalise_kind_depluralises_and_title_cases():

@@ -373,7 +373,7 @@ def test_neighbour_just_outside_the_old_window_is_found(tmp_path, monkeypatch):
     store = store_of(tmp_path, box(-0.02, 0.1, 1.02, 0.9))
     area = named_area(db_path, "WEST")
 
-    assert "cgaz:ADM1:EAST" in [item.id for item in land._neighbours(db_path, area, area.geom)]
+    assert "ovt:EAST" in [item.id for item in land._neighbours(db_path, area, area.geom)]
 
     # A tiny vertex cap forces the coarsening branch while recovered land is present.
     monkeypatch.setattr(land, "MAX_DISPLAY_VERTICES", 4)
@@ -636,16 +636,14 @@ def test_named_area_leaves_the_land_of_a_same_level_neighbour(tmp_path):
     west, east = box(0, 0, NEIGHBOUR_EDGE_DEG, 1), box(NEIGHBOUR_EDGE_DEG, 0, 2, 1)
     rows = [
         boundary_row(
-            f"cgaz:ADM1:{name}", "state", name, bbox=part.bounds, geometry=json.dumps(mapping(part))
+            f"ovt:{name}", "state", name, bbox=part.bounds, geometry=json.dumps(mapping(part))
         )
         for name, part in (("WEST", west), ("EAST", east))
     ]
-    db.add_boundaries(db_path, "geoBoundaries CGAZ", rows)
+    db.add_boundaries(db_path, "Overture Maps divisions", rows)
     store = store_of(tmp_path, box(0, 0, 2, 1))
 
-    clipped = clip_area_to_land(
-        db_path, store, Area(west, db.get_boundary(db_path, "cgaz:ADM1:WEST"))
-    )
+    clipped = clip_area_to_land(db_path, store, Area(west, db.get_boundary(db_path, "ovt:WEST")))
 
     assert clipped.geom.area == pytest.approx(NEIGHBOUR_EDGE_DEG)
 
@@ -672,15 +670,15 @@ def test_city_area_keeps_the_land_another_city_holds(tmp_path):
 def add_boundaries(db_path, parts):
     rows = [
         boundary_row(
-            f"cgaz:ADM1:{name}", "state", name, bbox=part.bounds, geometry=json.dumps(mapping(part))
+            f"ovt:{name}", "state", name, bbox=part.bounds, geometry=json.dumps(mapping(part))
         )
         for name, part in parts.items()
     ]
-    db.add_boundaries(db_path, "geoBoundaries CGAZ", rows)
+    db.add_boundaries(db_path, "Overture Maps divisions", rows)
 
 
 def named_area(db_path, name):
-    boundary = db.get_boundary(db_path, f"cgaz:ADM1:{name}")
+    boundary = db.get_boundary(db_path, f"ovt:{name}")
     return Area(shapely.from_geojson(boundary["geom_geojson"]), boundary)
 
 
@@ -1176,9 +1174,9 @@ def test_area_that_breaks_the_clip_is_skipped_not_raised(tmp_path, monkeypatch, 
 
     monkeypatch.setattr(land, "clip_area_to_land", broken)
 
-    assert land._store_clip(db_path, store, "cgaz:ADM1:WEST") is False
+    assert land._store_clip(db_path, store, "ovt:WEST") is False
     skipped = capsys.readouterr().out
-    assert "cgaz:ADM1:WEST" in skipped
+    assert "ovt:WEST" in skipped
     assert "boom" in skipped
 
 

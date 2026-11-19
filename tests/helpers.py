@@ -37,12 +37,12 @@ COARSE = replace(
 )
 
 BOUNDARY = {
-    "id": "cgaz:ADM1:TEST",
+    "id": "ovt:TEST",
     "name": "Testland",
     "level": "state",
     "iso3": "KEN",
-    "source": "geoBoundaries CGAZ",
-    "licence": "CC BY 4.0",
+    "source": "Overture Maps divisions",
+    "licence": "ODbL 1.0",
 }
 
 HASH_A, HASH_B, HASH_C = "a" * 20, "b" * 20, "c" * 20
@@ -101,8 +101,8 @@ def boundary_row(
     bbox: tuple[float, float, float, float] = (0, 0, 1, 1),
     cells: int = 400,
     geometry: str = "{}",
-    source: str = "geoBoundaries CGAZ",
-    licence: str = "CC BY 4.0",
+    source: str = "Overture Maps divisions",
+    licence: str = "ODbL 1.0",
 ) -> db.BoundaryValues:
     """One boundaries row in the column order of db.INSERT_BOUNDARY."""
     return (boundary_id, level, name, parent_name, iso3, *bbox, cells, geometry, source, licence)

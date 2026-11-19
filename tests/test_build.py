@@ -1970,15 +1970,15 @@ def test_island_scene_has_no_borders(tmp_path):
     assert all(shape(feature["geometry"]).is_empty for feature in borders["features"])
 
 
-def test_scene_cut_to_land_credits_the_coast_and_both_licences(tmp_path):
+def test_scene_cut_to_land_credits_the_coast_and_boundary(tmp_path):
     scene, _ = build_cut_nairobi(tmp_path, ISLAND)
 
     assert validate(scene) == []
     assert scene["area"]["borders_href"] == "borders.geojson"
     assert scene["area"]["land"]["version"] == LAND_VERSION
-    assert scene["area"]["boundary"]["licence"] == "CC BY 4.0 + ODbL 1.0"
+    assert scene["area"]["boundary"]["licence"] == "ODbL 1.0"
     assert scene["area"]["land"]["attribution"] in scene["credits"]["lines"]
-    assert SOURCES["geoBoundaries CGAZ"]["attribution"] in scene["credits"]["lines"]
+    assert SOURCES["Overture Maps divisions"]["attribution"] in scene["credits"]["lines"]
 
 
 def test_outline_drops_parts_smaller_than_the_finest_cell(tmp_path):

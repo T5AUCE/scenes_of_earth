@@ -2,7 +2,7 @@
   "spots": [
     {
       "name": "Kenya",
-      "area": "cgaz:ADM0:KEN",
+      "area": "ovt:KE",
       "centre": [37.9, 0.2],
       "zooms": ["fitted", 8],
       "layers": [
@@ -19,7 +19,7 @@
     },
     {
       "name": "Kenya-Turkana",
-      "area": "cgaz:ADM0:KEN",
+      "area": "ovt:KE",
       "centre": [36.1, 3.3],
       "zooms": [9],
       "layers": [
@@ -36,7 +36,7 @@
     },
     {
       "name": "Kenya-coast",
-      "area": "cgaz:ADM0:KEN",
+      "area": "ovt:KE",
       "centre": [39.75, -3.6],
       "zooms": [10],
       "layers": [
@@ -70,7 +70,7 @@
     },
     {
       "name": "Fiji-west-of-180",
-      "area": "cgaz:ADM0:FJI",
+      "area": "ovt:FJ",
       "centre": [178.0, -17.8],
       "zooms": ["fitted", 9],
       "layers": [
@@ -87,7 +87,7 @@
     },
     {
       "name": "Fiji-east-of-180",
-      "area": "cgaz:ADM0:FJI",
+      "area": "ovt:FJ",
       "centre": [179.95, -16.6],
       "zooms": [11],
       "layers": [
@@ -104,7 +104,7 @@
     },
     {
       "name": "Burkina-Faso",
-      "area": "cgaz:ADM0:BFA",
+      "area": "ovt:BF",
       "centre": [-1.5, 12.3],
       "zooms": ["fitted"],
       "layers": [
@@ -121,7 +121,7 @@
     },
     {
       "name": "Mauritius",
-      "area": "cgaz:ADM0:MUS",
+      "area": "ovt:MU",
       "centre": [57.55, -20.25],
       "zooms": ["fitted", 11],
       "layers": [
@@ -138,7 +138,7 @@
     },
     {
       "name": "Switzerland",
-      "area": "cgaz:ADM0:CHE",
+      "area": "ovt:CH",
       "centre": [8.2, 46.6],
       "zooms": ["fitted", 10],
       "layers": [
@@ -155,7 +155,7 @@
     },
     {
       "name": "Chile",
-      "area": "cgaz:ADM0:CHL",
+      "area": "ovt:CL",
       "centre": [-70.6, -33.4],
       "zooms": ["fitted", 8],
       "layers": [
@@ -172,7 +172,7 @@
     },
     {
       "name": "Japan",
-      "area": "cgaz:ADM0:JPN",
+      "area": "ovt:JP",
       "centre": [138.7, 35.4],
       "zooms": ["fitted", 9],
       "layers": [
@@ -189,7 +189,7 @@
     },
     {
       "name": "Egypt",
-      "area": "cgaz:ADM0:EGY",
+      "area": "ovt:EG",
       "centre": [31.2, 30.0],
       "zooms": ["fitted", 9],
       "layers": [

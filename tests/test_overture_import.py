@@ -436,10 +436,9 @@ def test_malformed_release_fails_before_any_write(tmp_path, monkeypatch):
     path = str(tmp_path / "soe.db")
     written: list[str] = []
     monkeypatch.setattr(cli.db, "ensure_schema", lambda db_path: written.append("schema"))
-    monkeypatch.setattr(cli, "import_cgaz", lambda *args: written.append("cgaz"))
 
     with pytest.raises(SystemExit, match="must look like"):
-        cli.main(["import-boundaries", "--cgaz", "folder", "--overture", "latest", "--db", path])
+        cli.main(["import-boundaries", "--overture", "latest", "--db", path])
 
     assert written == []
     assert not Path(path).exists()
@@ -454,10 +453,9 @@ def test_absent_release_fails_before_any_write(tmp_path, monkeypatch):
 
     monkeypatch.setattr(overture_import, "DuckDbSource", absent)
     monkeypatch.setattr(cli.db, "ensure_schema", lambda db_path: written.append("schema"))
-    monkeypatch.setattr(cli, "import_cgaz", lambda *args: written.append("cgaz"))
 
     with pytest.raises(SystemExit, match="not found"):
-        cli.main(["import-boundaries", "--cgaz", "folder", "--overture", RELEASE, "--db", path])
+        cli.main(["import-boundaries", "--overture", RELEASE, "--db", path])
 
     assert written == []
     assert not Path(path).exists()
@@ -490,7 +488,6 @@ def test_import_refuses_release_other_than_the_credited_one(tmp_path, monkeypatc
 
     written: list[str] = []
     monkeypatch.setattr(cli.db, "ensure_schema", lambda db_path: written.append("schema"))
-    monkeypatch.setattr(cli, "import_cgaz", lambda *args: written.append("cgaz"))
 
     for flag in ("--overture", "--overture-levels", "--overture-cities"):
         written.clear()
@@ -662,6 +659,55 @@ def test_import_replaces_earlier_overture_rows_and_keeps_other_sources(tmp_path)
     assert db.get_boundary(path, "old:1") is not None
     assert stored(path, "ovt:FR")["licence"] == "ODbL 1.0"
     assert not Path(f"{path}.staging").exists()
+
+
+def test_overture_import_deletes_leftover_cgaz_rows_tokens_and_clips(tmp_path):
+    from shapely.geometry import mapping
+
+    from soe.areas import Area
+    from soe.land import clip_area_to_land, write_land_store
+
+    path = str(tmp_path / "soe.db")
+    db.init(path)
+    legacy = "geoBoundaries CGAZ"
+    home = box(0, 0, 1, 1)
+    db.add_boundaries(
+        path,
+        legacy,
+        [
+            boundary_row(
+                "legacy:FR",
+                "country",
+                "France",
+                iso3="FRA",
+                bbox=home.bounds,
+                geometry=json.dumps(mapping(home)),
+                source=legacy,
+            )
+        ],
+    )
+    store = tmp_path / "land.sqlite"
+    write_land_store(store, "v1", [home])
+    clip_area_to_land(path, store, Area(home, db.get_boundary(path, "legacy:FR")))
+
+    source = FakeSource(
+        [division("fr", "FR", "country", name="France")], [land("fr", box(0, 0, 1, 1))]
+    )
+    import_overture(path, source, no_levels)
+
+    assert db.get_boundary(path, "legacy:FR") is None
+    assert stored(path, "ovt:FR")["name"] is not None
+    assert db.search(path, "france") != []
+    with db.connect(path) as connection:
+        tokens = {
+            row["boundary_id"]
+            for row in connection.execute("SELECT boundary_id FROM boundary_names")
+        }
+        remaining = [row[0] for row in connection.execute("SELECT geom_digest FROM land_clips")]
+
+    assert "legacy:FR" not in tokens
+    assert remaining == []
+    db.require_search_names(path)
 
 
 def test_other_run_staging_file_is_neither_attached_nor_deleted(tmp_path):

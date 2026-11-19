@@ -39,7 +39,7 @@ def test_sample_areas_reload_on_startup_and_real_boundaries_suppress_them(tmp_pa
     assert db.get_boundary(db_path, "sample:kenya")["licence"].startswith("Public Domain")
 
     real_boundary = boundary_row("x", "state", "Other")
-    db.add_boundaries(db_path, "geoBoundaries CGAZ", [real_boundary])
+    db.add_boundaries(db_path, "Overture Maps divisions", [real_boundary])
     db.add_boundaries(db_path, "synthetic", [stale_sample])
 
     seed_sample_areas(db_path)

@@ -518,16 +518,16 @@ def add_named_pair(db_path, neighbour_east_deg):
     parts = {"A": box(36, -2, 37, 0), "B": box(37, -2, neighbour_east_deg, 0)}
     rows = [
         boundary_row(
-            f"cgaz:ADM1:{name}", "state", name, bbox=part.bounds, geometry=json.dumps(mapping(part))
+            f"ovt:{name}", "state", name, bbox=part.bounds, geometry=json.dumps(mapping(part))
         )
         for name, part in parts.items()
     ]
-    db.add_boundaries(db_path, "geoBoundaries CGAZ", rows)
+    db.add_boundaries(db_path, "Overture Maps divisions", rows)
 
 
 def test_scene_id_names_the_neighbours_the_area_was_cut_against(db_path, revision_source):
     registry = make_registry(revision_source)
-    area = {"type": "boundary", "id": "cgaz:ADM1:A"}
+    area = {"type": "boundary", "id": "ovt:A"}
     add_named_pair(db_path, 38)
     first = prepare_scene(db_path, registry, request_body(area=area))
 
@@ -540,7 +540,7 @@ def test_scene_id_names_the_neighbours_the_area_was_cut_against(db_path, revisio
 
 def test_queued_scene_is_refused_when_a_neighbour_changed_while_it_waited(db_path, revision_source):
     add_named_pair(db_path, 38)
-    area = {"type": "boundary", "id": "cgaz:ADM1:A"}
+    area = {"type": "boundary", "id": "ovt:A"}
     prepared = prepare_scene(db_path, make_registry(revision_source), request_body(area=area))
     spec = json.loads(prepared.request_json)["area"]
 

@@ -119,7 +119,7 @@ test("search works before the layer list arrives", async (context) => {
       searched.push(url);
       return Response.json([areaHit()]);
     }
-    if (url === "/api/areas/cgaz%3AADM1%3ANAKURU") {
+    if (url === "/api/areas/ovt%3ANAKURU") {
       return Response.json({ ...areaHit(), geometry: bboxFeature() });
     }
 
@@ -241,7 +241,7 @@ test("build shows Starting build… before the POST resolves", async (context) =
     if (url.startsWith("/api/areas/search?")) {
       return Response.json([areaHit()]);
     }
-    if (url === "/api/areas/cgaz%3AADM1%3ANAKURU") {
+    if (url === "/api/areas/ovt%3ANAKURU") {
       return Response.json({
         ...areaHit(),
         geometry: {
@@ -342,7 +342,7 @@ test("a finished build shows Preparing scene… until the scene reports back", a
       });
     }
     if (url.startsWith("/api/areas/search?")) return Response.json([areaHit()]);
-    if (url === "/api/areas/cgaz%3AADM1%3ANAKURU") {
+    if (url === "/api/areas/ovt%3ANAKURU") {
       return Response.json({ ...areaHit(), geometry: bboxFeature() });
     }
     if (url === "/api/scenes" && init?.method === "POST") {
@@ -411,7 +411,7 @@ test("the picked outline survives Build until the scene hides it and returns whe
       });
     }
     if (url.startsWith("/api/areas/search?")) return Response.json([areaHit()]);
-    if (url === "/api/areas/cgaz%3AADM1%3ANAKURU") {
+    if (url === "/api/areas/ovt%3ANAKURU") {
       return Response.json({ ...areaHit(), geometry: bboxFeature() });
     }
     if (url === "/api/scenes" && init?.method === "POST") {
@@ -523,7 +523,7 @@ test("repick clears a build and a stale 503 never overwrites a newer run", async
     if (url.startsWith("/api/areas/search?")) {
       return Response.json([areaHit()]);
     }
-    if (url === "/api/areas/cgaz%3AADM1%3ANAKURU") {
+    if (url === "/api/areas/ovt%3ANAKURU") {
       return Response.json({
         ...areaHit(),
         geometry: {
@@ -1024,7 +1024,7 @@ async function resultTexts(context: TestContext, root: HTMLElement): Promise<(st
 
 function areaHit(overrides: Partial<AreaHit> = {}): AreaHit {
   return {
-    id: "cgaz:ADM1:NAKURU",
+    id: "ovt:NAKURU",
     name: "Nakuru",
     level: "state",
     kind: null,
