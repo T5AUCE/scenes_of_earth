@@ -4,13 +4,6 @@ import type { CustomLayerInterface, Map as MapLibreMap } from "maplibre-gl";
 import { yieldToBrowser } from "../data";
 import { addressSearch, gestureFlags, subscribeGesture } from "../gesture-quality";
 import {
-  isBasemapWaterAbsent,
-  noteWaterReadinessUnknown,
-  readyWaterCoverage,
-  waterScreenQuads,
-  type WaterScreenQuad,
-} from "../layers/basemap-water-readiness";
-import {
   BAND_BYTES_PER_CELL,
   bakeBandInto,
   CLASS_FIELD_VERTEX,
@@ -21,7 +14,7 @@ import {
   isBandParityMismatched,
   markThinCells,
 } from "./class-field-shaders";
-import { deleteResources, linkProgram, uploadTexture } from "./gl";
+import { deleteResources, uploadTexture } from "./gl";
 import { WIDE_HALO_CELLS } from "./grid-geometry";
 import {
   TiledGpuLayer,
@@ -55,14 +48,6 @@ interface Gpu extends TiledGpu {
   palette: WebGLTexture | null;
   bandTiles: (BandTileTextures | null | undefined)[];
   bandStaging: (BandStaging | undefined)[];
-  waterStencil: WaterStencil | null;
-}
-
-/** The shared stencil program that marks ready water tiles once per frame. */
-interface WaterStencil {
-  program: WebGLProgram;
-  vertexArray: WebGLVertexArrayObject;
-  buffer: WebGLBuffer;
 }
 
 /** One tile's baked band textures, uploaded beside the ids and flags windows. */
@@ -200,7 +185,6 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
     this.flagPromise = null;
     this.pendingWindow = null;
     this.clearBand();
-    this.deleteWaterStencil();
 
     super.onRemove();
   }
@@ -454,7 +438,7 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
   }
 
   protected extendGpu(base: TiledGpu): Gpu {
-    return { ...base, palette: null, bandTiles: [], bandStaging: [], waterStencil: null };
+    return { ...base, palette: null, bandTiles: [], bandStaging: [] };
   }
 
   protected extraTextures(gpu: Gpu) {
@@ -703,56 +687,7 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
 
     if (this.bakeAllowed) this.bindBakeUniforms(gl, gpu);
 
-    const map = this.map;
-    // Tests without a basemap keep drawing so they exercise the shader alone.
-    if (!map) {
-      timedGpuDraw(gl, this.id, () => this.drawCategoricalTiles(gl, gpu, mainMatrix, uniform));
-
-      return;
-    }
-
-    // A style without water has no sea to flash, so it paints as before.
-    if (isBasemapWaterAbsent(map)) {
-      timedGpuDraw(gl, this.id, () => this.drawCategoricalTiles(gl, gpu, mainMatrix, uniform));
-
-      return;
-    }
-
-    const coverage = readyWaterCoverage(map);
-
-    // Unknown parse state hides colour so no flash appears.
-    if (!coverage) {
-      noteWaterReadinessUnknown();
-
-      return;
-    }
-
-    // Rebuilt every frame so fractional zoom and rotation never use stale pixels.
-    const quads = waterScreenQuads(map, coverage);
-
-    // While no water tile has parsed the layer stays hidden.
-    if (quads.length === 0) return;
-
-    const stencil = ensureWaterStencil(gl, gpu);
-    const stencilOn = safeIsEnabled(gl, gl.STENCIL_TEST);
-    const scissorOn = safeIsEnabled(gl, gl.SCISSOR_TEST);
-    gl.disable(gl.SCISSOR_TEST);
-    gl.enable(gl.STENCIL_TEST);
-
-    try {
-      writeWaterStencil(gl, stencil, quads, map);
-      // The stencil pass leaves its own program selected, so categorical draws need theirs again.
-      this.beginDraw(gl, gpu);
-      gl.stencilMask(0x00);
-      gl.stencilFunc(gl.EQUAL, 1, 0xff);
-      gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
-      timedGpuDraw(gl, this.id, () => this.drawCategoricalTiles(gl, gpu, mainMatrix, uniform));
-    } finally {
-      gl.stencilMask(0xff);
-
-      if (!stencilOn) gl.disable(gl.STENCIL_TEST);
-      if (scissorOn) gl.enable(gl.SCISSOR_TEST);
-    }
+    timedGpuDraw(gl, this.id, () => this.drawCategoricalTiles(gl, gpu, mainMatrix, uniform));
   }
 
   /** Draw every categorical tile once with its band uniforms, resetting the tile cursor. */
@@ -787,36 +722,6 @@ class ClassFieldLayer extends TiledGpuLayer<Gpu> {
       gl.uniform2i(uniform("uIdsSize"), window.width, window.height);
       gl.uniform1f(uniform("uWindowRow"), window.row);
     });
-  }
-
-  private deleteWaterStencil(): void {
-    const gpu = this.gpu;
-    const gl = this.gl;
-
-    if (!gpu?.waterStencil) {
-      if (gpu) gpu.waterStencil = null;
-
-      return;
-    }
-
-    if (!gl) {
-      gpu.waterStencil = null;
-
-      return;
-    }
-
-    const stencil = gpu.waterStencil;
-    gpu.waterStencil = null;
-
-    try {
-      deleteResources(gl, {
-        programs: [stencil.program],
-        buffers: [stencil.buffer],
-        vertexArrays: [stencil.vertexArray],
-      });
-    } catch {
-      // Releasing must not hide the remove it cleans up after.
-    }
   }
 
   private bindBakeUniforms(gl: WebGL2RenderingContext, gpu: Gpu): void {
@@ -1154,97 +1059,6 @@ function cancelError(): Error {
   error.name = "AbortError";
 
   return error;
-}
-
-/** Clip-space quads need only a passthrough because the CPU already projected them. */
-const WATER_STENCIL_VERTEX = `#version 300 es
-layout(location = 0) in vec2 aPosition;
-void main() {
-  gl_Position = vec4(aPosition, 0.0, 1.0);
-}
-`;
-
-/** Colour is masked off while the stencil is written, so the output value never matters. */
-const WATER_STENCIL_FRAGMENT = `#version 300 es
-precision mediump float;
-out vec4 outColor;
-void main() {
-  outColor = vec4(1.0);
-}
-`;
-
-/** Create the stencil program once because compiling per frame would stall drawing. */
-function ensureWaterStencil(gl: WebGL2RenderingContext, gpu: Gpu): WaterStencil {
-  if (gpu.waterStencil) return gpu.waterStencil;
-
-  const program = linkProgram(gl, WATER_STENCIL_VERTEX, WATER_STENCIL_FRAGMENT);
-  const vertexArray = gl.createVertexArray();
-  const buffer = gl.createBuffer();
-
-  if (!vertexArray || !buffer) {
-    deleteResources(gl, { programs: [program], vertexArrays: [vertexArray], buffers: [buffer] });
-    throw new Error("Cannot allocate the water stencil");
-  }
-
-  const stencil = { program, vertexArray, buffer };
-  gpu.waterStencil = stencil;
-
-  return stencil;
-}
-
-/** Mark every ready tile in the stencil, batching all quads into one draw. */
-function writeWaterStencil(
-  gl: WebGL2RenderingContext,
-  stencil: WaterStencil,
-  quads: WaterScreenQuad[],
-  map: MapLibreMap,
-): void {
-  const canvas = map.getCanvas?.() as { clientWidth?: number; clientHeight?: number } | undefined;
-  const width = canvas?.clientWidth ?? 0;
-  const height = canvas?.clientHeight ?? 0;
-  // A missing size hides colour because clip positions would be guesses.
-  if (!(width > 0 && height > 0)) return;
-
-  const positions = new Float32Array(quads.length * 12);
-  let offset = 0;
-
-  for (const quad of quads) {
-    const clip = quad.points.map((point) => [
-      (point.x / width) * 2 - 1,
-      1 - (point.y / height) * 2,
-    ]);
-    const [northwest, northeast, southeast, southwest] = clip;
-    positions.set([...northwest, ...northeast, ...southeast], offset);
-    offset += 6;
-    positions.set([...northwest, ...southeast, ...southwest], offset);
-    offset += 6;
-  }
-
-  // Colour stays masked while the stencil is written, so only the mask changes.
-  gl.colorMask(false, false, false, false);
-  gl.stencilMask(0xff);
-  gl.clearStencil(0);
-  gl.clear(gl.STENCIL_BUFFER_BIT);
-  gl.stencilFunc(gl.ALWAYS, 1, 0xff);
-  gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
-  gl.useProgram(stencil.program);
-  gl.bindVertexArray(stencil.vertexArray);
-  gl.bindBuffer(gl.ARRAY_BUFFER, stencil.buffer);
-  gl.bufferData(gl.ARRAY_BUFFER, positions, gl.DYNAMIC_DRAW);
-  gl.enableVertexAttribArray(0);
-  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-  gl.drawArrays(gl.TRIANGLES, 0, quads.length * 6);
-  gl.colorMask(true, true, true, true);
-  gl.bindVertexArray(null);
-}
-
-/** Read the enable state without failing where the test double omits it. */
-function safeIsEnabled(gl: WebGL2RenderingContext, capability: number): boolean {
-  try {
-    return gl.isEnabled(capability);
-  } catch {
-    return false;
-  }
 }
 
 function classFieldProgram(bake: boolean): TiledProgram {

@@ -1340,266 +1340,9 @@ test("without basemap water the layer draws every tile with no stencil", () => {
   assert.equal(stencil.isStencilEnabled(), false);
 });
 
-test("colour draws once inside parsed water tiles with one stencil write", () => {
-  const harness = createHarness();
-  const stencil = installStencil(harness);
-  installWaterMap(harness, {
-    zoom: 5,
-    tiles: [
-      waterTile({ z: 5, x: 3, y: 4, buckets: { water: waterBucket() } }),
-      waterTile({ z: 5, x: 4, y: 4, buckets: { water: waterBucket() } }),
-    ],
-  });
-  harness.field.setIds(new Uint8Array(12).fill(1));
-  harness.field.layer.onAdd!(harness.map, harness.gl);
-  harness.field.layer.render(harness.gl, harness.input);
-
-  // One stencil quad batch plus one categorical draw per world copy.
-  assert.equal(harness.draws.length, 4);
-  assert.equal(stencil.isStencilEnabled(), false);
-  assert.equal(stencil.stencilWrites(), 1);
-});
-
-test("dry tiles with no buckets and non-water buckets both count as ready", () => {
-  const harness = createHarness();
-  const stencil = installStencil(harness);
-  installWaterMap(harness, {
-    zoom: 5,
-    tiles: [
-      waterTile({ z: 5, x: 3, y: 4, buckets: {} }),
-      waterTile({ z: 5, x: 4, y: 4, buckets: { park: { layers: [{ sourceLayer: "park" }] } } }),
-    ],
-  });
-  harness.field.setIds(new Uint8Array(12).fill(1));
-  harness.field.layer.onAdd!(harness.map, harness.gl);
-  harness.field.layer.render(harness.gl, harness.input);
-
-  assert.equal(harness.draws.length, 4);
-  assert.equal(stencil.isStencilEnabled(), false);
-});
-
-test("loaded parents never count as coverage", () => {
-  const harness = createHarness();
-  const stencil = installStencil(harness);
-  installWaterMap(harness, {
-    zoom: 5,
-    tiles: [waterTile({ z: 4, x: 1, y: 2, buckets: { water: waterBucket() } })],
-  });
-  harness.field.setIds(new Uint8Array(12).fill(1));
-  harness.field.layer.onAdd!(harness.map, harness.gl);
-  harness.field.layer.render(harness.gl, harness.input);
-
-  assert.equal(harness.draws.length, 0);
-  assert.equal(stencil.isStencilEnabled(), false);
-});
-
-test("the stencil rebuilds every frame and after context loss", () => {
-  const harness = createHarness();
-  installStencil(harness);
-  const project = projectCounter();
-  installWaterMap(harness, {
-    zoom: 5,
-    tiles: [waterTile({ z: 5, x: 3, y: 4, buckets: { water: waterBucket() } })],
-    project,
-  });
-  harness.field.setIds(new Uint8Array(12).fill(1));
-  harness.field.layer.onAdd!(harness.map, harness.gl);
-  harness.field.layer.render(harness.gl, harness.input);
-  harness.field.layer.render(harness.gl, harness.input);
-
-  // Four corners per frame with no cache between frames.
-  assert.equal(project.calls(), 8);
-
-  harness.field.layer.onRemove!(harness.map, harness.gl);
-  harness.field.layer.onAdd!(harness.map, harness.gl);
-  harness.field.layer.render(harness.gl, harness.input);
-
-  assert.equal(project.calls(), 12);
-});
-
-test("unknown readiness hides colour and warns once", async () => {
-  const harness = createHarness();
-  const stencil = installStencil(harness);
-  const warnings: unknown[][] = [];
-  const original = console.warn;
-  console.warn = (...args: unknown[]) => void warnings.push(args);
-  const { resetWaterReadinessWarningsForTests } =
-    await import("../layers/basemap-water-readiness.ts");
-
-  try {
-    resetWaterReadinessWarningsForTests();
-    installWaterMap(harness, { zoom: 5, tiles: [] });
-    const style = (harness.map as unknown as { style: unknown }).style as {
-      tileManagers: Record<string, unknown>;
-    };
-    style.tileManagers.openmaptiles = {
-      getRenderableIds: () => ["key0"],
-      getTileByID: () => {
-        throw new Error("private state unavailable");
-      },
-    };
-    (harness.map as unknown as { getStyle?: () => unknown }).getStyle = () => ({
-      layers: [{ id: "water", type: "fill", "source-layer": "water" }],
-    });
-    harness.field.setIds(new Uint8Array(12).fill(1));
-    harness.field.layer.onAdd!(harness.map, harness.gl);
-    harness.field.layer.render(harness.gl, harness.input);
-    harness.field.layer.render(harness.gl, harness.input);
-
-    assert.equal(harness.draws.length, 0);
-    assert.equal(warnings.length, 1);
-    assert.equal(stencil.isStencilEnabled(), false);
-  } finally {
-    console.warn = original;
-    resetWaterReadinessWarningsForTests();
-  }
-});
-
-test("categorical draws reuse the categorical program after the stencil", async () => {
-  const harness = createHarness();
-  const stencil = installStencil(harness);
-  installWaterMap(harness, {
-    zoom: 5,
-    tiles: [waterTile({ z: 5, x: 3, y: 4, buckets: { water: waterBucket() } })],
-  });
-  harness.field.setIds(new Uint8Array(12).fill(1));
-  harness.field.layer.onAdd!(harness.map, harness.gl);
-  harness.field.layer.render(harness.gl, harness.input);
-  await Promise.resolve();
-
-  assert.equal(harness.failures.length, 0);
-
-  // One stencil batch plus one categorical draw per world copy.
-  const states = stencil.drawStates();
-  assert.equal(states.length, 4);
-  assert.equal(stencil.stencilWrites(), 1);
-
-  const [stencilState, ...colour] = states;
-  for (const state of colour) {
-    assert.equal(state.program, colour[0].program);
-    assert.ok(state.array);
-    assert.notEqual(state.program, stencilState.program);
-    assert.notEqual(state.array, stencilState.array);
-  }
-  assert.equal(stencil.isStencilEnabled(), false);
-});
-
-test("an unsupported manager accessor hides colour and warns once", async () => {
-  const harness = createHarness();
-  const stencil = installStencil(harness);
-  const warnings: unknown[][] = [];
-  const original = console.warn;
-  console.warn = (...args: unknown[]) => void warnings.push(args);
-  const { resetWaterReadinessWarningsForTests } =
-    await import("../layers/basemap-water-readiness.ts");
-
-  try {
-    resetWaterReadinessWarningsForTests();
-    installWaterMap(harness, {
-      zoom: 5,
-      tiles: [waterTile({ z: 5, x: 3, y: 4, buckets: { water: waterBucket() } })],
-    });
-    const style = (harness.map as unknown as { style: unknown }).style as {
-      tileManagers: Record<string, unknown>;
-    };
-    style.tileManagers.openmaptiles = {
-      getRenderableIds: () => ["key0"],
-      getTileById: () => waterTile({ z: 5, x: 3, y: 4, buckets: { water: waterBucket() } }),
-    };
-    harness.field.setIds(new Uint8Array(12).fill(1));
-    harness.field.layer.onAdd!(harness.map, harness.gl);
-    harness.field.layer.render(harness.gl, harness.input);
-    await Promise.resolve();
-
-    assert.equal(harness.draws.length, 0);
-    assert.equal(warnings.length, 1);
-    assert.equal(stencil.isStencilEnabled(), false);
-  } finally {
-    console.warn = original;
-    resetWaterReadinessWarningsForTests();
-  }
-});
-
-function waterTile(options: {
-  z: number;
-  x: number;
-  y: number;
-  wrap?: number;
-  buckets: Record<string, unknown>;
-}) {
-  return {
-    tileID: {
-      overscaledZ: options.z,
-      wrap: options.wrap ?? 0,
-      canonical: { z: options.z, x: options.x, y: options.y },
-    },
-    state: "loaded",
-    buckets: options.buckets,
-  };
-}
-
-function waterBucket() {
-  return { layers: [{ sourceLayer: "water" }] };
-}
-
-function projectCounter() {
-  let calls = 0;
-  const project = ([longitude, latitude]: [number, number]) => {
-    calls += 1;
-    return { x: (longitude + 180) * 2, y: (90 - latitude) * 2 };
-  };
-
-  (project as unknown as { calls: () => number }).calls = () => calls;
-
-  return project as unknown as ([longitude, latitude]: [number, number]) => {
-    x: number;
-    y: number;
-  } & { calls: () => number };
-}
-
-function installWaterMap(
-  harness: ReturnType<typeof createHarness>,
-  options: {
-    zoom?: number;
-    tiles: unknown[];
-    project?: ([longitude, latitude]: [number, number]) => { x: number; y: number };
-  },
-) {
-  const tiles = options.tiles;
-  const manager = {
-    getRenderableIds: () => tiles.map((_, index) => `key${index}`),
-    getTileByID: (key: string) => tiles[Number(key.replace("key", ""))],
-  };
-  const project =
-    options.project
-    ?? (([longitude, latitude]: [number, number]) => ({
-      x: (longitude + 180) * 2,
-      y: (90 - latitude) * 2,
-    }));
-
-  Object.assign(harness.map, {
-    getZoom: () => options.zoom ?? 5,
-    getCenter: () => ({ lng: 0, lat: 0 }),
-    getBearing: () => 0,
-    getPixelRatio: () => 1,
-    getCanvas: () => ({
-      clientWidth: 800,
-      clientHeight: 600,
-      addEventListener: () => {},
-      removeEventListener: () => {},
-    }),
-    project,
-  });
-  (harness.map as unknown as { style: unknown }).style = {
-    tileManagers: { openmaptiles: manager },
-  };
-}
-
 function installStencil(harness: ReturnType<typeof createHarness>) {
   let stencilEnabled = false;
   let scissorEnabled = false;
-  let writes = 0;
-  const draws = harness.draws;
   const inner = harness.gl as unknown as {
     useProgram: (program: unknown) => void;
     getUniformLocation: (program: unknown, name: string) => unknown;
@@ -1608,17 +1351,11 @@ function installStencil(harness: ReturnType<typeof createHarness>) {
     uniform2i: (location: unknown, first: unknown, second: unknown) => void;
     uniform4f: (location: unknown, ...values: unknown[]) => void;
     uniformMatrix4fv: (location: unknown, transpose: boolean, value: unknown) => void;
-    bindVertexArray: (array: unknown) => void;
-    drawArrays: (...args: unknown[]) => void;
   };
   let currentProgram: unknown = null;
-  let currentArray: unknown = null;
-  const drawStates: { program: unknown; array: unknown }[] = [];
   // Snapshot before assigning, so the wrappers below cannot call themselves.
   const originalUse = inner.useProgram.bind(harness.gl);
   const originalLocation = inner.getUniformLocation.bind(harness.gl);
-  const originalBind = inner.bindVertexArray.bind(harness.gl);
-  const originalDraw = inner.drawArrays.bind(harness.gl);
 
   const checkLocation = (location: unknown) => {
     const owned = location as { program: unknown; name: string };
@@ -1654,14 +1391,6 @@ function installStencil(harness: ReturnType<typeof createHarness>) {
     uniformMatrix4fv: (location: unknown, _transpose: boolean, value: unknown) => {
       harness.uniforms.set(checkLocation(location), value);
     },
-    bindVertexArray: (array: unknown) => {
-      currentArray = array;
-      originalBind(array);
-    },
-    drawArrays: (...args: unknown[]) => {
-      drawStates.push({ program: currentProgram, array: currentArray });
-      originalDraw(...args);
-    },
   });
 
   Object.assign(harness.gl, {
@@ -1695,9 +1424,7 @@ function installStencil(harness: ReturnType<typeof createHarness>) {
     stencilFunc: () => {},
     stencilOp: () => {},
     clearStencil: () => {},
-    clear: () => {
-      writes += 1;
-    },
+    clear: () => {},
     bufferData: () => {},
     enableVertexAttribArray: () => {},
     vertexAttribPointer: () => {},
@@ -1708,13 +1435,5 @@ function installStencil(harness: ReturnType<typeof createHarness>) {
     },
   });
 
-  // The harness counts every draw, so stencil writes show as extra draws.
-  const stencilDraws = () => draws.length;
-
-  return {
-    isStencilEnabled: () => stencilEnabled,
-    stencilWrites: () => writes,
-    drawCount: stencilDraws,
-    drawStates: () => [...drawStates],
-  };
+  return { isStencilEnabled: () => stencilEnabled };
 }

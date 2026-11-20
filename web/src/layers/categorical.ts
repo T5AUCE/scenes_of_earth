@@ -37,12 +37,6 @@ import type {
   LayerView,
 } from "../types";
 import type { Draw } from "./allocate";
-import {
-  isBasemapWaterAbsent,
-  isWaterCoverageComplete,
-  noteWaterReadinessUnknown,
-  readyWaterCoverage,
-} from "./basemap-water-readiness";
 import { createImagePainter } from "./categorical-image";
 
 const CATEGORICAL_OPACITY = 0.8;
@@ -96,8 +90,6 @@ class CategoricalView implements LayerView {
   private readonly context: LayerContext;
   private restorePosition: LayerPosition | null = null;
   private readonly loadAbort = new AbortController();
-  private stopWaterWatch: (() => void) | null = null;
-  private wantsColour = false;
 
   constructor(context: LayerContext) {
     this.context = context;
@@ -360,14 +352,6 @@ class CategoricalView implements LayerView {
     const colors = this.classValues.map((value) => this.colors.get(value) ?? [0, 0, 0]);
 
     if (this.image) {
-      // Dry tiles count as ready, so the fallback waits only for unparsed water.
-      if (!this.imageCoverageReady()) {
-        this.setVisible(false);
-        this.ensureWaterWatch();
-        return;
-      }
-
-      if (this.wantsColour) this.ensureWaterWatch();
       if (this.ids) this.image.paint(unhatchIds(this.ids), colors, this.smooth);
     } else {
       this.gpu.setColors(colors);
@@ -379,76 +363,6 @@ class CategoricalView implements LayerView {
     if (this.hasHatched && !this.image) legend.append(classNoDataLegend());
 
     this.legendBox.replaceChildren(legend);
-  }
-
-  /**
-   * Whether the image fallback may show. Absent water bypasses the gate.
-   */
-  private imageCoverageReady(): boolean {
-    try {
-      const { map, layer, shift } = this.context;
-      // Confirmed absence needs no gate, so waterless styles paint as before.
-      if (isBasemapWaterAbsent(map)) return true;
-
-      const coverage = readyWaterCoverage(map);
-
-      // Unknown parse state hides colour so no flash appears.
-      if (!coverage) {
-        noteWaterReadinessUnknown();
-
-        return false;
-      }
-
-      return isWaterCoverageComplete(map, coverage, layer.grid.bbox, shift);
-    } catch {
-      noteWaterReadinessUnknown();
-
-      return false;
-    }
-  }
-
-  /** Keep the fallback gated while it owns colour, across pans and source updates. */
-  private ensureWaterWatch(): void {
-    if (this.stopWaterWatch || !this.alive || !this.image || !this.wantsColour) return;
-
-    const { map } = this.context;
-    const on = (map as unknown as { on?: (event: string, listener: () => void) => void }).on;
-    const off = (map as unknown as { off?: (event: string, listener: () => void) => void }).off;
-
-    if (typeof on !== "function" || typeof off !== "function") return;
-
-    const events = ["move", "zoom", "data", "sourcedata"];
-    for (const event of events) on.call(map, event, this.onWaterMaybeChanged);
-    this.stopWaterWatch = () => {
-      for (const event of events) off.call(map, event, this.onWaterMaybeChanged);
-    };
-  }
-
-  private readonly onWaterMaybeChanged = (): void => {
-    if (!this.alive || !this.image || !this.wantsColour) return;
-
-    const ready = this.imageCoverageReady();
-
-    // Repainting also restores visibility, so a pan never leaves stale pixels hidden.
-    if (ready && !this.isVisible()) {
-      this.setVisible(true);
-      this.repaint();
-    } else if (!ready && this.isVisible()) this.setVisible(false);
-  };
-
-  private isVisible(): boolean {
-    if (this.restorePosition) return this.restorePosition.visibility === "visible";
-
-    try {
-      return this.context.map.getLayoutProperty?.(this.id, "visibility") !== "none";
-    } catch {
-      return false;
-    }
-  }
-
-  private clearWaterWatch(): void {
-    this.stopWaterWatch?.();
-    this.stopWaterWatch = null;
   }
 
   private async load() {
@@ -583,21 +497,10 @@ class CategoricalView implements LayerView {
 
   show(draw: Draw | null) {
     if (draw !== "colour") {
-      this.wantsColour = false;
-      this.clearWaterWatch();
       this.setVisible(false);
       return;
     }
 
-    this.wantsColour = true;
-
-    if (this.image && !this.imageCoverageReady()) {
-      this.setVisible(false);
-      this.ensureWaterWatch();
-      return;
-    }
-
-    this.ensureWaterWatch();
     this.setVisible(true);
     this.repaint();
     this.menuUpdates.dispatchEvent(new Event("change"));
@@ -610,7 +513,6 @@ class CategoricalView implements LayerView {
   destroy() {
     this.alive = false;
     this.loadAbort.abort();
-    this.clearWaterWatch();
 
     const { map } = this.context;
     const canvas = map.getCanvas();

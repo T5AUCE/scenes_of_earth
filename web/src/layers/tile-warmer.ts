@@ -145,6 +145,7 @@ export class TileWarmer {
     if (!state) return;
 
     this.sources.delete(id);
+    state.source.close?.();
 
     for (const [key, job] of [...this.active]) {
       if (job.sourceId === id) this.cancelJob(key, job);
@@ -172,6 +173,7 @@ export class TileWarmer {
     this.cancelDwell();
 
     for (const [key, job] of [...this.active]) this.cancelJob(key, job);
+    for (const state of this.sources.values()) state.source.close?.();
 
     this.sources.clear();
     this.warmed.clear();

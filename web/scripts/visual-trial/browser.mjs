@@ -32,16 +32,18 @@ import {
   classifyFailure,
   contourLegend,
   deltaZoomBands,
+  detectFlashes,
+  FLASH_GRID_COLS,
+  FLASH_GRID_ROWS,
   isSettled,
   medianZoomBands,
   slug,
+  spotStartZoom,
   summarizeZoomSweep,
   viewRecord,
-  ZOOM_END_OFFSET,
-  ZOOM_START_OFFSET,
-  ZOOM_STEP,
   zoomBandRecord,
   zoomLabel,
+  zoomSweepRange,
 } from "./measure.mjs";
 
 const TOOL_DIRS = [
@@ -263,17 +265,31 @@ export const ZOOM_VARIANTS = [
   "contour-max-11",
 ];
 const ZOOM_BASELINE = "all";
+// A wheel notch is 120 px as on most mouse drivers, and a burst of notches is one quick flick.
+const WHEEL_NOTCH_PX = 120;
+const WHEEL_NOTCHES_PER_BURST = 3;
+const WHEEL_NOTCH_GAP_MS = 350;
+const WHEEL_BURST_PAUSE_MS = 1500;
+const WHEEL_MAX_BURSTS = 8;
+const WHEEL_LEVELS = 3;
+// Each frame is a PNG held in the page until the sweep ends, so the count stays bounded.
+const MAX_CAPTURE_FRAMES = 600;
 const ZOOM_REPEATS_FALLBACK = 3;
 const MAP_DETAILS_SWITCH = "Show Map details";
 const MASK_LAYER_ID = "soe-scene-mask";
 const FADE_LAYER_ID = "soe-scene-fade";
 
 /** Sweeps one spot through every zoom variant; returns one record per band and variant. */
-export async function trialZoomSpot(context, appUrl, spot, sceneId) {
+export async function trialZoomSpot(context, appUrl, spot, sceneId, options = {}) {
   const page = await context.newPage();
   const requests = trackRequests(page);
 
   try {
+    if (options.frames) {
+      return await captureZoomSpot(page, requests, appUrl, spot, sceneId, options);
+    }
+
+    const direction = options.direction ?? "in";
     const medians = {};
     const counts = {};
 
@@ -297,11 +313,7 @@ export async function trialZoomSpot(context, appUrl, spot, sceneId) {
         for (let repeat = 0; repeat < zoomRepeats(); repeat += 1) {
           requests.take();
 
-          const sweep = await page.evaluate(zoomSweep, [
-            sample.zoom + ZOOM_START_OFFSET,
-            sample.zoom + ZOOM_END_OFFSET,
-            ZOOM_STEP,
-          ]);
+          const sweep = await page.evaluate(zoomSweep, zoomSweepRange(sample.zoom, direction));
           requestCounts.push(requests.take());
           repeats.push(summarizeZoomSweep({ ...sweep, fittedZoom: sample.zoom }));
         }
@@ -319,6 +331,132 @@ export async function trialZoomSpot(context, appUrl, spot, sceneId) {
     requests.stop();
     await page.close();
   }
+}
+
+/**
+ * Zooms one spot with real mouse wheel events on the baseline variant and saves every rendered
+ * frame as a PNG. The wheel drives MapLibre's own animated zoom, so tile replacement behaves
+ * as it does for a user instead of stepping the camera with jumpTo.
+ */
+async function captureZoomSpot(page, requests, appUrl, spot, sceneId, options) {
+  const direction = options.direction ?? "in";
+
+  await openZoomScene(page, appUrl, sceneId, spot, ZOOM_BASELINE);
+  await waitForEntry(page);
+
+  const startZoom = spotStartZoom(spot);
+
+  if (startZoom !== null) await page.evaluate(jumpTo, [spot.centre, startZoom]);
+
+  const { sample, timedOut } = await settledSample(page);
+
+  if (!sample || timedOut) return [zoomFailedRecord(spot, sceneId, ZOOM_BASELINE, "never settled")];
+
+  requests.take();
+
+  await page.evaluate(startFrameRecording, [FLASH_GRID_COLS, FLASH_GRID_ROWS, MAX_CAPTURE_FRAMES]);
+  await wheelZoom(page, direction);
+  await page.evaluate(waitForIdle, VIEW_TIMEOUT_MS);
+
+  const capture = await page.evaluate(stopFrameRecording);
+  const requestCount = requests.take();
+  const framesDir = path.resolve(options.frames);
+  fs.mkdirSync(framesDir, { recursive: true });
+
+  const index = capture.frames.map((frame, position) => {
+    const file = frameFileName(position, frame.zoom, frame.timestampMs);
+    const encoded = frame.png.split(",")[1] ?? "";
+    fs.writeFileSync(path.join(framesDir, file), Buffer.from(encoded, "base64"));
+
+    return {
+      file,
+      index: position,
+      zoom: Number(frame.zoom.toFixed(2)),
+      timestampMs: Math.round(frame.timestampMs),
+      tilesLoaded: frame.tilesLoaded,
+      zooming: frame.zooming,
+      captureMs: Math.round(frame.captureMs),
+      layers: frame.layers,
+      sources: frame.sources,
+    };
+  });
+  fs.writeFileSync(path.join(framesDir, "index.json"), `${JSON.stringify(index, null, 2)}\n`);
+
+  const records = captureBandRecords(spot, sceneId, sample.zoom, capture.frames, requestCount);
+
+  for (const flash of detectFlashes(capture.frames.map((frame) => frame.grid))) {
+    records.push({
+      mode: "zoom-flash",
+      spot: spot.name,
+      scene: sceneId,
+      variant: ZOOM_BASELINE,
+      direction,
+      index: flash.index,
+      file: index[flash.index].file,
+      zoom: index[flash.index].zoom,
+      grid_diff_previous: flash.diffPrevious,
+      grid_diff_next: flash.diffNext,
+    });
+  }
+
+  return records;
+}
+
+/**
+ * Scrolls the wheel over the map centre in short bursts, so each burst eases the zoom across
+ * an integer level and the pauses let tiles replace before the next burst.
+ */
+async function wheelZoom(page, direction) {
+  const startZoom = await page.evaluate(() => window.__map.getZoom());
+  const sign = direction === "out" ? 1 : -1;
+
+  await page.mouse.move(VIEWPORT_PX.width / 2, VIEWPORT_PX.height / 2);
+
+  for (let burst = 0; burst < WHEEL_MAX_BURSTS; burst += 1) {
+    for (let notch = 0; notch < WHEEL_NOTCHES_PER_BURST; notch += 1) {
+      await page.mouse.wheel(0, sign * WHEEL_NOTCH_PX);
+      await page.waitForTimeout(WHEEL_NOTCH_GAP_MS);
+    }
+
+    await page.waitForTimeout(WHEEL_BURST_PAUSE_MS);
+
+    const zoom = await page.evaluate(() => window.__map.getZoom());
+
+    if (Math.abs(zoom - startZoom) >= WHEEL_LEVELS) return;
+  }
+}
+
+/** Builds one baseline band record per band from a single capture sweep. */
+function captureBandRecords(spot, sceneId, fittedZoom, frames, requestCount) {
+  const summary = summarizeZoomSweep({ frames, longtasks: [], fittedZoom });
+  const records = [];
+
+  for (const [band, stats] of Object.entries(summary)) {
+    records.push(
+      zoomBandRecord({
+        spot: spot.name,
+        scene: sceneId,
+        variant: ZOOM_BASELINE,
+        band,
+        stats,
+        deltas: {},
+        requests: requestCount,
+        repeats: 1,
+      }),
+    );
+  }
+
+  return records;
+}
+
+/**
+ * Names a captured frame from its position, zoom and page-relative timestamp.
+ * The zoom keeps its decimals because integer names would collide across steps.
+ */
+export function frameFileName(position, zoom, timestampMs) {
+  const padded = String(position).padStart(4, "0");
+
+  return `frame-${padded}-z${zoom.toFixed(2)}-t${Math.round(timestampMs)}.png`;
 }
 
 /** Counts the requests of each sweep so tile churn shows next to frame times. */
@@ -2347,7 +2485,9 @@ function zoomSweep([startZoom, endZoom, stepZoom]) {
         });
         zoom += stepZoom;
 
-        if (zoom > endZoom + 1e-9) {
+        const done = stepZoom >= 0 ? zoom > endZoom + 1e-9 : zoom < endZoom - 1e-9;
+
+        if (done) {
           try {
             observer?.disconnect();
           } catch {
@@ -2380,6 +2520,165 @@ function zoomSweep([startZoom, endZoom, stepZoom]) {
       return { zoom: at, durationMs: task.duration };
     });
   }
+}
+
+/**
+ * Records a PNG and a layer snapshot after every MapLibre render until stopFrameRecording runs.
+ * Both read inside the render event, so no frame is skipped and each file pairs with the zoom
+ * that produced it. PNG encoding stays in the page because only the bytes cross back to Node.
+ */
+function startFrameRecording([gridCols, gridRows, maxFrames]) {
+  const map = window.__map;
+  const frames = [];
+  const watchIds = (map.style?._order ?? map.getStyle().layers.map((layer) => layer.id)).filter(
+    (id) => id.startsWith("soe-") || map.getLayer(id)?.type === "custom",
+  );
+  let previous;
+  const onRender = () => {
+    if (frames.length >= maxFrames) return;
+
+    const now = performance.now();
+
+    frames.push({
+      zoom: map.getZoom(),
+      deltaMs: previous === undefined ? 0 : now - previous,
+      renderMs: 0,
+      timestampMs: now,
+      tilesLoaded: map.areTilesLoaded(),
+      zooming: map.isZooming(),
+      png: map.getCanvas().toDataURL("image/png"),
+      grid: sampleGrid(map, gridCols, gridRows),
+      layers: layerSnapshot(map, watchIds),
+      sources: sourceSnapshot(map),
+      captureMs: performance.now() - now,
+    });
+    previous = now;
+  };
+
+  map.on("render", onRender);
+  window.__trialRecording = {
+    stop: () => {
+      map.off("render", onRender);
+
+      return frames;
+    },
+  };
+
+  // One full readback per frame feeds the small grid, so the detector compares bytes cheaply.
+  function sampleGrid(target, cols, rows) {
+    const canvas = target.getCanvas();
+    const gl = canvas.getContext("webgl2");
+    const pixels = new Uint8Array(canvas.width * canvas.height * 4);
+    gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+    const grid = [];
+
+    for (let row = 0; row < rows; row += 1) {
+      for (let col = 0; col < cols; col += 1) {
+        const pointX = Math.min(canvas.width - 1, Math.floor(((col + 0.5) * canvas.width) / cols));
+        const pointY = Math.min(
+          canvas.height - 1,
+          Math.floor(((row + 0.5) * canvas.height) / rows),
+        );
+        const offset = (pointY * canvas.width + pointX) * 4;
+        grid.push(pixels[offset], pixels[offset + 1], pixels[offset + 2]);
+      }
+    }
+
+    return grid;
+  }
+
+  // One unfiltered query per frame names every rendered layer, so a missing layer stands out.
+  function layerSnapshot(target, watched) {
+    let rendered = [];
+
+    try {
+      rendered = target.queryRenderedFeatures();
+    } catch {
+      rendered = [];
+    }
+
+    const counts = {};
+
+    for (const feature of rendered) {
+      const id = feature?.layer?.id;
+      if (id) counts[id] = (counts[id] ?? 0) + 1;
+    }
+
+    const layers = {};
+
+    for (const id of watched) {
+      let visibility = "visible";
+
+      try {
+        visibility = target.getLayoutProperty(id, "visibility") ?? "visible";
+      } catch {
+        visibility = "unknown";
+      }
+
+      layers[id] = {
+        type: target.getLayer(id)?.type ?? null,
+        visibility,
+        inZoomRange: layerInZoomRange(target, id),
+        rendered: counts[id] ?? 0,
+      };
+    }
+
+    return layers;
+  }
+
+  // Custom layers draw only inside their zoom range, so a layer can vanish without being hidden.
+  function layerInZoomRange(target, id) {
+    const layer = target.getLayer(id);
+    const zoom = target.getZoom();
+
+    return zoom >= (layer?.minzoom ?? 0) && zoom <= (layer?.maxzoom ?? 24);
+  }
+
+  // Tile counts read MapLibre's per-source tile stores, whose name changed across versions.
+  function sourceSnapshot(target) {
+    let caches = null;
+
+    try {
+      caches = target.style?.tileManagers ?? target.style?.sourceCaches ?? null;
+    } catch {
+      caches = null;
+    }
+
+    if (!caches) return null;
+
+    const sources = {};
+
+    for (const [id, cache] of Object.entries(caches)) {
+      try {
+        const tiles = cache.getIds().map((tileId) => cache.getTileByID(tileId));
+        const loadedByZoom = {};
+
+        for (const tile of tiles) {
+          if (tile?.state !== "loaded") continue;
+
+          const tileZoom = tile.tileID.overscaledZ;
+          loadedByZoom[tileZoom] = (loadedByZoom[tileZoom] ?? 0) + 1;
+        }
+
+        sources[id] = {
+          renderable: cache.getRenderableIds().length,
+          total: tiles.length,
+          loaded: Object.values(loadedByZoom).reduce((sum, count) => sum + count, 0),
+          loadedByZoom,
+        };
+      } catch {
+        sources[id] = null;
+      }
+    }
+
+    return sources;
+  }
+}
+
+/** Ends the recording that startFrameRecording began and returns its frames. */
+function stopFrameRecording() {
+  return { frames: window.__trialRecording.stop() };
 }
 
 function nextFrame() {

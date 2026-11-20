@@ -7,6 +7,13 @@ export const ZOOM_STEP = 0.03;
 // The sweep starts half a level below the fitted zoom and climbs six levels above it.
 export const ZOOM_START_OFFSET = -0.5;
 export const ZOOM_END_OFFSET = 6;
+// A zoom-out capture starts half a level above the fitted zoom and drops three levels below.
+export const ZOOM_OUT_START_OFFSET = 0.5;
+export const ZOOM_OUT_END_OFFSET = -3.5;
+// The flash detector samples this grid of pixels per frame and flags a one-frame blink.
+export const FLASH_GRID_COLS = 32;
+export const FLASH_GRID_ROWS = 20;
+export const FLASH_DIFF_THRESHOLD = 32; // Mean 0-255 channel steps against both neighbours.
 // Bands are one zoom level wide, so +0 to +1 is the first full level of zooming in.
 export const ZOOM_BAND_WIDTH = 1;
 export const ZOOM_BAND_COUNT = 6;
@@ -104,6 +111,25 @@ export function zoomBand(fittedZoom, zoom) {
   return `+${band}-${band + 1}`;
 }
 
+/**
+ * Returns the sweep's start zoom, end zoom and step from the fitted zoom.
+ * A sweep toward higher zooms climbs while a zoom-out sweep descends.
+ */
+export function zoomSweepRange(fittedZoom, direction = "in") {
+  if (direction === "out") {
+    return [fittedZoom + ZOOM_OUT_START_OFFSET, fittedZoom + ZOOM_OUT_END_OFFSET, -ZOOM_STEP];
+  }
+
+  return [fittedZoom + ZOOM_START_OFFSET, fittedZoom + ZOOM_END_OFFSET, ZOOM_STEP];
+}
+
+/** Returns the first numeric zoom a spot lists, or null so the capture starts at the fitted view. */
+export function spotStartZoom(spot) {
+  const zoom = (spot.zooms ?? []).find((entry) => Number.isFinite(entry));
+
+  return zoom ?? null;
+}
+
 /** Summarises positive values with nearest-rank percentiles, null when empty. */
 export function zoomStats(values) {
   const sorted = values
@@ -164,6 +190,39 @@ export function summarizeZoomSweep({ frames, longtasks, fittedZoom }) {
   }
 
   return records;
+}
+
+/** Averages the per-channel steps between two sampled pixel grids of equal length. */
+export function meanGridDiff(first, second) {
+  if (!first.length || first.length !== second.length) return null;
+
+  let total = 0;
+
+  for (let index = 0; index < first.length; index += 1) {
+    total += Math.abs(first[index] - second[index]);
+  }
+
+  return Number((total / first.length).toFixed(2));
+}
+
+/**
+ * Flags frames whose grid differs sharply from both neighbours, which marks a one-frame
+ * blink rather than a lasting change. Threshold defaults to FLASH_DIFF_THRESHOLD.
+ */
+export function detectFlashes(grids, threshold = FLASH_DIFF_THRESHOLD) {
+  const flagged = [];
+
+  for (let index = 1; index + 1 < grids.length; index += 1) {
+    const previous = meanGridDiff(grids[index], grids[index - 1]);
+    const next = meanGridDiff(grids[index], grids[index + 1]);
+
+    if (previous === null || next === null) continue;
+    if (previous > threshold && next > threshold) {
+      flagged.push({ index, diffPrevious: previous, diffNext: next });
+    }
+  }
+
+  return flagged;
 }
 
 /** Takes the median of each band number across repeats, ignoring missing bands. */

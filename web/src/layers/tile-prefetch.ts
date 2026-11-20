@@ -30,6 +30,8 @@ export interface PreloadSource {
   tasks(fittedZoom: number): PreloadTask[];
   /** Dwell tasks for the resting viewport, bounded so pans never flood the network. */
   dwell?(viewport: DwellViewport, fittedZoom: number, currentZoom: number): PreloadTask[];
+  /** Stops work the source runs outside the warmer's queue, when it is removed or the warmer is destroyed. */
+  close?(): void;
 }
 
 /** The map surface the warmer listens to for its dwell timing. */

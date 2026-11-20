@@ -169,6 +169,29 @@ measures label placement cost against the unlabelled baseline. Hiding the mask a
 its clip reveals the basemap outside, so its delta is the mask and the clip against the
 basemap they cover.
 
+`--frames <dir> --spot <name>` captures one spot instead of sweeping every variant. The
+capture opens the spot at its own first numeric zoom (the fitted view when it lists none) and
+then scrolls the real mouse wheel over the map centre in bursts of three notches, with a pause
+between bursts so tiles replace as they do for a user. `--direction out` scrolls toward lower
+zooms and the default `in` toward higher ones, and each run stops after about three levels.
+MapLibre's own animated scroll zoom does the zooming, so the camera crosses integer zooms in
+jumps instead of the fixed steps of the sweep above.
+
+A recording hook saves one PNG after every MapLibre render in `<dir>`, with the frame index,
+zoom and page-relative timestamp in each file name. `index.json` holds, per frame, the zoom,
+whether the camera was still zooming, whether tiles had loaded, the milliseconds the capture
+itself took, every `soe-` and custom layer (type, visibility, whether the zoom is inside its
+range, rendered feature count), and per source the renderable and loaded tile counts with the
+loaded tiles by zoom. Custom GPU layers draw no queryable features, so their rendered count
+stays zero and only the PNG shows them. The `soe-slot-*` layers are hidden background anchors,
+not data layers. One `zoom-flash` JSON line per flagged frame reports a one-frame blink found
+by comparing a fixed pixel grid against both neighbour frames.
+
+Each capture frame costs about half a second in SwiftShader because reading the frame back
+waits for the render, so the animation advances several tenths of a zoom level per saved frame.
+A blink that lasts a few real frames can fall between two saved frames, so a run with no
+`zoom-flash` line does not prove the map is steady.
+
 The headless browser uses SwiftShader, so its frames cannot rank GPU fill; they measure
 main-thread work such as label placement and tile churn while zooming. The dev readout's
 per-layer GPU timings answer the real-GPU question in a desktop browser instead.
@@ -204,6 +227,10 @@ per-layer GPU timings answer the real-GPU question in a desktop browser instead.
   tasks over 50 ms, `requests_during_sweep` counts requests seen during the sweep, and
   `repeats` counts the merged repeats. Non-baseline bands add one `_delta` field per number
   against the `all` variant of the same spot and band.
+- Zoom captures carry `mode: "zoom-flash"` with the frame `index`, `file` and `zoom`. Each
+  flagged frame differs sharply from both neighbour frames on a fixed pixel grid, so it
+  blinked for one frame rather than changing for good. The capture directory also holds one
+  PNG per rendered frame and an `index.json` with the per-frame layer and source snapshots.
 - `gl_errors` lists nonzero errors observed through WebGL2 `getError`, including upload checks.
 - `display_checks` reports visibility and palette repaint checks from frame readbacks. It also
   reports whether Edges are available and repaint, or whether the image fallback has its single

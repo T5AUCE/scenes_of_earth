@@ -7,6 +7,9 @@ const PLACES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "plac
 const DEFAULT_PARALLEL_VIEWS = 3;
 const LAYOUT_PRESET = "layout";
 const ZOOM_PRESET = "zoom";
+// A frame capture sweeps toward higher zooms unless --direction out reverses it.
+const DEFAULT_DIRECTION = "in";
+const DIRECTIONS = ["in", "out"];
 
 /**
  * The layout command checks one fixed scene. It bundles four layers over a period, so Play,
@@ -28,7 +31,7 @@ const LAYOUT_PLACES = {
 
 export const USAGE =
   "usage: npm run trial -- <places.json|preset> [--start | --app <url>] [--out dir] [--screens]"
-  + " [--parallel n]";
+  + " [--parallel n] [--frames dir --spot name [--direction in|out]]";
 
 /** Parses argv (without node and script) into options. Throws a usage message on bad input. */
 export function parseArgs(argv) {
@@ -39,6 +42,9 @@ export function parseArgs(argv) {
     out: null,
     screens: false,
     parallel: DEFAULT_PARALLEL_VIEWS,
+    frames: null,
+    spot: null,
+    direction: DEFAULT_DIRECTION,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -48,7 +54,11 @@ export function parseArgs(argv) {
     else if (argument === "--screens") options.screens = true;
     else if (argument === "--app") options.app = valueAfter(argv, ++index, argument);
     else if (argument === "--out") options.out = valueAfter(argv, ++index, argument);
-    else if (argument === "--parallel") {
+    else if (argument === "--frames") options.frames = valueAfter(argv, ++index, argument);
+    else if (argument === "--spot") options.spot = valueAfter(argv, ++index, argument);
+    else if (argument === "--direction") {
+      options.direction = directionAfter(argv, ++index, argument);
+    } else if (argument === "--parallel") {
       options.parallel = Number(valueAfter(argv, ++index, argument));
     } else if (argument.startsWith("--") || options.places) {
       throw new Error(`unexpected argument ${argument}\n${USAGE}`);
@@ -62,6 +72,10 @@ export function parseArgs(argv) {
 
   if (!(options.parallel >= 1)) throw new Error(`--parallel must be at least 1\n${USAGE}`);
 
+  if (options.frames && !options.spot) {
+    throw new Error(`give --spot <name> with --frames <dir>\n${USAGE}`);
+  }
+
   return options;
 }
 
@@ -69,6 +83,14 @@ function valueAfter(argv, index, flag) {
   if (index >= argv.length) throw new Error(`${flag} needs a value\n${USAGE}`);
 
   return argv[index];
+}
+
+/** Reads --direction and rejects anything but a sweep toward higher or lower zooms. */
+function directionAfter(argv, index, flag) {
+  const direction = valueAfter(argv, index, flag);
+  if (!DIRECTIONS.includes(direction)) throw new Error(`--direction must be in or out\n${USAGE}`);
+
+  return direction;
 }
 
 /** Reads a places file given by path or by preset name and checks its shape. */

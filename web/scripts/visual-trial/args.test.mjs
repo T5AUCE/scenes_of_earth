@@ -13,6 +13,9 @@ test("parseArgs reads flags and the places argument", () => {
     out: "x",
     screens: true,
     parallel: 2,
+    frames: null,
+    spot: null,
+    direction: "in",
   });
 });
 
@@ -25,6 +28,37 @@ test("parseArgs needs exactly one of --start and --app", () => {
 test("parseArgs rejects unknown flags and a missing places argument", () => {
   assert.throws(() => parseArgs(["--start"]), /usage/);
   assert.throws(() => parseArgs(["a", "--start", "--bogus"]), /unexpected/);
+});
+
+test("parseArgs reads the frame capture flags", () => {
+  const options = parseArgs([
+    "zoom",
+    "--start",
+    "--frames",
+    "frames",
+    "--spot",
+    "Kenya-coast",
+    "--direction",
+    "out",
+  ]);
+
+  assert.equal(options.frames, "frames");
+  assert.equal(options.spot, "Kenya-coast");
+  assert.equal(options.direction, "out");
+});
+
+test("parseArgs sweeps toward higher zooms unless told otherwise", () => {
+  assert.equal(parseArgs(["zoom", "--start"]).direction, "in");
+  assert.equal(parseArgs(["zoom", "--start", "--spot", "Kenya-coast"]).direction, "in");
+});
+
+test("parseArgs rejects capture flags without a spot and a bad direction", () => {
+  assert.throws(() => parseArgs(["zoom", "--start", "--frames", "frames"]), /--spot/);
+  assert.throws(
+    () => parseArgs(["zoom", "--start", "--spot", "Kenya-coast", "--direction", "sideways"]),
+    /--direction/,
+  );
+  assert.throws(() => parseArgs(["zoom", "--start", "--direction"]), /needs a value/);
 });
 
 test("checkPlaces fills defaults and rejects bad spots", () => {

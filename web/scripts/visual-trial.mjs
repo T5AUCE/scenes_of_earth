@@ -55,7 +55,7 @@ export async function runTrial(options, system = {}) {
   } = system;
 
   const records = [];
-  const spots = readSpots(options.places);
+  const spots = selectSpots(readSpots(options.places), options.spot);
   await checkBrowser();
 
   const appUrl = options.start ? await bootServers() : options.app.replace(/\/$/, "");
@@ -73,7 +73,12 @@ export async function runTrial(options, system = {}) {
     const context = await openContext(browser);
     await warmCache(context, path.join(CACHE_DIR, "http"));
 
-    const runOptions = { screens: options.screens, out };
+    const runOptions = {
+      screens: options.screens,
+      out,
+      frames: options.frames,
+      direction: options.direction,
+    };
     const jobs = spots.map((spot, index) => async () => {
       for (const record of await measureSpot(context, appUrl, spot, sceneIds[index], runOptions)) {
         const line = JSON.stringify(record);
@@ -93,6 +98,23 @@ export async function runTrial(options, system = {}) {
 
   // Contour records carry no present flag, so only layout failures flip the exit.
   return layoutFailed(records) ? 1 : 0;
+}
+
+/**
+ * Keeps only the named spot for a frame capture, so no other scene resolves or runs.
+ * Returns every spot when no name is given.
+ */
+function selectSpots(spots, name) {
+  if (!name) return spots;
+
+  const spot = spots.find((entry) => entry.name === name);
+
+  if (!spot) {
+    const names = spots.map((entry) => entry.name).join(", ");
+    throw new Error(`no spot named ${name} (have ${names})`);
+  }
+
+  return [spot];
 }
 
 async function runLimited(jobs, limit) {

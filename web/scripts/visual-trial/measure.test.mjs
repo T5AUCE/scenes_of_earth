@@ -13,21 +13,31 @@ import {
   classifyFailure,
   contourLegend,
   deltaZoomBands,
+  detectFlashes,
   frameStats,
   isSettled,
+  meanGridDiff,
   medianZoomBands,
   nearestPx,
   pickArea,
   sameSample,
   slug,
+  spotStartZoom,
   summarizeZoomSweep,
   viewRecord,
   zoomBand,
   zoomBandRecord,
   zoomStats,
+  zoomSweepRange,
 } from "./measure.mjs";
 import { getRemainingMs, getRetryDelayMs, postScene } from "./scenes.mjs";
 import { isOpen, stopServers } from "./servers.mjs";
+
+test("zoomSweepRange climbs inward and descends outward", () => {
+  assert.deepEqual(zoomSweepRange(10), [9.5, 16, 0.03]);
+  assert.deepEqual(zoomSweepRange(10, "in"), [9.5, 16, 0.03]);
+  assert.deepEqual(zoomSweepRange(10, "out"), [10.5, 6.5, -0.03]);
+});
 
 test("zoomBand names bands from the fitted zoom", () => {
   assert.equal(zoomBand(5.5, 5.0), "approach");
@@ -64,6 +74,32 @@ test("summarizeZoomSweep bins frames and longtasks per band", () => {
   assert.equal(summary["+0-1"].longtask_ms_total, 60);
   assert.equal(summary["+1-2"].frames, 1);
   assert.equal(summary["+1-2"].longtasks, 0);
+});
+
+test("spotStartZoom takes the first numeric zoom and ignores the fitted view", () => {
+  assert.equal(spotStartZoom({ zooms: [10] }), 10);
+  assert.equal(spotStartZoom({ zooms: ["fitted", 9] }), 9);
+  assert.equal(spotStartZoom({ zooms: ["fitted"] }), null);
+  assert.equal(spotStartZoom({}), null);
+});
+
+test("meanGridDiff averages channel steps and rejects mismatched grids", () => {
+  assert.equal(meanGridDiff([0, 10, 20], [0, 10, 20]), 0);
+  assert.equal(meanGridDiff([0, 0], [30, 90]), 60);
+  assert.equal(meanGridDiff([], []), null);
+  assert.equal(meanGridDiff([1], [1, 2]), null);
+});
+
+test("detectFlashes flags a one-frame blink but not a lasting change", () => {
+  const dark = [10, 10, 10];
+  const bright = [250, 250, 250];
+  const [flagged] = detectFlashes([dark, bright, dark]);
+
+  assert.equal(flagged.index, 1);
+  assert.ok(flagged.diffPrevious > 32 && flagged.diffNext > 32);
+  assert.deepEqual(detectFlashes([dark, dark, dark]), []);
+  assert.deepEqual(detectFlashes([dark, dark, bright, bright]), []);
+  assert.deepEqual(detectFlashes([dark, dark]), []);
 });
 
 test("medianZoomBands takes the median across repeats", () => {

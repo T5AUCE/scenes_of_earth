@@ -19,6 +19,7 @@ import {
   chartTickBounds,
   chartWorkflowState,
   displayFailures,
+  frameFileName,
   hitTestAttribution,
   hitTestControl,
   isEntryReady,
@@ -129,6 +130,10 @@ test("swappedZoomColour exchanges temperature and geology", () => {
   assert.equal(swappedZoomColour({ colour: "geology" }), "era5land_temperature");
   assert.equal(swappedZoomColour({ colour: "era5land_temperature" }), "geology");
   assert.equal(swappedZoomColour({ colour: null }), "era5land_temperature");
+});
+
+test("frameFileName carries position, zoom and timestamp", () => {
+  assert.equal(frameFileName(3, 9.97, 1834.2), "frame-0003-z9.97-t1834.png");
 });
 
 test("a blend baseline swaps colour without keeping the halves off", () => {
@@ -356,6 +361,188 @@ test("a zoom sweep records band medians with deltas against the baseline", async
   assert.equal(swapped.frame_ms_p50_delta, 0);
   assert.equal(swapped.requests_during_sweep, 0);
 });
+
+test("a frame capture wheels from the spot zoom and saves every rendered frame", async (context) => {
+  silenceTrial(context);
+
+  const framesDir = temporaryDir(context);
+  const calls = [];
+  const wheels = [];
+  const page = {
+    on: () => {},
+    off: () => {},
+    goto: async () => {},
+    waitForFunction: async () => {},
+    waitForTimeout: async () => {},
+    mouse: { move: async () => {}, wheel: async (deltaX, deltaY) => wheels.push(deltaY) },
+    evaluate: async (callback, argument) => {
+      calls.push([callback.name, argument]);
+
+      if (callback.name === "stopFrameRecording") return { frames: capturedStubs() };
+      if (callback.name === "waitForIdle") return true;
+      if (callback.name === "takeSample") {
+        return {
+          sceneReady: true,
+          tilesLoaded: true,
+          zoom: 10,
+          labelCount: 0,
+          labelLines: [],
+          centre: [0, 0],
+          cardText: "",
+          classLabels: [],
+        };
+      }
+
+      return undefined;
+    },
+    close: async () => {},
+  };
+  const spot = { name: "Kenya-coast", area: "ovt:KE", centre: [39.75, -3.6], zooms: [10] };
+  const records = await trialZoomSpot(
+    { newPage: async () => page },
+    "http://example.test",
+    spot,
+    "scene",
+    { frames: framesDir, direction: "out" },
+  );
+
+  assert.deepEqual(calls.find(([name]) => name === "jumpTo")[1], [[39.75, -3.6], 10]);
+  assert.ok(wheels.length > 0 && wheels.every((deltaY) => deltaY > 0));
+  assert.deepEqual(calls.find(([name]) => name === "startFrameRecording")[1], [32, 20, 600]);
+  assert.deepEqual(fs.readdirSync(framesDir).sort(), [
+    "frame-0000-z10.00-t1000.png",
+    "frame-0001-z9.97-t1016.png",
+    "frame-0002-z9.94-t1033.png",
+    "index.json",
+  ]);
+
+  const index = JSON.parse(fs.readFileSync(path.join(framesDir, "index.json"), "utf8"));
+
+  assert.equal(index.length, 3);
+  assert.equal(index[1].zoom, 9.97);
+  assert.equal(index[1].layers["soe-ocean-cover"].rendered, 0);
+  assert.equal(index[1].layers["esa_worldcover-classes"].type, "custom");
+  assert.equal(index[1].sources.basemap.loaded, 4);
+  assert.equal(index[1].zooming, true);
+
+  const bands = records.filter((record) => record.mode === "zoom");
+
+  assert.ok(bands.length >= 1);
+  assert.ok(bands.every((record) => record.variant === "all" && record.repeats === 1));
+
+  const [flash] = records.filter((record) => record.mode === "zoom-flash");
+
+  assert.equal(flash.index, 1);
+  assert.equal(flash.file, "frame-0001-z9.97-t1016.png");
+  assert.equal(flash.direction, "out");
+});
+
+test("a frame capture zooming in wheels toward the viewer", async (context) => {
+  silenceTrial(context);
+
+  const wheels = [];
+  const page = {
+    on: () => {},
+    off: () => {},
+    goto: async () => {},
+    waitForFunction: async () => {},
+    waitForTimeout: async () => {},
+    mouse: { move: async () => {}, wheel: async (deltaX, deltaY) => wheels.push(deltaY) },
+    evaluate: async (callback) => {
+      if (callback.name === "stopFrameRecording") return { frames: [] };
+      if (callback.name === "takeSample") return stillSample();
+
+      return callback.name === "waitForIdle" ? true : undefined;
+    },
+    close: async () => {},
+  };
+  const spot = { name: "A", area: "sample:a", centre: [1, 2], zooms: ["fitted"] };
+
+  await trialZoomSpot({ newPage: async () => page }, "http://example.test", spot, "scene", {
+    frames: temporaryDir(context),
+    direction: "in",
+  });
+
+  assert.ok(wheels.length > 0 && wheels.every((deltaY) => deltaY < 0));
+});
+
+test("a named spot runs alone without resolving other scenes", async (context) => {
+  const out = temporaryDir(context);
+  silenceTrial(context);
+
+  const resolved = [];
+  const ran = [];
+  const system = {
+    loadPlaces: () => [
+      { name: "A", layout: true },
+      { name: "Kenya-coast", layout: true },
+    ],
+    preflightWebGL: async () => {},
+    ensureScenes: async (appUrl, spots) => {
+      resolved.push(spots.map((spot) => spot.name));
+      return spots.map(() => "scene-id");
+    },
+    launchBrowser: async () => ({ close: async () => {} }),
+    newContext: async () => ({}),
+    installCache: async () => {},
+    trialSpot: async (browserContext, appUrl, spot) => {
+      ran.push(spot.name);
+      return [];
+    },
+  };
+
+  assert.equal(await runTrial({ ...trialOptions(out), spot: "Kenya-coast" }, system), 0);
+  assert.deepEqual(resolved, [["Kenya-coast"]]);
+  assert.deepEqual(ran, ["Kenya-coast"]);
+  await assert.rejects(
+    runTrial({ ...trialOptions(out), spot: "Missing" }, system),
+    /no spot named/,
+  );
+});
+
+function stillSample() {
+  return {
+    sceneReady: true,
+    tilesLoaded: true,
+    zoom: 10,
+    labelCount: 0,
+    labelLines: [],
+    centre: [0, 0],
+    cardText: "",
+    classLabels: [],
+  };
+}
+
+function capturedStubs() {
+  const dark = [10, 10, 10, 10, 10, 10];
+  const bright = [250, 250, 250, 250, 250, 250];
+  const layers = {
+    "soe-ocean-cover": { type: "fill", visibility: "visible", inZoomRange: true, rendered: 0 },
+    "soe-inland-water": { type: "fill", visibility: "visible", inZoomRange: true, rendered: 2 },
+    "esa_worldcover-classes": {
+      type: "custom",
+      visibility: "visible",
+      inZoomRange: true,
+      rendered: 0,
+    },
+  };
+  const sources = { basemap: { renderable: 4, total: 4, loaded: 4 } };
+  const frame = (zoom, timestampMs, grid) => ({
+    zoom,
+    deltaMs: 16.7,
+    renderMs: 8,
+    timestampMs,
+    tilesLoaded: true,
+    zooming: true,
+    captureMs: 5,
+    png: "data:image/png;base64,AAAA",
+    grid,
+    layers,
+    sources,
+  });
+
+  return [frame(10, 1000, dark), frame(9.97, 1016.4, bright), frame(9.94, 1033.1, dark)];
+}
 
 test("a successful contour run returns exit code 0 and writes its records", async (context) => {
   const out = temporaryDir(context);
