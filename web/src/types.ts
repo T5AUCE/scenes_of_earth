@@ -220,12 +220,6 @@ export interface Scene {
     boundary: BoundaryDoc | null; // null for a drawn polygon
     bbox: Bbox;
     geometry_href: string;
-    /** The lines of the outline that run over land; absent from scenes not cut to land. */
-    borders_href?: string;
-    /** The OSM admin level of the area's borders; null for drawn areas. */
-    border_level?: number | null;
-    /** The zoom from which the basemap's own borders take over. */
-    border_min_zoom?: number | null;
     /** The land polygons the area was cut to, absent from scenes not cut to land. */
     land?: CreditDoc;
     clipped_to_coverage: boolean;

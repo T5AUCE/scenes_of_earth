@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-from shapely.geometry import box, shape
+from shapely.geometry import box
 
 from soe import db
 from soe.areas import Area
@@ -114,7 +114,7 @@ def test_scene_json_states_the_requested_period(tmp_path):
     doc, store = build_nairobi(tmp_path, ("2015-01", "2016-02"))
     rain = doc["layers"][1]
 
-    assert doc["version"] == "0.8"
+    assert doc["version"] == "0.9"
     assert doc["period"] == {"start": "2015-01-01", "end": "2016-03-01", "step": "P1M"}
     assert rain["time"]["method"] == "sum"
     assert store["chirps_monthly/precip"].attrs["cell_methods"] == "time: sum"
@@ -714,7 +714,7 @@ def test_contract_rejects_wrong_versions_and_missing_terms(tmp_path):
     old_contract = copy.deepcopy(doc)
     old_contract["version"] = "0.6"
 
-    assert validate(old_contract) == ["version must be 0.8"]
+    assert validate(old_contract) == ["version must be 0.9"]
 
     old_generator = copy.deepcopy(doc)
     old_generator["generator"]["version"] = "0.8.1"
@@ -1012,9 +1012,7 @@ def cut_to_land_doc(tmp_path: Path) -> dict:
     """The Nairobi scene.json with the fields of a scene cut to land added."""
     doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-03"))
     land = {**SOURCES["osm_land"], "version": "2026-11-14"}
-    doc["area"].update(
-        borders_href="borders.geojson", border_level=None, border_min_zoom=None, land=land
-    )
+    doc["area"].update(border_level=None, border_min_zoom=None, land=land)
     doc["area"]["boundary"]["licence"] = "ODbL 1.0"
     doc["credits"]["lines"].append(land["attribution"])
 
@@ -1030,13 +1028,6 @@ def test_scene_cut_to_land_without_the_coast_credit_is_invalid(tmp_path):
     doc["credits"]["lines"].remove(doc["area"]["land"]["attribution"])
 
     assert any("OpenStreetMap land polygons" in problem for problem in validate(doc))
-
-
-def test_land_source_and_borders_file_come_together(tmp_path):
-    doc = cut_to_land_doc(tmp_path)
-    del doc["area"]["borders_href"]
-
-    assert any("given together" in problem for problem in validate(doc))
 
 
 def test_land_source_must_carry_the_odbl_licence(tmp_path):
@@ -1124,14 +1115,14 @@ OVERTURE_BOUNDARY = {
 }
 
 
-def test_bundle_rejects_version_0_7(tmp_path):
+def test_bundle_rejects_version_0_8(tmp_path):
     doc, _ = build_nairobi(tmp_path, ("2015-01", "2015-01"))
-    doc["version"] = "0.7"
+    doc["version"] = "0.8"
 
-    assert validate(doc) == ["version must be 0.8"]
+    assert validate(doc) == ["version must be 0.9"]
 
 
-def test_borders_feature_collection_carries_disputed(tmp_path):
+def test_drawn_shape_cut_to_land_has_no_border_runs_and_no_borders_file(tmp_path):
     store = tmp_path / "land.sqlite"
     write_land_store(store, "2026-11-14", [box(36, -2, 38, 0)])
     db.init(tmp_path / "soe.db")
@@ -1139,20 +1130,11 @@ def test_borders_feature_collection_carries_disputed(tmp_path):
 
     build_scene("a" * 20, area, "2015-01", "2015-02", [TERRAIN], "Test", tmp_path / "scenes")
 
-    borders = json.loads((tmp_path / "scenes" / ("a" * 20) / "borders.geojson").read_text())
+    scene_dir = tmp_path / "scenes" / ("a" * 20)
+    feature = json.loads((scene_dir / "area.geojson").read_text())
 
-    assert borders["type"] == "FeatureCollection"
-    assert sorted(feature["properties"]["disputed"] for feature in borders["features"]) == [
-        False,
-        True,
-    ]
-    solid = next(
-        feature for feature in borders["features"] if not feature["properties"]["disputed"]
-    )
-    disputed = next(feature for feature in borders["features"] if feature["properties"]["disputed"])
-
-    assert shape(solid["geometry"]).length == pytest.approx(4)
-    assert shape(disputed["geometry"]).is_empty
+    assert "border_runs" not in feature["properties"]
+    assert not (scene_dir / "borders.geojson").exists()
 
 
 def test_overture_boundary_licence_lists_cc_by_when_sourced(tmp_path):

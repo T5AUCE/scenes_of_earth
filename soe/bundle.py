@@ -19,7 +19,7 @@ from .sources import REQUEST_STEP, SOURCE_ROLE, SOURCES, STOP_COUNT, Dataset
 
 __all__ = ["COLOUR_PATTERN", "MIN_STOPS", "STOP_COUNT", "STYLE_KINDS", "validate"]
 
-VERSION = "0.8"
+VERSION = "0.9"
 
 BOUNDARY_SOURCE_FIELDS = ("licence_url", "attribution", "citation", "modified")
 LAND_SOURCE = "osm_land"  # key in SOURCES of the land polygons that cut areas are made from
@@ -94,17 +94,12 @@ def _land_block(area: Area) -> JsonObject:
 
 
 def _land_fields(area: Area, land_source: JsonObject | None) -> JsonObject:
-    """The area fields of a scene cut to land, with the borders and their basemap switch zoom."""
+    """The area fields of a scene cut to land, with the border level and its basemap switch zoom."""
     if land_source is None:
         return {}
 
     level = area.boundary.get("border_level") if area.named else None
-    return {
-        "borders_href": "borders.geojson",
-        "border_level": level,
-        "border_min_zoom": border_min_zoom(level),
-        "land": land_source,
-    }
+    return {"border_level": level, "border_min_zoom": border_min_zoom(level), "land": land_source}
 
 
 def _boundary_block(area: Area) -> JsonObject:

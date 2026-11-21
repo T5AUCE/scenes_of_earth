@@ -35,8 +35,8 @@ class Area:
     geom: object  # shapely (Multi)Polygon, EPSG:4326
     boundary: dict | None = None  # boundary row for named areas, None for drawn ones
     display: object | None = None  # outline to draw, a little wider than the coast; None if uncut
-    borders: object | None = None  # solid land borders as lines; None if uncut
-    disputed: object | None = None  # borders along a disputed line; None if uncut
+    borders: object | None = None  # solid land borders as lines; None if uncut or a plain cut
+    disputed: object | None = None  # borders along a disputed line; None if uncut or a plain cut
     land_version: str | None = None  # version of the land polygons the shape was cut to
     neighbour_revision: str | None = None  # revision of the boundaries that bounded the cut
 

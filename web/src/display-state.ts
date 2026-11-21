@@ -1,3 +1,5 @@
+import type { ExpressionSpecification } from "maplibre-gl";
+
 import {
   allocate,
   BLEND,
@@ -202,6 +204,36 @@ export function outlineCss(color: string): string {
 
   // The paint needs a valid CSS string, so an unknown name falls back to graphite, the first entry.
   return OUTLINE_COLORS[0].color;
+}
+
+// Lines widen with zoom the way basemap lines do, so a border stays visible when zoomed in.
+const OUTLINE_RAMP_LOW_ZOOM = 5;
+const OUTLINE_RAMP_MID_ZOOM = 8;
+const OUTLINE_RAMP_HIGH_ZOOM = 12;
+const OUTLINE_RAMP_TOP_ZOOM = 16;
+
+// Each stop multiplies the slider width, so small source offsets hide inside a wider band.
+const OUTLINE_RAMP_MID_GROWTH = 1.25;
+const OUTLINE_RAMP_HIGH_GROWTH = 2;
+const OUTLINE_RAMP_TOP_GROWTH = 2.5;
+
+/** The slider width grown with zoom, so thin lines stay visible when zoomed in. */
+export function outlineWidthRamp(widthPx: number, factor: number): ExpressionSpecification {
+  const base = widthPx * factor;
+
+  return [
+    "interpolate",
+    ["linear"],
+    ["zoom"],
+    OUTLINE_RAMP_LOW_ZOOM,
+    base,
+    OUTLINE_RAMP_MID_ZOOM,
+    base * OUTLINE_RAMP_MID_GROWTH,
+    OUTLINE_RAMP_HIGH_ZOOM,
+    base * OUTLINE_RAMP_HIGH_GROWTH,
+    OUTLINE_RAMP_TOP_ZOOM,
+    base * OUTLINE_RAMP_TOP_GROWTH,
+  ] as ExpressionSpecification;
 }
 
 /** Read the stored Edge smoothing radius without changing shared-link display. */

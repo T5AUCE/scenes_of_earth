@@ -132,14 +132,17 @@ def test_land_in_reads_both_sides_of_180_and_shifts_the_far_side(tmp_path):
     ]
 
 
-def test_borders_hold_only_the_edges_that_run_over_land(tmp_path):
+def test_borders_are_the_display_edge_along_a_neighbour_over_land(tmp_path):
     store = store_of(tmp_path, box(0, 0, 2, 1))
     neighbour = box(1, -1, 2, 2)
 
     clip = clip_to_land(store, box(-1, -1, 1, 2), [neighbour])
 
-    assert clip.borders.length == pytest.approx(1)
-    assert clip.borders.bounds == pytest.approx((1, 0, 1, 1))
+    edge_deg = 1 - land.OUTLINE_PRECISION_DEG
+    west, south, east, north = clip.borders.bounds
+    assert west == east == pytest.approx(edge_deg)
+    assert (south, north) == pytest.approx((0, 1), abs=1e-9)
+    assert clip.display.boundary.covers(clip.borders)
 
 
 def test_land_cut_by_the_margin_where_no_neighbour_holds_it_is_not_a_border(tmp_path):
@@ -150,12 +153,12 @@ def test_land_cut_by_the_margin_where_no_neighbour_holds_it_is_not_a_border(tmp_
     assert clip.borders.is_empty
 
 
-def test_edges_of_a_drawn_shape_over_land_are_borders(tmp_path):
+def test_edges_of_a_drawn_shape_over_land_are_not_borders(tmp_path):
     store = store_of(tmp_path, box(0, 0, 2, 1))
 
     clip = clip_to_land(store, box(-1, -1, 1, 2), [], grow_deg=0)
 
-    assert clip.borders.length == pytest.approx(1)
+    assert clip.borders.is_empty
 
 
 def test_an_island_has_no_borders(tmp_path):
@@ -164,6 +167,29 @@ def test_an_island_has_no_borders(tmp_path):
     clip = clip_to_land(store, box(-1, -1, 2, 2), [])
 
     assert clip.borders.is_empty
+
+
+def test_border_of_a_territorial_area_stops_at_the_coast_without_a_tail_into_the_sea(tmp_path):
+    store = store_of(tmp_path, box(0, 0, 1, 1))
+
+    clip = land.clip_territorial(store, box(-1, -1, 1, 2), [])
+
+    west, south, east, north = clip.borders.bounds
+    corners = [(1, 0), (1, 1)]
+    vertices = shapely.get_coordinates(clip.display)
+    assert (west, south, east, north) == pytest.approx((1, 0, 1, 1), abs=1e-9)
+    assert all(np.isclose(vertices, corner).all(axis=1).any() for corner in corners)
+
+
+def test_disputed_line_that_starts_inside_one_border_segment_splits_it_exactly(tmp_path):
+    store = store_of(tmp_path, box(0, 0, 3, 1))
+    disputed_line = LineString([(1, 0.6), (1, 3)])
+
+    clip = land.clip_territorial(store, box(-1, -1, 1, 2), [disputed_line])
+
+    zone_start = 0.6 - land.BORDER_MATCH_DEG
+    assert clip.borders.length == pytest.approx(zone_start, abs=1e-9)
+    assert clip.disputed.length == pytest.approx(1 - zone_start, abs=1e-9)
 
 
 def test_outline_covers_the_coast_and_stays_off_the_neighbours_land(tmp_path):
@@ -304,7 +330,7 @@ def test_segmented_border_grows_rays_only_from_its_merged_ends(monkeypatch):
     grown = box(-0.05, -0.05, 1.05, 2.05)
     mainland = box(0, 0, 1, 2)
     neighbour = box(1, 0, 2, 2)
-    coast = land._coast_lines(mainland, border)
+    coast = land._coast_lines(mainland, neighbour)
     seen = {}
     seaward_rays = land._seaward_border_rays
 
@@ -341,7 +367,7 @@ def test_sea_trim_is_skipped_when_border_rays_pass_the_cap(monkeypatch):
     grown = box(-0.05, -0.05, 1.05, 2.05)
     mainland = box(0, 0, 1, 2)
     neighbour = box(1, 0, 2, 2)
-    coast = land._coast_lines(mainland, border)
+    coast = land._coast_lines(mainland, neighbour)
     monkeypatch.setattr(land, "MAX_BORDER_RAYS", 1)
 
     def failing_split(geometry: BaseGeometry, splitter: BaseGeometry) -> BaseGeometry:
@@ -351,6 +377,77 @@ def test_sea_trim_is_skipped_when_border_rays_pass_the_cap(monkeypatch):
     outline = land._cut_sea_at_borders(grown, mainland, border, coast, 0.01, neighbour)
 
     assert shapely.equals_exact(outline, shapely.normalize(grown.difference(neighbour)), 0)
+
+
+def test_landlocked_area_keeps_the_grown_shape_without_cutting_the_sea(monkeypatch):
+    mainland = box(1, 1, 2, 2)
+    grown = box(0.95, 0.95, 2.05, 2.05)
+    surrounding = box(0, 0, 3, 3).difference(mainland)
+    neighbour_land = land._neighbour_land([surrounding])
+    border = land._shared_border_lines(mainland, neighbour_land)
+    coast = land._coast_lines(mainland, neighbour_land)
+    exclusion = land._display_exclusion([surrounding], grown)
+
+    def failing_split(geometry: BaseGeometry, splitter: BaseGeometry) -> BaseGeometry:
+        raise AssertionError("a landlocked area has no sea margin to split")
+
+    monkeypatch.setattr(land, "split", failing_split)
+    outline = land._cut_sea_at_borders(grown, mainland, border, coast, 0.05, exclusion)
+
+    assert coast.is_empty
+    assert shapely.equals_exact(outline, shapely.normalize(grown.difference(exclusion)), 0)
+
+
+def test_border_woven_into_slivers_is_one_piece():
+    mainland = box(0, 0, 1, 1)
+    weave = [(1 + (5e-8 if step % 2 else -5e-8), step / 50) for step in range(51)]
+    neighbour = Polygon([*weave, (2, 1), (2, 0)])
+
+    exact = shapely.intersection(mainland, neighbour)
+    border = land._shared_border_lines(mainland, land._neighbour_land([neighbour]))
+    pieces = shapely.get_parts(shapely.line_merge(border))
+
+    assert shapely.get_num_geometries(exact) > 10
+    assert len(pieces) == 1
+    assert pieces[0].length == pytest.approx(1, abs=1e-4)
+
+
+def test_short_coast_segment_at_a_border_end_stays_coast_so_the_ray_starts_at_the_coast():
+    tail_deg = 1.5 * land.SHARED_BORDER_DEG
+    mainland = Polygon([(0, 0), (0, 1), (1, 1), (1, 0), (1 - tail_deg, 0)])
+    neighbour_land = land._neighbour_land([box(1, 0, 2, 1)])
+
+    border = land._shared_border_lines(mainland, neighbour_land)
+    coast = land._coast_lines(mainland, neighbour_land)
+
+    assert border.bounds == pytest.approx((1, 0, 1, 1))
+    assert coast.intersection(LineString([(1, 0), (1 - tail_deg, 0)])).length == pytest.approx(
+        tail_deg
+    )
+
+
+def test_sea_margin_stays_where_a_neighbour_edge_enters_it():
+    selected = box(0, 0, 1, 1)
+    neighbour = Polygon([(1, 1), (1, 0), (0.97, -0.0035), (1.5, -0.5), (2, 1)])
+    growth_deg = 0.0025
+    grown = land._grown_cover([selected], 0.001, growth_deg)
+    exclusion = land._display_exclusion([neighbour], grown)
+    neighbour_land = land._neighbour_land([neighbour])
+    border = land._shared_border_lines(selected, neighbour_land)
+    coast = land._coast_lines(selected, neighbour_land)
+
+    outline = land._cut_sea_at_borders(grown, selected, border, coast, growth_deg, exclusion)
+
+    assert exclusion.intersection(grown.difference(selected)).area > growth_deg * 1e-4
+    assert shapely.covers(outline, Point(0.5, -0.001))
+    assert shapely.covers(outline, Point(0.5, 1.001))
+    assert not shapely.covers(outline, Point(1.001, 1.001))
+
+
+def test_closed_border_grows_no_rays():
+    ring = LineString([(0, 0), (1, 0), (1, 1), (0, 1), (0, 0)])
+
+    assert land._seaward_border_rays(ring, 0.01, box(-1, -1, 2, 2)) == []
 
 
 def test_shallow_border_ray_leaves_no_tail_on_the_neighbour_sea_side():
@@ -364,7 +461,7 @@ def test_shallow_border_ray_leaves_no_tail_on_the_neighbour_sea_side():
         tolerance_deg = land._display_tolerance(frame_bounds)
         limit_deg = land._conservative_reach_deg(frame_bounds)
 
-        outline = land._display_outline(
+        outline, _ = land._display_outline(
             parts, [shifted_neighbour], tolerance_deg, keep_in_reach=True, limit_deg=limit_deg
         )
 
@@ -512,7 +609,7 @@ def test_coarsening_cuts_the_sea_only_for_the_final_tolerances(monkeypatch):
         return cut_once(covered, land_union, border_lines, coast_lines, growth_deg, exclusion)
 
     monkeypatch.setattr(land, "_cut_sea_at_borders", counting_cut)
-    outline = land._display_outline(
+    outline, _ = land._display_outline(
         parts, neighbours, tolerance_deg, keep_in_reach=True, limit_deg=limit_deg
     )
 
@@ -533,8 +630,9 @@ def _outline_with_a_cut_per_round(
     span_deg = max(east - west, north - south)
     valid_neighbours = [part if part.is_valid else shapely.make_valid(part) for part in neighbours]
     land_union = shapely.union_all(parts)
-    border_lines = land._shared_border_lines(land_union, valid_neighbours)
-    coast_lines = land._coast_lines(land_union, border_lines)
+    neighbour_land = land._neighbour_land(valid_neighbours)
+    border_lines = land._shared_border_lines(land_union, neighbour_land)
+    coast_lines = land._coast_lines(land_union, neighbour_land)
     previous_vertices = None
     cuts = 0
     while True:
@@ -578,8 +676,10 @@ def test_irrelevant_neighbour_does_not_change_coarsening(monkeypatch):
     tolerance_deg = land._display_tolerance(frame_bounds)
     limit_deg = land._conservative_reach_deg(frame_bounds)
 
-    plain = land._display_outline(parts, [], tolerance_deg, keep_in_reach=True, limit_deg=limit_deg)
-    with_far = land._display_outline(
+    plain, _ = land._display_outline(
+        parts, [], tolerance_deg, keep_in_reach=True, limit_deg=limit_deg
+    )
+    with_far, _ = land._display_outline(
         parts, [box(10, 10, 11, 11)], tolerance_deg, keep_in_reach=True, limit_deg=limit_deg
     )
 
@@ -799,23 +899,53 @@ def test_display_stops_at_maritime_limit(tmp_path):
 
 def test_disputed_border_segments_are_tagged(tmp_path):
     store = store_of(tmp_path, box(0, 0, 3, 1))
+    frame = Polygon([(-1, -1), (1.5, -1), (1.5, 0.4), (1.5, 2), (-1, 2)])
     disputed_line = LineString([(1.5, 0.4), (1.5, 3)])
 
-    clip = land.clip_territorial(store, box(-1, -1, 1.5, 2), [disputed_line])
+    clip = land.clip_territorial(store, frame, [disputed_line])
 
     assert clip.disputed.length == pytest.approx(0.6, abs=0.02)
     assert clip.borders.length == pytest.approx(0.4, abs=0.02)
 
 
-def test_coast_following_borders_split_disputed_lines(tmp_path):
+def test_coast_following_border_along_a_disputed_line_is_all_disputed(tmp_path):
     store = store_of(tmp_path, box(0, 0, 3, 1))
     held = box(1, -1, 2, 2)
-    disputed_line = LineString([(1, 0.4), (1, 3)])
+    disputed_line = LineString([(1, -1), (1, 2)])
 
     clip = clip_to_land(store, box(-1, -1, 1, 2), [held], disputed_lines=[disputed_line])
 
-    assert clip.disputed.length == pytest.approx(0.6, abs=0.02)
-    assert clip.borders.length == pytest.approx(0.4, abs=0.02)
+    assert clip.disputed.length == pytest.approx(1, abs=0.02)
+    assert clip.borders.is_empty
+
+
+def test_coast_following_border_away_from_a_disputed_line_stays_solid(tmp_path):
+    store = store_of(tmp_path, box(0, 0, 3, 1))
+    held = box(1, -1, 2, 2)
+    disputed_line = LineString([(5, 0), (5, 1)])
+
+    clip = clip_to_land(store, box(-1, -1, 1, 2), [held], disputed_lines=[disputed_line])
+
+    assert clip.borders.length == pytest.approx(1, abs=0.02)
+    assert clip.disputed.is_empty
+
+
+def test_disputed_stretch_shorter_than_a_segment_sample_gap_is_split_out(tmp_path):
+    store = store_of(tmp_path, box(0, 0, 3, 1))
+    disputed_line = LineString([(1, 0.1), (1, 0.15)])
+
+    clip = land.clip_territorial(store, box(-1, -1, 1, 2), [disputed_line])
+
+    assert clip.disputed.length == pytest.approx(0.05 + 2 * land.BORDER_MATCH_DEG, abs=1e-4)
+
+
+def test_border_stops_at_a_coast_that_runs_nearly_along_it(tmp_path):
+    coast = Polygon([(0, 0), (1, 0), (1 - 3e-13, 0.9), (0, 0.9)])
+    store = store_of(tmp_path, coast)
+
+    clip = land.clip_territorial(store, box(-1, -1, 1, 2), [])
+
+    assert clip.borders.length == pytest.approx(0.9, abs=1e-4)
 
 
 def test_disputed_lines_are_stored_with_the_clip(tmp_path):
@@ -864,7 +994,8 @@ def test_border_level_change_makes_a_new_clip_despite_a_warm_cache(tmp_path):
 def test_disputed_line_change_makes_a_new_clip_despite_a_warm_cache(tmp_path):
     db_path = tmp_path / "soe.db"
     db.init(db_path)
-    add_overture(db_path, {"WEST": box(-1, -1, 1.5, 2)})
+    frame = Polygon([(-1, -1), (1.5, -1), (1.5, 0.5), (1.5, 2), (-1, 2)])
+    add_overture(db_path, {"WEST": frame})
     store = store_of(tmp_path, box(0, 0, 3, 1))
     add_disputed_line(db_path, LineString([(1.5, 0), (1.5, 0.5)]))
     area = overture_area(db_path, "WEST")
@@ -896,16 +1027,12 @@ def test_territorial_and_coast_following_clips_of_one_frame_have_different_revis
 @pytest.mark.parametrize(
     ("border_level", "zoom"), [(2, 5), (4, 5), (5, 9), (6, 9), (7, 11), (8, 11), (9, 12), (10, 12)]
 )
-def test_border_tolerance_follows_level(border_level, zoom):
-    half_pixel_deg = 360 / 512 / 2**zoom / 2
-
-    assert land._border_tolerance_deg(border_level, (0, 0, 1, 1)) == pytest.approx(half_pixel_deg)
+def test_basemap_draws_borders_of_a_level_from_its_zoom(border_level, zoom):
+    assert land.border_min_zoom(border_level) == zoom
 
 
-def test_border_without_a_level_is_simplified_like_the_outline():
-    bounds = (0, 0, 40, 10)
-
-    assert land._border_tolerance_deg(None, bounds) == land._display_tolerance(bounds)
+def test_border_without_a_level_has_no_basemap_zoom():
+    assert land.border_min_zoom(None) is None
 
 
 def test_combined_clip_is_union_of_members(tmp_path):
@@ -974,9 +1101,9 @@ def test_combined_borders_leave_out_the_edge_that_members_share(tmp_path):
 
     assert clipped.borders.intersection(shared).length == pytest.approx(0, abs=1e-9)
     assert clipped.disputed.intersection(shared).length == pytest.approx(0, abs=1e-9)
-    # The disputed zone borrows 0.01 degrees off each neighbouring edge.
-    assert clipped.borders.length == pytest.approx(4.98, abs=1e-6)
-    assert clipped.disputed.length == pytest.approx(1.02, abs=1e-6)
+    # The disputed zone reaches 0.01 along the two edges that meet its line.
+    assert clipped.borders.length == pytest.approx(5 - 2 * land.BORDER_MATCH_DEG, abs=1e-6)
+    assert clipped.disputed.length == pytest.approx(1 + 2 * land.BORDER_MATCH_DEG, abs=1e-6)
     assert clipped.borders.length + clipped.disputed.length == pytest.approx(6, abs=1e-9)
 
 
@@ -1084,11 +1211,89 @@ def test_unassigned_land_report_sums_country_land_no_state_holds(tmp_path):
     ]
     db.add_boundaries(db_path, "Overture states", rows)
     store = store_of(tmp_path, box(0, 0, 2, 1))
+    store_every_clip(db_path, store)
 
     report = land.unassigned_land_report(db_path, store)
 
     assert [country_id for country_id, _ in report] == ["ovt:AAA"]
     assert report[0][1] == pytest.approx(0.98 * 111.32**2, rel=0.01)
+
+
+def test_unassigned_land_report_finds_nothing_where_abutting_states_tile_the_country(tmp_path):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    add_overture(db_path, {"AAA": box(0, 0, 2, 1)}, level="country", maritime=False)
+    rows = [
+        boundary_row(
+            f"ovt:AAA-{number}",
+            "state",
+            str(number),
+            iso3="AAA",
+            bbox=(number - 1, 0, number, 1),
+            geometry=json.dumps(mapping(box(number - 1, 0, number, 1))),
+            source=OVERTURE,
+        )
+        for number in (1, 2)
+    ]
+    db.add_boundaries(db_path, "Overture states", rows)
+    store = store_of(tmp_path, box(0, 0, 2, 1))
+    store_every_clip(db_path, store)
+
+    report = land.unassigned_land_report(db_path, store)
+
+    assert report == [("ovt:AAA", 0)]
+
+
+def test_unassigned_land_report_skips_a_country_with_too_detailed_clips(
+    tmp_path, monkeypatch, capsys
+):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    add_overture(db_path, {"AAA": box(0, 0, 2, 1)}, level="country", maritime=False)
+    state = boundary_row(
+        "ovt:AAA-1",
+        "state",
+        "One",
+        iso3="AAA",
+        bbox=(0, 0, 1, 1),
+        geometry=json.dumps(mapping(box(0, 0, 1, 1))),
+        source=OVERTURE,
+    )
+    db.add_boundaries(db_path, "Overture states", [state])
+    store = store_of(tmp_path, box(0, 0, 2, 1))
+    store_every_clip(db_path, store)
+    monkeypatch.setattr(land, "UNASSIGNED_REPORT_MAX_VERTICES", 8)
+
+    report = land.unassigned_land_report(db_path, store)
+
+    assert report == []
+    assert "ovt:AAA skipped" in capsys.readouterr().out
+
+
+def test_unassigned_land_report_never_clips_an_area_itself(tmp_path, monkeypatch):
+    db_path = tmp_path / "soe.db"
+    db.init(db_path)
+    add_overture(db_path, {"AAA": box(0, 0, 2, 1)}, level="country", maritime=False)
+    state = boundary_row(
+        "ovt:AAA-1",
+        "state",
+        "One",
+        iso3="AAA",
+        bbox=(0, 0, 1, 1),
+        geometry=json.dumps(mapping(box(0, 0, 1, 1))),
+        source=OVERTURE,
+    )
+    db.add_boundaries(db_path, "Overture states", [state])
+    store = store_of(tmp_path, box(0, 0, 2, 1))
+    clip_area_to_land(db_path, store, overture_area(db_path, "AAA"))
+
+    def refuse_to_clip(*args: object, **kwargs: object) -> None:
+        raise AssertionError("the report must read stored clips only")
+
+    monkeypatch.setattr(land, "_clip_area", refuse_to_clip)
+    report = land.unassigned_land_report(db_path, store)
+
+    assert report[0][1] == pytest.approx(2 * 111.32**2, rel=0.01)
 
 
 def test_unassigned_land_report_matches_states_across_180(tmp_path):
@@ -1118,6 +1323,7 @@ def test_unassigned_land_report_matches_states_across_180(tmp_path):
     ]
     db.add_boundaries(db_path, "Overture states", rows)
     store = store_of(tmp_path, box(170, 0, 180, 1), box(-180, 0, -160, 1))
+    store_every_clip(db_path, store)
 
     report = land.unassigned_land_report(db_path, store)
 
@@ -1256,3 +1462,8 @@ def test_downloaded_zip_is_stored_and_leaves_no_copy_behind(tmp_path):
     assert land_version(store) == VERSION
     assert [polygon.bounds for polygon in land_in(store, (4, 4, 7, 7))] == [(5, 5, 6, 6)]
     assert sorted(path.name for path in store.parent.iterdir()) == ["land.sqlite"]
+
+
+def store_every_clip(db_path: Path, store: Path) -> None:
+    for boundary_id in db.boundary_ids(db_path, OVERTURE, ("country", "state")):
+        clip_area_to_land(db_path, store, land._named_area(db_path, boundary_id))

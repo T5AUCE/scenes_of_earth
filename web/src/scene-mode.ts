@@ -28,8 +28,9 @@ import {
   addBorders,
   BORDER_DISPUTED_ID,
   BORDER_LINE_ID,
-  BORDER_LOW_ID,
-  borderCopyMounted,
+  type BorderLines,
+  borderLines,
+  bordersMounted,
   removeBorders,
 } from "./layers/borders";
 import {
@@ -121,6 +122,8 @@ interface MaskLayers {
   mask: ReturnType<typeof createMaskLayers>[number];
   fade: ReturnType<typeof createMaskLayers>[number];
   rings: number[][][];
+  /** The border runs as lines, or null when the bundle omits them for a plain cut. */
+  borderLines: BorderLines | null;
   release(): void;
 }
 
@@ -638,13 +641,15 @@ export function createSceneMode(map: MapLibreMap, roots: SceneRoots) {
       const hasCoast = addCoastStroke(map, undefined, currentOutline);
       // The second mask shares the outside target, so it clips without a second allocation.
       try {
-        // The border copy sits under the coast mask, so only its half inside the area shows.
-        const hasBorders =
-          hasCoast
-          && masks !== null
-          && addBorders(map, scene.area, currentOutline, OUTLINE_ID, OUTLINE_ID);
-        // The copy replaces the centred outline above the mask.
-        if (hasBorders) map.setLayoutProperty(OUTLINE_ID, "visibility", "none");
+        // The borders sit under the coast mask, so only their half inside the area shows.
+        // A missing property keeps the outline for plain cuts.
+        // An empty list still hides it because the coast stroke outlines an island.
+        const lines = masks?.borderLines ?? null;
+        if (hasCoast && lines !== null) {
+          addBorders(map, lines, currentOutline, OUTLINE_ID);
+          // The borders replace the centred outline above the mask.
+          map.setLayoutProperty(OUTLINE_ID, "visibility", "none");
+        }
 
         if (hasCoast && masks && !map.getLayer(COAST_MASK_ID)) {
           const [coast] = createMaskLayers(
@@ -1052,6 +1057,7 @@ function addHiddenMask(
     mask,
     fade,
     rings,
+    borderLines: borderLines(feature, shift),
     release() {
       stopKeepingMask();
       stopKeepingFade();
@@ -1175,11 +1181,11 @@ export function placeSceneSymbols(map: MapLibreMap, sceneLayerIds: readonly stri
   // The inland cover stays below the mask, so the world outside the area stays hidden.
   if (inland && map.getLayer(MASK_ID)) map.moveLayer(inland, MASK_ID);
 
-  // The coast group stacks ocean, stroke, border copies, second mask, and outline from bottom to top.
+  // The coast group stacks ocean, stroke, borders, second mask, and outline from bottom to top.
   const hasOcean = Boolean(map.getLayer(OCEAN_COVER_ID));
   const hasStroke = Boolean(map.getLayer(COAST_STROKE_ID));
   const hasCoastMask = Boolean(map.getLayer(COAST_MASK_ID));
-  const hasBorders = borderCopyMounted(map);
+  const hasBorders = bordersMounted(map);
   const hasOutline = Boolean(map.getLayer(OUTLINE_ID));
 
   if (hasStroke || hasCoastMask || hasBorders) {
@@ -1190,13 +1196,12 @@ export function placeSceneSymbols(map: MapLibreMap, sceneLayerIds: readonly stri
     let belowBorders = hasOutline ? OUTLINE_ID : undefined;
     if (hasCoastMask) belowBorders = COAST_MASK_ID;
     if (hasBorders) {
-      map.moveLayer(BORDER_LOW_ID, belowBorders);
       map.moveLayer(BORDER_LINE_ID, belowBorders);
       map.moveLayer(BORDER_DISPUTED_ID, belowBorders);
     }
 
     // The stroke sits directly below the borders, the coast mask, or the outline.
-    if (hasStroke) map.moveLayer(COAST_STROKE_ID, hasBorders ? BORDER_LOW_ID : belowBorders);
+    if (hasStroke) map.moveLayer(COAST_STROKE_ID, hasBorders ? BORDER_LINE_ID : belowBorders);
 
     // The ocean cover stays directly below the stroke, so the coast reads as one line.
     if (hasOcean && hasStroke) map.moveLayer(OCEAN_COVER_ID, COAST_STROKE_ID);

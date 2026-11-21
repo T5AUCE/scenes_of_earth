@@ -1,7 +1,7 @@
 /** Draw inland water, the sea cover in the page colour, and the coast stroke above it. */
 import type { Map as MapLibreMap } from "maplibre-gl";
 
-import { outlineCss, type OutlineState } from "../display-state";
+import { outlineCss, outlineWidthRamp, type OutlineState } from "../display-state";
 
 /** The inland cover above every scene layer; the basemap source stays owned by the basemap. */
 export const INLAND_WATER_ID = "soe-inland-water";
@@ -103,7 +103,7 @@ export function addCoastStroke(
       layout: { "line-join": "round", "line-cap": "round", visibility: "visible" } as never,
       paint: {
         "line-color": outlineCss(outline.color),
-        "line-width": outline.widthPx,
+        "line-width": outlineWidthRamp(outline.widthPx, 1),
         "line-opacity": 1,
       } as never,
     } as Parameters<MapLibreMap["addLayer"]>[0],
@@ -123,7 +123,7 @@ export function applyCoastStroke(map: MapLibreMap, outline: OutlineState): void 
 
   map.setLayoutProperty(COAST_STROKE_ID, "visibility", outline.shown ? "visible" : "none");
   map.setPaintProperty(COAST_STROKE_ID, "line-color", outlineCss(outline.color));
-  map.setPaintProperty(COAST_STROKE_ID, "line-width", outline.widthPx);
+  map.setPaintProperty(COAST_STROKE_ID, "line-width", outlineWidthRamp(outline.widthPx, 1));
 }
 
 /** Remove the coast stroke while leaving the basemap source untouched. */

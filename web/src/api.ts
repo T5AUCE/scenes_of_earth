@@ -9,7 +9,7 @@ import type {
   SceneStatus,
 } from "./types";
 
-const SCENE_VERSION = "0.8";
+const SCENE_VERSION = "0.9";
 const SCENE_ID_CHARS = 20; // Must match ID_CHARS in soe/scene_request.py.
 const SCENE_ID_PATTERN = new RegExp(`^[0-9a-f]{${SCENE_ID_CHARS}}$`);
 
@@ -82,9 +82,6 @@ export async function loadScene(bundleUrl: string): Promise<Scene> {
   }
 
   scene.area.geometry_href = new URL(scene.area.geometry_href, base).href;
-  if (scene.area.borders_href) {
-    scene.area.borders_href = new URL(scene.area.borders_href, base).href;
-  }
   scene.data.href = new URL(scene.data.href, base).href;
 
   for (const layer of scene.layers) {

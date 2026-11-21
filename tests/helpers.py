@@ -47,7 +47,7 @@ BOUNDARY = {
 
 HASH_A, HASH_B, HASH_C = "a" * 20, "b" * 20, "c" * 20
 
-CONTRACT_VERSION = "0.8"  # scene.json format that the validator accepts
+CONTRACT_VERSION = "0.9"  # scene.json format that the validator accepts
 GENERATOR_VERSION = "0.9.1"  # soe release that writes the current bundles
 
 

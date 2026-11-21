@@ -36,6 +36,7 @@ const {
   NO_TOKENS,
   OUTLINE_COLORS,
   outlineCss,
+  outlineWidthRamp,
   rangeDecimals,
   recordMenuChange,
   resolveDisplay,
@@ -1212,6 +1213,38 @@ test("outline CSS resolves presets and custom hexes and falls back to graphite",
   assert.equal(outlineCss("#102030"), "#102030");
   assert.equal(outlineCss("pink"), "#333333");
   assert.equal(outlineCss(""), "#333333");
+});
+
+test("the width ramp holds the slider width to z5 and grows it after", () => {
+  assert.deepEqual(outlineWidthRamp(1.5, 2), [
+    "interpolate",
+    ["linear"],
+    ["zoom"],
+    5,
+    3,
+    8,
+    3.75,
+    12,
+    6,
+    16,
+    7.5,
+  ]);
+});
+
+test("the width ramp without the border doubling keeps the slider width itself", () => {
+  assert.deepEqual(outlineWidthRamp(2, 1), [
+    "interpolate",
+    ["linear"],
+    ["zoom"],
+    5,
+    2,
+    8,
+    2.5,
+    12,
+    4,
+    16,
+    5,
+  ]);
 });
 
 test("the stored outline round trips and starts absent", () => {

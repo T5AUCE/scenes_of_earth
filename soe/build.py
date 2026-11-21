@@ -6,6 +6,8 @@ import shutil
 import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
+from itertools import groupby, pairwise
+from operator import itemgetter
 from pathlib import Path
 
 import shapely
@@ -150,33 +152,67 @@ def _write_scene_documents(
     outline = (
         _land_outline(area, scene_plan) if area.land_version else _display_geometry(scene_plan)
     )
-    _write_feature(temp_dir / "area.geojson", area_name, outline)
-
-    if area.land_version:
-        solid = shapely.set_precision(area.borders, OUTLINE_PRECISION_DEG)
+    properties: JsonObject = {"name": area_name}
+    if area.borders is not None:
         disputed = area.disputed if area.disputed is not None else MultiLineString()
-        disputed = shapely.set_precision(disputed, OUTLINE_PRECISION_DEG)
-        _write_borders(temp_dir / "borders.geojson", area_name, solid, disputed)
+        properties["border_runs"] = _border_runs(outline, area.borders, disputed)
+
+    _write_feature(temp_dir / "area.geojson", properties, outline)
 
     (temp_dir / "scene.json").write_text(json.dumps(scene_document, indent=1), encoding="utf-8")
 
 
-def _write_feature(path: Path, name: str, geometry: BaseGeometry) -> None:
-    feature = {"type": "Feature", "properties": {"name": name}, "geometry": mapping(geometry)}
+def _write_feature(path: Path, properties: JsonObject, geometry: BaseGeometry) -> None:
+    feature = {"type": "Feature", "properties": properties, "geometry": mapping(geometry)}
     path.write_text(json.dumps(feature), encoding="utf-8")
 
 
-def _write_borders(path: Path, name: str, solid: BaseGeometry, disputed: BaseGeometry) -> None:
-    """Write solid and disputed borders as one feature each, so the viewer styles them apart."""
-    features = [_border_feature(name, False, solid), _border_feature(name, True, disputed)]
-    collection = {"type": "FeatureCollection", "features": features}
-    path.write_text(json.dumps(collection), encoding="utf-8")
+def _border_runs(
+    outline: BaseGeometry, solid: BaseGeometry, disputed: BaseGeometry
+) -> list[list[int]]:
+    """The stretches of the written outline on land borders, as `[ring, first, last, disputed]`.
+
+    Rings are counted in the order `area.geojson` lists them, over its polygons in order and
+    within each polygon the exterior ring first and then its holes. `first` and `last` are
+    vertex indexes into that ring's coordinate array, `last` included and never below `first`, so
+    the run is `coordinates[first : last + 1]`. A run never passes the end of its ring, so a
+    border that crosses the ring's start becomes two runs. `disputed` is 1 for a border along a
+    disputed line and 0 otherwise. The coordinates are the ones written, so the run is found by
+    a segment between two outline vertices that the border lines also hold, after the same
+    rounding.
+    """
+    kinds = _border_segment_kinds(solid, disputed)
+    polygons = shapely.get_parts(outline)
+    rings = [ring for polygon in polygons for ring in (polygon.exterior, *polygon.interiors)]
+
+    runs = []
+    for ring_index, ring in enumerate(rings):
+        segments = pairwise(tuple(vertex) for vertex in ring.coords)
+        segment_kinds = [kinds.get(_segment_key(start, end)) for start, end in segments]
+        for kind, group in groupby(enumerate(segment_kinds), key=itemgetter(1)):
+            if kind is not None:
+                indexes = [index for index, _ in group]
+                runs.append([ring_index, indexes[0], indexes[-1] + 1, kind])
+
+    return runs
 
 
-def _border_feature(name: str, disputed_flag: bool, geometry: BaseGeometry) -> JsonObject:
-    """One borders feature, marked solid or disputed for the viewer."""
-    properties = {"name": name, "disputed": disputed_flag}
-    return {"type": "Feature", "properties": properties, "geometry": mapping(geometry)}
+def _border_segment_kinds(
+    solid: BaseGeometry, disputed: BaseGeometry
+) -> dict[tuple[tuple[float, ...], ...], int]:
+    """Each rounded border segment, keyed by its two vertices, with 1 when it is disputed."""
+    kinds = {}
+    for lines, kind in ((solid, 0), (disputed, 1)):
+        for line in shapely.get_parts(shapely.set_precision(lines, OUTLINE_PRECISION_DEG)):
+            for start, end in pairwise(tuple(vertex) for vertex in line.coords):
+                kinds[_segment_key(start, end)] = kind
+
+    return kinds
+
+
+def _segment_key(start: tuple[float, ...], end: tuple[float, ...]) -> tuple[tuple[float, ...], ...]:
+    """The segment's vertices in a fixed order, so either direction finds it."""
+    return tuple(sorted((start, end)))
 
 
 def _display_geometry(scene_plan: Plan) -> BaseGeometry:

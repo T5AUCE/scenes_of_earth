@@ -206,7 +206,7 @@ def test_post_poll_and_serve(env):
     assert [layer["id"] for layer in scene["layers"]] == ["terrain", "chirps_monthly"]
 
     terrain = scene["layers"][0]
-    assert scene["version"] == "0.8" and terrain["arrays"] == {} and terrain["stats"]["p98"] > 0
+    assert scene["version"] == "0.9" and terrain["arrays"] == {} and terrain["stats"]["p98"] > 0
     assert terrain["tiles"]["source"]["attribution"] in scene["credits"]["lines"]
     assert scene["credits"]["terms_passthrough"]
     assert scene["generator"]["version"] == "0.9.1"
@@ -484,18 +484,18 @@ def test_overture_boundary_scene_carries_local_names_and_border_zoom(
         scene_id = client.post("/api/scenes", json=request).json()["id"]
         done = wait_for(client, scene_id)
         scene = client.get(done["bundle_url"]).json()
-        borders = client.get(f"/scenes/{scene_id}/borders.geojson").json()
+        outline = client.get(f"/scenes/{scene_id}/area.geojson").json()
 
     assert done["status"] == "done"
     assert validate(scene) == []
-    assert scene["version"] == "0.8"
+    assert scene["version"] == "0.9"
     assert scene["area"]["border_level"] == 4
     assert scene["area"]["border_min_zoom"] == 5
     assert scene["area"]["boundary"]["name_local"] == "Test Local"
     assert scene["area"]["boundary"]["parent_name_local"] == "Land Local"
     assert scene["area"]["boundary"]["version"] == SOURCES["Overture Maps divisions"]["version"]
     assert "CC BY 4.0" in scene["area"]["boundary"]["licence"]
-    assert borders["type"] == "FeatureCollection"
+    assert isinstance(outline["properties"]["border_runs"], list)
 
 
 def test_rejections_happen_before_any_read(env):
@@ -627,7 +627,7 @@ def test_built_scene_is_served_again_when_the_source_goes_down(
         assert again.json()["id"] == first.json()["id"]
 
 
-def test_scene_cut_to_land_is_built_with_its_outline_borders_and_credit(
+def test_scene_cut_to_land_is_built_with_its_outline_and_credit(
     tmp_path, revision_source, land_store
 ):
     app = create_app(tmp_path / "soe.db", tmp_path / "scenes", make_registry(revision_source))
@@ -636,26 +636,18 @@ def test_scene_cut_to_land_is_built_with_its_outline_borders_and_credit(
         done = wait_for(client, scene_id)
         scene = client.get(done["bundle_url"]).json()
         outline = client.get(f"/scenes/{scene_id}/area.geojson").json()
-        borders = client.get(f"/scenes/{scene_id}/borders.geojson").json()
+        borders_response = client.get(f"/scenes/{scene_id}/borders.geojson")
 
     assert done["status"] == "done"
     assert validate(scene) == []
-    assert scene["area"]["borders_href"] == "borders.geojson"
+    assert "borders_href" not in scene["area"]
+    assert borders_response.status_code == 404
     assert scene["area"]["land"]["version"] == "2026-11-14"
     assert any("OpenStreetMap contributors" in line for line in scene["credits"]["lines"])
     drawn = shape(outline["geometry"])
     assert shape(SQUARE).difference(drawn).area < 1e-9
     assert drawn.difference(shape(SQUARE)).area < 0.011  # only the sea margin overshoots
-    assert borders["type"] == "FeatureCollection"
-    assert sorted(feature["properties"]["disputed"] for feature in borders["features"]) == [
-        False,
-        True,
-    ]
-    solid = next(
-        feature for feature in borders["features"] if not feature["properties"]["disputed"]
-    )
-
-    assert shape(solid["geometry"]).length == pytest.approx(4)
+    assert "border_runs" not in outline["properties"]
 
 
 def test_missing_land_store_gives_503_before_any_read(tmp_path, monkeypatch, revision_source):

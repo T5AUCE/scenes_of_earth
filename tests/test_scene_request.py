@@ -36,9 +36,9 @@ from tests.helpers import RAIN, boundary_row, write_cube
 SQUARE = mapping(box(36.5, -1.5, 37.5, -0.5))
 LAND_VERSION = "2026-11-14"
 PINNED_REVISION = "Tue, 01 Sep 2015 00:00:00 GMT"
-PINNED_SCENE_ID = "d9b0f2c6fd4fdaee38fc"  # Computed for soe 0.9.1 and scene format 0.8.
-IN_RANGE_SCENE_ID = "a09f3b350d669cacf08c"  # Nairobi square under format 0.8.
-EDGE_SCENE_ID = "ef3acda6b50f535e0fb3"  # A polygon ending just below 60N under format 0.8.
+PINNED_SCENE_ID = "c6162fd6801ba14cae14"  # Computed for soe 0.9.1 and scene format 0.9.
+IN_RANGE_SCENE_ID = "0c5bb37dfbaa4f9bc4e9"  # Nairobi square under format 0.9.
+EDGE_SCENE_ID = "8df3f7169401a19f76ca"  # A polygon ending just below 60N under format 0.9.
 PREVIOUS_SCENE_ID = "51c67b0430f967920733"  # The same inputs under soe 0.9.0.
 
 

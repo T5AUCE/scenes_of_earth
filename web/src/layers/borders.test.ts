@@ -2,240 +2,287 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { OutlineState } from "../display-state.ts";
-import type { Scene } from "../types.ts";
+import { outlineWidthRamp } from "../display-state.ts";
+import type { AreaFeature } from "../types.ts";
 import {
   addBorders,
   applyBorders,
   BORDER_DISPUTED_ID,
   BORDER_LAYER_IDS,
   BORDER_LINE_ID,
-  BORDER_LOW_ID,
-  borderCopyMounted,
+  BORDER_SOURCE_ID,
+  borderLines,
+  bordersMounted,
   removeBorders,
 } from "./borders.ts";
 
 const OUTLINE: OutlineState = { shown: true, color: "white", widthPx: 2 };
-const AREA = {
-  bbox: [0, 0, 1, 1],
-  geometry_href: "area.geojson",
-  borders_href: "borders.geojson",
-  border_level: 6,
-  border_min_zoom: 9,
-  clipped_to_coverage: true,
-} as Scene["area"];
 
-test("the border copies reuse the basemap boundary from the area's switch zoom", () => {
-  const map = makeMap();
+// Ring 0 is polygon 0's exterior, ring 1 its hole, and ring 2 is polygon 1's exterior.
+const FIRST_EXTERIOR = [
+  [0, 0],
+  [10, 0],
+  [10, 10],
+  [0, 10],
+  [0, 0],
+];
+const FIRST_HOLE = [
+  [2, 2],
+  [2, 4],
+  [4, 4],
+  [4, 2],
+  [2, 2],
+];
+const SECOND_EXTERIOR = [
+  [20, 0],
+  [30, 0],
+  [30, 10],
+  [20, 10],
+  [20, 0],
+];
 
-  assert.equal(addBorders(map as never, AREA, OUTLINE, "soe-area-outline", "outline-anchor"), true);
+test("runs slice the right ring of a multi-polygon with holes", () => {
+  const lines = borderLines(
+    landFeature([
+      [0, 1, 2, 0],
+      [1, 0, 2, 0],
+      [2, 2, 4, 0],
+    ]),
+    0,
+  )!;
 
-  const line = map.specs.get(BORDER_LINE_ID)!;
-  const disputed = map.specs.get(BORDER_DISPUTED_ID)!;
-  const low = map.specs.get(BORDER_LOW_ID)!;
-
-  assert.equal(line.source, "openmaptiles");
-  assert.equal(line["source-layer"], "boundary");
-  assert.equal(line.minzoom, 9);
-  assert.equal(line.maxzoom, undefined);
-  assert.deepEqual(line.filter, [
-    "all",
-    ["<=", ["get", "admin_level"], 6],
-    ["!=", ["get", "maritime"], 1],
-    ["!=", ["get", "disputed"], 1],
-  ]);
-
-  assert.equal(disputed.source, "openmaptiles");
-  assert.equal(disputed.minzoom, 9);
-  assert.deepEqual(disputed.filter, [
-    "all",
-    ["<=", ["get", "admin_level"], 6],
-    ["!=", ["get", "maritime"], 1],
-    ["==", ["get", "disputed"], 1],
-  ]);
-
-  assert.equal(low.source, "soe-area-outline");
-  assert.equal(low["source-layer"], undefined);
-  assert.equal(low.minzoom, undefined);
-  assert.equal(low.maxzoom, 9);
-  assert.equal(low.filter, undefined);
+  assert.deepEqual(
+    lines.features.map((feature) => feature.geometry.coordinates),
+    [
+      [
+        [10, 0],
+        [10, 10],
+      ],
+      [
+        [2, 2],
+        [2, 4],
+        [4, 4],
+      ],
+      [
+        [30, 10],
+        [20, 10],
+        [20, 0],
+      ],
+    ],
+  );
 });
 
-test("every admin level filters its own lines and switches at the given zoom", () => {
-  for (const [level, minZoom] of [
-    [4, 5],
-    [6, 9],
-    [8, 11],
-    [10, 12],
-  ]) {
-    const map = makeMap();
-    const area = withArea({ border_level: level, border_min_zoom: minZoom });
+test("runs meeting at the ring start join into one line", () => {
+  const lines = borderLines(
+    landFeature([
+      [0, 0, 1, 0],
+      [0, 3, 4, 0],
+    ]),
+    0,
+  )!;
 
-    assert.equal(addBorders(map as never, area, OUTLINE, "soe-area-outline", undefined), true);
-
-    for (const id of [BORDER_LINE_ID, BORDER_DISPUTED_ID]) {
-      const spec = map.specs.get(id)!;
-      const filter = spec.filter as unknown[];
-
-      assert.deepEqual(filter[1], ["<=", ["get", "admin_level"], level]);
-      assert.equal(spec.minzoom, minZoom);
-    }
-
-    assert.equal(map.specs.get(BORDER_LOW_ID)!.maxzoom, minZoom);
-  }
-});
-
-test("the copies paint at twice the outline width with Liberty's disputed dashes", () => {
-  const map = makeMap();
-
-  addBorders(map as never, AREA, { ...OUTLINE, widthPx: 1.5 }, "soe-area-outline", undefined);
-
-  const linePaint = map.specs.get(BORDER_LINE_ID)!.paint as Record<string, unknown>;
-  const disputedPaint = map.specs.get(BORDER_DISPUTED_ID)!.paint as Record<string, unknown>;
-  const lowPaint = map.specs.get(BORDER_LOW_ID)!.paint as Record<string, unknown>;
-  const lowDashes = lowPaint["line-dasharray"] as unknown[];
-
-  assert.deepEqual(linePaint, { "line-color": "#ffffff", "line-width": 3, "line-opacity": 1 });
-  assert.deepEqual(disputedPaint["line-dasharray"], [0.5, 1]);
-  assert.deepEqual(lowDashes, [
-    "case",
-    ["==", ["get", "disputed"], true],
-    ["literal", [0.5, 1]],
-    ["literal", [1, 0]],
+  assert.equal(lines.features.length, 1);
+  assert.deepEqual(lines.features[0].geometry.coordinates, [
+    [0, 10],
+    [0, 0],
+    [10, 0],
   ]);
-
-  // The bundle writes disputed as a boolean, so the low layer must dash boolean features.
-  assert.deepEqual(dashFor(lowDashes, { disputed: true }), [0.5, 1]);
-  assert.deepEqual(dashFor(lowDashes, { disputed: false }), [1, 0]);
 });
 
-test("an outline change repaints all three copies", () => {
+test("runs meeting at a concave ring start join into one line", () => {
+  const concave: AreaFeature = {
+    type: "Feature",
+    properties: {
+      border_runs: [
+        [0, 0, 1, 0],
+        [0, 5, 6, 0],
+      ],
+    },
+    geometry: {
+      type: "Polygon",
+      coordinates: [
+        [
+          [5, 5],
+          [5, 10],
+          [0, 10],
+          [0, 0],
+          [10, 0],
+          [10, 5],
+          [5, 5],
+        ],
+      ],
+    },
+  };
+  const lines = borderLines(concave, 0)!;
+
+  assert.equal(lines.features.length, 1);
+  assert.deepEqual(lines.features[0].geometry.coordinates, [
+    [10, 5],
+    [5, 5],
+    [5, 10],
+  ]);
+});
+
+test("runs of different kinds meeting at the ring start stay separate", () => {
+  const lines = borderLines(
+    landFeature([
+      [0, 0, 1, 0],
+      [0, 3, 4, 1],
+    ]),
+    0,
+  )!;
+
+  assert.equal(lines.features.length, 2);
+  assert.deepEqual(
+    lines.features.map((feature) => feature.properties.disputed),
+    [0, 1],
+  );
+});
+
+test("disputed runs carry the flag that the dashed layer filters on", () => {
+  const lines = borderLines(
+    landFeature([
+      [0, 0, 1, 0],
+      [0, 1, 2, 1],
+    ]),
+    0,
+  )!;
+
+  assert.deepEqual(
+    lines.features.map((feature) => feature.properties.disputed),
+    [0, 1],
+  );
+});
+
+test("the antimeridian shift moves the sliced vertices like the mask rings", () => {
+  const lines = borderLines(landFeature([[2, 0, 1, 0]]), -360)!;
+
+  assert.deepEqual(lines.features[0].geometry.coordinates, [
+    [-340, 0],
+    [-330, 0],
+  ]);
+});
+
+test("a scene without runs has no border lines and an empty list has none to draw", () => {
+  assert.equal(borderLines(landFeature(undefined), 0), null);
+  assert.deepEqual(borderLines(landFeature([]), 0)!.features, []);
+});
+
+test("a run that points outside its ring is skipped", () => {
+  const lines = borderLines(
+    landFeature([
+      [9, 0, 1, 0],
+      [0, 4, 4, 0],
+      [0, 0, 1, 0],
+    ]),
+    0,
+  )!;
+
+  assert.equal(lines.features.length, 1);
+});
+
+test("the lines draw from one unsimplified source with a dashed disputed layer", () => {
+  const map = makeMap();
+  const lines = borderLines(landFeature([[0, 0, 1, 0]]), 0)!;
+
+  addBorders(map as never, lines, { ...OUTLINE, widthPx: 1.5 }, "outline");
+
+  assert.deepEqual(map.sources.get(BORDER_SOURCE_ID), {
+    type: "geojson",
+    data: lines,
+    tolerance: 0,
+  });
+  assert.deepEqual(map.specs.get(BORDER_LINE_ID)!.filter, ["!=", ["get", "disputed"], 1]);
+  assert.deepEqual(map.specs.get(BORDER_DISPUTED_ID)!.filter, ["==", ["get", "disputed"], 1]);
+  assert.deepEqual(map.specs.get(BORDER_DISPUTED_ID)!.paint, { "line-dasharray": [0.5, 1] });
+  assert.deepEqual(map.order, ["background", BORDER_LINE_ID, BORDER_DISPUTED_ID, "outline"]);
+  assert.deepEqual(map.paints.get(BORDER_LINE_ID)?.slice(-3), [
+    ["line-color", "#ffffff"],
+    ["line-width", outlineWidthRamp(1.5, 2)],
+    ["line-opacity", 1],
+  ]);
+});
+
+test("an outline change repaints both border lines", () => {
   const map = makeMap();
 
-  addBorders(map as never, AREA, OUTLINE, "soe-area-outline", undefined);
+  addBorders(map as never, borderLines(landFeature([]), 0)!, OUTLINE, "outline");
   applyBorders(map as never, { shown: false, color: "#123456", widthPx: 3 });
 
   for (const id of BORDER_LAYER_IDS) {
     assert.deepEqual(map.layouts.get(id)?.at(-1), ["visibility", "none"]);
-    assert.deepEqual(map.paints.get(id)?.slice(-2), [
+    assert.deepEqual(map.paints.get(id)?.slice(-3), [
       ["line-color", "#123456"],
-      ["line-width", 6],
+      ["line-width", outlineWidthRamp(3, 2)],
+      ["line-opacity", 1],
     ]);
   }
 });
 
-test("a second add repaints the mounted copies instead of doubling them", () => {
+test("a second add repaints the mounted lines instead of doubling them", () => {
   const map = makeMap();
-  const added: string[] = [];
-  const addLayer = map.addLayer;
+  const lines = borderLines(landFeature([]), 0)!;
 
-  map.addLayer = (spec: { id: string }, beforeId?: string) => {
-    added.push(spec.id);
-    addLayer(spec, beforeId);
-  };
+  addBorders(map as never, lines, OUTLINE, "outline");
+  addBorders(map as never, lines, { ...OUTLINE, widthPx: 3 }, "outline");
 
-  addBorders(map as never, AREA, OUTLINE, "soe-area-outline", undefined);
-  assert.equal(
-    addBorders(map as never, AREA, { ...OUTLINE, widthPx: 3 }, "soe-area-outline", undefined),
-    true,
-  );
-
-  assert.deepEqual(added, BORDER_LAYER_IDS);
-  assert.deepEqual(map.paints.get(BORDER_LINE_ID)?.at(-1), ["line-width", 6]);
+  assert.deepEqual(map.order, ["background", BORDER_LINE_ID, BORDER_DISPUTED_ID, "outline"]);
+  assert.deepEqual(map.paints.get(BORDER_LINE_ID)?.at(-2), ["line-width", outlineWidthRamp(3, 2)]);
 });
 
-test("a drawn area without a border level keeps the fallback outline", () => {
-  for (const area of [
-    withArea({ border_level: null, border_min_zoom: null }),
-    withArea({ border_level: undefined }),
-    withArea({ border_min_zoom: undefined }),
-    withArea({ borders_href: undefined }),
-  ]) {
-    const map = makeMap();
-
-    assert.equal(addBorders(map as never, area, OUTLINE, "soe-area-outline", undefined), false);
-    assert.deepEqual(map.specs.size, 0);
-  }
-});
-
-test("a style without a boundary line keeps the fallback outline", () => {
-  const map = makeMap({ boundary: false });
-
-  assert.equal(addBorders(map as never, AREA, OUTLINE, "soe-area-outline", undefined), false);
-  assert.deepEqual(map.specs.size, 0);
-});
-
-test("a style that cannot be read keeps the fallback outline", () => {
-  const map = makeMap();
-  map.getStyle = () => {
-    throw new Error("style unavailable");
-  };
-
-  assert.equal(addBorders(map as never, AREA, OUTLINE, "soe-area-outline", undefined), false);
-  assert.deepEqual(map.specs.size, 0);
-});
-
-test("the copy stacks in its own order and the mount check follows it", () => {
+test("the mount check follows the lines and removal drops the source too", () => {
   const map = makeMap();
 
-  assert.equal(borderCopyMounted(map as never), false);
-  addBorders(map as never, AREA, OUTLINE, "soe-area-outline", "outline-anchor");
+  assert.equal(bordersMounted(map as never), false);
+  addBorders(map as never, borderLines(landFeature([]), 0)!, OUTLINE, "outline");
+  assert.equal(bordersMounted(map as never), true);
 
-  assert.equal(borderCopyMounted(map as never), true);
-  assert.deepEqual(
-    map.order.filter((id) => id !== "boundary_2"),
-    ["background", BORDER_LOW_ID, BORDER_LINE_ID, BORDER_DISPUTED_ID, "outline-anchor"],
-  );
-});
-
-test("removing the copies leaves the basemap source and its layers alone", () => {
-  const map = makeMap();
-
-  addBorders(map as never, AREA, OUTLINE, "soe-area-outline", undefined);
   removeBorders(map as never);
   removeBorders(map as never);
 
-  assert.deepEqual(map.order, ["background", "boundary_2", "outline-anchor"]);
-  assert.deepEqual(map.specs.size, 0);
-  assert.ok(map.getLayer("boundary_2"));
+  assert.equal(bordersMounted(map as never), false);
+  assert.deepEqual(map.order, ["background", "outline"]);
+  assert.equal(map.sources.size, 0);
 });
 
-function makeMap({ boundary = true } = {}) {
-  const order = boundary
-    ? ["background", "boundary_2", "outline-anchor"]
-    : ["background", "outline-anchor"];
+function landFeature(runs: number[][] | undefined): AreaFeature {
+  return {
+    type: "Feature",
+    properties: runs ? { border_runs: runs } : {},
+    geometry: {
+      type: "MultiPolygon",
+      coordinates: [[FIRST_EXTERIOR, FIRST_HOLE], [SECOND_EXTERIOR]],
+    },
+  };
+}
+
+function makeMap() {
+  const order = ["background", "outline"];
   const specs = new Map<string, Record<string, unknown>>();
+  const sources = new Map<string, unknown>();
   const paints = new Map<string, [string, unknown][]>();
   const layouts = new Map<string, [string, unknown][]>();
 
   return {
     order,
     specs,
+    sources,
     paints,
     layouts,
-    getStyle: () => ({
-      layers: [
-        ...(boundary
-          ? [
-              {
-                id: "boundary_2",
-                type: "line",
-                source: "openmaptiles",
-                "source-layer": "boundary",
-                filter: ["!=", ["get", "brunnel"], "tunnel"],
-              },
-            ]
-          : []),
-        { id: "outline-anchor", type: "line" },
-      ],
-    }),
     getLayer: (id: string) => (order.includes(id) ? { id } : undefined),
+    getSource: (id: string) => sources.get(id),
+    addSource: (id: string, source: unknown) => {
+      sources.set(id, source);
+    },
+    removeSource: (id: string) => {
+      sources.delete(id);
+    },
     addLayer: (spec: Record<string, unknown> & { id: string }, beforeId?: string) => {
       specs.set(spec.id, spec);
-      place(order, spec.id, beforeId);
+      order.splice(beforeId === undefined ? order.length : order.indexOf(beforeId), 0, spec.id);
     },
     removeLayer: (id: string) => {
-      const index = order.indexOf(id);
-      if (index >= 0) order.splice(index, 1);
+      order.splice(order.indexOf(id), 1);
       specs.delete(id);
     },
     setPaintProperty: (id: string, name: string, value: unknown) => {
@@ -245,33 +292,4 @@ function makeMap({ boundary = true } = {}) {
       layouts.set(id, [...(layouts.get(id) ?? []), [name, value]]);
     },
   };
-}
-
-function place(order: string[], id: string, beforeId?: string) {
-  const at = order.indexOf(id);
-
-  if (at >= 0) order.splice(at, 1);
-
-  const anchor = beforeId === undefined ? order.length : order.indexOf(beforeId);
-  order.splice(anchor < 0 ? order.length : anchor, 0, id);
-}
-
-function withArea(patch: Partial<Scene["area"]>): Scene["area"] {
-  return { ...AREA, ...patch };
-}
-
-function dashFor(expression: unknown[], properties: Record<string, unknown>): unknown {
-  const [, condition, whenTrue, whenFalse] = expression as [
-    unknown,
-    [string, [string, string], unknown],
-    unknown[],
-    unknown[],
-  ];
-  const [operator, left, right] = condition;
-
-  if (operator !== "==" || left[0] !== "get") throw new Error("unsupported dash condition");
-
-  const chosen = properties[left[1]] === right ? whenTrue : whenFalse;
-
-  return chosen[1];
 }

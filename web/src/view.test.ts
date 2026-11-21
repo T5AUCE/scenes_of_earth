@@ -4,7 +4,8 @@ import { afterEach, test } from "node:test";
 
 import { Window } from "happy-dom";
 
-import { BORDER_DISPUTED_ID, BORDER_LINE_ID, BORDER_LOW_ID } from "./layers/borders.ts";
+import { outlineWidthRamp } from "./display-state.ts";
+import { BORDER_DISPUTED_ID, BORDER_LINE_ID } from "./layers/borders.ts";
 import type { Scene } from "./types.ts";
 
 interface PendingRead {
@@ -359,78 +360,60 @@ test("the outline layer paints the linked colour and width and hides when linked
 
   assert.ok(map.layouts.includes("soe-area-outline:visibility:none"));
   assert.ok(map.paints.includes("soe-area-outline:line-color:#1a3658"));
-  assert.ok(map.paints.includes("soe-area-outline:line-width:2"));
+  assert.ok(map.paints.includes(`soe-area-outline:line-width:${rampWidth(2, 1)}`));
 
   mounted.unmount();
 });
 
-test("the outline draws only the land borders when the area is cut to land", () => {
+test("the fallback outline draws the area geometry", () => {
   const outlineData = (map: ReturnType<typeof fakeMap>) =>
     (map.getSource("soe-area-outline") as { data: string }).data;
 
-  const cut = mountTwoLayers(true, [], "", { borders_href: "borders.geojson" });
-  const uncut = mountTwoLayers();
+  const { mounted, map } = mountTwoLayers();
 
-  assert.equal(outlineData(cut.map), "borders.geojson");
-  assert.equal(outlineData(uncut.map), "area.geojson");
+  assert.equal(outlineData(map), "area.geojson");
 
-  cut.mounted.unmount();
-  uncut.mounted.unmount();
+  mounted.unmount();
 });
 
-test("a shifted scene draws both border features with their properties", async () => {
-  const borders = {
-    type: "FeatureCollection",
-    features: [
-      {
-        type: "Feature",
-        properties: { name: "Test", disputed: false },
-        geometry: {
-          type: "LineString",
-          coordinates: [
-            [179, 0],
-            [181, 0],
-          ],
-        },
-      },
-      {
-        type: "Feature",
-        properties: { name: "Test", disputed: true },
-        geometry: {
-          type: "LineString",
-          coordinates: [
-            [182, 1],
-            [184, 1],
-          ],
-        },
-      },
-    ],
+test("a shifted scene draws the area outline one world west", async () => {
+  const area = {
+    type: "Feature",
+    properties: { border_runs: [[0, 0, 1, 0]] },
+    geometry: {
+      type: "Polygon",
+      coordinates: [
+        [
+          [179, 0],
+          [181, 0],
+          [181, 1],
+          [179, 0],
+        ],
+      ],
+    },
   };
   const { mounted, map } = mountTwoLayers(
     true,
     [],
     "",
-    { bbox: [176, -20, 190, -15], borders_href: "borders.geojson" },
-    { "borders.geojson": borders },
+    { bbox: [176, -20, 190, -15] },
+    { "area.geojson": area },
   );
 
   await settle();
   await settle();
 
-  const data = (map.getSource("soe-area-outline") as { data: typeof borders }).data;
+  const data = (map.getSource("soe-area-outline") as { data: typeof area }).data;
 
-  assert.equal(data.type, "FeatureCollection");
-  assert.equal(data.features.length, 2);
-  assert.deepEqual(data.features[0].geometry.coordinates, [
-    [-181, 0],
-    [-179, 0],
+  assert.deepEqual(data.geometry.coordinates, [
+    [
+      [-181, 0],
+      [-179, 0],
+      [-179, 1],
+      [-181, 0],
+    ],
   ]);
-  assert.deepEqual(data.features[1].geometry.coordinates, [
-    [-178, 1],
-    [-176, 1],
-  ]);
-  assert.deepEqual(data.features[0].properties, { name: "Test", disputed: false });
-  assert.deepEqual(data.features[1].properties, { name: "Test", disputed: true });
+  assert.deepEqual(data.properties, area.properties);
 
   mounted.unmount();
 });
@@ -447,7 +430,7 @@ test("an outline display change repaints the map and remembers the choice", () =
 
   assert.ok(map.layouts.includes("soe-area-outline:visibility:visible"));
   assert.ok(map.paints.includes("soe-area-outline:line-color:#ffffff"));
-  assert.ok(map.paints.includes("soe-area-outline:line-width:3"));
+  assert.ok(map.paints.includes(`soe-area-outline:line-width:${rampWidth(3, 1)}`));
   assert.equal(
     window.localStorage.getItem("soe.outline.v1"),
     JSON.stringify({ shown: true, color: "white", widthPx: 3 }),
@@ -456,10 +439,10 @@ test("an outline display change repaints the map and remembers the choice", () =
   mounted.unmount();
 });
 
-test("an outline change repaints every border copy and keeps the fallback outline hidden", () => {
+test("an outline change repaints both border lines and keeps the fallback outline hidden", () => {
   const { mounted, map } = mountTwoLayers();
 
-  for (const id of [BORDER_LOW_ID, BORDER_LINE_ID, BORDER_DISPUTED_ID]) {
+  for (const id of [BORDER_LINE_ID, BORDER_DISPUTED_ID]) {
     map.layers.set(id, { id });
   }
 
@@ -472,10 +455,10 @@ test("an outline change repaints every border copy and keeps the fallback outlin
 
   assert.ok(map.layouts.includes("soe-area-outline:visibility:none"));
 
-  for (const id of [BORDER_LOW_ID, BORDER_LINE_ID, BORDER_DISPUTED_ID]) {
+  for (const id of [BORDER_LINE_ID, BORDER_DISPUTED_ID]) {
     assert.ok(map.layouts.includes(`${id}:visibility:visible`), id);
     assert.ok(map.paints.includes(`${id}:line-color:#ffffff`), id);
-    assert.ok(map.paints.includes(`${id}:line-width:4`), id);
+    assert.ok(map.paints.includes(`${id}:line-width:${rampWidth(2, 2)}`), id);
   }
 
   mounted.unmount();
@@ -800,7 +783,7 @@ function makeScene(withTime: boolean): Scene {
     id: "test",
     title: "Test scene",
     generator: { name: "soe", version: "0.9.0" },
-    version: "0.8",
+    version: "0.9",
     area: {
       boundary: null,
       bbox: [0, -1, 1, 1],
@@ -813,4 +796,8 @@ function makeScene(withTime: boolean): Scene {
     notices: { limits: [] },
     credits: { lines: [], disclaimers: [], endorsement: "", terms_passthrough: "" },
   } as unknown as Scene;
+}
+
+function rampWidth(widthPx: number, factor: number): string {
+  return (outlineWidthRamp(widthPx, factor) as unknown[]).join(",");
 }

@@ -351,7 +351,7 @@ test("a finished build shows Preparing scene… until the scene reports back", a
 
     return Response.json({
       id: "s",
-      version: "0.8",
+      version: "0.9",
       area: { geometry_href: "area.geojson" },
       data: { href: "data.zarr" },
       layers: [],
@@ -420,7 +420,7 @@ test("the picked outline survives Build until the scene hides it and returns whe
 
     return Response.json({
       id: "s",
-      version: "0.8",
+      version: "0.9",
       area: { geometry_href: "area.geojson" },
       data: { href: "data.zarr" },
       layers: [],
@@ -666,7 +666,7 @@ async function assertDeferredSceneEntries(context: TestContext): Promise<void> {
 
     return Response.json({
       id: url.split("/").at(-1),
-      version: "0.8",
+      version: "0.9",
       area: { geometry_href: "area.geojson" },
       data: { href: "data.zarr" },
       layers: [],
@@ -743,7 +743,7 @@ async function assertSceneEntryHooks(context: TestContext): Promise<void> {
 
     return Response.json({
       id: "s",
-      version: "0.8",
+      version: "0.9",
       area: { geometry_href: "area.geojson" },
       data: { href: "data.zarr" },
       layers: [],

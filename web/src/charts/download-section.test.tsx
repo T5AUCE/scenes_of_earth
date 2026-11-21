@@ -216,7 +216,7 @@ function makeScene(layers: LayerDoc[]): Scene {
     id: "test",
     title: "Test scene",
     generator: { name: "soe", version: "0.9.0" },
-    version: "0.8",
+    version: "0.9",
     area: {
       boundary: {
         id: "test",

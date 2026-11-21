@@ -685,6 +685,9 @@ export class TestMap {
   removeLayer(id: string) {
     this.layers.delete(id);
   }
+  addSource(id: string, source: object) {
+    this.sources.set(id, source);
+  }
   removeSource(id: string) {
     this.sources.delete(id);
   }

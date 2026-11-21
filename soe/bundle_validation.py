@@ -40,7 +40,7 @@ OVERTURE_CC_LICENCE = "CC BY 4.0"
 FRACTION_TOLERANCE = 1e-12  # summation order may nudge an exact share slightly above one
 
 
-def validate(doc: JsonObject, expected_version: str = "0.8") -> list[str]:
+def validate(doc: JsonObject, expected_version: str = "0.9") -> list[str]:
     """Return a list of problems (empty when the bundle is fine)."""
     if not isinstance(doc, dict):
         return ["scene must be an object"]
@@ -109,14 +109,11 @@ def _area_problems(area: object) -> list[str]:
 def _land_problems(area: JsonObject) -> list[str]:
     """Return problems with an area cut to land, whose outline is derived from OpenStreetMap."""
     land = area.get("land")
-    if bool(land) != bool(area.get("borders_href")):
-        return ["area.land and area.borders_href must be given together"]
-
-    if land and "ODbL" not in str(land.get("licence")):
-        return ["area.land must carry the ODbL licence of the OpenStreetMap land polygons"]
-
     if not land:
         return []
+
+    if "ODbL" not in str(land.get("licence")):
+        return ["area.land must carry the ODbL licence of the OpenStreetMap land polygons"]
 
     return _overture_boundary_problems(area) + _border_level_problems(area)
 

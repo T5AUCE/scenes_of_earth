@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { outlineWidthRamp } from "../display-state.ts";
 import {
   addCoastStroke,
   addInlandWater,
@@ -280,7 +281,11 @@ test("the coast stroke copies ocean water as a line in the border colour and wid
   assert.equal(spec.source, "openmaptiles");
   assert.equal(spec["source-layer"], "water");
   assert.deepEqual(spec.filter, ["all", WATER_FILTER, ["==", ["get", "class"], "ocean"]]);
-  assert.deepEqual(spec.paint, { "line-color": "#ffffff", "line-width": 2, "line-opacity": 1 });
+  assert.deepEqual(spec.paint, {
+    "line-color": "#ffffff",
+    "line-width": outlineWidthRamp(2, 1),
+    "line-opacity": 1,
+  });
   assert.deepEqual(spec.layout, {
     "line-join": "round",
     "line-cap": "round",
@@ -309,7 +314,7 @@ test("a second coast stroke repaints instead of doubling", () => {
   assert.equal(map.layouts.get(COAST_STROKE_ID)?.at(-1), "none");
   assert.deepEqual(map.paints.get(COAST_STROKE_ID)?.slice(-2), [
     ["line-color", "#333333"],
-    ["line-width", 3],
+    ["line-width", outlineWidthRamp(3, 1)],
   ]);
   assert.equal(map.addedSources(), 0);
 });
@@ -323,7 +328,7 @@ test("the border state drives the coast colour, width, and visibility", () => {
   assert.equal(map.layouts.get(COAST_STROKE_ID)?.at(-1), "none");
   assert.deepEqual(map.paints.get(COAST_STROKE_ID)?.slice(-2), [
     ["line-color", "#333333"],
-    ["line-width", 3],
+    ["line-width", outlineWidthRamp(3, 1)],
   ]);
 
   map.layouts.clear();
@@ -333,7 +338,7 @@ test("the border state drives the coast colour, width, and visibility", () => {
   assert.deepEqual(map.layouts.get(COAST_STROKE_ID), ["visible"]);
   assert.deepEqual(map.paints.get(COAST_STROKE_ID), [
     ["line-color", "#ffffff"],
-    ["line-width", 2],
+    ["line-width", outlineWidthRamp(2, 1)],
   ]);
 });
 

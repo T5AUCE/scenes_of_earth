@@ -10,9 +10,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import shapely
 import zarr
 from rasterio.transform import Affine
-from shapely.geometry import MultiPolygon, Polygon, box, mapping, shape
+from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon, box, mapping, shape
 from shapely.geometry.base import BaseGeometry
 
 from soe import build as build_module
@@ -20,7 +21,14 @@ from soe import db
 from soe.areas import Area, AreaError
 from soe.build import SourceChanged, build_scene
 from soe.bundle import JsonObject, validate
-from soe.land import MIN_DISPLAY_TOLERANCE_DEG, clip_area_to_land, write_land_store
+from soe.land import (
+    MIN_DISPLAY_TOLERANCE_DEG,
+    OUTLINE_PRECISION_DEG,
+    clip_area_to_land,
+    clip_territorial,
+    clip_to_land,
+    write_land_store,
+)
 from soe.layer_writer import _fill_outside
 from soe.plan import plan, scene_datasets
 from soe.scene_request import prepare_scene, resolve_area
@@ -1957,24 +1965,33 @@ def test_outline_of_a_scene_cut_to_land_reaches_a_little_past_the_coast(tmp_path
     assert outline.difference(ISLAND.buffer(0.002)).area < 1e-9
 
 
-def test_island_scene_has_no_borders(tmp_path):
+def test_island_scene_has_no_border_runs(tmp_path):
     _, scene_dir = build_cut_nairobi(tmp_path, ISLAND)
 
-    borders = json.loads((scene_dir / "borders.geojson").read_text(encoding="utf-8"))
+    feature = json.loads((scene_dir / "area.geojson").read_text(encoding="utf-8"))
 
-    assert borders["type"] == "FeatureCollection"
-    assert sorted(feature["properties"]["disputed"] for feature in borders["features"]) == [
-        False,
-        True,
-    ]
-    assert all(shape(feature["geometry"]).is_empty for feature in borders["features"])
+    assert feature["properties"]["border_runs"] == []
+    assert not (scene_dir / "borders.geojson").exists()
+
+
+def test_city_scene_has_no_border_runs_so_the_viewer_draws_its_outline(tmp_path):
+    write_land_store(tmp_path / "land.sqlite", LAND_VERSION, [ISLAND])
+    db.init(tmp_path / "soe.db")
+    area = clip_area_to_land(
+        tmp_path / "soe.db", tmp_path / "land.sqlite", Area(NAIROBI, {**BOUNDARY, "level": "city"})
+    )
+
+    build_scene(HASH_A, area, None, None, [TERRAIN], "Test", tmp_path / "scenes")
+
+    feature = json.loads((tmp_path / "scenes" / HASH_A / "area.geojson").read_text("utf-8"))
+    assert "border_runs" not in feature["properties"]
 
 
 def test_scene_cut_to_land_credits_the_coast_and_boundary(tmp_path):
     scene, _ = build_cut_nairobi(tmp_path, ISLAND)
 
     assert validate(scene) == []
-    assert scene["area"]["borders_href"] == "borders.geojson"
+    assert "borders_href" not in scene["area"]
     assert scene["area"]["land"]["version"] == LAND_VERSION
     assert scene["area"]["boundary"]["licence"] == "ODbL 1.0"
     assert scene["area"]["land"]["attribution"] in scene["credits"]["lines"]
@@ -1992,8 +2009,122 @@ def test_outline_drops_parts_smaller_than_the_finest_cell(tmp_path):
     assert len(read_geometry(scene_dir / "area.geojson").geoms) == 1
 
 
-def test_scene_that_is_not_cut_to_land_has_no_borders_file(tmp_path):
+def test_scene_that_is_not_cut_to_land_has_no_border_runs(tmp_path):
     scene, _ = build_nairobi(tmp_path)
 
+    feature = json.loads((tmp_path / HASH_A / "area.geojson").read_text(encoding="utf-8"))
+
     assert "borders_href" not in scene["area"]
+    assert "border_runs" not in feature["properties"]
     assert not (tmp_path / HASH_A / "borders.geojson").exists()
+
+
+def test_border_runs_cover_exactly_the_border_vertices():
+    outline = box(0, 0, 1, 1)
+    border = LineString([(1, 0), (1, 1)])
+
+    runs = build_module._border_runs(outline, border, MultiLineString())
+
+    ring = list(outline.exterior.coords)
+    first, last = runs[0][1], runs[0][2]
+    assert len(runs) == 1
+    assert [ring[index] for index in range(first, last + 1)] == [(1, 0), (1, 1)]
+
+
+def test_border_runs_tell_disputed_stretches_from_solid_ones():
+    outline = Polygon([(0, 0), (1, 0), (1, 1), (1, 2), (0, 2)])
+    solid = LineString([(1, 0), (1, 1)])
+    disputed = LineString([(1, 1), (1, 2)])
+
+    runs = build_module._border_runs(outline, solid, disputed)
+
+    ring = list(outline.exterior.coords)
+    stretches = {kind: [ring[i] for i in range(first, last + 1)] for _, first, last, kind in runs}
+    assert stretches == {0: [(1, 0), (1, 1)], 1: [(1, 1), (1, 2)]}
+
+
+def test_border_runs_count_rings_over_polygons_then_holes_in_written_order():
+    first = Polygon([(0, 0), (4, 0), (4, 4), (0, 4)], [[(1, 1), (1, 2), (2, 2), (2, 1)]])
+    second = box(10, 0, 11, 1)
+    hole_edge = LineString([(1, 1), (1, 2)])
+    second_edge = LineString([(10, 1), (10, 0)])
+
+    runs = build_module._border_runs(
+        MultiPolygon([first, second]), MultiLineString([hole_edge, second_edge]), MultiLineString()
+    )
+
+    rings = [first.exterior, *first.interiors, second.exterior]
+    assert [run[0] for run in runs] == [1, 2]
+    for ring_index, start, end, _ in runs:
+        written = list(rings[ring_index].coords)[start : end + 1]
+        assert sorted(written) in ([(1, 1), (1, 2)], [(10, 0), (10, 1)])
+
+
+def test_border_run_across_the_ring_start_becomes_two_runs():
+    outline = box(0, 0, 1, 1)
+    ring = list(outline.exterior.coords)
+    border = LineString([ring[-2], ring[0], ring[1]])
+
+    runs = build_module._border_runs(outline, border, MultiLineString())
+
+    assert [(first, last) for _, first, last, _ in runs] == [(0, 1), (len(ring) - 2, len(ring) - 1)]
+
+
+def test_border_runs_match_borders_that_the_outline_rounding_moves():
+    outline = shapely.set_precision(Polygon([(0, 0), (1.000004, 0), (1.000004, 1), (0, 1)]), 1e-5)
+    border = LineString([(1.000004, 0), (1.000004, 1)])
+
+    runs = build_module._border_runs(outline, border, MultiLineString())
+
+    assert len(runs) == 1
+
+
+def test_border_runs_of_a_built_scene_lie_on_the_outline_edge_along_the_neighbour(tmp_path):
+    write_land_store(tmp_path / "land.sqlite", LAND_VERSION, [ISLAND])
+    neighbour = box(37.0, -2, 38, 0)
+    clip = clip_to_land(tmp_path / "land.sqlite", NAIROBI, [neighbour])
+    area = Area(
+        clip.geom,
+        BOUNDARY,
+        display=clip.display,
+        borders=clip.borders,
+        disputed=clip.disputed,
+        land_version=LAND_VERSION,
+    )
+
+    build_scene(HASH_A, area, None, None, [TERRAIN], "Test", tmp_path / "scenes")
+
+    feature = json.loads((tmp_path / "scenes" / HASH_A / "area.geojson").read_text("utf-8"))
+    rings = [ring for polygon in feature["geometry"]["coordinates"] for ring in polygon]
+    runs = feature["properties"]["border_runs"]
+    assert runs
+    for ring_index, first, last, disputed in runs:
+        longitudes = [longitude for longitude, _ in rings[ring_index][first : last + 1]]
+        assert disputed == 0
+        assert longitudes == pytest.approx([37.0 - OUTLINE_PRECISION_DEG] * len(longitudes))
+
+
+def test_border_runs_of_a_built_scene_end_at_the_coast_on_the_written_vertices(tmp_path):
+    write_land_store(tmp_path / "land.sqlite", LAND_VERSION, [ISLAND])
+    frame = box(36, -2, 37.4, 0)
+    clip = clip_territorial(tmp_path / "land.sqlite", frame, [])
+    area = Area(
+        clip.geom,
+        BOUNDARY,
+        display=clip.display,
+        borders=clip.borders,
+        disputed=clip.disputed,
+        land_version=LAND_VERSION,
+    )
+
+    build_scene(HASH_A, area, None, None, [TERRAIN], "Test", tmp_path / "scenes")
+
+    feature = json.loads((tmp_path / "scenes" / HASH_A / "area.geojson").read_text("utf-8"))
+    rings = [ring for polygon in feature["geometry"]["coordinates"] for ring in polygon]
+    ends = [
+        rings[ring_index][index]
+        for ring_index, first, last, _ in feature["properties"]["border_runs"]
+        for index in (first, last)
+    ]
+    south, north = ISLAND.bounds[1], ISLAND.bounds[3]
+    assert sorted(latitude for _, latitude in ends) == pytest.approx([south, north])

@@ -327,7 +327,7 @@ maps now read GMNA, lowest priority, instead of the global base maps.
 
 - `area.bbox` is `[W, S, E, N]` with W < E always. A shape across the antimeridian is unwrapped into one frame, so E may be
   above 180 (up to 360) and `lon` arrays rise past 180, as MapLibre's `LngLatBounds` does. `area.geojson` is in the same frame.
-- `scene.json` is version 0.8 and the generator is 0.9.1. The top-level `period` (`start`, `end` exclusive, `step`; ISO dates) is the requested range,
+- `scene.json` is version 0.9 and the generator is 0.9.1. The top-level `period` (`start`, `end` exclusive, `step`; ISO dates) is the requested range,
   or `null` for a scene without series. Each layer has its own `grid` (crs, bbox, res, nx, ny; `aggregation` for series), `mask`,
   `coverage`, `time` (`step` as an ISO 8601 duration, `end` = the day after the last step's period, `method` = how a step summarises
   its period (`sum`, `mean`, `point`, `max`), `count`, explicit `values`, or `null` for static layers) and
@@ -389,10 +389,13 @@ maps now read GMNA, lowest priority, instead of the global base maps.
 - A scene whose layers are not offline is cut to land (see Import land). Its `area.geojson` is the land outline simplified
   to the larger of 0.001 degrees and a 2000th of the area's longer side, grown by the same amount along the coast, never onto a
   neighbour's land, and at most 50,000 vertices. Parts smaller than the finest grid cell are dropped, except the largest.
-  Coordinates are rounded to 1e-5 degrees. `area.borders_href` names `borders.geojson`, a FeatureCollection with one feature
-  per `disputed` value that holds the outline lines running over land, which are the borders with other areas and the edges
-  of a drawn shape. An island country holds two empty features. The viewer draws
-  the outline from this file, since the sea side is drawn by the basemap. `area.border_level` is the OpenStreetMap admin level
+  Coordinates are rounded to 1e-5 degrees. The feature's `properties.border_runs` lists `[ring, first, last, disputed]`, the
+  stretches of the written outline that lie on land borders. Rings are counted in the order `area.geojson` lists them, over its
+  polygons in order and in each polygon the exterior ring first, then its holes. `first` and `last` are vertex indexes into that
+  ring's coordinate array, both included, so a run is `ring[first : last + 1]`. Rings are closed, so their last vertex repeats the first, and a run never passes the end of its ring.
+  `disputed` is 1 for a border along a disputed line and 0 otherwise. A named area without land borders, such as an island
+  country, has an empty list. A drawn shape or a city has no `border_runs` property, so the viewer draws its whole outline.
+  `area.border_level` is the OpenStreetMap admin level
   of the boundary and `area.border_min_zoom` is the zoom from which the basemap draws that level, both null when the level is
   unknown. `area.boundary` also carries `name_local`, `parent_name_local` and the boundary source `version`, which is the
   Overture release. `area.land` is the credit block of the land polygons
@@ -439,7 +442,7 @@ maps now read GMNA, lowest priority, instead of the global base maps.
 - Terrain reads are cached in `SCENES_DIR/.cache/` (keyed by dataset, source versions, bbox, res and soe version), so
   rebuilding an area with other layers or dates does not read the tiles again. Deleting the folder is always safe, and it
   is the way to clear files that older versions left behind.
-- Format 0.8 keeps the real-data ring with `area_series` and `distribution` and adds the Overture boundary fields with the borders FeatureCollection. Generator 0.9.1 and the bundle format
+- Format 0.9 keeps the real-data ring with `area_series` and `distribution` and the Overture boundary fields, and replaces the borders file with the `border_runs` of `area.geojson`. Generator 0.9.1 and the bundle format
   both enter the scene id, so new requests cannot reuse older bundles and old terrain caches are not reused. Build a new scene
   rather than replacing an immutable bundle in place. The viewer rejects older formats with a prompt to pick the area again.
 - Contours use `maplibre-contour` (BSD-3-Clause) for labels only, with a fixed global nested
@@ -578,7 +581,7 @@ The data providers do not endorse Scenes of Earth. Reuse of a bundle's data is s
   (https://www.openstreetmap.org/copyright)". OpenStreetMap contributors, land polygons (split, EPSG:4326) built from
   `natural=coastline` with osmcoastline, https://osmdata.openstreetmap.de/data/land-polygons.html. Modified: intersected
   with the area outline (Overture area or the drawn shape), without the land its same-level neighbours hold, and parts
-  under about 1 ha dropped. A scene cut to land carries `area.geojson` and `borders.geojson` as a derived database, so they are
+  under about 1 ha dropped. A scene cut to land carries `area.geojson` as a derived database, so it is
   offered under ODbL 1.0 with this credit, and the boundary licence of such a scene is "ODbL 1.0", with "CC BY 4.0" added
   when a contributing source needs it. The same text is in `soe/sources/licences.py`.
 - **Area search level names: geoBoundaries gbOpen metadata.** Each country's own ADM1/ADM2 type names

@@ -1,5 +1,6 @@
 {
   "below_60_north": {
+    "scene_id": "cd7a47423bb746a3ee0a",
     "area.geojson": "1dcc783fc6b74d606e4dab23e0bfefcbf34317c989fdd564b680ca867d16f94a",
     "data.zarr/chirps_monthly/lat/c/0": "b8534a96c7c0e537891caa68000fa7306fd4f0701564dad43ac5ac62ff203ece",
     "data.zarr/chirps_monthly/lat/zarr.json": "8e364d5d2ac4470d5f5f2269b6d8c6772c1a8fe6110dac5b2dca5d357c9da77e",
@@ -31,10 +32,10 @@
     "data.zarr/terrain/mask/zarr.json": "95f5f251cb3156261309b4bee8ffc591fdf055607b3395163a4f1cdbfaa101d6",
     "data.zarr/terrain/zarr.json": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2",
     "data.zarr/zarr.json": "b423ba1a9a022ade23527c7f27c9fb73259dbae1a08c4d83316db30e64831c52",
-    "scene.json": "d4646d0b406afb502fb32d5b6ed9a8d011a72c592af744413377aaa618cd8184",
-    "scene_id": "f40fc2723bf468d1305a"
+    "scene.json": "06b001dfcd37d04e27c32abbd7139843eeccce23cfa5c443c7f5d1576fa7b5be"
   },
   "nairobi": {
+    "scene_id": "f4666864ed57aafa0d49",
     "area.geojson": "a9be3753b59bf00a322aeec442712532fa2b046cfb3c1bb2809c14cb3b91a32c",
     "data.zarr/chirps_monthly/lat/c/0": "f897e9bd930a491bd409094c0c9a4b9798ea482851866baae943cdca63a6946c",
     "data.zarr/chirps_monthly/lat/zarr.json": "54fede1e0da3d9ca35a8e95b51db261c0a741945da595d600ce2093eab793666",
@@ -66,7 +67,6 @@
     "data.zarr/terrain/mask/zarr.json": "ff5d3e4f8f21131a081bb20846b65be2bf84e2b0d3affec5e2fbac12ef422d37",
     "data.zarr/terrain/zarr.json": "36615682d5be9646729635067a75185212eb0c48d708ef06ad34c1f58dd587d2",
     "data.zarr/zarr.json": "c362f5d31236b62d663b73a5ea34c5f8699dccbcc9026f0bbd03e61eac5e4bfb",
-    "scene.json": "89bf5796887188266effb4d8dbe4e96e4cf931ebd7b6b5f084ae42268224b0bb",
-    "scene_id": "64cb014f5877a1630ccc"
+    "scene.json": "e827312ea5d621d80786a175eaf7ad7d5dcf2e5f8ac402c41562a1e6d7dc8ba7"
   }
 }
