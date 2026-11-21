@@ -28,6 +28,11 @@ from itertools import repeat
 from multiprocessing import get_context
 from pathlib import Path
 
+try:
+    import resource
+except ImportError:  # Windows has no resource module, so the import is optional.
+    resource = None  # type: ignore[assignment]
+
 import numpy as np
 import shapely
 from shapely.affinity import translate
@@ -54,6 +59,8 @@ MIN_PART_DEG2 = 1e-6
 OUTLINE_PRECISION_DEG = 1e-5  # the build rounds outline and border coordinates to this
 BORDER_MATCH_DEG = GROW_DEG / 2  # how close a cut edge must be to a neighbour to count as a border
 CLIP_WORKERS_BY_LEVEL = {"country": 1, "state": 4}  # levels whose clips the import stores
+# The limit counts virtual memory, so a runaway GEOS call raises instead of ending the pool.
+CLIP_WORKER_LIMIT_BYTES = 6 * 1024**3
 TERRITORIAL_LEVELS = ("country", "state")  # levels whose maritime extent holds all their land
 # Member frames merge slivers below the build rounding precision before their union.
 FRAME_SNAP_DEG = OUTLINE_PRECISION_DEG
@@ -76,6 +83,8 @@ DISPLAY_CORNER_SEGMENTS = 2  # segments per quarter circle where the outline is 
 DISPLAY_GROWTH_FACTOR = 1.1  # makes up for the polygonal corners of the growth, 1.082 at least
 DISPLAY_SPAN_DIVISOR = 400  # a 400th of the span keeps a centred coast line inside the mask
 DISPLAY_BORDER_RAY_FACTOR = 2  # twice the growth is the shortest seaward ray
+# Stored states reach at most about 950 rays, so a larger count would exhaust the union.
+MAX_BORDER_RAYS = 2000
 NEIGHBOUR_TOUCH_DEG = (
     10 * OUTLINE_PRECISION_DEG
 )  # shorter contacts are rounding, not neighbour land
@@ -610,7 +619,7 @@ def _cut_sea_at_borders(
 
         # Merging turns each border into whole lines, so only the real ends grow rays.
         rays = _seaward_border_rays(shapely.line_merge(border_lines), growth_deg, covered)
-        if not rays:
+        if not rays or len(rays) > MAX_BORDER_RAYS:
             return shapely.normalize(base)
 
         divided = split(sea, shapely.union_all(rays))
@@ -1044,7 +1053,10 @@ def store_clips(db_path: Path | str, store: Path | str) -> int:
         boundary_ids = db.boundary_ids(db_path, OVERTURE_SOURCE, (level,))
         # Each area runs in a fresh worker, so its peak memory is released afterwards.
         with ProcessPoolExecutor(
-            workers, mp_context=get_context("spawn"), max_tasks_per_child=1
+            workers,
+            mp_context=get_context("spawn"),
+            max_tasks_per_child=1,
+            initializer=_limit_clip_worker_memory,
         ) as pool:
             results = pool.map(
                 _store_clip, repeat(db_path), repeat(store), boundary_ids, chunksize=1
@@ -1057,6 +1069,14 @@ def store_clips(db_path: Path | str, store: Path | str) -> int:
                     )
 
     return stored
+
+
+def _limit_clip_worker_memory() -> None:
+    """Cap one clip worker, so a runaway GEOS call raises instead of ending the pool."""
+    if resource is None:
+        return
+
+    resource.setrlimit(resource.RLIMIT_AS, (CLIP_WORKER_LIMIT_BYTES, CLIP_WORKER_LIMIT_BYTES))
 
 
 def unassigned_land_report(

@@ -334,6 +334,25 @@ def test_segmented_border_grows_rays_only_from_its_merged_ends(monkeypatch):
     assert outline.equals(previous_outline)
 
 
+def test_sea_trim_is_skipped_when_border_rays_pass_the_cap(monkeypatch):
+    border = MultiLineString(
+        [LineString([(1, index / 10), (1, (index + 1) / 10)]) for index in range(20)]
+    )
+    grown = box(-0.05, -0.05, 1.05, 2.05)
+    mainland = box(0, 0, 1, 2)
+    neighbour = box(1, 0, 2, 2)
+    coast = land._coast_lines(mainland, border)
+    monkeypatch.setattr(land, "MAX_BORDER_RAYS", 1)
+
+    def failing_split(geometry: BaseGeometry, splitter: BaseGeometry) -> BaseGeometry:
+        raise AssertionError("the sea must not be split past the cap")
+
+    monkeypatch.setattr(land, "split", failing_split)
+    outline = land._cut_sea_at_borders(grown, mainland, border, coast, 0.01, neighbour)
+
+    assert shapely.equals_exact(outline, shapely.normalize(grown.difference(neighbour)), 0)
+
+
 def test_shallow_border_ray_leaves_no_tail_on_the_neighbour_sea_side():
     selected = Polygon([(0, 0), (0, 1), (5.67, 1)])
     neighbour = Polygon([(0, 0), (5.67, 0), (5.67, 1)])
@@ -1178,6 +1197,17 @@ def test_area_that_breaks_the_clip_is_skipped_not_raised(tmp_path, monkeypatch, 
     skipped = capsys.readouterr().out
     assert "ovt:WEST" in skipped
     assert "boom" in skipped
+
+
+def test_clip_worker_limits_its_address_space(monkeypatch):
+    stdlib_resource = pytest.importorskip("resource")
+    calls = []
+    monkeypatch.setattr(stdlib_resource, "setrlimit", lambda *args: calls.append(args))
+
+    land._limit_clip_worker_memory()
+
+    limit = land.CLIP_WORKER_LIMIT_BYTES
+    assert calls == [(stdlib_resource.RLIMIT_AS, (limit, limit))]
 
 
 def test_land_version_is_the_stored_date(tmp_path):
